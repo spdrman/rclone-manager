@@ -1,13 +1,13 @@
 // Package rclone: this file owns everything about how the embedded sftp
 // backend authenticates and verifies the servers it talks to (FR-6).
 //
-// It exists as its own file, separate from adapter.go, because the SSH
+// I put it in its own file, separate from adapter.go, because the SSH
 // posture is a security control, not plumbing. It needs one owner and one
-// test file, so a change to it is reviewed as a security change rather than
-// buried in a diff to the transport adapter.
+// test file, so a change to it gets reviewed as a security change rather
+// than getting buried in a diff to the transport adapter.
 //
-// The core fact this file is built around is rclone's own default: read
-// backend/sftp/sftp.go in the vendored rclone v1.75.0 tree and the default
+// The core fact I built this around is rclone's own default. I read
+// backend/sftp/sftp.go in the vendored rclone v1.75.0 tree, and the default
 // case, reached whenever known_hosts_file, pin_host_key, host_keys and the
 // ssh option are all unset, is:
 //
@@ -16,9 +16,9 @@
 // That accepts any host key from any server, silently (it logs a notice, but
 // does not fail, and does not refuse the connection). If this adapter ever
 // forwarded an operator's configuration straight through to rclone, an empty
-// or missing known_hosts setting would produce exactly that. sftpConfig below
-// is the single place that stands between operator configuration and
-// rclone's option map, and it never lets that default be reached.
+// or missing known_hosts setting would produce exactly that. sftpConfig
+// below is the single place standing between operator configuration and
+// rclone's option map, and I built it so that default can never be reached.
 package rclone
 
 import (
@@ -110,5 +110,43 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	cfg.Set("user", src.User)
 	cfg.Set("key_file", src.KeyFile)
 	cfg.Set("known_hosts_file", src.KnownHosts)
+
+	// fsFor calls info.NewFs directly instead of going through rclone's usual
+	// fs.NewFs/fs.ConfigMap path, on purpose: fs.ConfigMap layers in a getter
+	// that reads the on-disk rclone config file for a stanza matching the
+	// remote name, and this adapter's whole premise is that there is no
+	// ambient rclone state to leak in (see the fsFor doc comment). The cost
+	// of skipping that path is that none of the sftp backend's own
+	// registered option defaults apply either: configstruct.Set only ever
+	// reads keys that are actually present in the map, so any option this
+	// function leaves unset comes out as its Go zero value, not rclone's
+	// documented default.
+	//
+	// For most sftp options that is harmless, because the zero value already
+	// is the intended default (booleans that default to false, strings that
+	// default to blank). These three are not like that, and I found this by
+	// testing the happy path in ssh_test.go, not by reading the docs: with
+	// none of them set, every single sftp operation this adapter makes,
+	// including a plain List, fails before it can do anything.
+	//
+	//   - subsystem: RequestSubsystem(f.opt.Subsystem) is called with the
+	//     empty string, and the server it's driving refuses the subsystem
+	//     request outright ("subsystem not found") because it never named
+	//     one. This isn't really a tunable rclone default so much as it is
+	//     the standard SSH2 subsystem name for SFTP, which is why the value
+	//     below is a literal rather than something looked up.
+	//   - chunk_size and concurrency: rclone passes these straight into
+	//     github.com/pkg/sftp's MaxPacketUnchecked and
+	//     MaxConcurrentRequestsPerFile, both of which reject anything less
+	//     than 1 outright. A zero value doesn't degrade performance, it
+	//     fails NewFs for every backend operation, not just transfers, since
+	//     they configure the single pooled SFTP client every operation
+	//     shares. The values here match rclone's own documented defaults
+	//     (32KiB chunks, 64 concurrent requests per file) as of rclone
+	//     v1.75.0.
+	cfg.Set("subsystem", "sftp")
+	cfg.Set("chunk_size", "32Ki")
+	cfg.Set("concurrency", "64")
+
 	return cfg, nil
 }

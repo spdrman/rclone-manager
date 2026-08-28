@@ -184,6 +184,14 @@ func TestSftpConfig_OnlyAllowlistedKeysAreSet(t *testing.T) {
 		"user":             true,
 		"key_file":         true,
 		"known_hosts_file": true,
+		// Not part of the FR-6 security posture: these three exist because
+		// fsFor calls info.NewFs directly and so gets none of rclone's own
+		// option defaults (see the comment in sftpConfig). Without them
+		// every sftp operation fails before it does anything, security
+		// posture aside.
+		"subsystem":   true,
+		"chunk_size":  true,
+		"concurrency": true,
 	}
 	for k := range cfg {
 		if !allowed[k] {
@@ -489,7 +497,8 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 	// port, wrong user, key mismatch, sshd misconfigured).
 	t.Run("recorded host key with the configured SSH key succeeds", func(t *testing.T) {
 		if _, err := adapter.List(ctx, src); err != nil {
-			t.Fatalf("List against the recorded host key should have succeeded, got: %v", err)
+			logs, _ := exec.Command("docker", "logs", contA).CombinedOutput()
+			t.Fatalf("List against the recorded host key should have succeeded, got: %v\nserver logs:\n%s", err, logs)
 		}
 	})
 
