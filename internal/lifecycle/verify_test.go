@@ -1,0 +1,883 @@
+package lifecycle
+
+// Fakes in this file are named verifyJournal/verifyTransport, deliberately
+// distinct from engine_test.go's fakeJournal (whose Get is unused there,
+// since Advance never calls it) and from transfer_test.go's
+// fakeTransferJournal/fakeTransport (owned by Transfer's own tests, and not
+// configurable the way Verify's RemoteHash-heavy tests need). testArtifact
+// is reused as-is from transfer_test.go rather than redeclared.
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/internal/config"
+	"github.com/spdrman/rclone-manager/internal/model"
+	"github.com/spdrman/rclone-manager/internal/state"
+	"github.com/spdrman/rclone-manager/internal/transport"
+	"github.com/spdrman/rclone-manager/internal/transport/retry"
+)
+
+// --- fakes ---
+
+// verifyJournal is a minimal in-memory Journal for Verify's own tests. It
+// needs a working Get (Verify reads the current record itself, unlike
+// Advance's own tests), plus the same idempotency-key-replay and
+// from-state-mismatch behaviour the real journal has, so tests can trust
+// what they observe.
+type verifyJournal struct {
+	rec       state.Record
+	getErr    error
+	recordErr error
+	seen      map[string]state.Outcome
+	recorded  []state.Transition
+}
+
+func newVerifyJournal(rec state.Record) *verifyJournal {
+	return &verifyJournal{rec: rec, seen: make(map[string]state.Outcome)}
+}
+
+func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, error) {
+	if j.getErr != nil {
+		return state.Record{}, j.getErr
+	}
+	return j.rec, nil
+}
+
+func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) (state.Outcome, error) {
+	j.recorded = append(j.recorded, t)
+
+	if out, ok := j.seen[t.Key]; ok {
+		return state.Outcome{Applied: false, Record: out.Record}, nil
+	}
+	if j.recordErr != nil {
+		return state.Outcome{}, j.recordErr
+	}
+	if j.rec.State != t.From {
+		return state.Outcome{}, fmt.Errorf("verifyJournal: state mismatch: have %q, want from %q", j.rec.State, t.From)
+	}
+
+	j.rec.State = t.To
+	if t.Hashes != nil {
+		j.rec.LocalHash = t.Hashes.Hash
+		j.rec.LocalHashAlg = t.Hashes.Alg
+	}
+	if t.Validation != nil {
+		passed := t.Validation.Passed
+		j.rec.ValidationPassed = &passed
+		j.rec.ValidationDetail = t.Validation.Detail
+	}
+
+	out := state.Outcome{Applied: true, Record: j.rec}
+	j.seen[t.Key] = out
+	return out, nil
+}
+
+func (j *verifyJournal) currentState() string { return j.rec.State }
+
+func (j *verifyJournal) transitionsTo(to State) []state.Transition {
+	var out []state.Transition
+	for _, t := range j.recorded {
+		if t.To == string(to) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// verifyTransport is a minimal transport.Transport. Only RemoteHash is ever
+// exercised by Verify; the rest exist solely to satisfy the interface, and
+// fail loudly if a test accidentally reaches them.
+type verifyTransport struct {
+	remoteHashFunc  func(ctx context.Context, source transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error)
+	remoteHashCalls int
+}
+
+func (t *verifyTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
+	return nil, errors.New("verifyTransport: List not used")
+}
+
+func (t *verifyTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
+	return transport.RemoteArtifact{}, errors.New("verifyTransport: Stat not used")
+}
+
+func (t *verifyTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+	return transport.TransferResult{}, errors.New("verifyTransport: CopyToLocal not used")
+}
+
+func (t *verifyTransport) RemoteHash(ctx context.Context, source transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
+	t.remoteHashCalls++
+	if t.remoteHashFunc == nil {
+		return "", errors.New("verifyTransport: RemoteHash not configured")
+	}
+	return t.remoteHashFunc(ctx, source, remotePath, alg)
+}
+
+func (t *verifyTransport) DeleteRemote(context.Context, transport.Source, string) error {
+	return errors.New("verifyTransport: DeleteRemote not used")
+}
+
+// --- helpers ---
+
+func verifyWriteLocalFile(t *testing.T, content []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "artifact.dump")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("writing local file: %v", err)
+	}
+	return path
+}
+
+// verifyingRecord builds the journal row Verify expects to find: VERIFYING,
+// with a recorded transfer result matching localPath's real size.
+func verifyingRecord(t *testing.T, localPath string, size int64) state.Record {
+	t.Helper()
+	return state.Record{
+		Artifact:   testArtifact(t),
+		RemotePath: "backups/backup-2026-08-27.dump.zst",
+		LocalPath:  localPath,
+		State:      string(Verifying),
+		Transfer:   &state.TransferResult{BytesTransferred: size},
+	}
+}
+
+// mustScript writes an executable POSIX shell script and returns its
+// absolute path, satisfying config.Validate's requirement that a
+// validator's executable be absolute.
+func mustScript(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "validator.sh")
+	full := "#!/bin/sh\n" + body
+	if err := os.WriteFile(path, []byte(full), 0o755); err != nil {
+		t.Fatalf("writing validator script: %v", err)
+	}
+	return path
+}
+
+func sha256Hex(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+// --- layer 1: transfer verification, always ---
+
+func TestVerify_TransferOnly_NoHashNoValidator_Verifies(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact:   rec.Artifact,
+		AttemptKey: "attempt-1",
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+	if tr.remoteHashCalls != 0 {
+		t.Fatalf("RemoteHash called %d times, want 0 when Hash policy is empty", tr.remoteHashCalls)
+	}
+	if out.Record.LocalHash == "" || out.Record.LocalHashAlg != "sha256" {
+		t.Fatalf("expected a recorded local hash even with no hash policy, got %+v", out.Record)
+	}
+}
+
+func TestVerify_TransferVerification_MissingLocalFile_Fails(t *testing.T) {
+	rec := verifyingRecord(t, filepath.Join(t.TempDir(), "does-not-exist"), 10)
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Failed)
+	}
+}
+
+func TestVerify_TransferVerification_SizeMismatch_Fails(t *testing.T) {
+	path := verifyWriteLocalFile(t, []byte("short"))
+	rec := verifyingRecord(t, path, 999) // does not match what's actually on disk
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Failed)
+	}
+	failed := j.transitionsTo(Failed)
+	if len(failed) != 1 || !strings.Contains(failed[0].Detail, "expected 999 bytes") {
+		t.Fatalf("FAILED detail = %+v, want it to name the expected size", failed)
+	}
+}
+
+func TestVerify_TransferVerification_NoExpectedSize_Fails(t *testing.T) {
+	path := verifyWriteLocalFile(t, []byte("x"))
+	rec := verifyingRecord(t, path, 0)
+	rec.Transfer = nil // no transfer result and no remote size recorded
+
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q: with no expected size on record, this must refuse rather than guess", out.Record.State, Failed)
+	}
+}
+
+// --- layer 2: hash verification ---
+
+func TestVerify_Hash_TrustsProducerSuppliedChecksum_SkipsRemoteHash(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	rec.Transfer.Checksummed = true
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		t.Fatal("RemoteHash must not be called once the transfer step already recorded a trustworthy checksum")
+		return "", nil
+	}}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+	if tr.remoteHashCalls != 0 {
+		t.Fatalf("RemoteHash called %d times, want 0", tr.remoteHashCalls)
+	}
+}
+
+func TestVerify_Hash_MatchesRemoteHash_Verifies(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	want := sha256Hex(content)
+
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		return want, nil
+	}}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+	if tr.remoteHashCalls != 1 {
+		t.Fatalf("RemoteHash called %d times, want 1", tr.remoteHashCalls)
+	}
+	if out.Record.LocalHash != want {
+		t.Fatalf("recorded LocalHash = %q, want %q", out.Record.LocalHash, want)
+	}
+}
+
+func TestVerify_Hash_MismatchQuarantines(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		return sha256Hex([]byte("something else entirely")), nil
+	}}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q: a proven hash mismatch is a content-invalid finding, not a mere failure", out.Record.State, Quarantined)
+	}
+}
+
+// TestVerify_Hash_RequiredButCapabilityAbsent_FailsExplicitly_NeverSilentlyVerifies
+// is the proof for this issue's central constraint: against a hardened,
+// shell-less SFTP account (docs/ssh-setup.md's recommended setup),
+// rclone's sftp backend cannot run a remote hash command at all, and
+// Transport.RemoteHash returns exactly the classified error simulated
+// here (transport.UnsupportedCapability; see
+// internal/transport/rclone/errors_test.go's
+// unsupported_capability_remote_hash_on_a_shell_less_account and gate_test.go's
+// RemoteHashCapability for that fact proved against a real fixture). A
+// configured "Hash: sha256" policy must never be silently satisfied by the
+// transfer-verification checks alone once this happens.
+func TestVerify_Hash_RequiredButCapabilityAbsent_FailsExplicitly_NeverSilentlyVerifies(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		return "", transport.NewError(transport.UnsupportedCapability, "remote_hash", errors.New("backend cannot compute sha256"))
+	}}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State == string(Verified) {
+		t.Fatal("an unsupported remote hash must never be silently accepted as Verified")
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Failed)
+	}
+	failed := j.transitionsTo(Failed)
+	if len(failed) != 1 {
+		t.Fatalf("recorded %d FAILED transitions, want 1", len(failed))
+	}
+	if !strings.Contains(failed[0].Detail, "unsupported_capability") {
+		t.Fatalf("FAILED detail = %q, want it to explicitly name the capability category", failed[0].Detail)
+	}
+}
+
+func TestVerify_Hash_EmptyPolicy_NeverCallsRemoteHashEvenWithoutAProducerChecksum(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	rec.Transfer.Checksummed = false
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		t.Fatal("RemoteHash must not be called when the operator did not configure a hash policy")
+		return "", nil
+	}}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: ""},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q: transfer verification alone is a legitimate, explicitly-chosen posture", out.Record.State, Verified)
+	}
+}
+
+func TestVerify_Hash_RetriesTransientFailureThenSucceeds(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	want := sha256Hex(content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+
+	attempts := 0
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		attempts++
+		if attempts < 2 {
+			return "", transport.NewError(transport.Transient, "remote_hash", errors.New("connection reset"))
+		}
+		return want, nil
+	}}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+	if attempts < 2 {
+		t.Fatalf("attempts = %d, want at least 2 (a transient failure must be retried)", attempts)
+	}
+}
+
+func TestVerify_Hash_DoesNotRetryUnsupportedCapability(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+
+	attempts := 0
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		attempts++
+		return "", transport.NewError(transport.UnsupportedCapability, "remote_hash", errors.New("no shell"))
+	}}
+
+	if _, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	}); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("RemoteHash called %d times, want exactly 1: retrying an unsupported capability cannot change the answer", attempts)
+	}
+}
+
+// --- hash lookup cancellation: a stop request, not a verdict ---
+
+func TestVerify_AlreadyCancelledContext_RefusesWithoutTouchingTheJournal(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		t.Fatal("RemoteHash should not even be attempted against an already-cancelled context")
+		return "", nil
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := Verify(ctx, Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err == nil {
+		t.Fatal("Verify succeeded despite an already-cancelled context")
+	}
+	if len(j.recorded) != 0 {
+		t.Fatalf("the journal was written to despite cancellation: %+v", j.recorded)
+	}
+}
+
+func TestVerify_HashLookupCancelledDuringRetryBackoff_LeavesJournalAtVerifying(t *testing.T) {
+	orig := remoteHashRetryPolicy
+	remoteHashRetryPolicy = retry.Policy{BaseDelay: 200 * time.Millisecond, MaxDelay: 200 * time.Millisecond, Multiplier: 2}
+	t.Cleanup(func() { remoteHashRetryPolicy = orig })
+
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+
+	started := make(chan struct{}, 1)
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		return "", transport.NewError(transport.Transient, "remote_hash", errors.New("connection reset"))
+	}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started // wait for the first attempt, then cancel during the backoff wait
+		cancel()
+	}()
+
+	_, err := Verify(ctx, Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err == nil {
+		t.Fatal("Verify succeeded despite cancellation during retry backoff")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("errors.Is(err, context.Canceled) = false, want true: %v", err)
+	}
+	if j.currentState() != string(Verifying) {
+		t.Fatalf("journal state = %q, want %q: cancellation must not be recorded as a verdict", j.currentState(), Verifying)
+	}
+	if len(j.recorded) != 0 {
+		t.Fatalf("the journal was written to despite cancellation: %+v", j.recorded)
+	}
+}
+
+// --- layer 3: application validation ---
+
+func TestVerify_Validator_Passes_Verifies(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	script := mustScript(t, "exit 0\n")
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(5 * time.Second)}},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+	if out.Record.ValidationPassed == nil || !*out.Record.ValidationPassed {
+		t.Fatalf("ValidationPassed = %v, want true", out.Record.ValidationPassed)
+	}
+}
+
+func TestVerify_Validator_Fails_Quarantines(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	script := mustScript(t, "echo \"corrupt: page checksum mismatch\" >&2\nexit 1\n")
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(5 * time.Second)}},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Quarantined)
+	}
+	if out.Record.ValidationPassed == nil || *out.Record.ValidationPassed {
+		t.Fatalf("ValidationPassed = %v, want false", out.Record.ValidationPassed)
+	}
+	if !strings.Contains(out.Record.ValidationDetail, "corrupt: page checksum mismatch") {
+		t.Fatalf("ValidationDetail = %q, want it to contain the validator's own output", out.Record.ValidationDetail)
+	}
+}
+
+func TestVerify_Validator_CannotStart_Fails(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Command: &config.Command{Executable: missing, Timeout: config.Duration(5 * time.Second)}},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q: a validator that never ran gives no verdict on content", out.Record.State, Failed)
+	}
+}
+
+func TestVerify_Validator_DoesNotInheritAmbientEnvironment(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	t.Setenv("RCLONE_MANAGER_TEST_SECRET", "super-secret-value")
+
+	script := mustScript(t, "echo \"SECRET=$RCLONE_MANAGER_TEST_SECRET\"\necho \"ARTIFACT=$RCLONE_MANAGER_ARTIFACT_PATH\"\necho \"ARG1=$1\"\nexit 1\n")
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(5 * time.Second)}},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if strings.Contains(out.Record.ValidationDetail, "super-secret-value") {
+		t.Fatalf("the validator saw an ambient secret it must never inherit: %q", out.Record.ValidationDetail)
+	}
+	if !strings.Contains(out.Record.ValidationDetail, "ARTIFACT="+path) {
+		t.Fatalf("the validator did not see its artifact path via env: %q", out.Record.ValidationDetail)
+	}
+	if !strings.Contains(out.Record.ValidationDetail, "ARG1="+path) {
+		t.Fatalf("the validator did not see its artifact path via argv[1]: %q", out.Record.ValidationDetail)
+	}
+}
+
+func TestVerify_Validator_OutputIsBounded(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	script := mustScript(t, "yes A | head -c 1000000\nexit 1\n")
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(5 * time.Second)}},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Quarantined)
+	}
+	if len(out.Record.ValidationDetail) > maxValidatorOutput+64 {
+		t.Fatalf("ValidationDetail length = %d, an untrusted validator's output must be bounded near %d", len(out.Record.ValidationDetail), maxValidatorOutput)
+	}
+}
+
+// TestVerify_Validator_Timeout_KillsProcess_Quarantines is the flagship
+// proof of two FR-13 requirements at once: a required validator that never
+// answers must be treated as a failure (fail closed, QUARANTINED), and the
+// validator process itself must actually be killed, not merely abandoned.
+func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	markerFile := filepath.Join(t.TempDir(), "marker")
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+
+	start := time.Now()
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}},
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("Verify took %s to return; the validator should have been killed well before its 5s sleep finished", elapsed)
+	}
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q: a validator that never answers must fail closed", out.Record.State, Quarantined)
+	}
+	if !strings.Contains(out.Record.ValidationDetail, "timeout") {
+		t.Fatalf("ValidationDetail = %q, want it to mention the timeout", out.Record.ValidationDetail)
+	}
+
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("reading pid file (the validator should have written it immediately on starting): %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		t.Fatalf("parsing pid: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		killErr := syscall.Kill(pid, 0)
+		if errors.Is(killErr, syscall.ESRCH) {
+			break // confirmed: the process is actually gone
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("validator process %d is still alive well after its timeout; it was abandoned, not killed", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("marker file exists: the validator ran to completion despite its timeout, so it was not actually killed")
+	}
+}
+
+// shQuote is a minimal single-quote wrap for the paths this test file
+// interpolates into a generated shell script. t.TempDir() paths on the
+// platforms this project targets never contain a single quote, so this
+// only needs to produce syntactically valid sh, not defend against
+// adversarial input.
+func shQuote(s string) string { return "'" + s + "'" }
+
+// --- the flagship proof: a required validator's failure blocks source deletion ---
+
+// TestFailingValidatorBlocksSourceDeletion drives a real *state.Journal
+// (the same package production code uses, not a fake) through the nominal
+// path from DISCOVERED to VERIFYING, runs Verify with a validator that
+// rejects the artifact, and then proves the resulting QUARANTINED state
+// structurally forecloses ever reaching a state Transport.DeleteRemote
+// could be called from (Committed, RemoteDeletePending) without the whole
+// pipeline running again from DISCOVERED.
+func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
+	ctx := context.Background()
+	j, err := state.Open(ctx, filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	defer j.Close()
+
+	artifact := testArtifact(t)
+	content := []byte("dump-bytes")
+	localPath := verifyWriteLocalFile(t, content)
+
+	if _, err := j.Discover(ctx, artifact, "attempt-1:discover", "backups/backup.dump", state.RemoteIdentity{}, time.Now()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "attempt-1:transferring", From: string(Discovered), To: string(Transferring),
+		LocalPath: &localPath,
+	}); err != nil {
+		t.Fatalf("Advance to Transferring: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "attempt-1:transferred", From: string(Transferring), To: string(Transferred),
+		Transfer: &state.TransferResult{BytesTransferred: int64(len(content))},
+	}); err != nil {
+		t.Fatalf("Advance to Transferred: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "attempt-1:verifying", From: string(Transferred), To: string(Verifying),
+	}); err != nil {
+		t.Fatalf("Advance to Verifying: %v", err)
+	}
+
+	script := mustScript(t, "echo \"pg_restore --list: archive header checksum mismatch\" >&2\nexit 1\n")
+
+	out, err := Verify(ctx, Deps{Journal: j, Transport: &verifyTransport{}}, VerifyParams{
+		Artifact:   artifact,
+		AttemptKey: "attempt-1",
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(5 * time.Second)}},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Quarantined) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Quarantined)
+	}
+
+	// Structural proof #1: Quarantined's only legal successor at all is
+	// Discovered. There is no direct edge to anything closer to deletion.
+	successors := Successors(Quarantined)
+	if len(successors) != 1 || successors[0] != Discovered {
+		t.Fatalf("Successors(Quarantined) = %v, want exactly [Discovered]", successors)
+	}
+
+	// Structural proof #2: Advance itself, backed by the real journal,
+	// refuses every attempt to move straight from Quarantined to a
+	// delete-eligible or later state, and leaves the journal untouched
+	// when it does.
+	for _, illegal := range []State{Verified, Committing, Committed, RemoteDeletePending, Complete} {
+		if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+			Artifact: artifact,
+			Key:      "attempt-1:illegal:" + string(illegal),
+			From:     string(Quarantined),
+			To:       string(illegal),
+		}); err == nil {
+			t.Fatalf("Advance allowed QUARANTINED -> %s; a failing validator must not reach a delete-eligible state directly", illegal)
+		}
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(Quarantined) {
+		t.Fatalf("journal state = %q after the refused Advance attempts, want it to still be %q", rec.State, Quarantined)
+	}
+}
+
+func TestVerify_SameAttemptKey_IsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	j, err := state.Open(ctx, filepath.Join(t.TempDir(), "journal.db"))
+	if err != nil {
+		t.Fatalf("state.Open: %v", err)
+	}
+	defer j.Close()
+
+	artifact := testArtifact(t)
+	content := []byte("dump-bytes")
+	localPath := verifyWriteLocalFile(t, content)
+
+	if _, err := j.Discover(ctx, artifact, "a1:discover", "backups/x", state.RemoteIdentity{}, time.Now()); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "a1:transferring", From: string(Discovered), To: string(Transferring), LocalPath: &localPath,
+	}); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "a1:transferred", From: string(Transferring), To: string(Transferred),
+		Transfer: &state.TransferResult{BytesTransferred: int64(len(content))},
+	}); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "a1:verifying", From: string(Transferred), To: string(Verifying),
+	}); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	deps := Deps{Journal: j, Transport: &verifyTransport{}}
+	params := VerifyParams{Artifact: artifact, AttemptKey: "a1"}
+
+	out1, err := Verify(ctx, deps, params)
+	if err != nil {
+		t.Fatalf("Verify (first): %v", err)
+	}
+	if !out1.Applied {
+		t.Fatal("the first Verify call should have applied the transition")
+	}
+
+	out2, err := Verify(ctx, deps, params)
+	if err != nil {
+		t.Fatalf("Verify (second): %v", err)
+	}
+	if out2.Applied {
+		t.Fatal("a second Verify call with the same AttemptKey should be recognised as a replay, not applied again")
+	}
+	if out2.Record.State != out1.Record.State {
+		t.Fatalf("replay state = %q, want %q", out2.Record.State, out1.Record.State)
+	}
+}
+
+// --- input validation ---
+
+func TestVerify_RejectsMissingRequiredParams(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	cases := []struct {
+		name string
+		deps Deps
+		p    VerifyParams
+	}{
+		{"no journal", Deps{Transport: tr}, VerifyParams{Artifact: rec.Artifact, AttemptKey: "a"}},
+		{"no transport", Deps{Journal: j}, VerifyParams{Artifact: rec.Artifact, AttemptKey: "a"}},
+		{"no attempt key", Deps{Journal: j, Transport: tr}, VerifyParams{Artifact: rec.Artifact}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := Verify(context.Background(), c.deps, c.p); err == nil {
+				t.Fatalf("Verify accepted %s", c.name)
+			}
+		})
+	}
+}
