@@ -67,11 +67,11 @@ func Start(t *testing.T) *Fixture {
 
 	for _, tool := range []string{"docker", "ssh-keygen", "ssh-keyscan"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("sftpfixture: %s not found on PATH, skipping: %v", tool, err)
+			t.Skipf("sftpfixture: SKIPPING (missing capability: %q not found on PATH): %v", tool, err)
 		}
 	}
 	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
-		t.Skipf("sftpfixture: docker daemon not reachable, skipping: %v\n%s", err, out)
+		t.Skipf("sftpfixture: SKIPPING (missing capability: docker daemon not reachable, Docker itself appears absent or not running here): %v\n%s", err, out)
 	}
 
 	runDir := filepath.Join(testsRoot(t), ".run", fmt.Sprintf("%s-%d", sanitize(t.Name()), time.Now().UnixNano()))
@@ -112,6 +112,16 @@ func Start(t *testing.T) *Fixture {
 
 	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
 
+	// Pull explicitly, before "docker run -d", so the run step itself is
+	// quiet regardless of whether the image was already cached on this
+	// machine. Belt and braces alongside dockerCapture's stdout/stderr
+	// separation above: a quiet run has nothing to accidentally mix into the
+	// container ID even if some future docker version starts writing
+	// something else to stdout during "run".
+	if _, err := dockerCapture(t, "pull", "atmoz/sftp:alpine"); err != nil {
+		t.Fatalf("sftpfixture: docker pull atmoz/sftp:alpine: %v", err)
+	}
+
 	args := []string{
 		"run", "-d", "--name", name,
 		"-p", "127.0.0.1::22",
@@ -124,12 +134,12 @@ func Start(t *testing.T) *Fixture {
 		"atmoz/sftp:alpine",
 		User + "::" + containerUID + ":" + containerUID + ":upload",
 	}
-	out, err := exec.Command("docker", args...).CombinedOutput()
+	containerID, err := dockerCapture(t, args...)
 	if err != nil {
 		os.RemoveAll(runDir)
-		t.Fatalf("sftpfixture: docker run: %v\n%s", err, out)
+		t.Fatalf("sftpfixture: docker run: %v", err)
 	}
-	f.containerID = strings.TrimSpace(string(out))
+	f.containerID = containerID
 
 	t.Cleanup(func() {
 		_ = exec.Command("docker", "rm", "-f", f.containerID).Run()
@@ -175,6 +185,32 @@ func must(t *testing.T, err error, what string) {
 	}
 }
 
+// dockerCapture runs a docker command and returns its trimmed stdout, with
+// stderr captured separately for diagnostics rather than merged in.
+//
+// This distinction matters specifically for "docker run -d": on a cold
+// runner (or any machine without the image already cached), the image pull
+// this triggers writes its progress to stderr, not stdout. CombinedOutput
+// merges the two, so the "container ID" a caller reads back is actually pull
+// progress followed by the ID, which then fails every later docker command
+// that tries to address the container by that corrupted string ("Error
+// response from daemon: page not found", exactly the failure a cold CI
+// runner hits and a machine with the image already pulled never does). Only
+// stdout is ever meaningful output here, so only stdout is what gets parsed.
+func dockerCapture(t *testing.T, args ...string) (stdout string, err error) {
+	t.Helper()
+	cmd := exec.Command("docker", args...)
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	err = cmd.Run()
+	stdout = strings.TrimSpace(outBuf.String())
+	if err != nil {
+		return stdout, fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+	}
+	return stdout, nil
+}
+
 func keygen(t *testing.T, path string) {
 	t.Helper()
 	keygenType(t, path, "ed25519", "")
@@ -207,9 +243,9 @@ func waitForPublishedPort(t *testing.T, containerID string) int {
 	deadline := time.Now().Add(15 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		out, err := exec.Command("docker", "port", containerID, "22/tcp").CombinedOutput()
+		out, err := dockerCapture(t, "port", containerID, "22/tcp")
 		if err == nil {
-			line := strings.TrimSpace(strings.Split(string(out), "\n")[0])
+			line := strings.TrimSpace(strings.Split(out, "\n")[0])
 			idx := strings.LastIndex(line, ":")
 			if idx >= 0 {
 				if port, convErr := strconv.Atoi(line[idx+1:]); convErr == nil {
@@ -218,7 +254,7 @@ func waitForPublishedPort(t *testing.T, containerID string) int {
 			}
 			lastErr = fmt.Errorf("unparseable docker port output: %q", line)
 		} else {
-			lastErr = fmt.Errorf("%w: %s", err, out)
+			lastErr = err
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
