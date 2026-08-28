@@ -72,3 +72,16 @@ The repository root is the Go module root. `cmd/backup-manager/` is the entry po
 The project was first scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It lives
 here instead, and the specification says so. Nothing in the design depended on the
 location, so the move cost nothing beyond the wording.
+
+## Toolchain
+
+Go 1.27, and Docker for the disposable SFTP server the integration tests use.
+
+The certified rclone version is pinned in `go.mod`. Do not move it without running the
+full regression set described in `docs/EPIC.md` under the rclone Upgrade Compatibility
+Contract, and never enable automatic merge for that dependency.
+
+```bash
+go build ./...
+go test ./...
+```
