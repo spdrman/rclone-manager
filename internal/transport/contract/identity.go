@@ -5,19 +5,26 @@
 // non-rclone implementation entirely) runs the identical assertions without
 // anyone rewriting lifecycle tests.
 //
-// This package also carries the reference remote-identity comparison that
-// FR-16 describes: persist identity at discovery, recheck it immediately
-// before deletion, and refuse the deletion if the object no longer matches.
-// The lifecycle/state packages that will own this for real do not exist yet,
-// so it lives here for now, next to the tests that prove it actually catches
-// a replacement. A future FR-16 implementation should behave identically to
-// Changed below; promoting this logic verbatim into state/lifecycle once
-// those packages exist is a reasonable path.
+// This package also carries Capture and Changed, which the
+// changed-object-detection case below exercises for FR-16: persist identity
+// at discovery, recheck it immediately before deletion, and refuse the
+// deletion if the object no longer matches with sufficient confidence. The
+// actual comparison logic lives in internal/model (RemoteIdentity,
+// CompareIdentity), which every other package should call directly, since
+// model depends on nothing and lifecycle/state/discovery can all reach it
+// without depending on contract. Changed below is a thin adapter over
+// model.CompareIdentity, kept only so this file's existing (bool, bool)
+// signature keeps compiling for the suite in contract.go. It is deliberately
+// not a second, independent implementation of the comparison: two answers to
+// "has this object changed" that can disagree with each other is a worse
+// hazard than either answer being wrong on its own, given that this is the
+// check that decides whether a delete proceeds.
 package contract
 
 import (
 	"context"
 
+	"github.com/spdrman/rclone-manager/internal/model"
 	"github.com/spdrman/rclone-manager/internal/transport"
 )
 
@@ -32,11 +39,31 @@ type Identity struct {
 	HasHash  bool
 }
 
+// toModel maps this contract-local Identity onto model.RemoteIdentity, the
+// type model.CompareIdentity actually operates on. HasHash gates whether the
+// hash fields carry across: Capture only ever sets Artifact.Hash/HashAlg
+// alongside HasHash together, but a value built by hand (as several table
+// tests here do) might not, so this does not just trust that the two always
+// travel as a pair.
+func (id Identity) toModel() model.RemoteIdentity {
+	r := model.RemoteIdentity{
+		Path:     id.Artifact.Path,
+		Size:     id.Artifact.Size,
+		ModTime:  id.Artifact.ModTime,
+		StableID: id.Artifact.ID,
+	}
+	if id.HasHash {
+		r.Hash = id.Artifact.Hash
+		r.HashAlg = string(id.Artifact.HashAlg)
+	}
+	return r
+}
+
 // Capture builds an Identity for remotePath by combining Stat with a
 // best-effort RemoteHash call using alg. A backend that cannot produce alg for
 // this object simply leaves HasHash false rather than failing the capture:
-// whether a hash-less identity is good enough is Changed's call to make, not
-// this one's.
+// whether a hash-less identity is good enough is model.CompareIdentity's call
+// to make, not this one's.
 func Capture(ctx context.Context, tr transport.Transport, source transport.Source, remotePath string, alg transport.HashAlgorithm) (Identity, error) {
 	art, err := tr.Stat(ctx, source, remotePath)
 	if err != nil {
@@ -54,27 +81,24 @@ func Capture(ctx context.Context, tr transport.Transport, source transport.Sourc
 
 // Changed reports whether current no longer corresponds to discovered, i.e.
 // whether an FR-15 pre-delete recheck must refuse the deletion. confident
-// reports whether that verdict rests on an unambiguous attribute (path, size,
-// modification time or hash); when neither side carries a hash and the
-// modification time cannot be compared either, Changed cannot rule out a
-// same-second, same-size replacement, and FR-16 is explicit about what that
-// means: preserve the remote object rather than guess, so callers should
-// treat !confident as "refuse" regardless of the changed value returned.
+// reports whether that verdict rests on model.ConfidenceStrong evidence: a
+// decisive hash agreement/disagreement, backend stable-identifier
+// agreement/disagreement, or an outright mismatch on path, size, or
+// modification time. When the comparison can only reach
+// model.ConfidenceWeak or model.ConfidenceNone, confident is false
+// regardless of the changed value returned, and FR-16 is explicit about
+// what that means: preserve the remote object rather than guess, so callers
+// should treat !confident as "refuse" regardless of changed.
+//
+// This used to compare attributes itself, and treated a bare size and
+// modification time agreement (no hash on either side) as confident and
+// unchanged. That was wrong: modification-time granularity (commonly one
+// second on many filesystems, and on rclone backends that cannot do better)
+// cannot see a same-second, same-size replacement, so calling that
+// confident is a green light to delete a file this manager never actually
+// verified. Changed now delegates to model.CompareIdentity, which reaches
+// that same case as ConfidenceWeak, not ConfidenceStrong.
 func Changed(discovered, current Identity) (changed bool, confident bool) {
-	if discovered.Artifact.Path != current.Artifact.Path {
-		return true, true
-	}
-	if discovered.HasHash && current.HasHash {
-		return discovered.Artifact.Hash != current.Artifact.Hash, true
-	}
-	if discovered.Artifact.Size != current.Artifact.Size {
-		return true, true
-	}
-	if discovered.Artifact.ModTime != 0 && current.Artifact.ModTime != 0 {
-		return discovered.Artifact.ModTime != current.Artifact.ModTime, true
-	}
-	// Same path, same size, no hash on at least one side, and no usable
-	// modification time to fall back on: a same-second, same-size content
-	// replacement is indistinguishable from no change at all here.
-	return false, false
+	cmp := model.CompareIdentity(discovered.toModel(), current.toModel())
+	return cmp.Verdict == model.VerdictChanged, cmp.Confidence == model.ConfidenceStrong
 }
