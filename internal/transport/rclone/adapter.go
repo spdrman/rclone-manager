@@ -9,7 +9,6 @@ package rclone
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	// local and sftp are the two backends FR-4 requires. Importing them,
 	// together with fs/operations below, also registers crypt transitively.
@@ -37,6 +36,9 @@ var _ transport.Transport = (*Adapter)(nil)
 // fsFor builds an rclone Fs for a source without touching any on-disk rclone
 // config file. Everything comes from the manager's own configuration, so there
 // is no ambient rclone state to leak in.
+//
+// sftp options are built by sftpConfig in ssh.go, which owns the SSH
+// authentication and host-key verification posture required by FR-6.
 func (a *Adapter) fsFor(ctx context.Context, src transport.Source) (fs.Fs, error) {
 	info, err := fs.Find(src.Type)
 	if err != nil {
@@ -45,20 +47,11 @@ func (a *Adapter) fsFor(ctx context.Context, src transport.Source) (fs.Fs, error
 
 	cfg := configmap.Simple{}
 	if src.Type == "sftp" {
-		cfg.Set("host", src.Host)
-		if src.Port != 0 {
-			cfg.Set("port", strconv.Itoa(src.Port))
+		sftpCfg, err := sftpConfig(src)
+		if err != nil {
+			return nil, err
 		}
-		cfg.Set("user", src.User)
-		if src.KeyFile != "" {
-			cfg.Set("key_file", src.KeyFile)
-		}
-		// Host-key verification is not optional. An unset known_hosts would let
-		// rclone accept any key, which is exactly the failure FR-6 forbids.
-		if src.KnownHosts == "" {
-			return nil, fmt.Errorf("source %q: known_hosts is required for sftp", src.ID)
-		}
-		cfg.Set("known_hosts_file", src.KnownHosts)
+		cfg = sftpCfg
 	}
 
 	f, err := info.NewFs(ctx, src.ID, src.Root, cfg)

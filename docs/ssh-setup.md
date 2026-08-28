@@ -1,0 +1,244 @@
+# SSH/SFTP setup for backup-manager
+
+This is FR-6 from `docs/EPIC.md` ("SSH/SFTP Security") turned into something an
+operator can actually follow: how to create the dedicated key, how to lock
+down the remote account, and how to capture its host key without just trusting
+whatever the network hands you. Read FR-6 and the Security Requirements
+section of the EPIC first if you haven't, this file assumes them.
+
+## What backup-manager actually enforces
+
+Before the how-to, the ground truth, because policy documents drift from code
+and this one shouldn't get the chance to. `internal/transport/rclone/ssh.go`
+builds every sftp connection this manager makes, and it refuses to build one
+at all unless:
+
+- `key_file` points at a real, readable file. There is no fallback to an
+  ssh-agent and no password option, because `transport.Source` has no
+  password field and this adapter never sets one, even though rclone's sftp
+  backend supports both.
+- `known_hosts` points at a real, readable file. An empty value is refused,
+  and so is the literal string `none`, which is rclone's own way of saying
+  "don't check host keys at all." Both would otherwise let rclone accept any
+  host key silently, which is the exact failure FR-6 exists to prevent.
+
+So the two things this doc walks through, a key file and a known_hosts file,
+aren't just good practice, they're the two things you cannot skip.
+
+## 1. Generate a dedicated SSH key pair
+
+Don't reuse a personal or shared key. Generate one that exists for this
+backup job and nothing else, so it can be rotated or revoked without touching
+anything unrelated:
+
+```bash
+ssh-keygen -t ed25519 -f /etc/backup-manager/ssh/backup_key -C "backup-manager" -N ""
+```
+
+The empty `-N ""` means no passphrase. That's deliberate, not an oversight:
+backup-manager runs unattended and has nowhere to prompt for one. The
+passphrase's job (protecting the key if the file leaks) gets done instead by
+filesystem permissions and by mounting the key read-only into wherever
+backup-manager actually runs:
+
+```bash
+chmod 600 /etc/backup-manager/ssh/backup_key
+chown root:root /etc/backup-manager/ssh/backup_key
+```
+
+Never commit this key, or any real key, to Git. If you generate it inside a
+repo checkout by mistake, `git status` before you commit anything.
+
+## 2. Create the restricted account on the remote server
+
+FR-6 asks for an account that's dedicated to backups, SFTP-only, has no
+interactive shell, is confined to backup directories, can list/read/delete
+eligible artifacts, but can't modify or replace completed ones, and has no
+other server privileges. Here's what that looks like as actual commands, on
+the remote server, as root:
+
+```bash
+useradd --system --create-home --home-dir /srv/backup-manager \
+        --shell /usr/sbin/nologin backupsvc
+mkdir -p /srv/backup-manager/incoming
+```
+
+`/usr/sbin/nologin` blocks every login path that goes through the account's
+shell (console, `su`, cron, anything PAM-based). It does not block SFTP,
+because the SFTP subsystem never execs the user's shell in the first place,
+it runs the sftp-server binary directly. I confirmed this myself in the
+Docker fixture `ssh_test.go` builds: the fixture's `backup` user has
+`/sbin/nologin` as its shell and SFTP still works, because the config in the
+next step is what actually does the confining.
+
+Add your dedicated public key to this account:
+
+```bash
+mkdir -p /srv/backup-manager/incoming/.ssh
+chmod 700 /srv/backup-manager/incoming/.ssh
+cp /etc/backup-manager/ssh/backup_key.pub /srv/backup-manager/incoming/.ssh/authorized_keys
+chmod 600 /srv/backup-manager/incoming/.ssh/authorized_keys
+chown -R backupsvc:backupsvc /srv/backup-manager/incoming/.ssh
+```
+
+OpenSSH is strict about ownership here and will silently refuse to read
+`authorized_keys` if the permissions are too loose, so match the modes above
+exactly.
+
+## 3. Chroot and force sftp-only in sshd_config
+
+This is the step that actually confines the account, and it's also where the
+"delete but don't modify/replace" requirement lives, since that one isn't a
+single config line. Add to `/etc/ssh/sshd_config`:
+
+```
+Match User backupsvc
+    ChrootDirectory /srv/backup-manager/incoming
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTTY no
+```
+
+`ChrootDirectory` requires the chroot root itself, and every directory above
+the writable part, to be owned by root and not writable by group or other:
+
+```bash
+chown root:root /srv/backup-manager /srv/backup-manager/incoming
+chmod 755 /srv/backup-manager /srv/backup-manager/incoming
+```
+
+Put the actual backup artifacts in a subdirectory the account owns, not in
+the chroot root itself:
+
+```bash
+mkdir -p /srv/backup-manager/incoming/backups
+chown backupsvc:backupsvc /srv/backup-manager/incoming/backups
+chmod 750 /srv/backup-manager/incoming/backups
+```
+
+Now the "list/read/delete eligible artifacts, but never modify or replace a
+completed one" requirement. This is a POSIX permission split that's easy to
+get backwards, so here it is spelled out: unlinking (deleting or renaming) a
+file is controlled by write permission on the *directory* it lives in.
+Overwriting a file's *content* is controlled by write permission on the file
+itself. Those are two independent checks, which is exactly the lever FR-6
+needs:
+
+- Give `backupsvc` write+execute on `backups/` (already done above), so it
+  can delete entries.
+- Have whatever process produces the completed artifacts write them as a
+  *different* user, and land them read-only to `backupsvc`:
+
+```bash
+# run as the producer account, after a backup artifact is finalized
+chown produceruser:backupsvc /srv/backup-manager/incoming/backups/some-artifact.dump.zst
+chmod 440 /srv/backup-manager/incoming/backups/some-artifact.dump.zst
+```
+
+With that combination, `backupsvc` can `list`, `get`, and `rm` the artifact
+over SFTP (directory permissions allow it), but `open()`-ing it for write
+fails (file permissions block it), so a compromised or buggy
+`backup-manager` process can delete a stale backup once it's confirmed
+durably copied elsewhere, but it can never quietly corrupt or replace one in
+place. Also make sure the `backups/` directory does **not** have the sticky
+bit set: a sticky directory restricts deletion to the file's owner, which
+here is the producer account, not `backupsvc`, and would break the delete
+path this account needs.
+
+Finally, `backupsvc` should not be in any admin/sudo group and should have no
+other login method on this host. Check with `sudo -l -U backupsvc` (expect
+"not allowed to run sudo") and `id backupsvc` (expect only its own group).
+
+Test the sshd config before reloading, then reload:
+
+```bash
+sshd -t
+systemctl reload sshd
+```
+
+## 4. Capture the server's host key, verified, not just trusted
+
+This is the part that matters most, so don't shortcut it.
+`ssh-keyscan`/first connection alone is trust-on-first-use: whatever key
+answers the first time gets recorded, no matter who's actually answering. To
+get real assurance, verify the fingerprint out-of-band, over a channel you
+already trust, before you write anything to `known_hosts`:
+
+```bash
+# on the remote server itself, over a channel you already trust
+# (cloud console, physical access, an already-verified session)
+ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+```
+
+Then, from wherever backup-manager will actually connect from:
+
+```bash
+ssh-keyscan -t ed25519 -p 22 production.example.internal > /etc/backup-manager/known_hosts
+ssh-keygen -lf /etc/backup-manager/known_hosts
+```
+
+Compare the two fingerprints by eye. If they don't match, stop, you're either
+talking to the wrong host or something is intercepting the connection. Only
+once they match does `/etc/backup-manager/known_hosts` mean anything.
+
+From here on, backup-manager itself is what keeps this honest: if that host's
+key ever changes, whether from a legitimate server rebuild or from something
+worse, every connection attempt gets refused until a human repeats this
+verification step and updates the file on purpose. That refusal is exactly
+what the integration test in `internal/transport/rclone/ssh_test.go` proves:
+it stands up a real SFTP server, records its key, swaps in a second server
+with a different one on the same address, and checks that the connection is
+refused rather than silently reconnecting to whatever answered.
+
+## 5. Point a source at it
+
+Using the shape from FR-5's config example in `docs/EPIC.md`:
+
+```yaml
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: sftp
+          host: production.example.internal
+          port: 22
+          user: backupsvc
+          key_file: /etc/backup-manager/ssh/backup_key
+          known_hosts: /etc/backup-manager/known_hosts
+        remote_path: /backups
+```
+
+Mount `backup_key` and `known_hosts` read-only into wherever backup-manager
+runs, per the Security Requirements section's "credentials mounted read-only
+where practical."
+
+## 6. Verify it end to end before pointing it at anything real
+
+Before trusting this setup with production data, do a manual sanity check
+with the same files backup-manager will use:
+
+```bash
+sftp -i /etc/backup-manager/ssh/backup_key \
+     -o UserKnownHostsFile=/etc/backup-manager/known_hosts \
+     -o StrictHostKeyChecking=yes \
+     backupsvc@production.example.internal
+```
+
+You should land in `backups/` with no shell, no password prompt, and the
+ability to `ls`, `get`, and `rm` but not overwrite an existing artifact
+in place. If any of that isn't true, fix it here before wiring the config in
+step 5, since backup-manager itself will fail the same way for the same
+reason.
+
+## What this setup deliberately refuses
+
+- `known_hosts: none` or an empty `known_hosts`. Both disable host-key
+  verification, and this adapter refuses to build a connection at all rather
+  than let that happen.
+- An empty `key_file`, expecting an ssh-agent or a password prompt to cover
+  for it. Neither is offered. Configure the key or the source doesn't run.
+- A changed host key at a previously-known address, without a human repeating
+  step 4 on purpose.
