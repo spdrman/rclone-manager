@@ -1,0 +1,43 @@
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+
+        remote:
+          type: sftp
+          host: production.example.internal
+          port: 22
+          user: backup
+          key_file: /run/secrets/backup_ssh_key
+          known_hosts: /etc/backup-manager/known_hosts
+
+        remote_path: /backups/postgres
+        local_path: /backups/production/postgres
+
+        include:
+          - "*.dump.zst"
+
+        completion:
+          strategy: stable
+          stable_for: 10m
+
+        stale_after: 30h
+
+        validation:
+          hash: sha256
+          command:
+            executable: /usr/local/bin/validate-postgres-backup
+            timeout: 10m
+
+retention:
+  timezone: America/Vancouver
+  week_starts_on: monday
+  daily_days: 7
+  weekly_months: 3
+  monthly_months: 12
+  protect_last_known_good: true

@@ -177,7 +177,7 @@ func TestChanged(t *testing.T) {
 			note:          "FR-16: identity cannot be established with sufficient confidence here, so a caller must refuse rather than treat this as a safe match",
 		},
 		{
-			name: "hash on discovered side only falls back to size/modtime",
+			name: "hash on discovered side only falls back to weak size/modtime evidence",
 			discovered: Identity{
 				Artifact: withHash(base, "hash-a"),
 				HasHash:  true,
@@ -185,8 +185,15 @@ func TestChanged(t *testing.T) {
 			current: Identity{
 				Artifact: base, // same size/modtime, no hash available now
 			},
+			// This used to assert wantConfident: true. That was the bug this
+			// package's Changed used to have (now fixed by delegating to
+			// model.CompareIdentity): a size+modtime agreement with no hash on
+			// at least one side is not proof of anything, it is exactly the
+			// same-second, same-size replacement FR-16 exists to catch. Do not
+			// "fix" this back to true; true was the wrong answer.
 			wantChanged:   false,
-			wantConfident: true,
+			wantConfident: false,
+			note:          "no two-sided hash comparison was possible, so a size/modtime agreement is only weak evidence, not confirmation",
 		},
 	}
 
