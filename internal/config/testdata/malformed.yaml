@@ -1,0 +1,9 @@
+poll_interval: 15m
+state:
+  database: /var/lib/backup-manager/state.db
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+      remote_path: /backups/postgres
+   local_path: /backups/production/postgres
