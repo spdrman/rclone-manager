@@ -63,9 +63,12 @@ functional requirements, the security and failure-safety invariants, the rclone 
 compatibility contract, the testing matrix, and the five-reviewer adversarial consensus
 that settled the architecture. The delivery plan and its phases are tracked as issues.
 
-## A note on where this lives
+## Layout
 
-The EPIC was written against `iasbuilt/iac`, placing the tool under
-`tools/backup-manager/`. This repository is standalone instead, so the acceptance
-criterion that names that path needs rewording before it can be ticked. Nothing else in
-the specification depends on the location.
+The repository root is the Go module root. `cmd/backup-manager/` is the entry point,
+`internal/` holds the application packages, and every rclone import stays inside
+`internal/transport/rclone/`. The full tree is in `docs/EPIC.md`.
+
+The project was first scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It lives
+here instead, and the specification says so. Nothing in the design depended on the
+location, so the move cost nothing beyond the wording.

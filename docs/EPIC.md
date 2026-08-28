@@ -2,11 +2,11 @@
 
 ## Summary
 
-Implement a purpose-built backup lifecycle manager in `iasbuilt/iac`
-under:
+Implement a purpose-built backup lifecycle manager in its own
+repository:
 
 ``` text
-tools/backup-manager/
+spdrman/rclone-manager
 ```
 
 The manager will run on a UGREEN NAS and ingest backup artifacts that
@@ -280,45 +280,53 @@ files.
 
 # Repository Layout
 
+The repository root is the Go module root:
+
 ``` text
-tools/
+README.md
+go.mod
+go.sum
+
+cmd/
   backup-manager/
-    README.md
-    go.mod
-    go.sum
 
-    cmd/
-      backup-manager/
+internal/
+  app/
+  config/
+  model/
+  discovery/
+  lifecycle/
+  retention/
+  validation/
+  state/
+  health/
 
-    internal/
-      app/
-      config/
-      model/
-      discovery/
-      lifecycle/
-      retention/
-      validation/
-      state/
-      health/
+  transport/
+    transport.go
+    rclone/
+      adapter.go
+      config.go
+      listing.go
+      copy.go
+      hash.go
+      delete.go
+      errors.go
 
-      transport/
-        transport.go
-        rclone/
-          adapter.go
-          config.go
-          listing.go
-          copy.go
-          hash.go
-          delete.go
-          errors.go
+docs/
+  EPIC.md
 
-    migrations/
-    tests/
+migrations/
+tests/
 
-    container/
-      Dockerfile
-      compose.yaml
+container/
+  Dockerfile
+  compose.yaml
 ```
+
+This was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`.
+The project now lives in its own repository, so the module root is the
+repository root. Nothing else in this specification depends on the
+location.
 
 Application packages outside `internal/transport/rclone` SHOULD NOT
 directly import rclone packages.
@@ -1388,7 +1396,7 @@ Potential:
 
 # Acceptance Criteria
 
--   [ ] Tool exists under `tools/backup-manager/`.
+-   [ ] Tool lives in its own repository, `spdrman/rclone-manager`.
 -   [ ] Implementation is Go.
 -   [ ] rclone is embedded as Go modules.
 -   [ ] rclone is not forked.
