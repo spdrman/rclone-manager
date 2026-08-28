@@ -1,0 +1,373 @@
+package config
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spdrman/rclone-manager/internal/model"
+)
+
+// Validate checks a Config for every problem this package knows how to
+// catch, and fills in the documented default for every field that has one.
+//
+// Those two things happen together on purpose. A Config that comes back
+// from a successful Validate call is fully resolved: no retention tier is
+// still zero, ProtectLastKnownGood is never nil, and every backup set's ID
+// is populated. Downstream code (retention, discovery, health) can read
+// those fields directly and never has to re-derive "what does zero mean
+// here", which is exactly the kind of scattered, ad hoc check this function
+// exists to replace with one, tested, place.
+//
+// Validate collects every problem it finds rather than returning on the
+// first one: a config wrong in three places should not cost an operator
+// three restarts to fix.
+//
+// Validate is safe to call more than once on the same Config: every default
+// it fills in is only applied when the field is still at its zero value, so
+// a second call is a no-op.
+func (c *Config) Validate() error {
+	v := &validator{}
+
+	if c.PollInterval.Duration() <= 0 {
+		v.addf("poll_interval: must be set to a positive duration (got %s)", c.PollInterval)
+	}
+
+	v.validateState(c.State)
+
+	if len(c.Sources) == 0 {
+		v.addf("sources: at least one source is required")
+	}
+
+	seenSourceNames := map[string]bool{}
+	seenSetIDs := map[string]string{} // BackupSetID.String() -> the field path that first claimed it
+
+	for i := range c.Sources {
+		src := &c.Sources[i]
+		path := fmt.Sprintf("sources[%d]", i)
+
+		if src.Name == "" {
+			v.addf("%s: id must not be empty", path)
+		} else if seenSourceNames[src.Name] {
+			v.addf("%s: duplicate source id %q", path, src.Name)
+		}
+		seenSourceNames[src.Name] = true
+
+		if len(src.BackupSets) == 0 {
+			v.addf("%s: at least one backup set is required", path)
+		}
+
+		for j := range src.BackupSets {
+			bsPath := fmt.Sprintf("%s.backup_sets[%d]", path, j)
+			v.validateBackupSet(bsPath, src.Name, &src.BackupSets[j], seenSetIDs)
+		}
+	}
+
+	v.validateRetention(&c.Retention)
+
+	return v.err()
+}
+
+func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, seenSetIDs map[string]string) {
+	if bs.Name == "" {
+		v.addf("%s: id must not be empty", path)
+	}
+
+	// FR-7: the identity is source-plus-set, and it goes through
+	// model.NewBackupSetID rather than string concatenation so the same
+	// validation the model package tests (no separator, no whitespace, no
+	// control characters in either half) applies here too, instead of being
+	// re-implemented, and possibly reimplemented incompletely, in this
+	// package.
+	id, err := model.NewBackupSetID(sourceName, bs.Name)
+	if err != nil {
+		v.addf("%s: %v", path, err)
+	} else {
+		bs.ID = id
+		if prev, dup := seenSetIDs[id.String()]; dup {
+			v.addf("%s: backup set id %q is already used by %s", path, id, prev)
+		} else {
+			seenSetIDs[id.String()] = path
+		}
+	}
+
+	v.validateRemote(path+".remote", &bs.Remote)
+
+	if bs.RemotePath == "" {
+		v.addf("%s: remote_path must not be empty", path)
+	} else if err := validAbsolutePath(bs.RemotePath); err != nil {
+		v.addf("%s: remote_path %v", path, err)
+	}
+
+	if bs.LocalPath == "" {
+		v.addf("%s: local_path must not be empty", path)
+	} else if err := validAbsolutePath(bs.LocalPath); err != nil {
+		v.addf("%s: local_path %v", path, err)
+	}
+
+	for k, pat := range bs.Include {
+		incPath := fmt.Sprintf("%s.include[%d]", path, k)
+		switch {
+		case pat == "":
+			v.addf("%s: must not be empty", incPath)
+		case strings.ContainsAny(pat, `/\`):
+			// Include patterns match artifact basenames (see
+			// model.ArtifactID, which refuses anything else), never paths:
+			// remote filenames are untrusted (FR-8), and a pattern that
+			// could itself contain a path separator invites exactly the
+			// kind of traversal ArtifactID is built to reject downstream.
+			v.addf("%s: %q must be a filename pattern, not a path", incPath, pat)
+		default:
+			if _, err := filepath.Match(pat, ""); err != nil {
+				v.addf("%s: %q is not a valid pattern: %v", incPath, pat, err)
+			}
+		}
+	}
+
+	v.validateCompletion(path+".completion", &bs.Completion)
+
+	// A stale_after that parses to the zero Duration must not be read as
+	// "age >= 0 is always true, so every backup is stale": that would make
+	// every backup set report STALE the instant it starts, which is a false
+	// alarm at best and, if anything downstream ever reacts to STALE
+	// automatically, a wrong one. There is no default duration documented
+	// anywhere for this field, so rather than guess one, a missing or zero
+	// stale_after is refused outright.
+	if bs.StaleAfter.Duration() <= 0 {
+		v.addf("%s: stale_after must be set to a positive duration (got %s)", path, bs.StaleAfter)
+	}
+
+	v.validateValidation(path+".validation", &bs.Validation)
+}
+
+func (v *validator) validateRemote(path string, r *Remote) {
+	switch r.Type {
+	case "sftp":
+		if r.Host == "" {
+			v.addf("%s: host is required for type \"sftp\"", path)
+		}
+		if r.User == "" {
+			v.addf("%s: user is required for type \"sftp\"", path)
+		}
+		// Mirrors the requirement enforced again, independently, in
+		// transport/rclone/ssh.go: key-based auth is mandatory so an
+		// operator who forgot to set key_file never falls through to
+		// rclone's ssh-agent fallback. Catching it here means a config
+		// mistake is reported before the manager ever tries to connect,
+		// not on the first attempt to reach the remote.
+		if r.KeyFile == "" {
+			v.addf("%s: key_file is required for type \"sftp\"", path)
+		}
+		if r.KnownHosts == "" {
+			v.addf("%s: known_hosts is required for type \"sftp\"", path)
+		} else if strings.EqualFold(strings.TrimSpace(r.KnownHosts), "none") {
+			// rclone treats the literal value "none" as an explicit request
+			// to disable host-key checking. See ssh.go's package comment
+			// for the full trace; the same value is refused here so the
+			// mistake is caught at config time.
+			v.addf("%s: known_hosts value %q disables host-key verification, which is not allowed (FR-6)", path, r.KnownHosts)
+		}
+		if r.Port < 0 || r.Port > 65535 {
+			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
+		}
+	case "local":
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || r.KnownHosts != "" || r.Port != 0 {
+			v.addf("%s: host, port, user, key_file and known_hosts are not used for type \"local\"; remove them", path)
+		}
+	case "":
+		v.addf("%s: type must be set (\"local\" or \"sftp\")", path)
+	default:
+		v.addf("%s: unsupported type %q; this build only registers \"local\" and \"sftp\" (FR-4)", path, r.Type)
+	}
+}
+
+func (v *validator) validateCompletion(path string, c *Completion) {
+	switch c.Strategy {
+	case "stable":
+		if c.StableFor.Duration() <= 0 {
+			v.addf("%s: stable_for must be set to a positive duration when strategy is \"stable\"", path)
+		}
+	case "rename", "marker":
+		if c.StableFor.Duration() != 0 {
+			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
+		}
+	case "":
+		v.addf("%s: strategy must be set (\"rename\", \"marker\" or \"stable\", FR-8)", path)
+	default:
+		v.addf("%s: unsupported strategy %q; must be \"rename\", \"marker\" or \"stable\" (FR-8)", path, c.Strategy)
+	}
+}
+
+func (v *validator) validateValidation(path string, val *Validation) {
+	switch val.Hash {
+	case "", "sha256":
+	default:
+		v.addf("%s: unsupported hash %q; must be empty or \"sha256\"", path, val.Hash)
+	}
+
+	if val.Command == nil {
+		return
+	}
+	cmdPath := path + ".command"
+	if val.Command.Executable == "" {
+		v.addf("%s: executable must not be empty", cmdPath)
+	} else if !filepath.IsAbs(val.Command.Executable) {
+		// Required so the validator that runs against a candidate restore
+		// point resolves to exactly one binary regardless of the process's
+		// working directory or $PATH at the moment it happens to run,
+		// rather than whatever a relative name resolves to.
+		v.addf("%s: executable %q must be an absolute path", cmdPath, val.Command.Executable)
+	}
+	// A required validator with no timeout can hang the lifecycle it's
+	// gating on forever; there's no safe default duration to guess here
+	// either, so this is required whenever a command is configured at all.
+	if val.Command.Timeout.Duration() <= 0 {
+		v.addf("%s: timeout must be set to a positive duration", cmdPath)
+	}
+}
+
+func (v *validator) validateState(s State) {
+	if s.Database == "" {
+		v.addf("state.database: must not be empty")
+		return
+	}
+	if err := validAbsolutePath(s.Database); err != nil {
+		v.addf("state.database: %v", err)
+	}
+}
+
+var validWeekdays = map[string]bool{
+	"monday":    true,
+	"tuesday":   true,
+	"wednesday": true,
+	"thursday":  true,
+	"friday":    true,
+	"saturday":  true,
+	"sunday":    true,
+}
+
+func (v *validator) validateRetention(r *Retention) {
+	if r.Timezone == "" {
+		r.Timezone = "UTC"
+	}
+	if _, err := time.LoadLocation(r.Timezone); err != nil {
+		v.addf("retention.timezone: %q is not a loadable IANA timezone: %v", r.Timezone, err)
+	}
+
+	if r.WeekStartsOn == "" {
+		r.WeekStartsOn = "monday"
+	} else {
+		r.WeekStartsOn = strings.ToLower(r.WeekStartsOn)
+	}
+	if !validWeekdays[r.WeekStartsOn] {
+		v.addf("retention.week_starts_on: %q is not a day of the week", r.WeekStartsOn)
+	}
+
+	// FR-18's retention table documents 7 daily / 3 weekly / 12 monthly as
+	// the default policy. A tier left at zero, whether because the key was
+	// omitted or written as 0, falls back to that documented default here
+	// rather than being read literally: a literal zero would mean "keep
+	// none of this tier", and a retention pass that deletes an entire
+	// tier because the operator left a key out of the YAML file is a
+	// data-loss bug, not a permissive default. An operator who explicitly
+	// wants a tighter policy sets a positive number smaller than the
+	// default; there is no way to spell "disable this tier" in this
+	// schema, by design.
+	if r.DailyDays == 0 {
+		r.DailyDays = 7
+	} else if r.DailyDays < 0 {
+		v.addf("retention.daily_days: must not be negative (got %d)", r.DailyDays)
+	}
+	if r.WeeklyMonths == 0 {
+		r.WeeklyMonths = 3
+	} else if r.WeeklyMonths < 0 {
+		v.addf("retention.weekly_months: must not be negative (got %d)", r.WeeklyMonths)
+	}
+	if r.MonthlyMonths == 0 {
+		r.MonthlyMonths = 12
+	} else if r.MonthlyMonths < 0 {
+		v.addf("retention.monthly_months: must not be negative (got %d)", r.MonthlyMonths)
+	}
+
+	// FR-19: the newest known-good restore point must never be deleted
+	// solely because of its age. ProtectLastKnownGood is a *bool rather
+	// than a bool specifically so "the key was left out of the YAML file"
+	// and "the operator explicitly wrote false" are distinguishable inputs.
+	// A plain bool can't tell them apart, and its zero value is false, so a
+	// config that simply omits this key would silently turn the protection
+	// off. Only the "absent" case is defaulted, and it defaults to the safe
+	// reading; an explicit false is left as the operator wrote it.
+	if r.ProtectLastKnownGood == nil {
+		protect := true
+		r.ProtectLastKnownGood = &protect
+	}
+}
+
+// validAbsolutePath rejects anything that is not an absolute, traversal-free
+// path.
+//
+// This is deliberately stricter than the leeway ssh.go's sftpConfig gives
+// key_file and known_hosts, which are passed through env.ShellExpand and so
+// may legitimately start with "~" or an environment variable reference.
+// This package does not import anything from rclone (only transport/rclone
+// may), so it cannot replicate that exact expansion without risking a
+// second, subtly different implementation of it; key_file and known_hosts
+// are therefore only checked here for being non-empty and traversal-free,
+// and are left to transport to resolve and confirm exist. local_path,
+// remote_path and state.database have no documented expansion syntax
+// anywhere in this codebase, and get to be held to the stricter standard:
+// they define the managed backup root and the lifecycle journal location,
+// so a path that resolves differently depending on the process's working
+// directory is exactly the kind of ambiguity FR-20's "prove it is beneath
+// the configured backup-set root" is guarding against.
+func validAbsolutePath(p string) error {
+	if !filepath.IsAbs(p) {
+		return fmt.Errorf("%q must be an absolute path", p)
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return fmt.Errorf("%q must not contain \"..\"", p)
+		}
+	}
+	return nil
+}
+
+// validator accumulates every problem Validate finds instead of stopping at
+// the first one.
+type validator struct {
+	problems []error
+}
+
+func (v *validator) addf(format string, args ...any) {
+	v.problems = append(v.problems, fmt.Errorf(format, args...))
+}
+
+func (v *validator) err() error {
+	if len(v.problems) == 0 {
+		return nil
+	}
+	return &ValidationError{Problems: v.problems}
+}
+
+// ValidationError is what Validate returns when the config has one or more
+// problems. It carries every problem found in a single Validate call, not
+// just the first, so fixing a config doesn't take one restart per mistake.
+type ValidationError struct {
+	Problems []error
+}
+
+func (e *ValidationError) Error() string {
+	if len(e.Problems) == 1 {
+		return fmt.Sprintf("invalid config: %v", e.Problems[0])
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "invalid config (%d problems):", len(e.Problems))
+	for _, p := range e.Problems {
+		fmt.Fprintf(&b, "\n  - %v", p)
+	}
+	return b.String()
+}
+
+// Unwrap lets errors.Is and errors.As reach into any individual problem.
+func (e *ValidationError) Unwrap() []error { return e.Problems }

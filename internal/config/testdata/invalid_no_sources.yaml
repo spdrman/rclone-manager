@@ -1,0 +1,4 @@
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
