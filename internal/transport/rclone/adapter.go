@@ -8,6 +8,7 @@ package rclone
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	// local and sftp are the two backends FR-4 requires. Importing them,
@@ -21,6 +22,7 @@ import (
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/fs/operations"
+	"github.com/rclone/rclone/fs/walk"
 
 	"github.com/spdrman/rclone-manager/internal/transport"
 )
@@ -32,6 +34,19 @@ type Adapter struct{}
 func New() *Adapter { return &Adapter{} }
 
 var _ transport.Transport = (*Adapter)(nil)
+
+// ErrUnsupportedHash is returned by RemoteHash when the requested algorithm
+// is one this adapter does not know how to translate to an rclone hash.Type
+// at all, or one the backend behind src cannot compute for this object.
+//
+// It exists so errors.go's Classify can recognize this case by identity
+// (errors.Is) instead of matching this same package's own error strings a
+// second time. Matching a dependency's wording is unavoidable in a couple of
+// documented spots in errors.go because no typed value exists to reach for
+// instead; matching a string adapter.go itself produces never had that
+// excuse, since a sentinel defined right here is exactly as cheap and does
+// not silently drift if one file's wording changes without the other's.
+var ErrUnsupportedHash = errors.New("rclone: unsupported hash")
 
 // fsFor builds an rclone Fs for a source without touching any on-disk rclone
 // config file. Everything comes from the manager's own configuration, so there
@@ -69,20 +84,54 @@ func toArtifact(o fs.Object) transport.RemoteArtifact {
 	}
 }
 
+// List recurses the whole tree beneath src's root, not just the top
+// directory.
+//
+// It used to call f.List(ctx, ""), which lists exactly one directory level.
+// A producer that writes one directory per run, for example
+// gitea-runs/<RUN_ID>/*.dump, is a normal FR-8 layout, not an edge case, and
+// under the old call every artifact placed in a subdirectory went missing
+// from List with no error at all: Stat and CopyToLocal could still reach it
+// by path, so the gap was invisible until something went looking for a
+// backup that discovery had silently never seen. That is exactly the
+// protection-dies-quietly failure this project exists to prevent, so it is
+// not something a caller can be trusted to notice and route around: List
+// itself has to stop lying about what exists.
+//
+// The fix is unconditional, full recursion rather than a configurable depth
+// knob, because there is nothing here for a depth setting to mean: FR-5's
+// per-backup-set include patterns (config.BackupSet.Include) are validated
+// as filename patterns, never path patterns (see
+// internal/config/validate.go's rejection of any "/" in an include
+// pattern), so they already only ever match a candidate's basename
+// regardless of how deep it sits. A "recurse N levels" option would filter
+// something the configuration has no way to describe in the first place.
+// Unconditional recursion is therefore the reading that is actually
+// consistent with the configuration surface that exists today, not an
+// implicit behaviour bolted on beside it. internal/discovery is where a
+// basename that turns up at two different depths (and therefore collides as
+// one model.ArtifactID) gets handled explicitly, loudly, and by name.
+//
+// walk.GetAll with maxLevel -1 is rclone's own idiom for this (see its
+// fstest package): it uses the backend's native recursive listing when one
+// is available and falls back to walking directory by directory otherwise,
+// so this works identically against local and sftp. includeAll=true is
+// passed explicitly because this adapter never configures an rclone filter
+// for a caller to accidentally rely on; making that explicit here is
+// cheaper than leaving the answer to whatever ambient default happens to be
+// in effect.
 func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.RemoteArtifact, error) {
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := f.List(ctx, "")
+	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]transport.RemoteArtifact, 0, len(entries))
-	for _, e := range entries {
-		if o, ok := e.(fs.Object); ok {
-			out = append(out, toArtifact(o))
-		}
+	out := make([]transport.RemoteArtifact, 0, len(objs))
+	for _, o := range objs {
+		out = append(out, toArtifact(o))
 	}
 	return out, nil
 }
@@ -136,12 +185,12 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	case transport.SHA256:
 		ht = hash.SHA256
 	default:
-		return "", fmt.Errorf("unsupported hash %q", alg)
+		return "", fmt.Errorf("%w: %q", ErrUnsupportedHash, alg)
 	}
 	// An unsupported remote hash must surface as an explicit capability result,
 	// never as a silent downgrade of configured verification (FR-13).
 	if !f.Hashes().Contains(ht) {
-		return "", fmt.Errorf("backend %q cannot compute %s", src.Type, alg)
+		return "", fmt.Errorf("%w: backend %q cannot compute %s", ErrUnsupportedHash, src.Type, alg)
 	}
 	return o.Hash(ctx, ht)
 }

@@ -174,30 +174,36 @@ func TestRcloneErrorTranslationShape_PermissionDenied(t *testing.T) {
 	}
 }
 
-// TestRcloneAdapter_List_DoesNotRecurseIntoSubdirectories documents an
-// adapter gap the contract suite surfaced: Adapter.List calls f.List(ctx, "")
-// once, which is a single-directory listing, not a recursive walk (rclone
-// itself distinguishes the two, exposing recursive listing separately as
-// walk.ListR / "rclone lsf -R"). An artifact placed in a subdirectory of a
-// source's root is therefore invisible to List, silently, with no error.
+// TestRcloneAdapter_List_RecursesIntoSubdirectories used to document the
+// opposite of what it proves now: Adapter.List called f.List(ctx, "") once,
+// a single-directory listing, not a recursive walk, so an artifact placed in
+// a subdirectory of a source's root was invisible to List, silently, with no
+// error. Stat and CopyToLocal, driven by an explicit path, reached the same
+// object fine, so nothing about the gap looked broken until something went
+// looking for a backup discovery had silently never seen.
 //
-// Whether that is actually wrong depends on whether any backup set's
-// remote_path ever nests artifacts in subdirectories; FR-8 discovery does not
-// rule that out. Reported in the PR description as an adapter bug rather than
-// fixed here, since adapter.go is outside this issue's file scope.
-func TestRcloneAdapter_List_DoesNotRecurseIntoSubdirectories(t *testing.T) {
+// That matters for real layouts, not edge cases: a producer that writes one
+// directory per run (gitea-runs/<RUN_ID>/*.dump) is exactly the normal FR-8
+// shape, and the old behaviour meant every artifact under such a layout
+// never got backed up, with nothing in the manager's own output saying so.
+// List now recurses the whole tree beneath the source's root (see its
+// updated doc comment in adapter.go for why that is unconditional rather
+// than a configurable depth), so this test is kept, renamed, and rewritten
+// to prove the fix instead of the gap, rather than deleted and rediscovered
+// the next time someone reaches for a nested backup set.
+func TestRcloneAdapter_List_RecursesIntoSubdirectories(t *testing.T) {
 	ctx := context.Background()
 	adapter := rclone.New()
 	root := t.TempDir()
-	source := transport.Source{ID: "list-recursion-gap", Type: "local", Root: root}
+	source := transport.Source{ID: "list-recursion", Type: "local", Root: root}
 
-	if err := os.MkdirAll(filepath.Join(root, "subdir"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "gitea-runs", "run-1"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "top-level.txt"), []byte("visible"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "subdir", "nested.txt"), []byte("invisible"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "gitea-runs", "run-1", "nested.txt"), []byte("also visible now"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -211,21 +217,24 @@ func TestRcloneAdapter_List_DoesNotRecurseIntoSubdirectories(t *testing.T) {
 		switch a.Path {
 		case "top-level.txt":
 			sawTopLevel = true
-		case "subdir/nested.txt":
+		case "gitea-runs/run-1/nested.txt":
 			sawNested = true
 		}
 	}
 	if !sawTopLevel {
-		t.Errorf("List did not report the top-level file; test setup or List itself is broken beyond the known gap")
+		t.Errorf("List did not report the top-level file")
 	}
-	if sawNested {
-		t.Fatalf("List reported the nested file: the recursion gap this test documents appears to be fixed, update the comment above and fold subdirectories back into the generic contract suite's list case")
+	if !sawNested {
+		t.Fatalf("List did not report the nested file: the recursion fix this test proves appears to have regressed")
+	}
+	if len(got) != 2 {
+		t.Errorf("List reported %d artifacts, want exactly 2 (top-level.txt and gitea-runs/run-1/nested.txt): %+v", len(got), got)
 	}
 
-	// Stat and CopyToLocal, unlike List, do reach the nested object directly
-	// by path: the gap is specific to enumeration, not to access.
-	if _, err := adapter.Stat(ctx, source, "subdir/nested.txt"); err != nil {
-		t.Errorf("Stat(\"subdir/nested.txt\") failed even though the file exists: %v", err)
+	// Stat, which already reached the nested object directly by path even
+	// before this fix, must still agree with what List now reports.
+	if _, err := adapter.Stat(ctx, source, "gitea-runs/run-1/nested.txt"); err != nil {
+		t.Errorf("Stat(\"gitea-runs/run-1/nested.txt\") failed even though the file exists: %v", err)
 	}
 }
 

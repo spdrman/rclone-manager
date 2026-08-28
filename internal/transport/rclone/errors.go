@@ -14,8 +14,13 @@
 // Wherever rclone (or a library it embeds) exposes a typed error or an
 // exported sentinel value, this file matches on that, by identity, not by
 // text: errors.As/errors.Is against a real Go value survives an upstream
-// wording change even if the file were never touched again. Two cases have
-// no such value to reach for:
+// wording change even if the file were never touched again. Adapter.go's own
+// ErrUnsupportedHash (RemoteHash's error for an algorithm this adapter
+// cannot translate, or the backend cannot compute) is exactly this kind of
+// value: it costs nothing to define here since this package authors it, so
+// it is matched by errors.Is like every other sentinel below rather than by
+// the text RemoteHash happens to format around it. One case has no such
+// value to reach for:
 //
 //   - authentication failure: golang.org/x/crypto/ssh has a typed
 //     ServerAuthError for the server side of an SSH exchange, but nothing
@@ -25,14 +30,6 @@
 //     it comes from x/crypto/ssh (an rclone dependency), not from rclone
 //     itself, so it changes on an x/crypto/ssh upgrade, not an rclone one,
 //     but the same caution applies.
-//   - unsupported hash capability by way of adapter.go's own
-//     "cannot compute" / "unsupported hash" wording. That text is authored
-//     in this same package (adapter.go's RemoteHash), not by rclone, so
-//     matching it is an intra-package contract rather than a bet on
-//     upstream: errors_test.go in this package breaks the moment the two
-//     drift, which is the same safety property the rest of this file gets
-//     from typed values, just enforced by this package's own tests instead
-//     of by the type system.
 //
 // errors_test.go proves every category this function can reach against a
 // real error from a real rclone call wherever that is achievable (a
@@ -151,12 +148,11 @@ func Classify(err error) transport.Category {
 
 	// UnsupportedCapability: rclone's own "optional feature not implemented"
 	// and "this hash is not computable" sentinels, plus adapter.go's own
-	// wording for the same fact (see the package comment for why that half
-	// is safe to match).
+	// ErrUnsupportedHash for the same fact (see the package comment for why
+	// that one is a sentinel rather than a string match).
 	if errors.Is(err, rclonefs.ErrorNotImplemented) ||
 		errors.Is(err, rclonehash.ErrUnsupported) ||
-		strings.Contains(err.Error(), "cannot compute") ||
-		strings.Contains(err.Error(), "unsupported hash") {
+		errors.Is(err, ErrUnsupportedHash) {
 		return transport.UnsupportedCapability
 	}
 
