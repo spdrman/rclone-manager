@@ -207,6 +207,15 @@ func TestDo_AlreadyCancelledContext(t *testing.T) {
 // backs off for a full second between attempts; the test cancels shortly
 // after the first failure and asserts Do returns in a small fraction of that
 // second, proving it woke up on ctx.Done() rather than on the backoff timer.
+//
+// It deliberately does not assert an exact call count. Full jitter draws
+// uniformly from [0, cap], so it can legitimately draw a near-zero delay on
+// the very first backoff and let a second (or, vanishingly rarely, a third)
+// attempt start before the 20ms cancellation fires; that is jitter working
+// as designed, not the loop failing to stop promptly, and asserting calls==1
+// here made the test flake on a slower CI runner. The elapsed-time bound
+// below is the real proof either way: however many attempts land in that
+// window, none of them waited out the 1s backoff step.
 func TestDo_CancelledContextStopsPromptly(t *testing.T) {
 	const wouldHaveSlept = 1 * time.Second
 	policy := Policy{BaseDelay: wouldHaveSlept, MaxDelay: wouldHaveSlept, Multiplier: 2}
@@ -228,8 +237,8 @@ func TestDo_CancelledContextStopsPromptly(t *testing.T) {
 	if elapsed >= wouldHaveSlept/2 {
 		t.Fatalf("Do took %v to return after cancellation, want well under the %v backoff step; it slept out the schedule instead of stopping promptly", elapsed, wouldHaveSlept)
 	}
-	if calls != 1 {
-		t.Fatalf("op called %d times, want exactly 1 (cancelled during the wait before the second attempt)", calls)
+	if calls < 1 {
+		t.Fatalf("op called %d times, want at least 1", calls)
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Do error = %v, want errors.Is(err, context.Canceled)", err)
