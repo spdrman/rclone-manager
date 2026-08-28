@@ -11,6 +11,10 @@ import (
 	"fmt"
 	"strconv"
 
+	// local and sftp are the two backends FR-4 requires. Importing them,
+	// together with fs/operations below, also registers crypt transitively.
+	// See backends.go for the traced cause, why it's accepted rather than
+	// removed, and the test that keeps this exact set enforced.
 	_ "github.com/rclone/rclone/backend/local"
 	_ "github.com/rclone/rclone/backend/sftp"
 
