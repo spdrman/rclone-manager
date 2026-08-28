@@ -1,0 +1,30 @@
+version: 2
+
+updates:
+  # Opens PRs for rclone and its transitive module graph. It does NOT and
+  # must NEVER auto-merge: there is no auto-merge workflow in this repo for
+  # the gomod ecosystem, and one must not be added. FR-2 in docs/EPIC.md
+  # requires a human to run the full regression gate and read the upstream
+  # release notes before an rclone version bump can land. See
+  # docs/rclone-upgrade.md for the non-negotiable rule and the reasoning.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rclone-upgrade"
+    commit-message:
+      prefix: "deps"
+
+  # Keeps the Actions themselves current. Lower risk than the gomod update
+  # above, but still reviewed by a human, not auto-merged.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "ci"

@@ -1,0 +1,116 @@
+name: rclone upgrade gate
+
+# FR-2 in docs/EPIC.md ("rclone Dependency Management") requires eight
+# things of every rclone upgrade: dependency update, compilation, unit
+# tests, transport contract tests, SFTP integration tests, crash and
+# reconciliation tests, destructive-safety tests, and a human read of the
+# upstream release notes.
+#
+# As of this workflow, most of those suites do not exist yet (they are
+# being built under spdrman/rclone-manager#30 and #31). This gate runs the
+# checks that are real today and writes an honest PENDING line for the
+# ones that are not, instead of reporting a suite as green when nothing
+# ran. See docs/rclone-upgrade.md for the full checklist and the
+# non-negotiable "never auto-merge" rule this gate exists to protect.
+
+on:
+  pull_request:
+    paths:
+      - "go.mod"
+      - "go.sum"
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: FR-2 regression gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Needed so the base ref's go.mod is available for the version
+          # diff below.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+
+      - name: "1. Dependency update"
+        run: |
+          echo "### 1. Dependency update" >> "$GITHUB_STEP_SUMMARY"
+          NEW=$(grep -E 'github\.com/rclone/rclone[[:space:]]+v[0-9]' go.mod | awk '{print $NF}')
+          OLD=$(git show "origin/${GITHUB_BASE_REF}:go.mod" 2>/dev/null | grep -E 'github\.com/rclone/rclone[[:space:]]+v[0-9]' | awk '{print $NF}')
+          OLD=${OLD:-unknown}
+          NEW=${NEW:-unknown}
+          echo "ENFORCED: this PR is the dependency update. rclone: ${OLD} -> ${NEW}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "OLD_RCLONE=${OLD}" >> "$GITHUB_ENV"
+          echo "NEW_RCLONE=${NEW}" >> "$GITHUB_ENV"
+
+      - name: "2. Compilation"
+        run: |
+          echo "### 2. Compilation" >> "$GITHUB_STEP_SUMMARY"
+          go build ./...
+          echo "ENFORCED: go build ./... succeeded." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "3. Unit tests"
+        run: |
+          echo "### 3. Unit tests" >> "$GITHUB_STEP_SUMMARY"
+          go test ./...
+          if git ls-files '*_test.go' | grep -v '^tests/' | grep -q .; then
+            echo "ENFORCED: go test ./... ran the unit suite above." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "PENDING: no *_test.go files exist in the module yet, so go test ./... ran clean but exercised nothing. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "4. Transport contract tests"
+        run: |
+          echo "### 4. Transport contract tests" >> "$GITHUB_STEP_SUMMARY"
+          if git ls-files 'internal/transport/*_test.go' 'internal/transport/**/*_test.go' | grep -q .; then
+            echo "ENFORCED: internal/transport has test files, and go test ./... above already ran them. If they specifically exercise the common transport contract required by FR-2/FR-3, this item is covered; verify the suite covers list/stat/copy/hash/delete/cancel/not-found/permission-denied/changed-object." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "PENDING: internal/transport has no test files yet, so the transport contract suite required by FR-2 does not exist. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "5. SFTP integration tests"
+        run: |
+          echo "### 5. SFTP integration tests" >> "$GITHUB_STEP_SUMMARY"
+          if [ -d tests ] && [ -n "$(find tests -type f -name '*.go' 2>/dev/null)" ]; then
+            echo "A tests/ suite exists, but this workflow does not yet know how to invoke it (it likely needs a disposable SFTP server via Docker). Update this step before relying on it. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "PENDING: no disposable-SFTP-server integration suite exists yet. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "6. Crash and reconciliation tests"
+        run: |
+          echo "### 6. Crash and reconciliation tests" >> "$GITHUB_STEP_SUMMARY"
+          echo "PENDING: the crash matrix in docs/EPIC.md (Testing Requirements) is not implemented yet. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "7. Destructive-safety tests"
+        run: |
+          echo "### 7. Destructive-safety tests" >> "$GITHUB_STEP_SUMMARY"
+          echo "PENDING: the destructive-safety suite (malicious paths, symlinks, replaced remote objects, malformed config, stale journal state) is not implemented yet. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: "8. Upstream release notes review"
+        run: |
+          echo "### 8. Upstream release notes review" >> "$GITHUB_STEP_SUMMARY"
+          echo "MANUAL: a person must read the rclone release notes between ${OLD_RCLONE} and ${NEW_RCLONE} before approving this PR. This step cannot verify that the review happened, it can only point at where to do it." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Changelog: https://github.com/rclone/rclone/blob/master/docs/content/changelog.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Releases: https://github.com/rclone/rclone/releases" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Gate summary
+        if: always()
+        run: |
+          {
+            echo ""
+            echo "---"
+            echo "This gate reports status honestly, it does not fail the build merely"
+            echo "because a suite tracked in #30/#31 does not exist yet. What it does"
+            echo "enforce, unconditionally: this workflow never auto-merges, and no"
+            echo "other workflow in this repository is permitted to auto-merge a change"
+            echo "to the rclone dependency. See docs/rclone-upgrade.md."
+          } >> "$GITHUB_STEP_SUMMARY"

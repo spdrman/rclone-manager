@@ -78,10 +78,22 @@ location, so the move cost nothing beyond the wording.
 Go 1.27, and Docker for the disposable SFTP server the integration tests use.
 
 The certified rclone version is pinned in `go.mod`. Do not move it without running the
-full regression set described in `docs/EPIC.md` under the rclone Upgrade Compatibility
-Contract, and never enable automatic merge for that dependency.
+full regression set described in `docs/rclone-upgrade.md`, which turns the rclone Upgrade
+Compatibility Contract in `docs/EPIC.md` into an actual checklist and the CI gate that backs
+it. Automatic merge is never enabled for that dependency, that rule is non-negotiable and
+spelled out in `docs/rclone-upgrade.md`.
 
 ```bash
 go build ./...
+go vet ./...
 go test ./...
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same three commands on every push and pull
+request, with the Go module cache preserved between runs, and separately cross-compiles
+`cmd/backup-manager` for both UGREEN targets (`linux/amd64` and `linux/arm64`,
+`CGO_ENABLED=0`) as a compile check. `.github/workflows/rclone-upgrade-gate.yml` runs
+whenever `go.mod` or `go.sum` changes and reports the FR-2 checklist status.
+
+The architecture decision behind embedding rclone this way, and what it costs, is in
+`docs/adr/0001-embed-rclone-behind-transport-adapter.md`.
