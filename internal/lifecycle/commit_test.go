@@ -31,18 +31,18 @@ func openTestJournal(t *testing.T) *state.Journal {
 }
 
 // walkToVerified durably drives artifact through the nominal path from
-// DISCOVERED to VERIFIED, recording partialPath as the local path at
+// DISCOVERED to VERIFIED, recording partial as the local path at
 // TRANSFERRING exactly as FR-11 would. It does not touch the filesystem:
-// callers create partialPath themselves, since Commit's own contract is
-// that FR-11/FR-13 already finished doing so before Commit is ever called.
-func walkToVerified(t *testing.T, ctx context.Context, d Deps, artifact model.ArtifactID, partialPath string) {
+// callers create partial themselves, since Commit's own contract is that
+// FR-11/FR-13 already finished doing so before Commit is ever called.
+func walkToVerified(t *testing.T, ctx context.Context, d Deps, artifact model.ArtifactID, partial string) {
 	t.Helper()
 	steps := []struct {
 		from, to  State
 		localPath *string
 	}{
 		{"", Discovered, nil},
-		{Discovered, Transferring, &partialPath},
+		{Discovered, Transferring, &partial},
 		{Transferring, Transferred, nil},
 		{Transferred, Verifying, nil},
 		{Verifying, Verified, nil},
@@ -63,6 +63,10 @@ func walkToVerified(t *testing.T, ctx context.Context, d Deps, artifact model.Ar
 }
 
 // The nominal path: a real .partial file, a real journal, one Commit call.
+// The .partial and final paths are computed with transfer.go's own
+// partialPath/finalPath helpers, exactly as Commit itself computes them, so
+// the test is pinned to the real FR-12 naming convention rather than an
+// arbitrary literal that could quietly drift from it.
 func TestCommitWalksVerifiedToCommitted(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
@@ -70,18 +74,17 @@ func TestCommitWalksVerifiedToCommitted(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partialPath := filepath.Join(dir, "backup.dump.zst.partial")
-	finalPath := filepath.Join(dir, "backup.dump.zst")
+	partial := partialPath(dir, artifact)
+	final := finalPath(dir, artifact)
 	content := []byte("durable backup content")
-	if err := os.WriteFile(partialPath, content, 0o644); err != nil {
+	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	walkToVerified(t, ctx, d, artifact, partialPath)
+	walkToVerified(t, ctx, d, artifact, partial)
 
 	out, err := Commit(ctx, d, CommitInput{
 		Artifact:      artifact,
-		PartialPath:   partialPath,
-		FinalPath:     finalPath,
+		LocalDir:      dir,
 		CommittingKey: "commit-1-committing",
 		CommittedKey:  "commit-1-committed",
 	})
@@ -94,18 +97,18 @@ func TestCommitWalksVerifiedToCommitted(t *testing.T) {
 	if out.Record.State != string(Committed) {
 		t.Fatalf("Record.State = %q, want COMMITTED", out.Record.State)
 	}
-	if out.Record.LocalPath != finalPath {
-		t.Fatalf("Record.LocalPath = %q, want %q", out.Record.LocalPath, finalPath)
+	if out.Record.LocalPath != final {
+		t.Fatalf("Record.LocalPath = %q, want %q", out.Record.LocalPath, final)
 	}
 
-	got, err := os.ReadFile(finalPath)
+	got, err := os.ReadFile(final)
 	if err != nil {
 		t.Fatalf("final file missing: %v", err)
 	}
 	if string(got) != string(content) {
 		t.Fatalf("final content = %q, want %q", got, content)
 	}
-	if _, err := os.Stat(partialPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
 		t.Fatalf(".partial file still present after commit: err=%v", err)
 	}
 
@@ -113,7 +116,7 @@ func TestCommitWalksVerifiedToCommitted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if rec.State != string(Committed) || rec.LocalPath != finalPath {
+	if rec.State != string(Committed) || rec.LocalPath != final {
 		t.Fatalf("journal record after commit = %+v", rec)
 	}
 }
@@ -131,13 +134,13 @@ func TestCommitConvergesAfterACrashBetweenRenameAndDirectorySync(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partialPath := filepath.Join(dir, "backup.dump.zst.partial")
-	finalPath := filepath.Join(dir, "backup.dump.zst")
+	partial := partialPath(dir, artifact)
+	final := finalPath(dir, artifact)
 	content := []byte("durable backup content")
-	if err := os.WriteFile(partialPath, content, 0o644); err != nil {
+	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	walkToVerified(t, ctx, d, artifact, partialPath)
+	walkToVerified(t, ctx, d, artifact, partial)
 
 	simulatedCrash := errors.New("simulated crash between rename and directory fsync")
 	testHookAfterRename = func() error { return simulatedCrash }
@@ -145,8 +148,7 @@ func TestCommitConvergesAfterACrashBetweenRenameAndDirectorySync(t *testing.T) {
 
 	in := CommitInput{
 		Artifact:      artifact,
-		PartialPath:   partialPath,
-		FinalPath:     finalPath,
+		LocalDir:      dir,
 		CommittingKey: "crash-committing",
 		CommittedKey:  "crash-committed",
 	}
@@ -157,10 +159,10 @@ func TestCommitConvergesAfterACrashBetweenRenameAndDirectorySync(t *testing.T) {
 
 	// What the "crash" actually left behind: renamed, .partial gone,
 	// directory never fsynced, journal never advanced past COMMITTING.
-	if _, err := os.Stat(finalPath); err != nil {
+	if _, err := os.Stat(final); err != nil {
 		t.Fatalf("final file missing after the simulated crash: %v", err)
 	}
-	if _, err := os.Stat(partialPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(partial); !os.IsNotExist(err) {
 		t.Fatalf(".partial file unexpectedly still present: err=%v", err)
 	}
 	rec, err := j.Get(ctx, artifact)
@@ -179,10 +181,10 @@ func TestCommitConvergesAfterACrashBetweenRenameAndDirectorySync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Commit after restart: %v", err)
 	}
-	if out.Record.State != string(Committed) || out.Record.LocalPath != finalPath {
+	if out.Record.State != string(Committed) || out.Record.LocalPath != final {
 		t.Fatalf("journal record after restart = %+v", out.Record)
 	}
-	got, err := os.ReadFile(finalPath)
+	got, err := os.ReadFile(final)
 	if err != nil || string(got) != string(content) {
 		t.Fatalf("final content after restart = %q, %v, want %q", got, err, content)
 	}
@@ -199,12 +201,11 @@ func TestCommitFinishesWhenAnEarlierAttemptOnlyRecordedCommitting(t *testing.T) 
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partialPath := filepath.Join(dir, "backup.partial")
-	finalPath := filepath.Join(dir, "backup.final")
-	if err := os.WriteFile(partialPath, []byte("payload"), 0o644); err != nil {
+	partial := partialPath(dir, artifact)
+	if err := os.WriteFile(partial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	walkToVerified(t, ctx, d, artifact, partialPath)
+	walkToVerified(t, ctx, d, artifact, partial)
 
 	committingKey := "precommitted-committing"
 	if _, err := Advance(ctx, d, state.Transition{
@@ -215,15 +216,14 @@ func TestCommitFinishesWhenAnEarlierAttemptOnlyRecordedCommitting(t *testing.T) 
 
 	out, err := Commit(ctx, d, CommitInput{
 		Artifact:      artifact,
-		PartialPath:   partialPath,
-		FinalPath:     finalPath,
+		LocalDir:      dir,
 		CommittingKey: committingKey,
 		CommittedKey:  "precommitted-committed",
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	if out.Record.State != string(Committed) || out.Record.LocalPath != finalPath {
+	if out.Record.State != string(Committed) || out.Record.LocalPath != finalPath(dir, artifact) {
 		t.Fatalf("Record after commit = %+v", out.Record)
 	}
 }
@@ -239,15 +239,14 @@ func TestCommitConvergesWhenCalledAgainAfterFullSuccess(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partialPath := filepath.Join(dir, "backup.partial")
-	finalPath := filepath.Join(dir, "backup.final")
-	if err := os.WriteFile(partialPath, []byte("payload"), 0o644); err != nil {
+	partial := partialPath(dir, artifact)
+	if err := os.WriteFile(partial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	walkToVerified(t, ctx, d, artifact, partialPath)
+	walkToVerified(t, ctx, d, artifact, partial)
 
 	in := CommitInput{
-		Artifact: artifact, PartialPath: partialPath, FinalPath: finalPath,
+		Artifact: artifact, LocalDir: dir,
 		CommittingKey: "twice-committing", CommittedKey: "twice-committed",
 	}
 	first, err := Commit(ctx, d, in)
@@ -265,39 +264,39 @@ func TestCommitConvergesWhenCalledAgainAfterFullSuccess(t *testing.T) {
 	if second.Applied {
 		t.Fatal("second Commit: Applied = true, want a converged no-op")
 	}
-	if second.Record.State != string(Committed) || second.Record.LocalPath != finalPath {
+	if second.Record.State != string(Committed) || second.Record.LocalPath != finalPath(dir, artifact) {
 		t.Fatalf("second Commit record = %+v", second.Record)
 	}
 }
 
-// A caller passing a PartialPath that does not match what TRANSFERRING
-// actually recorded is a bug, not a crash window, and Commit has to say so
-// instead of guessing which one is right. Critically, the COMMITTING write
-// itself must still land durably before this check runs (recording intent
-// has to come before any file I/O, per FR-14's ordering), so a corrected
-// retry using the same CommittingKey has to succeed afterwards.
-func TestCommitRefusesAMismatchedPartialPathThenRecoversOnRetry(t *testing.T) {
+// A caller (or an operator changing config between steps) whose LocalDir at
+// commit time does not match the LocalDir Transfer actually used is a bug,
+// not a crash window, and Commit has to say so instead of guessing which
+// one is right. Critically, the COMMITTING write itself must still land
+// durably before this check runs (recording intent has to come before any
+// file I/O, per FR-14's ordering), so a corrected retry using the same
+// CommittingKey has to succeed afterwards.
+func TestCommitRefusesAMismatchedLocalDirThenRecoversOnRetry(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
 	d := Deps{Journal: j}
 	artifact := mustID(t)
 
-	dir := t.TempDir()
-	actualPartial := filepath.Join(dir, "actual.partial")
+	correctDir := t.TempDir()
+	actualPartial := partialPath(correctDir, artifact)
 	if err := os.WriteFile(actualPartial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	walkToVerified(t, ctx, d, artifact, actualPartial)
 
-	wrongPartial := filepath.Join(dir, "wrong.partial")
-	finalPath := filepath.Join(dir, "final")
+	wrongDir := t.TempDir()
 
 	_, err := Commit(ctx, d, CommitInput{
-		Artifact: artifact, PartialPath: wrongPartial, FinalPath: finalPath,
+		Artifact: artifact, LocalDir: wrongDir,
 		CommittingKey: "mismatch-committing", CommittedKey: "mismatch-committed",
 	})
 	if err == nil {
-		t.Fatal("Commit: want an error for a PartialPath that does not match the journal, got none")
+		t.Fatal("Commit: want an error for a LocalDir that does not match the journal, got none")
 	}
 
 	rec, err := j.Get(ctx, artifact)
@@ -307,12 +306,12 @@ func TestCommitRefusesAMismatchedPartialPathThenRecoversOnRetry(t *testing.T) {
 	if rec.State != string(Committing) {
 		t.Fatalf("journal state after the mismatch = %q, want COMMITTING", rec.State)
 	}
-	if _, statErr := os.Stat(wrongPartial); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(partialPath(wrongDir, artifact)); !os.IsNotExist(statErr) {
 		t.Fatal("commitFile touched the filesystem despite the mismatch")
 	}
 
 	out, err := Commit(ctx, d, CommitInput{
-		Artifact: artifact, PartialPath: actualPartial, FinalPath: finalPath,
+		Artifact: artifact, LocalDir: correctDir,
 		CommittingKey: "mismatch-committing", CommittedKey: "mismatch-committed",
 	})
 	if err != nil {
@@ -323,34 +322,33 @@ func TestCommitRefusesAMismatchedPartialPathThenRecoversOnRetry(t *testing.T) {
 	}
 }
 
-// Replaying a completed commit with a FinalPath other than the one that was
-// actually recorded must fail loudly rather than silently report success
-// for the wrong path.
-func TestCommitRejectsFinalPathMismatchOnAnAlreadyCommittedRecord(t *testing.T) {
+// Replaying a completed commit with a LocalDir other than the one that
+// actually produced the committed final path must fail loudly rather than
+// silently report success for the wrong path.
+func TestCommitRejectsLocalDirMismatchOnAnAlreadyCommittedRecord(t *testing.T) {
 	ctx := context.Background()
 	j := openTestJournal(t)
 	d := Deps{Journal: j}
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partialPath := filepath.Join(dir, "backup.partial")
-	finalPath := filepath.Join(dir, "backup.final")
-	if err := os.WriteFile(partialPath, []byte("payload"), 0o644); err != nil {
+	partial := partialPath(dir, artifact)
+	if err := os.WriteFile(partial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	walkToVerified(t, ctx, d, artifact, partialPath)
+	walkToVerified(t, ctx, d, artifact, partial)
 
 	in := CommitInput{
-		Artifact: artifact, PartialPath: partialPath, FinalPath: finalPath,
+		Artifact: artifact, LocalDir: dir,
 		CommittingKey: "k1", CommittedKey: "k2",
 	}
 	if _, err := Commit(ctx, d, in); err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	in.FinalPath = filepath.Join(dir, "different.final")
+	in.LocalDir = t.TempDir() // a different directory than what was committed
 	if _, err := Commit(ctx, d, in); err == nil {
-		t.Fatal("Commit: want an error replaying with a different FinalPath than what was committed")
+		t.Fatal("Commit: want an error replaying with a different LocalDir than what was committed")
 	}
 }
 
@@ -369,8 +367,7 @@ func TestCommitInputValidate(t *testing.T) {
 	artifact := mustID(t)
 	base := CommitInput{
 		Artifact:      artifact,
-		PartialPath:   "/data/a.partial",
-		FinalPath:     "/data/a.final",
+		LocalDir:      "/data",
 		CommittingKey: "ck",
 		CommittedKey:  "dk",
 	}
@@ -383,10 +380,7 @@ func TestCommitInputValidate(t *testing.T) {
 		mutate func(*CommitInput)
 	}{
 		{"zero artifact", func(in *CommitInput) { in.Artifact = model.ArtifactID{} }},
-		{"empty partial path", func(in *CommitInput) { in.PartialPath = "" }},
-		{"empty final path", func(in *CommitInput) { in.FinalPath = "" }},
-		{"partial equals final", func(in *CommitInput) { in.FinalPath = in.PartialPath }},
-		{"different directories", func(in *CommitInput) { in.FinalPath = "/elsewhere/a.final" }},
+		{"empty local dir", func(in *CommitInput) { in.LocalDir = "" }},
 		{"empty committing key", func(in *CommitInput) { in.CommittingKey = "" }},
 		{"empty committed key", func(in *CommitInput) { in.CommittedKey = "" }},
 		{"same keys", func(in *CommitInput) { in.CommittedKey = in.CommittingKey }},

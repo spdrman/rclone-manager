@@ -122,23 +122,18 @@ import (
 type CommitInput struct {
 	Artifact model.ArtifactID
 
-	// PartialPath is the .partial file's current location (FR-12). Commit
-	// does not create, transfer or verify this file; FR-11 and FR-13 do,
-	// and by the time Commit is called the journal must already say
-	// VERIFIED (or, on a crash-recovery retry, COMMITTING; see below).
-	PartialPath string
-
-	// FinalPath is the durable, restorable name FR-14 step 4 renames to.
-	// It must be in the same directory as PartialPath: FR-12's .partial
-	// file is a same-directory sibling of its own final name, and that is
-	// what lets the single directory fsync in step 5 durably cover both
-	// the added final-name entry and the removed .partial-name entry with
-	// one call. A cross-directory (or cross-filesystem) destination would
-	// also break the rename-equivalent primitive's atomicity guarantee
-	// outright, since neither link(2) nor rename(2) can cross a filesystem
-	// boundary, so Commit refuses it up front rather than let that surface
-	// later as a confusing EXDEV.
-	FinalPath string
+	// LocalDir is the backup set's configured local destination directory,
+	// exactly the value TransferParams.LocalDir held when this artifact was
+	// transferred (config.BackupSet.LocalPath). Commit derives both the
+	// .partial path and the final path from LocalDir and Artifact using the
+	// same finalPath/partialPath helpers transfer.go uses, rather than
+	// taking either path as a caller-supplied string, so the transfer step
+	// and the commit step can never disagree about where an artifact's
+	// files live, and the two paths are always in the same directory by
+	// construction: that is what lets the single directory fsync in step 5
+	// durably cover both the added final-name entry and the removed
+	// .partial-name entry with one call.
+	LocalDir string
 
 	// CommittingKey and CommittedKey are the FR-9 idempotency keys for the
 	// two separate durable journal writes Commit makes (VERIFIED ->
@@ -156,14 +151,8 @@ func (in CommitInput) validate() error {
 	switch {
 	case in.Artifact.Name == "" || in.Artifact.Set.IsZero():
 		return fmt.Errorf("lifecycle: Commit needs a valid artifact id")
-	case in.PartialPath == "":
-		return fmt.Errorf("lifecycle: Commit needs a PartialPath")
-	case in.FinalPath == "":
-		return fmt.Errorf("lifecycle: Commit needs a FinalPath")
-	case in.PartialPath == in.FinalPath:
-		return fmt.Errorf("lifecycle: Commit needs PartialPath and FinalPath to differ")
-	case filepath.Dir(in.PartialPath) != filepath.Dir(in.FinalPath):
-		return fmt.Errorf("lifecycle: Commit needs PartialPath and FinalPath in the same directory, got %q and %q", in.PartialPath, in.FinalPath)
+	case in.LocalDir == "":
+		return fmt.Errorf("lifecycle: Commit needs a LocalDir")
 	case in.CommittingKey == "":
 		return fmt.Errorf("lifecycle: Commit needs a CommittingKey")
 	case in.CommittedKey == "":
@@ -192,6 +181,9 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		return state.Outcome{}, err
 	}
 
+	partial := partialPath(in.LocalDir, in.Artifact)
+	final := finalPath(in.LocalDir, in.Artifact)
+
 	committing, err := Advance(ctx, d, state.Transition{
 		Artifact: in.Artifact,
 		Key:      in.CommittingKey,
@@ -214,10 +206,10 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		// through to COMMITTED before this call was made (or observed
 		// success from a call that crashed only after the fact). Converge
 		// without touching the filesystem or the journal again.
-		if committing.Record.LocalPath != in.FinalPath {
+		if committing.Record.LocalPath != final {
 			return state.Outcome{}, fmt.Errorf(
-				"lifecycle: commit %s: already COMMITTED at %q, not the FinalPath %q this call was given",
-				in.Artifact, committing.Record.LocalPath, in.FinalPath)
+				"lifecycle: commit %s: already COMMITTED at %q, not the final path %q this LocalDir computes",
+				in.Artifact, committing.Record.LocalPath, final)
 		}
 		return committing, nil
 	case committing.Record.State == string(Committing):
@@ -231,23 +223,22 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 			in.Artifact, committing.Record.State)
 	}
 
-	if committing.Record.LocalPath != in.PartialPath {
+	if committing.Record.LocalPath != partial {
 		return state.Outcome{}, fmt.Errorf(
-			"lifecycle: commit %s: journal's recorded local path %q does not match the PartialPath %q this call was given",
-			in.Artifact, committing.Record.LocalPath, in.PartialPath)
+			"lifecycle: commit %s: journal's recorded local path %q does not match the .partial path %q this LocalDir computes",
+			in.Artifact, committing.Record.LocalPath, partial)
 	}
 
-	if err := commitFile(in.PartialPath, in.FinalPath); err != nil {
+	if err := commitFile(partial, final); err != nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: %w", in.Artifact, err)
 	}
 
-	finalPath := in.FinalPath
 	committed, err := Advance(ctx, d, state.Transition{
 		Artifact:  in.Artifact,
 		Key:       in.CommittedKey,
 		From:      string(Committing),
 		To:        string(Committed),
-		LocalPath: &finalPath,
+		LocalPath: &final,
 	})
 	if err != nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: recording COMMITTED: %w", in.Artifact, err)
@@ -260,16 +251,22 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 // unrelated file already there, and fsync the directory the rename's
 // durability depends on.
 //
-// It is safe to call more than once for the same (partialPath, finalPath)
-// pair. The crash matrix (docs/EPIC.md) can kill the process after any one
-// of the underlying syscalls below, and Commit's caller is expected to
-// retry the whole thing with no memory of how far an earlier attempt got;
-// this function figures that out fresh from what is actually on disk each
-// time, rather than trusting any in-memory or journalled record of its own
+// Its parameters are named partial and final, not partialPath/finalPath,
+// deliberately: those latter names are transfer.go's package-level helpers
+// that compute these same two strings from a LocalDir and an
+// model.ArtifactID (see Commit), and this function only ever needs the
+// already-resolved paths, never to call those helpers itself.
+//
+// It is safe to call more than once for the same (partial, final) pair. The
+// crash matrix (docs/EPIC.md) can kill the process after any one of the
+// underlying syscalls below, and Commit's caller is expected to retry the
+// whole thing with no memory of how far an earlier attempt got; this
+// function figures that out fresh from what is actually on disk each time,
+// rather than trusting any in-memory or journalled record of its own
 // progress.
-func commitFile(partialPath, finalPath string) error {
-	finalInfo, finalErr := os.Stat(finalPath)
-	partialInfo, partialErr := os.Stat(partialPath)
+func commitFile(partial, final string) error {
+	finalInfo, finalErr := os.Stat(final)
+	partialInfo, partialErr := os.Stat(partial)
 
 	switch {
 	case finalErr == nil && partialErr == nil:
@@ -279,52 +276,52 @@ func commitFile(partialPath, finalPath string) error {
 		// creates a second name for the very same inode, so os.SameFile is
 		// a precise, zero-ambiguity test for "this is our own interrupted
 		// retry," not a coincidence. Anything else already sitting at
-		// finalPath is the FR-12 collision linkWithoutClobbering exists to
+		// final is the FR-12 collision linkWithoutClobbering exists to
 		// refuse, just discovered here instead of at the link call.
 		if !os.SameFile(finalInfo, partialInfo) {
-			return &FinalPathCollisionError{PartialPath: partialPath, FinalPath: finalPath}
+			return &FinalPathCollisionError{PartialPath: partial, FinalPath: final}
 		}
-		if err := removeIfExists(partialPath); err != nil {
-			return fmt.Errorf("removing %s after an earlier attempt already linked it to %s: %w", partialPath, finalPath, err)
+		if err := removeIfExists(partial); err != nil {
+			return fmt.Errorf("removing %s after an earlier attempt already linked it to %s: %w", partial, final, err)
 		}
 
 	case finalErr == nil:
-		// finalPath exists, partialPath does not: an earlier attempt
-		// finished the rename (link, then remove) before being killed,
-		// most likely before the directory fsync below, or before the
-		// COMMITTED journal write ever landed. Nothing left to do to the
-		// files themselves; fall through to the directory fsync, which is
-		// itself idempotent and might still be the very thing that never
-		// happened last time.
+		// final exists, partial does not: an earlier attempt finished the
+		// rename (link, then remove) before being killed, most likely
+		// before the directory fsync below, or before the COMMITTED
+		// journal write ever landed. Nothing left to do to the files
+		// themselves; fall through to the directory fsync, which is itself
+		// idempotent and might still be the very thing that never happened
+		// last time.
 
 	case os.IsNotExist(finalErr) && partialErr == nil:
 		// Normal case: the .partial file is there, nothing occupies the
 		// final name yet. Do the actual work, in FR-14's order: flush the
 		// content durably *before* it becomes reachable under the name
 		// that is about to be promised durable.
-		if err := fsyncFile(partialPath); err != nil {
-			return fmt.Errorf("fsyncing %s before renaming it: %w", partialPath, err)
+		if err := fsyncFile(partial); err != nil {
+			return fmt.Errorf("fsyncing %s before renaming it: %w", partial, err)
 		}
-		if err := linkWithoutClobbering(partialPath, finalPath); err != nil {
+		if err := linkWithoutClobbering(partial, final); err != nil {
 			return err
 		}
-		if err := removeIfExists(partialPath); err != nil {
-			return fmt.Errorf("removing %s after linking it to %s: %w", partialPath, finalPath, err)
+		if err := removeIfExists(partial); err != nil {
+			return fmt.Errorf("removing %s after linking it to %s: %w", partial, final, err)
 		}
 
 	case os.IsNotExist(finalErr) && os.IsNotExist(partialErr):
 		// Neither name exists. FR-11 and FR-13 are supposed to guarantee
 		// the .partial file is present by the time anything calls Commit,
 		// so this is not a retryable crash window: it is data loss (or a
-		// caller passing the wrong paths), and it has to say so loudly
+		// caller passing the wrong LocalDir), and it has to say so loudly
 		// rather than let "nothing to commit" be mistaken for success.
-		return &ArtifactFileMissingError{PartialPath: partialPath, FinalPath: finalPath}
+		return &ArtifactFileMissingError{PartialPath: partial, FinalPath: final}
 
 	default:
 		if finalErr != nil && !os.IsNotExist(finalErr) {
-			return fmt.Errorf("checking %s: %w", finalPath, finalErr)
+			return fmt.Errorf("checking %s: %w", final, finalErr)
 		}
-		return fmt.Errorf("checking %s: %w", partialPath, partialErr)
+		return fmt.Errorf("checking %s: %w", partial, partialErr)
 	}
 
 	if testHookAfterRename != nil {
@@ -348,8 +345,8 @@ func commitFile(partialPath, finalPath string) error {
 	// change while the data blocks it pointed at survive, leaving the
 	// content durable on disk but findable under neither name, or still
 	// only under the old .partial name.
-	if err := fsyncDir(filepath.Dir(finalPath)); err != nil {
-		return fmt.Errorf("fsyncing the directory containing %s: %w", finalPath, err)
+	if err := fsyncDir(filepath.Dir(final)); err != nil {
+		return fmt.Errorf("fsyncing the directory containing %s: %w", final, err)
 	}
 	return nil
 }
@@ -359,32 +356,32 @@ func commitFile(partialPath, finalPath string) error {
 // Plain rename(2) on POSIX silently replaces whatever already sits at
 // newname; FR-12 requires the opposite ("Final-name collisions SHALL fail
 // safely rather than overwrite a known-good backup"), and os.Rename offers
-// no way to ask for that. os.Link instead fails with EEXIST if finalPath is
+// no way to ask for that. os.Link instead fails with EEXIST if final is
 // already occupied, which is exactly "fail safely" instead of "guess and
 // clobber." The link and the later removal of the old name carry the same
 // atomicity guarantee plain rename has for a crashing observer: at every
 // instant there is either just the old name, both names (this function's
 // own deliberately-idempotent transient state), or just the new name, never
 // a torn or vanished file.
-func linkWithoutClobbering(partialPath, finalPath string) error {
-	err := os.Link(partialPath, finalPath)
+func linkWithoutClobbering(partial, final string) error {
+	err := os.Link(partial, final)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, fs.ErrExist) {
-		return fmt.Errorf("linking %s to %s: %w", partialPath, finalPath, err)
+		return fmt.Errorf("linking %s to %s: %w", partial, final, err)
 	}
 
-	// Something is already at finalPath. Proceeding is only safe if it is
+	// Something is already at final. Proceeding is only safe if it is
 	// literally the same file this call is trying to link, i.e. a
 	// previous, interrupted attempt (or a racing one) reached here first;
 	// anything else is the FR-12 collision this function exists to refuse.
-	finalInfo, ferr := os.Stat(finalPath)
-	partialInfo, perr := os.Stat(partialPath)
+	finalInfo, ferr := os.Stat(final)
+	partialInfo, perr := os.Stat(partial)
 	if ferr == nil && perr == nil && os.SameFile(finalInfo, partialInfo) {
 		return nil
 	}
-	return &FinalPathCollisionError{PartialPath: partialPath, FinalPath: finalPath}
+	return &FinalPathCollisionError{PartialPath: partial, FinalPath: final}
 }
 
 // fsyncFile opens path read-only purely to obtain a file descriptor to
