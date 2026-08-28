@@ -1,0 +1,18 @@
+# Go
+*.exe
+*.test
+*.out
+/backup-manager
+/dist/
+/bin/
+
+# SQLite journals produced by local runs
+*.db
+*.db-shm
+*.db-wal
+
+# Local config that may carry host keys or credentials
+config.local.*
+*.local.yaml
+
+.DS_Store
