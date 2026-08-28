@@ -149,41 +149,41 @@ func discoverAndAdvance(
 	t.Fatalf("discoverAndAdvance: unsupported stopAt %s", stopAt)
 }
 
-// fakeTransport is a minimal, fully controllable transport.Transport for
+// deleteTransport is a minimal, fully controllable transport.Transport for
 // exercising DeleteRemote's revalidation without a real backend. Every
 // method not needed by a given test panics loudly via "not used", the same
 // convention fakeJournal (engine_test.go) already uses in this package, so
 // a test that unexpectedly calls further than it meant to fails immediately
 // rather than returning a quiet zero value.
-type fakeTransport struct {
+type deleteTransport struct {
 	statFn func(ctx context.Context, source transport.Source, remotePath string) (transport.RemoteArtifact, error)
 
 	deleteCalls int
 	deleteErr   error
 }
 
-var _ transport.Transport = (*fakeTransport)(nil)
+var _ transport.Transport = (*deleteTransport)(nil)
 
-func (f *fakeTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
-	return nil, errors.New("fakeTransport: List not used")
+func (f *deleteTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
+	return nil, errors.New("deleteTransport: List not used")
 }
 
-func (f *fakeTransport) Stat(ctx context.Context, source transport.Source, remotePath string) (transport.RemoteArtifact, error) {
+func (f *deleteTransport) Stat(ctx context.Context, source transport.Source, remotePath string) (transport.RemoteArtifact, error) {
 	if f.statFn == nil {
-		return transport.RemoteArtifact{}, errors.New("fakeTransport: Stat not configured")
+		return transport.RemoteArtifact{}, errors.New("deleteTransport: Stat not configured")
 	}
 	return f.statFn(ctx, source, remotePath)
 }
 
-func (f *fakeTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
-	return transport.TransferResult{}, errors.New("fakeTransport: CopyToLocal not used")
+func (f *deleteTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+	return transport.TransferResult{}, errors.New("deleteTransport: CopyToLocal not used")
 }
 
-func (f *fakeTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
-	return "", errors.New("fakeTransport: RemoteHash not used")
+func (f *deleteTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+	return "", errors.New("deleteTransport: RemoteHash not used")
 }
 
-func (f *fakeTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
+func (f *deleteTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
 	f.deleteCalls++
 	return f.deleteErr
 }
@@ -224,7 +224,7 @@ func TestDeleteRemote_RefusesWhenJournalStateIsWrong(t *testing.T) {
 			discoverAndAdvance(t, j, artifact, testRemotePath, state.RemoteIdentity{Size: &size}, localPath,
 				&state.TransferResult{BytesTransferred: 10}, nil, from)
 
-			tp := &fakeTransport{}
+			tp := &deleteTransport{}
 			_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 				Artifact: artifact, AttemptKey: "attempt-1",
 			})
@@ -257,7 +257,7 @@ func TestDeleteRemote_RefusesWhenLocalFileIsMissing(t *testing.T) {
 	discoverAndAdvance(t, j, artifact, testRemotePath, state.RemoteIdentity{Size: &size}, missingPath,
 		&state.TransferResult{BytesTransferred: 10}, nil, Committed)
 
-	tp := &fakeTransport{}
+	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
@@ -289,7 +289,7 @@ func TestDeleteRemote_RefusesWhenLocalFileIsWrongSize(t *testing.T) {
 	discoverAndAdvance(t, j, artifact, testRemotePath, state.RemoteIdentity{Size: &size}, localPath,
 		&state.TransferResult{BytesTransferred: 10}, nil, Committed)
 
-	tp := &fakeTransport{}
+	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
@@ -315,7 +315,7 @@ func TestDeleteRemote_RefusesWhenLocalHashDoesNotMatch(t *testing.T) {
 		&state.HashUpdate{Alg: "sha256", Hash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 		Committed)
 
-	tp := &fakeTransport{}
+	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
@@ -339,7 +339,7 @@ func TestDeleteRemote_RefusesWhenRecordedSizesDisagreeWithEachOther(t *testing.T
 	discoverAndAdvance(t, j, artifact, testRemotePath, state.RemoteIdentity{Size: &remoteSize}, localPath,
 		&state.TransferResult{BytesTransferred: 999}, nil, Committed)
 
-	tp := &fakeTransport{}
+	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
@@ -366,7 +366,7 @@ func TestDeleteRemote_RefusesWhenRemoteIdentityConfirmedChanged(t *testing.T) {
 		state.RemoteIdentity{Size: &size, Hash: "aaaa", HashAlg: "sha256"},
 		localPath, &state.TransferResult{BytesTransferred: 10}, nil, Committed)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 			return transport.RemoteArtifact{
 				Path: testRemotePath, Size: 10, Hash: "bbbb", HashAlg: transport.SHA256,
@@ -428,7 +428,7 @@ func TestDeleteRemote_RefusesWhenRemoteIdentityCannotBeConfirmed(t *testing.T) {
 		state.RemoteIdentity{Size: &size, ModTime: &mtime},
 		localPath, &state.TransferResult{BytesTransferred: 10}, nil, Committed)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 			return transport.RemoteArtifact{
 				Path: testRemotePath, Size: 10, ModTime: mtime.Unix(),
@@ -477,7 +477,7 @@ func TestDeleteRemote_RefusesWhenRemoteCannotBeStatted(t *testing.T) {
 	discoverAndAdvance(t, j, artifact, testRemotePath, state.RemoteIdentity{Size: &size}, localPath,
 		&state.TransferResult{BytesTransferred: 10}, nil, Committed)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 			return transport.RemoteArtifact{}, transport.NewError(transport.NotFound, "stat", errors.New("no such object"))
 		},
@@ -507,7 +507,7 @@ func TestDeleteRemote_RefusesFromRemoteDeletePendingWhenIdentityChanged(t *testi
 		state.RemoteIdentity{Size: &size, Hash: "aaaa", HashAlg: "sha256"},
 		localPath, &state.TransferResult{BytesTransferred: 10}, nil, RemoteDeletePending)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 			return transport.RemoteArtifact{Path: testRemotePath, Size: 10, Hash: "bbbb", HashAlg: transport.SHA256}, nil
 		},
@@ -528,7 +528,7 @@ func TestDeleteRemote_RefusesFromRemoteDeletePendingWhenIdentityChanged(t *testi
 // RecordTransition depends on.
 func TestDeleteRemote_RequiresAnAttemptKey(t *testing.T) {
 	j := openTestJournal(t)
-	tp := &fakeTransport{}
+	tp := &deleteTransport{}
 	_, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 		Artifact: mustID(t),
 	})
@@ -566,7 +566,7 @@ func TestDeleteRemote_PositiveControl_SafeDeleteProceeds(t *testing.T) {
 		&state.HashUpdate{Alg: "sha256", Hash: localSum},
 		Committed)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(_ context.Context, _ transport.Source, remotePath string) (transport.RemoteArtifact, error) {
 			if remotePath != testRemotePath {
 				t.Errorf("Stat called with remotePath = %q, want %q", remotePath, testRemotePath)
@@ -625,7 +625,7 @@ func TestDeleteRemote_PositiveControl_ProceedsFromRemoteDeletePending(t *testing
 		&state.HashUpdate{Alg: "sha256", Hash: localSum},
 		RemoteDeletePending)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 			return transport.RemoteArtifact{Path: testRemotePath, Size: 10, Hash: remoteHash, HashAlg: transport.SHA256}, nil
 		},
@@ -658,7 +658,7 @@ func TestDeleteRemote_RecordsTransportDeleteFailure(t *testing.T) {
 		state.RemoteIdentity{Size: &size, Hash: localSum, HashAlg: "sha256"},
 		localPath, &state.TransferResult{BytesTransferred: 10}, nil, Committed)
 
-	tp := &fakeTransport{
+	tp := &deleteTransport{
 		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
 			return transport.RemoteArtifact{Path: testRemotePath, Size: 10, Hash: localSum, HashAlg: transport.SHA256}, nil
 		},
