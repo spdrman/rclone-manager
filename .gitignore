@@ -16,3 +16,6 @@ config.local.*
 *.local.yaml
 
 .DS_Store
+
+# Agent worktrees, local only
+.claude/
