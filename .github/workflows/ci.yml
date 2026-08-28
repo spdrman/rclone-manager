@@ -1,0 +1,72 @@
+name: CI
+
+# Builds, vets, and tests the module on every push and pull request, and
+# keeps the two UGREEN cross-compile targets honest with a real compile
+# check. rclone's dependency graph is heavy (roughly 1.7GB and 260+
+# modules to resolve, see docs/rclone-upgrade.md), so the Go module and
+# build caches are load-bearing here, not a nice-to-have.
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-vet-test:
+    name: build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+          # actions/setup-go caches ~/go/pkg/mod and the build cache, keyed
+          # on go.sum. Without this a cold resolve of rclone's module graph
+          # takes over 6 minutes on every single run.
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  ugreen-cross-compile:
+    name: UGREEN cross-compile (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: [amd64, arm64]
+    env:
+      GOOS: linux
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.0"
+          cache: true
+
+      # This is a compile check, not a smoke test: it proves the UGREEN
+      # target still cross-compiles with CGO disabled. It does not run the
+      # resulting binary, since the runner's architecture usually does not
+      # match the target's.
+      - name: Compile backup-manager for linux/${{ matrix.goarch }}, CGO_ENABLED=0
+        run: go build -o /dev/null ./cmd/backup-manager
