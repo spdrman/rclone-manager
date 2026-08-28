@@ -1,11 +1,12 @@
 // Package lifecycle defines the artifact state machine for FR-10.
 //
-// An artifact moves through eleven named states between being noticed on a
-// remote and being fully retired there. The string form of each state is
-// exactly one of the uppercase names below, and that string is a contract
-// with the FR-9 journal: the journal stores it as a plain string column and
-// owns neither the Go type nor the rules for how it may change. This
-// package owns both.
+// An artifact moves through the eleven states FR-10 names, plus one more
+// this package adds while working the issue (QUARANTINED_LOST, see below),
+// between being noticed on a remote and being fully retired there. The
+// string form of each state is exactly one of the uppercase names below,
+// and that string is a contract with the FR-9 journal: the journal stores
+// it as a plain string column and owns neither the Go type nor the rules
+// for how it may change. This package owns both.
 //
 //	DISCOVERED
 //	TRANSFERRING
@@ -16,8 +17,9 @@
 //	COMMITTED
 //	REMOTE_DELETE_PENDING
 //	COMPLETE
-//	FAILED       (exceptional)
-//	QUARANTINED  (exceptional)
+//	FAILED             (exceptional)
+//	QUARANTINED        (exceptional, recoverable)
+//	QUARANTINED_LOST   (exceptional, terminal)
 //
 // # Why a graph, not a set of constants
 //
@@ -29,6 +31,23 @@
 // point it's attempted, and a test that walks the table is a complete proof
 // of what the machine allows. See machine.go for that table and for the
 // crash-safety reasoning behind the transitions that matter most.
+//
+// # Why QUARANTINED_LOST exists
+//
+// FR-10 names only QUARANTINED as the content-is-suspect state. Working out
+// its exits surfaced a gap FR-17's reconciliation table doesn't cover
+// either: COMPLETE means the remote source is already confirmed deleted, so
+// an artifact whose only local copy is found corrupted after COMPLETE has
+// no source left anywhere to recover from. Routing that case through the
+// same QUARANTINED -> DISCOVERED exit as a recoverable quarantine would ask
+// the pipeline to rediscover and re-transfer something that no longer
+// exists, which fails, lands in FAILED, and FAILED -> DISCOVERED sends it
+// right back around: a livelock, and one that also mislabels an
+// irrecoverable loss as an ordinary retryable failure. QUARANTINED_LOST is
+// the state that loss is recorded in instead, reachable only from COMPLETE
+// and terminal by design (see TestOnlyCompletePrecedesQuarantinedLost and
+// TestCompleteCannotLivelockThroughQuarantine). Leaving it requires an
+// operator to act, not another automatic retry.
 package lifecycle
 
 // State is one named point in the FR-10 artifact lifecycle.
@@ -84,12 +103,24 @@ const (
 	// Quarantined means one specific artifact's content is suspect and
 	// needs a human, either because a validator rejected it (FR-13) or
 	// because later reconciliation (FR-17) found the durable local copy had
-	// gone bad after the fact.
+	// gone bad after the fact, while a remote copy still exists (or hasn't
+	// been confirmed gone) to recover from. Its one exit, back to
+	// Discovered, is a real recovery path: a fresh attempt can still find
+	// the source. Contrast QuarantinedLost, where that source is gone.
 	Quarantined State = "QUARANTINED"
+
+	// QuarantinedLost means an artifact's durable local copy was found
+	// corrupted after Complete, when the remote source is already confirmed
+	// deleted. There is no copy anywhere left to recover from, so unlike
+	// Quarantined this state has no automatic exit: retrying would only
+	// rediscover nothing and fail again. This is FR-10's one addition
+	// beyond the names the issue lists, added to close a gap FR-17's
+	// reconciliation table doesn't cover (see the package doc).
+	QuarantinedLost State = "QUARANTINED_LOST"
 )
 
 // AllStates lists every state this package recognizes, happy path first and
-// then the two exceptional states. Tests use it to try every state as a
+// then the exceptional states. Tests use it to try every state as a
 // candidate for some role (predecessor, successor, starting point) instead
 // of hand-maintaining a second list that can drift from the constants above.
 var AllStates = []State{
@@ -104,6 +135,7 @@ var AllStates = []State{
 	Complete,
 	Failed,
 	Quarantined,
+	QuarantinedLost,
 }
 
 var validStates = func() map[State]bool {

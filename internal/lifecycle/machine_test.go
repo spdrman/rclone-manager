@@ -64,7 +64,7 @@ func TestTransitionsTableIsWellFormed(t *testing.T) {
 	}
 }
 
-// Every declared edge must actually validate — otherwise the table and
+// Every declared edge must actually validate, otherwise the table and
 // Validate have drifted apart.
 func TestDeclaredTransitionsValidate(t *testing.T) {
 	for _, tr := range Transitions {
@@ -100,9 +100,9 @@ func TestSameStateIsAlwaysAnIdempotentNoOp(t *testing.T) {
 	}
 }
 
-// A genuinely illegal move — skipping steps, going backward, or jumping
-// straight to a terminal state — must fail, and must fail with the
-// specific error a caller can distinguish from the idempotent case.
+// A genuinely illegal move, skipping steps, going backward, or jumping
+// straight to a terminal state, must fail, and must fail with the specific
+// error a caller can distinguish from the idempotent case.
 func TestIllegalTransitionsFail(t *testing.T) {
 	for _, tc := range []struct{ from, to State }{
 		{Discovered, Verified},            // skips ahead
@@ -115,9 +115,13 @@ func TestIllegalTransitionsFail(t *testing.T) {
 		{Failed, Committed},               // failure can't shortcut to success
 		{Failed, Complete},                // failure can't shortcut to success
 		{Failed, RemoteDeletePending},     // failure can't shortcut to success
+		{Failed, QuarantinedLost},         // a pre-commit failure never confirmed the source gone
 		{Quarantined, Verified},           // quarantine can't shortcut back in
+		{Quarantined, QuarantinedLost},    // quarantine can't declare loss without going through Complete
 		{Complete, Committed},             // terminal can't rewind
 		{RemoteDeletePending, Discovered}, // can't abandon a delete-pending mid-flight back to the start
+		{QuarantinedLost, Discovered},     // terminal by design, see TestCompleteCannotLivelockThroughQuarantine
+		{QuarantinedLost, Quarantined},    // no route from the unrecoverable outcome to the recoverable one
 	} {
 		err := Validate(tc.from, tc.to)
 		if err == nil {
@@ -174,6 +178,36 @@ func TestOnlyCommittedPrecedesRemoteDeletePending(t *testing.T) {
 	}
 }
 
+// --- the second safety spine: nothing reaches QUARANTINED_LOST except through COMPLETE ---
+
+// QUARANTINED_LOST asserts that the remote source is confirmed gone. That
+// assertion is only true coming from COMPLETE, so this proves the same
+// shape of property TestOnlyCommittedPrecedesRemoteDeletePending proves for
+// the delete boundary: try every known state as a predecessor and show only
+// COMPLETE is accepted.
+func TestOnlyCompletePrecedesQuarantinedLost(t *testing.T) {
+	preds := Predecessors(QuarantinedLost)
+	assertStateSet(t, "Predecessors(QuarantinedLost)", preds, Complete)
+
+	for _, s := range AllStates {
+		err := Validate(s, QuarantinedLost)
+		switch {
+		case s == Complete:
+			if err != nil {
+				t.Errorf("Validate(COMPLETE, QUARANTINED_LOST) = %v, want nil", err)
+			}
+		case s == QuarantinedLost:
+			if err != nil {
+				t.Errorf("Validate(QUARANTINED_LOST, QUARANTINED_LOST) = %v, want nil (idempotent)", err)
+			}
+		default:
+			if err == nil {
+				t.Errorf("Validate(%s, QUARANTINED_LOST) = nil, want an error: only COMPLETE may precede QUARANTINED_LOST, since that's the only state confirming the remote source is already gone", s)
+			}
+		}
+	}
+}
+
 // --- FAILED: defined entry points, defined exits ---
 
 func TestFailedEntryPoints(t *testing.T) {
@@ -203,14 +237,16 @@ func TestFailedHasExits(t *testing.T) {
 
 func TestQuarantinedEntryPoints(t *testing.T) {
 	// VERIFYING: a validator found the content itself invalid.
-	// COMMITTED / REMOTE_DELETE_PENDING / COMPLETE: reconciliation found the
-	// durable, final-named local copy corrupted after the fact. Nothing
-	// before COMMITTED can enter here this way because no "final"-named
-	// local file exists before COMMITTED (FR-12).
+	// COMMITTED / REMOTE_DELETE_PENDING: reconciliation found the durable,
+	// final-named local copy corrupted after the fact, but before the
+	// remote delete has actually happened, so a source may still exist.
+	// COMPLETE is deliberately excluded here: by then the remote is
+	// confirmed gone, so that case routes to QUARANTINED_LOST instead (see
+	// TestOnlyCompletePrecedesQuarantinedLost).
 	// FAILED: the retry budget is exhausted and this needs a human instead
 	// of another automatic attempt.
 	assertStateSet(t, "Predecessors(Quarantined)", Predecessors(Quarantined),
-		Verifying, Committed, RemoteDeletePending, Complete, Failed)
+		Verifying, Committed, RemoteDeletePending, Failed)
 }
 
 func TestQuarantinedHasExits(t *testing.T) {
@@ -224,23 +260,72 @@ func TestQuarantinedHasExits(t *testing.T) {
 // The hole this whole package exists to close: a quarantined artifact must
 // never be able to silently resume the happy path. Its only way out is
 // DISCOVERED, which forces a full re-run of transfer, verification and
-// commit — never a shortcut straight back to something that looks done.
+// commit, never a shortcut straight back to something that looks done.
 func TestQuarantineCannotShortcutToSuccess(t *testing.T) {
-	for _, target := range []State{Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Complete} {
+	for _, target := range []State{Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Complete, QuarantinedLost} {
 		if err := Validate(Quarantined, target); err == nil {
 			t.Errorf("Validate(QUARANTINED, %s) = nil, want an error: quarantine must not shortcut back onto the happy path", target)
 		}
 	}
 }
 
-// --- no state is a dead end ---
+// --- QUARANTINED_LOST: the terminal, unrecoverable outcome ---
+
+// This is the fix for the gap found reviewing this same issue: COMPLETE
+// means the remote source is already deleted, so an artifact whose only
+// local copy corrupts after COMPLETE has no source left to recover from.
+// Routing that case through the recoverable QUARANTINED -> DISCOVERED exit
+// would send the pipeline back to rediscover and re-transfer something
+// that no longer exists anywhere, which fails transfer, lands in FAILED,
+// and FAILED -> DISCOVERED sends it right back around: a livelock, and
+// worse, one that reports an unrecoverable loss as an ordinary retryable
+// failure. This test proves that loop cannot form.
+func TestCompleteCannotLivelockThroughQuarantine(t *testing.T) {
+	// COMPLETE must not reach the recoverable QUARANTINED at all...
+	if err := Validate(Complete, Quarantined); err == nil {
+		t.Fatal("Validate(COMPLETE, QUARANTINED) accepted; COMPLETE must route to QUARANTINED_LOST, not to the recoverable QUARANTINED")
+	}
+	// ...it must land in QUARANTINED_LOST instead...
+	if err := Validate(Complete, QuarantinedLost); err != nil {
+		t.Fatalf("Validate(COMPLETE, QUARANTINED_LOST) = %v, want nil", err)
+	}
+	// ...and QUARANTINED_LOST must have no way back into the graph at all,
+	// which is what actually breaks the loop: there is nothing left to
+	// retry, so nothing can cycle.
+	if successors := Successors(QuarantinedLost); len(successors) != 0 {
+		t.Fatalf("QUARANTINED_LOST has successors %v, want none: any exit here re-creates the livelock this state exists to prevent", successors)
+	}
+}
+
+// --- no state is a dead end, except the one that's terminal on purpose ---
+
+// terminalByDesign lists states this package deliberately gives no
+// automatic exit. Landing in one of these is not "the artifact is stuck"
+// in the sense the issue calls a design bug; it's a hard stop that
+// surfaces as an operator-visible alarm (FR-24) instead of an automatic
+// retry, because there is genuinely nothing left for an automatic retry to
+// do. QUARANTINED_LOST is the only member: it means the remote source is
+// confirmed gone (only COMPLETE precedes it) and the local copy has also
+// gone bad, so retrying would only rediscover nothing and fail again. See
+// TestCompleteCannotLivelockThroughQuarantine for the loop this avoids.
+var terminalByDesign = map[State]bool{
+	QuarantinedLost: true,
+}
 
 // "The artifact is stuck" is a design bug per the issue, so prove it can't
-// happen: every state this package defines has at least one legal way out.
+// happen for anything other than the one state that's terminal on purpose,
+// and prove that state really is exactly as terminal as declared.
 func TestNoStateIsALeak(t *testing.T) {
 	for _, s := range AllStates {
-		if len(Successors(s)) == 0 {
-			t.Errorf("%q has no declared successors; an artifact reaching it would be stuck there forever", s)
+		successors := Successors(s)
+		if terminalByDesign[s] {
+			if len(successors) != 0 {
+				t.Errorf("%q is listed as terminal by design but has successors %v; update terminalByDesign or Transitions, they've drifted apart", s, successors)
+			}
+			continue
+		}
+		if len(successors) == 0 {
+			t.Errorf("%q has no declared successors and is not in terminalByDesign; an artifact reaching it would be stuck there forever with no documented reason", s)
 		}
 	}
 }
@@ -273,8 +358,8 @@ func TestMachineWalksTheNominalPath(t *testing.T) {
 	}
 }
 
-// Re-applying the transition that just happened — the exact shape a
-// restarted retry produces — must be a no-op success, not an error.
+// Re-applying the transition that just happened, the exact shape a
+// restarted retry produces, must be a no-op success, not an error.
 func TestMachineApplyIsIdempotentOnRepeat(t *testing.T) {
 	m, err := NewMachine(Committed)
 	if err != nil {

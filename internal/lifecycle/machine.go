@@ -10,8 +10,8 @@ type Transition struct {
 
 // Transitions is the single source of truth for every legal state change.
 // Nothing outside this table is a legal move (current == target is the one
-// exception, handled by Validate as an idempotent no-op, not as a row
-// here — see the package doc and the comment on Validate for why).
+// exception, handled by Validate as an idempotent no-op, not as a row here;
+// see the package doc and the comment on Validate for why).
 //
 // # The nominal path
 //
@@ -21,37 +21,53 @@ type Transition struct {
 //
 // # FAILED: reachable only before COMMITTED
 //
-// FAILED is entered from every state before COMMITTED — a permanent,
+// FAILED is entered from every state before COMMITTED, a permanent,
 // non-retryable error (FR-22) at discovery, transfer, verification or the
-// durable-commit step itself — and from nowhere at or after COMMITTED.
-// Once the local file is durably committed the backup has already
-// succeeded; there's no "the backup failed" story left to tell for this
-// artifact, only a possible "the copy is bad" one, which is QUARANTINED's
-// job, not FAILED's. FAILED has two exits: back to DISCOVERED (the retry
-// policy restarts the artifact from scratch) or into QUARANTINED (the
-// retry budget is exhausted and this needs a human instead of another
-// attempt).
+// durable-commit step itself, and from nowhere at or after COMMITTED. Once
+// the local file is durably committed the backup has already succeeded;
+// there's no "the backup failed" story left to tell for this artifact, only
+// a possible "the copy is bad" one, which is QUARANTINED's job, not
+// FAILED's. FAILED has two exits: back to DISCOVERED (the retry policy
+// restarts the artifact from scratch) or into QUARANTINED (the retry budget
+// is exhausted and this needs a human instead of another attempt). Both
+// exits are safe here specifically because FAILED can only be reached
+// before COMMITTED, which means the remote delete has never been issued and
+// the source is presumptively still there to recover from.
 //
-// # QUARANTINED: content is suspect, not that an attempt errored
+// # QUARANTINED vs. QUARANTINED_LOST: does a source still exist to recover from
 //
-// QUARANTINED has two kinds of entry. From VERIFYING, when a validator
-// (FR-13) determines the transferred content itself is invalid, as
-// opposed to the copy having merely failed (that's FAILED). And from
-// COMMITTED, REMOTE_DELETE_PENDING or COMPLETE, when later reconciliation
-// (FR-17) finds the durable local copy has gone bad after the fact — bit
-// rot, disk corruption. Those three and only those three, because a
-// "final"-named local file (FR-12) exists starting at COMMITTED and never
-// before it. Critically, COMMITTED and REMOTE_DELETE_PENDING routing to
-// QUARANTINED instead of continuing forward means corruption discovered
-// before the remote delete is issued always aborts the delete: the remote
-// copy is preserved (FR-16) rather than removed out from under a bad local
-// copy. QUARANTINED has exactly one exit, back to DISCOVERED, and that is
-// deliberate: reaching COMPLETE again means re-running discovery,
-// transfer, verification and commit in full, never a shortcut back onto
-// the happy path. A direct edge from QUARANTINED to COMMITTED, to
-// REMOTE_DELETE_PENDING, or to COMPLETE is not merely missing by omission —
-// TestQuarantineCannotShortcutToSuccess asserts each is refused, because
-// that shortcut is exactly the hole this package exists to close.
+// QUARANTINED covers content that's suspect while a remote copy still
+// exists, or at least hasn't been confirmed gone: from VERIFYING, when a
+// validator (FR-13) determines the transferred content itself is invalid,
+// as opposed to the copy having merely failed (that's FAILED); and from
+// COMMITTED or REMOTE_DELETE_PENDING, when later reconciliation (FR-17)
+// finds the durable local copy has gone bad after the fact, bit rot, disk
+// corruption, before the remote delete has actually happened. COMMITTED
+// guarantees the remote is still untouched, and REMOTE_DELETE_PENDING only
+// records intent (FR-16 requires re-confirming the remote object's identity
+// before any delete is issued), so a fresh DISCOVERED attempt from either
+// has a real chance of finding the source. QUARANTINED's one exit, back to
+// DISCOVERED, is a genuine recovery path.
+//
+// QUARANTINED_LOST is a different outcome, not another way into the same
+// state. It's entered only from COMPLETE, which is the one state in this
+// whole graph that confirms the remote source is already deleted. An
+// artifact whose durable local copy is found corrupted at that point has no
+// copy anywhere left: not on the remote (COMPLETE said so), not intact
+// locally (that's why it's here). Sending that case to DISCOVERED, the way
+// QUARANTINED does, would ask the pipeline to rediscover and re-transfer
+// something that no longer exists, which fails, lands in FAILED, and
+// FAILED -> DISCOVERED sends it right back around: a livelock, and one that
+// also mislabels an irrecoverable loss as an ordinary retryable failure.
+// QUARANTINED_LOST has no declared successors at all, on purpose (see
+// TestOnlyCompletePrecedesQuarantinedLost and
+// TestCompleteCannotLivelockThroughQuarantine). It is a hard stop that
+// surfaces as an operator alarm (FR-24's quarantined count should count
+// this too), not a state the state machine itself ever tries to route out
+// of. This is FR-10's one addition beyond the states the issue names.
+// FR-17's reconciliation table has no row for "remote absent and local
+// final copy invalid" either, so whoever builds FR-17's reconciliation
+// (issue #18) needs that row added, targeting QUARANTINED_LOST.
 var Transitions = []Transition{
 	// --- nominal path ---
 	{From: Discovered, To: Transferring},
@@ -87,16 +103,23 @@ var Transitions = []Transition{
 	{From: Verified, To: Failed},
 	{From: Committing, To: Failed},
 
-	// --- entry points into QUARANTINED: content is invalid, not merely failed ---
+	// --- entry points into QUARANTINED: content is invalid, source may still exist ---
 	{From: Verifying, To: Quarantined},
 	{From: Committed, To: Quarantined},
 	{From: RemoteDeletePending, To: Quarantined},
-	{From: Complete, To: Quarantined},
+
+	// --- the sole entry into QUARANTINED_LOST: source is confirmed gone ---
+	{From: Complete, To: QuarantinedLost},
 
 	// --- exits from the exceptional states ---
 	{From: Failed, To: Discovered},
 	{From: Failed, To: Quarantined},
 	{From: Quarantined, To: Discovered},
+
+	// QuarantinedLost has no outgoing edges at all: it is terminal by
+	// design. Leaving it means an operator has acted, for example resolving
+	// the loss against a different backup-set generation, which is out of
+	// this state machine's scope, not another automatic move.
 }
 
 var transitionSet = func() map[Transition]bool {
@@ -136,14 +159,14 @@ func (e *UnknownStateError) Error() string {
 // Validate reports whether moving an artifact from current to target is
 // legal.
 //
-// current == target is always legal and is treated as an idempotent
-// no-op, regardless of whether that pair also happens to be a declared
-// edge. The crash matrix (docs/EPIC.md) terminates the process after every
-// one of these states, so on restart a step gets retried without knowing
-// whether its own last attempt already landed; asking to move to the state
-// you're already in has to succeed, or every crash would turn into a stuck
+// current == target is always legal and is treated as an idempotent no-op,
+// regardless of whether that pair also happens to be a declared edge. The
+// crash matrix (docs/EPIC.md) terminates the process after every one of
+// these states, so on restart a step gets retried without knowing whether
+// its own last attempt already landed; asking to move to the state you're
+// already in has to succeed, or every crash would turn into a stuck
 // artifact. Anything else must appear in Transitions or Validate refuses
-// it — that refusal is what catches a real bug (a skipped step, a stale
+// it, and that refusal is what catches a real bug (a skipped step, a stale
 // in-memory copy of the state, a corrupted journal row) instead of letting
 // it silently corrupt the journal.
 func Validate(current, target State) error {
@@ -164,8 +187,8 @@ func Validate(current, target State) error {
 
 // Predecessors returns every state Transitions declares as a legal source
 // for target, in table order. It does not include target itself, even
-// though current == target is always a legal move via Validate — this
-// function answers "what can lead here", the idempotent no-op isn't a
+// though current == target is always a legal move via Validate; this
+// function answers "what can lead here", and the idempotent no-op isn't a
 // lead-in, it's staying put.
 func Predecessors(target State) []State {
 	var out []State
@@ -219,10 +242,10 @@ func (m *Machine) Current() State { return m.current }
 //
 // changed reports whether this call actually moved the machine anywhere.
 // It's false both when target equals the current state (the idempotent
-// no-op case a restarted retry produces) and, of course, on error. A
-// caller that wants to know "did this attempt just newly land, or was it
-// already done" reads changed; a caller that only wants a durable outcome
-// can ignore it and check err alone.
+// no-op case a restarted retry produces) and, of course, on error. A caller
+// that wants to know "did this attempt just newly land, or was it already
+// done" reads changed; a caller that only wants a durable outcome can
+// ignore it and check err alone.
 func (m *Machine) Apply(target State) (changed bool, err error) {
 	if err := Validate(m.current, target); err != nil {
 		return false, err

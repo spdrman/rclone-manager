@@ -22,6 +22,7 @@ func TestStateStringIsExactlyTheContractName(t *testing.T) {
 		{Complete, "COMPLETE"},
 		{Failed, "FAILED"},
 		{Quarantined, "QUARANTINED"},
+		{QuarantinedLost, "QUARANTINED_LOST"},
 	} {
 		if got := tc.state.String(); got != tc.want {
 			t.Errorf("%#v.String() = %q, want %q", tc.state, got, tc.want)
@@ -43,8 +44,11 @@ func TestAllStatesAreValidAndDistinct(t *testing.T) {
 		}
 		seen[s] = true
 	}
-	if len(AllStates) != 11 {
-		t.Fatalf("FR-10 names 11 states, AllStates has %d", len(AllStates))
+	// FR-10 names 11 states; QUARANTINED_LOST is this package's addition
+	// (see the package doc and TestCompleteCannotLivelockThroughQuarantine
+	// in machine_test.go), which makes 12.
+	if len(AllStates) != 12 {
+		t.Fatalf("AllStates has %d states, want 12 (11 named by FR-10 plus QUARANTINED_LOST)", len(AllStates))
 	}
 }
 
