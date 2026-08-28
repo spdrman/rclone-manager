@@ -19,16 +19,8 @@ import (
 // terms of the journal's own idempotency-key replay behaviour (see
 // CommitInput's Key docs), so a fake that reimplemented that behaviour
 // would risk drifting from the real thing and proving nothing.
-func openTestJournal(t *testing.T) *state.Journal {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "journal.db")
-	j, err := state.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("state.Open: %v", err)
-	}
-	t.Cleanup(func() { j.Close() })
-	return j
-}
+// openTestJournal lives in remotedelete_test.go. Every file here is one
+// package, so a second copy would not compile.
 
 // walkToVerified durably drives artifact through the nominal path from
 // DISCOVERED to VERIFIED, recording partial as the local path at
