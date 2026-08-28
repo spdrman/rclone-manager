@@ -1,0 +1,5 @@
+# Ephemeral per-run state for the Docker SFTP fixture: generated test SSH
+# keys, known_hosts files, and the bind-mounted upload directory. Removed by
+# t.Cleanup() after every test run; this is a backstop in case a run is
+# killed before cleanup gets to run.
+.run/
