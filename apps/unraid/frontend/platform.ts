@@ -9,7 +9,7 @@ export const unraidBridge: PlatformBridge = {
   integration: "container",
 
   deployment: {
-    deployment: "Community Applications",
+    label: "Community Applications",
     storageMount: "/mnt/user/backups",
     adapterVersion: "unraid 1.1.0"
   },

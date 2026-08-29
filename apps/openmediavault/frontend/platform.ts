@@ -9,7 +9,7 @@ export const openmediavaultBridge: PlatformBridge = {
   integration: "container",
 
   deployment: {
-    deployment: "omv-compose",
+    label: "omv-compose",
     storageMount: "/srv/dev-disk-by-uuid/backups",
     adapterVersion: "omv 1.0.2"
   },

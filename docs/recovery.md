@@ -17,7 +17,7 @@ This procedure is the permanent shape, not a workaround.
 ## The one fact everything else depends on
 
 The journal is a plain SQLite file at whatever path `state.database` names in your config
-(`internal/config/testdata/full.yaml` shows the shape). Query it with the `sqlite3` CLI,
+(`core/internal/config/testdata/full.yaml` shows the shape). Query it with the `sqlite3` CLI,
 no Go required:
 
 ```bash
@@ -27,7 +27,7 @@ sqlite3 /path/to/state.db ".schema artifacts"
 The columns that matter for recovery: `source`, `backup_set`, `artifact_name`,
 `remote_path`, `local_path`, `state`, `updated_at`, `remote_hash`, `local_hash`,
 `retry_count`, `last_error`, `remote_deleted_at`, `remote_delete_error`. The full schema is
-`migrations/0001_init.sql` plus `migrations/0002_quarantined_lost.sql`.
+`core/migrations/0001_init.sql` plus `core/migrations/0002_quarantined_lost.sql`.
 
 ## Step 1: is this actually broken?
 
@@ -43,7 +43,7 @@ sqlite3 /path/to/state.db "
 "
 ```
 
-What `internal/health` would tell you if it were wired to anything (see the README's
+What `core/internal/health` would tell you if it were wired to anything (see the README's
 [Status and health](../README.md#status-and-health)):
 
 - If the newest row across the whole set is `COMMITTED`, `REMOTE_DELETE_PENDING` or
@@ -60,7 +60,7 @@ What `internal/health` would tell you if it were wired to anything (see the READ
 ## Step 2: finding a restore point
 
 Only three states are ever a valid restore point. This isn't a convention this document is
-inventing, it's the exact set `internal/health/compute.go` calls `knownGood`:
+inventing, it's the exact set `core/internal/health/compute.go` calls `knownGood`:
 
 - `COMMITTED`
 - `REMOTE_DELETE_PENDING`
@@ -93,7 +93,7 @@ sqlite3 /path/to/state.db "
 ```
 
 The `local_path` in that row is the file. It was fsynced and atomically promoted to that
-name by `internal/lifecycle/commit.go` before `COMMITTED` was ever recorded (see the
+name by `core/internal/lifecycle/commit.go` before `COMMITTED` was ever recorded (see the
 README's [Durable commit](../README.md#durable-commit)), so treat it as trustworthy on the
 strength of that alone; you don't need to re-verify it before copying it out, though
 re-running whatever validator the backup set's config names is never wrong if the stakes
@@ -109,7 +109,7 @@ Stop looking for that specific backup. It's gone. `QUARANTINED_LOST` is reachabl
 `COMPLETE`, the one state that confirms the remote copy was already deleted, so by the time
 an artifact reaches it there is no copy anywhere: not on the remote (already deleted), not
 intact locally (that's why it's here). It's terminal by design; nothing in the state machine
-ever routes an artifact back out of it (`internal/lifecycle/machine.go`).
+ever routes an artifact back out of it (`core/internal/lifecycle/machine.go`).
 
 What to actually do:
 
@@ -140,7 +140,7 @@ reconciliation run against this backup set. Today, with no daemon or scheduled r
 own. Your options, in order of how much you should trust the result:
 
 1. If you or someone else has already wired a runner against these packages (calling
-   `discovery.Discover`, `reconcile.Reconcile`, and the `internal/lifecycle` steps
+   `discovery.Discover`, `reconcile.Reconcile`, and the `core/internal/lifecycle` steps
    yourself), run it against this backup set.
 2. Otherwise, fetch the artifact by hand: `sftp` in with the same key and `known_hosts`
    `docs/ssh-setup.md` describes, confirm it's still there under the `remote_path` the
@@ -148,7 +148,7 @@ own. Your options, in order of how much you should trust the result:
    names against the file before trusting it, since that's the check that flagged it in the
    first place.
 3. Don't manually flip the journal row's `state` column back to `DISCOVERED` by hand unless
-   you understand exactly what `internal/state/journal.go`'s idempotency-key scheme expects;
+   you understand exactly what `core/internal/state/journal.go`'s idempotency-key scheme expects;
    an ad hoc `UPDATE` can leave `state_transitions` and `artifacts` disagreeing in a way the
    append-only log was specifically built to prevent.
 
@@ -198,7 +198,7 @@ That's a real operational consequence, not a cosmetic one:
 That's expected, not a bug, for two independent reasons documented in the README's
 [Retention](../README.md#retention) section:
 
-- `internal/retention.GFSDecide` only classifies artifacts into keep/not-kept-by-GFS. It
+- `core/internal/retention.GFSDecide` only classifies artifacts into keep/not-kept-by-GFS. It
   contains no deletion code at all. A `Keep: false` verdict is a candidate, not an order.
 - There is no code path anywhere in this repository that deletes a local file yet (FR-20,
   issue #21, the mandatory dry-run local deletion safety, is open). Local disk usage only

@@ -32,10 +32,10 @@ Read this before the rest of the document, because it changes how to read everyt
 The lifecycle engine, the SQLite journal, discovery, verification, durable commit, remote
 delete with TOCTOU protection, GFS retention, reconciliation, disk capacity guards, health
 computation and structured logging are all real, implemented, unit- and integration-tested
-Go packages under `internal/`. None of that is aspirational; it's covered by
+Go packages under `core/internal/`. None of that is aspirational; it's covered by
 `go test ./...` today.
 
-What doesn't exist yet is anything that runs them. `cmd/backup-manager/main.go` is 25 lines
+What doesn't exist yet is anything that runs them. `core/cmd/backup-manager/main.go` is 25 lines
 and understands exactly one subcommand:
 
 ```bash
@@ -46,17 +46,17 @@ That's it. There is no `run`, no `daemon`, no `status`, no `retention`, no `reco
 `restore`. Nothing loads a config file and drives an artifact from `DISCOVERED` to
 `COMPLETE` outside of a test. Building that orchestrator is issue #25 (execution modes) and
 #26 (the CLI surface), both open. Because everything the orchestrator would call lives
-under `internal/`, Go's own visibility rules mean no other module can import it either, so
+under `core/internal/`, Go's own visibility rules mean no other module can import it either, so
 until #25/#26 land, this project cannot be operated by anyone from outside this repository.
 
 A few pieces further down this document are implemented but not yet wired to anything that
 calls them:
 
-- `internal/capacity`'s disk guard is real and tested, but nothing in the transfer path
+- `core/internal/capacity`'s disk guard is real and tested, but nothing in the transfer path
   calls it yet.
-- `internal/obs`'s structured logger is real and tested, but nothing else in the repository
+- `core/internal/obs`'s structured logger is real and tested, but nothing else in the repository
   logs through it yet, or at all.
-- `internal/health`'s four-state computation is real and tested, but nothing renders it as
+- `core/internal/health`'s four-state computation is real and tested, but nothing renders it as
   a `status` command or an HTTP endpoint.
 - Last-known-good protection (FR-19, issue #20) and the mandatory dry-run for local
   deletion (FR-20, issue #21) are not implemented. `config.Retention.ProtectLastKnownGood`
@@ -91,8 +91,8 @@ backup-manager:
 ```
 
 That boundary is the central architectural constraint. Application packages outside
-`internal/transport/rclone` do not import rclone packages, so upstream API churn stays
-contained in one adapter. `internal/transport/rclone/backends_test.go` fails the build if
+`core/internal/transport/rclone` do not import rclone packages, so upstream API churn stays
+contained in one adapter. `core/internal/transport/rclone/backends_test.go` fails the build if
 that ever stops being true.
 
 ## Why rclone is embedded, not forked, not shelled out to
@@ -117,9 +117,9 @@ only summarizes it.
 
 ### The adapter
 
-Every rclone import in this repository lives under `internal/transport/rclone`. Everything
+Every rclone import in this repository lives under `core/internal/transport/rclone`. Everything
 else in the codebase depends only on the manager-owned interface in
-`internal/transport/transport.go`:
+`core/internal/transport/transport.go`:
 
 ```go
 type Transport interface {
@@ -137,7 +137,7 @@ decision away from the lifecycle manager.
 
 ### The pinned version, and the backend count that surprised us
 
-`go.mod` pins `github.com/rclone/rclone v1.75.0`. `internal/transport/rclone/adapter.go`
+`core/go.mod` pins `github.com/rclone/rclone v1.75.0`. `core/internal/transport/rclone/adapter.go`
 blank-imports exactly two backend packages, `backend/local` and `backend/sftp`. But the
 adapter also needs `operations.Copy` from `fs/operations`, and that package itself imports
 `backend/crypt` for an unrelated feature (decrypting filenames for `--show-encrypted`).
@@ -145,14 +145,14 @@ Backends self-register via `init()`, so importing `fs/operations` registers `cry
 silently, as a side effect nothing in a casual read of the blank imports would reveal. So
 importing two backends registers three. This is measured, traced to the exact import chain,
 and pinned by `TestRegisteredBackendsExactSet` in
-`internal/transport/rclone/backends_test.go`, so the registered set can't widen again
+`core/internal/transport/rclone/backends_test.go`, so the registered set can't widen again
 without the build failing.
 
 If you need to confirm what's actually registered in a built binary rather than trust this
 paragraph: `go mod why github.com/rclone/rclone/backend/crypt` shows the chain, and
 `go version -m ./backup-manager | grep rclone/rclone` reads the exact linked rclone version
 back out of a compiled binary, which is a faster sanity check than trusting whatever
-`go.mod` said at build time actually got shipped.
+`core/go.mod` said at build time actually got shipped.
 
 ### Upgrading the pin
 
@@ -160,14 +160,14 @@ No rclone dependency bump auto-merges, ever, not even a patch version with green
 human reads the release notes. `docs/rclone-upgrade.md` is the actual checklist: what the
 CI gate (`rclone-upgrade-gate.yml`) enforces today versus what's still manual, how to run
 the regression set locally, and how to check what got registered instead of only what got
-imported. Read it before touching the version in `go.mod`.
+imported. Read it before touching the version in `core/go.mod`.
 
 ## Connecting to a remote: SSH/SFTP and the restricted account
 
 `docs/ssh-setup.md` is the full walkthrough: generating a dedicated key, creating a
 shell-less, chrooted SFTP-only account that can list/read/delete eligible artifacts but
 can't overwrite a completed one, and verifying the server's host key out-of-band instead of
-trusting whatever answers first. `internal/transport/rclone/ssh.go` refuses to build a
+trusting whatever answers first. `core/internal/transport/rclone/ssh.go` refuses to build a
 connection at all without both a real key file and a real `known_hosts` file; there's no
 password fallback and no way to disable host-key checking.
 
@@ -207,7 +207,7 @@ putting the run stamp in the filename rather than only in the directory.
 
 ## The lifecycle
 
-An artifact moves through twelve states, defined in `internal/lifecycle/state.go` and
+An artifact moves through twelve states, defined in `core/internal/lifecycle/state.go` and
 `machine.go`, which are the single source of truth; the table below is a summary, not a
 substitute.
 
@@ -241,7 +241,7 @@ in health computation (see [Status and health](#status-and-health)).
 
 ### Verification
 
-`internal/lifecycle/verify.go` runs three layers, each with a different failure shape:
+`core/internal/lifecycle/verify.go` runs three layers, each with a different failure shape:
 
 1. **Transfer verification**, always performed: the local file opens, reads without an I/O
    error, and its size matches what the transfer step recorded. Failing this means the copy
@@ -261,7 +261,7 @@ in health computation (see [Status and health](#status-and-health)).
 
 ### Durable commit
 
-`internal/lifecycle/commit.go` implements the FR-14 sequence between `VERIFIED` and
+`core/internal/lifecycle/commit.go` implements the FR-14 sequence between `VERIFIED` and
 `COMMITTED`:
 
 1. record `COMMITTING` in the journal, before touching any file;
@@ -278,7 +278,7 @@ Every step is idempotent and safe to resume after a crash at any point in the se
 
 ### TOCTOU protection on delete
 
-`internal/lifecycle/remotedelete.go` is, by its own doc comment, "the most dangerous line
+`core/internal/lifecycle/remotedelete.go` is, by its own doc comment, "the most dangerous line
 in the project," the only call site allowed to invoke `Transport.DeleteRemote`. Before
 issuing a delete it revalidates, from scratch, every time:
 
@@ -305,7 +305,7 @@ column, specifically so it's a queryable fact and not just a log line. See
 
 ### Reconciliation
 
-On startup, before normal processing touches anything, `internal/reconcile` compares what
+On startup, before normal processing touches anything, `core/internal/reconcile` compares what
 the journal believes against what the local filesystem and the remote backend actually show
 right now, for every scenario FR-17 names:
 
@@ -340,7 +340,7 @@ its final committed path if quarantined afterward by reconciliation. See
 
 ### GFS retention
 
-`internal/retention` implements deterministic GFS (grandfather-father-son) classification
+`core/internal/retention` implements deterministic GFS (grandfather-father-son) classification
 for every managed, completed backup in a set:
 
 | Tier    | Default            |
@@ -354,7 +354,7 @@ valid backup in every calendar bucket their look-back window covers). The calcul
 "now" as a plain argument rather than calling `time.Now()`, specifically so the same journal
 state always produces the same verdict regardless of when or where it runs. One thing worth
 knowing if you're comparing this against `docs/EPIC.md`: the EPIC's example default
-timezone is `America/Vancouver`, but `internal/config`'s actual validated default is `UTC`.
+timezone is `America/Vancouver`, but `core/internal/config`'s actual validated default is `UTC`.
 This package defers to whatever config supplies rather than hardcoding the EPIC's example,
 so the honest current default is UTC; set `retention.timezone` explicitly if you want
 something else.
@@ -368,7 +368,7 @@ delete order.
 **Not implemented.** FR-19 says the newest known-good restore point must never be deleted
 solely for exceeding retention age. `config.Retention.ProtectLastKnownGood` exists as a
 config field, defaults to `true` when the key is omitted, and is validated, but nothing
-downstream reads it. `internal/retention`'s own package doc says plainly that it "does not
+downstream reads it. `core/internal/retention`'s own package doc says plainly that it "does not
 know about last-known-good protection." Tracked as issue #20. Until it lands, GFS's
 `Keep: false` candidates are only candidates in principle, since nothing acts on them at
 all, but don't rely on that as a substitute for the real protection once deletion is
@@ -388,7 +388,7 @@ are true regardless of how the container ends up built.
 
 ## Status and health
 
-`internal/health` computes two structurally separate things and enforces, by test, that
+`core/internal/health` computes two structurally separate things and enforces, by test, that
 they never share a field: process health (is the binary alive, what version is it, what
 rclone version is embedded) and backup-set health, one of four states:
 
@@ -402,7 +402,7 @@ rclone version is embedded) and backup-set health, one of four states:
 - **FAILING** – checked first, unconditionally: any `QUARANTINED_LOST` artifact, or a
   `FAILED` artifact with no retry scheduled.
 
-This computation is real and tested (`internal/health/compute.go`), including the
+This computation is real and tested (`core/internal/health/compute.go`), including the
 `QuarantinedCount`/`QuarantinedLostCount` aggregates FR-24 asks for. **Nothing renders it
 yet.** There is no `backup-manager status` command and no `/health` HTTP endpoint; the
 package's own doc comment says it's meant to back exactly those, both separate, open work.
@@ -430,7 +430,7 @@ sqlite3 /path/to/state.db "
 ```
 
 Only three states are ever a valid restore point: **`COMMITTED`, `REMOTE_DELETE_PENDING`,
-`COMPLETE`**. That's not a convention, it's the exact set `internal/health` calls
+`COMPLETE`**. That's not a convention, it's the exact set `core/internal/health` calls
 `knownGood`. Everything else, `DISCOVERED` through `COMMITTING`, `FAILED`, `QUARANTINED`,
 `QUARANTINED_LOST`, or any `.partial` file you find sitting on disk regardless of what the
 journal says, is not a restore point. Take the newest row in one of the three good states;
@@ -464,7 +464,11 @@ is happening in the background.
 
 Go 1.27, and Docker for the disposable SFTP server the integration tests use.
 
+The engine lives in its own `core/` Go module (`core/go.mod`), separate from the
+repository root, so every command below runs from `core/`:
+
 ```bash
+cd core
 go build ./...
 go vet ./...
 go test ./...
@@ -472,19 +476,21 @@ go test ./...
 
 CI (`.github/workflows/ci.yml`) runs the same three commands on every push and pull
 request, with the Go module cache preserved between runs, and separately cross-compiles the
-whole module (`go build ./...`, not just `cmd/backup-manager`) for both UGREEN targets
+whole module (`go build ./...`, not just `core/cmd/backup-manager`) for both UGREEN targets
 (`linux/amd64` and `linux/arm64`, `CGO_ENABLED=0`) as a compile check.
-`.github/workflows/rclone-upgrade-gate.yml` runs whenever `go.mod` or `go.sum` changes and
-reports the FR-2 checklist status.
+`.github/workflows/rclone-upgrade-gate.yml` runs whenever `core/go.mod` or `core/go.sum`
+changes and reports the FR-2 checklist status.
 
 ## Layout
 
-The repository root is the Go module root. `cmd/backup-manager/` is the entry point (today,
-just `version`); `internal/` holds every application package, and every rclone import stays
-inside `internal/transport/rclone/`:
+`core/` is its own Go module (`core/go.mod`), separate from the repository root, drawn
+that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
+`docs/EPIC-B-multi-nas.md` §7 for why). `core/cmd/backup-manager/` is the entry point
+(today, just `version`); `core/internal/` holds every application package, and every
+rclone import stays inside `core/internal/transport/rclone/`:
 
 ```text
-internal/
+core/internal/
   config/       YAML config schema, loading, validation (Load takes any path)
   model/        shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   discovery/    turns a raw remote listing into artifacts proven complete
@@ -498,10 +504,29 @@ internal/
   transport/    the manager-owned Transport interface and the rclone adapter behind it
 ```
 
-Config example: `internal/config/testdata/full.yaml` has a complete, valid config with
+Config example: `core/internal/config/testdata/full.yaml` has a complete, valid config with
 every field populated; that's a better reference than hand-writing one here, since it's
 exercised by the config package's own tests and won't silently drift out of sync with the
 schema the way a README example would.
+
+`apps/common/` is a second, much smaller Go module (`apps/common/go.mod`): the
+`PlatformCapabilities`/`PlatformAdapter` contract every provider app composes over
+(`apps/common/platform/capabilities/`, `docs/EPIC-B-multi-nas.md` §3.4), plus two
+reserved-but-empty packages (`apps/common/webhost/`, `apps/common/auth/local/`) that hold
+the location the real `/api/v1` implementation and local-account auth land in (#94/B1.5) —
+out of scope for #106/B1.1, which only draws the boundary. `apps/common/tests/` is a
+separate small TS package: the one place in the repo that legitimately imports every
+provider's frontend bridge at once (the provider-conformance matrix, §63A), kept outside
+`ui/shared/` specifically so removing a provider never breaks `ui/shared`'s own build.
+
+`ui/shared/` is the one shared frontend every provider app builds against
+(`ui/shared/src/`), never providing its own product UI (see `docs/EPIC-B-multi-nas.md` §11):
+pages, components, the `PlatformBridge` contract (`ui/shared/src/platform/`,
+`ui/shared/src/types/platform.ts`), and the single causl-ts state graph
+(`ui/shared/src/state/graph.ts`). A provider app under `apps/<provider>/frontend/`
+supplies a `PlatformBridge` implementation and, for the seven that exist today
+(`generic`, `ugos`, `synology`, `truenas`, `unraid`, `openmediavault`, `proxmox`), nothing
+else — `ui/shared` never imports a provider, only the reverse.
 
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.

@@ -1,10 +1,11 @@
 # Keep the container build context to exactly what container/Dockerfile
-# COPYs (go.mod, go.sum, cmd/, internal/, migrations/) plus whatever Docker
-# itself needs to see this file. Everything else here would either bloat
-# the context for no reason or actively undermine reproducibility: the
-# Dockerfile passes -buildvcs=false precisely because the build isn't
-# supposed to depend on .git being present or clean, so .git is excluded
-# rather than merely ignored by that flag.
+# COPYs (core/go.mod, core/go.sum, core/cmd/, core/internal/,
+# core/migrations/) plus whatever Docker itself needs to see this file.
+# Everything else here would either bloat the context for no reason or
+# actively undermine reproducibility: the Dockerfile passes -buildvcs=false
+# precisely because the build isn't supposed to depend on .git being
+# present or clean, so .git is excluded rather than merely ignored by that
+# flag.
 .git
 .github
 .claude
@@ -17,7 +18,11 @@ README.md
 *.md
 
 # Test fixtures and their scratch output; never part of the shipped binary.
-tests
+# core/tests, not tests: the root tests/ moved under core/ with #106/B1.1,
+# and the un-prefixed pattern is dead today (the current Dockerfile never
+# COPYs anything that would match it) but would silently stop excluding
+# anything the day a future COPY core/ ... starts matching it instead.
+core/tests
 
 # Never let a filled-in .env reach the build context.
 .env

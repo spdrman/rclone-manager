@@ -11,7 +11,7 @@ export const ugosBridge: PlatformBridge = {
   integration: "native",
 
   deployment: {
-    deployment: "UGOS package",
+    label: "UGOS package",
     storageMount: "/volume1/backup-manager",
     adapterVersion: "ugos 1.3.0"
   },

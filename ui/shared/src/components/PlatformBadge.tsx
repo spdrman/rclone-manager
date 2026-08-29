@@ -42,7 +42,7 @@ export function PlatformBadge({ compact = false }: { compact?: boolean }) {
       <dd style={{ margin: 0 }}>{authLabel}</dd>
       <dt style={{ color: "var(--text-2)" }}>Deployment</dt>
       <dd className="mono" style={{ margin: 0, fontSize: "var(--text-sm)" }}>
-        {bridge.deployment.deployment}
+        {bridge.deployment.label}
       </dd>
       <dt style={{ color: "var(--text-2)" }}>Storage mount</dt>
       <dd className="mono" style={{ margin: 0, fontSize: "var(--text-sm)" }}>

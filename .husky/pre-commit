@@ -5,13 +5,19 @@
 #
 # WHAT RUNS HERE, AND WHY THIS SUBSET.
 #
-# Go: build, vet, and the ./internal/... suite. Deliberately NOT `go test ./...`.
-# The ./tests/... tree holds the crash matrix, the SFTP integration suite and
-# the destructive-safety suite, which stand up Docker containers and kill real
-# processes. Those take minutes, need a working Docker daemon, and would make
-# this hook unusable on a laptop with Docker stopped. CI runs them on every
-# push, which is where a suite that slow belongs. `./internal/...` is around a
-# minute and covers every package the commit is likely to have touched.
+# Go: build, vet, and core/'s ./internal/... suite (core/ is its own Go
+# module as of #106/B1.1 — docs/EPIC-B-multi-nas.md §7). Deliberately NOT
+# `go test ./...`. core/'s ./tests/... tree holds the crash matrix, the SFTP
+# integration suite and the destructive-safety suite, which stand up Docker
+# containers and kill real processes. Those take minutes, need a working
+# Docker daemon, and would make this hook unusable on a laptop with Docker
+# stopped. CI runs them on every push, which is where a suite that slow
+# belongs. `./internal/...` is around a minute and covers every package the
+# commit is likely to have touched.
+#
+# apps/common is a second, much smaller Go module (the platform-capability
+# contract plus reserved webhost/auth/local scaffolding) — build, vet and
+# test run in full since none of it is slow.
 #
 # Frontend: tsc --noEmit and the vitest suite, both of which are about a second.
 # Playwright is NOT here, for the same reason as the Go integration tree: it
@@ -34,14 +40,28 @@ set -e
 
 export PATH="/opt/homebrew/bin:$PATH"
 
-echo "==> pre-commit: go build"
-go build ./...
+# GOWORK=off: prove core/'s own go.mod stands alone, independent of the
+# repo-root go.work (which also lists ./apps/common for local multi-module
+# development convenience).
+echo "==> pre-commit: core/ go build"
+(cd core && GOWORK=off go build ./...)
 
-echo "==> pre-commit: go vet"
-go vet ./...
+echo "==> pre-commit: core/ go vet"
+(cd core && GOWORK=off go vet ./...)
 
-echo "==> pre-commit: go test ./internal/..."
-go test ./internal/...
+echo "==> pre-commit: core/ go test ./internal/..."
+(cd core && GOWORK=off go test ./internal/...)
+
+if [ -d apps/common ]; then
+  # GOWORK=off, matching core/ above: apps/common has no dependencies
+  # today, so this changes nothing observable yet, but apps/common/webhost
+  # is the deliberate seam for #94, which will need to import core/, and
+  # leaving GOWORK on would let go.work's `use` directives silently
+  # substitute the local core/ directory regardless of apps/common's own
+  # module pin.
+  echo "==> pre-commit: apps/common go build, vet, test"
+  (cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+fi
 
 # The frontend only exists once ui/shared is present, and a Go-only checkout
 # should not fail this hook.
