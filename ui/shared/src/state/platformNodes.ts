@@ -1,7 +1,7 @@
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";
 import { describeCapabilities } from "@shared/platform/capabilities";
 import type { CapabilityCopy } from "@shared/platform/capabilities";
-import { graph } from "./graph";
+import { graph, registerInput } from "./graph";
 
 /**
  * Platform state, as graph nodes (EPIC B — causl-ts migration of
@@ -17,14 +17,14 @@ import { graph } from "./graph";
 /** The platform bridge for this running app instance. `null` until
  *  `PlatformProvider` mounts and commits it — a provider shell supplies
  *  exactly one bridge for the app's lifetime (apps/<id>/frontend/bootstrap.tsx). */
-export const bridgeNode = graph.input<PlatformBridge | null>("platform.bridge", null);
+export const bridgeNode = registerInput<PlatformBridge | null>("platform.bridge", null);
 
 /** The signed-in identity, or null before the first auth check resolves. */
-export const authNode = graph.input<AuthContext | null>("platform.auth", null);
+export const authNode = registerInput<AuthContext | null>("platform.auth", null);
 
 /** True until the first getAuthContext() call settles (success or
  *  failure) — the splash-screen gate in App.tsx. */
-export const authLoadingNode = graph.input<boolean>("platform.authLoading", true);
+export const authLoadingNode = registerInput<boolean>("platform.authLoading", true);
 
 /** Honest capability copy for the Settings page (§22 — never claim an
  *  unsupported capability). Pure function of the bridge, so it is a
