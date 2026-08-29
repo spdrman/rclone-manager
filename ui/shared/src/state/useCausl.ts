@@ -1,4 +1,4 @@
-import { useRef, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import type { Graph, Node } from "@causlts/core";
 
 /**
@@ -36,7 +36,14 @@ export function createCauslHook(graph: Graph) {
   return function useCausl<T>(node: Node<T>): T {
     const cacheRef = useRef<{ time: number; value: T } | null>(null);
 
-    function getSnapshot(): T {
+    // useSyncExternalStore resubscribes whenever `subscribe`'s identity
+    // changes. Both callbacks were plain function expressions before,
+    // recreated on every render of every consumer of this one shared
+    // hook — which meant every render tore down and re-established its
+    // graph subscription for no reason. Keyed on [node] (via graph, which
+    // is fixed per createCauslHook call) so identity only changes when the
+    // node being read changes.
+    const getSnapshot = useCallback((): T => {
       const cache = cacheRef.current;
       if (cache !== null && cache.time === graph.now) {
         return cache.value;
@@ -44,11 +51,12 @@ export function createCauslHook(graph: Graph) {
       const value = graph.read(node);
       cacheRef.current = { time: graph.now, value };
       return value;
-    }
+    }, [node]);
 
-    function subscribe(onStoreChange: () => void) {
-      return graph.subscribe(node, onStoreChange);
-    }
+    const subscribe = useCallback(
+      (onStoreChange: () => void) => graph.subscribe(node, onStoreChange),
+      [node]
+    );
 
     return useSyncExternalStore(subscribe, getSnapshot);
   };
