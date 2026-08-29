@@ -68,5 +68,14 @@ jobs:
       # target still cross-compiles with CGO disabled. It does not run the
       # resulting binary, since the runner's architecture usually does not
       # match the target's.
-      - name: Compile backup-manager for linux/${{ matrix.goarch }}, CGO_ENABLED=0
-        run: go build -o /dev/null ./cmd/backup-manager
+      #
+      # It builds ./... rather than just ./cmd/backup-manager on purpose. The
+      # narrower form only compiles what the binary transitively imports, so a
+      # package nobody has wired up yet is never cross-compiled at all, and an
+      # architecture-specific mistake in it sits undetected until the day it
+      # gets imported. internal/capacity found this the hard way: it wraps
+      # statfs, whose struct field widths differ between amd64 and arm64, and
+      # the job here would have passed regardless because cmd/ does not import
+      # it yet.
+      - name: Compile everything for linux/${{ matrix.goarch }}, CGO_ENABLED=0
+        run: go build ./...
