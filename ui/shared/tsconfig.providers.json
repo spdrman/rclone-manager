@@ -2,6 +2,6 @@
   "extends": "./tsconfig.json",
   "include": [
     "src",
-    "../../apps"
+    "../../apps/*/frontend"
   ]
 }
