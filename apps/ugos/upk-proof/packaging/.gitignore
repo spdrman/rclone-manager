@@ -1,0 +1,7 @@
+# Reproducible build output, not source: build.sh (re)creates these from the frontend and
+# backend source under apps/ugos/. Committing an exported Docker image tar or a .upk binary
+# would bloat the repo with something that regenerates from source on demand.
+/rootfs_amd64/images/*.tar
+/rootfs_arm64/images/*.tar
+/build_dir/
+*.upk
