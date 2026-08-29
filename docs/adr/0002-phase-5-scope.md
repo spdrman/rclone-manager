@@ -79,7 +79,7 @@ version of this candidate is operational guidance (point the configured local ba
 at a snapshot-capable volume, schedule snapshots independently of `backup-manager`), which
 belongs in deployment documentation, not in `internal/`. Revisit only if a requirement
 appears for `backup-manager` itself to trigger a snapshot (e.g. shell out to a NAS vendor
-API right after a `COMPLETE` transition) — at which point the trigger, the specific
+API right after a `COMPLETE` transition). At that point the trigger, the specific
 snapshot mechanism, and its failure modes all need to be named before it's a design, not
 just a feature checkbox.
 
@@ -127,7 +127,7 @@ own credentials, not a hypothetical one) and #31 is green.
 Worth separating two different claims hiding under one phrase.
 
 **Package separation between "ingestion" and "retention" is real, not incidental.**
-`internal/retention` imports `config`, `lifecycle`, `model`, and `state` — nothing from
+`internal/retention` imports `config`, `lifecycle`, `model`, and `state`, and nothing from
 `internal/transport`, at all. `GFSDecide` and `ApplyLastKnownGood` classify journal rows by
 timestamp and state; they never touch a remote credential, never call `Transport`, and (per
 `gfs.go`'s own package doc) never touch the filesystem either. That boundary isn't a
@@ -156,7 +156,7 @@ protection against a *compromised running process* (as opposed to protection aga
 leaked config file) needs two separate OS processes or containers, not just two structs.
 That's a deployment redesign, not a library addition, and `config.Remote` is the one truly
 load-bearing data contract in this project (every backup set's identity and every credential
-flow through it) — the most expensive place in the codebase to make a speculative change.
+flow through it), which is the most expensive place in the codebase to make a speculative change.
 
 **Recommendation: not now.** The half of this that was cheap (package-level separation
 between ingest and retention logic) is already done, on its own merits, not because anyone
@@ -181,7 +181,7 @@ let me touch `internal/health` to add it.
 
 Beyond that gap, "alerts" as a Phase 5 line item is really asking for two different things:
 a *signal* (which `internal/health` already computes) and *delivery* (deciding severity
-tiers, a channel — webhook, email, Slack, a pager — and de-duplication policy). The signal
+tiers, a channel (webhook, email, Slack, a pager) and de-duplication policy). The signal
 half is done. The delivery half is pure speculation right now: this project has no
 configured notification channel, no on-call concept, and no stated preference between "log
 loudly" and "page a human," and guessing at that shape produces exactly the kind of
@@ -214,7 +214,7 @@ HTTP endpoint would.
 
 I checked whether to reach for `github.com/prometheus/client_golang`, which is already an
 *indirect* dependency in `go.mod` (pulled in transitively through rclone's own stats
-plumbing) — using it directly wouldn't need a new module, only flipping its `go.mod`
+plumbing). Using it directly wouldn't need a new module, only flipping its `go.mod`
 annotation from indirect to direct, which is exactly the file I'm told not to edit. I hand
 rolled the small, stable subset of the text exposition format instead, entirely in the
 standard library. That's more conservative than it needed to be technically, but it means
@@ -241,8 +241,8 @@ conservative, less precise substitute for GFS's actual per-run, per-bucket recom
 (`gfs.go`'s package doc is explicit that "protected" and tier membership are recomputed
 every run against current state, not fixed at write time). That's a real, nontrivial design
 problem, not a checkbox, and it can't be scoped sensibly before two things are true: FR-20
-(actual local deletion, issue #21) exists in code at all — WORM is a constraint on a delete
-capability that doesn't exist yet — and a specific storage backend is chosen, since the
+(actual local deletion, issue #21) exists in code at all, since WORM is a constraint on a delete
+capability that doesn't exist yet, and a specific storage backend is chosen, since the
 mechanism (a filesystem attribute vs. an object-lock API call) is backend-specific and
 would live in a place this project hasn't built yet.
 
