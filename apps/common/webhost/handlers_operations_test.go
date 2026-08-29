@@ -63,6 +63,36 @@ func TestSubmitOperation_Success_Returns202WithOperationIDAndStatus(t *testing.T
 	}
 }
 
+// TestSubmitOperation_DuplicateIdempotencyKeyOverHTTPReturnsTheSameOperation
+// is the RED plan's "two requests with the same idempotency key produce
+// one operation record, not two" made concrete at the actual HTTP
+// endpoint: two real POST requests through the router (not a single call
+// into the backend), same Idempotency-Key header, must resolve to the
+// same operation_id.
+func TestSubmitOperation_DuplicateIdempotencyKeyOverHTTPReturnsTheSameOperation(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	body := `{"action":"run_cycle","config_revision":"rev-1"}`
+
+	first := submitOperation(t, tr.router, "idem-shared", body)
+	second := submitOperation(t, tr.router, "idem-shared", body)
+
+	if first.Code != http.StatusAccepted || second.Code != http.StatusAccepted {
+		t.Fatalf("status codes = %d, %d, want both %d", first.Code, second.Code, http.StatusAccepted)
+	}
+
+	var firstBody, secondBody map[string]any
+	if err := json.Unmarshal(first.Body.Bytes(), &firstBody); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondBody); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+
+	if firstBody["operation_id"] != secondBody["operation_id"] {
+		t.Errorf("operation_id = %v then %v, want the same id for a resubmitted idempotency key", firstBody["operation_id"], secondBody["operation_id"])
+	}
+}
+
 func TestSubmitOperation_MissingIdempotencyKeyReturns400(t *testing.T) {
 	tr := newOperationsTestRouter(t, alwaysPassGate{})
 	rec := submitOperation(t, tr.router, "", `{"action":"run_cycle","config_revision":"rev-1"}`)
