@@ -31,16 +31,19 @@
 // package would rather be wrong the same way config is wrong than silently
 // disagree with it. See this package's introducing PR for the same note.
 //
-// # What this package does not do
+// # What this file does not do
 //
-// This issue (FR-18) decides what the daily/weekly/monthly tiers keep. It
-// does not know about last-known-good protection (FR-19) and it does not
-// delete anything (FR-20, local deletion safety, is deliberately a
-// separate concern with its own mandatory dry-run). A GFSVerdict with
-// Keep == false is a GFS delete *candidate*, not a delete order: FR-19
-// still has to union in the protected set before DELETE is final, and
-// FR-20 still has to independently re-verify every artifact before
-// removing anything from disk. Nothing in this file touches a filesystem.
+// GFSDecide itself decides only what the daily/weekly/monthly tiers keep.
+// It does not know about last-known-good protection (FR-19: see
+// lastknowngood.go's LastKnownGoodDecide, ApplyLastKnownGood and DecideKeep
+// in this same package for that composition) and it does not delete
+// anything (FR-20, local deletion safety, is deliberately a separate
+// concern with its own mandatory dry-run). A GFSVerdict with Keep == false,
+// straight out of GFSDecide, is a GFS delete *candidate*, not a delete
+// order: FR-19 still has to union in the protected set before DELETE is
+// final, and FR-20 still has to independently re-verify every artifact
+// before removing anything from disk. Nothing in this file touches a
+// filesystem.
 package retention
 
 import (
@@ -79,6 +82,12 @@ type GFSVerdict struct {
 	// Tiers lists every tier that selected this artifact, in the fixed
 	// order Daily, Weekly, Monthly (never reordered, so two runs over the
 	// same inputs render it identically). Nil when Keep is false.
+	//
+	// GFSDecide itself only ever appends GFSDaily, GFSWeekly or GFSMonthly
+	// here. TierLastKnownGood (lastknowngood.go) can appear too, but only
+	// after ApplyLastKnownGood composes FR-19's protected term into a
+	// GFSDecide result; it is always appended after any GFS tiers already
+	// present, so the Daily/Weekly/Monthly ordering above is unaffected.
 	Tiers []GFSTier
 }
 

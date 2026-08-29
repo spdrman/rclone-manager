@@ -1,0 +1,231 @@
+package retention
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/spdrman/rclone-manager/internal/config"
+	"github.com/spdrman/rclone-manager/internal/model"
+	"github.com/spdrman/rclone-manager/internal/state"
+)
+
+// TierLastKnownGood marks a GFSVerdict kept under FR-19: the artifact holds
+// last-known-good protection, not because any FR-18 GFS tier selected it.
+//
+// It deliberately is not spelled GFSProtected or similar: this protection is
+// explicitly outside GFS's three tiers by the EPIC's own formula (daily ∪
+// weekly ∪ monthly ∪ protected are four separate terms), and the name
+// should not suggest it is a fourth GFS tier.
+//
+// # This file's job
+//
+// FR-18's own formula names this package's second job explicitly:
+//
+//	KEEP = daily ∪ weekly ∪ monthly ∪ protected
+//
+// GFSDecide (gfs.go) computes the first three terms and is deliberately
+// unaware of the fourth: see its doc comment's "What this file does not
+// do". This file computes "protected" -- the newest known-good restore
+// point in a backup set -- and composes it into GFSDecide's own output, so
+// the union above is a real, tested step in this package rather than
+// something a caller has to remember to perform itself.
+//
+// # What "known-good" means here
+//
+// A backup is eligible as known-good only if it is a valid committed or
+// complete restore point that has satisfied required verification: exactly
+// gfsIsManagedComplete's Committed/RemoteDeletePending/Complete set, the
+// same one gfs.go already uses for "managed, completed backup". FAILED,
+// QUARANTINED, QUARANTINED_LOST and every .partial (pre-Committed) state
+// are excluded, matching FR-19's own wording. That is also, by
+// construction, the identical state set internal/health's decideState
+// calls knownGood for FR-24: this package cannot import that unexported
+// map (health depends on nothing upstream of it, and importing it here
+// would invert that), so the equivalence is enforced by review and by
+// TestLastKnownGoodEligibilityMatchesGFSManagedComplete rather than by a
+// shared symbol, but the three states involved are the same three states,
+// on purpose, in both places.
+//
+// Reusing gfs.go's own eligibility check is not just convenient: it is
+// what guarantees the protected artifact, whenever one exists, already has
+// an entry in GFSDecide's returned verdicts (GFSDecide includes every
+// managed-complete artifact whether or not any tier kept it). Composition
+// in ApplyLastKnownGood can therefore always find that entry and flip it,
+// rather than needing to fabricate one.
+//
+// # The quarantined-newest trap
+//
+// The newest *arrival* in a backup set is not necessarily the newest
+// *eligible* one. A set whose only recent artifact is QUARANTINED must fall
+// back to protecting an older genuinely-good artifact, never conclude the
+// quarantined one counts (it is never eligible, full stop) and never
+// conclude nothing is protected (an older good one is still there to
+// protect). LastKnownGoodDecide handles this the same way GFSDecide picks a
+// tier's representative: filter to eligible records first, then take the
+// newest of what remains. See TestLastKnownGoodFallsBackPastQuarantinedNewest.
+//
+// # The config flag
+//
+// cfg.ProtectLastKnownGood is a *bool so config.Validate can default a truly
+// absent key to true while leaving an explicit false alone (see that
+// field's doc in config.go). LastKnownGoodDecide applies that same "absent
+// means protect" reading to a nil pointer too, so a caller that bypasses
+// Validate still gets the safe behaviour rather than an accidental
+// protection-off. An explicit false is honoured exactly as written: the
+// operator asked for a materially more dangerous configuration, and
+// LastKnownGoodResult.Enabled is false with a Reason that says so in
+// plain words, so that fact is visible to a caller or a log line rather
+// than silently absent.
+const TierLastKnownGood GFSTier = "LAST_KNOWN_GOOD"
+
+// LastKnownGoodResult is FR-19's answer for one backup set: whether
+// protection is active, and if so, which single artifact currently holds
+// it.
+type LastKnownGoodResult struct {
+	Set model.BackupSetID
+
+	// Enabled reports the resolved protect_last_known_good reading: false
+	// only when the operator explicitly set it to false, true for both an
+	// explicit true and an absent/nil value. See config.go's field doc and
+	// TierLastKnownGood's doc comment above.
+	Enabled bool
+
+	// Protected is true iff Enabled is true and at least one eligible
+	// (known-good) artifact exists in this backup set. Check this field,
+	// not just Artifact being non-zero, before treating "nothing is
+	// protected" as established: Artifact is meaningless when this is
+	// false.
+	Protected bool
+
+	// Artifact is the protected artifact. Only meaningful when Protected is
+	// true; the zero model.ArtifactID{} otherwise.
+	Artifact model.ArtifactID
+
+	// Reason explains the result in one sentence, mirroring
+	// internal/health's decideState(evidence) (State, string) pattern: a
+	// human or a log line should be able to see why an artifact was, or was
+	// not, protected without re-deriving it from cfg and records.
+	Reason string
+}
+
+// LastKnownGoodDecide computes FR-19's last-known-good protection for one
+// backup set.
+//
+// Unlike GFSDecide, this does not take a "now": whether the newest eligible
+// artifact is protected does not depend on how old it is (that is exactly
+// the point of FR-19 -- age alone must never disqualify it), so there is no
+// clock reading for this calculation to need or to accidentally depend on.
+//
+// records must all belong to set, exactly like GFSDecide's own FR-7
+// isolation rule; a record from another set is rejected rather than
+// silently folded in.
+func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []state.Record) (LastKnownGoodResult, error) {
+	if set.IsZero() {
+		return LastKnownGoodResult{}, fmt.Errorf("retention: LastKnownGoodDecide needs a non-zero backup set id")
+	}
+
+	enabled := cfg.ProtectLastKnownGood == nil || *cfg.ProtectLastKnownGood
+	result := LastKnownGoodResult{Set: set, Enabled: enabled}
+
+	if !enabled {
+		result.Reason = "protect_last_known_good is explicitly false: FR-19 last-known-good protection is disabled for this backup set, which is a materially more dangerous configuration"
+		return result, nil
+	}
+
+	type candidate struct {
+		artifact model.ArtifactID
+		occurred time.Time
+	}
+	var newest *candidate
+
+	for _, rec := range records {
+		if rec.Artifact.Set != set {
+			return LastKnownGoodResult{}, fmt.Errorf("retention: record %s does not belong to backup set %s (FR-7 isolation)", rec.Artifact, set)
+		}
+		if !gfsIsManagedComplete(rec.State) {
+			// FAILED, QUARANTINED, QUARANTINED_LOST and every .partial
+			// (pre-Committed) state land here and are never candidates,
+			// regardless of how recent they are. This is the check that
+			// keeps the quarantined-newest trap from succeeding.
+			continue
+		}
+		if newest == nil || gfsIsNewerRepresentative(rec.Artifact, rec.DiscoveredAt, newest.artifact, newest.occurred) {
+			newest = &candidate{artifact: rec.Artifact, occurred: rec.DiscoveredAt}
+		}
+	}
+
+	if newest == nil {
+		result.Reason = "no eligible restore point exists in this backup set (nothing is committed, remote-delete-pending or complete)"
+		return result, nil
+	}
+
+	result.Protected = true
+	result.Artifact = newest.artifact
+	result.Reason = fmt.Sprintf("artifact %q is the newest eligible restore point in this backup set and holds FR-19 last-known-good protection", newest.artifact.Name)
+	return result, nil
+}
+
+// ApplyLastKnownGood folds lkg into verdicts, producing the FR-18 ∪ FR-19
+// KEEP union the EPIC formula names: daily ∪ weekly ∪ monthly ∪ protected.
+// verdicts is expected to be GFSDecide's own output for the same backup set
+// and the same records lkg was computed from; the input slice is never
+// mutated, and its by-name sort order is preserved.
+//
+// When lkg.Protected is false (protection disabled, or nothing eligible
+// exists), verdicts is returned unchanged: there is nothing to union in.
+//
+// When the protected artifact already sits inside a GFS tier, its Tiers
+// gains TierLastKnownGood alongside whichever tiers GFSDecide already found,
+// so a verdict can honestly show more than one reason it survived. When it
+// sits outside every tier, this is the only mechanism that keeps it: Keep
+// flips to true and Tiers becomes exactly [TierLastKnownGood].
+func ApplyLastKnownGood(verdicts []GFSVerdict, lkg LastKnownGoodResult) []GFSVerdict {
+	if !lkg.Protected {
+		return verdicts
+	}
+
+	out := make([]GFSVerdict, len(verdicts))
+	copy(out, verdicts)
+
+	for i := range out {
+		if out[i].Artifact == lkg.Artifact {
+			out[i].Keep = true
+			out[i].Tiers = append(append([]GFSTier(nil), out[i].Tiers...), TierLastKnownGood)
+			return out
+		}
+	}
+
+	// Defensive only: LastKnownGoodDecide draws its candidate from
+	// gfsIsManagedComplete, the identical eligibility GFSDecide itself
+	// uses, so the protected artifact is always already present in
+	// verdicts when verdicts and lkg were computed from the same records
+	// and backup set. Reaching here means a caller passed mismatched
+	// inputs; append rather than silently drop the protection, and
+	// re-sort so the documented by-name order still holds.
+	out = append(out, GFSVerdict{
+		Artifact: lkg.Artifact,
+		Keep:     true,
+		Tiers:    []GFSTier{TierLastKnownGood},
+	})
+	sortGFSVerdicts(out)
+	return out
+}
+
+// DecideKeep runs FR-18's GFS calculation and FR-19's last-known-good
+// protection together and returns the final KEEP union the EPIC formula
+// names, plus the LastKnownGoodResult on its own for a caller (or FR-23
+// observability) that needs to see why, separately from the merged
+// verdicts. This is the function production callers should use; GFSDecide
+// and LastKnownGoodDecide stay exported separately because each half's own
+// reasoning is independently useful and independently tested.
+func DecideKeep(now time.Time, cfg config.Retention, set model.BackupSetID, records []state.Record) ([]GFSVerdict, LastKnownGoodResult, error) {
+	verdicts, err := GFSDecide(now, cfg, set, records)
+	if err != nil {
+		return nil, LastKnownGoodResult{}, err
+	}
+	lkg, err := LastKnownGoodDecide(cfg, set, records)
+	if err != nil {
+		return nil, LastKnownGoodResult{}, err
+	}
+	return ApplyLastKnownGood(verdicts, lkg), lkg, nil
+}
