@@ -70,13 +70,14 @@ type BackupSet struct {
 	// succeeds.
 	ID model.BackupSetID `yaml:"-"`
 
-	Remote     Remote     `yaml:"remote"`
-	RemotePath string     `yaml:"remote_path"`
-	LocalPath  string     `yaml:"local_path"`
-	Include    []string   `yaml:"include"`
-	Completion Completion `yaml:"completion"`
-	StaleAfter Duration   `yaml:"stale_after"`
-	Validation Validation `yaml:"validation"`
+	Remote       Remote       `yaml:"remote"`
+	RemotePath   string       `yaml:"remote_path"`
+	LocalPath    string       `yaml:"local_path"`
+	Include      []string     `yaml:"include"`
+	Completion   Completion   `yaml:"completion"`
+	StaleAfter   Duration     `yaml:"stale_after"`
+	Validation   Validation   `yaml:"validation"`
+	Revalidation Revalidation `yaml:"revalidation"`
 }
 
 // Remote describes where a backup set's artifacts come from. Type selects
@@ -113,6 +114,49 @@ type Validation struct {
 type Command struct {
 	Executable string   `yaml:"executable"`
 	Timeout    Duration `yaml:"timeout"`
+}
+
+// Revalidation configures Phase 4's scheduled re-verification of artifacts
+// that already reached a durable, once-good state (COMMITTED,
+// REMOTE_DELETE_PENDING or COMPLETE). Bit rot does not announce itself, and
+// a backup that verified six months ago is not guaranteed to still verify
+// today; this is what re-checks it without waiting for a restore attempt
+// to find out the hard way.
+//
+// It is entirely optional. The zero value (Hash false, Command nil) means
+// disabled: nothing is re-checked, ever, for this backup set, which is
+// exactly today's behavior and stays the default so an existing config
+// keeps working unchanged. Re-reading, and potentially re-hashing, a NAS's
+// worth of already-verified data has a real I/O cost, so an operator has
+// to opt in explicitly and choose both a cadence (Interval) and a scope
+// (MaxPerCycle) rather than this package guessing safe values for either;
+// see validateRevalidation.
+type Revalidation struct {
+	// Interval is how long since an artifact's last check still counts as
+	// fresh; once exceeded, the artifact becomes due for another one.
+	Interval Duration `yaml:"interval"`
+
+	// MaxPerCycle bounds how many due artifacts a single revalidation pass
+	// actually checks, so a backlog of simultaneously-due artifacts (for
+	// example right after a large initial backfill all finished within
+	// the same window) cannot turn into one unbounded read-and-hash sweep
+	// across the whole backup set.
+	MaxPerCycle int `yaml:"max_per_cycle"`
+
+	// Hash, when true, recomputes the local final file's SHA-256 and
+	// compares it against the hash recorded at VERIFIED (FR-13). An
+	// artifact that was originally verified without hash: sha256 has
+	// nothing recorded to compare a fresh read against; that is a no-op
+	// for that one artifact, not a failure.
+	Hash bool `yaml:"hash"`
+
+	// Command is an optional restore-test hook: the stronger form of
+	// revalidation, proving the artifact still actually restores rather
+	// than only that its bytes are unchanged. It reuses exactly the same
+	// untrusted-subprocess contract Validation.Command already
+	// established for FR-13 (fixed environment, its own process group,
+	// bounded captured output, fail-closed on its timeout).
+	Command *Command `yaml:"command"`
 }
 
 // Retention configures GFS retention (FR-18) and last-known-good protection

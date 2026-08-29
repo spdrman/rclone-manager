@@ -64,6 +64,18 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if bs.Validation.Command.Timeout.Duration() != 10*time.Minute {
 		t.Fatalf("Command.Timeout = %s", bs.Validation.Command.Timeout)
 	}
+	if got, want := bs.Revalidation.Interval.Duration(), 720*time.Hour; got != want {
+		t.Fatalf("Revalidation.Interval = %s, want %s", got, want)
+	}
+	if bs.Revalidation.MaxPerCycle != 5 {
+		t.Fatalf("Revalidation.MaxPerCycle = %d, want 5", bs.Revalidation.MaxPerCycle)
+	}
+	if !bs.Revalidation.Hash {
+		t.Fatalf("Revalidation.Hash = false, want true")
+	}
+	if bs.Revalidation.Command == nil || bs.Revalidation.Command.Executable != "/usr/local/bin/validate-postgres-backup" {
+		t.Fatalf("Revalidation.Command decoded wrong: %#v", bs.Revalidation.Command)
+	}
 
 	if cfg.Retention.Timezone != "America/Vancouver" {
 		t.Fatalf("Retention.Timezone = %q", cfg.Retention.Timezone)
