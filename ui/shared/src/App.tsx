@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import "@shared/design-system/tokens.css";
 import "@shared/design-system/typography.css";
 import "@shared/design-system/components.css";
 import { useApi } from "@shared/api/ApiContext";
 import { usePlatform } from "@shared/platform/PlatformContext";
-import { useAsync, usePolling } from "@shared/hooks/useAsync";
+import { usePolling } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { useResource } from "@shared/state/resource";
+import { countsNode, healthNode, quarantineNode, readOnlyNode, setsNode, versionNode } from "@shared/state/appNodes";
 import { AppShell } from "@shared/layouts/AppShell";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { DashboardPage } from "@shared/pages/DashboardPage";
@@ -38,10 +41,12 @@ export function App() {
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  const health = useAsync(() => api.getHealth(), [api]);
-  const version = useAsync(() => api.getVersion(), [api]);
-  const sets = useAsync(() => api.listSets(), [api]);
-  const quarantine = useAsync(() => api.listQuarantine(), [api]);
+  const health = useResource(healthNode, () => api.getHealth(), [api]);
+  const version = useResource(versionNode, () => api.getVersion(), [api]);
+  const sets = useResource(setsNode, () => api.listSets(), [api]);
+  // Fetched into the graph for the header's quarantine count (countsNode,
+  // below); QuarantinePage reads it independently, same as before.
+  useResource(quarantineNode, () => api.listQuarantine(), [api]);
 
   const reloadAll = useCallback(() => {
     health.reload();
@@ -50,18 +55,11 @@ export function App() {
 
   usePolling(30_000, reloadAll, auth?.authenticated ?? false);
 
-  const counts = useMemo(
-    () => ({
-      sets: sets.data?.length,
-      backups: health.data?.retainedCount,
-      quarantine: quarantine.data?.length
-    }),
-    [sets.data, health.data, quarantine.data]
-  );
-
-  // §38 — an incompatible service disables every management action but leaves
-  // read-only information visible.
-  const readOnly = version.data ? !version.data.compatible : false;
+  // counts and readOnly are derived() nodes (state/appNodes.ts): pure
+  // functions of the four resources above, recomputed by the graph rather
+  // than by a useMemo keyed on their .data references.
+  const counts = useCausl(countsNode);
+  const readOnly = useCausl(readOnlyNode);
 
   if (authLoading) return <Splash />;
 
