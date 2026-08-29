@@ -23,7 +23,20 @@ export default defineConfig({
       // the instant a component from one instance is rendered by the
       // other's ReactDOM.
       react: resolve(__dirname, "node_modules/react"),
-      "react-dom": resolve(__dirname, "node_modules/react-dom")
+      "react-dom": resolve(__dirname, "node_modules/react-dom"),
+      // Same reasoning as react/react-dom above, for a different failure
+      // mode: ui/shared/src/state/graph.ts imports the bare specifier
+      // "@causlts/core", and Vite resolves a bare specifier relative to
+      // the IMPORTING FILE's own location on disk (walking up
+      // ui/shared/src/state -> ui/shared -> ui/shared/node_modules),
+      // never relative to this config's root - adding @causlts/core to
+      // THIS package's own package.json/node_modules alone does nothing
+      // for that resolution. Declaring it in this package's own
+      // package.json (see that file) still matters: it's what makes
+      // `node_modules/@causlts/core` exist here at all for this alias to
+      // point at, and what makes `npm ci` reproducible without relying
+      // on ui/shared happening to have been installed first.
+      "@causlts/core": resolve(__dirname, "node_modules/@causlts/core")
     }
   },
   test: {

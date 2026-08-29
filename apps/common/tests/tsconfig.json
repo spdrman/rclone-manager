@@ -11,7 +11,27 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@shared/*": ["../../../ui/shared/src/*"]
+      "@shared/*": ["../../../ui/shared/src/*"],
+      // react/react-dom/@causlts/core: ui/shared/src files pulled in
+      // through the @shared alias above import these as bare
+      // specifiers, and TypeScript resolves a bare specifier relative
+      // to the IMPORTING file's own location on disk (walking up from
+      // ui/shared/src, never reaching this package's own node_modules,
+      // a sibling directory rather than an ancestor of it) - matching
+      // vitest.config.ts's own resolve.alias entries for the same three
+      // packages, and needed for the same underlying reason.
+      // Pointed at @types/*'s own .d.ts, not just node_modules/react:
+      // TypeScript's separate "does this bare import have declarations"
+      // lookup ALSO resolves relative to the importing file's own
+      // location (same underlying cause as the plain module-resolution
+      // fix below), and does not follow this file's "paths" redirect a
+      // second time to re-derive it - pointing straight at the
+      // declaration file sidesteps that lookup entirely rather than
+      // relying on it succeeding.
+      "react": ["node_modules/@types/react", "node_modules/react"],
+      "react/jsx-runtime": ["node_modules/@types/react/jsx-runtime", "node_modules/react/jsx-runtime"],
+      "react-dom": ["node_modules/@types/react-dom", "node_modules/react-dom"],
+      "@causlts/core": ["node_modules/@causlts/core"]
     }
   },
   "include": ["*.ts"],
