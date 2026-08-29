@@ -1,0 +1,82 @@
+# Playwright end to end, nightly on main, deliberately NOT per pull request.
+#
+# WHY THIS IS NOT IN ci.yml. The browser suite is the slowest and least stable
+# signal we have: it installs browsers, boots a dev server, and drives a real
+# renderer, and it re-runs the shell specs once per provider on top of that.
+# Hanging that off every push turns a fifteen second typecheck into a multi
+# minute wait on the one job people watch before merging, and a flake there
+# blocks a change it has nothing to say about.
+#
+# The per-PR gate stays typecheck, unit tests and build, which is what catches
+# a commit that cannot build. This job is what catches a regression in what the
+# browser actually renders, one night later, on main only.
+#
+# The same split is why the Go integration tree (tests/crashmatrix,
+# tests/sftpintegration) is not in the pre-commit hook: slow suites that need a
+# daemon or a browser belong somewhere nobody is waiting on them.
+#
+# It can be run by hand from the Actions tab when a UI change wants the signal
+# before morning.
+
+name: Nightly E2E
+
+on:
+  schedule:
+    # 03:20 UTC, chosen to sit clear of the estate's other nightly jobs.
+    - cron: "20 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-e2e
+  cancel-in-progress: false
+
+jobs:
+  e2e:
+    name: playwright (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: generic
+            script: e2e
+          - suite: all-providers
+            script: "e2e:all-providers"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/shared/package-lock.json
+
+      - name: Install
+        working-directory: ui/shared
+        run: npm ci --no-audit --no-fund
+
+      # Only the browsers the config actually uses, with their system deps.
+      - name: Install Playwright browsers
+        working-directory: ui/shared
+        run: npx playwright install --with-deps chromium
+
+      - name: Run ${{ matrix.suite }}
+        working-directory: ui/shared
+        run: npm run ${{ matrix.script }}
+
+      # A failed browser run is close to unusable without the trace, and the
+      # person reading it is doing so the morning after, with no way to
+      # reproduce the runner's state.
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.suite }}
+          path: |
+            ui/shared/playwright-report/
+            ui/shared/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

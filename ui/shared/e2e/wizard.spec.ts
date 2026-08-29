@@ -1,0 +1,147 @@
+import { expect, test } from "./fixtures";
+
+test.describe("add backup set wizard", () => {
+  test.beforeEach(async ({ bm, page }) => {
+    await bm.goto("/sets");
+    await page.getByRole("button", { name: "Add backup set" }).click();
+    await expect(bm.heading("Add backup set")).toBeVisible();
+  });
+
+  test("groups the flow into exactly six steps", async ({ page }) => {
+    const steps = page.getByRole("listitem");
+    await expect(steps).toHaveCount(6);
+    for (const label of ["Source", "Authentication", "Verify server", "Discovery", "Storage & retention", "Review"]) {
+      await expect(page.getByRole("button", { name: label })).toBeVisible();
+    }
+  });
+
+  test("marks the current step and advances with Continue", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "Source" })).toHaveAttribute("aria-current", "step");
+    await expect(page.getByText("Step 1 of 6")).toBeVisible();
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByText("Step 2 of 6")).toBeVisible();
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(page.getByText("Step 1 of 6")).toBeVisible();
+  });
+
+  test("Back is disabled on the first step and Continue on the last", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
+    await page.getByRole("button", { name: "Review" }).click();
+    await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
+  });
+
+  test("step 1 collects source connection details", async ({ page }) => {
+    for (const label of ["Backup set name", "Server hostname", "SSH port", "Username"]) {
+      await expect(page.getByText(label, { exact: true })).toBeVisible();
+    }
+  });
+
+  test("step 2 offers three key sources and shows only the public key", async ({ page }) => {
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await expect(page.getByRole("radio")).toHaveCount(3);
+    await expect(page.getByText("Generate dedicated SSH key")).toBeVisible();
+    await expect(page.getByText(/never displayed/)).toBeVisible();
+    await expect(page.getByText(/^ssh-ed25519 AAAA/)).toBeVisible();
+    expect(await page.locator("body").innerText()).not.toMatch(/PRIVATE KEY/i);
+  });
+
+  test("step 2 copy button is present for the public key", async ({ page }) => {
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await expect(page.getByRole("button", { name: "Copy public key" })).toBeEnabled();
+  });
+
+  test("step 3 requires an explicit trust decision", async ({ page }) => {
+    await page.getByRole("button", { name: "Verify server" }).click();
+    await expect(page.getByText("Algorithm")).toBeVisible();
+    await expect(page.getByText(/SHA256:/)).toBeVisible();
+    await expect(page.getByText("Not yet trusted")).toBeVisible();
+
+    const trust = page.getByRole("button", { name: "Trust host" });
+    await expect(trust).toBeEnabled();
+    await trust.click();
+    await expect(page.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+  });
+
+  test("step 3 warns what a future host-key change will do", async ({ page }) => {
+    await page.getByRole("button", { name: "Verify server" }).click();
+    await expect(page.getByText(/stops all backup operations for the set/)).toBeVisible();
+    await expect(page.getByText(/blocks remote artifact deletion/)).toBeVisible();
+  });
+
+  test("step 4 separates recommended from advanced completion methods", async ({ page }) => {
+    await page.getByRole("button", { name: "Discovery" }).click();
+    await expect(page.getByText("Recommended")).toBeVisible();
+    await expect(page.getByText("Advanced")).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Atomic rename/ })).toBeVisible();
+    await expect(page.getByRole("radio", { name: /Completion marker/ })).toBeChecked();
+  });
+
+  test("step 4 warns when completion is inferred", async ({ page }) => {
+    await page.getByRole("button", { name: "Discovery" }).click();
+    await expect(page.getByText(/infers completion/)).toHaveCount(0);
+
+    await page.getByRole("radio", { name: /Stable file size/ }).click();
+    await expect(
+      page.getByText(/infers completion and provides less assurance than a producer-provided completion marker/)
+    ).toBeVisible();
+  });
+
+  test("step 5 defaults retention and protects the known-good backup", async ({ page }) => {
+    await page.getByRole("button", { name: "Storage & retention" }).click();
+    await expect(page.getByDisplayValue("7 days")).toBeVisible();
+    await expect(page.getByDisplayValue("3 months")).toBeVisible();
+    await expect(page.getByDisplayValue("12 months")).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /Protect newest known-good/ })).toBeChecked();
+  });
+
+  test("step 5 lists the three validation layers", async ({ page }) => {
+    await page.getByRole("button", { name: "Storage & retention" }).click();
+    await expect(page.getByRole("checkbox", { name: /Transfer verification/ })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: /Checksum verification/ })).toBeChecked();
+    await expect(page.getByRole("checkbox", { name: /Application validation/ })).not.toBeChecked();
+  });
+
+  test("step 6 summarises source, destination, retention and validation", async ({ page }) => {
+    await page.getByRole("button", { name: "Review" }).click();
+    for (const label of ["Source", "Destination", "Retention", "Validation"]) {
+      await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
+    }
+  });
+
+  test("step 6 discloses remote-source handling in full", async ({ page }) => {
+    await page.getByRole("button", { name: "Review" }).click();
+    await expect(page.getByText("Remote source handling")).toBeVisible();
+    await expect(
+      page.getByText(/transferred, verified, durably committed to this NAS, and recorded as safe/)
+    ).toBeVisible();
+    await expect(page.getByText("Remote artifact deleted")).toBeVisible();
+  });
+
+  test("saving is blocked until the acknowledgement is checked", async ({ page }) => {
+    await page.getByRole("button", { name: "Review" }).click();
+
+    const runNow = page.getByRole("button", { name: /Save, enable & run/ });
+    const enable = page.getByRole("button", { name: /^Save & enable$/ });
+    await expect(runNow).toBeDisabled();
+    await expect(enable).toBeDisabled();
+    await expect(page.getByText(/Acknowledge remote-source handling/)).toBeVisible();
+
+    await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).check();
+    await expect(runNow).toBeEnabled();
+    await expect(enable).toBeEnabled();
+
+    // Unchecking must re-arm the guard, not leave it latched open.
+    await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).uncheck();
+    await expect(runNow).toBeDisabled();
+  });
+
+  test("offers a save-disabled escape hatch that needs no acknowledgement", async ({ page }) => {
+    await page.getByRole("button", { name: "Review" }).click();
+    await expect(page.getByRole("button", { name: "Save disabled" })).toBeEnabled();
+  });
+
+  test("cancel returns to the sets list", async ({ bm, page }) => {
+    await page.getByRole("button", { name: /Cancel and return to backup sets/ }).click();
+    await expect(bm.heading("Backup sets")).toBeVisible();
+  });
+});

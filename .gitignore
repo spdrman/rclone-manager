@@ -24,3 +24,27 @@ config.local.*
 # is what compose reads. The example stays tracked, the real one must not be.
 .env
 container/.env
+
+# --- Frontend (ui/, apps/) -----------------------------------------------
+# node_modules/ ignores the DIRECTORY. `**/node_modules/**` only ignores its
+# CONTENTS, which leaves the directory entry itself untracked and not ignored,
+# so `git clean -fd` and `git stash --include-untracked` delete the whole tree.
+# Keep BOTH lines: the first protects the directory, the second still covers
+# nested node_modules inside packages.
+node_modules/
+**/node_modules/**
+
+# Vite/tsc build output. ui/shared/dist is what gets embedded into the Go
+# binary at release time, so it is generated, never committed.
+/ui/shared/dist/
+/ui/shared/.vite/
+*.tsbuildinfo
+
+# Playwright runtime artifacts. The specs under ui/shared/e2e/ are source and
+# stay tracked; what a run writes is not.
+/ui/shared/playwright-report/
+/ui/shared/test-results/
+/ui/shared/playwright/.cache/
+
+# Coverage
+/ui/shared/coverage/

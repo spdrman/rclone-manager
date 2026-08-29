@@ -1,0 +1,13 @@
+/* Restrained DSM treatment: accent hue and a neutral titlebar. Nothing that
+   imitates DSM's own controls. */
+:root {
+  --platform-accent: oklch(0.52 0.09 240);
+  --accent-quiet: oklch(0.95 0.02 240);
+  --platform-titlebar: oklch(0.97 0.008 240);
+}
+
+[data-theme="dark"] {
+  --platform-accent: oklch(0.70 0.09 240);
+  --accent-quiet: oklch(0.30 0.045 240);
+  --platform-titlebar: oklch(0.24 0.012 240);
+}

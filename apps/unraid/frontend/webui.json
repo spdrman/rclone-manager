@@ -1,0 +1,8 @@
+{
+  "name": "Backup Manager",
+  "webui": "http://[IP]:[PORT:8080]/",
+  "icon": "/ui/shared/public/icon.svg",
+  "appdata": "/mnt/user/appdata/backup-manager",
+  "backupRoot": "/mnt/user/backups",
+  "notes": "Backup root must be a share Backup Manager can write to; appdata holds the catalog database."
+}

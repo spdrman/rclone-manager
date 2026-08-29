@@ -1,0 +1,1541 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #f2f2f0; --surface: #ffffff; --surface-2: #fafaf9; --surface-3: #f0f0ed;
+    --border: #e0dfdc; --border-strong: #c8c7c3;
+    --text: #191a19; --text-2: #5b5d5b; --text-3: #8b8d8a;
+    --accent: oklch(0.52 0.09 255); --accent-quiet: oklch(0.95 0.02 255);
+    --ok: oklch(0.52 0.10 155); --ok-quiet: oklch(0.955 0.025 155);
+    --warn: oklch(0.56 0.11 70); --warn-quiet: oklch(0.96 0.035 75);
+    --danger: oklch(0.52 0.15 25); --danger-quiet: oklch(0.955 0.03 25);
+    --shadow: 0 1px 2px rgba(20,20,18,0.05), 0 1px 1px rgba(20,20,18,0.04);
+    --shadow-lg: 0 14px 40px rgba(20,20,18,0.14), 0 2px 6px rgba(20,20,18,0.07);
+  }
+  html[data-theme="dark"] {
+    --bg: #121312; --surface: #1b1d1b; --surface-2: #202220; --surface-3: #262826;
+    --border: #313331; --border-strong: #454745;
+    --text: #eceeeb; --text-2: #a3a6a2; --text-3: #767976;
+    --accent: oklch(0.70 0.09 255); --accent-quiet: oklch(0.30 0.045 255);
+    --ok: oklch(0.72 0.11 155); --ok-quiet: oklch(0.28 0.05 155);
+    --warn: oklch(0.78 0.12 75); --warn-quiet: oklch(0.30 0.055 70);
+    --danger: oklch(0.68 0.15 25); --danger-quiet: oklch(0.30 0.07 25);
+    --shadow: 0 1px 2px rgba(0,0,0,0.4); --shadow-lg: 0 16px 44px rgba(0,0,0,0.55);
+  }
+  html[data-provider="ugos"] { --accent: oklch(0.52 0.09 150); --accent-quiet: oklch(0.95 0.02 150); }
+  html[data-provider="ugos"][data-theme="dark"] { --accent: oklch(0.70 0.09 150); --accent-quiet: oklch(0.30 0.045 150); }
+  html[data-provider="synology"] { --accent: oklch(0.52 0.09 240); --accent-quiet: oklch(0.95 0.02 240); }
+  html[data-provider="synology"][data-theme="dark"] { --accent: oklch(0.70 0.09 240); --accent-quiet: oklch(0.30 0.045 240); }
+  html[data-provider="truenas"] { --accent: oklch(0.52 0.09 215); --accent-quiet: oklch(0.95 0.02 215); }
+  html[data-provider="truenas"][data-theme="dark"] { --accent: oklch(0.70 0.09 215); --accent-quiet: oklch(0.30 0.045 215); }
+  html[data-provider="unraid"] { --accent: oklch(0.52 0.09 40); --accent-quiet: oklch(0.95 0.02 40); }
+  html[data-provider="unraid"][data-theme="dark"] { --accent: oklch(0.70 0.09 40); --accent-quiet: oklch(0.30 0.045 40); }
+  html[data-provider="openmediavault"] { --accent: oklch(0.52 0.09 275); --accent-quiet: oklch(0.95 0.02 275); }
+  html[data-provider="openmediavault"][data-theme="dark"] { --accent: oklch(0.70 0.09 275); --accent-quiet: oklch(0.30 0.045 275); }
+  html[data-provider="proxmox"] { --accent: oklch(0.52 0.09 20); --accent-quiet: oklch(0.95 0.02 20); }
+  html[data-provider="proxmox"][data-theme="dark"] { --accent: oklch(0.70 0.09 20); --accent-quiet: oklch(0.30 0.045 20); }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "IBM Plex Sans", Helvetica, Arial, sans-serif;
+    font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; text-wrap: pretty;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: var(--text); text-decoration: underline; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  table { border-collapse: collapse; }
+  ::selection { background: var(--accent-quiet); }
+  @keyframes bmPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  @keyframes bmShift { to { background-position: 20px 0; } }
+</style>
+</helmet>
+
+<sc-if value="{{ showAuth }}" hint-placeholder-val="{{ false }}">
+  <div style="min-height: 100vh; display: grid; place-items: center; padding: 48px 24px; background: var(--bg)">
+    <div style="width: 100%; max-width: 452px; display: flex; flex-direction: column; gap: 20px">
+      <div style="display: flex; align-items: center; gap: 11px">
+        <svg width="27" height="27" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="17" fill="none" stroke="var(--accent)" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)"></circle>
+          <circle cx="24" cy="24" r="5.5" fill="var(--accent)"></circle>
+        </svg>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 15px; letter-spacing: -0.01em">rclone<span style="color: var(--text-3)">-</span>manager</span>
+      </div>
+
+      <sc-if value="{{ authIsEnroll }}" hint-placeholder-val="{{ false }}">
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 28px">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-3)">First run</div>
+          <h1 style="margin: 8px 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.015em">Create Backup Manager administrator</h1>
+          <p style="margin: 0 0 22px; color: var(--text-2); font-size: 13px">This account manages Backup Manager only. It is separate from your NAS operating-system account.</p>
+          <div style="display: flex; flex-direction: column; gap: 14px">
+            <label style="display: flex; flex-direction: column; gap: 6px">
+              <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Username</span>
+              <input value="bm-admin" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px">
+              <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Password</span>
+              <input type="password" value="............" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px" />
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px">
+              <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Confirm password</span>
+              <input type="password" value="............" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px" />
+            </label>
+            <div style="display: flex; gap: 10px; font-size: 12px; color: var(--text-2); background: var(--surface-3); border: 1px solid var(--border); border-radius: 7px; padding: 11px 12px">
+              <span aria-hidden="true" style="color: var(--text-3)">i</span>
+              <span>Minimum 12 characters. Credentials are stored on this NAS; nothing is sent off the device.</span>
+            </div>
+            <button onClick="{{ enterApp }}" style="margin-top: 4px; height: 40px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-weight: 600; font-size: 13.5px">Create administrator</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ authIsLogin }}" hint-placeholder-val="{{ true }}">
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 28px">
+          <h1 style="margin: 0 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.015em">Sign in</h1>
+          <p style="margin: 0 0 22px; color: var(--text-2); font-size: 13px">Backup Manager local account — <span style="color: var(--text)">not</span> your NAS operating-system login.</p>
+          <div style="display: flex; flex-direction: column; gap: 14px">
+            <label style="display: flex; flex-direction: column; gap: 6px">
+              <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Username</span>
+              <input value="bm-admin" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+            </label>
+            <label style="display: flex; flex-direction: column; gap: 6px">
+              <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Password</span>
+              <input type="password" value="............" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px" />
+            </label>
+            <button onClick="{{ enterApp }}" style="margin-top: 4px; height: 40px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-weight: 600; font-size: 13.5px">Sign in</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ authIsExpired }}" hint-placeholder-val="{{ false }}">
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 28px">
+          <div style="display: flex; align-items: center; gap: 9px; color: var(--warn); font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.09em; text-transform: uppercase">
+            <span aria-hidden="true">▲</span><span>Session expired</span>
+          </div>
+          <h1 style="margin: 8px 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -0.015em">Your session ended</h1>
+          <p style="margin: 0 0 20px; color: var(--text-2); font-size: 13px">Backup operations continued running in the background. Sign in again to manage them.</p>
+          <div style="display: flex; gap: 10px">
+            <button onClick="{{ goLogin }}" style="height: 40px; padding: 0 18px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-weight: 600; font-size: 13.5px">Sign in</button>
+            <button onClick="{{ enterApp }}" style="height: 40px; padding: 0 16px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13.5px">View read-only status</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--text-3)">
+        <span style="font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.07em; text-transform: uppercase; font-size: 10.5px">Demo</span>
+        <button onClick="{{ goLogin }}" style="height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); font-size: 12px">Login</button>
+        <button onClick="{{ goEnroll }}" style="height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); font-size: 12px">First run</button>
+        <button onClick="{{ goExpired }}" style="height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); font-size: 12px">Session expired</button>
+        <button onClick="{{ enterApp }}" style="height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); font-size: 12px">Skip to app →</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ showApp }}" hint-placeholder-val="{{ true }}">
+<div style="min-height: 100vh; display: flex; flex-direction: column; background: var(--bg)">
+
+  <sc-if value="{{ hasWindowChrome }}" hint-placeholder-val="{{ false }}">
+    <div style="height: 30px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--surface-3); border-bottom: 1px solid var(--border); font-size: 11.5px; color: var(--text-2)">
+      <div style="display: flex; gap: 6px">
+        <span style="width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: block"></span>
+        <span style="width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: block"></span>
+        <span style="width: 9px; height: 9px; border-radius: 50%; background: var(--border-strong); display: block"></span>
+      </div>
+      <span style="margin-left: 6px; font-family: 'IBM Plex Mono', monospace">rclone-manager — {{ platformName }}</span>
+    </div>
+  </sc-if>
+
+  <header style="flex: none; height: 52px; display: flex; align-items: center; gap: 16px; padding: 0 18px; background: var(--surface); border-bottom: 1px solid var(--border)">
+    <div style="display: flex; align-items: center; gap: 10px; min-width: 206px">
+      <svg width="24" height="24" viewBox="0 0 48 48" aria-hidden="true">
+        <circle cx="24" cy="24" r="17" fill="none" stroke="var(--accent)" stroke-width="5" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)"></circle>
+        <circle cx="24" cy="24" r="5.5" fill="var(--accent)"></circle>
+      </svg>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 14px; letter-spacing: -0.01em">rclone<span style="color: var(--text-3)">-</span>manager</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 7px; padding: 3px 9px 3px 7px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 12px; color: var(--text-2)">
+      <span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: block"></span>
+      <span>Service running</span>
+      <span aria-hidden="true" style="color: var(--border-strong)">·</span>
+      <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px">v1.3.0</span>
+    </div>
+    <div style="flex: 1"></div>
+    <div style="display: flex; align-items: center; gap: 8px">
+      <span style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Platform</span>
+      <select value="{{ platform }}" onChange="{{ onPlatformChange }}" aria-label="Platform integration" style="height: 30px; padding: 0 8px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12.5px">
+        <option value="generic">Generic Docker / Linux</option>
+        <option value="ugos">UGREEN UGOS Pro</option>
+        <option value="synology">Synology DSM</option>
+        <option value="truenas">TrueNAS</option>
+        <option value="unraid">Unraid</option>
+        <option value="openmediavault">OpenMediaVault</option>
+        <option value="proxmox">Proxmox VE</option>
+      </select>
+      <button onClick="{{ toggleTheme }}" aria-label="Toggle colour theme" style="height: 30px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); font-size: 12.5px">{{ themeLabel }}</button>
+      <button onClick="{{ goLogin }}" style="height: 30px; padding: 0 11px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-size: 12.5px; color: var(--text-2)">Sign out</button>
+    </div>
+  </header>
+
+  <div style="flex: 1; display: flex; align-items: stretch; min-height: 0">
+    <nav aria-label="Sections" style="flex: none; width: 206px; padding: 14px 10px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px">
+      <sc-for list="{{ navItems }}" as="item" hint-placeholder-count="7">
+        <button onClick="{{ item.onClick }}" aria-current="{{ item.current }}" style="{{ item.style }}">
+          <span aria-hidden="true" style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; width: 13px; opacity: 0.7">{{ item.glyph }}</span>
+          <span style="flex: 1; text-align: left">{{ item.label }}</span>
+          <span style="{{ item.countStyle }}">{{ item.count }}</span>
+        </button>
+      </sc-for>
+      <div style="flex: 1; min-height: 20px"></div>
+      <div style="padding: 12px 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px">
+        <div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-3)">Running on</div>
+        <div style="font-size: 13px; font-weight: 500">{{ platformName }}</div>
+        <div style="font-size: 12px; color: var(--text-2)">{{ platformIntegration }} · {{ platformAuth }}</div>
+      </div>
+    </nav>
+
+    <main style="flex: 1; min-width: 0; overflow: auto">
+      <div style="max-width: 1240px; margin: 0 auto; padding: 24px 28px 64px; display: flex; flex-direction: column; gap: 18px">
+
+        <sc-if value="{{ versionMismatch }}" hint-placeholder-val="{{ false }}">
+          <div role="alert" style="display: flex; gap: 13px; padding: 15px 16px; background: var(--warn-quiet); border: 1px solid var(--warn); border-radius: 8px">
+            <span aria-hidden="true" style="color: var(--warn); line-height: 1.5">▲</span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 6px">
+              <div style="font-weight: 600; font-size: 13.5px">Backup Manager update required</div>
+              <div style="font-size: 13px; color: var(--text-2); max-width: 76ch">The user interface and backup service versions do not match. Management actions have been disabled to prevent unsafe changes. Read-only information remains visible.</div>
+              <div style="display: flex; gap: 18px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-2)"><span>UI 1.3.0</span><span>Service 1.2.0</span></div>
+            </div>
+            <button onClick="{{ dismissVersion }}" style="align-self: flex-start; height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12px">Dismiss</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ hostKeyAlert }}" hint-placeholder-val="{{ true }}">
+          <div role="alert" style="display: flex; gap: 13px; padding: 15px 16px; background: var(--danger-quiet); border: 1px solid var(--danger); border-radius: 8px">
+            <span aria-hidden="true" style="color: var(--danger); line-height: 1.5">✕</span>
+            <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--danger)">Security warning</div>
+              <div style="font-weight: 600; font-size: 13.5px">The SSH host key for prod-db-01 has changed</div>
+              <div style="font-size: 13px; color: var(--text-2); max-width: 76ch">Backup operations for this set have been stopped until the new fingerprint is independently verified. No remote artifacts will be deleted while the set is halted.</div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 2px">
+                <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px">
+                  <div style="font-size: 11px; color: var(--text-3); margin-bottom: 4px">Previously trusted</div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; word-break: break-all">SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM</div>
+                </div>
+                <div style="background: var(--surface); border: 1px solid var(--danger); border-radius: 7px; padding: 10px 12px">
+                  <div style="font-size: 11px; color: var(--danger); margin-bottom: 4px">Presented now</div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; word-break: break-all">SHA256:1aXpQ8Lm+Nb3vRt7yKcE0dJf5UwZoGqS2iTrHuVeM4k</div>
+                </div>
+              </div>
+              <div style="display: flex; gap: 9px; margin-top: 4px">
+                <button style="height: 32px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px; font-weight: 500">Compare fingerprints</button>
+                <button onClick="{{ dismissHostKey }}" style="height: 32px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px">Keep set halted</button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+          <div style="display: flex; flex-direction: column; gap: 18px">
+            <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+              <div>
+                <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Dashboard</h1>
+                <p style="margin: 4px 0 0; color: var(--text-2); font-size: 13px">Backup posture across 7 sets · polling every 30s</p>
+              </div>
+              <div style="display: flex; gap: 9px">
+                <button style="height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px; font-weight: 500">Run all due sets</button>
+                <button onClick="{{ goWizard }}" style="height: 34px; padding: 0 13px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Add backup set</button>
+              </div>
+            </div>
+
+            <section aria-label="Backup health" style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden">
+              <div style="display: flex; align-items: flex-start; gap: 20px; padding: 20px 22px; border-bottom: 1px solid var(--border); flex-wrap: wrap">
+                <div style="flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 9px">
+                  <div style="display: flex; align-items: center; gap: 10px">
+                    <span aria-hidden="true" style="color: var(--warn); font-size: 15px">▲</span>
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; letter-spacing: 0.04em; color: var(--warn)">BACKUPS DEGRADED</span>
+                  </div>
+                  <div style="font-size: 13.5px; color: var(--text-2); max-width: 66ch">One set has not produced a verified backup in 31 hours. The service itself is running normally — a healthy daemon is not a healthy backup.</div>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 3px">
+                    <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 12px; color: var(--text-2)"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: block"></span>Service running · 14d uptime</span>
+                    <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 12px; color: var(--text-2)"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: block"></span>Storage nominal</span>
+                    <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--warn); border-radius: 999px; background: var(--warn-quiet); font-size: 12px; color: var(--text)"><span aria-hidden="true" style="color: var(--warn)">▲</span>1 set stale</span>
+                    <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--danger); border-radius: 999px; background: var(--danger-quiet); font-size: 12px; color: var(--text)"><span aria-hidden="true" style="color: var(--danger)">✕</span>1 host key changed</span>
+                  </div>
+                </div>
+                <dl style="flex: none; margin: 0; display: grid; grid-template-columns: auto auto; gap: 9px 26px; font-size: 13px">
+                  <dt style="color: var(--text-2)">Last successful cycle</dt>
+                  <dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; text-align: right">8 minutes ago</dd>
+                  <dt style="color: var(--text-2)">Newest verified backup</dt>
+                  <dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; text-align: right">42 minutes ago</dd>
+                  <dt style="color: var(--text-2)">Oldest set freshness</dt>
+                  <dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; text-align: right; color: var(--warn)">31 hours ago</dd>
+                  <dt style="color: var(--text-2)">Retained artifacts</dt>
+                  <dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; text-align: right">318 · 4.42 TB</dd>
+                </dl>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr))">
+                <div style="padding: 15px 20px; border-right: 1px solid var(--border)">
+                  <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Backup sets</div>
+                  <div style="margin-top: 6px; display: flex; align-items: baseline; gap: 7px"><span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">5</span><span style="font-size: 12.5px; color: var(--text-2)">healthy</span></div>
+                  <div style="margin-top: 4px; font-size: 12.5px; color: var(--text-2)">1 stale · 1 failing</div>
+                </div>
+                <div style="padding: 15px 20px; border-right: 1px solid var(--border)">
+                  <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Success rate · 7d</div>
+                  <div style="margin-top: 6px; font-size: 24px; font-weight: 600; letter-spacing: -0.02em">96.4%</div>
+                  <div style="margin-top: 4px; font-size: 12.5px; color: var(--text-2)">53 of 55 cycles verified</div>
+                </div>
+                <div style="padding: 15px 20px; border-right: 1px solid var(--border)">
+                  <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Quarantine</div>
+                  <div style="margin-top: 6px; display: flex; align-items: baseline; gap: 7px"><span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">2</span><span style="font-size: 12.5px; color: var(--text-2)">need review</span></div>
+                  <div style="margin-top: 4px; font-size: 12.5px; color: var(--text-2)">Checksum · validation</div>
+                </div>
+                <div style="padding: 15px 20px">
+                  <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Storage</div>
+                  <div style="margin-top: 6px; display: flex; align-items: baseline; gap: 7px"><span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">1.8 TB</span><span style="font-size: 12.5px; color: var(--text-2)">free</span></div>
+                  <div style="margin-top: 8px; height: 5px; border-radius: 3px; background: var(--surface-3); overflow: hidden"><div style="width: 71%; height: 100%; background: var(--ok)"></div></div>
+                  <div style="margin-top: 5px; font-size: 12px; color: var(--text-2)">4.42 TB of 6.2 TB used · 71%</div>
+                </div>
+              </div>
+            </section>
+
+            <section aria-label="Active operations" style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+              <div style="display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid var(--border)">
+                <h2 style="margin: 0; font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Active operations</h2>
+                <span style="font-size: 12px; color: var(--text-2)">2 running</span>
+              </div>
+              <div style="padding: 18px; display: flex; flex-direction: column; gap: 20px">
+                <div style="display: flex; flex-direction: column; gap: 11px">
+                  <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 14px; flex-wrap: wrap">
+                    <div style="display: flex; align-items: baseline; gap: 10px">
+                      <span style="font-weight: 600; font-size: 14px">Production PostgreSQL</span>
+                      <span style="font-size: 12.5px; color: var(--text-2)">Transferring backup</span>
+                    </div>
+                    <div style="display: flex; gap: 16px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text-2)">
+                      <span>8.4 GB / 14.2 GB</span><span>118 MB/s</span><span>1m 03s left</span><span style="color: var(--text); font-weight: 600">59%</span>
+                    </div>
+                  </div>
+                  <div style="height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden">
+                    <div style="width: 59%; height: 100%; background: var(--accent); background-image: linear-gradient(90deg, rgba(255,255,255,0.28) 0 8px, transparent 8px 20px); background-size: 20px 100%; animation: bmShift 1.4s linear infinite"></div>
+                  </div>
+                  <ol style="margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px">
+                    <li style="display: flex; align-items: center; gap: 6px; color: var(--text-2)"><span aria-hidden="true" style="color: var(--ok)">✓</span>Discovering</li>
+                    <li aria-current="step" style="display: flex; align-items: center; gap: 6px; color: var(--text); font-weight: 600"><span aria-hidden="true" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: block; animation: bmPulse 1.4s ease-in-out infinite"></span>Transferring</li>
+                    <li style="display: flex; align-items: center; gap: 6px; color: var(--text-3)"><span aria-hidden="true">○</span>Verifying</li>
+                    <li style="display: flex; align-items: center; gap: 6px; color: var(--text-3)"><span aria-hidden="true">○</span>Committing</li>
+                    <li style="display: flex; align-items: center; gap: 6px; color: var(--text-3)"><span aria-hidden="true">○</span>Cleaning remote source</li>
+                    <li style="display: flex; align-items: center; gap: 6px; color: var(--text-3)"><span aria-hidden="true">○</span>Complete</li>
+                  </ol>
+                  <div style="font-size: 12px; color: var(--text-3)">The remote artifact is removed only after the NAS copy is verified and durably committed.</div>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 11px; padding-top: 18px; border-top: 1px solid var(--border)">
+                  <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 14px; flex-wrap: wrap">
+                    <div style="display: flex; align-items: baseline; gap: 10px">
+                      <span style="font-weight: 600; font-size: 14px">Media archive</span>
+                      <span style="font-size: 12.5px; color: var(--text-2)">Reconciliation</span>
+                    </div>
+                    <div style="display: flex; gap: 16px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text-2)"><span>1204 / 3190 artifacts</span><span style="color: var(--text); font-weight: 600">38%</span></div>
+                  </div>
+                  <div style="height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden"><div style="width: 38%; height: 100%; background: var(--text-3)"></div></div>
+                  <div style="font-size: 12px; color: var(--text-3)">Read-only pass · no artifacts are deleted during reconciliation.</div>
+                </div>
+              </div>
+            </section>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px">
+              <section aria-label="Needs attention" style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                <div style="padding: 13px 18px; border-bottom: 1px solid var(--border)">
+                  <h2 style="margin: 0; font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Needs attention</h2>
+                </div>
+                <ul style="margin: 0; padding: 0; list-style: none">
+                  <li style="display: flex; gap: 11px; padding: 14px 18px; border-bottom: 1px solid var(--border)">
+                    <span aria-hidden="true" style="color: var(--danger)">✕</span>
+                    <div style="flex: 1">
+                      <div style="font-weight: 600; font-size: 13.5px">Host key changed · prod-db-01</div>
+                      <div style="font-size: 12.5px; color: var(--text-2); margin-top: 2px">Set halted 4 hours ago. Verify the fingerprint out of band before resuming.</div>
+                    </div>
+                  </li>
+                  <li style="display: flex; gap: 11px; padding: 14px 18px; border-bottom: 1px solid var(--border)">
+                    <span aria-hidden="true" style="color: var(--warn)">▲</span>
+                    <div style="flex: 1">
+                      <div style="font-weight: 600; font-size: 13.5px">Stale · Billing MySQL</div>
+                      <div style="font-size: 12.5px; color: var(--text-2); margin-top: 2px">No verified backup received for 31 hours. Expected within 24 hours.</div>
+                    </div>
+                  </li>
+                  <li style="display: flex; gap: 11px; padding: 14px 18px">
+                    <span aria-hidden="true" style="color: var(--warn)">▲</span>
+                    <div style="flex: 1">
+                      <div style="font-weight: 600; font-size: 13.5px">2 artifacts quarantined</div>
+                      <div style="font-size: 12.5px; color: var(--text-2); margin-top: 2px">Checksum mismatch and one failed application validation.</div>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+
+              <section aria-label="Recent activity" style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 13px 18px; border-bottom: 1px solid var(--border)">
+                  <h2 style="margin: 0; font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Recent activity</h2>
+                  <button onClick="{{ goActivity }}" style="border: none; background: none; padding: 0; font-size: 12.5px; color: var(--accent)">View all</button>
+                </div>
+                <ul style="margin: 0; padding: 10px 18px 14px; list-style: none; display: flex; flex-direction: column; gap: 9px">
+                  <sc-for list="{{ recentActivity }}" as="ev" hint-placeholder-count="6">
+                    <li style="display: grid; grid-template-columns: 62px 14px 1fr; gap: 10px; align-items: baseline; font-size: 12.5px">
+                      <span style="font-family: 'IBM Plex Mono', monospace; color: var(--text-3)">{{ ev.time }}</span>
+                      <span aria-hidden="true" style="{{ ev.iconStyle }}">{{ ev.icon }}</span>
+                      <span><span>{{ ev.text }}</span> <span style="color: var(--text-3)">{{ ev.setName }}</span></span>
+                    </li>
+                  </sc-for>
+                </ul>
+              </section>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isSets }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+              <div>
+                <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Backup sets</h1>
+                <p style="margin: 4px 0 0; color: var(--text-2); font-size: 13px">7 sets · 5 healthy · 1 stale · 1 failing</p>
+              </div>
+              <button onClick="{{ goWizard }}" style="height: 34px; padding: 0 13px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Add backup set</button>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(372px, 1fr)); gap: 14px">
+              <sc-for list="{{ sets }}" as="s" hint-placeholder-count="4">
+                <article style="{{ s.cardStyle }}">
+                  <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 15px 17px 13px">
+                    <div>
+                      <div style="font-size: 15px; font-weight: 600; letter-spacing: -0.01em">{{ s.name }}</div>
+                      <div style="margin-top: 3px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-2)">{{ s.host }}</div>
+                    </div>
+                    <span style="{{ s.badgeStyle }}"><span aria-hidden="true">{{ s.icon }}</span>{{ s.stateLabel }}</span>
+                  </div>
+                  <div style="padding: 0 17px 13px; font-size: 12.5px; color: var(--text-2); min-height: 34px">{{ s.note }}</div>
+                  <dl style="margin: 0; padding: 13px 17px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 11px 14px; font-size: 12.5px">
+                    <div>
+                      <dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Newest known-good</dt>
+                      <dd style="margin: 3px 0 0; font-family: 'IBM Plex Mono', monospace">{{ s.newest }}</dd>
+                    </div>
+                    <div>
+                      <dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Last run</dt>
+                      <dd style="margin: 3px 0 0; font-family: 'IBM Plex Mono', monospace">{{ s.lastRun }}</dd>
+                    </div>
+                    <div>
+                      <dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Retention</dt>
+                      <dd style="margin: 3px 0 0; font-family: 'IBM Plex Mono', monospace">{{ s.retention }}</dd>
+                    </div>
+                    <div>
+                      <dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Last validation</dt>
+                      <dd style="margin: 3px 0 0">{{ s.validation }}</dd>
+                    </div>
+                  </dl>
+                  <div style="display: flex; align-items: center; gap: 8px; padding: 11px 17px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 9px 9px">
+                    <button onClick="{{ goSetDetail }}" style="height: 29px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px; font-weight: 500">Open</button>
+                    <button style="height: 29px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px">Run now</button>
+                    <button style="height: 29px; padding: 0 11px; border: 1px solid var(--border); border-radius: 6px; background: transparent; font-size: 12.5px; color: var(--text-2)">Test connection</button>
+                    <div style="flex: 1"></div>
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--text-3)">{{ s.current }}</span>
+                  </div>
+                </article>
+              </sc-for>
+            </div>
+            <div style="margin-top: 6px; padding: 34px 22px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface-2); text-align: center">
+              <div style="font-size: 15px; font-weight: 600">No backup sets yet</div>
+              <p style="margin: 6px auto 14px; max-width: 46ch; font-size: 13px; color: var(--text-2)">Connect Backup Manager to your first server to begin collecting and retaining verified backups.</p>
+              <button onClick="{{ goWizard }}" style="height: 34px; padding: 0 14px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Add backup set</button>
+              <div style="margin-top: 10px; font-size: 11.5px; color: var(--text-3); font-family: 'IBM Plex Mono', monospace">empty-state reference</div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isSetDetail }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; flex-direction: column; gap: 10px">
+              <button onClick="{{ goSets }}" style="align-self: flex-start; border: none; background: none; padding: 0; font-size: 12.5px; color: var(--accent)">← Backup sets</button>
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+                <div>
+                  <div style="display: flex; align-items: center; gap: 11px">
+                    <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Production PostgreSQL</h1>
+                    <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--ok); border-radius: 999px; background: var(--ok-quiet); font-size: 12px; font-weight: 500"><span aria-hidden="true" style="color: var(--ok)">●</span>Healthy</span>
+                  </div>
+                  <p style="margin: 5px 0 0; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text-2)">prod-db-01.internal:22 · /backups/postgresql/</p>
+                </div>
+                <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap">
+                  <button style="height: 34px; padding: 0 13px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Run now</button>
+                  <button style="height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Test connection</button>
+                  <button style="height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Edit</button>
+                  <button onClick="{{ openRetentionPreview }}" style="height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Preview retention</button>
+                </div>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 14px; align-items: start">
+              <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Overview</h2>
+                  <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px 18px; font-size: 13px">
+                    <div><dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Newest known-good</dt><dd style="margin: 4px 0 0; font-family: 'IBM Plex Mono', monospace">42 minutes ago</dd></div>
+                    <div><dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Last successful run</dt><dd style="margin: 4px 0 0; font-family: 'IBM Plex Mono', monospace">02:01:01 today</dd></div>
+                    <div><dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Retained</dt><dd style="margin: 4px 0 0; font-family: 'IBM Plex Mono', monospace">32 · 421 GB</dd></div>
+                    <div><dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Expected cadence</dt><dd style="margin: 4px 0 0; font-family: 'IBM Plex Mono', monospace">every 24h</dd></div>
+                    <div><dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Current operation</dt><dd style="margin: 4px 0 0">Transferring · 59%</dd></div>
+                    <div><dt style="color: var(--text-3); font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.06em; text-transform: uppercase">Remote cleanup</dt><dd style="margin: 4px 0 0">Enabled after commit</dd></div>
+                  </dl>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Connection</h2>
+                  <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: 172px 1fr; gap: 11px 16px; font-size: 13px">
+                    <dt style="color: var(--text-2)">Host</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">prod-db-01.internal</dd>
+                    <dt style="color: var(--text-2)">Port · user</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">22 · backup-agent</dd>
+                    <dt style="color: var(--text-2)">Key</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">ed25519 · managed by Backup Manager</dd>
+                    <dt style="color: var(--text-2)">Host fingerprint</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; word-break: break-all">SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM</dd>
+                    <dt style="color: var(--text-2)">Trusted</dt><dd style="margin: 0">Aug 02 2026 by bm-admin</dd>
+                  </dl>
+                  <div style="padding: 0 18px 16px; font-size: 12px; color: var(--text-3)">The private key never leaves this NAS and is never displayed.</div>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Backup discovery</h2>
+                  <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: 172px 1fr; gap: 11px 16px; font-size: 13px">
+                    <dt style="color: var(--text-2)">Remote folder</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">/backups/postgresql/</dd>
+                    <dt style="color: var(--text-2)">Include</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">*.dump.zst</dd>
+                    <dt style="color: var(--text-2)">Exclude</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">*.tmp, *.part</dd>
+                    <dt style="color: var(--text-2)">Completion method</dt><dd style="margin: 0">Completion marker / manifest <span style="color: var(--text-3)">— producer-provided</span></dd>
+                  </dl>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Activity</h2>
+                  <ul style="margin: 0; padding: 12px 18px 16px; list-style: none; display: flex; flex-direction: column; gap: 9px">
+                    <sc-for list="{{ recentActivity }}" as="ev" hint-placeholder-count="6">
+                      <li style="display: grid; grid-template-columns: 62px 14px 1fr; gap: 10px; align-items: baseline; font-size: 12.5px">
+                        <span style="font-family: 'IBM Plex Mono', monospace; color: var(--text-3)">{{ ev.time }}</span>
+                        <span aria-hidden="true" style="{{ ev.iconStyle }}">{{ ev.icon }}</span>
+                        <span>{{ ev.text }}</span>
+                      </li>
+                    </sc-for>
+                  </ul>
+                </section>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 14px; min-width: 0">
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Retention</h2>
+                  <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 11px; font-size: 13px">
+                    <div style="display: flex; justify-content: space-between"><span style="color: var(--text-2)">Daily</span><span style="font-family: 'IBM Plex Mono', monospace">7 kept · 7 days</span></div>
+                    <div style="display: flex; justify-content: space-between"><span style="color: var(--text-2)">Weekly</span><span style="font-family: 'IBM Plex Mono', monospace">13 kept · 3 months</span></div>
+                    <div style="display: flex; justify-content: space-between"><span style="color: var(--text-2)">Monthly</span><span style="font-family: 'IBM Plex Mono', monospace">12 kept · 12 months</span></div>
+                    <div style="display: flex; justify-content: space-between"><span style="color: var(--text-2)">Timezone · week start</span><span style="font-family: 'IBM Plex Mono', monospace">Europe/Berlin · Mon</span></div>
+                    <div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--ok-quiet); border: 1px solid var(--ok); border-radius: 7px; font-size: 12.5px">
+                      <span aria-hidden="true" style="color: var(--ok)">✓</span><span>Newest known-good backup is protected from deletion</span>
+                    </div>
+                    <button onClick="{{ openRetentionPreview }}" style="margin-top: 2px; height: 32px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); font-size: 12.5px; font-weight: 500">Preview retention plan</button>
+                  </div>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Validation</h2>
+                  <ul style="margin: 0; padding: 14px 18px 16px; list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 13px">
+                    <li style="display: flex; gap: 9px"><span aria-hidden="true" style="color: var(--ok)">✓</span><div><div>Transfer verification</div><div style="font-size: 12px; color: var(--text-3)">Size and byte-count reconciliation</div></div></li>
+                    <li style="display: flex; gap: 9px"><span aria-hidden="true" style="color: var(--ok)">✓</span><div><div>Checksum verification</div><div style="font-size: 12px; color: var(--text-3)">SHA-256 · end-to-end</div></div></li>
+                    <li style="display: flex; gap: 9px"><span aria-hidden="true" style="color: var(--ok)">✓</span><div><div>Application validation</div><div style="font-size: 12px; color: var(--text-3)">pg_restore --list · passed 42 min ago</div></div></li>
+                  </ul>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Set management</h2>
+                  <div style="padding: 15px 18px; display: flex; flex-direction: column; gap: 10px">
+                    <button style="height: 32px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface-2); font-size: 12.5px">Disable backup set</button>
+                    <button onClick="{{ openApplyRetention }}" style="height: 32px; border: 1px solid var(--danger); border-radius: 6px; background: transparent; color: var(--danger); font-size: 12.5px; font-weight: 500">Apply retention now…</button>
+                    <button style="height: 32px; border: 1px solid var(--danger); border-radius: 6px; background: transparent; color: var(--danger); font-size: 12.5px; font-weight: 500">Remove set configuration…</button>
+                    <div style="font-size: 12px; color: var(--text-3)">Removing configuration never deletes retained backups from NAS storage.</div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isWizard }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px; max-width: 900px; width: 100%; margin: 0 auto">
+            <div>
+              <button onClick="{{ goSets }}" style="border: none; background: none; padding: 0; font-size: 12.5px; color: var(--accent)">← Cancel and return to backup sets</button>
+              <h1 style="margin: 8px 0 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Add backup set</h1>
+            </div>
+            <ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px">
+              <sc-for list="{{ wizardSteps }}" as="st" hint-placeholder-count="6">
+                <li>
+                  <button onClick="{{ st.onClick }}" style="{{ st.style }}">
+                    <span style="display: flex; align-items: center; gap: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.06em">{{ st.num }}<span style="{{ st.tickStyle }}">✓</span></span>
+                    <span style="font-size: 12.5px; font-weight: 500; text-align: left">{{ st.label }}</span>
+                  </button>
+                </li>
+              </sc-for>
+            </ol>
+
+            <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+              <div style="padding: 20px 22px 22px">
+                <sc-if value="{{ w1 }}" hint-placeholder-val="{{ true }}">
+                  <div style="display: flex; flex-direction: column; gap: 18px">
+                    <div>
+                      <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Source</h2>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">The remote server that produces the backup artifacts. Backup Manager pulls — it is never given write access to your data.</p>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(228px, 1fr)); gap: 15px 18px">
+                      <label style="display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1; max-width: 420px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Backup set name</span>
+                        <input value="Production PostgreSQL" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px" />
+                      </label>
+                      <label style="display: flex; flex-direction: column; gap: 6px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Server hostname</span>
+                        <input value="prod-db-01.internal" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                      </label>
+                      <label style="display: flex; flex-direction: column; gap: 6px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">SSH port</span>
+                        <input value="22" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                      </label>
+                      <label style="display: flex; flex-direction: column; gap: 6px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Username</span>
+                        <input value="backup-agent" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                      </label>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ w2 }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 18px">
+                    <div>
+                      <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Authentication</h2>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Install the public key on the remote server. Private keys stay on this NAS and are never shown after creation.</p>
+                    </div>
+                    <div role="radiogroup" aria-label="Key source" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(216px, 1fr)); gap: 10px">
+                      <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1.5px solid var(--accent); border-radius: 8px; background: var(--accent-quiet); cursor: pointer">
+                        <input type="radio" name="keysrc" checked="{{ true }}" style="margin-top: 2px; accent-color: var(--accent)" />
+                        <span><span style="display: block; font-size: 13px; font-weight: 600">Generate dedicated SSH key</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Recommended · scoped to this set only</span></span>
+                      </label>
+                      <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); cursor: pointer">
+                        <input type="radio" name="keysrc" style="margin-top: 2px; accent-color: var(--accent)" />
+                        <span><span style="display: block; font-size: 13px; font-weight: 600">Use managed key</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Reuse an existing Backup Manager key</span></span>
+                      </label>
+                      <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); cursor: pointer">
+                        <input type="radio" name="keysrc" style="margin-top: 2px; accent-color: var(--accent)" />
+                        <span><span style="display: block; font-size: 13px; font-weight: 600">Import key</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Paste once · stored encrypted, never displayed</span></span>
+                      </label>
+                    </div>
+                    <div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+                      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; background: var(--surface-2); border-bottom: 1px solid var(--border)">
+                        <span style="font-size: 11.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-3)">Public key · ed25519</span>
+                        <button style="height: 28px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12px; font-weight: 500">Copy public key</button>
+                      </div>
+                      <div style="padding: 13px 14px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.6; word-break: break-all">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4pQ7mXvR2tYc8nJ0dKeW1sBfHgZaTqOo9UiKrEu backup-manager@nas-01</div>
+                      <div style="padding: 0 14px 13px; font-size: 12px; color: var(--text-3)">Add to <span style="font-family: 'IBM Plex Mono', monospace">/home/backup-agent/.ssh/authorized_keys</span> on the remote server.</div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ w3 }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 18px">
+                    <div>
+                      <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Verify server</h2>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Confirm this fingerprint through a channel other than this connection before trusting the host.</p>
+                    </div>
+                    <dl style="margin: 0; display: grid; grid-template-columns: 132px 1fr; gap: 12px 16px; padding: 16px 18px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; font-size: 13px">
+                      <dt style="color: var(--text-2)">Host</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">prod-db-01.internal:22</dd>
+                      <dt style="color: var(--text-2)">Algorithm</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">ssh-ed25519</dd>
+                      <dt style="color: var(--text-2)">Fingerprint</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 13.5px; word-break: break-all">SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM</dd>
+                      <dt style="color: var(--text-2)">First seen</dt><dd style="margin: 0">Just now · not yet trusted</dd>
+                    </dl>
+                    <div style="display: flex; align-items: center; gap: 10px">
+                      <button style="height: 36px; padding: 0 15px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Trust host</button>
+                      <button style="height: 36px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Re-fetch fingerprint</button>
+                    </div>
+                    <div style="display: flex; gap: 12px; padding: 14px 15px; background: var(--danger-quiet); border: 1px solid var(--danger); border-radius: 8px">
+                      <span aria-hidden="true" style="color: var(--danger)">✕</span>
+                      <div>
+                        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--danger)">If this ever changes</div>
+                        <div style="margin-top: 5px; font-size: 13px; color: var(--text-2); max-width: 72ch">A changed host key stops all backup operations for the set and blocks remote artifact deletion until an administrator verifies the new fingerprint independently.</div>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ w4 }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 18px">
+                    <div>
+                      <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Backup discovery</h2>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Where artifacts appear, and how Backup Manager knows one is finished being written.</p>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(228px, 1fr)); gap: 15px 18px">
+                      <label style="display: flex; flex-direction: column; gap: 6px; grid-column: 1 / -1; max-width: 420px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Remote folder</span>
+                        <input value="/backups/postgresql/" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                      </label>
+                      <label style="display: flex; flex-direction: column; gap: 6px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Include patterns</span>
+                        <input value="*.dump.zst" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                      </label>
+                      <label style="display: flex; flex-direction: column; gap: 6px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Exclude patterns</span>
+                        <input value="*.tmp, *.part" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                      </label>
+                    </div>
+                    <fieldset style="margin: 0; padding: 0; border: none">
+                      <legend style="padding: 0 0 9px; font-size: 12px; font-weight: 500; color: var(--text-2)">Completion method</legend>
+                      <div style="display: flex; flex-direction: column; gap: 9px">
+                        <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Recommended</div>
+                        <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); cursor: pointer">
+                          <input type="radio" name="cm" style="margin-top: 2px; accent-color: var(--accent)" />
+                          <span><span style="display: block; font-size: 13px; font-weight: 600">Atomic rename</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Producer writes to a temporary name, then renames into place.</span></span>
+                        </label>
+                        <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1.5px solid var(--accent); border-radius: 8px; background: var(--accent-quiet); cursor: pointer">
+                          <input type="radio" name="cm" checked="{{ true }}" style="margin-top: 2px; accent-color: var(--accent)" />
+                          <span><span style="display: block; font-size: 13px; font-weight: 600">Completion marker / manifest</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Producer writes a sidecar manifest when the artifact is complete.</span></span>
+                        </label>
+                        <div style="margin-top: 4px; font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Advanced</div>
+                        <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); cursor: pointer">
+                          <input type="radio" name="cm" style="margin-top: 2px; accent-color: var(--accent)" />
+                          <span style="flex: 1"><span style="display: block; font-size: 13px; font-weight: 600">Stable file size / timestamp</span><span style="display: block; margin-top: 3px; font-size: 12px; color: var(--text-2)">Use only when the producer cannot signal completion.</span>
+                            <span style="display: flex; gap: 9px; margin-top: 9px; padding: 10px 11px; background: var(--warn-quiet); border: 1px solid var(--warn); border-radius: 7px; font-size: 12px">
+                              <span aria-hidden="true" style="color: var(--warn)">▲</span>
+                              <span>This method infers completion and provides less assurance than a producer-provided completion marker.</span>
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                    </fieldset>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ w5 }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 20px">
+                    <div>
+                      <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Storage, retention and validation</h2>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Where the NAS copy lives, how long it is kept, and how it is proven good.</p>
+                    </div>
+                    <div>
+                      <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px">Storage</div>
+                      <label style="display: flex; flex-direction: column; gap: 6px; max-width: 560px">
+                        <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">NAS destination</span>
+                        <span style="display: flex; gap: 8px">
+                          <input value="/data/backups/production/postgres/" style="flex: 1; height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" />
+                          <button style="height: 38px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px; white-space: nowrap">{{ storagePickerLabel }}</button>
+                        </span>
+                        <span style="font-size: 12px; color: var(--text-3)">{{ storagePickerHint }}</span>
+                      </label>
+                    </div>
+                    <div>
+                      <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px">Retention</div>
+                      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(164px, 1fr)); gap: 14px">
+                        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Daily</span><input value="7 days" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" /></label>
+                        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Weekly</span><input value="3 months" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" /></label>
+                        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Monthly</span><input value="12 months" style="height: 38px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" /></label>
+                        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Week starts</span><select style="height: 38px; padding: 0 9px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px"><option>Monday</option><option>Sunday</option></select></label>
+                      </div>
+                      <label style="display: flex; align-items: center; gap: 9px; margin-top: 12px; padding: 11px 12px; background: var(--ok-quiet); border: 1px solid var(--ok); border-radius: 7px; font-size: 12.5px; cursor: pointer">
+                        <input type="checkbox" checked="{{ true }}" style="accent-color: var(--ok)" />
+                        <span>Protect newest known-good backup — never deleted by retention</span>
+                      </label>
+                    </div>
+                    <div>
+                      <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px">Validation</div>
+                      <div style="display: flex; flex-direction: column; gap: 8px">
+                        <label style="display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: 13px; cursor: pointer"><input type="checkbox" checked="{{ true }}" style="accent-color: var(--accent)" /><span style="flex: 1">Transfer verification</span><span style="font-size: 12px; color: var(--text-3)">always on</span></label>
+                        <label style="display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: 13px; cursor: pointer"><input type="checkbox" checked="{{ true }}" style="accent-color: var(--accent)" /><span style="flex: 1">Checksum verification</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-3)">SHA-256</span></label>
+                        <label style="display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-2); font-size: 13px; cursor: pointer"><input type="checkbox" style="accent-color: var(--accent)" /><span style="flex: 1">Application validation</span><span style="font-size: 12px; color: var(--text-3)">pg_restore --list</span></label>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{ w6 }}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 18px">
+                    <div>
+                      <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Review</h2>
+                      <p style="margin: 5px 0 0; font-size: 13px; color: var(--text-2)">Confirm the configuration and the remote-source handling policy.</p>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(224px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; overflow: hidden">
+                      <div style="background: var(--surface); padding: 14px 16px">
+                        <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Source</div>
+                        <div style="margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.7">prod-db-01.internal<br />/backups/postgresql/</div>
+                      </div>
+                      <div style="background: var(--surface); padding: 14px 16px">
+                        <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Destination</div>
+                        <div style="margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.7">/data/backups/production/<br />postgres/</div>
+                      </div>
+                      <div style="background: var(--surface); padding: 14px 16px">
+                        <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Retention</div>
+                        <div style="margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.7">7 daily<br />13 weekly<br />12 monthly</div>
+                      </div>
+                      <div style="background: var(--surface); padding: 14px 16px">
+                        <div style="font-size: 11px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Validation</div>
+                        <div style="margin-top: 7px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 1.7">SHA-256<br />transfer verify<br />marker completion</div>
+                      </div>
+                    </div>
+
+                    <div style="border: 1.5px solid var(--warn); border-radius: 9px; overflow: hidden">
+                      <div style="padding: 12px 16px; background: var(--warn-quiet); border-bottom: 1px solid var(--warn); display: flex; align-items: center; gap: 9px">
+                        <span aria-hidden="true" style="color: var(--warn)">▲</span>
+                        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; letter-spacing: 0.09em; text-transform: uppercase; font-weight: 600">Remote source handling</span>
+                      </div>
+                      <div style="padding: 16px; background: var(--surface); display: flex; flex-direction: column; gap: 14px">
+                        <p style="margin: 0; font-size: 13.5px; max-width: 78ch">After a backup has been successfully transferred, verified, durably committed to this NAS, and recorded as safe, Backup Manager will delete the original backup artifact from the remote server.</p>
+                        <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--text-2)">
+                          <li>Discovered</li><li aria-hidden="true">→</li><li>Transferred</li><li aria-hidden="true">→</li><li>Verified</li><li aria-hidden="true">→</li><li>Committed</li><li aria-hidden="true">→</li><li>Safe state persisted</li><li aria-hidden="true">→</li><li style="color: var(--warn); font-weight: 600">Remote artifact deleted</li>
+                        </ol>
+                        <label style="display: flex; gap: 10px; padding: 13px 14px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-2); font-size: 13px; cursor: pointer">
+                          <input type="checkbox" checked="{{ acknowledged }}" onChange="{{ toggleAck }}" style="margin-top: 2px; accent-color: var(--accent)" />
+                          <span>I understand the remote backup will be removed only after the NAS copy has been safely committed.</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+                      <button disabled="{{ saveDisabled }}" style="{{ savePrimaryStyle }}">Save, enable &amp; run</button>
+                      <button disabled="{{ saveDisabled }}" style="{{ saveSecondaryStyle }}">Save &amp; enable</button>
+                      <button style="height: 36px; padding: 0 14px; border: 1px solid var(--border); border-radius: 6px; background: transparent; font-size: 13px; color: var(--text-2)">Save disabled</button>
+                      <span style="font-size: 12.5px; color: var(--text-3)">{{ ackHint }}</span>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 22px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 9px 9px">
+                <button onClick="{{ prevStep }}" style="height: 33px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Back</button>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-3)">Step {{ wizardStep }} of 6</span>
+                <button onClick="{{ nextStep }}" style="height: 33px; padding: 0 15px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Continue</button>
+              </div>
+            </section>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isBackups }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+              <div>
+                <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Backups</h1>
+                <p style="margin: 4px 0 0; color: var(--text-2); font-size: 13px">318 retained artifacts · 4.42 TB · catalog current as of 30s ago</p>
+              </div>
+              <div style="display: flex; gap: 9px">
+                <select aria-label="Filter by backup set" style="height: 32px; padding: 0 9px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12.5px">
+                  <option>All backup sets</option><option>Production PostgreSQL</option><option>Billing MySQL</option>
+                </select>
+                <button onClick="{{ openRetentionPreview }}" style="height: 32px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px; font-weight: 500">Preview retention</button>
+              </div>
+            </div>
+            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden">
+              <div style="overflow-x: auto">
+              <table style="width: 100%; min-width: 820px; font-size: 13px">
+                <caption style="text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 11.5px; color: var(--text-3); font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.07em; text-transform: uppercase">Retained backups</caption>
+                <thead>
+                  <tr style="background: var(--surface-2)">
+                    <th scope="col" style="text-align: left; padding: 9px 16px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border); white-space: nowrap">Time</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Backup set</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Artifact</th>
+                    <th scope="col" style="text-align: right; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Size</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Validation</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Retention</th>
+                    <th scope="col" style="text-align: left; padding: 9px 16px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ backups }}" as="b" hint-placeholder-count="8">
+                    <tr onClick="{{ goBackupDetail }}" style="border-bottom: 1px solid var(--border); cursor: pointer" style-hover="background: var(--surface-2)">
+                      <td style="padding: 11px 16px; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; color: var(--text-2)">{{ b.time }}</td>
+                      <td style="padding: 11px 12px">{{ b.setName }}</td>
+                      <td style="padding: 11px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px">{{ b.artifact }}</td>
+                      <td style="padding: 11px 12px; font-family: 'IBM Plex Mono', monospace; text-align: right; white-space: nowrap">{{ b.size }}</td>
+                      <td style="padding: 11px 12px; white-space: nowrap"><span style="{{ b.valStyle }}"><span aria-hidden="true">{{ b.valIcon }}</span>{{ b.valLabel }}</span></td>
+                      <td style="padding: 11px 12px">
+                        <span style="display: inline-flex; gap: 5px; flex-wrap: wrap">
+                          <sc-for list="{{ b.classes }}" as="c" hint-placeholder-count="2">
+                            <span style="{{ c.style }}">{{ c.label }}</span>
+                          </sc-for>
+                        </span>
+                      </td>
+                      <td style="padding: 11px 16px; font-size: 12.5px; color: var(--text-2); white-space: nowrap">{{ b.status }}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 16px; background: var(--surface-2); font-size: 12.5px; color: var(--text-2)">
+                <span>Showing 8 of 318</span>
+                <span style="font-size: 12px; color: var(--text-3)">Backup Manager does not perform application restore — these are retained, verified copies.</span>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isBackupDetail }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; flex-direction: column; gap: 9px">
+              <button onClick="{{ goBackups }}" style="align-self: flex-start; border: none; background: none; padding: 0; font-size: 12.5px; color: var(--accent)">← Backups</button>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+                <h1 style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 19px; font-weight: 600; letter-spacing: -0.01em">postgres-prod-20260828.dump.zst</h1>
+                <span style="display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--ok); border-radius: 999px; background: var(--ok-quiet); font-size: 12px; font-weight: 500"><span aria-hidden="true" style="color: var(--ok)">✓</span>Verified</span>
+                <span style="padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 4px; font-size: 11.5px; font-family: 'IBM Plex Mono', monospace">Daily</span>
+                <span style="padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: 4px; font-size: 11.5px; font-family: 'IBM Plex Mono', monospace">Weekly</span>
+                <span style="padding: 2px 8px; border: 1px solid var(--accent); background: var(--accent-quiet); border-radius: 4px; font-size: 11.5px; font-family: 'IBM Plex Mono', monospace">Protected</span>
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start">
+              <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Artifact</h2>
+                <dl style="margin: 0; padding: 15px 18px; display: grid; grid-template-columns: 150px 1fr; gap: 11px 14px; font-size: 12.5px">
+                  <dt style="color: var(--text-2)">Artifact ID</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; word-break: break-all">art_01J9F4M2QK8Z</dd>
+                  <dt style="color: var(--text-2)">Backup set</dt><dd style="margin: 0">Production PostgreSQL</dd>
+                  <dt style="color: var(--text-2)">Remote original</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; word-break: break-all">prod-db-01:/backups/postgresql/postgres-prod-20260828.dump.zst</dd>
+                  <dt style="color: var(--text-2)">Local path</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; word-break: break-all">/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst</dd>
+                  <dt style="color: var(--text-2)">Producer time</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">2026-08-28 01:58:44 +02:00</dd>
+                  <dt style="color: var(--text-2)">Received</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">2026-08-28 02:00:53 +02:00</dd>
+                  <dt style="color: var(--text-2)">Size</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">14.2 GB · 15246903296 B</dd>
+                  <dt style="color: var(--text-2)">Checksum</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; word-break: break-all">sha256:4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04</dd>
+                  <dt style="color: var(--text-2)">Validation</dt><dd style="margin: 0">Checksum passed · pg_restore --list passed</dd>
+                  <dt style="color: var(--text-2)">Retention classes</dt><dd style="margin: 0">Daily, Weekly, Protected (newest known-good)</dd>
+                  <dt style="color: var(--text-2)">Remote source</dt><dd style="margin: 0">Removed 2026-08-28 02:01:01 after commit</dd>
+                </dl>
+              </section>
+
+              <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Lifecycle</h2>
+                <ol style="margin: 0; padding: 20px 22px 22px; list-style: none">
+                  <sc-for list="{{ lifecycle }}" as="p" hint-placeholder-count="6">
+                    <li style="display: grid; grid-template-columns: 18px 1fr auto; gap: 14px; align-items: start">
+                      <span aria-hidden="true" style="{{ p.railStyle }}"><span style="{{ p.dotStyle }}"></span></span>
+                      <div style="padding-bottom: 18px">
+                        <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; letter-spacing: 0.07em; font-weight: 600">{{ p.label }}</div>
+                        <div style="margin-top: 3px; font-size: 12.5px; color: var(--text-2)">{{ p.detail }}</div>
+                      </div>
+                      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-3); padding-top: 1px">{{ p.time }}</div>
+                    </li>
+                  </sc-for>
+                </ol>
+                <div style="padding: 0 22px 20px; font-size: 12px; color: var(--text-3); max-width: 60ch">Remote deletion is a lifecycle consequence of a proven NAS copy — never an independent file operation.</div>
+              </section>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isActivity }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div>
+              <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Activity</h1>
+              <p style="margin: 4px 0 0; color: var(--text-2); font-size: 13px">Operational timeline across all backup sets</p>
+            </div>
+            <div style="display: flex; gap: 9px; flex-wrap: wrap">
+              <select aria-label="Backup set" style="height: 32px; padding: 0 9px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12.5px"><option>All backup sets</option><option>Production PostgreSQL</option></select>
+              <select aria-label="Severity" style="height: 32px; padding: 0 9px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12.5px"><option>All severities</option><option>Warning and above</option><option>Errors only</option></select>
+              <select aria-label="Event type" style="height: 32px; padding: 0 9px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12.5px"><option>All event types</option><option>Lifecycle</option><option>Retention</option><option>Security</option></select>
+              <select aria-label="Time range" style="height: 32px; padding: 0 9px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 12.5px"><option>Last 24 hours</option><option>Last 7 days</option></select>
+            </div>
+            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden">
+              <ul style="margin: 0; padding: 0; list-style: none">
+                <sc-for list="{{ activity }}" as="ev" hint-placeholder-count="12">
+                  <li style="display: grid; grid-template-columns: 132px 16px 1fr auto; gap: 14px; align-items: baseline; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 13px">
+                    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-3)">{{ ev.stamp }}</span>
+                    <span aria-hidden="true" style="{{ ev.iconStyle }}">{{ ev.icon }}</span>
+                    <span><span style="{{ ev.textStyle }}">{{ ev.text }}</span> <span style="color: var(--text-3)">{{ ev.detail }}</span></span>
+                    <span style="font-size: 12px; color: var(--text-3)">{{ ev.setName }}</span>
+                  </li>
+                </sc-for>
+              </ul>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isQuarantine }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div>
+              <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Quarantine</h1>
+              <p style="margin: 4px 0 0; color: var(--text-2); font-size: 13px">Artifacts held back from the catalog. Their remote originals are retained until the issue is resolved.</p>
+            </div>
+            <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden">
+              <div style="overflow-x: auto">
+              <table style="width: 100%; min-width: 900px; font-size: 13px">
+                <thead>
+                  <tr style="background: var(--surface-2)">
+                    <th scope="col" style="text-align: left; padding: 9px 16px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Backup</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Backup set</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Reason</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Detected</th>
+                    <th scope="col" style="text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Remote source</th>
+                    <th scope="col" style="text-align: right; padding: 9px 16px; font-size: 11.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--border)">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ quarantine }}" as="q" hint-placeholder-count="2">
+                    <tr style="border-bottom: 1px solid var(--border)">
+                      <td style="padding: 12px 16px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px">{{ q.artifact }}</td>
+                      <td style="padding: 12px 12px">{{ q.setName }}</td>
+                      <td style="padding: 12px 12px"><span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="color: var(--danger)">✕</span>{{ q.reason }}</span></td>
+                      <td style="padding: 12px 12px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; color: var(--text-2)">{{ q.detected }}</td>
+                      <td style="padding: 12px 12px; font-size: 12.5px; color: var(--text-2)">{{ q.remote }}</td>
+                      <td style="padding: 12px 16px">
+                        <span style="display: flex; gap: 7px; justify-content: flex-end">
+                          <button style="height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12px">Inspect</button>
+                          <button style="height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12px">Revalidate</button>
+                          <button style="height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12px">Retry ingestion</button>
+                        </span>
+                      </td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+              </div>
+            </div>
+            <div style="font-size: 12.5px; color: var(--text-3)">Quarantined artifacts are never counted as known-good, and never trigger remote deletion.</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; flex-direction: column; gap: 16px">
+            <div>
+              <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em">Settings</h1>
+              <p style="margin: 4px 0 0; color: var(--text-2); font-size: 13px">Service behaviour, platform integration and build information</p>
+            </div>
+            <div style="display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; align-items: start">
+              <div style="display: flex; flex-direction: column; gap: 14px">
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Service</h2>
+                  <div style="padding: 16px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(196px, 1fr)); gap: 15px 18px">
+                    <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Polling interval</span><select style="height: 36px; padding: 0 9px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px"><option>30 seconds</option><option>60 seconds</option></select></label>
+                    <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Log level</span><select style="height: 36px; padding: 0 9px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-size: 13px"><option>info</option><option>debug</option><option>warn</option></select></label>
+                    <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Storage warning threshold</span><input value="80%" style="height: 36px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" /></label>
+                    <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Storage critical threshold</span><input value="92%" style="height: 36px; padding: 0 11px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text); font-family: 'IBM Plex Mono', monospace; font-size: 13px" /></label>
+                    <div style="grid-column: 1 / -1; display: flex; flex-direction: column; gap: 7px">
+                      <span style="font-size: 12px; font-weight: 500; color: var(--text-2)">Default retention for new sets</span>
+                      <div style="display: flex; gap: 9px; flex-wrap: wrap; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px">
+                        <span style="padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2)">7 daily</span>
+                        <span style="padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2)">13 weekly</span>
+                        <span style="padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2)">12 monthly</span>
+                        <span style="padding: 5px 10px; border: 1px solid var(--ok); border-radius: 6px; background: var(--ok-quiet)">protect known-good</span>
+                      </div>
+                    </div>
+                  </div>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Notifications</h2>
+                  <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
+                    <div style="display: flex; gap: 11px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2)">
+                      <span aria-hidden="true" style="color: var(--text-3)">i</span>
+                      <div style="font-size: 12.5px; color: var(--text-2); max-width: 70ch">{{ notifyCopy }}</div>
+                    </div>
+                    <label style="display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; cursor: pointer"><input type="checkbox" checked="{{ true }}" style="accent-color: var(--accent)" /><span style="flex: 1">Webhook notifications</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--text-3)">https://hooks.internal/bm</span></label>
+                    <label style="display: flex; align-items: center; gap: 10px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 7px; font-size: 13px; cursor: pointer"><input type="checkbox" style="accent-color: var(--accent)" /><span style="flex: 1">Email digest</span><span style="font-size: 12px; color: var(--text-3)">daily 08:00</span></label>
+                  </div>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--warn); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Catalog recovery</h2>
+                  <div style="padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
+                    <div style="font-size: 13.5px; font-weight: 600">Existing backup data detected</div>
+                    <p style="margin: 0; font-size: 13px; color: var(--text-2); max-width: 74ch">Backup files were found in the configured storage location, but they are not currently present in the Backup Manager catalog. Scanning is read-only — no files will be deleted.</p>
+                    <div style="display: flex; gap: 9px; flex-wrap: wrap">
+                      <button onClick="{{ openCatalogRebuild }}" style="height: 34px; padding: 0 13px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Scan backup storage</button>
+                      <button style="height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Dismiss for now</button>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 14px">
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">Platform</h2>
+                  <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: 128px 1fr; gap: 11px 14px; font-size: 13px">
+                    <dt style="color: var(--text-2)">Platform</dt><dd style="margin: 0; font-weight: 500">{{ platformName }}</dd>
+                    <dt style="color: var(--text-2)">Integration</dt><dd style="margin: 0">{{ platformIntegration }}</dd>
+                    <dt style="color: var(--text-2)">Authentication</dt><dd style="margin: 0">{{ platformAuth }}</dd>
+                    <dt style="color: var(--text-2)">Deployment</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px">{{ platformDeployment }}</dd>
+                    <dt style="color: var(--text-2)">Storage mount</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px">{{ platformMount }}</dd>
+                  </dl>
+                  <div style="padding: 0 18px 16px; display: flex; flex-direction: column; gap: 8px">
+                    <div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Capabilities</div>
+                    <div style="display: flex; flex-direction: column; gap: 6px">
+                      <sc-for list="{{ capabilities }}" as="c" hint-placeholder-count="5">
+                        <div style="display: flex; align-items: center; gap: 9px; font-size: 12.5px">
+                          <span aria-hidden="true" style="{{ c.iconStyle }}">{{ c.icon }}</span>
+                          <span style="flex: 1">{{ c.label }}</span>
+                          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--text-3)">{{ c.value }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </section>
+
+                <section style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow)">
+                  <h2 style="margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); font-weight: 500">System information</h2>
+                  <dl style="margin: 0; padding: 16px 18px; display: grid; grid-template-columns: 1fr auto; gap: 10px 14px; font-size: 12.5px">
+                    <dt style="color: var(--text-2)">Backup Manager version</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.3.0</dd>
+                    <dt style="color: var(--text-2)">Core version</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.3.0</dd>
+                    <dt style="color: var(--text-2)">Embedded rclone</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">1.68.2</dd>
+                    <dt style="color: var(--text-2)">Database schema</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">41</dd>
+                    <dt style="color: var(--text-2)">Platform adapter</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">{{ adapterVersion }}</dd>
+                    <dt style="color: var(--text-2)">Architecture</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">linux/arm64</dd>
+                    <dt style="color: var(--text-2)">Build commit</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">9f4c1ab</dd>
+                  </dl>
+                </section>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+      </div>
+    </main>
+  </div>
+
+  <sc-if value="{{ retentionPreviewOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; inset: 0; background: rgba(12,12,11,0.45); display: grid; place-items: center; padding: 28px; z-index: 40">
+      <div role="dialog" aria-modal="true" aria-label="Retention preview" style="width: 100%; max-width: 620px; max-height: 84vh; overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 11px; box-shadow: var(--shadow-lg)">
+        <div style="padding: 18px 22px; border-bottom: 1px solid var(--border)">
+          <h2 style="margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">Retention preview</h2>
+          <p style="margin: 4px 0 0; font-size: 12.5px; color: var(--text-2)">Production PostgreSQL · plan generated 12 seconds ago by the service</p>
+        </div>
+        <sc-if value="{{ planStale }}" hint-placeholder-val="{{ false }}">
+          <div role="alert" style="margin: 16px 22px 0; display: flex; gap: 12px; padding: 14px 15px; background: var(--warn-quiet); border: 1px solid var(--warn); border-radius: 8px">
+            <span aria-hidden="true" style="color: var(--warn)">▲</span>
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px">Retention preview changed</div>
+              <div style="margin-top: 4px; font-size: 12.5px; color: var(--text-2)">The backup inventory changed after this preview was created. No files were deleted. Review the updated retention plan before continuing.</div>
+              <button onClick="{{ refreshPlan }}" style="margin-top: 10px; height: 30px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 12.5px; font-weight: 500">Review new plan</button>
+            </div>
+          </div>
+        </sc-if>
+        <div style="padding: 18px 22px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 8px; margin: 18px 22px 0; overflow: hidden">
+          <div style="background: var(--surface); padding: 13px 15px"><div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Keep</div><div style="margin-top: 5px; font-size: 20px; font-weight: 600">32</div></div>
+          <div style="background: var(--surface); padding: 13px 15px"><div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Delete</div><div style="margin-top: 5px; font-size: 20px; font-weight: 600; color: var(--danger)">4</div></div>
+          <div style="background: var(--surface); padding: 13px 15px"><div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3)">Reclaim</div><div style="margin-top: 5px; font-size: 20px; font-weight: 600">51.8 GB</div></div>
+        </div>
+        <div style="padding: 18px 22px; display: flex; flex-direction: column; gap: 16px">
+          <div>
+            <div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.09em; text-transform: uppercase; color: var(--ok); margin-bottom: 8px">Keep</div>
+            <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px">
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Aug 28</span><span style="color: var(--text-2)">Daily + Weekly + Protected</span></li>
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Aug 27</span><span style="color: var(--text-2)">Daily</span></li>
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Aug 01</span><span style="color: var(--text-2)">Monthly</span></li>
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Jul 01</span><span style="color: var(--text-2)">Monthly</span></li>
+              <li style="color: var(--text-3)">+ 28 more</li>
+            </ul>
+          </div>
+          <div>
+            <div style="font-size: 10.5px; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.09em; text-transform: uppercase; color: var(--danger); margin-bottom: 8px">Delete</div>
+            <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px">
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Aug 13</span><span style="color: var(--text-2)">Not selected by current policy</span></li>
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Aug 06</span><span style="color: var(--text-2)">Not selected by current policy</span></li>
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Jul 23</span><span style="color: var(--text-2)">Not selected by current policy</span></li>
+              <li style="display: flex; justify-content: space-between; gap: 12px"><span style="font-family: 'IBM Plex Mono', monospace">Jul 16</span><span style="color: var(--text-2)">Not selected by current policy</span></li>
+            </ul>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 22px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 10px 10px">
+          <button onClick="{{ toggleStale }}" style="border: none; background: none; padding: 0; font-size: 12px; color: var(--text-3)">{{ staleToggleLabel }}</button>
+          <span style="display: flex; gap: 9px">
+            <button onClick="{{ closeDialogs }}" style="height: 34px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Cancel</button>
+            <button onClick="{{ openApplyRetention }}" disabled="{{ planStale }}" style="{{ applyStyle }}">Continue…</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ applyRetentionOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; inset: 0; background: rgba(12,12,11,0.45); display: grid; place-items: center; padding: 28px; z-index: 50">
+      <div role="dialog" aria-modal="true" aria-labelledby="applyTitle" style="width: 100%; max-width: 476px; background: var(--surface); border: 1px solid var(--danger); border-radius: 11px; box-shadow: var(--shadow-lg)">
+        <div style="padding: 20px 22px 0">
+          <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--danger)">Destructive action</div>
+          <h2 id="applyTitle" style="margin: 8px 0 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em">Apply retention</h2>
+        </div>
+        <div style="padding: 14px 22px 20px; display: flex; flex-direction: column; gap: 12px; font-size: 13.5px">
+          <p style="margin: 0">4 retained backup files will be permanently removed from NAS storage.</p>
+          <p style="margin: 0; color: var(--text-2)">51.8 GB will be reclaimed. This is the exact plan you reviewed — it will not be recalculated.</p>
+          <div style="display: flex; align-items: center; gap: 9px; padding: 11px 12px; background: var(--ok-quiet); border: 1px solid var(--ok); border-radius: 7px; font-size: 12.5px">
+            <span aria-hidden="true" style="color: var(--ok)">✓</span><span>The newest known-good backup is protected.</span>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 9px; padding: 14px 22px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 10px 10px">
+          <button onClick="{{ closeDialogs }}" style="height: 36px; padding: 0 15px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px; font-weight: 500">Cancel</button>
+          <button onClick="{{ closeDialogs }}" style="height: 36px; padding: 0 15px; border: 1px solid var(--danger); border-radius: 6px; background: var(--danger); color: var(--surface); font-size: 13px; font-weight: 600">Delete 4 backups</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ catalogRebuildOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position: fixed; inset: 0; background: rgba(12,12,11,0.45); display: grid; place-items: center; padding: 28px; z-index: 50">
+      <div role="dialog" aria-modal="true" aria-labelledby="rebuildTitle" style="width: 100%; max-width: 476px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 11px; box-shadow: var(--shadow-lg)">
+        <div style="padding: 20px 22px 0">
+          <h2 id="rebuildTitle" style="margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em">Catalog rebuild preview</h2>
+        </div>
+        <div style="padding: 14px 22px 20px; display: flex; flex-direction: column; gap: 11px; font-size: 13.5px">
+          <dl style="margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 9px 14px; font-size: 13px">
+            <dt style="color: var(--text-2)">Backup artifacts discovered</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace">47</dd>
+            <dt style="color: var(--text-2)">Valid</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; color: var(--ok)">45</dd>
+            <dt style="color: var(--text-2)">Require review</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; color: var(--warn)">2</dd>
+          </dl>
+          <div style="display: flex; align-items: center; gap: 9px; padding: 11px 12px; background: var(--surface-3); border: 1px solid var(--border); border-radius: 7px; font-size: 12.5px">
+            <span aria-hidden="true" style="color: var(--text-3)">i</span><span>No files will be deleted. Artifacts requiring review go to Quarantine.</span>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: flex-end; gap: 9px; padding: 14px 22px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 10px 10px">
+          <button onClick="{{ closeDialogs }}" style="height: 36px; padding: 0 15px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); font-size: 13px">Cancel</button>
+          <button onClick="{{ closeDialogs }}" style="height: 36px; padding: 0 15px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: var(--surface); font-size: 13px; font-weight: 600">Rebuild catalog</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</sc-if>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:940},&quot;startTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;'light' | 'dark'&quot;,&quot;section&quot;:&quot;Demo state&quot;},&quot;startPlatform&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;generic&quot;,&quot;ugos&quot;,&quot;synology&quot;,&quot;truenas&quot;,&quot;unraid&quot;,&quot;openmediavault&quot;,&quot;proxmox&quot;],&quot;default&quot;:&quot;generic&quot;,&quot;tsType&quot;:&quot;PlatformId&quot;,&quot;section&quot;:&quot;Demo state&quot;},&quot;showVersionMismatch&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Risk states&quot;},&quot;showHostKeyAlert&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Risk states&quot;}}">
+const PLATFORMS = {
+  generic: { name: "Generic Docker / Linux", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Docker Compose", mount: "/data/backups", adapter: "generic 1.3.0" },
+  ugos: { name: "UGREEN UGOS Pro", integration: "Native app", auth: "UGOS session", chrome: true, picker: true, nativeNotify: true, deployment: "UGOS package", mount: "/volume1/backup-manager", adapter: "ugos 1.3.0" },
+  synology: { name: "Synology DSM", integration: "Embedded web app", auth: "Backup Manager local account", chrome: true, picker: false, nativeNotify: false, deployment: "DSM package", mount: "/volume1/backup-manager", adapter: "synology 1.2.4" },
+  truenas: { name: "TrueNAS", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "TrueNAS app (container)", mount: "/mnt/tank/backup-manager", adapter: "truenas 1.1.0" },
+  unraid: { name: "Unraid", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Community Applications", mount: "/mnt/user/backups", adapter: "unraid 1.1.0" },
+  openmediavault: { name: "OpenMediaVault", integration: "Compose plugin container", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "omv-compose", mount: "/srv/dev-disk-by-uuid/backups", adapter: "omv 1.0.2" },
+  proxmox: { name: "Proxmox VE", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Unprivileged LXC", mount: "/mnt/backup-manager", adapter: "proxmox 1.0.1" }
+};
+
+const NAV = [
+  { id: "dashboard", label: "Dashboard", glyph: "◇" },
+  { id: "sets", label: "Backup sets", glyph: "▤", count: "7" },
+  { id: "backups", label: "Backups", glyph: "▥", count: "318" },
+  { id: "activity", label: "Activity", glyph: "≡" },
+  { id: "quarantine", label: "Quarantine", glyph: "⊘", count: "2", alert: true },
+  { id: "settings", label: "Settings", glyph: "⚙" }
+];
+
+const WSTEPS = ["Source", "Authentication", "Verify server", "Discovery", "Storage &amp; retention", "Review"];
+
+const SETS = [
+  { name: "Production PostgreSQL", host: "prod-db-01.internal", state: "healthy", note: "Verified nightly dump, application validation enabled.", newest: "42 min ago", lastRun: "02:01 today", retention: "7 / 13 / 12", validation: "Passed", current: "transferring 59%" },
+  { name: "Billing MySQL", host: "billing-db.internal", state: "stale", note: "No verified backup received for 31 hours. Expected within 24 hours.", newest: "31 hours ago", lastRun: "02:00 yesterday", retention: "7 / 13 / 12", validation: "Passed", current: "idle" },
+  { name: "Auth service config", host: "prod-db-01.internal", state: "failing", note: "Halted — SSH host key changed. Remote artifacts are untouched.", newest: "4 hours ago", lastRun: "failed 04:12", retention: "7 / 4 / 6", validation: "Not run", current: "halted" },
+  { name: "Media archive", host: "media-01.internal", state: "healthy", note: "Weekly cold archive, checksum only.", newest: "3 days ago", lastRun: "Sun 01:30", retention: "0 / 8 / 24", validation: "Passed", current: "reconciling 38%" },
+  { name: "Object store snapshots", host: "minio-01.internal", state: "healthy", note: "Hourly manifests, atomic rename completion.", newest: "18 min ago", lastRun: "hourly", retention: "14 / 8 / 6", validation: "Passed", current: "idle" },
+  { name: "Edge appliance configs", host: "edge-gw-02.internal", state: "healthy", note: "Small config bundles, marker completion.", newest: "6 hours ago", lastRun: "20:00 yesterday", retention: "7 / 13 / 12", validation: "Passed", current: "idle" }
+];
+
+const STATE_STYLE = {
+  healthy: { icon: "●", label: "Healthy", color: "var(--ok)", bg: "var(--ok-quiet)" },
+  stale: { icon: "▲", label: "Stale", color: "var(--warn)", bg: "var(--warn-quiet)" },
+  failing: { icon: "✕", label: "Failing", color: "var(--danger)", bg: "var(--danger-quiet)" },
+  degraded: { icon: "▲", label: "Degraded", color: "var(--warn)", bg: "var(--warn-quiet)" }
+};
+
+const BACKUPS = [
+  { time: "Aug 28 02:00", setName: "Production PostgreSQL", artifact: "postgres-prod-20260828.dump.zst", size: "14.2 GB", val: "ok", classes: ["Daily", "Weekly", "Protected"], status: "Remote source removed" },
+  { time: "Aug 28 01:30", setName: "Object store snapshots", artifact: "minio-manifest-20260828T0130.tar", size: "812 MB", val: "ok", classes: ["Daily"], status: "Remote source removed" },
+  { time: "Aug 27 02:00", setName: "Production PostgreSQL", artifact: "postgres-prod-20260827.dump.zst", size: "14.0 GB", val: "ok", classes: ["Daily"], status: "Remote source removed" },
+  { time: "Aug 27 02:00", setName: "Billing MySQL", artifact: "billing-20260827.sql.gz", size: "3.4 GB", val: "ok", classes: ["Daily", "Weekly"], status: "Remote source removed" },
+  { time: "Aug 26 04:12", setName: "Auth service config", artifact: "auth-config-20260826.tar.zst", size: "42 MB", val: "warn", classes: ["Daily"], status: "Quarantined — checksum" },
+  { time: "Aug 25 01:30", setName: "Media archive", artifact: "media-week34.tar", size: "1.61 TB", val: "ok", classes: ["Weekly"], status: "Remote source removed" },
+  { time: "Aug 21 02:00", setName: "Production PostgreSQL", artifact: "postgres-prod-20260821.dump.zst", size: "13.8 GB", val: "ok", classes: ["Weekly"], status: "Remote source removed" },
+  { time: "Aug 01 02:00", setName: "Production PostgreSQL", artifact: "postgres-prod-20260801.dump.zst", size: "13.1 GB", val: "ok", classes: ["Monthly"], status: "Remote source removed" }
+];
+
+const LIFECYCLE = [
+  { label: "DISCOVERED", time: "02:00:11", detail: "Completion manifest present on prod-db-01" },
+  { label: "TRANSFERRED", time: "02:00:53", detail: "14.2 GB over SFTP · 118 MB/s average" },
+  { label: "VERIFIED", time: "02:00:59", detail: "SHA-256 matched producer manifest" },
+  { label: "COMMITTED", time: "02:01:00", detail: "Durably written and fsynced to NAS storage" },
+  { label: "SAFE STATE PERSISTED", time: "02:01:00", detail: "Catalog records artifact as known-good" },
+  { label: "REMOTE SOURCE DELETED", time: "02:01:01", detail: "Original removed from prod-db-01 after commit" },
+  { label: "COMPLETE", time: "02:01:01", detail: "Retention classification applied" }
+];
+
+const ACTIVITY = [
+  { stamp: "Aug 29 04:12:08", sev: "error", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", setName: "Auth service config" },
+  { stamp: "Aug 29 03:40:22", sev: "warn", text: "Backup stale", detail: "no verified backup for 31 hours", setName: "Billing MySQL" },
+  { stamp: "Aug 29 02:01:01", sev: "ok", text: "Remote source deleted", detail: "after durable commit", setName: "Production PostgreSQL" },
+  { stamp: "Aug 29 02:01:00", sev: "ok", text: "Backup committed", detail: "14.2 GB", setName: "Production PostgreSQL" },
+  { stamp: "Aug 29 02:00:59", sev: "ok", text: "Verification passed", detail: "SHA-256", setName: "Production PostgreSQL" },
+  { stamp: "Aug 29 02:00:53", sev: "info", text: "Transfer complete", detail: "1m 03s", setName: "Production PostgreSQL" },
+  { stamp: "Aug 29 02:00:11", sev: "info", text: "Backup discovered", detail: "completion manifest", setName: "Production PostgreSQL" },
+  { stamp: "Aug 29 01:35:40", sev: "ok", text: "Retention completed", detail: "4 deleted · 51.8 GB reclaimed", setName: "Object store snapshots" },
+  { stamp: "Aug 28 22:14:03", sev: "warn", text: "Validation failed", detail: "artifact quarantined", setName: "Auth service config" },
+  { stamp: "Aug 28 19:02:55", sev: "info", text: "Configuration updated", detail: "retention weekly 8 → 13", setName: "Media archive" },
+  { stamp: "Aug 28 12:44:17", sev: "warn", text: "Storage warning", detail: "81% of pool used", setName: "—" },
+  { stamp: "Aug 28 02:00:04", sev: "info", text: "Transfer started", detail: "3.4 GB", setName: "Billing MySQL" }
+];
+
+const QUARANTINE = [
+  { artifact: "auth-config-20260826.tar.zst", setName: "Auth service config", reason: "Checksum mismatch", detected: "Aug 26 04:14", remote: "Retained on remote" },
+  { artifact: "billing-20260824.sql.gz", setName: "Billing MySQL", reason: "Validation failed", detected: "Aug 24 02:19", remote: "Retained on remote" }
+];
+
+const SEV = {
+  ok: { icon: "✓", color: "var(--ok)" },
+  info: { icon: "·", color: "var(--text-3)" },
+  warn: { icon: "▲", color: "var(--warn)" },
+  error: { icon: "✕", color: "var(--danger)" }
+};
+
+class Component extends DCLogic {
+  state = {
+    view: "dashboard",
+    auth: null,
+    platform: this.props.startPlatform || "generic",
+    theme: this.props.startTheme || "light",
+    wizardStep: 1,
+    acknowledged: false,
+    hostKeyAlert: this.props.showHostKeyAlert !== false,
+    versionMismatch: this.props.showVersionMismatch === true,
+    retentionPreviewOpen: false,
+    applyRetentionOpen: false,
+    catalogRebuildOpen: false,
+    planStale: false
+  };
+
+  componentDidMount() { this.syncRoot(); }
+  componentDidUpdate() { this.syncRoot(); }
+
+  syncRoot() {
+    const el = document.documentElement;
+    el.setAttribute("data-theme", this.state.theme);
+    el.setAttribute("data-provider", this.state.platform);
+  }
+
+  set(patch) { this.setState(patch); }
+
+  navStyle(active, alert) {
+    const base = "display: flex; align-items: center; gap: 9px; width: 100%; height: 33px; padding: 0 10px; border: none; border-radius: 7px; font-size: 13.5px; text-align: left; ";
+    return active
+      ? base + "background: var(--accent-quiet); color: var(--text); font-weight: 600"
+      : base + "background: transparent; color: var(--text-2); font-weight: 400";
+  }
+
+  renderVals() {
+    const s = this.state;
+    const p = PLATFORMS[s.platform];
+    const view = (v) => () => this.set({ view: v, retentionPreviewOpen: false, applyRetentionOpen: false, catalogRebuildOpen: false });
+
+    const navItems = NAV.map((n) => ({
+      label: n.label,
+      glyph: n.glyph,
+      count: n.count || "",
+      current: s.view === n.id ? "page" : undefined,
+      onClick: view(n.id),
+      style: this.navStyle(s.view === n.id),
+      countStyle:
+        "font-family: 'IBM Plex Mono', monospace; font-size: 11px; padding: 1px 6px; border-radius: 999px; " +
+        (n.alert
+          ? "background: var(--warn-quiet); color: var(--text); border: 1px solid var(--warn)"
+          : "color: var(--text-3)")
+    }));
+
+    const sets = SETS.map((x) => {
+      const st = STATE_STYLE[x.state];
+      return {
+        ...x,
+        icon: st.icon,
+        stateLabel: st.label,
+        cardStyle:
+          "background: var(--surface); border: 1px solid " +
+          (x.state === "healthy" ? "var(--border)" : st.color) +
+          "; border-radius: 10px; box-shadow: var(--shadow); display: flex; flex-direction: column",
+        badgeStyle:
+          "display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; white-space: nowrap; font-size: 12px; font-weight: 500; border: 1px solid " +
+          st.color + "; background: " + st.bg,
+        goSetDetail: view("setDetail")
+      };
+    });
+
+    const backups = BACKUPS.map((b) => ({
+      ...b,
+      valIcon: b.val === "ok" ? "✓" : "▲",
+      valLabel: b.val === "ok" ? "Verified" : "Failed",
+      valStyle:
+        "display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: " +
+        (b.val === "ok" ? "var(--text)" : "var(--danger)"),
+      classes: b.classes.map((c) => ({
+        label: c,
+        style:
+          "padding: 2px 7px; border-radius: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; border: 1px solid " +
+          (c === "Protected" ? "var(--accent); background: var(--accent-quiet)" : "var(--border-strong)")
+      }))
+    }));
+
+    const lifecycle = LIFECYCLE.map((l, i) => ({
+      ...l,
+      railStyle:
+        "display: grid; place-items: center; padding-top: 3px; position: relative; " +
+        (i < LIFECYCLE.length - 1
+          ? "background: linear-gradient(var(--border), var(--border)) no-repeat center / 1px 100%"
+          : ""),
+      dotStyle:
+        "display: block; width: 9px; height: 9px; border-radius: 50%; outline: 3px solid var(--surface); background: " +
+        (l.label.indexOf("REMOTE") === 0 ? "var(--warn)" : "var(--ok)")
+    }));
+
+    const activity = ACTIVITY.map((e) => ({
+      stamp: e.stamp,
+      text: e.text,
+      detail: e.detail,
+      setName: e.setName,
+      icon: SEV[e.sev].icon,
+      iconStyle: "color: " + SEV[e.sev].color + "; text-align: center",
+      textStyle: e.sev === "error" || e.sev === "warn" ? "font-weight: 600" : ""
+    }));
+
+    const recentActivity = ACTIVITY.slice(0, 6).map((e) => ({
+      time: e.stamp.slice(7, 15),
+      text: e.text,
+      setName: e.setName,
+      icon: SEV[e.sev].icon,
+      iconStyle: "color: " + SEV[e.sev].color + "; text-align: center"
+    }));
+
+    const wizardSteps = WSTEPS.map((label, i) => {
+      const n = i + 1;
+      const active = s.wizardStep === n;
+      const done = s.wizardStep > n;
+      return {
+        label: label.replace("&amp;", "&"),
+        num: "0" + n,
+        onClick: () => this.set({ wizardStep: n }),
+        tickStyle: done ? "color: var(--ok)" : "opacity: 0",
+        style:
+          "display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 9px 10px; border-radius: 8px; text-align: left; border: 1px solid " +
+          (active ? "var(--accent)" : "var(--border)") +
+          "; background: " + (active ? "var(--accent-quiet)" : "var(--surface)") +
+          "; color: " + (active ? "var(--text)" : "var(--text-2)")
+      };
+    });
+
+    const capabilities = [
+      { label: "Native authentication", on: p.auth.indexOf("local") === -1, value: p.auth.indexOf("local") === -1 ? "available" : "not available" },
+      { label: "Native notifications", on: p.nativeNotify, value: p.nativeNotify ? "available" : "webhook fallback" },
+      { label: "Storage picker", on: p.picker, value: p.picker ? "available" : "manual path" },
+      { label: "Embedded window", on: p.chrome, value: p.chrome ? "available" : "standalone" },
+      { label: "App-store packaging", on: p.deployment.indexOf("package") > -1, value: p.deployment }
+    ].map((c) => ({
+      label: c.label,
+      value: c.value,
+      icon: c.on ? "✓" : "–",
+      iconStyle: "width: 12px; text-align: center; color: " + (c.on ? "var(--ok)" : "var(--text-3)")
+    }));
+
+    const saveDisabled = !s.acknowledged;
+    const primaryBase = "height: 36px; padding: 0 15px; border-radius: 6px; font-size: 13px; font-weight: 600; ";
+    const secondaryBase = "height: 36px; padding: 0 14px; border-radius: 6px; font-size: 13px; font-weight: 500; ";
+
+    return {
+      showAuth: s.auth !== null,
+      showApp: s.auth === null,
+      authIsLogin: s.auth === "login",
+      authIsEnroll: s.auth === "enroll",
+      authIsExpired: s.auth === "expired",
+      goLogin: () => this.set({ auth: "login" }),
+      goEnroll: () => this.set({ auth: "enroll" }),
+      goExpired: () => this.set({ auth: "expired" }),
+      enterApp: () => this.set({ auth: null, view: "dashboard" }),
+
+      platform: s.platform,
+      onPlatformChange: (e) => this.set({ platform: e.target.value }),
+      platformName: p.name,
+      platformIntegration: p.integration,
+      platformAuth: p.auth,
+      platformDeployment: p.deployment,
+      platformMount: p.mount,
+      adapterVersion: p.adapter,
+      hasWindowChrome: p.chrome,
+      storagePickerLabel: p.picker ? "Browse volumes…" : "Validate path",
+      storagePickerHint: p.picker
+        ? "Uses the native " + p.name + " storage picker."
+        : "This platform integration has no native storage picker — enter the mounted path directly (" + p.mount + ").",
+      notifyCopy: p.nativeNotify
+        ? "Native " + p.name + " notifications are available and enabled for this platform integration."
+        : "Native NAS notifications are not available for this platform integration. Backup Manager webhook notifications are enabled instead.",
+      capabilities,
+
+      theme: s.theme,
+      themeLabel: s.theme === "light" ? "Dark" : "Light",
+      toggleTheme: () => this.set({ theme: s.theme === "light" ? "dark" : "light" }),
+
+      navItems,
+      isDashboard: s.view === "dashboard",
+      isSets: s.view === "sets",
+      isSetDetail: s.view === "setDetail",
+      isWizard: s.view === "wizard",
+      isBackups: s.view === "backups",
+      isBackupDetail: s.view === "backupDetail",
+      isActivity: s.view === "activity",
+      isQuarantine: s.view === "quarantine",
+      isSettings: s.view === "settings",
+      goSets: view("sets"),
+      goSetDetail: view("setDetail"),
+      goWizard: () => this.set({ view: "wizard", wizardStep: 1 }),
+      goBackups: view("backups"),
+      goBackupDetail: view("backupDetail"),
+      goActivity: view("activity"),
+
+      hostKeyAlert: s.hostKeyAlert && (s.view === "dashboard" || s.view === "sets"),
+      dismissHostKey: () => this.set({ hostKeyAlert: false }),
+      versionMismatch: s.versionMismatch,
+      dismissVersion: () => this.set({ versionMismatch: false }),
+
+      sets,
+      backups,
+      lifecycle,
+      activity,
+      recentActivity,
+      quarantine: QUARANTINE,
+
+      wizardStep: s.wizardStep,
+      wizardSteps,
+      w1: s.wizardStep === 1,
+      w2: s.wizardStep === 2,
+      w3: s.wizardStep === 3,
+      w4: s.wizardStep === 4,
+      w5: s.wizardStep === 5,
+      w6: s.wizardStep === 6,
+      prevStep: () => this.set({ wizardStep: Math.max(1, s.wizardStep - 1) }),
+      nextStep: () => this.set({ wizardStep: Math.min(6, s.wizardStep + 1) }),
+      acknowledged: s.acknowledged,
+      toggleAck: () => this.set({ acknowledged: !s.acknowledged }),
+      saveDisabled,
+      ackHint: saveDisabled ? "Acknowledge remote-source handling to enable saving." : "",
+      savePrimaryStyle: saveDisabled
+        ? primaryBase + "border: 1px solid var(--border); background: var(--surface-3); color: var(--text-3); cursor: not-allowed"
+        : primaryBase + "border: 1px solid var(--accent); background: var(--accent); color: var(--surface)",
+      saveSecondaryStyle: saveDisabled
+        ? secondaryBase + "border: 1px solid var(--border); background: var(--surface-3); color: var(--text-3); cursor: not-allowed"
+        : secondaryBase + "border: 1px solid var(--border-strong); background: var(--surface); color: var(--text)",
+
+      retentionPreviewOpen: s.retentionPreviewOpen,
+      applyRetentionOpen: s.applyRetentionOpen,
+      catalogRebuildOpen: s.catalogRebuildOpen,
+      planStale: s.planStale,
+      staleToggleLabel: s.planStale ? "demo: mark plan current" : "demo: simulate stale plan",
+      toggleStale: () => this.set({ planStale: !s.planStale }),
+      refreshPlan: () => this.set({ planStale: false }),
+      applyStyle: s.planStale
+        ? primaryBase + "border: 1px solid var(--border); background: var(--surface-3); color: var(--text-3); cursor: not-allowed"
+        : primaryBase + "border: 1px solid var(--danger); background: transparent; color: var(--danger)",
+      openRetentionPreview: () => this.set({ retentionPreviewOpen: true, applyRetentionOpen: false }),
+      openApplyRetention: () => this.set({ applyRetentionOpen: true, retentionPreviewOpen: false }),
+      openCatalogRebuild: () => this.set({ catalogRebuildOpen: true }),
+      closeDialogs: () => this.set({ retentionPreviewOpen: false, applyRetentionOpen: false, catalogRebuildOpen: false })
+    };
+  }
+}
+</script>
+</body>
+</html>

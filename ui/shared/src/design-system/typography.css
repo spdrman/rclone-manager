@@ -1,0 +1,42 @@
+:root {
+  --font-sans: "IBM Plex Sans", Helvetica, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-xs: 11px;   --text-sm: 12.5px; --text-base: 13px;
+  --text-md: 14px;   --text-lg: 17px;   --text-xl: 22px;  --text-2xl: 25px;
+
+  --leading-tight: 1.2; --leading-normal: 1.45; --leading-loose: 1.7;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  text-wrap: pretty;
+}
+
+h1 { font-size: var(--text-xl); font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+h2 { font-size: var(--text-lg); font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+
+/* Every machine-readable value — paths, hashes, timestamps, sizes — is mono.
+   This is load-bearing: it is how an operator scans the UI. */
+.mono, code, kbd { font-family: var(--font-mono); }
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--text); text-decoration: underline; }
+:focus-visible { outline: var(--focus-ring); outline-offset: var(--focus-offset); }

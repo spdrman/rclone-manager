@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #f2f2f0;
+    color: #191a19;
+    font-family: "IBM Plex Sans", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    text-wrap: pretty;
+  }
+  a { color: oklch(0.52 0.09 255); text-decoration: none; }
+  a:hover { color: #191a19; text-decoration: underline; }
+  :focus-visible { outline: 2px solid oklch(0.52 0.09 255); outline-offset: 2px; }
+</style>
+</helmet>
+
+<section style="padding: 40px 44px 72px; display: flex; flex-direction: column; gap: 28px">
+  <header style="display: flex; flex-direction: column; gap: 8px; max-width: 78ch">
+    <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.11em; text-transform: uppercase; color: #8b8d8a">Turn 1 · logo exploration</div>
+    <h1 style="margin: 0; font-size: 25px; font-weight: 600; letter-spacing: -0.02em">rclone-manager — five marks</h1>
+    <p style="margin: 0; font-size: 13.5px; color: #5b5d5b">All geometric and single-colour, so they hold up at 16px in a NAS tab bar and inside an app-store tile. Each option shows the mark, the horizontal lockup, a 16px favicon proof, and a dark-surface version. Reference them in chat by id — <a href="#1a">1a</a> through <a href="#1e">1e</a>.</p>
+  </header>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: stretch">
+
+    <!-- 1a -->
+    <article id="1a" style="flex: 1 1 380px; min-width: 340px; background: #ffffff; border: 1px solid #e0dfdc; border-radius: 12px; box-shadow: 0 1px 2px rgba(20,20,18,0.05); overflow: hidden; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 8px; border: 1px solid #c8c7c3; border-radius: 5px">1a</span>
+        <span style="font-size: 12.5px; color: #5b5d5b">Cycle — continuous sync loop</span>
+      </div>
+      <div style="padding: 30px 16px 26px; display: grid; place-items: center; background: #ffffff">
+        <svg width="112" height="112" viewBox="0 0 48 48" role="img" aria-label="rclone-manager mark: a broken circular loop with two end dots">
+          <circle cx="24" cy="24" r="17" fill="none" stroke="oklch(0.52 0.09 255)" stroke-width="4" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)" />
+          <circle cx="24" cy="24" r="5" fill="oklch(0.52 0.09 255)" />
+        </svg>
+      </div>
+      <div style="padding: 18px 20px; border-top: 1px solid #e0dfdc; display: flex; align-items: center; gap: 12px">
+        <svg width="30" height="30" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="17" fill="none" stroke="oklch(0.52 0.09 255)" stroke-width="4" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)" />
+          <circle cx="24" cy="24" r="5" fill="oklch(0.52 0.09 255)" />
+        </svg>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">rclone<span style="color: #8b8d8a">-</span>manager</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8d8a">16px</span>
+        <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+          <circle cx="24" cy="24" r="17" fill="none" stroke="oklch(0.52 0.09 255)" stroke-width="5.5" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)" />
+          <circle cx="24" cy="24" r="6" fill="oklch(0.52 0.09 255)" />
+        </svg>
+        <div style="flex: 1"></div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 7px; background: #1b1d1b">
+          <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+            <circle cx="24" cy="24" r="17" fill="none" stroke="#eceeeb" stroke-width="4.5" stroke-linecap="round" stroke-dasharray="47 20" transform="rotate(-52 24 24)" />
+            <circle cx="24" cy="24" r="5.5" fill="#eceeeb" />
+          </svg>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 600; color: #eceeeb">rclone-manager</span>
+        </div>
+      </div>
+      <p style="margin: 0; padding: 14px 20px 18px; border-top: 1px solid #e0dfdc; font-size: 12.5px; color: #5b5d5b">Reads as transfer-in-progress without animation, and the gap keeps it legible when scaled down. Safest choice for an infrastructure tool.</p>
+    </article>
+
+    <!-- 1b -->
+    <article id="1b" style="flex: 1 1 380px; min-width: 340px; background: #ffffff; border: 1px solid #e0dfdc; border-radius: 12px; box-shadow: 0 1px 2px rgba(20,20,18,0.05); overflow: hidden; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 8px; border: 1px solid #c8c7c3; border-radius: 5px">1b</span>
+        <span style="font-size: 12.5px; color: #5b5d5b">Vault — committed copy</span>
+      </div>
+      <div style="padding: 30px 16px 26px; display: grid; place-items: center; background: #ffffff">
+        <svg width="112" height="112" viewBox="0 0 48 48" role="img" aria-label="rclone-manager mark: nested squares, the inner one offset">
+          <rect x="6" y="6" width="30" height="30" rx="4" fill="none" stroke="#c8c7c3" stroke-width="3" />
+          <rect x="15" y="15" width="27" height="27" rx="4" fill="#ffffff" stroke="oklch(0.52 0.09 255)" stroke-width="3.5" />
+          <circle cx="28.5" cy="28.5" r="4" fill="oklch(0.52 0.09 255)" />
+        </svg>
+      </div>
+      <div style="padding: 18px 20px; border-top: 1px solid #e0dfdc; display: flex; align-items: center; gap: 12px">
+        <svg width="30" height="30" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="6" y="6" width="30" height="30" rx="4" fill="none" stroke="#c8c7c3" stroke-width="3" />
+          <rect x="15" y="15" width="27" height="27" rx="4" fill="#ffffff" stroke="oklch(0.52 0.09 255)" stroke-width="3.5" />
+          <circle cx="28.5" cy="28.5" r="4" fill="oklch(0.52 0.09 255)" />
+        </svg>
+        <span style="font-family: 'IBM Plex Sans', sans-serif; font-size: 17.5px; font-weight: 600; letter-spacing: -0.02em">rclone<span style="color: #8b8d8a">-</span>manager</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8d8a">16px</span>
+        <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="5" y="5" width="30" height="30" rx="4" fill="none" stroke="#8b8d8a" stroke-width="4.5" />
+          <rect x="15" y="15" width="28" height="28" rx="4" fill="#ffffff" stroke="oklch(0.52 0.09 255)" stroke-width="5" />
+        </svg>
+        <div style="flex: 1"></div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 7px; background: #1b1d1b">
+          <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+            <rect x="6" y="6" width="30" height="30" rx="4" fill="none" stroke="#767976" stroke-width="3.5" />
+            <rect x="15" y="15" width="27" height="27" rx="4" fill="#1b1d1b" stroke="#eceeeb" stroke-width="3.5" />
+            <circle cx="28.5" cy="28.5" r="4" fill="#eceeeb" />
+          </svg>
+          <span style="font-size: 13px; font-weight: 600; color: #eceeeb">rclone-manager</span>
+        </div>
+      </div>
+      <p style="margin: 0; padding: 14px 20px 18px; border-top: 1px solid #e0dfdc; font-size: 12.5px; color: #5b5d5b">Two squares = remote original and the durable NAS copy; the filled dot marks the one that is verified. Most literal about the product's safety story.</p>
+    </article>
+
+    <!-- 1c -->
+    <article id="1c" style="flex: 1 1 380px; min-width: 340px; background: #ffffff; border: 1px solid #e0dfdc; border-radius: 12px; box-shadow: 0 1px 2px rgba(20,20,18,0.05); overflow: hidden; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 8px; border: 1px solid #c8c7c3; border-radius: 5px">1c</span>
+        <span style="font-size: 12.5px; color: #5b5d5b">Monogram — terminal-native</span>
+      </div>
+      <div style="padding: 30px 16px 26px; display: grid; place-items: center; background: #ffffff">
+        <div style="width: 112px; height: 112px; border: 3.5px solid #191a19; border-radius: 14px; display: grid; place-items: center; background: #ffffff">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 44px; font-weight: 600; letter-spacing: -0.03em; line-height: 1">rm<span style="color: oklch(0.52 0.09 255)">_</span></span>
+        </div>
+      </div>
+      <div style="padding: 18px 20px; border-top: 1px solid #e0dfdc; display: flex; align-items: center; gap: 12px">
+        <div style="width: 30px; height: 30px; border: 2px solid #191a19; border-radius: 6px; display: grid; place-items: center">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600; line-height: 1">rm<span style="color: oklch(0.52 0.09 255)">_</span></span>
+        </div>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 500; letter-spacing: -0.01em">rclone<span style="color: #8b8d8a">-</span>manager</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8d8a">16px</span>
+        <div style="width: 16px; height: 16px; border: 1.5px solid #191a19; border-radius: 4px; display: grid; place-items: center">
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 8px; font-weight: 700; line-height: 1">rm</span>
+        </div>
+        <div style="flex: 1"></div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 7px; background: #1b1d1b">
+          <div style="width: 20px; height: 20px; border: 1.5px solid #eceeeb; border-radius: 5px; display: grid; place-items: center">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; font-weight: 600; line-height: 1; color: #eceeeb">rm<span style="color: oklch(0.70 0.09 255)">_</span></span>
+          </div>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 500; color: #eceeeb">rclone-manager</span>
+        </div>
+      </div>
+      <p style="margin: 0; padding: 14px 20px 18px; border-top: 1px solid #e0dfdc; font-size: 12.5px; color: #5b5d5b">Caveat worth naming: <span style="font-family: 'IBM Plex Mono', monospace">rm</span> reads as the delete command to exactly the audience you're targeting. Strong personality, slight risk.</p>
+    </article>
+
+    <!-- 1d -->
+    <article id="1d" style="flex: 1 1 380px; min-width: 340px; background: #ffffff; border: 1px solid #e0dfdc; border-radius: 12px; box-shadow: 0 1px 2px rgba(20,20,18,0.05); overflow: hidden; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 8px; border: 1px solid #c8c7c3; border-radius: 5px">1d</span>
+        <span style="font-size: 12.5px; color: #5b5d5b">Generations — retention stack</span>
+      </div>
+      <div style="padding: 30px 16px 26px; display: grid; place-items: center; background: #ffffff">
+        <svg width="112" height="112" viewBox="0 0 48 48" role="img" aria-label="rclone-manager mark: four stacked bars of decreasing length">
+          <rect x="7" y="10" width="34" height="6" rx="3" fill="oklch(0.52 0.09 255)" />
+          <rect x="7" y="21" width="26" height="6" rx="3" fill="#c8c7c3" />
+          <rect x="7" y="32" width="17" height="6" rx="3" fill="#c8c7c3" />
+        </svg>
+      </div>
+      <div style="padding: 18px 20px; border-top: 1px solid #e0dfdc; display: flex; align-items: center; gap: 12px">
+        <svg width="30" height="30" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="7" y="10" width="34" height="6" rx="3" fill="oklch(0.52 0.09 255)" />
+          <rect x="7" y="21" width="26" height="6" rx="3" fill="#c8c7c3" />
+          <rect x="7" y="32" width="17" height="6" rx="3" fill="#c8c7c3" />
+        </svg>
+        <span style="font-family: 'IBM Plex Sans', sans-serif; font-size: 17.5px; font-weight: 600; letter-spacing: -0.02em">rclone<span style="color: #8b8d8a">-</span>manager</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8d8a">16px</span>
+        <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="6" y="10" width="36" height="7" rx="3.5" fill="oklch(0.52 0.09 255)" />
+          <rect x="6" y="21" width="26" height="7" rx="3.5" fill="#8b8d8a" />
+          <rect x="6" y="32" width="16" height="7" rx="3.5" fill="#8b8d8a" />
+        </svg>
+        <div style="flex: 1"></div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 7px; background: #1b1d1b">
+          <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+            <rect x="7" y="10" width="34" height="6" rx="3" fill="#eceeeb" />
+            <rect x="7" y="21" width="26" height="6" rx="3" fill="#767976" />
+            <rect x="7" y="32" width="17" height="6" rx="3" fill="#767976" />
+          </svg>
+          <span style="font-size: 13px; font-weight: 600; color: #eceeeb">rclone-manager</span>
+        </div>
+      </div>
+      <p style="margin: 0; padding: 14px 20px 18px; border-top: 1px solid #e0dfdc; font-size: 12.5px; color: #5b5d5b">Daily / weekly / monthly as three tiers, newest on top and accented. Calmest of the five and the most obviously "management console" rather than "cloud app".</p>
+    </article>
+
+    <!-- 1e -->
+    <article id="1e" style="flex: 1 1 380px; min-width: 340px; background: #ffffff; border: 1px solid #e0dfdc; border-radius: 12px; box-shadow: 0 1px 2px rgba(20,20,18,0.05); overflow: hidden; display: flex; flex-direction: column">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; padding: 2px 8px; border: 1px solid #c8c7c3; border-radius: 5px">1e</span>
+        <span style="font-size: 12.5px; color: #5b5d5b">Hop — remote to NAS</span>
+      </div>
+      <div style="padding: 30px 16px 26px; display: grid; place-items: center; background: #ffffff">
+        <svg width="112" height="112" viewBox="0 0 48 48" role="img" aria-label="rclone-manager mark: a small hollow circle linked to a larger filled circle">
+          <line x1="14" y1="24" x2="32" y2="24" stroke="#c8c7c3" stroke-width="4" stroke-linecap="round" />
+          <circle cx="12" cy="24" r="6" fill="#ffffff" stroke="#c8c7c3" stroke-width="3.5" />
+          <circle cx="34" cy="24" r="11" fill="oklch(0.52 0.09 255)" />
+        </svg>
+      </div>
+      <div style="padding: 18px 20px; border-top: 1px solid #e0dfdc; display: flex; align-items: center; gap: 12px">
+        <svg width="30" height="30" viewBox="0 0 48 48" aria-hidden="true">
+          <line x1="14" y1="24" x2="32" y2="24" stroke="#c8c7c3" stroke-width="4" stroke-linecap="round" />
+          <circle cx="12" cy="24" r="6" fill="#ffffff" stroke="#c8c7c3" stroke-width="3.5" />
+          <circle cx="34" cy="24" r="11" fill="oklch(0.52 0.09 255)" />
+        </svg>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; letter-spacing: -0.01em">rclone<span style="color: #8b8d8a">-</span>manager</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-top: 1px solid #e0dfdc; background: #fafaf9">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8d8a">16px</span>
+        <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
+          <line x1="13" y1="24" x2="32" y2="24" stroke="#8b8d8a" stroke-width="5" stroke-linecap="round" />
+          <circle cx="11" cy="24" r="6.5" fill="#ffffff" stroke="#8b8d8a" stroke-width="5" />
+          <circle cx="35" cy="24" r="12" fill="oklch(0.52 0.09 255)" />
+        </svg>
+        <div style="flex: 1"></div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-radius: 7px; background: #1b1d1b">
+          <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+            <line x1="14" y1="24" x2="32" y2="24" stroke="#767976" stroke-width="4" stroke-linecap="round" />
+            <circle cx="12" cy="24" r="6" fill="#1b1d1b" stroke="#767976" stroke-width="3.5" />
+            <circle cx="34" cy="24" r="11" fill="#eceeeb" />
+          </svg>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 600; color: #eceeeb">rclone-manager</span>
+        </div>
+      </div>
+      <p style="margin: 0; padding: 14px 20px 18px; border-top: 1px solid #e0dfdc; font-size: 12.5px; color: #5b5d5b">Directional: the remote source empties, the NAS copy becomes the weight of the mark. The only option that encodes the one-way pull.</p>
+    </article>
+  </div>
+
+  <footer style="display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; padding-top: 4px; font-size: 12.5px; color: #8b8d8a">
+    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase">Shared constraints</span>
+    <span>Single accent · no gradients · 48×48 grid · 4px minimum stroke at 1× · works on light and dark surfaces</span>
+  </footer>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{}"></script>
+</body>
+</html>
