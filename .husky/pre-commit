@@ -21,6 +21,12 @@
 # ESLint is not here either, matching webapp's reasoning: a lint ratchet exists
 # to block a merge, and a local commit is not a merge.
 #
+# THE THREE TIERS, so nobody has to reconstruct them from three files:
+#   this hook      build, vet, ./internal/... , ui typecheck and unit tests
+#   ci.yml         the same, plus the UI build and both cross-compiles
+#   nightly-e2e    Playwright, on main only, because a browser suite is too
+#                  slow and too flaky to sit in front of a merge
+#
 # `git commit --no-verify` is the documented escape hatch for a WIP commit you
 # will fix before pushing.
 
