@@ -98,11 +98,21 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 		ConfigRevision: body.ConfigRevision,
 	})
 	if err != nil {
-		if errors.Is(err, service.ErrConfigRevisionStale) {
+		switch {
+		case errors.Is(err, service.ErrConfigRevisionStale):
 			writeError(w, http.StatusConflict, "CONFIG_REVISION_STALE", err.Error())
-			return
+		case errors.Is(err, service.ErrInvalidRequest):
+			// Safe to echo: ErrInvalidRequest's message is always one of
+			// core/service's own deliberately generic strings (see that
+			// sentinel's doc), never anything from core/internal.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		default:
+			// Deliberately NOT err.Error() here: an unclassified error is
+			// exactly the case core/service.ErrInvalidRequest's doc warns
+			// about, one that might otherwise carry state-layer/SQLite
+			// text across this boundary.
+			writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to submit operation")
 		}
-		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 		return
 	}
 

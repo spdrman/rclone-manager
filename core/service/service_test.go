@@ -250,6 +250,9 @@ func TestSubmitRunCycle_RequiresIdempotencyKeyAndConfigRevision(t *testing.T) {
 			if err == nil {
 				t.Fatal("SubmitRunCycle: error = nil, want a validation error")
 			}
+			if !errors.Is(err, ErrInvalidRequest) {
+				t.Errorf("SubmitRunCycle error = %v, want errors.Is(err, ErrInvalidRequest)", err)
+			}
 			if errors.Is(err, ErrConfigRevisionStale) {
 				t.Error("a missing config revision must be a validation error, not ErrConfigRevisionStale")
 			}

@@ -33,6 +33,20 @@ var ErrConfigRevisionStale = errors.New("service: configuration revision is stal
 // matches the given id.
 var ErrOperationNotFound = errors.New("service: operation not found")
 
+// ErrInvalidRequest wraps every request-validation failure SubmitRunCycle
+// can return (a missing idempotency key, a missing configuration
+// revision). It exists so a caller outside core/ (the HTTP layer) can
+// distinguish "the caller's own request was malformed" — safe to report
+// back verbatim, since the message is always one of this package's own,
+// deliberately generic strings — from any other, unclassified error this
+// method might someday return, which must NOT be echoed back to a client
+// as-is: an unclassified error could, in principle, wrap a state-layer
+// failure whose text mentions SQLite internals, and this package's own
+// contract (never leak an rclone/SQLite implementation type or string
+// past this boundary) has to hold even for the failure paths, not just
+// the success shapes.
+var ErrInvalidRequest = errors.New("service: invalid request")
+
 // RunCycleRequest is what a caller submits to start (or, replaying the
 // same IdempotencyKey, resume observing) one run_cycle operation.
 type RunCycleRequest struct {
@@ -110,10 +124,10 @@ type Operation struct {
 // how long the operation itself ends up taking.
 func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest) (Operation, error) {
 	if req.IdempotencyKey == "" {
-		return Operation{}, fmt.Errorf("service: run_cycle request requires an idempotency key")
+		return Operation{}, fmt.Errorf("%w: run_cycle request requires an idempotency key", ErrInvalidRequest)
 	}
 	if req.ConfigRevision == "" {
-		return Operation{}, fmt.Errorf("service: run_cycle request requires a configuration revision")
+		return Operation{}, fmt.Errorf("%w: run_cycle request requires a configuration revision", ErrInvalidRequest)
 	}
 	if req.ConfigRevision != b.revision {
 		return Operation{}, fmt.Errorf("%w: request carries %q, current is %q", ErrConfigRevisionStale, req.ConfigRevision, b.revision)
@@ -130,7 +144,15 @@ func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest)
 		CreatedAt:      now(),
 	})
 	if err != nil {
-		return Operation{}, fmt.Errorf("service: submit run_cycle: %w", err)
+		if errors.Is(err, state.ErrOperationIdempotencyKeyReused) {
+			return Operation{}, fmt.Errorf("%w: idempotency key already used for a different request", ErrInvalidRequest)
+		}
+		// Deliberately not %w-wrapped with err here: err may originate
+		// from the state layer (a SQLite failure, a driver error string)
+		// and this method's whole contract is that nothing from that
+		// layer's vocabulary crosses this boundary, including through an
+		// error message a caller might log or display verbatim.
+		return Operation{}, fmt.Errorf("service: submit run_cycle: an internal error occurred")
 	}
 
 	if outcome.Created {

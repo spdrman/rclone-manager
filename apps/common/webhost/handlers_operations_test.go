@@ -2,6 +2,7 @@ package webhost
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,6 +106,48 @@ func TestSubmitOperation_ConfigRevisionStaleReturns409(t *testing.T) {
 	errObj, _ := body["error"].(map[string]any)
 	if errObj["code"] != "CONFIG_REVISION_STALE" {
 		t.Errorf("error.code = %v, want %q", errObj["code"], "CONFIG_REVISION_STALE")
+	}
+}
+
+// TestSubmitOperation_InvalidRequestFromBackendReturns400 proves the
+// second half of the error-mapping switch in handlers_operations.go: a
+// core/service.ErrInvalidRequest is safe to report back to the client
+// (its message is always one of core/service's own generic strings), so
+// it maps to 400, not 500.
+func TestSubmitOperation_InvalidRequestFromBackendReturns400(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.errOnSubmit = fmt.Errorf("%w: run_cycle request requires a configuration revision", service.ErrInvalidRequest)
+
+	rec := submitOperation(t, tr.router, "idem-1", `{"action":"run_cycle","config_revision":"rev-1"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "INVALID_REQUEST" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "INVALID_REQUEST")
+	}
+}
+
+// TestSubmitOperation_UnclassifiedBackendErrorReturns500WithoutLeakingDetails
+// is the acceptance criterion "API exposes no rclone/SQLite implementation
+// types" applied to an ERROR path, not just a success response: an
+// unclassified error from the backend (in production, potentially
+// wrapping a raw state-layer/SQLite failure) must never have its message
+// echoed back to the client.
+func TestSubmitOperation_UnclassifiedBackendErrorReturns500WithoutLeakingDetails(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.errOnSubmit = errBoom // deliberately NOT wrapped in a recognised sentinel
+
+	rec := submitOperation(t, tr.router, "idem-1", `{"action":"run_cycle","config_revision":"rev-1"}`)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), errBoom.Error()) {
+		t.Errorf("response leaked the raw backend error text: %s", rec.Body.String())
 	}
 }
 
