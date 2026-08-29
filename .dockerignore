@@ -18,3 +18,7 @@ README.md
 
 # Test fixtures and their scratch output; never part of the shipped binary.
 tests
+
+# Never let a filled-in .env reach the build context.
+.env
+container/.env
