@@ -47,6 +47,42 @@ var ErrOperationNotFound = errors.New("service: operation not found")
 // the success shapes.
 var ErrInvalidRequest = errors.New("service: invalid request")
 
+// ErrIdempotencyKeyConflict is returned by SubmitRunCycle when
+// RunCycleRequest.IdempotencyKey was already used for a request whose
+// actor, action or configuration revision differs from this one (see
+// internal/state.ErrOperationIdempotencyKeyReused, which this wraps). This
+// is deliberately a distinct sentinel from ErrInvalidRequest, not folded
+// into it: "you reused an idempotency key across two different logical
+// requests" is not the same problem as "your request body itself is
+// malformed", and a client needs to be able to tell the two apart
+// programmatically — that is the entire point of an idempotency key in the
+// first place. apps/common/webhost maps this to its own 409 error code,
+// distinct from CONFIG_REVISION_STALE and OPERATION_ALREADY_RUNNING below.
+var ErrIdempotencyKeyConflict = errors.New("service: idempotency key already used for a different request")
+
+// ErrOperationAlreadyRunning is returned by SubmitRunCycle when a brand
+// new run_cycle operation cannot be started because another one is
+// already executing.
+//
+// BackupService allows at most one executeRunCycle in flight at a time
+// (see that method's own doc and internal/app/cycle.go's "no concurrent
+// pass over the same backup set" invariant, which SubmitRunCycle's
+// goroutine-per-operation is the first caller in this codebase's history
+// to put at risk): a second, genuinely new submission that arrives while
+// the first is still running is rejected outright, not silently queued
+// and not silently dropped.
+//
+// Its already-persisted operation row is moved straight to "failed"
+// before this error is returned (see SubmitRunCycle), so nothing is ever
+// left at "queued" with no path to a terminal status; a client that wants
+// to actually run a cycle once the first one finishes must submit again
+// with a fresh IdempotencyKey. Replaying the SAME IdempotencyKey as the
+// operation already in flight is a different case entirely and is
+// unaffected by this: that always succeeds and returns the in-flight
+// operation's own current state, exactly like any other idempotent
+// replay.
+var ErrOperationAlreadyRunning = errors.New("service: another run_cycle operation is already running")
+
 // RunCycleRequest is what a caller submits to start (or, replaying the
 // same IdempotencyKey, resume observing) one run_cycle operation.
 type RunCycleRequest struct {
@@ -115,13 +151,40 @@ type Operation struct {
 //
 // # Decoupled from the caller's context
 //
-// The asynchronous execution below is started with context.Background(),
-// deliberately NOT ctx: ctx belongs to the caller (an HTTP handler's
-// request context in the real webhost wiring), and docs/EPIC-B-multi-nas.md
-// §14 is explicit that "HTTP request lifetime SHALL NOT own operation
-// lifetime". ctx is used only for the synchronous part of this call (the
-// idempotency-checked insert), which is expected to be fast regardless of
-// how long the operation itself ends up taking.
+// The asynchronous execution below is started with b.ctx (BackupService's
+// own long-lived, cancellable context; see that field's doc), deliberately
+// NOT ctx and NOT context.Background(): ctx belongs to the caller (an HTTP
+// handler's request context in the real webhost wiring), and
+// docs/EPIC-B-multi-nas.md §14 is explicit that "HTTP request lifetime
+// SHALL NOT own operation lifetime". context.Background() would decouple
+// execution from the request but ALSO from process shutdown entirely,
+// which §9.3 does not allow ("the HTTP server and background scheduler
+// SHALL share a common application service and process shutdown
+// context") — b.ctx is what lets Close actually ask a still-running
+// RunCycle to wind down. ctx (the parameter) is used only for the
+// synchronous part of this call (the idempotency-checked insert), which
+// is expected to be fast regardless of how long the operation itself ends
+// up taking.
+//
+// # At most one execution in flight (issue #118 item 1)
+//
+// internal/app/cycle.go's own doc says RunCycle guarantees "no concurrent
+// pass over the same backup set" only because, until this package existed,
+// the CLI called it once per process invocation and never concurrently
+// with itself. A goroutine spawned per submitted operation is what first
+// makes two overlapping RunCycle calls possible in this codebase, so this
+// method enforces the single-flight invariant explicitly: only the
+// goroutine that manages to lock b.runOnce may proceed. When a brand new
+// operation (Created == true) loses that race, its already-persisted row
+// is moved straight to "failed" — right here, synchronously, before this
+// method returns — rather than left at "queued" with nothing ever coming
+// along to finish it, and ErrOperationAlreadyRunning is returned instead
+// of Operation (see that sentinel's own doc for the full rationale,
+// including why this rejects rather than queues). This check only ever
+// applies to a genuinely new operation: a replay of an already-in-flight
+// operation's own IdempotencyKey is handled entirely by the
+// CreateOperation call above it (Created == false) and always succeeds,
+// since it is not asking to start a second execution at all.
 func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest) (Operation, error) {
 	if req.IdempotencyKey == "" {
 		return Operation{}, fmt.Errorf("%w: run_cycle request requires an idempotency key", ErrInvalidRequest)
@@ -145,7 +208,7 @@ func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest)
 	})
 	if err != nil {
 		if errors.Is(err, state.ErrOperationIdempotencyKeyReused) {
-			return Operation{}, fmt.Errorf("%w: idempotency key already used for a different request", ErrInvalidRequest)
+			return Operation{}, fmt.Errorf("%w: idempotency key already used for a different request", ErrIdempotencyKeyConflict)
 		}
 		// Deliberately not %w-wrapped with err here: err may originate
 		// from the state layer (a SQLite failure, a driver error string)
@@ -155,9 +218,20 @@ func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest)
 		return Operation{}, fmt.Errorf("service: submit run_cycle: an internal error occurred")
 	}
 
-	if outcome.Created {
-		go b.executeRunCycle(outcome.Operation.OperationID)
+	if !outcome.Created {
+		return toOperation(outcome.Operation), nil
 	}
+
+	if !b.runOnce.TryLock() {
+		reason := "rejected: another run_cycle operation is already in progress"
+		if failErr := b.journal.FailOperation(context.Background(), outcome.Operation.OperationID, now(), reason); failErr != nil {
+			b.logger.Error(context.Background(), "fail-rejected-run-cycle", failErr)
+		}
+		return Operation{}, fmt.Errorf("%w: %s", ErrOperationAlreadyRunning, reason)
+	}
+
+	b.wg.Add(1)
+	go b.executeRunCycle(outcome.Operation.OperationID)
 
 	return toOperation(outcome.Operation), nil
 }
@@ -166,6 +240,20 @@ func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest)
 // id, translating internal/state's ErrOperationNotFound into this
 // package's own sentinel so a caller outside core/ never needs to
 // errors.Is against a symbol from a package it cannot import.
+//
+// # Authorization (issue #118 item 9)
+//
+// GetOperation deliberately does not check Actor against whoever created
+// id: any authenticated caller may read any operation's status. That is a
+// considered decision, not an oversight, for the model this skeleton
+// actually ships under today — docs/EPIC-B-multi-nas.md §13.4's
+// admin-only initial release, where every authenticated caller already IS
+// the (one) administrator, so there is no other actor to scope reads
+// away from. This stops being an obviously-safe default the day multi-user
+// auth or a non-admin role lands; whoever adds that should revisit this
+// doc and decide explicitly between admin-sees-all (documented here again,
+// deliberately) and actor-scoped reads, rather than discovering the gap
+// implicitly.
 func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation, error) {
 	rec, err := b.journal.GetOperation(ctx, id)
 	if err != nil {
@@ -181,24 +269,46 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 // operation running, actually call the wrapped internal/app.Service's
 // RunCycle (this is "API invokes BackupService" happening for real, not a
 // simulated response), and record the outcome. It runs on its own
-// goroutine, on context.Background(), entirely independent of whatever
-// HTTP request originally called SubmitRunCycle; see that function's doc
-// for why.
+// goroutine, entirely independent of whatever HTTP request originally
+// called SubmitRunCycle; see that method's own doc for why RunCycle itself
+// runs on b.ctx rather than context.Background() or the request's ctx.
 //
-// Errors marking the row running/completed/failed are deliberately not
-// surfaced anywhere beyond this function: by the time they could happen,
-// the caller that could have acted on them is long gone (this runs after
-// SubmitRunCycle has already returned), and there is nothing left to
-// retry against other than the journal itself, which internal/state's own
-// durability guarantees already cover.
+// It always does exactly three things before returning, in order, no
+// matter how RunCycle behaves: release b.runOnce (so the next submitted
+// operation can proceed), signal b.wg (so Close knows this goroutine is
+// done), and, if RunCycle panicked, recover and record the operation as
+// failed instead of letting the panic escape the goroutine — an
+// unrecovered panic here would crash the entire persistent API server
+// hosting this BackupService, not just one CLI invocation, since this
+// package is what first makes RunCycle reachable from a goroutine inside
+// an always-on process. See the deferred calls below for exactly how, and
+// in what order.
+//
+// Every error this function encounters is logged via b.logger.Error
+// (a safe no-op if this BackupService was built with a nil logger) rather
+// than silently discarded: by the time one of these could happen, the
+// caller that could have acted on it is long gone (this runs after
+// SubmitRunCycle has already returned), so a log line is the only record
+// of it that will ever exist.
 func (b *BackupService) executeRunCycle(operationID string) {
-	ctx := context.Background()
+	defer b.wg.Done()
+	defer b.runOnce.Unlock()
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error(context.Background(), "execute-run-cycle-panic", fmt.Errorf("recovered panic: %v", r))
+			if err := b.journal.FailOperation(context.Background(), operationID, now(),
+				"an internal error occurred while running this operation"); err != nil {
+				b.logger.Error(context.Background(), "fail-operation-after-panic", err)
+			}
+		}
+	}()
 
-	if err := b.journal.MarkOperationRunning(ctx, operationID, now()); err != nil {
+	if err := b.journal.MarkOperationRunning(context.Background(), operationID, now()); err != nil {
+		b.logger.Error(context.Background(), "mark-operation-running", err)
 		return
 	}
 
-	report := b.inner.RunCycle(ctx)
+	report := runCycle(b.inner, b.ctx)
 
 	var failed string
 	for _, set := range report.Sets {
@@ -209,11 +319,25 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	}
 
 	if failed != "" {
-		_ = b.journal.FailOperation(ctx, operationID, now(), failed)
+		if err := b.journal.FailOperation(context.Background(), operationID, now(), failed); err != nil {
+			b.logger.Error(context.Background(), "fail-operation", err)
+		}
 		return
 	}
 
-	_ = b.journal.CompleteOperation(ctx, operationID, now(), summarizeCycle(report))
+	if err := b.journal.CompleteOperation(context.Background(), operationID, now(), summarizeCycle(report)); err != nil {
+		b.logger.Error(context.Background(), "complete-operation", err)
+	}
+}
+
+// runCycle is a seam over (*app.Service).RunCycle, exactly like now (in
+// service.go) is a seam over time.Now: a test can substitute a stand-in
+// that panics (see TestExecuteRunCycle_RecoversFromPanicAndRecordsFailedOperation)
+// or blocks on a channel the test controls (see the Close tests), without
+// this package needing an interface around *app.Service for the sake of
+// this one call site. Nothing overrides this in production.
+var runCycle = func(inner *app.Service, ctx context.Context) app.CycleReport {
+	return inner.RunCycle(ctx)
 }
 
 // cycleSummary is the opaque JSON blob stored in a completed run_cycle

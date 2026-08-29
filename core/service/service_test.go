@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 
@@ -304,5 +305,275 @@ func TestBuildVersion_ReportsEverySection(t *testing.T) {
 	}
 	if v.EngineVersion == "" || v.EngineVersion == "unknown" {
 		t.Errorf("EngineVersion = %q, want a real pinned version", v.EngineVersion)
+	}
+}
+
+// withStubbedRunCycle replaces the package-level runCycle seam (operations.go)
+// with fn for the duration of the calling test, restoring the real one via
+// t.Cleanup. Every test below that needs to control exactly when/how
+// internal/app.Service.RunCycle "returns" (block it, panic it, time it)
+// goes through this rather than exercising a real RunCycle pass, since none
+// of them are testing RunCycle's own business logic — that belongs to
+// internal/app's own test suite.
+func withStubbedRunCycle(t *testing.T, fn func(inner *app.Service, ctx context.Context) app.CycleReport) {
+	t.Helper()
+	orig := runCycle
+	t.Cleanup(func() { runCycle = orig })
+	runCycle = fn
+}
+
+// TestSubmitRunCycle_SecondSubmissionWhileFirstInFlightIsRejected is issue
+// #118 item 1's central regression test. SubmitRunCycle used to spawn a
+// goroutine per newly-created operation with no synchronization at all, so
+// two ordinary, unrelated requests (different idempotency keys, no
+// attacker required — two browser tabs, or a double-click) could each
+// start internal/app.Service.RunCycle concurrently against the very same
+// BackupService, something internal/app/cycle.go's own doc says is meant
+// to be impossible "by construction, not by a lock this package has to
+// remember to take". This proves the fix: a second, genuinely new
+// submission that arrives while the first is still actually inside
+// RunCycle is rejected with ErrOperationAlreadyRunning rather than
+// executing alongside it.
+//
+// # Rejecting, not queueing (the choice this test pins down)
+//
+// SubmitRunCycle's own doc documents this same decision; this comment
+// explains why, next to the test that would break if it changed.
+// Queueing the second submission to run once the first finishes was the
+// other option on the table, and was rejected because it reintroduces,
+// for the WAITER this time instead of the runner, exactly the
+// request-lifetime-owns-operation-lifetime coupling §14 forbids: an HTTP
+// handler would have to either block the request goroutine indefinitely
+// on an unrelated operation's completion, or hand back a 202 for a queued
+// slot this package cannot actually promise will ever come due (a
+// deployment could stay mid-cycle indefinitely). Failing the just-created
+// row fast and telling the caller so keeps every operation row's
+// lifecycle bounded and every response honest about what actually
+// happened, at the cost of the caller having to retry (with a fresh
+// idempotency key) instead of this package silently waiting on its
+// behalf.
+func TestSubmitRunCycle_SecondSubmissionWhileFirstInFlightIsRejected(t *testing.T) {
+	svc := newTestService(t)
+
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		close(inFlight)
+		<-release
+		return app.CycleReport{}
+	})
+
+	first, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-first",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("first SubmitRunCycle: %v", err)
+	}
+
+	select {
+	case <-inFlight:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first operation never reached RunCycle")
+	}
+
+	_, err = svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-second",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if !errors.Is(err, ErrOperationAlreadyRunning) {
+		t.Fatalf("second SubmitRunCycle (while the first is in flight) error = %v, want errors.Is(err, ErrOperationAlreadyRunning)", err)
+	}
+
+	close(release)
+
+	firstDone := waitForTerminalStatus(t, svc, first.ID)
+	if firstDone.Status != "completed" {
+		t.Fatalf("first operation Status = %q, want %q (Error = %q)", firstDone.Status, "completed", firstDone.Error)
+	}
+
+	// The rejected submission's own row must have reached a terminal
+	// status too, not be stuck at "queued" forever with nothing left to
+	// ever move it: resubmitting the SAME idempotency key now (the first
+	// operation, and with it the single-flight lock, has since been
+	// released) must replay that row rather than start a third execution.
+	rejectedReplay, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-second",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("resubmitting the rejected idempotency key: %v", err)
+	}
+	if rejectedReplay.Status != "failed" {
+		t.Fatalf("rejected operation's row Status = %q, want %q", rejectedReplay.Status, "failed")
+	}
+	if rejectedReplay.Error == "" {
+		t.Error("rejected operation's row Error is empty, want a reason")
+	}
+}
+
+// TestExecuteRunCycle_RecoversFromPanicAndRecordsFailedOperation is issue
+// #118 item 2's panic-recovery requirement: this PR is what first makes
+// RunCycle reachable from a goroutine inside an always-on process (rather
+// than a one-shot, supervised CLI run), so an unrecovered panic anywhere
+// in its call graph would crash the entire persistent API server, not
+// just fail one request. This test reaching its final assertion at all is
+// itself part of what it proves: an unrecovered panic inside runCycle
+// would crash this whole test binary, not just fail this one test.
+func TestExecuteRunCycle_RecoversFromPanicAndRecordsFailedOperation(t *testing.T) {
+	svc := newTestService(t)
+
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		panic("boom: simulated panic inside RunCycle")
+	})
+
+	op, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-panic",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("SubmitRunCycle: %v", err)
+	}
+
+	done := waitForTerminalStatus(t, svc, op.ID)
+	if done.Status != "failed" {
+		t.Fatalf("Status = %q, want %q after a panic inside RunCycle", done.Status, "failed")
+	}
+	if done.Error == "" {
+		t.Error("Error is empty on an operation that failed via a recovered panic")
+	}
+
+	// The single-flight lock (item 1) must also have been released by the
+	// panic-recovery path, not left held forever: a second operation must
+	// still be able to run afterward.
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		return app.CycleReport{}
+	})
+	second, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-after-panic",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("SubmitRunCycle after a recovered panic: %v", err)
+	}
+	secondDone := waitForTerminalStatus(t, svc, second.ID)
+	if secondDone.Status != "completed" {
+		t.Fatalf("second operation Status = %q, want %q (Error = %q)", secondDone.Status, "completed", secondDone.Error)
+	}
+}
+
+// TestClose_WaitsForInFlightOperationToFinish is issue #118 item 2's
+// WaitGroup-draining requirement: Close must not return (and must not
+// close the journal a still-running executeRunCycle is about to write to)
+// while an operation it started is still inside RunCycle.
+func TestClose_WaitsForInFlightOperationToFinish(t *testing.T) {
+	svc := newTestService(t)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		close(started)
+		<-release
+		return app.CycleReport{}
+	})
+
+	_, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-close",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("SubmitRunCycle: %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("operation never reached RunCycle")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- svc.Close() }()
+
+	// Close must not return while executeRunCycle is still blocked on
+	// release: give it a moment to (incorrectly) return early before
+	// proving it hasn't.
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before the in-flight operation finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return after the in-flight operation finished")
+	}
+}
+
+// TestClose_TimesOutAndProceedsIfOperationDoesNotFinish is the other half
+// of item 2's Close contract: an operation that never notices ctx was
+// canceled (a genuinely stuck remote, in production) must not be able to
+// hang a process shutdown forever. Close is documented to give up after
+// closeDrainTimeout and close the journal anyway.
+//
+// block is deliberately never closed: the stubbed goroutine leaks for the
+// rest of this test binary's life, standing in for an operation that never
+// returns. That is safe to leave running because started (closed from
+// inside the stub, before it blocks on block) proves the one-time read of
+// the package-level runCycle var this goroutine needed has already
+// happened by the time this test function returns; without that signal,
+// restoring runCycle in withStubbedRunCycle's own t.Cleanup could race a
+// still-in-flight first read of it from this leaked goroutine.
+func TestClose_TimesOutAndProceedsIfOperationDoesNotFinish(t *testing.T) {
+	svc := newTestService(t)
+
+	origTimeout := closeDrainTimeout
+	closeDrainTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { closeDrainTimeout = origTimeout })
+
+	started := make(chan struct{})
+	block := make(chan struct{})
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		close(started)
+		<-block
+		return app.CycleReport{}
+	})
+
+	_, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-timeout",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("SubmitRunCycle: %v", err)
+	}
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("operation never reached RunCycle")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- svc.Close() }()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not time out and proceed while the operation was still hanging")
 	}
 }
