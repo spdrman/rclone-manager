@@ -201,12 +201,19 @@ func (s *Service) lifecycleDeps() lifecycle.Deps {
 func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 	r := bs.Remote
 	return transport.Source{
-		ID:         bs.ID.String(),
-		Type:       r.Type,
-		Host:       r.Host,
-		Port:       r.Port,
-		User:       r.User,
-		KeyFile:    r.KeyFile,
+		ID:   bs.ID.String(),
+		Type: r.Type,
+		Host: r.Host,
+		Port: r.Port,
+		User: r.User,
+		// All three key sources have to travel, not just the file one.
+		// config.Validate has already refused anything but exactly one of
+		// them, and normalized the deprecated key_file into Key.File, so
+		// forwarding all three here is what makes key.env and key.command
+		// work in a real run rather than only in the adapter's own tests.
+		KeyFile:    r.Key.File,
+		KeyEnv:     r.Key.Env,
+		KeyCommand: r.Key.Command,
 		KnownHosts: r.KnownHosts,
 		Root:       bs.RemotePath,
 	}
