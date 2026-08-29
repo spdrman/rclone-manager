@@ -17,13 +17,19 @@
 #
 # It can be run by hand from the Actions tab when a UI change wants the signal
 # before morning.
+#
+# Schedule trigger disabled: GitHub Actions is no longer auto-triggered on
+# this repo (see ci.yml and rclone-upgrade-gate.yml). Run this by hand
+# (workflow_dispatch) before a release or when a UI change specifically
+# wants the browser-level signal; `npm run e2e` locally covers the common
+# case day-to-day.
 
 name: Nightly E2E
 
 on:
-  schedule:
-    # 03:20 UTC, chosen to sit clear of the estate's other nightly jobs.
-    - cron: "20 3 * * *"
+  # schedule:
+  #   # 03:20 UTC, chosen to sit clear of the estate's other nightly jobs.
+  #   - cron: "20 3 * * *"
   workflow_dispatch:
 
 concurrency:
