@@ -113,9 +113,29 @@ section above for what's real today.
 
 ### Troubleshooting UPK install
 
-*(Steps 3-4's exact wording depends on your UGOS Pro version; this section will get more
-precise as more of this actually gets tested against real hardware. If you hit something
-not covered here, that's worth reporting back so this section can grow.)*
+**"Please check the device (or app package) security signature"**: this is a device
+authorization problem, not a broken package. `ugcli pack` always development-signs a
+package; UGOS Pro only accepts that signature on a NAS UGREEN has explicitly authorized for
+development, and that authorization is per-device, expires, and does not come with any
+local "allow untrusted packages" toggle:
+
+1. Find your NAS's serial number and MAC address (Control Panel > About).
+2. Email UGREEN developer support (`developers_bd@ugreen.com`, per their developer portal
+   at `developer.ugnas.com`) with the serial number, MAC address, and the admin username
+   you'll install under.
+3. UGREEN sends back an authorization file. Rename it exactly `ugdev.sig` and upload it to
+   that same admin account's Personal Folder on the NAS.
+4. On UGOS Pro 1.16.0.0000 and later, that alone isn't enough: also go to **App Center >
+   Settings > App Development Settings** and click **Authorize**. This step was added at
+   1.16; a firmware update past that version can silently break a previously-working
+   `ugdev.sig`-only setup.
+5. If it previously worked and stopped, the authorization has likely expired, or a firmware
+   update crossed the 1.16 line, or something about the bound identity (admin username,
+   network identity) changed. Re-upload a fresh `ugdev.sig` and re-authorize.
+
+There is no developer-account certificate or paid tier involved, just this per-device email
+exchange. The alternative that needs none of this is running the same image as a plain
+Docker container through UGOS's built-in Docker app instead of an App Center package.
 
 ## Who owns what
 
