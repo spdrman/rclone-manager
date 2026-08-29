@@ -11,10 +11,11 @@
     "test:watch": "vitest",
     "e2e": "playwright test --project=generic --project=small-window",
     "lint": "tsc --noEmit",
+    "typecheck:providers": "tsc --noEmit -p tsconfig.providers.json",
     "e2e:ui": "playwright test --ui",
     "e2e:providers": "playwright test --project=providers",
     "e2e:all-providers": "for p in generic ugos synology truenas unraid openmediavault proxmox; do VITE_PLATFORM=$p playwright test --project=providers || exit 1; done",
-    "test:all": "npm run lint && npm test && npm run e2e"
+    "test:all": "npm run lint && npm run typecheck:providers && npm test && npm run e2e"
   },
   "dependencies": {
     "@causlts/core": "0.3.3",
