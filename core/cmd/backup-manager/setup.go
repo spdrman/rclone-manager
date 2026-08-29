@@ -9,9 +9,9 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/obs"
-	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+	"github.com/spdrman/rclone-manager/core/service"
 )
 
 // defaultConfigPath matches container/compose.yaml's mount point and
@@ -30,26 +30,23 @@ func newFlagSet(name string) (*flag.FlagSet, *string) {
 	return fs, cfgPath
 }
 
-// openService loads and validates configPath, opens its state journal,
-// and builds an internal/app.Service ready for whichever use case the
-// calling subcommand needs. withTransport controls whether the service is
-// given a real transport.Transport (internal/transport/rclone.Adapter):
-// every subcommand that can reach a remote (run, daemon, fetch, reconcile)
-// needs one; every purely local one (check, status, sources, artifacts,
+// openService loads and validates configPath, opens its state journal
+// (both via core/service.OpenConfigAndJournal — see that function's own
+// doc for why this no longer reimplements that sequence itself), and
+// builds an internal/app.Service ready for whichever use case the calling
+// subcommand needs. withTransport controls whether the service is given a
+// real transport.Transport (internal/transport/rclone.Adapter): every
+// subcommand that can reach a remote (run, daemon, fetch, reconcile) needs
+// one; every purely local one (check, status, sources, artifacts,
 // retention, validate) does not, and leaves Service.Transport nil rather
 // than pay for constructing an adapter it will never call.
 //
 // The returned cleanup func closes the journal; callers should always
 // `defer cleanup()` immediately.
 func openService(ctx context.Context, configPath string, withTransport bool) (*app.Service, *config.Config, func(), error) {
-	cfg, err := config.LoadAndValidate(configPath)
+	cfg, journal, err := service.OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
-		return nil, nil, func() {}, fmt.Errorf("config: %w", err)
-	}
-
-	journal, err := state.Open(ctx, cfg.State.Database)
-	if err != nil {
-		return nil, nil, func() {}, fmt.Errorf("state: %w", err)
+		return nil, nil, func() {}, err
 	}
 	cleanup := func() {
 		if err := journal.Close(); err != nil {
