@@ -1,0 +1,120 @@
+package local
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// AdminRecord is the one persisted local-auth identity this package
+// supports today (docs/EPIC-B-multi-nas.md §13.4's admin-only initial
+// release): a username and an Argon2id password hash (password.go).
+// PasswordHash is never a plaintext password.
+type AdminRecord struct {
+	Username     string    `json:"username"`
+	PasswordHash string    `json:"password_hash"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// storeFile is the on-disk shape Store persists. Enrollment is
+// permanently closed the moment Admin is non-nil (§49.1: "single-shot and
+// irreversible"); nothing in this package ever sets it back to nil.
+type storeFile struct {
+	Admin *AdminRecord `json:"admin"`
+}
+
+// ErrAlreadyEnrolled is returned by Store.Enroll when an administrator
+// record already exists.
+var ErrAlreadyEnrolled = errors.New("local: an administrator account already exists")
+
+// Store persists exactly one AdminRecord to a JSON file at path, guarded
+// by an in-process mutex (this package assumes a single process owns
+// path; the generic host's serve command is exactly that) and made
+// durable one write at a time via write-temp-then-rename, so a crash
+// mid-write can never leave a half-written file for the next start to
+// trip over.
+type Store struct {
+	path string
+	mu   sync.Mutex
+}
+
+// NewStore returns a Store backed by the JSON file at path. path's parent
+// directory is created (mode 0700) on first write if it does not already
+// exist; nothing is written or read until Admin or Enroll is called.
+func NewStore(path string) *Store {
+	return &Store{path: path}
+}
+
+func (s *Store) load() (storeFile, error) {
+	b, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return storeFile{}, nil
+	}
+	if err != nil {
+		return storeFile{}, fmt.Errorf("local: read store %s: %w", s.path, err)
+	}
+	var f storeFile
+	if err := json.Unmarshal(b, &f); err != nil {
+		return storeFile{}, fmt.Errorf("local: parse store %s: %w", s.path, err)
+	}
+	return f, nil
+}
+
+func (s *Store) save(f storeFile) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("local: create store directory: %w", err)
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return fmt.Errorf("local: encode store: %w", err)
+	}
+	// write-temp-then-rename: os.Rename is atomic on the same filesystem
+	// (true of every mount this file is expected to live on: a bind-mounted
+	// STATE_DIR volume, or a plain local directory in tests), so a reader
+	// never observes a partially written file, and a crash between the
+	// WriteFile and the Rename leaves the ORIGINAL file untouched rather
+	// than a corrupted one.
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return fmt.Errorf("local: write store: %w", err)
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		return fmt.Errorf("local: commit store: %w", err)
+	}
+	return nil
+}
+
+// Admin returns the persisted administrator record, or nil if enrollment
+// has not happened yet.
+func (s *Store) Admin() (*AdminRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+	return f.Admin, nil
+}
+
+// Enroll persists admin as this store's one administrator record. It
+// fails with ErrAlreadyEnrolled if a record already exists: enrollment is
+// single-shot and irreversible (§49.1), and this is the one method in
+// this package that could otherwise silently overwrite an existing
+// administrator.
+func (s *Store) Enroll(admin AdminRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load()
+	if err != nil {
+		return err
+	}
+	if f.Admin != nil {
+		return ErrAlreadyEnrolled
+	}
+	f.Admin = &admin
+	return s.save(f)
+}
