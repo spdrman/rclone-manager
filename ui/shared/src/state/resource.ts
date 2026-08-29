@@ -2,7 +2,7 @@ import { useCallback, useEffect } from "react";
 import type { InputNode } from "@causlts/core";
 import { BackupManagerError } from "@shared/api/contracts";
 import type { ApiError } from "@shared/api/contracts";
-import { graph, useCausl } from "./graph";
+import { graph, registerInput, useCausl } from "./graph";
 
 /** Mirrors useAsync's AsyncState<T> shape, so pages that already accept an
  *  AsyncState<T> prop (BackupSetsPage, DashboardPage, ...) do not change
@@ -15,9 +15,11 @@ export interface ResourceState<T> {
 
 /** Registers one fetched-resource input node. Call exactly once, at module
  *  load (see appNodes.ts) — like every `graph.input` call, calling this
- *  twice for the same id throws DuplicateNodeError. */
+ *  twice for the same id throws DuplicateNodeError. Goes through
+ *  `registerInput` (not `graph.input` directly) so `resetGraphForTests()`
+ *  knows how to put it back. */
 export function createResourceNode<T>(id: string): InputNode<ResourceState<T>> {
-  return graph.input<ResourceState<T>>(id, { data: null, error: null, loading: true });
+  return registerInput<ResourceState<T>>(id, { data: null, error: null, loading: true });
 }
 
 function toApiError(e: unknown): ApiError {
@@ -30,19 +32,41 @@ function toApiError(e: unknown): ApiError {
       };
 }
 
+/** Tracks the sequence number of the most recently issued fetch per node,
+ *  so an out-of-order resolution can tell it is stale and drop itself
+ *  instead of overwriting a newer response. This is the guard useAsync had
+ *  via a `live` flag tied to effect cleanup, which did not carry over when
+ *  fetchResource replaced it — see the mandatory-review fix for the
+ *  stale-response race. A plain counter, not an AbortController: fetchFn
+ *  is a bare `() => Promise<T>` with no signal to thread through, and
+ *  dropping a late response is all the contract here promises (it does
+ *  not cancel the in-flight request itself). */
+const latestSeqByNode = new WeakMap<InputNode<unknown>, number>();
+
 /** Runs `fetchFn`, committing the loading/resolved/failed phases to
  *  `node`. Exported separately from useResource so `reload()` can be
  *  called from outside a render (e.g. after a mutation elsewhere calls
  *  `sets.reload()`, exactly as it did with useAsync). */
 export function fetchResource<T>(node: InputNode<ResourceState<T>>, fetchFn: () => Promise<T>): void {
+  const key = node as InputNode<unknown>;
+  const seq = (latestSeqByNode.get(key) ?? 0) + 1;
+  latestSeqByNode.set(key, seq);
+  const isLatest = () => latestSeqByNode.get(key) === seq;
+
   graph.commit(node.id + "/loading", (tx) =>
     tx.set(node, { ...graph.read(node), loading: true, error: null })
   );
   fetchFn()
     .then((data) => {
+      // Two fetches to the same node can resolve out of order (a 30s poll
+      // tick overlapping a manual reload, or a post-mutation reload racing
+      // the poll); only the response to the LAST call issued is allowed to
+      // land, never whichever happens to resolve last.
+      if (!isLatest()) return;
       graph.commit(node.id + "/resolved", (tx) => tx.set(node, { data, error: null, loading: false }));
     })
     .catch((e: unknown) => {
+      if (!isLatest()) return;
       graph.commit(node.id + "/failed", (tx) =>
         tx.set(node, { ...graph.read(node), error: toApiError(e), loading: false })
       );
