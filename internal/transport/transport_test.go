@@ -12,6 +12,7 @@ import (
 	stdfs "io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -307,5 +308,67 @@ func TestPathSafety_RemotePathTraversalIsRejected(t *testing.T) {
 	}
 	if string(content) != sentinelContent {
 		t.Fatalf("sentinel file outside the root was modified: got %q, want %q", content, sentinelContent)
+	}
+}
+
+// Listing has to be deterministic, and the reason is not tidiness.
+//
+// walk.GetAll hands back whatever order the backend produced, which for the
+// local backend is directory-read order and is not stable between runs. That
+// is harmless while every artifact is independent, and stops being harmless
+// the moment two remote paths share a basename, because model.ArtifactID
+// identifies an artifact by its basename alone. Two run directories that each
+// contain backup.dump collide as a single identity, so with an unordered
+// listing the winner is whichever the backend yielded first: one cycle ingests
+// run-1 and reports run-2 as a conflict, the next does the reverse, and
+// neither is reliably backed up.
+//
+// This showed up as a discovery test that failed roughly one run in five.
+func TestRcloneAdapter_ListIsSortedAndDeterministic(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{
+		"zeta.dump", "alpha.dump", "middle.dump",
+		"runs/b/backup.dump", "runs/a/backup.dump", "runs/c/backup.dump",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(rel), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	a := rclone.New()
+	src := transport.Source{ID: "det", Type: "local", Root: root}
+
+	first, err := a.List(context.Background(), src)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(first) != 6 {
+		t.Fatalf("expected 6 artifacts, got %d", len(first))
+	}
+
+	paths := make([]string, len(first))
+	for i, r := range first {
+		paths[i] = r.Path
+	}
+	if !sort.StringsAreSorted(paths) {
+		t.Fatalf("List returned an unsorted listing: %v", paths)
+	}
+
+	// Repeat it. A single sorted result could be luck; the same order every
+	// time is the property that actually matters.
+	for i := 0; i < 25; i++ {
+		again, err := a.List(context.Background(), src)
+		if err != nil {
+			t.Fatalf("List (repeat %d): %v", i, err)
+		}
+		for j := range again {
+			if again[j].Path != first[j].Path {
+				t.Fatalf("repeat %d differed at %d: %q vs %q", i, j, again[j].Path, first[j].Path)
+			}
+		}
 	}
 }

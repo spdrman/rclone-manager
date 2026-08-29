@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	// local and sftp are the two backends FR-4 requires. Importing them,
 	// together with fs/operations below, also registers crypt transitively.
@@ -133,6 +134,26 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 	for _, o := range objs {
 		out = append(out, toArtifact(o))
 	}
+
+	// Sort by remote path so listing is deterministic.
+	//
+	// walk.GetAll returns whatever order the backend produced, which for the
+	// local backend is directory-read order and is not stable between runs.
+	// That does not matter while every artifact is independent, but it stops
+	// being harmless the moment two remote paths share a basename, because
+	// model.ArtifactID identifies an artifact by basename alone. Two run
+	// directories that both contain backup.dump collide as one identity, and
+	// with an unordered listing the winner is whichever the backend happened
+	// to yield first. That makes ingestion a coin flip: one cycle takes
+	// run-1's copy and reports run-2 as a conflict, the next cycle does the
+	// reverse, and neither is reliably backed up.
+	//
+	// Sorting does not fix the collision, it makes the outcome repeatable,
+	// which is the difference between a conflict an operator can reason about
+	// and a nondeterministic one they cannot. The real fix is for an artifact
+	// identity to carry more than a basename, which is a change to
+	// model.ArtifactID and to everything keyed on it.
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, nil
 }
 
