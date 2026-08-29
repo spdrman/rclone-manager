@@ -9,7 +9,7 @@ export const genericBridge: PlatformBridge = {
   integration: "standalone",
 
   deployment: {
-    deployment: "Docker Compose",
+    label: "Docker Compose",
     storageMount: "/data/backups",
     adapterVersion: "generic 1.3.0"
   },

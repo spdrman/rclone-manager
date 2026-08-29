@@ -9,7 +9,7 @@ export const truenasBridge: PlatformBridge = {
   integration: "container",
 
   deployment: {
-    deployment: "TrueNAS app (container)",
+    label: "TrueNAS app (container)",
     storageMount: "/mnt/tank/backup-manager",
     adapterVersion: "truenas 1.1.0"
   },

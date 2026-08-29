@@ -32,8 +32,10 @@ export interface AuthContext {
 }
 
 export interface PlatformDeploymentInfo {
-  /** e.g. "Unprivileged LXC", "DSM package" */
-  deployment: string;
+  /** e.g. "Unprivileged LXC", "DSM package". Named `label`, not
+   *  `deployment`, so a consumer reads `bridge.deployment.label` rather
+   *  than the doubled-up `bridge.deployment.deployment`. */
+  label: string;
   /** Documented storage mount for this integration. */
   storageMount: string;
   adapterVersion: string;

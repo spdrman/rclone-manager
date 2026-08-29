@@ -10,7 +10,7 @@ export const synologyBridge: PlatformBridge = {
   integration: "embedded-web",
 
   deployment: {
-    deployment: "DSM package",
+    label: "DSM package",
     storageMount: "/volume1/backup-manager",
     adapterVersion: "synology 1.2.4"
   },

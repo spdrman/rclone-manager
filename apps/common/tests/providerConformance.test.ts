@@ -39,7 +39,7 @@ describe("provider conformance", () => {
       });
 
       it("documents its deployment and storage mount", () => {
-        expect(bridge.deployment.deployment).toBeTruthy();
+        expect(bridge.deployment.label).toBeTruthy();
         expect(bridge.deployment.storageMount.startsWith("/")).toBe(true);
         expect(bridge.deployment.adapterVersion).toBeTruthy();
       });

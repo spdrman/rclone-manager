@@ -9,7 +9,7 @@ export const proxmoxBridge: PlatformBridge = {
   integration: "standalone",
 
   deployment: {
-    deployment: "Unprivileged LXC",
+    label: "Unprivileged LXC",
     storageMount: "/mnt/backup-manager",
     adapterVersion: "proxmox 1.0.1"
   },
