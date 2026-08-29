@@ -22,8 +22,15 @@
 #
 # apps/generic (issue #82/B4.1) is a third Go module: the generic Web
 # host's own binary, wiring core/service + apps/common/webhost +
-# apps/common/auth/local together. Same reasoning as apps/common — small
-# and fast enough to run in full here.
+# apps/common/auth/local together. Fast, EXCEPT for
+# apps/generic/tests/dockercli, which builds and runs the real
+# container/Dockerfile image against the real `docker` CLI — exactly the
+# kind of slow, Docker-dependent suite core/'s own ./tests/... tree is
+# deliberately excluded from above, for the same reason. It moved here
+# from core/tests/dockercli (this Dockerfile now COPYs apps/ and
+# ui/shared/ to build /backup-manager-web, so it can no longer live
+# inside core/'s own module — see that test package's own doc), and this
+# hook's exclusion has to move with it.
 #
 # Frontend: tsc --noEmit and the vitest suite, both of which are about a second.
 # Playwright is NOT here, for the same reason as the Go integration tree: it
@@ -70,8 +77,11 @@ if [ -d apps/common ]; then
 fi
 
 if [ -d apps/generic ]; then
-  echo "==> pre-commit: apps/generic go build, vet, test"
-  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+  echo "==> pre-commit: apps/generic go build, vet"
+  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./...)
+
+  echo "==> pre-commit: apps/generic go test (excluding tests/dockercli)"
+  (cd apps/generic && export GOWORK=off && go list ./... | grep -v '/tests/dockercli$' | xargs go test)
 fi
 
 # The frontend only exists once ui/shared is present, and a Go-only checkout
