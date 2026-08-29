@@ -206,7 +206,7 @@ def _compose_container_id(project: str, env_file: Path, timeout: float = 30) -> 
         result = _sh(
             "docker", "compose", "-p", project, "-f", str(deploy_generic.COMPOSE_FILE),
             "--env-file", str(env_file),
-            "ps", "-q", "backup-manager",
+            "ps", "-q", "rclone-manager",
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip().splitlines()[0]
