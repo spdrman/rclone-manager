@@ -198,6 +198,15 @@ func (s *Service) lifecycleDeps() lifecycle.Deps {
 // describes. This is the one place config.Remote's fields are translated
 // into transport.Source's, so every use case in this package (the cycle,
 // fetch, reconcile) agrees on exactly how that translation works.
+//
+// KeyFile carries both the deprecated top-level alias and the new key.file
+// block: Validate normalizes them to agree (see config/validate.go's
+// validateKey), so this line alone is enough for either spelling. KeyEnv
+// and KeyCommand (#74's other two resolvers) need their own fields here
+// too, since there is nothing to normalize them into: without this, a
+// config using key.env or key.command would pass Validate and then fail
+// loudly at connection time, because sftpConfig would see none of the
+// three sources set on the Source it was actually handed (#75).
 func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 	r := bs.Remote
 	return transport.Source{
@@ -207,6 +216,8 @@ func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 		Port:       r.Port,
 		User:       r.User,
 		KeyFile:    r.KeyFile,
+		KeyEnv:     r.Key.Env,
+		KeyCommand: r.Key.Command,
 		KnownHosts: r.KnownHosts,
 		Root:       bs.RemotePath,
 	}
