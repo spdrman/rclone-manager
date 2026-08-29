@@ -3,13 +3,17 @@
 # backup-manager container image (A3.9).
 #
 # Two stages: a builder that compiles the single Go binary (manager logic
-# plus the embedded rclone packages, see internal/transport/rclone), and a
-# distroless runtime that carries nothing but that binary and the TLS root
-# store. There is no `rclone` executable anywhere in this image: rclone is
-# consumed as a Go module (go.mod pins github.com/rclone/rclone), imported
-# as packages, and compiled straight into /backup-manager. See
+# plus the embedded rclone packages, see core/internal/transport/rclone),
+# and a distroless runtime that carries nothing but that binary and the TLS
+# root store. There is no `rclone` executable anywhere in this image: rclone
+# is consumed as a Go module (core/go.mod pins github.com/rclone/rclone),
+# imported as packages, and compiled straight into /backup-manager. See
 # docs/deployment.md for how that claim is verified against the built
 # image, rather than just asserted here.
+#
+# The engine lives in its own core/ Go module (docs/EPIC-B-multi-nas.md
+# §7 — B1.1/#106 drew this boundary): everything this build needs comes
+# from core/, never from apps/ or ui/.
 #
 # cmd/backup-manager currently only implements a `version` subcommand
 # (execution modes and the rest of the CLI are separate, still-open issues).
@@ -44,8 +48,9 @@ ENV CGO_ENABLED=0 \
 WORKDIR /src
 
 # Dependency layer first, so editing application code doesn't invalidate
-# the module download cache.
-COPY go.mod go.sum ./
+# the module download cache. core/ is its own Go module (see the top-of-
+# file note); everything below is relative to it landing at /src's root.
+COPY core/go.mod core/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
@@ -53,9 +58,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # accidental `git status`-dirty file (tests/.run scratch, etc.) that isn't
 # excluded by .dockerignore from ever reaching the build context for these
 # paths.
-COPY cmd/ ./cmd/
-COPY internal/ ./internal/
-COPY migrations/ ./migrations/
+COPY core/cmd/ ./cmd/
+COPY core/internal/ ./internal/
+COPY core/migrations/ ./migrations/
 
 # Cross-compiled for the target platform requested by `docker buildx build
 # --platform`, without emulating the builder itself: TARGETOS/TARGETARCH
