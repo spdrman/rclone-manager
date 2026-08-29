@@ -20,9 +20,12 @@ package dockercli_test
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -161,7 +164,12 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
 		"-v", filepath.Join(dir, "backups") + ":/data/backups",
 		"--health-interval=2s", "--health-timeout=2s", "--health-retries=1", "--health-start-period=1s",
-		image, "daemon", "--config", "/etc/backup-manager/config.yaml",
+		// Full path, not just "daemon": container/Dockerfile deliberately
+		// sets no ENTRYPOINT (it now ships two binaries, and a fixed
+		// ENTRYPOINT can only ever prefix one of them - see that file's
+		// own doc comment), so `command:`/`docker run` args are the whole
+		// argv, exactly as container/compose.yaml's own `command:` does.
+		image, "/backup-manager", "daemon", "--config", "/etc/backup-manager/config.yaml",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -257,4 +265,89 @@ func TestDaemonStaysRunningWithValidConfig(t *testing.T) {
 		logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
 		t.Fatalf("container %s is not running (State.Running=%s); logs:\n%s", name, got, logs)
 	}
+}
+
+// TestServeCommandExposesTheGenericWebHost is the Docker CLI-level
+// regression check for issue #82/B4.1's actual deliverable: not just that
+// the image builds (see the frontend-build/build-web stages in
+// container/Dockerfile), but that `/backup-manager-web serve`, run inside
+// a real container exactly as container/compose.yaml's default `command`
+// does, actually serves the generic Web host on a published port -
+// unauthenticated against the API, and the real built frontend for a
+// static route.
+func TestServeCommandExposesTheGenericWebHost(t *testing.T) {
+	image := buildImage(t)
+	dir := degradedConfig(t)
+	name := "backup-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
+
+	args := []string{
+		"run", "-d", "--name", name,
+		"-p", "0:8080", // publish --listen's :8080 to an ephemeral host port
+		"-v", filepath.Join(dir, "config.yaml") + ":/etc/backup-manager/config.yaml:ro",
+		"-v", filepath.Join(dir, "state") + ":/data/state",
+		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
+		"-v", filepath.Join(dir, "backups") + ":/data/backups",
+		image, "/backup-manager-web", "serve", "--config", "/etc/backup-manager/config.yaml", "--listen", ":8080",
+	}
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v\n%s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+
+	hostPort := publishedPort(t, name, "8080/tcp")
+	base := "http://127.0.0.1:" + hostPort
+
+	// The container's own HTTP listener can take a moment to come up
+	// after `docker run -d` returns; retry briefly rather than racing it.
+	deadline := time.Now().Add(15 * time.Second)
+	var resp *http.Response
+	for {
+		resp, err = http.Get(base + "/api/v1/system/version")
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
+			t.Fatalf("GET %s/api/v1/system/version never succeeded: %v; logs:\n%s", base, err, logs)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthenticated GET /api/v1/system/version status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+
+	staticResp, err := http.Get(base + "/")
+	if err != nil {
+		t.Fatalf("GET %s/: %v", base, err)
+	}
+	defer staticResp.Body.Close()
+	body, err := io.ReadAll(staticResp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if staticResp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("<html")) {
+		t.Errorf("GET / status=%d body=%q, want 200 and real HTML (ui/shared's built index.html)", staticResp.StatusCode, body)
+	}
+}
+
+// publishedPort returns the host port Docker assigned container's
+// containerPort ("8080/tcp") to, via `docker port`, when it was started
+// with `-P` (publish every exposed port to an ephemeral host port).
+func publishedPort(t *testing.T, container, containerPort string) string {
+	t.Helper()
+	out, err := exec.Command("docker", "port", container, containerPort).Output()
+	if err != nil {
+		t.Fatalf("docker port %s %s: %v", container, containerPort, err)
+	}
+	// Output looks like "0.0.0.0:54321\n" (and, on some hosts, a second
+	// "[::]:54321" line for IPv6) - the port after the last ':' on the
+	// first line is what's needed.
+	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	idx := strings.LastIndex(line, ":")
+	if idx < 0 || idx == len(line)-1 {
+		t.Fatalf("could not parse host port out of %q", out)
+	}
+	return line[idx+1:]
 }

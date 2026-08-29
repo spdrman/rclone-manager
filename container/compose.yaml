@@ -1,7 +1,6 @@
-# UGREEN deployment shape for backup-manager (A3.9). See docs/deployment.md
-# for the reasoning behind every one of these settings, how to build and run
-# it, and what still has to change once the daemon subcommands
-# (backup-manager run / daemon / status) exist.
+# Generic Docker deployment shape for backup-manager (A3.9, extended by
+# issue #82/B4.1). See docs/deployment.md for the reasoning behind every
+# one of these settings and how to build and run it.
 #
 # This file builds for the machine running `docker compose`, i.e. it's meant
 # to be run ON the UGREEN NAS itself (or against a matching architecture).
@@ -101,10 +100,13 @@ services:
       # hardcoded list ending in /tmp) — see docs/deployment.md.
       TMPDIR: /tmp
 
-      # `/backup-manager-web serve --listen ${LISTEN_ADDR}` binds this
-      # address inside the container; `ports:` above only republishes
-      # whatever port this is to the host. Kept as one address (not a
-      # separate host/port pair) so both sides always agree.
+      # `/backup-manager-web serve`'s own `--listen` flag defaults to this
+      # variable when set (falling back to :8080 otherwise), so it binds
+      # this address inside the container without it needing to be an
+      # explicit command-line argument above; `ports:` above only
+      # republishes whatever port this is to the host. Kept as one
+      # address (not a separate host/port pair) so both sides always
+      # agree.
       LISTEN_ADDR: ":8080"
 
     volumes:
