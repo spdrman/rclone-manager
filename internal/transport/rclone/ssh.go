@@ -30,6 +30,7 @@ import (
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/lib/env"
 
+	"github.com/spdrman/rclone-manager/internal/obs"
 	"github.com/spdrman/rclone-manager/internal/transport"
 )
 
@@ -40,13 +41,25 @@ import (
 // does not set is an option this adapter refuses to expose, and that list
 // matters as much as the list of what it does set:
 //
-//   - pass, key_pem, ask_password, key_use_agent are never set, so password
+//   - pass, ask_password, key_use_agent are never set, so password
 //     authentication and ssh-agent authentication have no path into this
 //     adapter. transport.Source has no password field to begin with, so
 //     there is nothing upstream that could even be threaded through, but
 //     this function is the backstop: even a future caller that adds a
 //     Password field to Source cannot reach a password login without also
 //     touching this switch statement.
+//   - key_pem (#74) IS reachable, but only just: it is set only when Source
+//     names an env or command key resolver instead of key_file, and only
+//     ever with what keysource.go's resolveKeyFromEnv/resolveKeyFromCommand
+//     returned after confirming it parses as an unencrypted SSH private
+//     key. There is no config field anywhere in this repository an operator
+//     can put a value into key_pem with directly: config.Remote's Key type
+//     has File, Env and Command fields, and deliberately nothing an
+//     operator could paste raw key material into (see config.Key's doc).
+//     key_file remains the default and documented preference specifically
+//     because it is the only one of the three sources that never routes
+//     through key_pem at all: rclone opens that file itself, so this
+//     adapter's own memory never holds the key.
 //   - pin_host_key and host_keys (rclone's trust-on-first-use pinning mode)
 //     are never set. TOFU is a legitimate mode for interactive use, but it
 //     means "accept whatever key the server shows the first time", which is
@@ -69,21 +82,77 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		return nil, fmt.Errorf("source %q: user is required for sftp", src.ID)
 	}
 
-	// FR-6: SSH key authentication by default. This is intentionally
-	// mandatory rather than optional. rclone's sftp backend, given no
+	// FR-6 + #74: SSH key authentication by default, mandatory rather than
+	// optional, exactly as before. rclone's sftp backend, given no
 	// key_file, no key_pem, no pass and no ask_password, does not refuse to
 	// connect: it falls back to asking a running ssh-agent for a key. That
 	// is a real, working authentication path, just not the one this adapter
 	// is meant to offer, and an operator who forgot to configure a key would
 	// otherwise authenticate against whatever key their agent happens to
-	// hold, silently and non-reproducibly. Requiring key_file closes that
-	// path by construction.
-	if src.KeyFile == "" {
-		return nil, fmt.Errorf("source %q: key_file is required for sftp (key-based authentication is mandatory, ssh-agent fallback and password login are not offered)", src.ID)
+	// hold, silently and non-reproducibly. Requiring exactly one of the
+	// three sources below closes that path by construction, the same as
+	// requiring key_file alone used to, before #74 gave it siblings.
+	//
+	// "Exactly one", not "at least one": two configured sources is a config
+	// mistake, not a precedence order for this adapter to silently pick
+	// through, so both are refused rather than one being guessed as
+	// intended. internal/config/validate.go enforces this same rule
+	// independently, so a config built through that package never reaches
+	// here with more than one set; this is the backstop for anything that
+	// builds a transport.Source directly, tests included.
+	sourceCount := 0
+	if src.KeyFile != "" {
+		sourceCount++
 	}
-	keyFilePath := env.ShellExpand(src.KeyFile)
-	if _, err := os.Stat(keyFilePath); err != nil {
-		return nil, fmt.Errorf("source %q: key_file %q is not accessible: %w", src.ID, src.KeyFile, err)
+	if src.KeyEnv != "" {
+		sourceCount++
+	}
+	if len(src.KeyCommand) > 0 {
+		sourceCount++
+	}
+	switch {
+	case sourceCount == 0:
+		return nil, fmt.Errorf("source %q: exactly one of key_file, key_env or key_command is required for sftp (key-based authentication is mandatory, ssh-agent fallback and password login are not offered)", src.ID)
+	case sourceCount > 1:
+		return nil, fmt.Errorf("source %q: exactly one of key_file, key_env or key_command may be set for sftp, not more than one", src.ID)
+	}
+
+	// keyFileValue and keyPEM are mutually exclusive: exactly one of them
+	// ends up populated by the switch below, and which one decides whether
+	// the cfg built further down sets key_file or key_pem. Resolution
+	// happens here, before known_hosts is even checked, so that a bad
+	// resolver (a secrets manager returning junk, an encrypted key, ...)
+	// is reported as a key problem, not buried after an unrelated
+	// known_hosts error.
+	var keyFileValue string
+	var keyPEM obs.Secret
+	usingKeyPEM := false
+
+	switch {
+	case src.KeyFile != "":
+		// The default and documented preference (docs/ssh-setup.md): this
+		// adapter only ever confirms the file exists and is readable. It
+		// never opens it, so the key itself never enters this process's
+		// memory at all; rclone's own sftp backend reads key_file directly.
+		keyFilePath := env.ShellExpand(src.KeyFile)
+		if _, err := os.Stat(keyFilePath); err != nil {
+			return nil, fmt.Errorf("source %q: key_file %q is not accessible: %w", src.ID, src.KeyFile, err)
+		}
+		keyFileValue = src.KeyFile
+	case src.KeyEnv != "":
+		secret, err := resolveKeyFromEnv(src.KeyEnv)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: resolving the SSH key from environment variable %q: %w", src.ID, src.KeyEnv, err)
+		}
+		keyPEM = secret
+		usingKeyPEM = true
+	case len(src.KeyCommand) > 0:
+		secret, err := resolveKeyFromCommand(src.KeyCommand)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: resolving the SSH key from the configured command: %w", src.ID, err)
+		}
+		keyPEM = secret
+		usingKeyPEM = true
 	}
 
 	// FR-6: host-key verification is mandatory, with no opt-out reachable
@@ -108,7 +177,19 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		cfg.Set("port", strconv.Itoa(src.Port))
 	}
 	cfg.Set("user", src.User)
-	cfg.Set("key_file", src.KeyFile)
+	if usingKeyPEM {
+		// rclone's sftp backend reconstructs the original PEM text with
+		// strconv.Unquote("\"" + opt.KeyPem + "\"") (backend/sftp/sftp.go),
+		// so the value has to be exactly what strconv.Quote would produce
+		// for it, minus the surrounding quotes strconv.Quote adds: the
+		// inverse operation of what NewFs does to read it back. Handing it
+		// a literal multi-line PEM string instead (real newline bytes, no
+		// escaping) fails that Unquote call outright, since a Go
+		// interpreted string literal cannot contain a raw newline.
+		cfg.Set("key_pem", quoteForRclonePem(keyPEM.Reveal()))
+	} else {
+		cfg.Set("key_file", keyFileValue)
+	}
 	cfg.Set("known_hosts_file", src.KnownHosts)
 
 	// fsFor calls info.NewFs directly instead of going through rclone's usual
@@ -149,4 +230,18 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	cfg.Set("concurrency", "64")
 
 	return cfg, nil
+}
+
+// quoteForRclonePem converts raw PEM text into the single-line,
+// backslash-n-escaped form rclone's sftp backend expects for its key_pem
+// option. backend/sftp/sftp.go reconstructs the original bytes with
+// strconv.Unquote("\"" + opt.KeyPem + "\""), so what this function returns
+// has to be exactly the inverse: strconv.Quote(pem) with the surrounding
+// quotes that Quote adds trimmed back off, since those two already are
+// exact inverses of each other for every byte a valid PEM block can
+// contain, not just the newlines rclone's own help text happens to call
+// out.
+func quoteForRclonePem(pem string) string {
+	quoted := strconv.Quote(pem)
+	return quoted[1 : len(quoted)-1]
 }

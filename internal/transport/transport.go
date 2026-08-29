@@ -17,13 +17,34 @@ type HashAlgorithm string
 const SHA256 HashAlgorithm = "sha256"
 
 // Source identifies one configured remote.
+//
+// KeyFile, KeyEnv and KeyCommand are the three ways (#74) an sftp Source may
+// name where its SSH private key comes from. None of them carry key
+// material itself, only where to find it: a file path rclone opens itself,
+// an environment variable name, or an argv array to run. Exactly one of the
+// three may be set for an sftp Source; internal/transport/rclone enforces
+// that and resolves whichever is set (see ssh.go's sftpConfig).
 type Source struct {
-	ID         string
-	Type       string // "sftp", "local"
-	Host       string
-	Port       int
-	User       string
-	KeyFile    string
+	ID   string
+	Type string // "sftp", "local"
+	Host string
+	Port int
+	User string
+
+	// KeyFile is the default and documented preference: the only one of
+	// the three that never puts key material in this process's own memory,
+	// because rclone opens the file itself.
+	KeyFile string
+
+	// KeyEnv names an environment variable to read the key from.
+	KeyEnv string
+
+	// KeyCommand is an argv array (KeyCommand[0] is the executable, the
+	// rest are its literal arguments) run to produce the key on stdout.
+	// It is never a shell string: nothing in this program ever hands it to
+	// a shell.
+	KeyCommand []string
+
 	KnownHosts string
 	Root       string
 }

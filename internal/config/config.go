@@ -88,8 +88,65 @@ type Remote struct {
 	Host       string `yaml:"host"`
 	Port       int    `yaml:"port"` // 0 means the backend's default port
 	User       string `yaml:"user"`
-	KeyFile    string `yaml:"key_file"`
+
+	// KeyFile is deprecated in favour of Key.File, and still works exactly
+	// as before (#74): docs/ssh-setup.md and docs/deployment.md both
+	// document it, and an operator's existing config must not break. It is
+	// treated as one more spelling of "the file resolver", not a fourth,
+	// independent key source: Validate refuses a config that sets both this
+	// and Key.File, exactly as it refuses two of Key's own fields set
+	// together.
+	KeyFile string `yaml:"key_file"`
+
+	// Key names exactly one way to obtain this remote's SSH private key.
+	// See the Key type's own doc for why File, Env and Command are the only
+	// three, and why there is deliberately no field here for raw key bytes.
+	Key Key `yaml:"key"`
+
 	KnownHosts string `yaml:"known_hosts"`
+}
+
+// Key names exactly one way for an sftp Remote to obtain its SSH private
+// key (#74). Exactly one of File, Env or Command may be set; Validate
+// enforces that (and, for the deprecated Remote.KeyFile alias, treats it as
+// interchangeable with Key.File rather than a fourth option).
+//
+// There is deliberately no field here for the key's raw bytes. Key only
+// ever names WHERE the key lives, never carries it: a file rclone opens
+// itself, an environment variable this process reads, or a command it
+// runs. That omission is the whole point of the type, not an oversight: the
+// one place resolved key material is allowed to reach rclone (its key_pem
+// option, see internal/transport/rclone/ssh.go) must only ever be reachable
+// through a resolver's output, never through anything an operator can spell
+// directly in YAML. Search this package for "key_pem" if that sentence
+// looks like it needs proving; you will not find it, on purpose.
+type Key struct {
+	// File points at the private key on disk. This is the default and the
+	// documented preference (docs/ssh-setup.md): of the three, it is the
+	// only one that never puts key material into this process's own
+	// memory, because rclone opens the file itself rather than this
+	// program reading it first.
+	File string `yaml:"file"`
+
+	// Env names an environment variable this process reads the key from at
+	// connection time.
+	Env string `yaml:"env"`
+
+	// Command is an argv array: Command[0] is the executable, invoked
+	// directly (never through a shell, so shell metacharacters in any
+	// element are inert literal bytes), and the rest are its arguments. Its
+	// stdout is treated as the key. This is the path a future secrets
+	// manager (OpenBao, Vault, SOPS, 1Password, AWS Secrets Manager, ...)
+	// adopts without this project taking a dependency on any of their SDKs
+	// or picking a winner among them.
+	Command []string `yaml:"command"`
+}
+
+// isZero reports whether none of Key's three sources are set, so callers
+// can tell "no key: block in the YAML at all" apart from a source with an
+// empty value in one of its fields.
+func (k Key) isZero() bool {
+	return k.File == "" && k.Env == "" && len(k.Command) == 0
 }
 
 // Completion selects how a backup set decides a remote artifact is finished
