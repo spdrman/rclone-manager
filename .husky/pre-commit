@@ -53,8 +53,14 @@ echo "==> pre-commit: core/ go test ./internal/..."
 (cd core && GOWORK=off go test ./internal/...)
 
 if [ -d apps/common ]; then
+  # GOWORK=off, matching core/ above: apps/common has no dependencies
+  # today, so this changes nothing observable yet, but apps/common/webhost
+  # is the deliberate seam for #94, which will need to import core/, and
+  # leaving GOWORK on would let go.work's `use` directives silently
+  # substitute the local core/ directory regardless of apps/common's own
+  # module pin.
   echo "==> pre-commit: apps/common go build, vet, test"
-  (cd apps/common && go build ./... && go vet ./... && go test ./...)
+  (cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
 fi
 
 # The frontend only exists once ui/shared is present, and a Go-only checkout

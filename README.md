@@ -509,6 +509,25 @@ every field populated; that's a better reference than hand-writing one here, sin
 exercised by the config package's own tests and won't silently drift out of sync with the
 schema the way a README example would.
 
+`apps/common/` is a second, much smaller Go module (`apps/common/go.mod`): the
+`PlatformCapabilities`/`PlatformAdapter` contract every provider app composes over
+(`apps/common/platform/capabilities/`, `docs/EPIC-B-multi-nas.md` §3.4), plus two
+reserved-but-empty packages (`apps/common/webhost/`, `apps/common/auth/local/`) that hold
+the location the real `/api/v1` implementation and local-account auth land in (#94/B1.5) —
+out of scope for #106/B1.1, which only draws the boundary. `apps/common/tests/` is a
+separate small TS package: the one place in the repo that legitimately imports every
+provider's frontend bridge at once (the provider-conformance matrix, §63A), kept outside
+`ui/shared/` specifically so removing a provider never breaks `ui/shared`'s own build.
+
+`ui/shared/` is the one shared frontend every provider app builds against
+(`ui/shared/src/`), never providing its own product UI (see `docs/EPIC-B-multi-nas.md` §11):
+pages, components, the `PlatformBridge` contract (`ui/shared/src/platform/`,
+`ui/shared/src/types/platform.ts`), and the single causl-ts state graph
+(`ui/shared/src/state/graph.ts`). A provider app under `apps/<provider>/frontend/`
+supplies a `PlatformBridge` implementation and, for the seven that exist today
+(`generic`, `ugos`, `synology`, `truenas`, `unraid`, `openmediavault`, `proxmox`), nothing
+else — `ui/shared` never imports a provider, only the reverse.
+
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
 

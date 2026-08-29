@@ -18,7 +18,11 @@ README.md
 *.md
 
 # Test fixtures and their scratch output; never part of the shipped binary.
-tests
+# core/tests, not tests: the root tests/ moved under core/ with #106/B1.1,
+# and the un-prefixed pattern is dead today (the current Dockerfile never
+# COPYs anything that would match it) but would silently stop excluding
+# anything the day a future COPY core/ ... starts matching it instead.
+core/tests
 
 # Never let a filled-in .env reach the build context.
 .env

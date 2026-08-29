@@ -58,6 +58,17 @@ jobs:
   apps-common-build-vet-test:
     name: apps/common build, vet, test
     runs-on: ubuntu-latest
+    # GOWORK=off, matching core-build-vet-test above: apps/common/go.mod
+    # has no dependencies today, so this is a no-op right now, but
+    # apps/common/webhost is the deliberate seam for #94, which WILL need
+    # to import core/. Left on, GOWORK would let go.work's `use` directives
+    # silently substitute the local core/ directory regardless of whether
+    # apps/common/go.mod's own module pin is even correct — exactly the
+    # module-boundary illusion this repo's dependency-rules job exists to
+    # prevent elsewhere. Fixing it now, while it changes nothing observable,
+    # is cheaper than fixing it once something actually depends on it.
+    env:
+      GOWORK: "off"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
