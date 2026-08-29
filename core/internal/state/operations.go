@@ -94,11 +94,12 @@ func validateOperationRequest(req OperationRequest) error {
 // same IdempotencyKey resolve to exactly one row rather than a
 // check-then-insert race creating two.
 //
-// If IdempotencyKey was already used for a request whose Action or
+// If IdempotencyKey was already used for a request whose Actor, Action or
 // ConfigRevision differs from req, this returns ErrOperationIdempotencyKeyReused:
-// an idempotency key is a promise about one specific logical request, and
-// silently serving back an unrelated operation's result would be worse than
-// refusing.
+// an idempotency key is a promise about one specific logical request from
+// one specific caller, and silently serving one actor's operation (which
+// may include its Result/Error) back to a request presenting a different
+// Actor would be an information leak across callers, not a convenience.
 func (j *Journal) CreateOperation(ctx context.Context, req OperationRequest) (OperationOutcome, error) {
 	if err := validateOperationRequest(req); err != nil {
 		return OperationOutcome{}, err
@@ -115,7 +116,7 @@ func (j *Journal) CreateOperation(ctx context.Context, req OperationRequest) (Op
 		return OperationOutcome{}, err
 	}
 	if err == nil {
-		if existing.Action != req.Action || existing.ConfigRevision != req.ConfigRevision {
+		if existing.Actor != req.Actor || existing.Action != req.Action || existing.ConfigRevision != req.ConfigRevision {
 			return OperationOutcome{}, fmt.Errorf("%w: key %q", ErrOperationIdempotencyKeyReused, req.IdempotencyKey)
 		}
 		if err := tx.Commit(); err != nil {

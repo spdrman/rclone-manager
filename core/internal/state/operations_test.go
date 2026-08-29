@@ -170,6 +170,29 @@ func TestCreateOperation_ReusedKeyForDifferentActionIsRefused(t *testing.T) {
 	}
 }
 
+// TestCreateOperation_ReusedKeyForDifferentActorIsRefused is the security
+// half of the same claim: a different caller presenting the same
+// idempotency key must never be handed back the original caller's
+// operation (which may carry that caller's Result/Error), even when the
+// Action and ConfigRevision happen to match.
+func TestCreateOperation_ReusedKeyForDifferentActorIsRefused(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+
+	first := testOperationRequest("op_1", "idem-1")
+	first.Actor = "alice"
+	if _, err := j.CreateOperation(ctx, first); err != nil {
+		t.Fatalf("first CreateOperation: %v", err)
+	}
+
+	second := testOperationRequest("op_2", "idem-1")
+	second.Actor = "mallory"
+	_, err := j.CreateOperation(ctx, second)
+	if !errors.Is(err, ErrOperationIdempotencyKeyReused) {
+		t.Fatalf("CreateOperation error = %v, want errors.Is(err, ErrOperationIdempotencyKeyReused)", err)
+	}
+}
+
 func TestCreateOperation_RequiresIdempotencyKeyOperationIDAndAction(t *testing.T) {
 	base := testOperationRequest("op_1", "idem-1")
 
