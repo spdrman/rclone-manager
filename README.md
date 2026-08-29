@@ -5,7 +5,6 @@
   </picture>
 </p>
 
-# rclone-manager
 
 A backup lifecycle manager for a UGREEN NAS. It pulls completed backup artifacts off a
 remote server over SFTP, verifies them, commits them durably, and only then deletes the
