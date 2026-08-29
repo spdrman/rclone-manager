@@ -272,3 +272,77 @@ docker compose -f container/compose.yaml run --rm backup-manager /backup-manager
 See "The generic Web host" below for what `serve` actually composes, and
 `scripts/deploy/deploy_generic.py --help` for a scripted version of the same steps that
 also renders `config.yaml`/`.env` for you from a private key and a remote host.
+
+## The generic Web host
+
+`/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2) is the
+"generic Web App host": one process composing
+
+- the versioned `/api/v1` API (`apps/common/webhost`, issue #94/B1.5's skeleton);
+- local authentication (`apps/common/auth/local`): Argon2id password hashing, HTTP-only
+  session cookies, double-submit-cookie CSRF protection, per-IP rate limiting on
+  login/enrollment, and a single-use, expiring bootstrap token for the one-time
+  administrator enrollment flow (§49.1);
+- the shared UI (`ui/shared`'s built static bundle, embedded via `apps/generic/webui`'s
+  `go:embed`, with an SPA fallback to `index.html` for any client-side route);
+- the backup scheduler (`core/service.BackupService.RunOnSchedule`, at the config file's
+  own `poll_interval`).
+
+The HTTP server and the scheduler share one `*service.BackupService` and one
+`signal.NotifyContext`-derived shutdown context (§9.3): both stop because the same
+signal canceled that context, not because one tells the other to. Both also share
+`BackupService`'s existing single-flight guard, so a scheduled cycle and a future
+API-submitted one (`POST /api/v1/operations`) can never run concurrently against the
+same backup sets.
+
+**First run.** With no administrator account yet, `serve` prints a one-time enrollment
+link straight to stdout (the container's own log):
+
+```
+backup-manager: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
+```
+
+That token is required to complete `POST /api/v1/auth/enroll` — reaching the port is
+not enough to claim the account (§49.1) — and is invalidated the moment enrollment
+completes, or by the next process restart before it does. It travels as a URL query
+parameter, not a form field: neither `EnrollmentPage.tsx` nor the design canvas
+(`docs/design/Backup Manager.dc.html`) has one, so `ui/shared/src/api/client.ts` reads
+it off `window.location.search` and attaches it as the `X-Bootstrap-Token` header
+instead.
+
+**Two binaries, one image, no `ENTRYPOINT`.** `apps/generic` is its own Go module — it
+has to be, since it imports `apps/common/webhost` and `apps/common/auth/local`, and
+`core/`'s own module cannot depend on `apps/` in either direction (§7.1) — so
+`/backup-manager-web` is a second binary alongside the unchanged `/backup-manager`,
+not a new subcommand of it. `container/Dockerfile` sets no `ENTRYPOINT` for exactly
+this reason (a fixed `ENTRYPOINT` can only ever prefix one binary): every `command:` in
+`container/compose.yaml`, and every example above, names its binary by full path.
+
+**Headless mode is still just the other binary.** `/backup-manager daemon` (or `run`,
+`check`, ...) never binds a web listener at all — override `command` in
+`container/compose.yaml` to `["/backup-manager", "daemon"]` for a deployment that
+should never expose the API/UI. `backup-manager status` (the HEALTHCHECK) works
+identically either way, since it is always a fresh, read-only check against the shared
+state database file, independent of which binary is actually running as the
+container's main process.
+
+## Release hashes
+
+`scripts/release/record-release-hashes.sh` builds `container/Dockerfile` for both
+`linux/amd64` and `linux/arm64`, extracts `/backup-manager` and `/backup-manager-web`
+from each built image, and writes their SHA-256 hashes (plus each build's local Docker
+image ID) to `container/release-manifest.json` — the Phase 4 TDD Gate's "binary
+SHA-256 and image/package digests," and §8's "release manifest SHALL prove core parity
+through binary hashes and image/package digests."
+
+```
+VERSION=$(git describe --tags --always) COMMIT=$(git rev-parse HEAD) \
+  bash scripts/release/record-release-hashes.sh
+```
+
+**What this doesn't record**: a registry digest. No registry is configured for this
+repository yet, so there is nothing for `docker buildx build --push` to assign one
+against; the manifest's `local_image_id_sha256` field is honestly labeled as the local
+Docker image ID it actually is, never as a stand-in for a digest that doesn't exist. A
+real release, once a registry exists, additionally records what
+`docker buildx imagetools inspect <ref>` (or the `--push` output itself) reports.
