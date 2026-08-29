@@ -130,9 +130,38 @@ func buildImage(t *testing.T) string {
 func degradedConfig(t *testing.T) (dir string) {
 	t.Helper()
 	dir = t.TempDir()
+	// 0o777, not 0o755: container/Dockerfile's runtime image
+	// (gcr.io/distroless/static-debian12:nonroot) runs as a fixed
+	// non-root uid (65532), which on a real Linux Docker daemon has no
+	// write access to a host directory it doesn't own unless "other" has
+	// write permission too - t.TempDir()'s own subdirectories are owned
+	// by whichever uid runs `go test`, essentially never 65532. This
+	// went unnoticed against a macOS Docker Desktop daemon, which does
+	// not enforce host bind-mount ownership/permission checks the same
+	// way (see docs/deployment.md's "Non-root and the NAS uid/gid"
+	// section, which documents this exact leniency directly), and only
+	// surfaced running this suite for real on a Linux CI runner:
+	// `state: PRAGMA journal_mode = WAL: unable to open database file
+	// (14)` - SQLITE_CANTOPEN, from failing to create state.db in a
+	// directory the container's own uid cannot write into.
+	// container/compose.yaml's real deployments solve the equivalent
+	// problem with an explicit PUID/PGID plus an operator pre-chowning
+	// the host directory (see that file's own "Non-root and the NAS
+	// uid/gid" comment); a throwaway per-test temp directory has no
+	// equivalent operator step to do that, so it's world-writable
+	// instead - the simplest fix that works regardless of which uid any
+	// given container image happens to default to.
 	for _, sub := range []string{"remote", "backups", "state"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o777); err != nil {
 			t.Fatalf("MkdirAll %s: %v", sub, err)
+		}
+		if err := os.Chmod(filepath.Join(dir, sub), 0o777); err != nil {
+			// MkdirAll on an already-existing directory does not change
+			// its mode, and (unlike Unix) does not necessarily apply the
+			// requested mode verbatim on first creation either once a
+			// umask is involved - Chmod afterward makes the final mode
+			// unconditional rather than depending on either.
+			t.Fatalf("Chmod %s: %v", sub, err)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "remote", ".keep"), nil, 0o644); err != nil {
@@ -254,8 +283,30 @@ func TestHealthCheckTracksStatusExitCode(t *testing.T) {
 	name := runDaemonContainer(t, image, dir)
 
 	got := healthStatus(t, name, 30*time.Second)
+
+	// Asserted BEFORE checking the health value itself, deliberately: a
+	// crashed container (main process exited, e.g. because it could not
+	// open its own state database - see degradedConfig's own doc for
+	// exactly that failure mode, caught here the hard way) can also end
+	// up reporting Docker health "unhealthy", which would make this
+	// assertion pass for entirely the wrong reason - a false positive
+	// that proves nothing about whether HEALTHCHECK actually tracks
+	// `backup-manager status`'s exit code. Requiring State.Running is
+	// what makes "unhealthy" mean "the DEGRADED backup set was detected
+	// by a live container", not "the container is not there to be
+	// healthy or not".
+	running, err := exec.Command("docker", "inspect", "--format", "{{.State.Running}}", name).Output()
+	if err != nil {
+		t.Fatalf("docker inspect: %v", err)
+	}
+	if got := string(bytes.TrimSpace(running)); got != "true" {
+		logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
+		t.Fatalf("container %s is not running (State.Running=%s), so its health status cannot mean what this test needs it to mean; logs:\n%s", name, got, logs)
+	}
+
 	if got != "unhealthy" {
-		t.Errorf("container health status = %q, want %q (backup-manager status must exit non-zero for a DEGRADED backup set, and HEALTHCHECK must run status, not version)", got, "unhealthy")
+		logs, _ := exec.Command("docker", "logs", name).CombinedOutput()
+		t.Errorf("container health status = %q, want %q (backup-manager status must exit non-zero for a DEGRADED backup set, and HEALTHCHECK must run status, not version); logs:\n%s", got, "unhealthy", logs)
 	}
 }
 
