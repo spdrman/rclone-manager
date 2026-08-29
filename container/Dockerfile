@@ -15,13 +15,11 @@
 # §7 — B1.1/#106 drew this boundary): everything this build needs comes
 # from core/, never from apps/ or ui/.
 #
-# cmd/backup-manager currently only implements a `version` subcommand
-# (execution modes and the rest of the CLI are separate, still-open issues).
-# This image and container/compose.yaml are deliberately packaging ahead of
-# that work: they define the shape a real deployment will run in
-# (volumes, uid/gid, restart policy, health check) without pretending a
-# daemon exists yet. Search this file and container/compose.yaml for
-# "TODO(daemon)" for the two spots that need to change once it does.
+# cmd/backup-manager now implements every execution mode FR-1/FR-24 call
+# for: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`, `fetch`,
+# `retention`, `reconcile`, `validate` and `version` (issue #82/B4.1 is what
+# caught this image's own CMD/HEALTHCHECK up to that, after EPIC A shipped
+# this file ahead of the daemon existing at all).
 
 # ---- builder ----------------------------------------------------------
 # Pinned by digest, not just tag, so this stage resolves to the exact same
@@ -111,24 +109,23 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/backup-manager /backup-manager
 
 ENTRYPOINT ["/backup-manager"]
-# TODO(daemon): once `backup-manager run` / `daemon` exist, this is where a
-# real deployment's long-running command goes; today the only subcommand
-# that exists is `version`, so there is nothing to default CMD to that
-# would actually stay up. container/compose.yaml supplies `command:
-# ["version"]` explicitly for the same reason.
+# `run`/`daemon`/`status`/`check`/`sources`/`artifacts`/`fetch`/`retention`/
+# `reconcile`/`validate`/`version` all exist now (issue #82/B4.1). This
+# image's own default CMD stays deliberately unset: container/compose.yaml
+# and every `docker run` example in docs/deployment.md say explicitly which
+# one they want (`daemon` for the long-running headless case, `version` for
+# a one-shot smoke check, `status` for the healthcheck below), rather than
+# relying on a default that would silently mean something different from
+# what the caller intended.
 
-# `backup-manager status` (issue #26) doesn't exist yet, so this can't ask
-# "is the service healthy" the way FR-24's health states are meant to be
-# read. It asks the narrower question that's actually answerable today: can
-# the binary still start up and exit 0. That's process liveness, not
-# backup freshness (the failure-safety invariants are explicit that those
-# are not the same fact) — it exists so the container has *a* health check
-# now, not so it substitutes for one.
-#
-# TODO(#26): replace this CMD with `["/backup-manager", "status"]` (or
-# whatever flag makes it exit non-zero on DEGRADED/STALE/FAILING) the day
-# that subcommand ships. Until then, a HEALTHCHECK that always reports
-# healthy would be actively misleading, so this one is left checking the
-# one true thing available: the binary runs.
+# `backup-manager status` (issue #26, FR-24) exits 0 only when every
+# configured backup set reports HEALTHY, and non-zero on DEGRADED, STALE or
+# FAILING (see cmd/backup-manager/status.go's own doc for the exact
+# contract). This is the real backup-freshness signal FR-24's health states
+# are meant to be read through — not process liveness, which is what the
+# previous `version`-based HEALTHCHECK could only ever answer. Verified
+# directly (see docs/deployment.md and core/tests/dockercli): a container
+# whose one backup set is DEGRADED now reports Docker health "unhealthy",
+# not "healthy".
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["/backup-manager", "version"]
+    CMD ["/backup-manager", "status"]

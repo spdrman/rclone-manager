@@ -29,12 +29,18 @@ services:
         COMMIT: ${COMMIT:-none}
     image: backup-manager:${VERSION:-dev}
 
-    # TODO(daemon): cmd/backup-manager only implements `version` today
-    # (execution modes are separate, still-open issues). This runs it once,
-    # printing backup-manager/rclone/Go versions, and exits 0. Replace with
-    # `["run"]` or `["daemon"]` once one exists — and see the `restart` note
-    # below, which has to change at the same time.
-    command: ["version"]
+    # `/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
+    # §9.2's "Generic Web App host") is this image's real long-running
+    # default: the shared UI, the versioned /api/v1, local authentication
+    # and the backup scheduler, all in one process sharing one shutdown
+    # context (§9.3) — the process this file was packaging ahead of before
+    # #82. `/backup-manager` (no "-web") is still in this same image for
+    # headless-only use with no web listener at all: override `command`
+    # with `["/backup-manager", "daemon"]` for that, or `docker compose run
+    # --rm backup-manager /backup-manager version` / `... check` for a
+    # one-shot check; see the `restart` note below, which assumes the
+    # default `serve` command specifically.
+    command: ["/backup-manager-web", "serve"]
 
     # No privileged mode, no added capabilities. The container doesn't bind
     # a low port, doesn't need raw sockets, and doesn't need to change file
@@ -95,9 +101,19 @@ services:
       # hardcoded list ending in /tmp) — see docs/deployment.md.
       TMPDIR: /tmp
 
+      # `/backup-manager-web serve --listen ${LISTEN_ADDR}` binds this
+      # address inside the container; `ports:` above only republishes
+      # whatever port this is to the host. Kept as one address (not a
+      # separate host/port pair) so both sides always agree.
+      LISTEN_ADDR: ":8080"
+
     volumes:
       # Persistent SQLite lifecycle journal (FR-9). A directory, per the
-      # WAL note above, not a single file.
+      # WAL note above, not a single file. `/backup-manager-web serve` also
+      # keeps its local-authentication administrator record
+      # (apps/common/auth/local) at /data/state/local-auth.json — the
+      # Argon2id password hash only, never a plaintext password — so
+      # enrollment survives a container restart without a second volume.
       - ${STATE_DIR:?set STATE_DIR in .env to a host path for the SQLite state directory}:/data/state
 
       # Where completed artifacts land once pulled and verified. This is
@@ -111,17 +127,26 @@ services:
       - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
       - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
 
-    # TODO(daemon): "unless-stopped" is the right policy for the eventual
-    # long-running `run`/`daemon` process — restart across crashes and NAS
-    # reboots, but stay down if an operator deliberately stops it. Today's
-    # `command: ["version"]` exits 0 immediately, so this will keep
-    # restarting it in a loop (Docker's restart backoff throttles how fast,
-    # but it will not settle). That's expected for a file that's packaging
-    # ahead of the daemon existing, not a bug in this file: use `docker
-    # compose run --rm backup-manager` for a one-shot check instead of `up
-    # -d` until a real long-running command exists. See docs/deployment.md.
+    # `unless-stopped`: restart across crashes and NAS reboots, but stay
+    # down if an operator deliberately stops it — the right policy now that
+    # `command` above (`/backup-manager-web serve`) is a real long-running
+    # process rather than the immediately-exiting `version` this file used
+    # to default to. For a one-shot check, use `docker compose run --rm
+    # backup-manager /backup-manager version` (or `... check`) instead of
+    # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
-    # See Dockerfile for what this actually checks today and why, and
-    # issue #26 for what it becomes.
+    # `backup-manager status` (issue #26), tracked by the image's own
+    # HEALTHCHECK instruction since issue #82/B4.1: see container/Dockerfile
+    # for exactly what it checks and docs/deployment.md for how that was
+    # verified against a running container.
     # healthcheck: inherited from the image's HEALTHCHECK instruction.
+
+    # The generic Web UI/API listener (docs/EPIC-B-multi-nas.md §9.2).
+    # LISTEN_ADDR below controls what `/backup-manager-web serve` actually
+    # binds to inside the container; this only republishes that same port
+    # to the host. Bind to a loopback-only host port (or omit `ports`
+    # entirely and reach it through a reverse proxy) if this deployment
+    # should not be reachable directly from the network.
+    ports:
+      - "${LISTEN_PORT:-8080}:8080"

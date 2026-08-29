@@ -5,15 +5,16 @@ This documents the container packaging for `core/cmd/backup-manager` (A3.9): wha
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
-## Status: packaging ahead of the daemon
+## Status
 
-`core/cmd/backup-manager` only implements a `version` subcommand today. Execution modes
-(`run`, `daemon`) and the rest of the CLI (`status`, `check`, `fetch`, ...) are separate,
-still-open issues. This container and compose file exist to define the deployment shape
-(volumes, uid/gid, restart policy, health check) ahead of that work, not to run a working
-service today. Grep `container/Dockerfile` and `container/compose.yaml` for
-`TODO(daemon)` and `TODO(#26)` for the exact two spots that need to change once the
-daemon and `status` subcommand exist.
+`core/cmd/backup-manager` implements every execution mode this deployment shape was
+originally packaged ahead of: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
+`fetch`, `retention`, `reconcile`, `validate` and `version`. `container/compose.yaml`
+defaults to the real long-running process (`/backup-manager-web serve`, see "The generic
+Web host" below) and `container/Dockerfile`'s `HEALTHCHECK` tracks `backup-manager
+status`'s real exit code (HEALTHY vs DEGRADED/STALE/FAILING), not just process liveness
+(issue #82/B4.1). Headless-only deployment (no web listener at all) is still available
+by overriding `command` to `["/backup-manager", "daemon"]`.
 
 ## rclone is compiled in, not shelled out to
 
@@ -223,41 +224,29 @@ non-root uid) needs any capability at all.
 
 ## Restart policy
 
-`restart: unless-stopped`, which is the right policy for the eventual long-running
-`run`/`daemon` process: come back after a crash or a NAS reboot, stay down if an operator
-deliberately stops it.
-
-Today, `command: ["version"]` (the only subcommand that exists) exits 0 immediately, so
-`unless-stopped` will keep restarting it in a loop — Docker's restart backoff throttles
-how fast, but it will not settle into "up." That's expected, not a bug in this file: it's
-what "a restart policy exists" looks like before there's a process meant to stay up. Use
-`docker compose run --rm backup-manager` for a one-shot check (this is what I used for
-end-to-end verification) rather than `up -d`, until `command` is updated to `["run"]` or
-`["daemon"]`.
+`restart: unless-stopped`: come back after a crash or a NAS reboot, stay down if an
+operator deliberately stops it. `command: ["/backup-manager-web", "serve"]` is a real
+long-running process (the generic Web host's HTTP server plus the backup scheduler, see
+below), so this policy now does what it says rather than looping a container that exits
+immediately. For a one-shot check instead, use `docker compose run --rm backup-manager
+/backup-manager version` (or `... check`), which bypasses `restart` entirely.
 
 ## Health check
 
-`backup-manager status` (issue #26) doesn't exist yet, so there's no way today to ask
-"is this service actually healthy" the way FR-24's `HEALTHY`/`DEGRADED`/`STALE`/`FAILING`
-states are meant to be read — the failure-safety invariants are explicit that process
-liveness and backup freshness are different facts, and a health check can't answer a
-question the binary has no way to compute yet.
-
-The `HEALTHCHECK` in `container/Dockerfile` asks the narrower question that's actually
-answerable today:
+`backup-manager status` (issue #26, FR-24) reports `HEALTHY`/`DEGRADED`/`STALE`/`FAILING`
+per backup set and exits 0 only when every one of them is `HEALTHY`. `container/Dockerfile`'s
+`HEALTHCHECK` runs exactly that:
 
 ```
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["/backup-manager", "version"]
+    CMD ["/backup-manager", "status"]
 ```
 
-This exits non-zero only if the binary itself can't start and run, which is a real (if
-minimal) signal, not a placeholder that always reports healthy. It is deliberately not
-claiming to check backup health.
-
-**TODO(#26)**: replace this `CMD` with `["/backup-manager", "status"]` (or whatever flag
-makes that subcommand exit non-zero on `DEGRADED`/`STALE`/`FAILING`) once it ships. The
-Dockerfile carries the same marker inline.
+Verified directly (`core/tests/dockercli`), not just asserted: a container whose one
+backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker health
+`unhealthy`, not `healthy`. Before this issue, `HEALTHCHECK` ran `backup-manager version`,
+which exits 0 unconditionally and so reported `healthy` regardless of backup health — real
+(if minimal) process-liveness evidence, but not what FR-24's health states are for.
 
 ## Building and running it yourself
 
@@ -268,10 +257,18 @@ docker buildx build --platform linux/arm64 \
   --build-arg COMMIT=$(git rev-parse HEAD) \
   -f container/Dockerfile -t backup-manager:dev --load .
 
-docker run --rm --platform linux/arm64 backup-manager:dev version
+docker run --rm --platform linux/arm64 backup-manager:dev /backup-manager version
 
-# The full deployment shape, via compose:
+# The full deployment shape, via compose (starts the generic Web host —
+# see below — listening on LISTEN_PORT, default 8080):
 cp container/.env.example container/.env   # then edit the paths for real
 docker compose -f container/compose.yaml build
-docker compose -f container/compose.yaml run --rm backup-manager
+docker compose -f container/compose.yaml up -d
+
+# A one-shot check instead of the long-running Web host:
+docker compose -f container/compose.yaml run --rm backup-manager /backup-manager check
 ```
+
+See "The generic Web host" below for what `serve` actually composes, and
+`scripts/deploy/deploy_generic.py --help` for a scripted version of the same steps that
+also renders `config.yaml`/`.env` for you from a private key and a remote host.
