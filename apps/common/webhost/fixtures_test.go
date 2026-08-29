@@ -3,6 +3,7 @@ package webhost
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"time"
 
@@ -131,7 +132,7 @@ func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycle
 	}
 	f.nextID++
 	op := service.Operation{
-		ID:             "op_test_" + itoa(f.nextID),
+		ID:             "op_test_" + strconv.Itoa(f.nextID),
 		IdempotencyKey: req.IdempotencyKey,
 		Actor:          req.Actor,
 		ConfigRevision: req.ConfigRevision,
@@ -153,18 +154,6 @@ func (f *syncFakeBackend) GetOperation(_ context.Context, id string) (service.Op
 		return service.Operation{}, service.ErrOperationNotFound
 	}
 	return op, nil
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	digits := ""
-	for n > 0 {
-		digits = string(rune('0'+n%10)) + digits
-		n /= 10
-	}
-	return digits
 }
 
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
