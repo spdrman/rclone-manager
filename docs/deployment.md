@@ -1,13 +1,13 @@
 # UGREEN container deployment
 
-This documents the container packaging for `cmd/backup-manager` (A3.9): what's in
+This documents the container packaging for `core/cmd/backup-manager` (A3.9): what's in
 `container/`, why it's shaped the way it is, and how I verified each requirement rather
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
 ## Status: packaging ahead of the daemon
 
-`cmd/backup-manager` only implements a `version` subcommand today. Execution modes
+`core/cmd/backup-manager` only implements a `version` subcommand today. Execution modes
 (`run`, `daemon`) and the rest of the CLI (`status`, `check`, `fetch`, ...) are separate,
 still-open issues. This container and compose file exist to define the deployment shape
 (volumes, uid/gid, restart policy, health check) ahead of that work, not to run a working
@@ -48,8 +48,8 @@ $ strings backup-manager | grep 'rclone/rclone' | sort -u | head
 ```
 
 2770 occurrences of `rclone/rclone` import paths inside a `stripped`, `statically
-linked` ELF binary. rclone is a Go module dependency (`go.mod` pins
-`github.com/rclone/rclone v1.75.0`), imported as packages by `internal/transport/rclone`,
+linked` ELF binary. rclone is a Go module dependency (`core/go.mod` pins
+`github.com/rclone/rclone v1.75.0`), imported as packages by `core/internal/transport/rclone`,
 and compiled straight into `/backup-manager` by the builder stage. `CGO_ENABLED=0`
 throughout means this holds without a C toolchain on either target architecture, which is
 also why `modernc.org/sqlite` (the state package's SQLite driver, pure Go, no cgo) was
@@ -61,9 +61,9 @@ the only option that ever made sense here.
   the `golang:1.27-bookworm` builder and the `gcr.io/distroless/static-debian12:nonroot`
   runtime. A tag can move; a digest can't. The builder's Go version
   (`golang@sha256:ded31c68...`) matches this module's `go 1.27.0` directive exactly, so
-  there's no drift between what `go.mod` asks for and what compiles it.
+  there's no drift between what `core/go.mod` asks for and what compiles it.
 - **`GOTOOLCHAIN=local`** so `go build` never reaches out to fetch a different toolchain
-  mid-build if some future `go.mod` bump disagreed with the pinned builder image.
+  mid-build if some future `core/go.mod` bump disagreed with the pinned builder image.
 - **`-trimpath`** strips the builder's absolute source paths from the binary. Checked
   directly: `strings backup-manager | grep -E '/Users/rom|/src/'` returns nothing.
 - **`-buildvcs=false`** so the build doesn't stamp VCS state read off a `.git` directory
@@ -131,12 +131,12 @@ multi-arch manifest, buildx directly is.
 under that, and I checked both directly against a container built from this exact image
 rather than assuming:
 
-**The state directory, not just the database file.** `internal/state/state.go` opens
+**The state directory, not just the database file.** `core/internal/state/state.go` opens
 SQLite with `journal_mode=WAL`, which keeps a `-wal` and a `-shm` file alongside the main
 `.db` file while it's open. A single-file bind mount for just the database would leave
 those siblings unable to be created. `container/compose.yaml` mounts a whole directory at
 `/data/state` for this reason. Verified: a small Go program using the exact same
-`sql.Open` + pragma sequence as `internal/state/state.go`, run inside this image with
+`sql.Open` + pragma sequence as `core/internal/state/state.go`, run inside this image with
 `--read-only` and only `/data/state` bind-mounted writable, inserted 20,000 rows, built an
 index, and read them back successfully.
 
@@ -188,8 +188,8 @@ Linux host (like the UGREEN NAS's own OS) does — a uid/gid mismatch that would
 `PUID`/`PGID` + pre-chown guidance above is standard Linux permission semantics, not
 something I was able to independently reproduce a failure for in this environment.
 
-The image also doesn't rely on `$HOME`: `internal/transport/rclone/ssh.go` and
-`internal/config` pass `known_hosts`/`key_file` paths through rclone's
+The image also doesn't rely on `$HOME`: `core/internal/transport/rclone/ssh.go` and
+`core/internal/config` pass `known_hosts`/`key_file` paths through rclone's
 `env.ShellExpand`, which only expands `~` for a path that literally starts with `~` and
 otherwise leaves it alone. Keep config paths absolute (as `container/.env.example`
 does) and this doesn't come up, which matters because `/home/nonroot` in the base image

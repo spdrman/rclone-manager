@@ -9,7 +9,7 @@ section of the EPIC first if you haven't, this file assumes them.
 ## What backup-manager actually enforces
 
 Before the how-to, the ground truth, because policy documents drift from code
-and this one shouldn't get the chance to. `internal/transport/rclone/ssh.go`
+and this one shouldn't get the chance to. `core/internal/transport/rclone/ssh.go`
 builds every sftp connection this manager makes, and it refuses to build one
 at all unless:
 
@@ -189,7 +189,7 @@ From here on, backup-manager itself is what keeps this honest: if that host's
 key ever changes, whether from a legitimate server rebuild or from something
 worse, every connection attempt gets refused until a human repeats this
 verification step and updates the file on purpose. That refusal is exactly
-what the integration test in `internal/transport/rclone/ssh_test.go` proves:
+what the integration test in `core/internal/transport/rclone/ssh_test.go` proves:
 it stands up a real SFTP server, records its key, swaps in a second server
 with a different one on the same address, and checks that the connection is
 refused rather than silently reconnecting to whatever answered.

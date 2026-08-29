@@ -31,7 +31,7 @@ it's a `go build` with commentary.
 | 1 | Dependency update | **Enforced** | The Dependabot/manual PR itself is the update. The gate workflow records the old and new pinned version. |
 | 2 | Compilation | **Enforced** | `go build ./...` runs in both `ci.yml` and the dedicated gate workflow. |
 | 3 | Unit tests | **Partially enforced** | `go test ./...` runs on every PR. Today the module has no `*_test.go` files, so this currently runs clean but exercises nothing. Once the suite lands (`#30`), this line becomes real enforcement with no workflow changes needed, `go test ./...` picks up whatever exists. |
-| 4 | Transport contract tests | **Pending** | Tracked in `#30` (A1.6). Will live under `internal/transport` as ordinary `_test.go` files, so it also rides on `go test ./...` once written. |
+| 4 | Transport contract tests | **Pending** | Tracked in `#30` (A1.6). Will live under `core/internal/transport` as ordinary `_test.go` files, so it also rides on `go test ./...` once written. |
 | 5 | SFTP integration tests | **Pending** | Tracked in `#31` (A2.13). Needs a disposable SFTP server (Docker is already available in this environment for exactly that). Not wired into any workflow yet because the suite doesn't exist to wire in. |
 | 6 | Crash / reconciliation tests | **Pending** | Tracked in `#31`. The crash matrix in `docs/EPIC.md` under Testing Requirements. |
 | 7 | Destructive-safety tests | **Pending** | Tracked in `#31`. Malicious paths, symlinks, replaced remote objects, malformed config, stale journal state. |
@@ -47,10 +47,10 @@ that workflow to actually invoke it, and flip this table's row to Enforced.
 ## Doing an upgrade, step by step
 
 1. **Let Dependabot open the PR, or open one yourself.** Either way it should
-   touch only `go.mod` and `go.sum`. Dependabot is configured in
+   touch only `core/go.mod` and `core/go.sum`. Dependabot is configured in
    `.github/dependabot.yml` to check weekly and label the PR `rclone-upgrade`.
-   If you're bumping by hand: `go get github.com/rclone/rclone@vX.Y.Z` and let
-   `go mod tidy` resolve the graph. Expect this to be slow, resolving rclone's
+   If you're bumping by hand, from `core/`: `go get github.com/rclone/rclone@vX.Y.Z`
+   and let `go mod tidy` resolve the graph. Expect this to be slow, resolving rclone's
    module graph from cold takes 6+ minutes and pulls down roughly 1.7GB across
    ~260 modules (see "What actually gets pulled in" below), so don't do this
    on a whim or in a hot loop.
@@ -62,10 +62,12 @@ that workflow to actually invoke it, and flip this table's row to Enforced.
    links the changelog and release pages for you; it does not read them for
    you.
 3. **Let the gate workflow run.** `.github/workflows/rclone-upgrade-gate.yml`
-   triggers on any PR touching `go.mod` or `go.sum` and writes the FR-2
+   triggers on any PR touching `core/go.mod` or `core/go.sum` and writes the FR-2
    checklist status to the job summary, with old and new version, per item.
-4. **Run what exists locally too, don't just trust CI.** At minimum:
+4. **Run what exists locally too, don't just trust CI.** `core/` is its own Go
+   module, so run these from `core/`. At minimum:
    ```bash
+   cd core
    go build ./...
    go vet ./...
    go test ./...
@@ -111,7 +113,7 @@ because nothing imports them.
 
 **What gets registered at runtime** is smaller still than "what's linked",
 but it is not the same as "what we explicitly imported", and this is the part
-that has actually surprised us. `internal/transport/rclone/adapter.go`
+that has actually surprised us. `core/internal/transport/rclone/adapter.go`
 deliberately imports exactly two backend packages for their registration side
 effect:
 
@@ -144,7 +146,7 @@ does this yet.
 
 ## Rolling back
 
-The pin is a single line in `go.mod`. If a certified upgrade turns out to
+The pin is a single line in `core/go.mod`. If a certified upgrade turns out to
 regress something after merge, reverting is `go get
 github.com/rclone/rclone@<previous-version>`, `go mod tidy`, and the same PR
 process in reverse, not a hotfix branch juggling a partial upgrade. This is
