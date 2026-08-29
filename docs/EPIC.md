@@ -517,10 +517,20 @@ Configuration SHALL be validated before destructive processing begins.
 
 The embedded rclone SFTP backend SHALL use:
 
--   SSH key authentication by default;
+-   SSH key authentication, mandatory rather than merely preferred;
 -   host-key verification;
 -   explicit known-host configuration;
 -   no automatic acceptance of changed/unknown production host keys.
+
+"Mandatory" is stronger than "by default" on purpose. The adapter SHALL refuse
+an empty `key_file` rather than letting the backend fall back to a running
+ssh-agent, and SHALL NOT set the backend's password, inline-key, prompt or
+use-agent options, so password and agent authentication have no path into this
+program at all. `transport.Source` carries no password field, so adding one
+would be a visible change to a shared type rather than a quiet configuration
+choice. An operator whose agent happens to hold a usable key MUST NOT be able
+to authenticate by accident, because a login that works only because of ambient
+agent state is not reproducible on the NAS at 03:40.
 
 The remote account SHOULD:
 
@@ -534,6 +544,43 @@ The remote account SHOULD:
 -   have no unrelated server privileges.
 
 Credentials MUST NOT be stored in Git.
+
+### Key custody: the manager references a key, it does not hold one
+
+The SSH private key is REQUIRED. Artifacts move over SFTP, and that connection
+is authenticated by the key, so without one no copy happens at all. There is no
+mode in which the manager fetches a backup without authenticating.
+
+The manager SHALL NOT store, generate, copy or otherwise manage that key.
+Configuration carries a `key_file` PATH, and the manager reads the file at
+connection time and does nothing else with it. It never writes the key
+anywhere, never puts it in the journal, never logs it, and never has a copy of
+its own that could drift from the operator's.
+
+That boundary is deliberate, and it decides who owns what:
+
+-   the key's generation, its filesystem permissions, its rotation, and any
+    backup of the key itself are the OPERATOR's, outside this program;
+-   the key file SHOULD be mounted read-only into the runtime, so the manager
+    cannot modify it even if compromised;
+-   because the manager holds no copy, rotating the key means replacing one
+    file on the host and restarting, with nothing to migrate and no stale
+    duplicate left behind;
+-   a key that the manager cannot read is a startup failure, not a warning to
+    be worked around, since the alternative is a backup run that appears
+    configured and silently transfers nothing.
+
+The same applies to `known_hosts`: a path the manager reads, never a store it
+maintains.
+
+The corollary is worth stating because it is easy to miss when planning a
+deployment: the NAS running this manager needs its own key pair, and the remote
+server needs that key in the backup account's `authorized_keys`. This program
+does not distribute it, and a first run against a host that has never seen the
+public key will fail authentication rather than falling back to anything.
+
+`docs/ssh-setup.md` is the operational procedure, and `docs/deployment.md`
+covers mounting the key into the container.
 
 ------------------------------------------------------------------------
 
