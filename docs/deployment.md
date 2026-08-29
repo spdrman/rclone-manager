@@ -242,7 +242,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD ["/backup-manager", "status"]
 ```
 
-Verified directly (`core/tests/dockercli`), not just asserted: a container whose one
+Verified directly (`apps/generic/tests/dockercli`), not just asserted: a container whose one
 backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker health
 `unhealthy`, not `healthy`. Before this issue, `HEALTHCHECK` ran `backup-manager version`,
 which exits 0 unconditionally and so reported `healthy` regardless of backup health — real

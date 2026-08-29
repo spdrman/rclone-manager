@@ -235,7 +235,7 @@ EXPOSE 8080
 # contract). This is the real backup-freshness signal FR-24's health states
 # are meant to be read through - not process liveness, which is what the
 # previous `version`-based HEALTHCHECK could only ever answer. Verified
-# directly (see docs/deployment.md and core/tests/dockercli): a container
+# directly (see docs/deployment.md and apps/generic/tests/dockercli): a container
 # whose one backup set is DEGRADED now reports Docker health "unhealthy",
 # not "healthy". This runs against the plain `/backup-manager` binary
 # regardless of which command the container's own main process
