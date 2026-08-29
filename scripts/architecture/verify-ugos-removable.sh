@@ -22,7 +22,7 @@ if [ ! -d "$wt/core" ]; then
 fi
 
 echo "==> go test ./... (core/, with apps/ugos deleted)"
-(cd "$wt/core" && go test ./...)
+(cd "$wt/core" && GOWORK=off go test ./...)
 
 echo "==> npm ci && npm test (ui/shared, with apps/ugos deleted)"
 (cd "$wt/ui/shared" && npm ci --no-audit --no-fund && npm test)

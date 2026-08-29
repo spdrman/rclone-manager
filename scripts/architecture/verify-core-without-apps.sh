@@ -21,10 +21,16 @@ fi
 
 rm -rf "$wt/apps"
 
+# GOWORK=off: the repo root's go.work also lists ./apps/common (for local
+# multi-module development convenience), and apps/ is now gone in this
+# worktree. Without this, `go build` would walk up to that go.work file and
+# fail on the missing apps/common — a workspace-tooling artifact, not the
+# thing this check exists to prove. core/'s own go.mod is what must stand
+# alone.
 echo "==> go build ./... (core/, with apps/ deleted entirely)"
-(cd "$wt/core" && go build ./...)
+(cd "$wt/core" && GOWORK=off go build ./...)
 
 echo "==> go test ./... (core/, with apps/ deleted entirely)"
-(cd "$wt/core" && go test ./...)
+(cd "$wt/core" && GOWORK=off go test ./...)
 
 echo "OK: core/ builds and its full test suite passes with apps/ deleted entirely."

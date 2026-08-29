@@ -1,10 +1,12 @@
 name: CI
 
-# Builds, vets, and tests the module on every push and pull request, and
-# keeps the two UGREEN cross-compile targets honest with a real compile
-# check. rclone's dependency graph is heavy (roughly 1.7GB and 260+
-# modules to resolve, see docs/rclone-upgrade.md), so the Go module and
-# build caches are load-bearing here, not a nice-to-have.
+# Builds, vets, and tests every module on every push and pull request, keeps
+# the two UGREEN cross-compile targets honest with a real compile check, and
+# enforces the core/apps/ui-shared repository-structure boundary
+# (docs/EPIC-B-multi-nas.md §7.1, landed in #106/B1.1). rclone's dependency
+# graph is heavy (roughly 1.7GB and 260+ modules to resolve, see
+# docs/rclone-upgrade.md), so the Go module and build caches are
+# load-bearing here, not a nice-to-have.
 
 on:
   push:
@@ -18,9 +20,15 @@ permissions:
   contents: read
 
 jobs:
-  build-vet-test:
-    name: build, vet, test
+  core-build-vet-test:
+    name: core/ build, vet, test
     runs-on: ubuntu-latest
+    # GOWORK=off: prove core/'s own go.mod stands alone, independent of the
+    # repo-root go.work (which also lists ./apps/common for local
+    # multi-module development convenience) — "provider-neutral core is
+    # independently buildable/testable" (#106 acceptance criteria).
+    env:
+      GOWORK: "off"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -33,14 +41,44 @@ jobs:
           # on go.sum. Without this a cold resolve of rclone's module graph
           # takes over 6 minutes on every single run.
           cache: true
+          cache-dependency-path: core/go.sum
 
       - name: Build
+        working-directory: core
         run: go build ./...
 
       - name: Vet
+        working-directory: core
         run: go vet ./...
 
       - name: Test
+        working-directory: core
+        run: go test ./...
+
+  apps-common-build-vet-test:
+    name: apps/common build, vet, test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/common/go.mod
+
+      - name: Build
+        working-directory: apps/common
+        run: go build ./...
+
+      - name: Vet
+        working-directory: apps/common
+        run: go vet ./...
+
+      - name: Test
+        working-directory: apps/common
         run: go test ./...
 
   ugreen-cross-compile:
@@ -54,6 +92,7 @@ jobs:
       GOOS: linux
       GOARCH: ${{ matrix.goarch }}
       CGO_ENABLED: "0"
+      GOWORK: "off"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -63,6 +102,7 @@ jobs:
         with:
           go-version: "1.27.0"
           cache: true
+          cache-dependency-path: core/go.sum
 
       # This is a compile check, not a smoke test: it proves the UGREEN
       # target still cross-compiles with CGO disabled. It does not run the
@@ -78,10 +118,11 @@ jobs:
       # the job here would have passed regardless because cmd/ does not import
       # it yet.
       - name: Compile everything for linux/${{ matrix.goarch }}, CGO_ENABLED=0
+        working-directory: core
         run: go build ./...
 
   frontend:
-    name: ui typecheck, test, build
+    name: ui/shared typecheck, test, build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -111,12 +152,95 @@ jobs:
         working-directory: ui/shared
         run: npm run lint
 
+      - name: Typecheck every provider frontend
+        working-directory: ui/shared
+        run: npm run typecheck:providers
+
       - name: Test
         working-directory: ui/shared
         run: npm test
 
       # A build is the only thing that proves the Vite entry and the provider
-      # alias actually resolve, which typecheck alone does not.
+      # alias actually resolve, which typecheck alone does not. Also proves,
+      # on every run, that this succeeds with only apps/generic present (see
+      # dependency-rules' verify-ui-shared-without-provider-sdks.sh for the
+      # literal every-other-provider-deleted version of this same claim).
       - name: Build
         working-directory: ui/shared
         run: npm run build
+
+  provider-conformance:
+    name: cross-provider conformance suite (apps/common/tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/common/tests/package-lock.json
+
+      - name: Install
+        working-directory: apps/common/tests
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo "::warning::apps/common/tests has no package-lock.json, falling back to npm install"
+            npm install --no-audit --no-fund
+          fi
+
+      # This suite is the one place in the repo that legitimately imports
+      # every provider's frontend bridge (§63A — the provider conformance
+      # matrix). It lives outside ui/shared specifically so removing a
+      # provider app never breaks ui/shared's own build or test run; see
+      # dependency-rules below for that claim proven by actual deletion.
+      - name: Test
+        working-directory: apps/common/tests
+        run: npm test
+
+  dependency-rules:
+    name: repository-structure dependency rules (§7.1)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The verify-*.sh scripts create a throwaway `git worktree` of
+          # HEAD and delete a directory in it; that needs real git history,
+          # not actions/checkout's default single-commit shallow clone.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: core/go.sum
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/shared/package-lock.json
+
+      - name: git config (worktree commits need an identity)
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "CI"
+
+      - name: core/ has zero imports from apps/ (static check)
+        run: bash scripts/architecture/check-core-dependency-rule.sh
+
+      - name: core/ builds and tests with apps/ deleted entirely
+        run: bash scripts/architecture/verify-core-without-apps.sh
+
+      - name: ui/shared builds with every provider SDK directory removed
+        run: bash scripts/architecture/verify-ui-shared-without-provider-sdks.sh
+
+      - name: apps/ugos/ is removable without breaking core or ui/shared
+        run: bash scripts/architecture/verify-ugos-removable.sh

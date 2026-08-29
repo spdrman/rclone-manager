@@ -40,14 +40,17 @@ set -e
 
 export PATH="/opt/homebrew/bin:$PATH"
 
+# GOWORK=off: prove core/'s own go.mod stands alone, independent of the
+# repo-root go.work (which also lists ./apps/common for local multi-module
+# development convenience).
 echo "==> pre-commit: core/ go build"
-(cd core && go build ./...)
+(cd core && GOWORK=off go build ./...)
 
 echo "==> pre-commit: core/ go vet"
-(cd core && go vet ./...)
+(cd core && GOWORK=off go vet ./...)
 
 echo "==> pre-commit: core/ go test ./internal/..."
-(cd core && go test ./internal/...)
+(cd core && GOWORK=off go test ./internal/...)
 
 if [ -d apps/common ]; then
   echo "==> pre-commit: apps/common go build, vet, test"

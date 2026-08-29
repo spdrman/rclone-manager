@@ -17,7 +17,10 @@ fi
 
 cd core
 
-bad=$(go list -deps ./... 2>&1 | grep -F '/apps/' || true)
+# GOWORK=off: resolve core/'s import graph against its own go.mod only,
+# never against the repo-root go.work (which also lists ./apps/common for
+# local development convenience). core/ standing alone is the claim.
+bad=$(GOWORK=off go list -deps ./... 2>&1 | grep -F '/apps/' || true)
 if [ -n "$bad" ]; then
   echo "FAIL: core/ imports code from apps/:" >&2
   echo "$bad" >&2
