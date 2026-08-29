@@ -39,12 +39,17 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // dockerCLIImage is the tag every test in this file builds once and
@@ -336,15 +341,16 @@ func TestDaemonStaysRunningWithValidConfig(t *testing.T) {
 	}
 }
 
-// TestServeCommandExposesTheGenericWebHost is the Docker CLI-level
-// regression check for issue #82/B4.1's actual deliverable: not just that
-// the image builds (see the frontend-build/build-web stages in
-// container/Dockerfile), but that `/backup-manager-web serve`, run inside
-// a real container exactly as container/compose.yaml's default `command`
-// does, actually serves the generic Web host on a published port -
-// unauthenticated against the API, and the real built frontend for a
-// static route.
-func TestServeCommandExposesTheGenericWebHost(t *testing.T) {
+// TestServeCommandExposesTheEngineAPIOnly is the Docker CLI-level
+// regression check for the engine half of the two-container split
+// (project-owner requirement folded into issue #82/B4.1 before merge):
+// `/backup-manager-web serve`, run standalone in a real container exactly
+// as `rclone-manager`'s own compose `command` does, exposes the
+// versioned API unauthenticated-refused, and serves NO static UI at all
+// - that is `web-ui`'s job now (see
+// TestComposeStack_WebUIProxiesToTheEngineEndToEnd for the real
+// two-container, proxied version of this same proof).
+func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 	image := buildImage(t)
 	dir := degradedConfig(t)
 	name := "backup-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
@@ -396,8 +402,8 @@ func TestServeCommandExposesTheGenericWebHost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	if staticResp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte("<html")) {
-		t.Errorf("GET / status=%d body=%q, want 200 and real HTML (ui/shared's built index.html)", staticResp.StatusCode, body)
+	if staticResp.StatusCode == http.StatusOK {
+		t.Errorf("GET / on the engine directly status = %d, want NOT 200 (the engine must not serve the static UI - see apps/generic/server.NewEngine); body=%q", staticResp.StatusCode, body)
 	}
 }
 
@@ -419,4 +425,351 @@ func publishedPort(t *testing.T, container, containerPort string) string {
 		t.Fatalf("could not parse host port out of %q", out)
 	}
 	return line[idx+1:]
+}
+
+
+// composeFile is just enough of container/compose.yaml's shape to check
+// which services publish ports - not a general compose-file model.
+type composeFile struct {
+	Services map[string]struct {
+		Ports []any `yaml:"ports"`
+	} `yaml:"services"`
+}
+
+// TestComposeConfig_EngineHasNoPublishedPortWebUIDoes is a static check
+// (no Docker needed) of the actual network-isolation requirement in
+// container/compose.yaml: the project-owner requirement folded into this
+// issue before merge is that `rclone-manager` (the engine) has NO
+// published port at all - reachable only from `web-ui`, over the
+// internal Docker network - and `web-ui` is the only service with one.
+// Reading the real compose file directly, rather than re-deriving the
+// same claim from a live `docker compose up`, is what makes this catch a
+// regression in the file itself (a `ports:` line accidentally restored
+// on the engine service, say) independent of whether the live end-to-end
+// test below happens to still pass despite it.
+func TestComposeConfig_EngineHasNoPublishedPortWebUIDoes(t *testing.T) {
+	root := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, "container", "compose.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile compose.yaml: %v", err)
+	}
+
+	var cf composeFile
+	if err := yaml.Unmarshal(raw, &cf); err != nil {
+		t.Fatalf("yaml.Unmarshal compose.yaml: %v", err)
+	}
+
+	engine, ok := cf.Services["rclone-manager"]
+	if !ok {
+		t.Fatal(`compose.yaml has no "rclone-manager" service`)
+	}
+	if len(engine.Ports) != 0 {
+		t.Errorf(`services.rclone-manager.ports = %v, want none (the engine must not be reachable from the LAN/host directly)`, engine.Ports)
+	}
+
+	ui, ok := cf.Services["web-ui"]
+	if !ok {
+		t.Fatal(`compose.yaml has no "web-ui" service`)
+	}
+	if len(ui.Ports) == 0 {
+		t.Error(`services.web-ui.ports is empty, want the published LAN-facing port`)
+	}
+}
+
+// workingRemoteConfig is like degradedConfig, but seeds a real, matching
+// artifact into the remote directory before the container ever starts,
+// so the very first scheduled cycle finds a genuine, fresh backup and
+// `backup-manager status` reports HEALTHY - required here because
+// container/compose.yaml's `web-ui` service has
+// `depends_on: rclone-manager: condition: service_healthy`, so
+// TestComposeStack_WebUIProxiesToTheEngineEndToEnd's stack would never
+// finish starting against a permanently-DEGRADED backup set the way
+// degradedConfig deliberately produces for the healthcheck tests above.
+func workingRemoteConfig(t *testing.T) (dir string) {
+	t.Helper()
+	dir = t.TempDir()
+	for _, sub := range []string{"state", "backups", filepath.Join("backups", "remote"), filepath.Join("backups", "local")} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o777); err != nil {
+			t.Fatalf("MkdirAll %s: %v", sub, err)
+		}
+		if err := os.Chmod(filepath.Join(dir, sub), 0o777); err != nil {
+			t.Fatalf("Chmod %s: %v", sub, err)
+		}
+	}
+	// remote_path/local_path both live under /data/backups (BACKUP_DIR),
+	// NOT a dedicated /data/remote mount: container/compose.yaml has no
+	// such volume (a real "sftp" remote lives on the network, never on a
+	// host bind mount), so this "local" remote type test has to reuse
+	// the one writable directory compose.yaml actually mounts, exactly
+	// as manually verified against a real compose-driven stack before
+	// writing this test.
+	if err := os.WriteFile(filepath.Join(dir, "backups", "remote", "backup.dump"), []byte("compose stack test payload"), 0o666); err != nil {
+		t.Fatalf("WriteFile backup.dump: %v", err)
+	}
+
+	config := "" +
+		"poll_interval: 1h\n" +
+		"state:\n" +
+		"  database: /data/state/state.db\n" +
+		"sources:\n" +
+		"  - id: production\n" +
+		"    backup_sets:\n" +
+		"      - id: postgres-primary\n" +
+		"        remote:\n" +
+		"          type: local\n" +
+		"        remote_path: /data/backups/remote\n" +
+		"        local_path: /data/backups/local\n" +
+		"        include:\n" +
+		"          - \"*.dump\"\n" +
+		"        completion:\n" +
+		"          strategy: rename\n" +
+		"        stale_after: 24h\n" +
+		"retention:\n" +
+		"  timezone: UTC\n" +
+		"  week_starts_on: monday\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("WriteFile config.yaml: %v", err)
+	}
+	return dir
+}
+
+// composeEnvFile writes an .env file (container/.env.example's own
+// shape) into dir, pointed at test fixtures instead of real host paths,
+// and returns its path. SSH_KEY_FILE/KNOWN_HOSTS_FILE point at
+// config.yaml itself - unused by this suite's "local" remote type, but
+// compose.yaml's `${VAR:?...}` guards require SOME readable file to
+// exist at each path regardless of remote type.
+func composeEnvFile(t *testing.T, dir string, listenPort int) string {
+	t.Helper()
+	envPath := filepath.Join(dir, ".env")
+	content := "STATE_DIR=" + filepath.Join(dir, "state") + "\n" +
+		"BACKUP_DIR=" + filepath.Join(dir, "backups") + "\n" +
+		"CONFIG_FILE=" + filepath.Join(dir, "config.yaml") + "\n" +
+		"SSH_KEY_FILE=" + filepath.Join(dir, "config.yaml") + "\n" +
+		"KNOWN_HOSTS_FILE=" + filepath.Join(dir, "config.yaml") + "\n" +
+		"LISTEN_PORT=" + strconv.Itoa(listenPort) + "\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile .env: %v", err)
+	}
+	return envPath
+}
+
+// composeProject drives `docker compose` for one test's whole stack
+// lifecycle: `up -d` in the constructor, `down -v` registered via
+// t.Cleanup, and a couple of convenience methods tests actually call.
+type composeProject struct {
+	name    string
+	envFile string
+}
+
+func startComposeStack(t *testing.T, image string, listenPort int) *composeProject {
+	t.Helper()
+	root := repoRoot(t)
+	dir := workingRemoteConfig(t)
+	envFile := composeEnvFile(t, dir, listenPort)
+
+	p := &composeProject{
+		name:    "backup-manager-dockercli-" + sanitizeProjectName(t.Name()),
+		envFile: envFile,
+	}
+
+	composeFilePath := filepath.Join(root, "container", "compose.yaml")
+
+	// Pin both services to the already-built image (see buildImage) so
+	// this test proves compose.yaml's OWN topology/network/healthcheck
+	// wiring, not a second build of the same Dockerfile compose would
+	// otherwise trigger on its own.
+	up := exec.Command("docker", "compose",
+		"--env-file", envFile,
+		"-f", composeFilePath,
+		"-p", p.name,
+		"up", "-d",
+		"--no-build",
+	)
+	up.Env = append(os.Environ(), "VERSION=dockercli-test")
+	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
+	// VERSION; buildImage's own tag is "backup-manager:dockercli-test",
+	// so VERSION has to match that tag exactly for `--no-build` to find
+	// it rather than trying (and failing, with no `build:` context error)
+	// to build a fresh one under a name nothing already built.
+	if !strings.HasSuffix(image, ":dockercli-test") {
+		t.Fatalf("startComposeStack assumes buildImage's own tag ends in \":dockercli-test\", got %q", image)
+	}
+
+	var out bytes.Buffer
+	up.Stdout = &out
+	up.Stderr = &out
+	if err := up.Run(); err != nil {
+		t.Fatalf("docker compose up: %v\n%s", err, out.String())
+	}
+
+	t.Cleanup(func() {
+		down := exec.Command("docker", "compose",
+			"--env-file", envFile,
+			"-f", composeFilePath,
+			"-p", p.name,
+			"down", "-v", "--remove-orphans",
+		)
+		down.Env = up.Env
+		down.Run()
+	})
+
+	return p
+}
+
+func sanitizeProjectName(name string) string {
+	r := strings.NewReplacer("/", "-", " ", "-", "_", "-")
+	return strings.ToLower(r.Replace(name)) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+func (p *composeProject) containerID(t *testing.T, service string) string {
+	t.Helper()
+	root := repoRoot(t)
+	out, err := exec.Command("docker", "compose",
+		"--env-file", p.envFile,
+		"-f", filepath.Join(root, "container", "compose.yaml"),
+		"-p", p.name,
+		"ps", "-q", service,
+	).Output()
+	if err != nil {
+		t.Fatalf("docker compose ps -q %s: %v", service, err)
+	}
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		t.Fatalf("docker compose ps -q %s returned no container", service)
+	}
+	return id
+}
+
+func (p *composeProject) publishedPort(t *testing.T, service, containerPort string) string {
+	t.Helper()
+	return publishedPort(t, p.containerID(t, service), containerPort)
+}
+
+// TestComposeStack_WebUIProxiesToTheEngineEndToEnd is this issue's live
+// proof of the two-container split, driven through `docker compose`
+// exactly as an operator would (not a hand-assembled `docker run`
+// replicating the same topology): brings up BOTH services from
+// container/compose.yaml, waits for web-ui's dependency-gated startup
+// (it will not even start until rclone-manager reports healthy - see
+// compose.yaml's own `depends_on: condition: service_healthy`), enrolls
+// and logs in entirely through web-ui's published port, confirms an
+// authenticated request proxies through to the real engine and
+// succeeds, and confirms the engine itself has no port reachable
+// directly from the host at all.
+func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
+	image := buildImage(t)
+	// buildImage's own tag doesn't carry a "dockercli-test" VERSION build
+	// stamp the way compose's `image:` resolution needs; retag it so
+	// compose's `image: backup-manager:${VERSION:-dev}` (VERSION=
+	// dockercli-test, set in startComposeStack) resolves to the exact
+	// image buildImage already built, instead of compose trying to build
+	// a second one under a tag nothing produced.
+	retag := exec.Command("docker", "tag", image, "backup-manager:dockercli-test")
+	if out, err := retag.CombinedOutput(); err != nil {
+		t.Fatalf("docker tag: %v\n%s", err, out)
+	}
+
+	project := startComposeStack(t, image, 0)
+
+	hostPort := project.publishedPort(t, "web-ui", "8080/tcp")
+	base := "http://127.0.0.1:" + hostPort
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	// Seed the CSRF cookie exactly as a browser's first page load would -
+	// served entirely by web-ui's own static handler, never touching the
+	// engine.
+	seedResp, err := client.Get(base + "/")
+	if err != nil {
+		t.Fatalf("GET %s/: %v", base, err)
+	}
+	seedResp.Body.Close()
+	if seedResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s/ status = %d, want %d (web-ui's own static shell)", base, seedResp.StatusCode, http.StatusOK)
+	}
+
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("url.Parse: %v", err)
+	}
+	var csrf string
+	for _, c := range jar.Cookies(baseURL) {
+		if c.Name == "bm_csrf" {
+			csrf = c.Value
+		}
+	}
+	if csrf == "" {
+		t.Fatal("no bm_csrf cookie present after seeding GET / through web-ui")
+	}
+
+	engineID := project.containerID(t, "rclone-manager")
+	logs, err := exec.Command("docker", "logs", engineID).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker logs %s: %v", engineID, err)
+	}
+	token := bootstrapTokenFromLogs(t, string(logs))
+
+	enrollBody := strings.NewReader(`{"username":"bm-admin","password":"correct-horse-battery"}`)
+	enrollReq, err := http.NewRequest(http.MethodPost, base+"/api/v1/auth/enroll", enrollBody)
+	if err != nil {
+		t.Fatalf("NewRequest enroll: %v", err)
+	}
+	enrollReq.Header.Set("Content-Type", "application/json")
+	enrollReq.Header.Set("X-CSRF-Token", csrf)
+	enrollReq.Header.Set("X-Bootstrap-Token", token)
+	enrollResp, err := client.Do(enrollReq)
+	if err != nil {
+		t.Fatalf("POST %s/api/v1/auth/enroll (via web-ui proxy): %v", base, err)
+	}
+	enrollBodyBytes, _ := io.ReadAll(enrollResp.Body)
+	enrollResp.Body.Close()
+	if enrollResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("enroll via web-ui proxy status = %d, want %d; body=%s", enrollResp.StatusCode, http.StatusNoContent, enrollBodyBytes)
+	}
+
+	versionResp, err := client.Get(base + "/api/v1/system/version")
+	if err != nil {
+		t.Fatalf("GET %s/api/v1/system/version (via web-ui proxy): %v", base, err)
+	}
+	versionBody, _ := io.ReadAll(versionResp.Body)
+	versionResp.Body.Close()
+	if versionResp.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated GET /api/v1/system/version via web-ui proxy status = %d, want %d; body=%s", versionResp.StatusCode, http.StatusOK, versionBody)
+	}
+	if !strings.Contains(string(versionBody), "api_version") {
+		t.Errorf("proxied response body = %q, want the engine's real /api/v1/system/version JSON", versionBody)
+	}
+
+	// The actual network-isolation claim, proven live rather than only
+	// statically (TestComposeConfig_EngineHasNoPublishedPortWebUIDoes
+	// already proves the compose file itself declares no port; this
+	// proves Docker actually honored that): the engine container has no
+	// port Docker will report as published.
+	portOut, portErr := exec.Command("docker", "port", engineID).CombinedOutput()
+	if portErr == nil && strings.TrimSpace(string(portOut)) != "" {
+		t.Errorf("docker port %s = %q, want no published ports at all", engineID, portOut)
+	}
+}
+
+// bootstrapTokenFromLogs extracts the single-use enrollment token from a
+// real container log line - the same string an operator reads to open
+// the enrollment link, not a test-only shortcut.
+func bootstrapTokenFromLogs(t *testing.T, logs string) string {
+	t.Helper()
+	const marker = "token="
+	i := strings.Index(logs, marker)
+	if i < 0 {
+		t.Fatalf("no bootstrap token found in engine logs: %q", logs)
+	}
+	rest := logs[i+len(marker):]
+	fields := strings.FieldsFunc(rest, func(r rune) bool { return r == ' ' || r == '\n' || r == '\r' })
+	if len(fields) == 0 {
+		t.Fatalf("could not parse token out of engine logs: %q", logs)
+	}
+	return fields[0]
 }
