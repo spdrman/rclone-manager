@@ -4,17 +4,34 @@
 // the same way an operator would, rather than unit-testing
 // container/Dockerfile's text.
 //
-// This is the RED half of "swap the HEALTHCHECK CMD from version to
-// status": before that change, container/Dockerfile's HEALTHCHECK always
-// reports "healthy" (it only proves the binary can start), no matter how
-// unhealthy the configured backup sets actually are. This suite forces a
-// DEGRADED backup set into a running container and asserts the
-// HEALTHCHECK reports "unhealthy" — a claim that is false against the
-// pre-fix Dockerfile and true against the fixed one.
+// This lives under apps/generic/, not core/, even though half of it
+// (TestHealthCheckTracksStatusExitCode, TestDaemonStaysRunningWithValidConfig)
+// only exercises the plain /backup-manager binary core/ alone produces:
+// container/Dockerfile's frontend-build and build-web stages COPY apps/
+// and ui/shared/ to build /backup-manager-web, so a test package that
+// builds this Dockerfile at all cannot live inside core/'s own module
+// without breaking "core/ builds and its full test suite passes with
+// apps/ deleted entirely" (§7.1, WP1.1's own acceptance criterion,
+// scripts/architecture/verify-core-without-apps.sh) - caught by actually
+// running that script against an earlier version of this file that DID
+// live under core/tests/dockercli, not by reasoning about it in advance.
+// apps/generic is the right home instead: it already assumes core/ and
+// apps/common/ are present as sibling directories (see its own go.mod's
+// replace directives), so a test exercising the full assembled image
+// adds no new assumption beyond what apps/generic's own build already
+// requires.
+//
+// The HEALTHCHECK-tracks-status behavior this suite is built around: RED
+// was container/Dockerfile's HEALTHCHECK always reporting "healthy" (it
+// only proved the binary could start), no matter how unhealthy the
+// configured backup sets actually were. TestHealthCheckTracksStatusExitCode
+// forces a DEGRADED backup set into a running container and asserts the
+// HEALTHCHECK reports "unhealthy" - true against the fixed Dockerfile,
+// false against the version this suite was first written against.
 //
 // Skipped automatically wherever the `docker` CLI or daemon is not
-// available (this project has no other test that depends on either), so
-// a checkout without Docker still runs the rest of the suite.
+// available, so a checkout without Docker still runs the rest of the
+// suite.
 package dockercli_test
 
 import (
@@ -35,18 +52,19 @@ import (
 // reported once, clearly, rather than once per test.
 const dockerCLIImage = "backup-manager:dockercli-test"
 
-// repoRoot is this file's own directory, three levels up
-// (core/tests/dockercli -> core/tests -> core -> repo root): the same
-// directory container/compose.yaml's `build.context: ..` resolves to from
-// container/, and what `docker build` needs as its context so
-// container/Dockerfile's `COPY core/...` lines resolve.
+// repoRoot is this file's own directory, four levels up
+// (apps/generic/tests/dockercli -> apps/generic/tests -> apps/generic ->
+// apps -> repo root): the same directory container/compose.yaml's
+// `build.context: ..` resolves to from container/, and what `docker
+// build` needs as its context so container/Dockerfile's `COPY core/...`,
+// `COPY apps/...` and `COPY ui/shared/...` lines all resolve.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	root, err := filepath.Abs(filepath.Join(wd, "..", "..", ".."))
+	root, err := filepath.Abs(filepath.Join(wd, "..", "..", "..", ".."))
 	if err != nil {
 		t.Fatalf("Abs: %v", err)
 	}
