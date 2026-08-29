@@ -8,13 +8,28 @@ updates:
   # release notes before an rclone version bump can land. See
   # docs/rclone-upgrade.md for the non-negotiable rule and the reasoning.
   - package-ecosystem: "gomod"
-    directory: "/"
+    # core/ is its own Go module as of #106/B1.1 (docs/EPIC-B-multi-nas.md
+    # §7) — this is where go.mod/go.sum, and therefore rclone's pin, live.
+    directory: "/core"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "rclone-upgrade"
+    commit-message:
+      prefix: "deps"
+
+  # apps/common is a second, much smaller Go module (the platform-capability
+  # contract plus reserved webhost/auth/local scaffolding). It has no
+  # third-party dependencies today, but this keeps it covered the day it
+  # gets one.
+  - package-ecosystem: "gomod"
+    directory: "/apps/common"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
     commit-message:
       prefix: "deps"
 

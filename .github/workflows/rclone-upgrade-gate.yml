@@ -16,8 +16,8 @@ name: rclone upgrade gate
 on:
   pull_request:
     paths:
-      - "go.mod"
-      - "go.sum"
+      - "core/go.mod"
+      - "core/go.sum"
 
 permissions:
   contents: read
@@ -39,12 +39,18 @@ jobs:
         with:
           go-version: "1.27.0"
           cache: true
+          cache-dependency-path: core/go.sum
 
+      # core/ is its own Go module as of #106/B1.1 (docs/EPIC-B-multi-nas.md
+      # §7); GOWORK=off resolves it against core/go.mod only, independent
+      # of the repo-root go.work (which also lists ./apps/common).
       - name: "1. Dependency update"
+        env:
+          GOWORK: "off"
         run: |
           echo "### 1. Dependency update" >> "$GITHUB_STEP_SUMMARY"
-          NEW=$(grep -E 'github\.com/rclone/rclone[[:space:]]+v[0-9]' go.mod | awk '{print $NF}')
-          OLD=$(git show "origin/${GITHUB_BASE_REF}:go.mod" 2>/dev/null | grep -E 'github\.com/rclone/rclone[[:space:]]+v[0-9]' | awk '{print $NF}')
+          NEW=$(grep -E 'github\.com/rclone/rclone[[:space:]]+v[0-9]' core/go.mod | awk '{print $NF}')
+          OLD=$(git show "origin/${GITHUB_BASE_REF}:core/go.mod" 2>/dev/null | grep -E 'github\.com/rclone/rclone[[:space:]]+v[0-9]' | awk '{print $NF}')
           OLD=${OLD:-unknown}
           NEW=${NEW:-unknown}
           echo "ENFORCED: this PR is the dependency update. rclone: ${OLD} -> ${NEW}" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -52,16 +58,20 @@ jobs:
           echo "NEW_RCLONE=${NEW}" >> "$GITHUB_ENV"
 
       - name: "2. Compilation"
+        env:
+          GOWORK: "off"
         run: |
           echo "### 2. Compilation" >> "$GITHUB_STEP_SUMMARY"
-          go build ./...
-          echo "ENFORCED: go build ./... succeeded." | tee -a "$GITHUB_STEP_SUMMARY"
+          (cd core && go build ./...)
+          echo "ENFORCED: go build ./... succeeded in core/." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: "3. Unit tests"
+        env:
+          GOWORK: "off"
         run: |
           echo "### 3. Unit tests" >> "$GITHUB_STEP_SUMMARY"
-          go test ./...
-          if git ls-files '*_test.go' | grep -v '^tests/' | grep -q .; then
+          (cd core && go test ./...)
+          if git ls-files '*_test.go' | grep -v '^core/tests/' | grep -q .; then
             echo "ENFORCED: go test ./... ran the unit suite above." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "PENDING: no *_test.go files exist in the module yet, so go test ./... ran clean but exercised nothing. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
@@ -70,17 +80,17 @@ jobs:
       - name: "4. Transport contract tests"
         run: |
           echo "### 4. Transport contract tests" >> "$GITHUB_STEP_SUMMARY"
-          if git ls-files 'internal/transport/*_test.go' 'internal/transport/**/*_test.go' | grep -q .; then
-            echo "ENFORCED: internal/transport has test files, and go test ./... above already ran them. If they specifically exercise the common transport contract required by FR-2/FR-3, this item is covered; verify the suite covers list/stat/copy/hash/delete/cancel/not-found/permission-denied/changed-object." | tee -a "$GITHUB_STEP_SUMMARY"
+          if git ls-files 'core/internal/transport/*_test.go' 'core/internal/transport/**/*_test.go' | grep -q .; then
+            echo "ENFORCED: core/internal/transport has test files, and go test ./... above already ran them. If they specifically exercise the common transport contract required by FR-2/FR-3, this item is covered; verify the suite covers list/stat/copy/hash/delete/cancel/not-found/permission-denied/changed-object." | tee -a "$GITHUB_STEP_SUMMARY"
           else
-            echo "PENDING: internal/transport has no test files yet, so the transport contract suite required by FR-2 does not exist. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "PENDING: core/internal/transport has no test files yet, so the transport contract suite required by FR-2 does not exist. Tracked in spdrman/rclone-manager#30." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: "5. SFTP integration tests"
         run: |
           echo "### 5. SFTP integration tests" >> "$GITHUB_STEP_SUMMARY"
-          if [ -d tests ] && [ -n "$(find tests -type f -name '*.go' 2>/dev/null)" ]; then
-            echo "A tests/ suite exists, but this workflow does not yet know how to invoke it (it likely needs a disposable SFTP server via Docker). Update this step before relying on it. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -d core/tests ] && [ -n "$(find core/tests -type f -name '*.go' 2>/dev/null)" ]; then
+            echo "A core/tests/ suite exists, but this workflow does not yet know how to invoke it (it likely needs a disposable SFTP server via Docker). Update this step before relying on it. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "PENDING: no disposable-SFTP-server integration suite exists yet. Tracked in spdrman/rclone-manager#31." | tee -a "$GITHUB_STEP_SUMMARY"
           fi
