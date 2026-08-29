@@ -1,6 +1,8 @@
 package webhost
 
 import (
+	"net/http"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
@@ -47,7 +49,17 @@ type handlers struct {
 // to register a route under /api/v1 in this function that bypasses that
 // r.Use call. /health/live and /health/ready are registered outside that
 // group, deliberately: see healthLive's doc for why.
-func NewRouter(cfg RouterConfig) *chi.Mux {
+//
+// The return type is http.Handler, not *chi.Mux, deliberately: the "no
+// route bypasses auth" proof above (TestNoAPIRouteBypassesAuthentication)
+// is airtight for what this function itself registers, but is not a
+// structural guarantee about what a caller could do with the concrete
+// value if this returned one — nothing would stop a future caller (a
+// provider's own main.go, say) from registering more routes directly on a
+// returned *chi.Mux, entirely outside this package's test reach. No
+// current caller needs any *chi.Mux-specific method, so there is nothing
+// to lose by only ever handing back the interface.
+func NewRouter(cfg RouterConfig) http.Handler {
 	gate := cfg.Gate
 	if gate == nil {
 		gate = NotYetImplementedGate{}

@@ -12,6 +12,14 @@ import (
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
+// maxSubmitOperationBodyBytes bounds POST /api/v1/operations' request
+// body (docs/EPIC-B-multi-nas.md §17: "enforce request-size limits").
+// submitOperationRequest carries exactly two short strings, so 1 MiB is
+// generous headroom over anything a legitimate client would ever send,
+// while still bounding how much of a malformed or hostile request this
+// handler will read into memory before giving up on it.
+const maxSubmitOperationBodyBytes = 1 << 20 // 1 MiB
+
 // submitOperationRequest is POST /api/v1/operations' request body. The
 // idempotency key travels as a header (Idempotency-Key), not a body
 // field: it is a property of the HTTP request/retry, not of the
@@ -81,8 +89,16 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitOperationBodyBytes)
+
 	var body submitOperationRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				fmt.Sprintf("request body exceeds the %d byte limit", maxSubmitOperationBodyBytes))
+			return
+		}
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "malformed JSON body")
 		return
 	}
@@ -100,7 +116,29 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrConfigRevisionStale):
-			writeError(w, http.StatusConflict, "CONFIG_REVISION_STALE", err.Error())
+			// A structured, top-level config_revision field, not just prose
+			// in the message a client is explicitly told not to rely on
+			// (issue #118 item 5); see writeConfigRevisionStale's own doc.
+			writeConfigRevisionStale(w, err.Error(), h.backend.ConfigRevision())
+		case errors.Is(err, service.ErrIdempotencyKeyConflict):
+			// Its own code, distinct from INVALID_REQUEST (issue #118 item
+			// 10): "you reused an idempotency key across two different
+			// logical requests" is not "your request body is malformed",
+			// and a client needs to tell the two apart programmatically.
+			// 409, matching the CONFIG_REVISION_STALE precedent above:
+			// safe to echo, ErrIdempotencyKeyConflict's message is always
+			// one of core/service's own deliberately generic strings.
+			writeError(w, http.StatusConflict, "IDEMPOTENCY_KEY_CONFLICT", err.Error())
+		case errors.Is(err, service.ErrOperationAlreadyRunning):
+			// issue #118 item 1: a second, genuinely new run_cycle
+			// submission that arrived while another was still executing.
+			// Its own code, not folded into either sentinel above: this is
+			// neither a malformed request nor a stale configuration
+			// revision, and a client that understands this code
+			// specifically knows to retry (with a fresh idempotency key)
+			// once the deployment is no longer mid-cycle, rather than
+			// assuming its request itself needs fixing.
+			writeError(w, http.StatusConflict, "OPERATION_ALREADY_RUNNING", err.Error())
 		case errors.Is(err, service.ErrInvalidRequest):
 			// Safe to echo: ErrInvalidRequest's message is always one of
 			// core/service's own deliberately generic strings (see that

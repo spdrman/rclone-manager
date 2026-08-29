@@ -24,6 +24,21 @@ import (
 // or #92 (platform-auth) exists. Every route failing closed against it is
 // this package's whole fail-closed-by-construction argument, not a
 // contrived test double.
+// routableFor type-asserts router (NewRouter's return type is http.Handler,
+// deliberately narrowed — see that function's own doc) back to chi.Routes
+// so a test can still walk its registered route table with chi.Walk. Every
+// router this package's own tests build is a *chi.Mux underneath, so this
+// assertion is never expected to fail; it exists so that fact lives in one
+// place instead of an unchecked type assertion at every call site.
+func routableFor(t *testing.T, router http.Handler) chi.Routes {
+	t.Helper()
+	routes, ok := router.(chi.Routes)
+	if !ok {
+		t.Fatalf("router %T does not implement chi.Routes; chi.Walk needs it", router)
+	}
+	return routes
+}
+
 func TestNoAPIRouteBypassesAuthentication(t *testing.T) {
 	router := NewRouter(RouterConfig{
 		Platform:      noAuthWiredAdapter{},
@@ -34,7 +49,7 @@ func TestNoAPIRouteBypassesAuthentication(t *testing.T) {
 	})
 
 	var checked int
-	err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+	err := chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if route == "/health/live" || route == "/health/ready" {
 			// Deliberately public (§17: "require UGOS authentication on
 			// /api/", not on infra health checks); see the dedicated
@@ -57,6 +72,78 @@ func TestNoAPIRouteBypassesAuthentication(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("chi.Walk found no /api/v1 routes to check; this test would pass vacuously")
+	}
+}
+
+// destructiveGateExemptRoutes names every non-GET /api/v1 route that is
+// deliberately NOT behind requireDestructiveGate, and (in a real entry, not
+// just this comment) why. It is empty today: the only mutating route this
+// skeleton has, POST /api/v1/operations, is gated. A future route added to
+// this map without a genuine justification is defeating the point of
+// TestNoMutatingAPIRouteBypassesTheDestructiveGate below, not satisfying
+// it.
+var destructiveGateExemptRoutes = map[string]bool{}
+
+// TestNoMutatingAPIRouteBypassesTheDestructiveGate is issue #118 item 3's
+// structural regression test, mirroring
+// TestNoAPIRouteBypassesAuthentication above exactly the way the review
+// that asked for it did: `r.With(requireDestructiveGate(gate)).Post(...)`
+// compiles fine and passes every other test in this package even if a
+// future mutating route forgets to chain requireDestructiveGate onto
+// itself, since nothing else in this package's route table walks every
+// route and checks. This does, using the same chi.Walk-driven,
+// fire-a-real-request approach as the auth test, rather than the auth
+// test's neighbour asserting a specific route list by name (that list
+// would silently stop proving anything the day a route is added and
+// nobody updates it).
+//
+// The platform here is fully authenticated (allowingPlatform), unlike
+// TestNoAPIRouteBypassesAuthentication's noAuthWiredAdapter: a 403 from an
+// authenticated request proves the GATE rejected it, not auth (auth is
+// already proven not to bypass anything, and ordering between the two is
+// TestSubmitOperation_GateIsCheckedAfterAuthentication's own job, not
+// this test's).
+func TestNoMutatingAPIRouteBypassesTheDestructiveGate(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		Platform:      allowingPlatform("alice"),
+		Backend:       newSyncFakeBackend(),
+		Gate:          NotYetImplementedGate{}, // gate NOT passed
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+
+	var checked int
+	err := chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if method == http.MethodGet {
+			// Reads are never destructive; see getOperation's own doc for
+			// why GET /api/v1/operations/{id} in particular is
+			// deliberately exempt from this gate.
+			return nil
+		}
+		if route == "/health/live" || route == "/health/ready" {
+			return nil
+		}
+		if destructiveGateExemptRoutes[method+" "+route] {
+			return nil
+		}
+
+		checked++
+		req := httptest.NewRequest(method, strings.ReplaceAll(route, "{id}", "op_1"), strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", "gate-walk-"+method+"-"+route)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s: status = %d, want %d (a non-GET route must be behind the destructive gate)", method, route, rec.Code, http.StatusForbidden)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	if checked == 0 {
+		t.Fatal("chi.Walk found no non-GET /api/v1 routes to check; this test would pass vacuously")
 	}
 }
 

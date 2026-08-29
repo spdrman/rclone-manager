@@ -52,6 +52,12 @@ func TestSystemVersion_ReportsBinaryVersionAndCommit(t *testing.T) {
 	if body["engine_version"] == "" || body["engine_version"] == nil {
 		t.Error("engine_version is missing/empty")
 	}
+	// issue #118 item 5: config_revision must be a structured field on this
+	// read endpoint, not something a client can only learn by deliberately
+	// triggering a 409 and scraping an error message.
+	if body["config_revision"] != "rev-1" {
+		t.Errorf("config_revision = %v, want %q (from the backend's own ConfigRevision())", body["config_revision"], "rev-1")
+	}
 }
 
 func TestSystemCapabilities_ReflectsThePlatformAdapter(t *testing.T) {

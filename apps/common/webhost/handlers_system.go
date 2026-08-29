@@ -12,22 +12,43 @@ import (
 // TestSystemEndpoints_NeverLeakRcloneOrSQLiteFieldNames, and
 // core/service.Version's own doc for why that is enforced at the source
 // of these values, not just here.
+//
+// ConfigRevision (issue #118 item 5) is what a client needs before it can
+// ever legitimately submit its first POST /api/v1/operations: without a
+// structured place to read it, the only way to learn the current
+// config_revision was to deliberately trigger a 409 and scrape it out of
+// an error message's prose, which the CONFIG_REVISION_STALE response
+// itself documents as free to change without notice. This read endpoint
+// is that structured place; the 409 body also carries it as a top-level
+// field now (see errors.go's configRevisionStaleResponse), so nothing
+// downstream of the very first write has to fall back to scraping either.
 type versionResponse struct {
-	APIVersion    string `json:"api_version"`
-	CoreVersion   string `json:"core_version"`
-	Commit        string `json:"commit"`
-	GoVersion     string `json:"go_version"`
-	EngineVersion string `json:"engine_version"`
+	APIVersion     string `json:"api_version"`
+	CoreVersion    string `json:"core_version"`
+	Commit         string `json:"commit"`
+	GoVersion      string `json:"go_version"`
+	EngineVersion  string `json:"engine_version"`
+	ConfigRevision string `json:"config_revision"`
 }
 
 func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 	v := service.BuildVersion(h.binaryVersion, h.commit)
+	// h.backend can be nil the same way healthReady already allows for
+	// (a RouterConfig built without one, in principle); reporting an empty
+	// ConfigRevision in that case rather than panicking matches this
+	// package's existing "not fully wired yet is a degraded response, not
+	// a crash" posture.
+	var configRevision string
+	if h.backend != nil {
+		configRevision = h.backend.ConfigRevision()
+	}
 	writeJSON(w, http.StatusOK, versionResponse{
-		APIVersion:    "v1",
-		CoreVersion:   v.CoreVersion,
-		Commit:        v.Commit,
-		GoVersion:     v.GoVersion,
-		EngineVersion: v.EngineVersion,
+		APIVersion:     "v1",
+		CoreVersion:    v.CoreVersion,
+		Commit:         v.Commit,
+		GoVersion:      v.GoVersion,
+		EngineVersion:  v.EngineVersion,
+		ConfigRevision: configRevision,
 	})
 }
 

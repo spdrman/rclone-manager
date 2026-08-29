@@ -137,6 +137,81 @@ func TestSubmitOperation_ConfigRevisionStaleReturns409(t *testing.T) {
 	if errObj["code"] != "CONFIG_REVISION_STALE" {
 		t.Errorf("error.code = %v, want %q", errObj["code"], "CONFIG_REVISION_STALE")
 	}
+	// issue #118 item 5: the current config_revision must also be a
+	// structured, top-level field on this exact response, not only
+	// embedded in error.message's prose.
+	if body["config_revision"] != tr.backend.ConfigRevision() {
+		t.Errorf("config_revision = %v, want %q", body["config_revision"], tr.backend.ConfigRevision())
+	}
+}
+
+// TestSubmitOperation_IdempotencyKeyConflictReturns409WithItsOwnCode is
+// issue #118 item 10: reusing an idempotency key for a different logical
+// request must map to its own machine-readable code, distinct from
+// INVALID_REQUEST, so a client can tell "fix your JSON" apart from "you
+// need a different idempotency key".
+func TestSubmitOperation_IdempotencyKeyConflictReturns409WithItsOwnCode(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.errOnSubmit = fmt.Errorf("%w: idempotency key already used for a different request", service.ErrIdempotencyKeyConflict)
+
+	rec := submitOperation(t, tr.router, "idem-1", `{"action":"run_cycle","config_revision":"rev-1"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "IDEMPOTENCY_KEY_CONFLICT" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "IDEMPOTENCY_KEY_CONFLICT")
+	}
+}
+
+// TestSubmitOperation_OperationAlreadyRunningReturns409WithItsOwnCode is
+// issue #118 item 1's HTTP-layer half: a rejected "another run_cycle is
+// already in progress" submission maps to its own code, distinct from
+// both CONFIG_REVISION_STALE and IDEMPOTENCY_KEY_CONFLICT, so a client
+// that understands this code specifically knows to retry later with a
+// fresh idempotency key rather than assuming its request itself was
+// wrong.
+func TestSubmitOperation_OperationAlreadyRunningReturns409WithItsOwnCode(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.errOnSubmit = fmt.Errorf("%w: rejected: another run_cycle operation is already in progress", service.ErrOperationAlreadyRunning)
+
+	rec := submitOperation(t, tr.router, "idem-1", `{"action":"run_cycle","config_revision":"rev-1"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "OPERATION_ALREADY_RUNNING" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "OPERATION_ALREADY_RUNNING")
+	}
+}
+
+// TestSubmitOperation_BodyExceedingSizeLimitReturns400 is issue #118 item
+// 14: §17 requires enforcing request-size limits, and this proves it is
+// actually wired up, not just declared in a constant nothing reads.
+func TestSubmitOperation_BodyExceedingSizeLimitReturns400(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+
+	oversized := `{"action":"run_cycle","config_revision":"` + strings.Repeat("x", maxSubmitOperationBodyBytes+1) + `"}`
+	rec := submitOperation(t, tr.router, "idem-1", oversized)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "INVALID_REQUEST" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "INVALID_REQUEST")
+	}
 }
 
 // TestSubmitOperation_InvalidRequestFromBackendReturns400 proves the
