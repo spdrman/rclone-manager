@@ -72,8 +72,6 @@ type fakeTransport struct {
 
 	copyToLocalCallsCount int32 // atomic
 
-	statErr error
-
 	// failForSourceID, when non-empty, makes every method fail with
 	// failErr for calls whose transport.Source.ID matches it, leaving
 	// every other source unaffected. This is what lets a test simulate one
@@ -118,9 +116,6 @@ func (f *fakeTransport) List(ctx context.Context, source transport.Source) ([]tr
 func (f *fakeTransport) Stat(ctx context.Context, source transport.Source, remotePath string) (transport.RemoteArtifact, error) {
 	if f.failsFor(source) {
 		return transport.RemoteArtifact{}, f.failErr
-	}
-	if f.statErr != nil {
-		return transport.RemoteArtifact{}, f.statErr
 	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
