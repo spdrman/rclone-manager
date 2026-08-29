@@ -2921,6 +2921,8 @@ Do not assume undocumented persistence behavior.
 On first open:
 
 ```text
+Administrator account creation   (local-auth only; skipped under platform-auth)
+  ↓
 Welcome / product purpose
   ↓
 Privacy + data-processing notice
@@ -2933,6 +2935,41 @@ Review source-deletion behavior
   ↓
 Optional first ingestion
 ```
+
+## 49.1 Administrator account creation
+
+Under `local-auth` (section 3.6), the very first thing an operator sees SHALL be
+the one-time enrollment flow that creates the administrator account. Nothing
+else in the product is reachable until it completes: not the dashboard, not a
+read-only view, not the API beyond the enrollment route itself.
+
+Under `platform-auth` this step SHALL be skipped entirely. On UGOS the operator
+has already authenticated against the NAS, and prompting them to invent a second
+credential would be both confusing and a worse security posture, since it
+creates an account the platform does not know about and cannot revoke.
+
+The enrollment flow is a security boundary, not a form, and it SHALL be designed
+as one:
+
+- **It is single-shot and irreversible.** Once an administrator exists,
+  enrollment SHALL be permanently closed. It MUST NOT reopen because a
+  configuration file was deleted, because the container restarted, or because
+  the database was replaced with an empty one. Reaching a state where enrollment
+  is available again SHALL require deliberate operator action that is
+  indistinguishable from a fresh install.
+- **Reaching the port SHALL NOT be sufficient to claim the account.** An
+  unclaimed instance exposed on a network is the obvious attack: whoever
+  connects first becomes the administrator. Enrollment SHALL therefore require a
+  bootstrap secret that the operator can only obtain from somewhere they already
+  control, for example printed to the container log on first start. That secret
+  SHALL be single-use and SHALL expire.
+- Password handling follows section 3.6: Argon2id or equivalent, no plaintext
+  persistence, HTTP-only session cookies, CSRF protection, and rate limiting on
+  both enrollment and login.
+- Enrollment SHALL be rate-limited and SHALL log every attempt, successful or
+  not, to the audit trail (section 58).
+
+Backup setup remains skippable, per below. Account creation does not.
 
 If the target App Center region/current UGREEN rules require first-launch privacy consent for the user identity/audit data processed by the application, that notice/consent step is mandatory and MUST NOT be skippable.
 
