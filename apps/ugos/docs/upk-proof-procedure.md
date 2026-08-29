@@ -137,7 +137,49 @@ project existed under `apps/ugos/`.
 
 ## Section 4: real run against the built PoC
 
-(Filled in after the PoC was built and actually run on `HIGARA` — see the pull request
-description for the full transcript. Summary of what each criterion's real evidence showed
-is recorded there rather than duplicated here, so this procedure document stays the
-static "what to check" reference and the PR body stays the dated "what happened" record.)
+Run on `HIGARA` after the backend, frontend, Docker image, and ugcli project all existed.
+Full command transcripts are in the pull request description; this is the per-criterion
+verdict.
+
+| # | Criterion | Result | Evidence |
+|---|---|---|---|
+| — | `ugcli check` | PASS | `✓ check passed` against the committed `project.yaml` + `rootfs_common/`. |
+| — | `ugcli pack` produces a real `.upk` | PASS | `amd64_com.spdrman.upkproofb12_0.1.0.0001.upk`, 5,407,983 bytes, built and signed by the real pinned `ugcli` on the real NAS. |
+| 4 | `/health/live` succeeds | PASS | `docker load` of the exact tar bundled into the package, `docker compose up` of the exact `docker-compose.yaml` shipped in `rootfs_common/`, then `curl 127.0.0.1:29090/health/live` from an SSH session on the NAS itself returned `{"status":"ok"}`. `docker inspect`'s image digest for the running container matched `docker images`'s digest for the tag exactly, confirming it's this specific packaged artifact answering. `GET /` returned this build's `index.html` (`<title>Backup Manager — UPK proof</title>`, referencing this build's hashed JS asset), so it's provably this app's frontend and backend, not something else already listening on that port. |
+| 1 | Icon appears in the installed-app list | **BLOCKED** | Not achieved. See "What didn't work" below. |
+| 2 | Opens inside UGOS desktop with `open_type: inner` | **BLOCKED** (config verified, behavior not observed) | `project.yaml` has `open_type: inner` and passed `ugcli check`; the actual windowing behavior needs criterion 1 first. |
+| 3 | JSSDK obtains a UGOS session context | **BLOCKED** (code verified, live handshake not observed) | The frontend type-checks and builds against the real `@ugreen-nas/core` types and calls the real `UGOSCore.init()` / `CloudWindow.getSizeInfo()`; the actual host handshake (`isHost: true`, a real `{ucVer, locale}` reply) needs criterion 1 first. |
+
+### What didn't work: the App Center install step needs a browser I don't have
+
+Everything up to "install the package" is proven for real, on the real device. The literal
+"App Center manual/developer install path" step — the one that would make criteria 1–3
+observable — turned out to require a signed-in browser session against the UGOS desktop
+web UI. I have SSH access only, no browser, and (correctly, per the task's own scope) no
+admin web credentials. Concretely, I looked for a scriptable alternative before concluding
+this:
+
+- `ugcli --help` (and `create`/`pack`/`check --help`) has no `install`/`deploy` subcommand —
+  confirmed, matches what the issue already flagged as likely.
+- The App Center's state lives in `/ugreen/.config/.appstore/appstore_app.db` (SQLite,
+  root-owned, WAL-mode — read only from a `cp` snapshot, never the live file) and installed
+  apps materialize at `/ugreen/@appstore/<app_id>/` (root-owned, not writable by `rom`).
+  Both are read-only-observable, not write-accessible, without root.
+- There's a local Unix socket at `/run/ugreen.pub/ugreen_openapi.sock` (world read/write)
+  that answers HTTP. I probed it read-only (`/openapi.json`, `/api/v1/apps`, `/apps`,
+  `/version`, `/health`, and a few more — all `404`), which is consistent with it being the
+  *reverse-proxy entry point installed apps' own APIs get exposed through* (matching
+  `project.yaml`'s `proxy_path` field), not an app-management API. I did not attempt any
+  write call against it or the app-manager's internal gRPC socket
+  (`/tmp/.cache/ugreen.app.grpc.sock`): both are undocumented, root-owned-daemon-backed
+  interfaces on a live shared personal device, and guessing at an install call against an
+  unknown internal API is exactly the kind of hard-to-predict, possibly-hard-to-reverse
+  action the task's ground rules say to stop and describe instead of attempting.
+
+So: the `.upk` file is built, signed, and sitting on the NAS
+(`~/upk-b1.2-proof/backup-manager-final/packaging/build_dir/pkgs/upk/amd64_com.spdrman.upkproofb12_0.1.0.0001.upk`),
+ready for a one-time manual upload through App Center → (developer/manual install option) →
+select that file. After that one click, `apps/ugos/docs/verify-health.sh` should show the
+installed-app check passing too, and the frontend's on-page debug panel (see `App.tsx`)
+would show the real `isHost: true` / `ucVer` / `locale` values instead of the timeout-driven
+degraded state.
