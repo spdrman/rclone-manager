@@ -43,7 +43,7 @@ import (
 // reconcileDeletePending only ever moves a row toward COMPLETE or
 // QUARANTINED, or leaves it exactly where it is; it never calls
 // DeleteRemote itself.
-func TestReconcile_RealAdapter_CannotConvergeRemoteDeletePendingToComplete_KnownDefect(t *testing.T) {
+func TestReconcile_RealAdapter_ConvergesRemoteDeletePendingToComplete(t *testing.T) {
 	j := openTestJournal(t)
 	artifact := testArtifact(t, "known-defect-stuck.dump")
 	size := int64(64)
@@ -71,16 +71,20 @@ func TestReconcile_RealAdapter_CannotConvergeRemoteDeletePendingToComplete_Known
 		t.Fatalf("Journal.Get: %v", getErr)
 	}
 
-	if len(report.Errors) == 1 && len(report.Findings) == 0 && rec.State == string(lifecycle.RemoteDeletePending) {
-		t.Logf("CONFIRMED (known defect): Reconcile could not convert a confirmed-absent remote into COMPLETE "+
-			"through the real adapter; it reported a per-artifact error instead and left the journal at %s: %v",
-			rec.State, report.Errors[0])
-		return
+	// This used to assert that Reconcile COULD NOT get here. The adapter
+	// never wrapped its own errors, so transport.CategoryOf could not tell a
+	// NotFound from anything else, and the "remote confirmed absent" path had
+	// nothing to switch on. Reconcile reported a per-artifact error and left
+	// the journal stuck at REMOTE_DELETE_PENDING forever.
+	//
+	// The adapter wraps its errors now, so a genuinely absent remote is
+	// recognised and the artifact converges to COMPLETE, which is FR-17's
+	// "absent / final / REMOTE_DELETE_PENDING -> reconcile COMPLETE" row.
+	if len(report.Errors) != 0 {
+		t.Fatalf("Reconcile reported errors for a confirmed-absent remote: %v", report.Errors)
 	}
-
-	t.Fatalf("this test's fixture assumption changed: got %d Errors, %d Findings, journal state %s (Errors=%v); "+
-		"if Reconcile now reaches COMPLETE here, the adapter-classification defect this test documents has been fixed "+
-		"(see internal/transport/rclone/error_classification_gap_a213_test.go and the PR description) and this test "+
-		"should be deleted, not adjusted to still pass",
-		len(report.Errors), len(report.Findings), rec.State, report.Errors)
+	if rec.State != string(lifecycle.Complete) {
+		t.Fatalf("journal state = %s, want %s; a confirmed-absent remote should converge to COMPLETE",
+			rec.State, lifecycle.Complete)
+	}
 }

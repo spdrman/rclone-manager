@@ -32,10 +32,11 @@
 // already ships for exactly this) for the complementary, precisely-targeted
 // half of that coverage.
 //
-// # Two known defects this suite works around
+// # Two defects this suite found, both since fixed
 //
-// Two real defects surfaced while building this suite (see the PR
-// description for the full writeup): internal/transport/rclone.Adapter
+// Two real defects surfaced while building this suite, and both are FIXED
+// now, so the workaround below is redundant rather than load-bearing. They
+// were: internal/transport/rclone.Adapter
 // never classifies its own errors, which breaks internal/reconcile's
 // "remote confirmed absent" detection and FR-22's retry-on-transient; and
 // internal/lifecycle.DeleteRemote's re-identification never asks for a
