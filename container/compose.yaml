@@ -1,0 +1,127 @@
+# UGREEN deployment shape for backup-manager (A3.9). See docs/deployment.md
+# for the reasoning behind every one of these settings, how to build and run
+# it, and what still has to change once the daemon subcommands
+# (backup-manager run / daemon / status) exist.
+#
+# This file builds for the machine running `docker compose`, i.e. it's meant
+# to be run ON the UGREEN NAS itself (or against a matching architecture).
+# To cross-build and publish a linux/amd64 + linux/arm64 image ahead of
+# time instead, use `docker buildx build --platform=...` directly; see
+# docs/deployment.md.
+#
+# Nothing below reads a secret from this file or from the environment: real
+# credential material (the SSH private key) lives only at the host path
+# SSH_KEY_FILE points to, mounted read-only into the container.
+
+services:
+  backup-manager:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+      args:
+        # Deterministic build stamps (see Dockerfile): pass the real values
+        # from a checkout, e.g.
+        #   VERSION=$(git -C .. describe --tags --always)
+        #   COMMIT=$(git -C .. rev-parse HEAD)
+        # Left unset, the binary reports "dev"/"none", which is fine for a
+        # local build but not what a release should ship.
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+    image: backup-manager:${VERSION:-dev}
+
+    # TODO(daemon): cmd/backup-manager only implements `version` today
+    # (execution modes are separate, still-open issues). This runs it once,
+    # printing backup-manager/rclone/Go versions, and exits 0. Replace with
+    # `["run"]` or `["daemon"]` once one exists — and see the `restart` note
+    # below, which has to change at the same time.
+    command: ["version"]
+
+    # No privileged mode, no added capabilities. The container doesn't bind
+    # a low port, doesn't need raw sockets, and doesn't need to change file
+    # ownership at startup (see the uid/gid note below) — there is no
+    # capability this process legitimately needs.
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    # Non-root, with the uid/gid coming from the environment rather than
+    # baked into the image. The distroless runtime image's own default
+    # (65532:65532, its "nonroot" account) is fine in isolation, but this
+    # container also has to write into a directory that lives on the
+    # UGREEN NAS's filesystem (the state volume below), and that
+    # directory's ownership is whatever the NAS's own admin account happens
+    # to be, not whatever uid the image picked at build time. Hardcoding
+    # 1000 here would work for the common case (most Linux-based NAS
+    # distributions, UGOS included, give the first admin account uid/gid
+    # 1000) and then fail confusingly on any NAS where it doesn't. PUID and
+    # PGID below default to that common case but are meant to be
+    # overridden in .env for a host where it doesn't hold.
+    #
+    # This only maps to a real writable directory if the host paths bound
+    # below are already owned by PUID:PGID before the container's first
+    # start — this image has no shell, no root step, and no init process to
+    # chown them for you. See "Non-root and the NAS uid/gid" in
+    # docs/deployment.md.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    # Application filesystem is read-only. Nothing under / is meant to be
+    # written by this process; the two things it does write (the SQLite
+    # journal and whatever it fetches from the remote) both live on
+    # explicit volumes below, never on the container's own rootfs.
+    read_only: true
+
+    # SQLite (journal_mode=WAL, see internal/state/state.go) writes -wal and
+    # -shm files alongside the main database file, so the whole state
+    # directory has to be writable, not just the database file itself — a
+    # single-file bind mount here would break the first write. This was
+    # verified directly against a read-only rootfs + this exact mount
+    # shape, not assumed; see docs/deployment.md.
+    #
+    # /tmp is mounted as tmpfs for the same reason: a read-only rootfs makes
+    # Go's default temp directory unwritable (verified directly too), and
+    # while the specific SQLite operations this project currently exercises
+    # didn't turn out to need a real temp file on modernc.org/sqlite in
+    # testing, that's not a guarantee future queries or a future sqlite
+    # version won't need one. Size is small on purpose: this is scratch
+    # space, not somewhere state is meant to persist.
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      # Explicit, not just relying on the default search order SQLite's
+      # temp-file code falls back to (SQLITE_TMPDIR, then TMPDIR, then a
+      # hardcoded list ending in /tmp) — see docs/deployment.md.
+      TMPDIR: /tmp
+
+    volumes:
+      # Persistent SQLite lifecycle journal (FR-9). A directory, per the
+      # WAL note above, not a single file.
+      - ${STATE_DIR:?set STATE_DIR in .env to a host path for the SQLite state directory}:/data/state
+
+      # Where completed artifacts land once pulled and verified. This is
+      # the NAS backup volume/share itself, so it's writable, not :ro.
+      - ${BACKUP_DIR:?set BACKUP_DIR in .env to the host backup storage path}:/data/backups
+
+      # Configuration and credentials: read-only, per the container
+      # requirements. Nothing here is baked into the image or into this
+      # file — only host paths, resolved at `docker compose up` time.
+      - ${CONFIG_FILE:?set CONFIG_FILE in .env to the manager's config.yaml}:/etc/backup-manager/config.yaml:ro
+      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+
+    # TODO(daemon): "unless-stopped" is the right policy for the eventual
+    # long-running `run`/`daemon` process — restart across crashes and NAS
+    # reboots, but stay down if an operator deliberately stops it. Today's
+    # `command: ["version"]` exits 0 immediately, so this will keep
+    # restarting it in a loop (Docker's restart backoff throttles how fast,
+    # but it will not settle). That's expected for a file that's packaging
+    # ahead of the daemon existing, not a bug in this file: use `docker
+    # compose run --rm backup-manager` for a one-shot check instead of `up
+    # -d` until a real long-running command exists. See docs/deployment.md.
+    restart: unless-stopped
+
+    # See Dockerfile for what this actually checks today and why, and
+    # issue #26 for what it becomes.
+    # healthcheck: inherited from the image's HEALTHCHECK instruction.
