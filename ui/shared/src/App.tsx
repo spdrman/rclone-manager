@@ -44,8 +44,12 @@ export function App() {
   const health = useResource(healthNode, () => api.getHealth(), [api]);
   const version = useResource(versionNode, () => api.getVersion(), [api]);
   const sets = useResource(setsNode, () => api.listSets(), [api]);
-  // Fetched into the graph for the header's quarantine count (countsNode,
-  // below); QuarantinePage reads it independently, same as before.
+  // Fetched into the graph purely for the header's quarantine count
+  // (countsNode, below). QuarantinePage does NOT read quarantineNode — it
+  // runs its own separate, uncoordinated api.listQuarantine() fetch via
+  // useAsync (pre-existing duplication, not new to this migration), so the
+  // two can disagree with each other in principle. Rewiring the page onto
+  // this node is arguably B2.5's scope; see #101.
   useResource(quarantineNode, () => api.listQuarantine(), [api]);
 
   const reloadAll = useCallback(() => {
