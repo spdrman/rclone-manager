@@ -16,8 +16,14 @@
 # commit is likely to have touched.
 #
 # apps/common is a second, much smaller Go module (the platform-capability
-# contract plus reserved webhost/auth/local scaffolding) — build, vet and
-# test run in full since none of it is slow.
+# contract, apps/common/webhost's API, and apps/common/auth/local's local
+# authentication) — build, vet and test run in full since none of it is
+# slow.
+#
+# apps/generic (issue #82/B4.1) is a third Go module: the generic Web
+# host's own binary, wiring core/service + apps/common/webhost +
+# apps/common/auth/local together. Same reasoning as apps/common — small
+# and fast enough to run in full here.
 #
 # Frontend: tsc --noEmit and the vitest suite, both of which are about a second.
 # Playwright is NOT here, for the same reason as the Go integration tree: it
@@ -61,6 +67,11 @@ if [ -d apps/common ]; then
   # module pin.
   echo "==> pre-commit: apps/common go build, vet, test"
   (cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+fi
+
+if [ -d apps/generic ]; then
+  echo "==> pre-commit: apps/generic go build, vet, test"
+  (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
 fi
 
 # The frontend only exists once ui/shared is present, and a Go-only checkout

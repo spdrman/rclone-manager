@@ -92,6 +92,39 @@ jobs:
         working-directory: apps/common
         run: go test ./...
 
+  apps-generic-build-vet-test:
+    name: apps/generic build, vet, test
+    runs-on: ubuntu-latest
+    # GOWORK=off, matching apps-common-build-vet-test above: apps/generic
+    # is the generic Web host's own binary (issue #82/B4.1), wiring
+    # core/service + apps/common/webhost + apps/common/auth/local
+    # together — its own go.mod's replace directives, not go.work's `use`
+    # list, are what have to resolve correctly here.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/generic/go.mod
+
+      - name: Build
+        working-directory: apps/generic
+        run: go build ./...
+
+      - name: Vet
+        working-directory: apps/generic
+        run: go vet ./...
+
+      - name: Test
+        working-directory: apps/generic
+        run: go test ./...
+
   ugreen-cross-compile:
     name: UGREEN cross-compile (${{ matrix.goarch }})
     runs-on: ubuntu-latest
