@@ -827,9 +827,24 @@ Required scenarios include:
                                                           quarantine
                                                           local
 
+  absent          invalid final   any                     quarantine,
+                                                          unrecoverable
+
   changed         final           delete pending          refuse delete;
   identity                                                investigate
   -----------------------------------------------------------------------
+
+I added the "absent / invalid final" row above: the original table had no
+row for it at all, and it is not the same problem as "exists / invalid
+final". When the remote copy is gone too, there is no source left to
+re-fetch from, so preserve-and-quarantine (which assumes a fresh attempt
+could still recover the artifact) is the wrong answer. The state machine
+carries a twelfth state, QUARANTINED_LOST, reachable only from COMPLETE and
+terminal by design, for exactly this case; see internal/lifecycle/state.go
+and machine.go. Reconciliation reaches it either directly from COMPLETE, or
+by first reconciling REMOTE_DELETE_PENDING to COMPLETE (the row above) and
+then on to QUARANTINED_LOST in the same pass, since that is the only legal
+path the state machine admits.
 
 Reconciliation SHALL be idempotent.
 
