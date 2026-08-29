@@ -103,7 +103,7 @@ Built and measured directly, both architectures:
 Both were built with `docker buildx build --platform linux/<arch> ...` from
 `container/Dockerfile`, and both ran `backup-manager version` successfully and printed
 the expected version/commit/Go-version line. `docker compose build` (which does not
-cross-build; see below) plus `docker compose run --rm backup-manager` was also exercised
+cross-build; see below) plus `docker compose run --rm rclone-manager` was also exercised
 end to end on linux/amd64, with the full read-only-rootfs/tmpfs/non-root/bind-mount shape
 from `container/compose.yaml` in effect, not just a bare `docker run`.
 
@@ -228,7 +228,7 @@ non-root uid) needs any capability at all.
 operator deliberately stops it. `command: ["/backup-manager-web", "serve"]` is a real
 long-running process (the generic Web host's HTTP server plus the backup scheduler, see
 below), so this policy now does what it says rather than looping a container that exits
-immediately. For a one-shot check instead, use `docker compose run --rm backup-manager
+immediately. For a one-shot check instead, use `docker compose run --rm rclone-manager
 /backup-manager version` (or `... check`), which bypasses `restart` entirely.
 
 ## Health check
@@ -266,49 +266,88 @@ docker compose -f container/compose.yaml build
 docker compose -f container/compose.yaml up -d
 
 # A one-shot check instead of the long-running Web host:
-docker compose -f container/compose.yaml run --rm backup-manager /backup-manager check
+docker compose -f container/compose.yaml run --rm rclone-manager /backup-manager check
 ```
 
 See "The generic Web host" below for what `serve` actually composes, and
 `scripts/deploy/deploy_generic.py --help` for a scripted version of the same steps that
 also renders `config.yaml`/`.env` for you from a private key and a remote host.
 
-## The generic Web host
+## The generic Web host: two containers, one image
 
-`/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2) is the
-"generic Web App host": one process composing
+The "generic Web App host" (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2) is two
+separate Docker containers, both running the exact same `/backup-manager-web` binary
+from the exact same image - only `command:` differs, the same "one canonical image,
+vary command" principle already applied to `/backup-manager` vs. `/backup-manager-web`
+themselves. No nginx or other new runtime dependency was introduced for the split: the
+UI-host container's reverse proxy is a plain `net/http/httputil.ReverseProxy`
+(`apps/generic/server.NewUI`).
 
-- the versioned `/api/v1` API (`apps/common/webhost`, issue #94/B1.5's skeleton);
-- local authentication (`apps/common/auth/local`): Argon2id password hashing, HTTP-only
-  session cookies, double-submit-cookie CSRF protection, per-IP rate limiting on
-  login/enrollment, and a single-use, expiring bootstrap token for the one-time
-  administrator enrollment flow (§49.1);
-- the shared UI (`ui/shared`'s built static bundle, embedded via `apps/generic/webui`'s
-  `go:embed`, with an SPA fallback to `index.html` for any client-side route);
-- the backup scheduler (`core/service.BackupService.RunOnSchedule`, at the config file's
-  own `poll_interval`).
+```text
+                          published port (LISTEN_PORT)
+                                    │
+                                    ▼
+                          ┌───────────────────┐
+        LAN / operator ──▶│      web-ui        │
+                          │ static UI + proxy  │
+                          └─────────┬──────────┘
+                                    │ internal Docker network only
+                                    │ (http://rclone-manager:8080)
+                                    ▼
+                          ┌───────────────────┐
+                          │  rclone-manager    │   no published port -
+                          │ engine: core svc + │   reachable only from
+                          │ scheduler + local  │   web-ui, over the
+                          │ auth + /api/v1     │   `internal` network
+                          └───────────────────┘
+```
 
-The HTTP server and the scheduler share one `*service.BackupService` and one
-`signal.NotifyContext`-derived shutdown context (§9.3): both stop because the same
-signal canceled that context, not because one tells the other to. Both also share
-`BackupService`'s existing single-flight guard, so a scheduled cycle and a future
-API-submitted one (`POST /api/v1/operations`) can never run concurrently against the
-same backup sets.
+**`rclone-manager`** (`/backup-manager-web serve`) is the engine: local authentication
+(`apps/common/auth/local`), the versioned `/api/v1` API (`apps/common/webhost`), and the
+backup scheduler (`core/service.BackupService.RunOnSchedule`, at the config file's own
+`poll_interval`) - one process sharing one `*service.BackupService` and one
+`signal.NotifyContext`-derived shutdown context (§9.3): both the HTTP server and the
+scheduler stop because the same signal canceled that context, not because one tells the
+other to, and both share `BackupService`'s existing single-flight guard so a scheduled
+cycle and a future API-submitted one (`POST /api/v1/operations`) can never run
+concurrently against the same backup sets. It has **no static UI and no published
+port** - `container/compose.yaml` gives it no `ports:` entry at all, so it is reachable
+only from `web-ui`, over the `internal` bridge network compose.yaml defines for exactly
+this project (nothing external, nothing shared with any other container on the host).
 
-**First run.** With no administrator account yet, `serve` prints a one-time enrollment
-link straight to stdout (the container's own log):
+**`web-ui`** (`/backup-manager-web serve-ui`) serves the shared static UI (`ui/shared`'s
+built bundle, embedded via `apps/generic/webui`'s `go:embed`, with an SPA fallback to
+`index.html` for any client-side route) and reverse-proxies `/api/v1/*` and `/health/*`
+unchanged (same path, method, body, and - critically - the browser's session/CSRF
+cookies) to `rclone-manager` over that same `internal` network, by its compose service
+name. This is the **only** container with a `ports:` entry - the one thing a browser or
+an operator's terminal is meant to reach directly.
+
+What this topology actually buys: even a full compromise of the UI-host process (the
+one facing the LAN) reaches `rclone-manager`'s API the exact same way a legitimate
+browser would - it does not get a bind mount to `config.yaml`, the SSH key,
+`known_hosts`, or either data directory, because `web-ui` never has any of those
+mounted in the first place (see `container/compose.yaml`: it declares zero `volumes:`).
+This is plain Docker Compose network topology, nothing more - no `internal: true`
+network flag and no firewall rules block `web-ui`'s own outbound internet access, which
+would be a further hardening step beyond what this issue asked for.
+
+**First run.** With no administrator account yet, `rclone-manager` prints a one-time
+enrollment link straight to its own container log:
 
 ```
 backup-manager: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
 ```
 
-That token is required to complete `POST /api/v1/auth/enroll` — reaching the port is
-not enough to claim the account (§49.1) — and is invalidated the moment enrollment
-completes, or by the next process restart before it does. It travels as a URL query
-parameter, not a form field: neither `EnrollmentPage.tsx` nor the design canvas
-(`docs/design/Backup Manager.dc.html`) has one, so `ui/shared/src/api/client.ts` reads
-it off `window.location.search` and attaches it as the `X-Bootstrap-Token` header
-instead.
+(The printed host/port reflects `rclone-manager`'s own internal listener, not
+`web-ui`'s published one - open the link at `web-ui`'s own published port/host instead;
+the query token itself is what actually matters.) That token is required to complete
+`POST /api/v1/auth/enroll` — reaching the port is not enough to claim the account
+(§49.1) — and is invalidated the moment enrollment completes, or by the next process
+restart before it does. It travels as a URL query parameter, not a form field: neither
+`EnrollmentPage.tsx` nor the design canvas (`docs/design/Backup Manager.dc.html`) has
+one, so `ui/shared/src/api/client.ts` reads it off `window.location.search` and
+attaches it as the `X-Bootstrap-Token` header instead.
 
 **Two binaries, one image, no `ENTRYPOINT`.** `apps/generic` is its own Go module — it
 has to be, since it imports `apps/common/webhost` and `apps/common/auth/local`, and
@@ -318,13 +357,21 @@ not a new subcommand of it. `container/Dockerfile` sets no `ENTRYPOINT` for exac
 this reason (a fixed `ENTRYPOINT` can only ever prefix one binary): every `command:` in
 `container/compose.yaml`, and every example above, names its binary by full path.
 
+**Healthchecks differ per container.** `rclone-manager` keeps the image's own baked-in
+`HEALTHCHECK` (`backup-manager status`, real backup-freshness evidence against the
+state database it actually holds). `web-ui` has neither a config file nor a state
+database, so `container/compose.yaml` overrides its `healthcheck:` to
+`/backup-manager-web healthcheck` instead - a plain HTTP GET against its own listener,
+the only question that applies to a container whose entire job is "serve static files
+and proxy requests."
+
 **Headless mode is still just the other binary.** `/backup-manager daemon` (or `run`,
-`check`, ...) never binds a web listener at all — override `command` in
-`container/compose.yaml` to `["/backup-manager", "daemon"]` for a deployment that
-should never expose the API/UI. `backup-manager status` (the HEALTHCHECK) works
-identically either way, since it is always a fresh, read-only check against the shared
-state database file, independent of which binary is actually running as the
-container's main process.
+`check`, ...) never binds a web listener at all — override `rclone-manager`'s `command`
+in `container/compose.yaml` to `["/backup-manager", "daemon"]` (and simply omit the
+`web-ui` service, or stop it) for a deployment that should never expose the API/UI at
+all. `backup-manager status` works identically either way, since it is always a fresh,
+read-only check against the shared state database file, independent of which binary is
+actually running as `rclone-manager`'s main process.
 
 ## Release hashes
 

@@ -11,9 +11,45 @@
 # Nothing below reads a secret from this file or from the environment: real
 # credential material (the SSH private key) lives only at the host path
 # SSH_KEY_FILE points to, mounted read-only into the container.
+#
+# TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
+# this issue merged): `rclone-manager` is the engine - core service,
+# scheduler, local authentication, and the versioned /api/v1 API, all in
+# one process sharing one shutdown context (§9.3) - and has NO published
+# port at all; it is reachable only from `web-ui`, over the `internal`
+# network below. `web-ui` serves the shared static UI and reverse-proxies
+# API requests to `rclone-manager`, and is the ONLY service with a
+# LAN-facing published port. Both run the exact same
+# `/backup-manager-web` binary from the exact same image - only `command:`
+# differs - matching the "one canonical image, vary command" principle
+# already applied to `/backup-manager` vs. `/backup-manager-web`
+# themselves; no nginx or other new runtime dependency was introduced for
+# this (see apps/generic/server's own doc comment for the plain
+# net/http/httputil.ReverseProxy this uses instead).
+#
+# Network isolation is plain compose topology, nothing more: `internal`
+# below is a private bridge network scoped to just this project (compose
+# creates one per project by default; this just names it explicitly for
+# clarity), so `rclone-manager` is reachable by `web-ui` (same network)
+# and by nothing else on the NAS - no other container, and nothing on the
+# host's own LAN interfaces, since it publishes no port and joins no
+# other network. This does NOT block `web-ui`'s own outbound internet
+# access (e.g. via a `internal: true` network or firewall rules) - that
+# is a further hardening step beyond what was asked for here.
+networks:
+  internal:
+
+# Shared hardening, identical for both services: neither one needs any
+# capability beyond what a plain non-root process gets by default.
+x-security: &security
+  privileged: false
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
 
 services:
-  backup-manager:
+  rclone-manager:
     build:
       context: ..
       dockerfile: container/Dockerfile
@@ -29,27 +65,19 @@ services:
     image: backup-manager:${VERSION:-dev}
 
     # `/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
-    # §9.2's "Generic Web App host") is this image's real long-running
-    # default: the shared UI, the versioned /api/v1, local authentication
-    # and the backup scheduler, all in one process sharing one shutdown
-    # context (§9.3) — the process this file was packaging ahead of before
-    # #82. `/backup-manager` (no "-web") is still in this same image for
-    # headless-only use with no web listener at all: override `command`
-    # with `["/backup-manager", "daemon"]` for that, or `docker compose run
-    # --rm backup-manager /backup-manager version` / `... check` for a
-    # one-shot check; see the `restart` note below, which assumes the
-    # default `serve` command specifically.
+    # §9.2's "Generic Web App host") is the engine: local authentication,
+    # the versioned /api/v1 API, and the backup scheduler, all in one
+    # process sharing one shutdown context (§9.3). No static UI - that is
+    # web-ui's job, over the `internal` network below, never a published
+    # port here. `/backup-manager` (no "-web") is still in this same image
+    # for headless-only use with no web listener at all: override
+    # `command` with `["/backup-manager", "daemon"]` for that, or `docker
+    # compose run --rm rclone-manager /backup-manager version` / `... check`
+    # for a one-shot check; see the `restart` note below, which assumes
+    # the default `serve` command specifically.
     command: ["/backup-manager-web", "serve"]
 
-    # No privileged mode, no added capabilities. The container doesn't bind
-    # a low port, doesn't need raw sockets, and doesn't need to change file
-    # ownership at startup (see the uid/gid note below) — there is no
-    # capability this process legitimately needs.
-    privileged: false
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
+    <<: *security
 
     # Non-root, with the uid/gid coming from the environment rather than
     # baked into the image. The distroless runtime image's own default
@@ -103,10 +131,10 @@ services:
       # `/backup-manager-web serve`'s own `--listen` flag defaults to this
       # variable when set (falling back to :8080 otherwise), so it binds
       # this address inside the container without it needing to be an
-      # explicit command-line argument above; `ports:` above only
-      # republishes whatever port this is to the host. Kept as one
-      # address (not a separate host/port pair) so both sides always
-      # agree.
+      # explicit command-line argument above. Never published to the
+      # host (see the top-of-file note): only reachable from `web-ui`,
+      # over the `internal` network, at this same port via the service
+      # name `rclone-manager` (Docker's own embedded DNS).
       LISTEN_ADDR: ":8080"
 
     volumes:
@@ -134,21 +162,100 @@ services:
     # `command` above (`/backup-manager-web serve`) is a real long-running
     # process rather than the immediately-exiting `version` this file used
     # to default to. For a one-shot check, use `docker compose run --rm
-    # backup-manager /backup-manager version` (or `... check`) instead of
+    # rclone-manager /backup-manager version` (or `... check`) instead of
     # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
     # `backup-manager status` (issue #26), tracked by the image's own
     # HEALTHCHECK instruction since issue #82/B4.1: see container/Dockerfile
     # for exactly what it checks and docs/deployment.md for how that was
-    # verified against a running container.
+    # verified against a running container. Real backup-freshness evidence
+    # (HEALTHY/DEGRADED/STALE/FAILING), appropriate here since this is the
+    # container that actually holds the state database - web-ui's own
+    # healthcheck below is deliberately a different, narrower check.
     # healthcheck: inherited from the image's HEALTHCHECK instruction.
 
-    # The generic Web UI/API listener (docs/EPIC-B-multi-nas.md §9.2).
-    # LISTEN_ADDR below controls what `/backup-manager-web serve` actually
-    # binds to inside the container; this only republishes that same port
-    # to the host. Bind to a loopback-only host port (or omit `ports`
-    # entirely and reach it through a reverse proxy) if this deployment
-    # should not be reachable directly from the network.
+    # Deliberately NO ports: here: mapping this to a network is now
+    # web-ui's job, over `internal`, never to the host directly. This is
+    # the actual network-isolation requirement, not a comment - see the
+    # top-of-file note.
+    networks:
+      - internal
+
+  web-ui:
+    # SAME image as rclone-manager, no separate `build:` block: this
+    # service reuses whatever `rclone-manager`'s own build already
+    # produced and tagged (docker compose resolves `image:` against
+    # whatever is already built/pulled under that tag). Same digest, same
+    # binary, different command - never a second image to keep in sync.
+    image: backup-manager:${VERSION:-dev}
+
+    # Wait for the engine to report healthy before starting: a NAS reboot
+    # (or `docker compose up`) starting both containers at once would
+    # otherwise let web-ui begin proxying before rclone-manager is even
+    # listening, surfacing as a confusing "bad gateway" instead of a
+    # simple "please wait."
+    depends_on:
+      rclone-manager:
+        condition: service_healthy
+
+    # `/backup-manager-web serve-ui`: the shared static UI plus a reverse
+    # proxy to the engine (apps/generic/server's own doc comment has the
+    # full routing shape). --upstream defaults to
+    # http://rclone-manager:8080 (the engine's own compose service name,
+    # resolved through Docker's embedded DNS on the `internal` network
+    # below), set explicitly here via UPSTREAM_ADDR anyway so the
+    # dependency is visible in this file, not just in the binary's own
+    # default.
+    command: ["/backup-manager-web", "serve-ui"]
+
+    <<: *security
+
+    # Same non-root reasoning as rclone-manager above, even though this
+    # service has no host directory of its own to write into: consistent
+    # hardening costs nothing, and this process may as well run with the
+    # same reduced privilege.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      TMPDIR: /tmp
+      # Published to the host (see `ports:` below); LISTEN_ADDR is this
+      # container's own internal bind address, always :8080 regardless of
+      # what host port LISTEN_PORT maps it to.
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
+
+    # No volumes at all: this service never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory - it only ever serves
+    # its own embedded static bundle and proxies HTTP requests. Smaller
+    # attack surface than the engine by construction, not by discipline.
+
+    restart: unless-stopped
+
+    # Overrides the image's own HEALTHCHECK (`/backup-manager status`,
+    # which needs a config file and a state database neither of which
+    # this container has): `/backup-manager-web healthcheck` just GETs
+    # its own listener and checks for a non-error response - "is this
+    # web server up," the only question that applies to a container with
+    # no backup state of its own to report on.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # The generic Web UI/API listener (docs/EPIC-B-multi-nas.md §9.2) -
+    # the ONLY published port in this file. Bind to a loopback-only host
+    # port (or omit `ports` entirely and reach it through your own
+    # reverse proxy/VPN) if this deployment should not be reachable
+    # directly from the LAN.
     ports:
       - "${LISTEN_PORT:-8080}:8080"
+
+    networks:
+      - internal
