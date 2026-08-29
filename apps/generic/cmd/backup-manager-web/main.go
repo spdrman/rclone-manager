@@ -1,10 +1,20 @@
 // Command backup-manager-web is the generic Web host's own executable
 // (issue #82/B4.1, docs/EPIC-B-multi-nas.md §9.2): it runs alongside
 // cmd/backup-manager (core/cmd/backup-manager, unchanged by this issue)
-// inside the same canonical OCI image, and adds exactly one thing that
-// binary does not have: a `serve` command combining the versioned
-// /api/v1 API, local authentication, the shared UI, and the backup
-// scheduler in one process (§9.3).
+// inside the same canonical OCI image, and adds what that binary does
+// not have: `serve` (the engine - core service/scheduler, local
+// authentication, and the versioned /api/v1 API, sharing one process and
+// one shutdown context per §9.3) and `serve-ui` (the shared static UI
+// plus a reverse proxy to the engine).
+//
+// These two run as SEPARATE CONTAINERS in production
+// (container/compose.yaml), from the SAME image: `serve` has no
+// published port and is reachable only from the `serve-ui` container
+// over the internal Docker network, and `serve-ui` is the only container
+// with a LAN-facing published port. Splitting them into two commands of
+// one binary, rather than two separate binaries or images, is the same
+// "one canonical image, vary command" principle already applied to
+// `/backup-manager` vs. `/backup-manager-web` themselves.
 //
 // Every other execution mode (`run`, `daemon`, `check`, `status`, ...)
 // stays on cmd/backup-manager: this binary is deliberately narrow rather
@@ -23,7 +33,9 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -54,15 +66,27 @@ const defaultConfigPath = "/etc/backup-manager/config.yaml"
 const defaultAuthStorePath = "/data/state/local-auth.json"
 
 // defaultListenAddr is used only when neither --listen nor LISTEN_ADDR
-// is set; container/compose.yaml always sets LISTEN_ADDR explicitly.
+// is set; container/compose.yaml always sets LISTEN_ADDR explicitly for
+// both the `serve` and `serve-ui` containers.
 const defaultListenAddr = ":8080"
 
-// shutdownGrace bounds how long serve waits for the HTTP server's
-// graceful Shutdown and the scheduler loop's own exit before giving up
-// on a clean stop and returning anyway - the process is exiting either
-// way once ctx is canceled (SIGTERM/SIGINT); this only decides how long
-// it waits first.
+// defaultUpstream matches container/compose.yaml's engine service name
+// (`rclone-manager`) on its own internal default port - resolved through
+// Docker's embedded DNS on the shared internal network, never a
+// published host port (the engine has none).
+const defaultUpstream = "http://rclone-manager:8080"
+
+// shutdownGrace bounds how long `serve`/`serve-ui` wait for the HTTP
+// server's graceful Shutdown (and, for `serve`, the scheduler loop's own
+// exit) before giving up on a clean stop and returning anyway - the
+// process is exiting either way once ctx is canceled (SIGTERM/SIGINT);
+// this only decides how long it waits first.
 const shutdownGrace = 10 * time.Second
+
+// healthcheckTimeout bounds `healthcheck`'s own HTTP GET - short, since
+// this runs on the HEALTHCHECK interval and a slow answer is itself a
+// sign of trouble, not something worth waiting out.
+const healthcheckTimeout = 3 * time.Second
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -76,6 +100,10 @@ func run(args []string) int {
 	switch args[0] {
 	case "serve":
 		return cmdServe(args[1:])
+	case "serve-ui":
+		return cmdServeUI(args[1:])
+	case "healthcheck":
+		return cmdHealthcheck(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown command %q\n\n", args[0])
 		usage()
@@ -84,13 +112,23 @@ func run(args []string) int {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `usage: backup-manager-web serve [flags]
+	fmt.Fprint(os.Stderr, `usage: backup-manager-web <command> [flags]
 
-serve runs the generic Web host: the shared UI, the versioned /api/v1
-API, local authentication, and the backup scheduler, all in one process
-sharing one shutdown context (docs/EPIC-B-multi-nas.md §9.2/§9.3).
+commands:
+  serve       run the engine: local authentication, the versioned
+              /api/v1 API, and the backup scheduler, sharing one process
+              and shutdown context (docs/EPIC-B-multi-nas.md §9.2/§9.3).
+              No static UI - this container is not meant to be reached
+              directly from a LAN/browser, only from serve-ui.
+  serve-ui    serve the shared static UI and reverse-proxy /api/v1 and
+              /health requests to the engine (--upstream). This is the
+              only one of the two meant to have a published port.
+  healthcheck make a single HTTP GET against --url and exit 0 on a 2xx/3xx
+              response, 1 otherwise - serve-ui's own HEALTHCHECK, since
+              it has no state database to run backup-manager status
+              against the way the engine container does.
 
-flags:
+serve flags:
   --config PATH       path to the manager's YAML config file
                        (default /etc/backup-manager/config.yaml)
   --listen ADDR        address to listen on
@@ -99,6 +137,16 @@ flags:
                        (default /data/state/local-auth.json)
   --auth-mode MODE     authentication mode; only "local" is implemented
                        today (default local)
+
+serve-ui flags:
+  --listen ADDR    address to listen on (default $LISTEN_ADDR, or :8080)
+  --upstream URL   the engine's base URL, reachable over the internal
+                    Docker network (default $UPSTREAM_ADDR, or
+                    http://rclone-manager:8080)
+
+healthcheck flags:
+  --url URL   URL to GET (default $LISTEN_ADDR turned into
+               http://127.0.0.1:<port>/)
 `)
 }
 
@@ -138,21 +186,11 @@ func cmdServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: printing bootstrap notice:", err)
 	}
 
-	staticFS, err := fs.Sub(webui.Assets, "dist")
-	if err != nil {
-		// webui.Assets is a compile-time go:embed of this module's own
-		// webui/dist directory: this can only fail if that package was
-		// edited to embed something else without updating this constant,
-		// a programmer error to notice loudly, not a runtime condition.
-		panic(fmt.Sprintf("backup-manager-web: webui.Assets has no \"dist\" subtree: %v", err))
-	}
-
-	handler := server.New(server.Config{
+	handler := server.NewEngine(server.EngineConfig{
 		Backend:       backend,
 		Auth:          authSvc,
 		BinaryVersion: version,
 		Commit:        commit,
-		StaticFS:      staticFS,
 	})
 
 	httpServer := &http.Server{Addr: *listenAddr, Handler: handler}
@@ -215,6 +253,120 @@ func cmdServe(args []string) int {
 	return 0
 }
 
+// cmdServeUI runs the UI-host container's whole job: serve the shared
+// static UI and reverse-proxy /api/v1 and /health requests to the
+// engine. Deliberately much simpler than cmdServe - a plain HTTP server
+// with no BackupService, no local-auth store, and no scheduler to
+// coordinate a shutdown with, since none of those live in this
+// container.
+func cmdServeUI(args []string) int {
+	fset := flag.NewFlagSet("serve-ui", flag.ContinueOnError)
+	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
+	upstream := fset.String("upstream", envOrDefault("UPSTREAM_ADDR", defaultUpstream), "the engine's base URL, reachable over the internal Docker network")
+	if err := fset.Parse(args); err != nil {
+		return 2
+	}
+
+	upstreamURL, err := url.Parse(*upstream)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "backup-manager-web: invalid --upstream %q: %v\n", *upstream, err)
+		return 2
+	}
+	if upstreamURL.Scheme == "" || upstreamURL.Host == "" {
+		fmt.Fprintf(os.Stderr, "backup-manager-web: --upstream %q must be an absolute URL (e.g. http://rclone-manager:8080)\n", *upstream)
+		return 2
+	}
+
+	staticFS, err := fs.Sub(webui.Assets, "dist")
+	if err != nil {
+		// webui.Assets is a compile-time go:embed of this module's own
+		// webui/dist directory: this can only fail if that package was
+		// edited to embed something else without updating this constant,
+		// a programmer error to notice loudly, not a runtime condition.
+		panic(fmt.Sprintf("backup-manager-web: webui.Assets has no \"dist\" subtree: %v", err))
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	handler := server.NewUI(server.UIConfig{Upstream: upstreamURL, StaticFS: staticFS})
+	httpServer := &http.Server{Addr: *listenAddr, Handler: handler}
+
+	serverErrCh := make(chan error, 1)
+	go func() { serverErrCh <- httpServer.ListenAndServe() }()
+
+	var exitErr error
+	select {
+	case <-ctx.Done():
+	case err := <-serverErrCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			exitErr = fmt.Errorf("http server: %w", err)
+		}
+	}
+
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancelShutdown()
+	if err := httpServer.Shutdown(shutdownCtx); err != nil && exitErr == nil {
+		exitErr = fmt.Errorf("http server shutdown: %w", err)
+	}
+
+	if exitErr != nil {
+		return fail(exitErr)
+	}
+	return 0
+}
+
+// cmdHealthcheck is serve-ui's own HEALTHCHECK: since that container has
+// no config, no state database, and no `backup-manager status` to run
+// (that binary/subcommand belongs to the engine's own container, and
+// checks REAL backup health, not "is a web server listening"), this asks
+// the one question that actually applies here: does the UI host's own
+// HTTP server answer at all. distroless has no shell and no curl/wget,
+// so this exists specifically to give HEALTHCHECK's exec-form CMD
+// something to invoke.
+func cmdHealthcheck(args []string) int {
+	fset := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
+	target := fset.String("url", localHealthcheckURL(envOrDefault("LISTEN_ADDR", defaultListenAddr)), "URL to GET")
+	if err := fset.Parse(args); err != nil {
+		return 2
+	}
+
+	client := &http.Client{Timeout: healthcheckTimeout}
+	resp, err := client.Get(*target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: healthcheck:", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		fmt.Fprintf(os.Stderr, "backup-manager-web: healthcheck: %s returned status %d\n", *target, resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+// localHealthcheckURL turns a --listen/LISTEN_ADDR value ("[HOST]:PORT")
+// into a URL this same process can GET against itself: HOST is replaced
+// with 127.0.0.1 whenever it is empty (the normal ":8080" form) or a
+// wildcard bind address (0.0.0.0, ::), since a healthcheck run as a
+// subprocess of this same container always reaches itself over loopback,
+// never through whatever interface the server itself is bound to
+// listen on.
+func localHealthcheckURL(listenAddr string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		// Not a valid "host:port" pair at all; fall back to treating the
+		// whole value as a port-only suffix the way displayBaseURL does,
+		// rather than producing a URL guaranteed to fail to parse.
+		return "http://127.0.0.1" + listenAddr + "/"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
+}
+
 // displayBaseURL turns a --listen value (":8080", "0.0.0.0:8080",
 // "127.0.0.1:8080") into a URL an operator could actually open, for the
 // bootstrap-enrollment notice. A bare ":PORT" form (this binary's own
@@ -235,9 +387,9 @@ func fail(err error) int {
 }
 
 // envOrDefault returns the environment variable key's value if set and
-// non-empty, or def otherwise. Used for --listen's default
-// (container/compose.yaml sets LISTEN_ADDR; a bare `go run` invocation
-// outside a container falls back to defaultListenAddr).
+// non-empty, or def otherwise. Used for --listen/--upstream's defaults
+// (container/compose.yaml sets LISTEN_ADDR/UPSTREAM_ADDR; a bare `go run`
+// invocation outside a container falls back to the hardcoded defaults).
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
