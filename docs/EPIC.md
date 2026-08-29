@@ -523,14 +523,22 @@ The embedded rclone SFTP backend SHALL use:
 -   no automatic acceptance of changed/unknown production host keys.
 
 "Mandatory" is stronger than "by default" on purpose. The adapter SHALL refuse
-an empty `key_file` rather than letting the backend fall back to a running
-ssh-agent, and SHALL NOT set the backend's password, inline-key, prompt or
-use-agent options, so password and agent authentication have no path into this
-program at all. `transport.Source` carries no password field, so adding one
-would be a visible change to a shared type rather than a quiet configuration
-choice. An operator whose agent happens to hold a usable key MUST NOT be able
-to authenticate by accident, because a login that works only because of ambient
-agent state is not reproducible on the NAS at 03:40.
+a source with none of `key_file`, `key.env` or `key.command` set (#74) rather
+than letting the backend fall back to a running ssh-agent, and SHALL NOT set
+the backend's password, prompt or use-agent options, so password and agent
+authentication have no path into this program at all. `transport.Source`
+carries no password field, so adding one would be a visible change to a
+shared type rather than a quiet configuration choice. An operator whose agent
+happens to hold a usable key MUST NOT be able to authenticate by accident,
+because a login that works only because of ambient agent state is not
+reproducible on the NAS at 03:40.
+
+The backend's inline-key option (`key_pem`) is the one exception, and it is
+narrow on purpose: it is set only when a source resolves its key through
+`key.env` or `key.command`, and only ever with what that resolver returned
+after it was confirmed to parse as an unencrypted SSH private key. There is
+no configuration field an operator can put a value into `key_pem` with
+directly; see "Key source" below.
 
 The remote account SHOULD:
 
@@ -552,10 +560,11 @@ is authenticated by the key, so without one no copy happens at all. There is no
 mode in which the manager fetches a backup without authenticating.
 
 The manager SHALL NOT store, generate, copy or otherwise manage that key.
-Configuration carries a `key_file` PATH, and the manager reads the file at
-connection time and does nothing else with it. It never writes the key
-anywhere, never puts it in the journal, never logs it, and never has a copy of
-its own that could drift from the operator's.
+Configuration names WHERE the key lives, never carries it directly: a
+`key_file` PATH is the default and documented case, and the manager reads the
+file at connection time and does nothing else with it. It never writes the
+key anywhere, never puts it in the journal, never logs it, and never has a
+copy of its own that could drift from the operator's.
 
 That boundary is deliberate, and it decides who owns what:
 
@@ -581,6 +590,50 @@ public key will fail authentication rather than falling back to anything.
 
 `docs/ssh-setup.md` is the operational procedure, and `docs/deployment.md`
 covers mounting the key into the container.
+
+### Key source: file, environment, or command (#74)
+
+A source's private key is named exactly one of three ways:
+
+```yaml
+remote:
+  type: sftp
+  host: cicd-pipeline.example
+  user: backup
+  known_hosts: /etc/backup-manager/known_hosts
+  key:
+    file: /etc/backup-manager/id_ed25519
+    # env: BACKUP_SSH_KEY
+    # command: ["op", "read", "op://infra/backup-manager/private-key"]
+```
+
+`key_file` (a bare path, no `key:` block) keeps working unchanged as a
+deprecated alias for `key.file`, since this section's custody model above,
+`docs/ssh-setup.md` and `docs/deployment.md` all document it, and an
+operator's existing config MUST NOT break. Exactly one of `key_file`,
+`key.file`, `key.env` or `key.command` MUST be set; two is a config error to
+fix, not a precedence order the manager resolves silently.
+
+`key.file` SHOULD be preferred, and is the default this section's custody
+model describes above, because it is the only one of the three that never
+puts key material into this program's own memory at all: rclone opens the
+file itself. `key.env` and `key.command` exist for one reason, stated
+plainly rather than hedged: they are the door this program opens for a
+secrets manager (OpenBao, Vault, SOPS, 1Password, AWS Secrets Manager, or
+anything else with a CLI) to be adopted later without a second change to this
+config shape, and specifically without this program taking a dependency on
+any vendor's SDK or picking a winner among them. `key.command` covers that
+case generically: it is an argv array, never a shell string, run with a
+timeout and a minimal environment, on the same reasoning already applied to
+FR-13's external validator.
+
+Whatever `key.env` or `key.command` produce is held only in memory, wrapped
+so it cannot render through a log line, and validated as an unencrypted SSH
+private key before this program will hand it to the embedded SFTP backend: a
+secrets manager answering with an error string, an HTML login page, an empty
+body, or a passphrase-protected key MUST fail loudly at that point, never
+surface later as a confusing connection failure or, worse, hang waiting on a
+passphrase prompt nobody is there to answer.
 
 ------------------------------------------------------------------------
 

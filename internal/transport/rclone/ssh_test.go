@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -167,9 +168,15 @@ func TestSftpConfig_PortOmittedWhenZero(t *testing.T) {
 // just check that a "pass" key is absent today, it pins the entire set of
 // keys sftpConfig is allowed to produce, so an unreviewed future change that
 // starts forwarding an option this adapter does not already know about
-// (password, key_pem, ask_password, key_use_agent, pin_host_key, host_keys,
-// the external ssh option, ...) breaks this test rather than shipping
-// silently.
+// (password, ask_password, key_use_agent, pin_host_key, host_keys, the
+// external ssh option, ...) breaks this test rather than shipping silently.
+//
+// key_pem (#74) is in the allowlist, not absent: it is now reachable, but
+// only through resolveKeyFromEnv/resolveKeyFromCommand's validated output,
+// never directly from a Source's own fields. See
+// TestSftpConfig_KeyFileNeverProducesKeyPem and the key_env/key_command
+// cases below for the other half of that claim: key_pem appears ONLY when
+// the source actually chose one of those two resolvers.
 func TestSftpConfig_OnlyAllowlistedKeysAreSet(t *testing.T) {
 	dir := t.TempDir()
 	src := validSource(t, dir)
@@ -183,6 +190,7 @@ func TestSftpConfig_OnlyAllowlistedKeysAreSet(t *testing.T) {
 		"port":             true,
 		"user":             true,
 		"key_file":         true,
+		"key_pem":          true,
 		"known_hosts_file": true,
 		// Not part of the FR-6 security posture: these three exist because
 		// fsFor calls info.NewFs directly and so gets none of rclone's own
@@ -206,6 +214,159 @@ func TestSftpConfig_OnlyAllowlistedKeysAreSet(t *testing.T) {
 	}
 	if v, _ := cfg.Get("known_hosts_file"); v != src.KnownHosts {
 		t.Errorf("known_hosts_file = %q, want %q", v, src.KnownHosts)
+	}
+}
+
+// TestSftpConfig_KeyFileNeverProducesKeyPem is the other half of the
+// allowlist test's claim: a source using the file resolver (the default,
+// and the only one of the three that keeps key material off this process's
+// heap) must never end up with key_pem set at all, on any path.
+func TestSftpConfig_KeyFileNeverProducesKeyPem(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := cfg.Get("key_pem"); ok {
+		t.Fatal("a key_file source produced a key_pem entry; the whole point of key_file is that this adapter never reads the key's bytes")
+	}
+}
+
+// --- #74: exactly one of key_file, key_env, key_command ---
+
+func TestSftpConfig_RequiresExactlyOneKeySource(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("zero sources rejected", func(t *testing.T) {
+		src := validSource(t, dir)
+		src.KeyFile = ""
+		_, err := sftpConfig(src)
+		if err == nil {
+			t.Fatal("a source with no key source at all was accepted")
+		}
+		if !strings.Contains(err.Error(), "key_file") || !strings.Contains(err.Error(), "key_env") || !strings.Contains(err.Error(), "key_command") {
+			t.Errorf("error %q should name all three sources", err.Error())
+		}
+	})
+
+	t.Run("key_file and key_env together rejected", func(t *testing.T) {
+		src := validSource(t, dir)
+		src.KeyEnv = "SOME_VAR"
+		_, err := sftpConfig(src)
+		if err == nil {
+			t.Fatal("a source with both key_file and key_env set was accepted")
+		}
+	})
+
+	t.Run("key_file and key_command together rejected", func(t *testing.T) {
+		src := validSource(t, dir)
+		src.KeyCommand = []string{"/bin/cat", "/dev/null"}
+		_, err := sftpConfig(src)
+		if err == nil {
+			t.Fatal("a source with both key_file and key_command set was accepted")
+		}
+	})
+
+	t.Run("key_env and key_command together rejected", func(t *testing.T) {
+		src := validSource(t, dir)
+		src.KeyFile = ""
+		src.KeyEnv = "SOME_VAR"
+		src.KeyCommand = []string{"/bin/cat", "/dev/null"}
+		_, err := sftpConfig(src)
+		if err == nil {
+			t.Fatal("a source with both key_env and key_command set was accepted")
+		}
+	})
+}
+
+func TestSftpConfig_KeyEnvResolvesToKeyPem(t *testing.T) {
+	dir := t.TempDir()
+	clientKeyPath, _ := generateClientSSHKeyPair(t)
+	pem, err := os.ReadFile(clientKeyPath)
+	if err != nil {
+		t.Fatalf("reading generated test key: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_KEY_ENV"
+	t.Setenv(envName, string(pem))
+
+	src := validSource(t, dir)
+	src.KeyFile = ""
+	src.KeyEnv = envName
+
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	if _, ok := cfg.Get("key_file"); ok {
+		t.Error("a key_env source also set key_file")
+	}
+	got, ok := cfg.Get("key_pem")
+	if !ok {
+		t.Fatal("a key_env source did not set key_pem")
+	}
+	// The value has to be usable by rclone's own reconstruction
+	// (strconv.Unquote("\"" + key_pem + "\"")), not merely non-empty.
+	roundTripped, err := strconv.Unquote(`"` + got + `"`)
+	if err != nil {
+		t.Fatalf("key_pem value is not valid rclone escaping: %v", err)
+	}
+	if roundTripped != string(pem) {
+		t.Fatal("key_pem, once unescaped the way rclone unescapes it, does not match the resolved key")
+	}
+}
+
+func TestSftpConfig_KeyCommandResolvesToKeyPem(t *testing.T) {
+	dir := t.TempDir()
+	clientKeyPath, _ := generateClientSSHKeyPair(t)
+	pem, err := os.ReadFile(clientKeyPath)
+	if err != nil {
+		t.Fatalf("reading generated test key: %v", err)
+	}
+
+	src := validSource(t, dir)
+	src.KeyFile = ""
+	src.KeyCommand = []string{"/bin/cat", clientKeyPath}
+
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	got, ok := cfg.Get("key_pem")
+	if !ok {
+		t.Fatal("a key_command source did not set key_pem")
+	}
+	roundTripped, err := strconv.Unquote(`"` + got + `"`)
+	if err != nil {
+		t.Fatalf("key_pem value is not valid rclone escaping: %v", err)
+	}
+	if roundTripped != string(pem) {
+		t.Fatal("key_pem, once unescaped the way rclone unescapes it, does not match the resolved key")
+	}
+}
+
+// TestSftpConfig_KeyResolverFailureNeverLeaksIntoTheError proves the
+// "resolved key never appears in any log line" requirement at the one
+// place this adapter itself produces text that a caller might log: the
+// error sftpConfig returns when a resolver fails.
+func TestSftpConfig_KeyResolverFailureNeverLeaksIntoTheError(t *testing.T) {
+	dir := t.TempDir()
+	const secretLookingJunk = "s3kr1t-value-that-is-not-actually-a-key"
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_KEY_ENV_JUNK"
+	t.Setenv(envName, secretLookingJunk)
+
+	src := validSource(t, dir)
+	src.KeyFile = ""
+	src.KeyEnv = envName
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("junk environment content was accepted as a key")
+	}
+	if strings.Contains(err.Error(), secretLookingJunk) {
+		t.Fatalf("sftpConfig's error leaked the resolved value: %v", err)
 	}
 }
 
@@ -538,6 +699,75 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "knownhosts: key mismatch") {
 			t.Fatalf("expected a host-key-mismatch error, got: %v", err)
+		}
+	})
+}
+
+// TestSFTPKeyResolvers is #74's positive control: an end-to-end SFTP
+// connection through each of the three key resolvers against the real
+// Docker fixture, proving they actually authenticate a real session rather
+// than merely producing bytes that look plausible in a unit test. Without
+// this, code that refused every resolver would still pass every other test
+// in this file.
+//
+// All three subtests reuse one fixture container and one client key pair:
+// the fixture's authorized_keys trusts exactly one key regardless of which
+// resolver names it, so the same container proves all three.
+func TestSFTPKeyResolvers(t *testing.T) {
+	requireDocker(t)
+
+	clientKeyPath, authorizedKeyLine := generateClientSSHKeyPair(t)
+	pem, err := os.ReadFile(clientKeyPath)
+	if err != nil {
+		t.Fatalf("reading generated client key: %v", err)
+	}
+	image := buildSFTPFixtureImage(t, authorizedKeyLine)
+
+	host := "127.0.0.1"
+	port := freeTCPPort(t)
+	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+
+	cont, hostKeyLine := startFixtureContainer(t, image, port, "key-resolvers")
+	t.Cleanup(func() { stopFixtureContainer(cont) })
+	writeKnownHosts(t, knownHostsPath, host, port, hostKeyLine)
+
+	base := transport.Source{
+		ID:         "sftp-key-resolvers",
+		Type:       "sftp",
+		Host:       host,
+		Port:       port,
+		User:       "backup",
+		KnownHosts: knownHostsPath,
+	}
+	adapter := New()
+	ctx := context.Background()
+
+	t.Run("file", func(t *testing.T) {
+		src := base
+		src.KeyFile = clientKeyPath
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via the key_file resolver: %v\nserver logs:\n%s", err, logs)
+		}
+	})
+
+	t.Run("env", func(t *testing.T) {
+		const envName = "RCLONE_MANAGER_TEST_SFTP_KEY_ENV"
+		t.Setenv(envName, string(pem))
+		src := base
+		src.KeyEnv = envName
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via the key_env resolver: %v\nserver logs:\n%s", err, logs)
+		}
+	})
+
+	t.Run("command", func(t *testing.T) {
+		src := base
+		src.KeyCommand = []string{"/bin/cat", clientKeyPath}
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via the key_command resolver: %v\nserver logs:\n%s", err, logs)
 		}
 	})
 }

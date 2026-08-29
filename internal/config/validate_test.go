@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,166 @@ func TestSftpRequiredFieldsMissing(t *testing.T) {
 	}
 }
 
+// --- #74: key_file, key.file, key.env, key.command ---
+
+func TestKeyExactlyOneSourceRequired(t *testing.T) {
+	t.Run("zero sources rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.KeyFile = ""
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("a remote with no key source at all was accepted")
+		}
+		if !strings.Contains(err.Error(), "key_file") {
+			t.Fatalf("error %q does not mention the missing key source", err.Error())
+		}
+	})
+
+	t.Run("key_file alone is accepted (deprecated alias)", func(t *testing.T) {
+		cfg := validConfig()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		r := cfg.Sources[0].BackupSets[0].Remote
+		if r.Key.File != r.KeyFile {
+			t.Fatalf("Key.File = %q, want it normalized to match KeyFile %q", r.Key.File, r.KeyFile)
+		}
+	})
+
+	t.Run("key.file alone is accepted and normalized into KeyFile", func(t *testing.T) {
+		cfg := validConfig()
+		r := &cfg.Sources[0].BackupSets[0].Remote
+		r.KeyFile = ""
+		r.Key = Key{File: "/etc/backup-manager/id_ed25519"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		if r.KeyFile != "/etc/backup-manager/id_ed25519" {
+			t.Fatalf("KeyFile = %q, want it normalized to match Key.File", r.KeyFile)
+		}
+	})
+
+	t.Run("key.env alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		r := &cfg.Sources[0].BackupSets[0].Remote
+		r.KeyFile = ""
+		r.Key = Key{Env: "BACKUP_SSH_KEY"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("key.command alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		r := &cfg.Sources[0].BackupSets[0].Remote
+		r.KeyFile = ""
+		r.Key = Key{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key"}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("key_file and key.file set to the same value is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		r := &cfg.Sources[0].BackupSets[0].Remote
+		r.Key = Key{File: r.KeyFile}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("key_file and key.file set to different values rejected", func(t *testing.T) {
+		cfg := validConfig()
+		r := &cfg.Sources[0].BackupSets[0].Remote
+		r.Key = Key{File: "/a/different/path"}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("key_file and key.file set to two different values were accepted")
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		key  Key
+	}{
+		{"key_file and key.env", Key{Env: "BACKUP_SSH_KEY"}},
+		{"key_file and key.command", Key{Command: []string{"/usr/local/bin/op", "read", "x"}}},
+	} {
+		t.Run(tc.name+" together rejected", func(t *testing.T) {
+			cfg := validConfig()
+			r := &cfg.Sources[0].BackupSets[0].Remote
+			r.Key = tc.key // KeyFile is still set from validConfig()
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("%s set together were accepted", tc.name)
+			}
+		})
+	}
+
+	t.Run("key.env and key.command together rejected", func(t *testing.T) {
+		cfg := validConfig()
+		r := &cfg.Sources[0].BackupSets[0].Remote
+		r.KeyFile = ""
+		r.Key = Key{Env: "BACKUP_SSH_KEY", Command: []string{"/usr/local/bin/op", "read", "x"}}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("key.env and key.command set together were accepted")
+		}
+	})
+}
+
+func TestKeyCommandExecutableMustBeAbsolute(t *testing.T) {
+	cfg := validConfig()
+	r := &cfg.Sources[0].BackupSets[0].Remote
+	r.KeyFile = ""
+	r.Key = Key{Command: []string{"op", "read", "op://infra/backup-manager/private-key"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a relative key.command executable was accepted")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error %q does not explain the absolute-path requirement", err.Error())
+	}
+}
+
+func TestKeyCommandEmptyExecutableRejected(t *testing.T) {
+	cfg := validConfig()
+	r := &cfg.Sources[0].BackupSets[0].Remote
+	r.KeyFile = ""
+	r.Key = Key{Command: []string{""}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a key.command with an empty executable was accepted")
+	}
+}
+
+func TestKeyValidateIsIdempotent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  Key
+	}{
+		{"deprecated key_file alone", Key{}},
+		{"key.file", Key{File: "/etc/backup-manager/id_ed25519"}},
+		{"key.env", Key{Env: "BACKUP_SSH_KEY"}},
+		{"key.command", Key{Command: []string{"/usr/local/bin/op", "read", "x"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			r := &cfg.Sources[0].BackupSets[0].Remote
+			if !tc.key.isZero() {
+				r.KeyFile = ""
+				r.Key = tc.key
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("first Validate: %v", err)
+			}
+			first := *r
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("second Validate: %v", err)
+			}
+			if !reflect.DeepEqual(*r, first) {
+				t.Fatalf("second Validate changed an already-resolved remote: %#v vs %#v", first, *r)
+			}
+		})
+	}
+}
+
 func TestKnownHostsNoneRejected(t *testing.T) {
 	for _, v := range []string{"none", "None", " none ", "NONE"} {
 		t.Run(v, func(t *testing.T) {
@@ -339,6 +500,9 @@ func TestLocalTypeRejectsSftpFields(t *testing.T) {
 		{"user", func(r *Remote) { r.User = "backup" }},
 		{"port", func(r *Remote) { r.Port = 22 }},
 		{"key_file", func(r *Remote) { r.KeyFile = "/key" }},
+		{"key.file", func(r *Remote) { r.Key = Key{File: "/key"} }},
+		{"key.env", func(r *Remote) { r.Key = Key{Env: "SOME_VAR"} }},
+		{"key.command", func(r *Remote) { r.Key = Key{Command: []string{"/bin/cat", "/dev/null"}} }},
 		{"known_hosts", func(r *Remote) { r.KnownHosts = "/known_hosts" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

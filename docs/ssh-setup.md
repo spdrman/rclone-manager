@@ -13,8 +13,10 @@ and this one shouldn't get the chance to. `internal/transport/rclone/ssh.go`
 builds every sftp connection this manager makes, and it refuses to build one
 at all unless:
 
-- `key_file` points at a real, readable file. There is no fallback to an
-  ssh-agent and no password option, because `transport.Source` has no
+- exactly one of `key_file`, `key.env` or `key.command` names where the SSH
+  private key comes from (`key_file` is a deprecated alias for `key.file`;
+  see "Choosing a key source" below for all three). There is no fallback to
+  an ssh-agent and no password option, because `transport.Source` has no
   password field and this adapter never sets one, even though rclone's sftp
   backend supports both.
 - `known_hosts` points at a real, readable file. An empty value is refused,
@@ -22,8 +24,8 @@ at all unless:
   "don't check host keys at all." Both would otherwise let rclone accept any
   host key silently, which is the exact failure FR-6 exists to prevent.
 
-So the two things this doc walks through, a key file and a known_hosts file,
-aren't just good practice, they're the two things you cannot skip.
+So the two things this doc walks through, a key source and a known_hosts
+file, aren't just good practice, they're the two things you cannot skip.
 
 ## 1. Generate a dedicated SSH key pair
 
@@ -192,6 +194,72 @@ it stands up a real SFTP server, records its key, swaps in a second server
 with a different one on the same address, and checks that the connection is
 refused rather than silently reconnecting to whatever answered.
 
+## Choosing a key source (#74)
+
+Everything above produces one thing: a private key file. What you point
+backup-manager at is a separate decision, and there are three ways to make
+it:
+
+```yaml
+remote:
+  type: sftp
+  host: production.example.internal
+  port: 22
+  user: backupsvc
+  known_hosts: /etc/backup-manager/known_hosts
+  key:
+    file: /etc/backup-manager/ssh/backup_key
+    # env: BACKUP_SSH_KEY
+    # command: ["op", "read", "op://infra/backup-manager/private-key"]
+```
+
+Exactly one of `key.file`, `key.env` or `key.command` goes in that block (the
+bare top-level `key_file: /path` shape from earlier `docs/EPIC.md` examples
+still works too, unchanged, as a deprecated alias for `key.file`). Setting
+two is a config error backup-manager refuses at startup, not a precedence
+order it picks through for you.
+
+**`key.file` is the one to actually use, and it is the default for a
+reason.** It is the only one of the three where the key's bytes never enter
+backup-manager's own memory at all: rclone opens the file itself, reads it,
+and that's the end of this program's involvement. Nothing to validate,
+nothing to wrap, nothing that could theoretically end up somewhere it
+shouldn't, because it never comes near this process in the first place.
+Everything from step 1 through step 4 above is written assuming this is what
+you use.
+
+**`key.env` and `key.command` exist for a specific, narrower reason:**
+adopting a secrets manager (OpenBao, Vault, SOPS, 1Password, AWS Secrets
+Manager, or anything else with a CLI) later, without a second change to this
+config's shape. `key.command` is the general form: an argv array, run
+directly, never through a shell, so putting `;`, `|`, `` ` ``, or `$(...)` in
+one of its elements does nothing but sit there as a literal character in an
+argument, exactly like every other byte in that argument. It runs with a
+15-second timeout and a fixed, minimal environment (`PATH` only, nothing
+inherited from backup-manager's own process), so the command has to be
+self-sufficient: an absolute executable path, and whatever authentication it
+needs already sitting on disk or baked into a wrapper script, not passed
+through an environment variable backup-manager would otherwise have to trust
+it with.
+
+Both of these put the resolved key in backup-manager's memory for the
+duration of one connection attempt, which is exactly the cost `key.file`
+avoids. In exchange, backup-manager validates what came back before it goes
+anywhere near rclone: it must parse as an unencrypted SSH private key, or the
+connection attempt fails right there, by name, rather than turning into a
+confusing rclone dial error somewhere else. A secrets manager CLI that isn't
+authenticated, is pointed at the wrong path, or answers with an HTML login
+page on stdout is refused for exactly that reason: "this is not a key,"
+never silently accepted. A key that needs a passphrase is refused too, with
+that named as the problem: backup-manager runs unattended, and there is
+nowhere for a passphrase prompt to go. None of this resolved material is
+ever logged, at any level, including debug; it is held only long enough to
+open the connection.
+
+There is no field anywhere in this configuration for pasting key bytes
+directly into YAML, and there never will be: `key.file`, `key.env` and
+`key.command` all name WHERE the key lives, none of them carry it.
+
 ## 5. Point a source at it
 
 Using the shape from FR-5's config example in `docs/EPIC.md`:
@@ -211,9 +279,14 @@ sources:
         remote_path: /backups
 ```
 
+(Or, per "Choosing a key source" above, `key: {file: ...}`, `key: {env: ...}`
+or `key: {command: [...]}` instead of the bare `key_file` line.)
+
 Mount `backup_key` and `known_hosts` read-only into wherever backup-manager
 runs, per the Security Requirements section's "credentials mounted read-only
-where practical."
+where practical." (`key.env` and `key.command` are the exception: there is
+nothing to mount for either, since the key never lives in a file backup-manager
+reads on this host at all.)
 
 ## 6. Verify it end to end before pointing it at anything real
 
@@ -238,7 +311,21 @@ reason.
 - `known_hosts: none` or an empty `known_hosts`. Both disable host-key
   verification, and this adapter refuses to build a connection at all rather
   than let that happen.
-- An empty `key_file`, expecting an ssh-agent or a password prompt to cover
-  for it. Neither is offered. Configure the key or the source doesn't run.
+- No key source configured at all, expecting an ssh-agent or a password
+  prompt to cover for it. Neither is offered. Configure `key.file`,
+  `key.env` or `key.command` (or the deprecated `key_file` alias) or the
+  source doesn't run.
+- More than one key source configured at once. Two is a mistake to fix, not
+  a precedence order backup-manager guesses through.
+- A `key.env` or `key.command` resolver whose output doesn't actually parse
+  as an unencrypted SSH private key (an error string, an HTML login page, an
+  empty body, or a passphrase-protected key). All of these fail loudly at
+  the point the bytes were produced, never as a confusing rclone error later
+  and never as a hang waiting on a passphrase prompt.
+- Raw key material written directly into config. `key.file`, `key.env` and
+  `key.command` only ever name where the key lives; there is no field to
+  paste key bytes into.
+- A `key.command` invoked through a shell. It always runs as a literal argv
+  array; nothing in it is ever interpreted by `/bin/sh` or any other shell.
 - A changed host key at a previously-known address, without a human repeating
   step 4 on purpose.

@@ -151,15 +151,7 @@ func (v *validator) validateRemote(path string, r *Remote) {
 		if r.User == "" {
 			v.addf("%s: user is required for type \"sftp\"", path)
 		}
-		// Mirrors the requirement enforced again, independently, in
-		// transport/rclone/ssh.go: key-based auth is mandatory so an
-		// operator who forgot to set key_file never falls through to
-		// rclone's ssh-agent fallback. Catching it here means a config
-		// mistake is reported before the manager ever tries to connect,
-		// not on the first attempt to reach the remote.
-		if r.KeyFile == "" {
-			v.addf("%s: key_file is required for type \"sftp\"", path)
-		}
+		v.validateKey(path, r)
 		if r.KnownHosts == "" {
 			v.addf("%s: known_hosts is required for type \"sftp\"", path)
 		} else if strings.EqualFold(strings.TrimSpace(r.KnownHosts), "none") {
@@ -173,13 +165,94 @@ func (v *validator) validateRemote(path string, r *Remote) {
 			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
 		}
 	case "local":
-		if r.Host != "" || r.User != "" || r.KeyFile != "" || r.KnownHosts != "" || r.Port != 0 {
-			v.addf("%s: host, port, user, key_file and known_hosts are not used for type \"local\"; remove them", path)
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || r.KnownHosts != "" || r.Port != 0 {
+			v.addf("%s: host, port, user, key_file/key and known_hosts are not used for type \"local\"; remove them", path)
 		}
 	case "":
 		v.addf("%s: type must be set (\"local\" or \"sftp\")", path)
 	default:
 		v.addf("%s: unsupported type %q; this build only registers \"local\" and \"sftp\" (FR-4)", path, r.Type)
+	}
+}
+
+// validateKey checks Remote's key configuration for an sftp remote and, if
+// it is valid, normalizes the deprecated KeyFile alias and the new Key.File
+// field to agree with each other.
+//
+// #74's shape has three sources (Key.File, Key.Env, Key.Command) plus one
+// deprecated alias for the first of those (Remote.KeyFile). KeyFile and
+// Key.File are two spellings of the same "file" source, not two
+// independent ones (see the Key type's doc), so they only count as one
+// source below, and only conflict with each other when set to two
+// different values; that keeps this function safe to call more than once
+// with the same Remote, exactly like Validate itself (see
+// TestValidateIsIdempotent), since after the first call normalizes them to
+// agree, a second call sees them equal rather than newly "both set".
+//
+// Across the three real sources, exactly one may be set, never zero
+// (mirrored again, independently, in transport/rclone/ssh.go, so a config
+// mistake is reported here, before the manager ever tries to connect, not
+// on the first attempt to reach the remote) and never more than one: two
+// configured sources is a config error to fix, not a precedence order for
+// this package or ssh.go to silently pick through.
+//
+// Once exactly one source is confirmed, and only then, this copies
+// whichever of KeyFile/Key.File is non-empty into the other, so every
+// reader downstream of Validate sees both agree regardless of which one
+// the operator actually wrote. That matters in particular for
+// internal/app's config.Remote -> transport.Source translation, which
+// today only forwards r.KeyFile: without this, a config written using the
+// new key.file: block would pass Validate but silently fail to connect,
+// exactly the kind of protection-dies-quietly gap this project exists to
+// avoid.
+func (v *validator) validateKey(path string, r *Remote) {
+	if r.KeyFile != "" && r.Key.File != "" && r.KeyFile != r.Key.File {
+		v.addf("%s: key_file and key.file are both set, to different values; set only one (key_file is a deprecated alias for key.file)", path)
+		return
+	}
+	fileValue := r.KeyFile
+	if fileValue == "" {
+		fileValue = r.Key.File
+	}
+
+	sources := 0
+	if fileValue != "" {
+		sources++
+	}
+	if r.Key.Env != "" {
+		sources++
+	}
+	if len(r.Key.Command) != 0 {
+		sources++
+	}
+
+	switch {
+	case sources == 0:
+		v.addf("%s: key_file, key.file, key.env or key.command is required for type \"sftp\" (key-based authentication is mandatory, ssh-agent fallback and password login are not offered)", path)
+		return
+	case sources > 1:
+		v.addf("%s: exactly one of key_file (deprecated)/key.file, key.env or key.command may be set, not more than one", path)
+		return
+	}
+
+	if len(r.Key.Command) != 0 {
+		cmdPath := path + ".key.command"
+		if r.Key.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(r.Key.Command[0]) {
+			// Same reasoning as validateValidation's identical rule on
+			// Validation.Command: a key resolver has to resolve to exactly
+			// one binary regardless of the process's working directory or
+			// $PATH at the moment a connection happens to be made, which
+			// matters even more here than for an application validator,
+			// since this is what authentication itself depends on.
+			v.addf("%s: executable %q must be an absolute path", cmdPath, r.Key.Command[0])
+		}
+	}
+
+	if fileValue != "" {
+		r.KeyFile = fileValue
+		r.Key.File = fileValue
 	}
 }
 

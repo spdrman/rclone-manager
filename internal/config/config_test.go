@@ -143,6 +143,43 @@ func TestLoadAndValidateMinimalExampleAppliesDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadParsesKeyCommand is #74's shape from a real YAML file, not just a
+// Go literal: the command argv, unlike every other string field this
+// package parses, has to survive as a []string, in order.
+func TestLoadParsesKeyCommand(t *testing.T) {
+	cfg, err := LoadAndValidate("testdata/key_resolvers.yaml")
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	r := cfg.Sources[0].BackupSets[0].Remote
+	want := []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key"}
+	if len(r.Key.Command) != len(want) {
+		t.Fatalf("Key.Command = %#v, want %#v", r.Key.Command, want)
+	}
+	for i := range want {
+		if r.Key.Command[i] != want[i] {
+			t.Fatalf("Key.Command[%d] = %q, want %q", i, r.Key.Command[i], want[i])
+		}
+	}
+	if r.KeyFile != "" {
+		t.Fatalf("KeyFile = %q, want empty: a key.command source has no file to normalize into it", r.KeyFile)
+	}
+}
+
+// TestLoadThenValidateTwoKeySourcesRejected proves the "exactly one" rule
+// end to end from a real file: key_file and key.env both set is a config
+// error, not a precedence order LoadAndValidate resolves silently.
+func TestLoadThenValidateTwoKeySourcesRejected(t *testing.T) {
+	_, err := LoadAndValidate("testdata/key_two_sources.yaml")
+	if err == nil {
+		t.Fatal("a config with both key_file and key.env set was accepted")
+	}
+	var verr *ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("expected a *ValidationError, got %T: %v", err, err)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	if _, err := Load("testdata/does-not-exist.yaml"); err == nil {
 		t.Fatal("expected an error loading a missing file")
