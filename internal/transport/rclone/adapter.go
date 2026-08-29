@@ -124,11 +124,11 @@ func toArtifact(o fs.Object) transport.RemoteArtifact {
 func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.RemoteArtifact, error) {
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return nil, err
+		return nil, Wrap("list", err)
 	}
 	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
 	if err != nil {
-		return nil, err
+		return nil, Wrap("list", err)
 	}
 	out := make([]transport.RemoteArtifact, 0, len(objs))
 	for _, o := range objs {
@@ -157,37 +157,73 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 	return out, nil
 }
 
+// Stat resolves one object and, unlike List, asks the backend for the
+// strongest identity attributes it can supply.
+//
+// WHY STAT HASHES AND LIST DOES NOT. Stat is the pre-delete recheck path.
+// FR-16 compares the identity captured at discovery against the identity
+// observed now, and model.CompareIdentity can only reach ConfidenceStrong on
+// a hash or a backend-supplied stable id. Without one of those it returns
+// Unconfirmed at Weak confidence, Preserve() is true, and FR-15 refuses the
+// delete. Stat returning only path, size and mtime therefore did not merely
+// weaken the check, it made a successful delete unreachable on every backend,
+// including ones that hash perfectly well.
+//
+// List deliberately does not do this. It runs over every object under a
+// source root, and on sftp rclone computes a hash by running a command on the
+// server, so hashing during a listing would be one round trip per artifact
+// for an attribute discovery does not need yet.
+//
+// A backend that cannot hash still returns an empty hash here, which is the
+// correct outcome rather than a failure: a hardened shell-less sftp account
+// genuinely cannot answer, so the comparison stays Weak and the delete stays
+// refused, which is what FR-16 asks for.
 func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath string) (transport.RemoteArtifact, error) {
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.RemoteArtifact{}, err
+		return transport.RemoteArtifact{}, Wrap("stat", err)
 	}
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.RemoteArtifact{}, err
+		return transport.RemoteArtifact{}, Wrap("stat", err)
 	}
-	return toArtifact(o), nil
+
+	art := toArtifact(o)
+
+	if f.Hashes().Contains(hash.SHA256) {
+		// A hash failure is not fatal here. The artifact is still usable with
+		// weaker identity, and reporting "I could not hash" as "stat failed"
+		// would turn a degraded check into an outage.
+		if h, herr := o.Hash(ctx, hash.SHA256); herr == nil && h != "" {
+			art.Hash = h
+			art.HashAlg = transport.SHA256
+		}
+	}
+	if ider, ok := o.(fs.IDer); ok {
+		art.ID = ider.ID()
+	}
+	return art, nil
 }
 
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	srcFs, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.TransferResult{}, err
+		return transport.TransferResult{}, Wrap("copy_to_local", err)
 	}
 	o, err := srcFs.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.TransferResult{}, err
+		return transport.TransferResult{}, Wrap("copy_to_local", err)
 	}
 	dstDir, dstName := splitPath(localPartialPath)
 	dstFs, err := fs.NewFs(ctx, dstDir)
 	if err != nil {
-		return transport.TransferResult{}, err
+		return transport.TransferResult{}, Wrap("copy_to_local", err)
 	}
 	// Copy, never Move. The remote source is deleted later, by the lifecycle
 	// manager, and only after a durable commit (FR-11, FR-15).
 	dst, err := operations.Copy(ctx, dstFs, nil, dstName, o)
 	if err != nil {
-		return transport.TransferResult{}, err
+		return transport.TransferResult{}, Wrap("copy_to_local", err)
 	}
 	return transport.TransferResult{BytesTransferred: dst.Size()}, nil
 }
@@ -195,11 +231,11 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return "", err
+		return "", Wrap("remote_hash", err)
 	}
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return "", err
+		return "", Wrap("remote_hash", err)
 	}
 	var ht hash.Type
 	switch alg {
@@ -219,13 +255,13 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remotePath string) error {
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return err
+		return Wrap("delete_remote", err)
 	}
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return err
+		return Wrap("delete_remote", err)
 	}
-	return o.Remove(ctx)
+	return Wrap("delete_remote", o.Remove(ctx))
 }
 
 func splitPath(p string) (dir, name string) {

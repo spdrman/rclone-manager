@@ -8,7 +8,6 @@ import (
 
 	"github.com/spdrman/rclone-manager/internal/config"
 	"github.com/spdrman/rclone-manager/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/internal/model"
 	"github.com/spdrman/rclone-manager/internal/state"
 	"github.com/spdrman/rclone-manager/internal/transport"
 	"github.com/spdrman/rclone-manager/internal/transport/rclone"
@@ -52,7 +51,7 @@ import (
 // identity" to attempt Transport.RemoteHash best-effort when the
 // discovered side carries one, mirroring exactly the pattern
 // captureRemoteIdentity already uses in this package's own discovery.go.
-func TestRealPipeline_DeleteRemote_NeverConfirmsIdentityStrongly_KnownDefect(t *testing.T) {
+func TestRealPipeline_DeleteRemote_ConfirmsIdentityAndProceeds(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	localDir := t.TempDir()
@@ -113,20 +112,29 @@ func TestRealPipeline_DeleteRemote_NeverConfirmsIdentityStrongly_KnownDefect(t *
 		Source: source, Artifact: artifact, AttemptKey: "delete:attempt-1",
 	})
 
-	refusal, ok := lifecycle.AsRemoteDeleteRefusal(deleteErr)
-	if !ok {
-		t.Fatalf("DeleteRemote against an untouched real local-backend object = %v (%T); "+
-			"if this now succeeds, the known defect this test documents (DeleteRemote never calls "+
-			"RemoteHash, see this file's package doc) has been fixed: delete this test rather than "+
-			"adjusting it to still pass, and remove the tests/classifytransport workaround this PR "+
-			"added for the same reason", deleteErr, deleteErr)
+	// This used to assert the opposite. The adapter's Stat never carried a
+	// hash, so model.CompareIdentity could not reach ConfidenceStrong and
+	// DeleteRemote refused every delete against every backend, even a local
+	// one that hashes perfectly well. Stat now asks the backend for a hash
+	// and a stable id, so an untouched, byte-identical object is positively
+	// re-confirmed and the delete proceeds.
+	//
+	// I kept the fixture rather than deleting the test with the defect,
+	// because driving the real Discover, Transfer, Verify, Commit,
+	// DeleteRemote pipeline end to end against a real backend is exactly the
+	// regression this fix needs, and nothing else covers that path.
+	if refusal, ok := lifecycle.AsRemoteDeleteRefusal(deleteErr); ok {
+		t.Fatalf("DeleteRemote refused an untouched, byte-identical object: check=%q confidence=%v reason=%s; "+
+			"Stat should now supply a hash, so this is the FR-16 re-check failing to reach ConfidenceStrong again",
+			refusal.Check, refusal.Confidence, refusal.Reason)
 	}
-	if refusal.Check != "remote identity" {
-		t.Fatalf("refusal.Check = %q, want %q", refusal.Check, "remote identity")
+	if deleteErr != nil {
+		t.Fatalf("DeleteRemote against an untouched real object = %v (%T)", deleteErr, deleteErr)
 	}
-	if refusal.Confidence == model.ConfidenceStrong {
-		t.Fatalf("refusal reached ConfidenceStrong and still refused, which would be a different, worse bug: %+v", refusal)
+
+	// And prove it actually deleted, rather than reporting success and doing
+	// nothing, which would pass the check above while losing the point.
+	if _, statErr := os.Stat(filepath.Join(root, "backup.dump")); !os.IsNotExist(statErr) {
+		t.Fatalf("DeleteRemote reported success but the remote object is still there (stat err = %v)", statErr)
 	}
-	t.Logf("CONFIRMED (known defect): a completely untouched, byte-identical real local-backend object "+
-		"still cannot be positively re-confirmed for deletion: %v", refusal)
 }

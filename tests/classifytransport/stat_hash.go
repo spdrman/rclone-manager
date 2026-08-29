@@ -14,12 +14,20 @@ import (
 // hardened, shell-less SFTP account), leave the artifact exactly as the
 // real Stat reported it, hash-less.
 //
-// It exists to work around a second real defect this issue's test suites
-// found: internal/lifecycle.DeleteRemote's FR-16 re-identification builds
+// HISTORY, and why this is now belt and braces rather than a workaround.
+// It was written to work around a real defect: internal/lifecycle.DeleteRemote's FR-16 re-identification builds
 // its "current" identity from a bare Transport.Stat call, which
 // internal/transport/rclone.Adapter's toArtifact never populates with a
 // hash or backend id (only Path/Size/ModTime), and DeleteRemote never
-// calls RemoteHash itself to fill that gap in. See
+// calls RemoteHash itself to fill that gap in.
+//
+// That defect is FIXED. Adapter.Stat now asks the backend for a hash and a
+// stable id, so a real Stat carries enough identity for FR-16 to reach
+// ConfidenceStrong on its own. This decorator is therefore redundant against
+// the rclone adapter today. I left it in place because it still does
+// something useful for a Transport that genuinely does not hash in Stat, and
+// because ripping it out would churn several test files for no behavioural
+// gain. Do not read its existence as evidence the defect is still there. See
 // internal/discovery/a213_defect_test.go
 // (TestRealPipeline_DeleteRemote_NeverConfirmsIdentityStrongly_KnownDefect)
 // for the full proof and the PR description for the recommended fix,
