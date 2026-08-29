@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo-dark.svg">
+    <img src="docs/assets/logo-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress, next to the rclone-manager wordmark" width="240">
+  </picture>
+</p>
+
 # rclone-manager
 
 A backup lifecycle manager for a UGREEN NAS. It pulls completed backup artifacts off a
