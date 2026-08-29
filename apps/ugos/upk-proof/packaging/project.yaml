@@ -1,0 +1,19 @@
+spec_version: "2.1"
+app_id: com.spdrman.upkproofb12
+version: 0.1.0
+support_arch:
+  - amd64
+is_docker_app: true
+port: 29090
+open_type: inner
+tag_types:
+  - backup
+depend_fw_version: 1.13.0.0000
+depend_docker_version: 1.7.0.0000
+i18n:
+  en-US:
+    name: Backup Manager UPK Proof
+    description: 'Minimal UPK proof for issue 91: install, open inner, JSSDK boot, health check.'
+    author: spdrman
+    official: https://example.invalid/backup-manager-upk-proof
+    help: https://example.invalid/backup-manager-upk-proof/help
