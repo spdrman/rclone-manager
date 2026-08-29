@@ -6,9 +6,43 @@ set -eu
 # Configuration
 # ============================================================
 
-UGCLI_VERSION="1.1.0.13"
-UGCLI_URL="https://osswaf.ugnas.com/pro/ugcli/download/ugcli-v${UGCLI_VERSION}-linux-amd64"
+# UGREEN publishes no "latest" pointer, no manifest and no directory listing.
+# Checked on 2026-08-29:
+#
+#   /pro/ugcli/download/ugcli-latest-linux-amd64        404
+#   /pro/ugcli/version, /version.json, /manifest.json   404
+#   /pro/ugcli/ and /pro/ugcli/download/                200, empty bodies
+#
+# What the endpoint DOES give is an enumerable, verifiable URL scheme:
+#
+#   ugcli-v1.1.0.12-linux-amd64   200
+#   ugcli-v1.1.0.13-linux-amd64   200
+#   ugcli-v1.1.0.14-linux-amd64   404
+#
+# So "latest" is discovered by walking the version upward from a known-good
+# floor until the endpoint stops answering, rather than by asking for it. That
+# is the only mechanism the vendor exposes.
+#
+# UGCLI_VERSION_FLOOR is the newest version this script has been verified
+# against. It is a starting point and a fallback, never a ceiling: discovery
+# only moves upward from it, and if discovery cannot run at all (no network, a
+# WAF in the way, no downloader present) the install proceeds with the floor
+# rather than failing, because a pinned install beats no install.
+#
+# To pin deliberately, set UGCLI_VERSION in the environment:
+#
+#   UGCLI_VERSION=1.1.0.13 ./ugcli-installer.sh
+#
+UGCLI_VERSION_FLOOR="1.1.0.13"
+UGCLI_VERSION="${UGCLI_VERSION:-}"
+
+UGCLI_BASE_URL="https://osswaf.ugnas.com/pro/ugcli/download"
 UGCLI_INSTALL="/usr/local/bin/ugcli"
+
+# How far to keep probing past the last version that answered. UGREEN has
+# published consecutive patch numbers so far, but a withdrawn build would leave
+# a hole, and stopping at the first 404 would then hide every later release.
+UGCLI_PROBE_MISSES=3
 
 GET_PIP_URL="https://bootstrap.pypa.io/get-pip.py"
 
@@ -546,6 +580,215 @@ $DEST"
 }
 
 # ============================================================
+# Version discovery
+#
+# UGREEN exposes no manifest, so the only way to learn what
+# exists is to ask for each candidate. These helpers do HEAD
+# requests through whichever downloader is present.
+# ============================================================
+
+ugcli_url()
+{
+    printf '%s/ugcli-v%s-linux-amd64' \
+        "$UGCLI_BASE_URL" \
+        "$1"
+}
+
+# Exit status:
+#   0  published
+#   1  definitely not published (a real 404)
+#   2  could not tell
+#
+# The distinction between 1 and 2 is the important one. Treating
+# "could not tell" as "not published" would let one network blip
+# silently pin the install to the floor and call it the latest.
+ugcli_version_exists()
+{
+    URL="$(ugcli_url "$1")"
+
+    if has_cmd python3 &&
+       python3 -c \
+           'import ssl, urllib.request' \
+           >/dev/null 2>&1
+    then
+
+        python3 - "$URL" <<'PYHEAD' >/dev/null 2>&1
+import sys
+import urllib.error
+import urllib.request
+
+request = urllib.request.Request(
+    sys.argv[1],
+    method="HEAD",
+    headers={
+        "User-Agent": "UGREEN-ugcli-installer/3.0"
+    },
+)
+
+try:
+    with urllib.request.urlopen(
+        request,
+        timeout=20,
+    ) as response:
+        sys.exit(0 if response.status == 200 else 2)
+
+except urllib.error.HTTPError as err:
+    sys.exit(1 if err.code == 404 else 2)
+
+except Exception:
+    sys.exit(2)
+PYHEAD
+        return $?
+
+    elif has_cmd curl; then
+
+        CODE="$(
+            curl \
+                --silent \
+                --head \
+                --max-time 20 \
+                --output /dev/null \
+                --write-out '%{http_code}' \
+                "$URL" 2>/dev/null
+        )" || return 2
+
+        case "$CODE" in
+            200) return 0 ;;
+            404) return 1 ;;
+            *)   return 2 ;;
+        esac
+
+    elif has_cmd wget; then
+
+        if wget \
+            --spider \
+            --quiet \
+            --timeout=20 \
+            "$URL"
+        then
+            return 0
+        fi
+
+        # wget --spider cannot separate a 404 from a transport
+        # failure without parsing its output, so anything that is
+        # not a success counts as "could not tell" and stops the
+        # walk rather than moving it.
+        return 2
+
+    else
+        return 2
+    fi
+}
+
+# Bumps one component of a dotted version, zeroing everything
+# below it. 1.1.0.13 field 3 -> 1.1.1.0
+ugcli_bump()
+{
+    printf '%s' "$1" |
+    awk -F. -v f="$2" '
+        BEGIN { OFS = "." }
+        {
+            $f = $f + 1
+            for (i = f + 1; i <= NF; i++) {
+                $i = 0
+            }
+            print
+        }
+    '
+}
+
+# Takes one step on a single component. Prints the newer version
+# if one is published, otherwise prints its input unchanged, so
+# the caller can loop until it stops moving.
+ugcli_probe_field()
+{
+    CURRENT="$1"
+    FIELD="$2"
+
+    TRY="$CURRENT"
+    MISS=0
+
+    while [ "$MISS" -lt "$UGCLI_PROBE_MISSES" ]; do
+
+        TRY="$(ugcli_bump "$TRY" "$FIELD")"
+
+        [ -n "$TRY" ] || break
+
+        # `|| RESULT=$?` rather than a bare call: this script runs
+        # under `set -e`, and a 404 is a return of 1, so a bare call
+        # would end the installer at the first version that does not
+        # exist, which is every probe past the newest one.
+        RESULT=0
+        ugcli_version_exists "$TRY" || RESULT=$?
+
+        if [ "$RESULT" -eq 0 ]; then
+            printf '%s' "$TRY"
+            return 0
+        fi
+
+        if [ "$RESULT" -eq 2 ]; then
+            break
+        fi
+
+        MISS=$((MISS + 1))
+
+    done
+
+    printf '%s' "$CURRENT"
+}
+
+resolve_ugcli_version()
+{
+    if [ -n "$UGCLI_VERSION" ]; then
+
+        log "Version pinned by UGCLI_VERSION:"
+        log "  $UGCLI_VERSION"
+
+        PINNED_RESULT=0
+        ugcli_version_exists "$UGCLI_VERSION" || PINNED_RESULT=$?
+
+        case $PINNED_RESULT in
+            0) log "[OK] UGREEN publishes that version." ;;
+            1) warn "UGREEN does not publish ugcli $UGCLI_VERSION. Continuing because you asked for it explicitly." ;;
+            *) warn "Could not confirm ugcli $UGCLI_VERSION is published. Continuing." ;;
+        esac
+
+        return 0
+    fi
+
+    log "Looking for the newest published ugcli..."
+    log "  walking up from the last verified version: $UGCLI_VERSION_FLOOR"
+
+    BEST="$UGCLI_VERSION_FLOOR"
+
+    # Patch first, then minor, then major. Each pass restarts the
+    # ones below it, so 1.1.0.13 -> 1.1.1.0 -> 1.1.1.7 is reachable
+    # rather than stopping at the first component that moves.
+    for FIELD in 4 3 2 1; do
+
+        while : ; do
+
+            NEXT="$(ugcli_probe_field "$BEST" "$FIELD")"
+
+            [ "$NEXT" != "$BEST" ] || break
+
+            BEST="$NEXT"
+            log "  found $BEST"
+
+        done
+
+    done
+
+    UGCLI_VERSION="$BEST"
+
+    if [ "$UGCLI_VERSION" = "$UGCLI_VERSION_FLOOR" ]; then
+        log "[OK] $UGCLI_VERSION is the newest published version."
+    else
+        log "[OK] Newer than the floor: $UGCLI_VERSION_FLOOR -> $UGCLI_VERSION"
+    fi
+}
+
+# ============================================================
 # Python HTTPS verification
 # ============================================================
 
@@ -863,6 +1106,15 @@ log ""
 log "========================================"
 log " Checking ugcli"
 log "========================================"
+log ""
+
+# Decide WHICH version we are installing before comparing anything
+# against what is already on the box. Everything below this point
+# treats $UGCLI_VERSION as a concrete, resolved version.
+resolve_ugcli_version
+
+UGCLI_URL="$(ugcli_url "$UGCLI_VERSION")"
+
 log ""
 
 INSTALL_UGCLI=1

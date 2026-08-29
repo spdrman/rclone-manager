@@ -1,6 +1,61 @@
 # UGCLI for UGREEN / UGOS Pro
 
-This package installs **UGREEN `ugcli` 1.1.0.13** on an x86_64 / amd64 UGREEN NAS running UGOS Pro.
+Two ways to get UGREEN `ugcli` onto an x86_64 / amd64 UGREEN NAS running UGOS
+Pro. They differ in one respect that matters, so pick deliberately.
+
+| | `ugcli-installer.sh` | `dpkg/*.deb` |
+|---|---|---|
+| Version | **tracks the newest UGREEN publishes** | pinned at 1.1.0.13 |
+| Needs the internet at install time | yes, to discover and download | yes, to download |
+| Artifact reviewed in this repo | no, fetched at run time | yes, with a committed SHA-256 |
+| Rollback story | pin with `UGCLI_VERSION=` | reinstall the same `.deb` |
+
+Use the **script** for a development NAS you want kept current. Use the **`.deb`**
+when you need the exact bytes that were reviewed, or a repeatable install.
+
+## How the script finds "the newest"
+
+UGREEN publishes no `latest` pointer, no manifest and no directory listing.
+Checked on 2026-08-29:
+
+```text
+/pro/ugcli/download/ugcli-latest-linux-amd64        404
+/pro/ugcli/version, /version.json, /manifest.json   404
+/pro/ugcli/ and /pro/ugcli/download/                200, empty bodies
+```
+
+What the endpoint does give is an enumerable, verifiable URL scheme, so the
+script walks the version upward from the last one it was verified against until
+the endpoint stops answering:
+
+```text
+ugcli-v1.1.0.12-linux-amd64   200
+ugcli-v1.1.0.13-linux-amd64   200
+ugcli-v1.1.0.14-linux-amd64   404
+```
+
+It keeps probing a little past the first miss rather than stopping dead, so a
+withdrawn build cannot hide every release after it. It also separates "not
+published" from "could not tell": a real 404 moves the walk on, while a network
+or WAF failure stops it, because treating an unreachable server as "no newer
+version" would silently pin you to the floor and call it the latest.
+
+If discovery cannot run at all, the install proceeds at the floor version
+rather than failing. A pinned install beats no install.
+
+To pin deliberately:
+
+```bash
+UGCLI_VERSION=1.1.0.13 ./ugcli-installer.sh
+```
+
+## The `.deb` stays pinned, on purpose
+
+`dpkg/ugcli-ugreen-bootstrap_1.1.0.13-1_amd64.deb` and its `.sha256` are
+committed together so the artifact you install is the one that was reviewed.
+Floating its version would defeat that, so its `postinst` keeps the hardcoded
+`1.1.0.13`. Everything below this line describes **the `.deb` path**, and its
+version numbers are correct for it.
 
 Package:
 
