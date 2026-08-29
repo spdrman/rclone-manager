@@ -79,3 +79,44 @@ jobs:
       # it yet.
       - name: Compile everything for linux/${{ matrix.goarch }}, CGO_ENABLED=0
         run: go build ./...
+
+  frontend:
+    name: ui typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/shared/package-lock.json
+
+      # npm ci needs a lockfile. Until one is committed, fall back to install
+      # so the job still gates on typecheck and tests rather than being
+      # skipped, and say so out loud rather than silently degrading.
+      - name: Install
+        working-directory: ui/shared
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
+          else
+            echo "::warning::ui/shared has no package-lock.json, falling back to npm install (builds are not reproducible until one is committed)"
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Typecheck
+        working-directory: ui/shared
+        run: npm run lint
+
+      - name: Test
+        working-directory: ui/shared
+        run: npm test
+
+      # A build is the only thing that proves the Vite entry and the provider
+      # alias actually resolve, which typecheck alone does not.
+      - name: Build
+        working-directory: ui/shared
+        run: npm run build

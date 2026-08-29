@@ -1,0 +1,55 @@
+#!/usr/bin/env sh
+# Pre-commit gate mirroring .github/workflows/ci.yml, in the same spirit as
+# iasbuilt/webapp's hook: stop a commit that cannot build, not a commit with
+# style debt.
+#
+# WHAT RUNS HERE, AND WHY THIS SUBSET.
+#
+# Go: build, vet, and the ./internal/... suite. Deliberately NOT `go test ./...`.
+# The ./tests/... tree holds the crash matrix, the SFTP integration suite and
+# the destructive-safety suite, which stand up Docker containers and kill real
+# processes. Those take minutes, need a working Docker daemon, and would make
+# this hook unusable on a laptop with Docker stopped. CI runs them on every
+# push, which is where a suite that slow belongs. `./internal/...` is around a
+# minute and covers every package the commit is likely to have touched.
+#
+# Frontend: tsc --noEmit and the vitest suite, both of which are about a second.
+# Playwright is NOT here, for the same reason as the Go integration tree: it
+# needs browsers installed and takes far longer than a commit should. Run
+# `npm run e2e` before a PR.
+#
+# ESLint is not here either, matching webapp's reasoning: a lint ratchet exists
+# to block a merge, and a local commit is not a merge.
+#
+# `git commit --no-verify` is the documented escape hatch for a WIP commit you
+# will fix before pushing.
+
+set -e
+
+export PATH="/opt/homebrew/bin:$PATH"
+
+echo "==> pre-commit: go build"
+go build ./...
+
+echo "==> pre-commit: go vet"
+go vet ./...
+
+echo "==> pre-commit: go test ./internal/..."
+go test ./internal/...
+
+# The frontend only exists once ui/shared is present, and a Go-only checkout
+# should not fail this hook.
+if [ -d ui/shared ]; then
+  if [ ! -d ui/shared/node_modules ]; then
+    echo "==> pre-commit: ui/shared has no node_modules, skipping frontend checks"
+    echo "    run 'cd ui/shared && npm install' to enable them"
+  else
+    echo "==> pre-commit: ui typecheck"
+    (cd ui/shared && npm run --silent lint)
+
+    echo "==> pre-commit: ui tests"
+    (cd ui/shared && npm test --silent)
+  fi
+fi
+
+echo "==> pre-commit: ok"

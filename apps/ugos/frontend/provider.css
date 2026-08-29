@@ -1,0 +1,13 @@
+/* 5-10% provider treatment, no more (§46). Accent hue only, plus a titlebar
+   tint so the window feels seated in UGOS. Product identity stays Backup Manager. */
+:root {
+  --platform-accent: oklch(0.52 0.09 150);
+  --accent-quiet: oklch(0.95 0.02 150);
+  --platform-titlebar: oklch(0.97 0.01 150);
+}
+
+[data-theme="dark"] {
+  --platform-accent: oklch(0.70 0.09 150);
+  --accent-quiet: oklch(0.30 0.045 150);
+  --platform-titlebar: oklch(0.24 0.015 150);
+}

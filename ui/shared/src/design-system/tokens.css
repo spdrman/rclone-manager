@@ -1,0 +1,64 @@
+/* Backup Manager design tokens.
+   The ONLY place raw colour values are declared. Provider layers may override
+   --platform-accent / --platform-surface / --platform-titlebar and nothing else. */
+
+:root {
+  /* spacing — 4px base */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+
+  /* radius */
+  --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  --radius-xl: 10px; --radius-pill: 999px;
+
+  /* surface + border */
+  --bg: #f2f2f0;
+  --surface: #ffffff;
+  --surface-2: #fafaf9;
+  --surface-3: #f0f0ed;
+  --border: #e0dfdc;
+  --border-strong: #c8c7c3;
+
+  /* text */
+  --text: #191a19;
+  --text-2: #5b5d5b;
+  --text-3: #8b8d8a;
+
+  /* accent — provider overridable */
+  --platform-accent: oklch(0.52 0.09 255);
+  --accent: var(--platform-accent);
+  --accent-quiet: oklch(0.95 0.02 255);
+
+  /* status — never used without an accompanying icon + label */
+  --ok: oklch(0.52 0.10 155);      --ok-quiet: oklch(0.955 0.025 155);
+  --warn: oklch(0.56 0.11 70);     --warn-quiet: oklch(0.96 0.035 75);
+  --danger: oklch(0.52 0.15 25);   --danger-quiet: oklch(0.955 0.03 25);
+
+  /* focus + shadow */
+  --focus-ring: 2px solid var(--accent);
+  --focus-offset: 2px;
+  --shadow: 0 1px 2px rgba(20,20,18,0.05), 0 1px 1px rgba(20,20,18,0.04);
+  --shadow-lg: 0 14px 40px rgba(20,20,18,0.14), 0 2px 6px rgba(20,20,18,0.07);
+
+  /* window chrome — only embedded providers set this */
+  --platform-titlebar: transparent;
+}
+
+[data-theme="dark"] {
+  --bg: #121312;
+  --surface: #1b1d1b;
+  --surface-2: #202220;
+  --surface-3: #262826;
+  --border: #313331;
+  --border-strong: #454745;
+  --text: #eceeeb;
+  --text-2: #a3a6a2;
+  --text-3: #767976;
+  --platform-accent: oklch(0.70 0.09 255);
+  --accent-quiet: oklch(0.30 0.045 255);
+  --ok: oklch(0.72 0.11 155);      --ok-quiet: oklch(0.28 0.05 155);
+  --warn: oklch(0.78 0.12 75);     --warn-quiet: oklch(0.30 0.055 70);
+  --danger: oklch(0.68 0.15 25);   --danger-quiet: oklch(0.30 0.07 25);
+  --shadow: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-lg: 0 16px 44px rgba(0,0,0,0.55);
+}

@@ -1,0 +1,89 @@
+/* Primitives shared across pages. Component-specific layout stays in the
+   component file; this is only what repeats. */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.card__header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.card__body { padding: var(--space-4) var(--space-5); }
+.card__footer {
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* Action tiers — §35. Destructive is never the visual default. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  height: 34px; padding: 0 13px;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  background: var(--surface); color: var(--text);
+  font: inherit; font-size: var(--text-base); cursor: pointer;
+}
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { background: var(--surface-3); color: var(--text-3); border-color: var(--border); cursor: not-allowed; }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: var(--surface); font-weight: 600; }
+.btn--primary:hover { filter: brightness(1.08); background: var(--accent); }
+.btn--quiet { border-color: var(--border); background: transparent; color: var(--text-2); }
+.btn--caution { border-color: var(--border-strong); background: var(--surface-2); }
+.btn--destructive { border-color: var(--danger); background: transparent; color: var(--danger); font-weight: 500; }
+.btn--destructive-confirm { border-color: var(--danger); background: var(--danger); color: var(--surface); font-weight: 600; }
+.btn--sm { height: 29px; padding: 0 11px; font-size: var(--text-sm); }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field__label { font-size: var(--text-sm); font-weight: 500; color: var(--text-2); }
+.input, .select {
+  height: 38px; padding: 0 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  color: var(--text); font: inherit; font-size: var(--text-base);
+}
+.input--mono { font-family: var(--font-mono); }
+
+.table { width: 100%; border-collapse: collapse; font-size: var(--text-base); }
+.table thead tr { background: var(--surface-2); }
+.table th {
+  text-align: left; padding: 9px 12px;
+  font-size: var(--text-sm); font-weight: 500; color: var(--text-3);
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.table td { padding: 11px 12px; border-bottom: 1px solid var(--border); }
+.table tbody tr:hover { background: var(--surface-2); }
+/* Tables must never clip a column in a small app window (§31). */
+.table-scroll { overflow-x: auto; }
+
+.banner {
+  display: flex; gap: var(--space-3);
+  padding: 15px var(--space-4);
+  border: 1px solid; border-radius: var(--radius-lg);
+}
+.banner--warn { background: var(--warn-quiet); border-color: var(--warn); }
+.banner--danger { background: var(--danger-quiet); border-color: var(--danger); }
+.banner--info { background: var(--surface-3); border-color: var(--border); }
+.banner--ok { background: var(--ok-quiet); border-color: var(--ok); }
+
+.dialog-scrim {
+  position: fixed; inset: 0; z-index: 50;
+  background: rgba(12,12,11,0.45);
+  display: grid; place-items: center; padding: var(--space-6);
+}
+.dialog {
+  width: 100%; background: var(--surface);
+  border: 1px solid var(--border-strong); border-radius: 11px;
+  box-shadow: var(--shadow-lg);
+}
+.dialog--destructive { border-color: var(--danger); }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
