@@ -72,6 +72,51 @@ enforce (never delete before commit, refuse a delete when identity is uncertain,
 treat `.partial` as a restore point) hold today in every test that exercises them. It just
 means there's currently no program you can point at a real server and walk away from.
 
+## Installing the current UGOS build from a `.UPK` package
+
+This is issue #91's hardware-acceptance package, not the finished product: the backend
+inside it answers `GET /health/live` and nothing else. What it proves is that the packaging
+and installation path onto a real UGREEN NAS actually works, before any real functionality
+gets wired behind it. Treat everything below as a developer/proof-of-concept install, not
+a release.
+
+**This has to happen through UGOS Web (the browser-based desktop at the NAS's own address),
+not through any UGREEN mobile or desktop companion app.** Those apps don't expose App
+Center's manual/developer install path at all.
+
+1. Build the package (from a Debian 12 environment with a pinned `ugcli`, which is normally
+   the NAS itself over SSH — see `apps/ugos/docs/upk-proof-procedure.md` for the full
+   procedure and `tools/ugcli-install/` for getting `ugcli` onto the NAS safely):
+   ```sh
+   cd apps/ugos/upk-proof
+   ugcli check
+   ugcli pack --arch amd64 --build 1
+   ```
+   This produces a signed `.upk` file under `build_dir/pkgs/upk/`.
+2. Get that file somewhere your browser can select it from. If you built it over SSH on the
+   NAS itself, either copy it to a share your NAS's file browser can reach (e.g. a
+   `Downloads` folder under your own account's home directory) and download it from there,
+   or `scp`/`sftp` it straight to your own machine.
+3. Open UGOS Web in a browser, sign in, and open **App Center**.
+4. Look for the manual/developer install option (this is usually a small entry point rather
+   than a prominent button — a settings/developer menu, or an icon near the top of the App
+   Center screen — since UGOS doesn't want casual users side-loading packages). Select the
+   `.upk` file from step 2.
+5. If the install fails with a signature/security error, see
+   [Troubleshooting](#troubleshooting-upk-install) below before assuming the package itself
+   is broken.
+
+Once installed, the app's icon should appear in the installed-app list and open as an inner
+UGOS desktop window (`open_type: inner`), and its `/health/live` endpoint should answer
+`{"status":"ok"}`. None of that means backups are actually running yet — see the Status
+section above for what's real today.
+
+### Troubleshooting UPK install
+
+*(Steps 3-4's exact wording depends on your UGOS Pro version; this section will get more
+precise as more of this actually gets tested against real hardware. If you hit something
+not covered here, that's worth reporting back so this section can grow.)*
+
 ## Who owns what
 
 rclone owns the data plane: SFTP and local backends, listing, copying, hashing, deletion
