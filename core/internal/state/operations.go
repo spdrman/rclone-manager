@@ -116,27 +116,34 @@ func (j *Journal) CreateOperation(ctx context.Context, req OperationRequest) (Op
 		return OperationOutcome{}, err
 	}
 	if err == nil {
-		if existing.Actor != req.Actor || existing.Action != req.Action || existing.ConfigRevision != req.ConfigRevision {
-			return OperationOutcome{}, fmt.Errorf("%w: key %q", ErrOperationIdempotencyKeyReused, req.IdempotencyKey)
-		}
-		if err := tx.Commit(); err != nil {
-			return OperationOutcome{}, fmt.Errorf("state: commit idempotent replay: %w", err)
-		}
-		return OperationOutcome{Created: false, Operation: existing}, nil
+		return commitIdempotentReplay(tx, req, existing)
 	}
 
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO operations (
-			operation_id, idempotency_key, actor, backup_set, config_revision,
-			action, parameters, status, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.OperationID, req.IdempotencyKey, req.Actor, req.BackupSet, req.ConfigRevision,
-		req.Action, req.Parameters, OperationQueued, formatTime(req.CreatedAt),
-	); err != nil {
-		return OperationOutcome{}, fmt.Errorf("state: insert operation: %w", err)
+	_, conflict, err := insertOperation(ctx, tx, req)
+	if err != nil {
+		return OperationOutcome{}, err
+	}
+	if conflict {
+		// Lost a race with a writer this transaction's own idempotency
+		// check above did not see yet: something else committed a row
+		// under this exact idempotency_key between that SELECT and this
+		// INSERT. db.SetMaxOpenConns(1) (state.go) makes that impossible
+		// for two calls sharing one *sql.DB (see
+		// TestCreateOperation_ConcurrentSameIdempotencyKeyCreatesExactlyOne),
+		// but nothing enforces that across two separate *sql.DB handles on
+		// the same underlying SQLite file — the realistic shape being two
+		// processes sharing one journal. Re-fetch and treat it exactly
+		// like the ordinary sequential-replay path above, rather than
+		// surfacing modernc.org/sqlite's raw constraint error to a caller
+		// that has no way to act on it.
+		existing, err := getOperationByIdempotencyKey(ctx, tx, req.IdempotencyKey)
+		if err != nil {
+			return OperationOutcome{}, fmt.Errorf("state: re-fetch after idempotency key race: %w", err)
+		}
+		return commitIdempotentReplay(tx, req, existing)
 	}
 
-	created, err := getOperationByID(ctx, tx, req.OperationID)
+	createdRow, err := getOperationByID(ctx, tx, req.OperationID)
 	if err != nil {
 		return OperationOutcome{}, err
 	}
@@ -145,12 +152,81 @@ func (j *Journal) CreateOperation(ctx context.Context, req OperationRequest) (Op
 		return OperationOutcome{}, fmt.Errorf("state: commit create operation: %w", err)
 	}
 
-	return OperationOutcome{Created: true, Operation: created}, nil
+	return OperationOutcome{Created: true, Operation: createdRow}, nil
+}
+
+// commitIdempotentReplay is CreateOperation's shared "this idempotency key
+// was already used" path, reached whether that was discovered by this
+// transaction's own idempotency-key SELECT or only after losing a
+// cross-connection race on the INSERT (see CreateOperation's own doc for
+// that second case). It still refuses a key reused for a logically
+// different request either way: silently serving back an unrelated
+// operation would mean telling a caller "your request is already in
+// flight" about a request it never actually made.
+func commitIdempotentReplay(tx *sql.Tx, req OperationRequest, existing Operation) (OperationOutcome, error) {
+	if existing.Actor != req.Actor || existing.Action != req.Action || existing.ConfigRevision != req.ConfigRevision {
+		return OperationOutcome{}, fmt.Errorf("%w: key %q", ErrOperationIdempotencyKeyReused, req.IdempotencyKey)
+	}
+	if err := tx.Commit(); err != nil {
+		return OperationOutcome{}, fmt.Errorf("state: commit idempotent replay: %w", err)
+	}
+	return OperationOutcome{Created: false, Operation: existing}, nil
+}
+
+// insertOperation attempts the actual INSERT CreateOperation needs once its
+// own idempotency check has found nothing. conflict is true when the
+// INSERT itself failed specifically because of a UNIQUE constraint
+// violation — operation_id is generated fresh per call (see
+// core/service's uuid-based OperationID) so in practice this means
+// idempotency_key raced a concurrent writer this transaction's own
+// idempotency check above did not see; any other failure is returned as
+// err, unclassified, exactly as before this function was extracted.
+func insertOperation(ctx context.Context, tx *sql.Tx, req OperationRequest) (created, conflict bool, err error) {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO operations (
+			operation_id, idempotency_key, actor, backup_set, config_revision,
+			action, parameters, status, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.OperationID, req.IdempotencyKey, req.Actor, req.BackupSet, req.ConfigRevision,
+		req.Action, req.Parameters, OperationQueued, formatTime(req.CreatedAt),
+	); err != nil {
+		if isUniqueViolation(err) {
+			return false, true, nil
+		}
+		return false, false, fmt.Errorf("state: insert operation: %w", err)
+	}
+	return true, false, nil
 }
 
 // GetOperation returns the current row for operationID.
 func (j *Journal) GetOperation(ctx context.Context, operationID string) (Operation, error) {
 	return getOperationByID(ctx, j.db, operationID)
+}
+
+// FailInterruptedOperations transitions every operation still at queued or
+// running to failed, recording finishedAt and reason. This is the startup
+// sweep core/service.Open calls once, before serving any request: a row
+// still at queued or running when a BackupService is constructed cannot
+// belong to anything this process itself has done (this journal, this
+// process, has made no SubmitRunCycle call yet), so it can only be left
+// over from an earlier process that was killed, or crashed, before it ever
+// reached a terminal status. Nothing would otherwise ever move such a row
+// out of that state; a client polling GET /api/v1/operations/{id} against
+// it would see "running" forever. Returns the number of rows swept, for a
+// caller that wants to log it.
+func (j *Journal) FailInterruptedOperations(ctx context.Context, finishedAt time.Time, reason string) (int64, error) {
+	res, err := j.db.ExecContext(ctx,
+		`UPDATE operations SET status = ?, finished_at = ?, error = ? WHERE status IN (?, ?)`,
+		OperationFailed, formatTime(finishedAt), reason, OperationQueued, OperationRunning,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("state: fail interrupted operations: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("state: fail interrupted operations: check rows affected: %w", err)
+	}
+	return n, nil
 }
 
 // MarkOperationRunning transitions operationID from queued to running,

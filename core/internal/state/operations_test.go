@@ -374,3 +374,137 @@ func TestCreateOperation_ConcurrentSameIdempotencyKeyCreatesExactlyOne(t *testin
 		t.Fatalf("operations table has %d rows, want exactly 1", count)
 	}
 }
+
+// TestInsertOperation_UniqueConstraintViolationIsClassifiedNotRaw is PR
+// #118's item 6 fix, isolated to exactly the code path it changed:
+// CreateOperation's own idempotency-key SELECT only ever prevents a race
+// WITHIN one *sql.DB (db.SetMaxOpenConns(1) fully serializes it there, as
+// the test above proves); it cannot prevent a second, separate *sql.DB
+// handle on the SAME underlying SQLite file — two processes sharing one
+// journal, in production — from having already committed a row under an
+// idempotency key this transaction's SELECT did not see yet, so the INSERT
+// itself can still hit the idempotency_key UNIQUE constraint.
+//
+// This drives insertOperation directly, across two hand-built transactions
+// on one *sql.DB, rather than trying to win a real race against a second
+// goroutine: the exact interleaving CreateOperation's own transaction needs
+// (SELECT finds nothing, then something else commits the same key, then
+// this transaction's own INSERT runs) is a timing window real concurrency
+// can miss on a given run; committing the "something else" write first and
+// then calling insertOperation reproduces the failure insertOperation has
+// to classify deterministically, on every run, instead of only sometimes.
+func TestInsertOperation_UniqueConstraintViolationIsClassifiedNotRaw(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+
+	winner := testOperationRequest("op_winner", "idem-conflict")
+	tx1, err := j.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx (winner): %v", err)
+	}
+	created, conflict, err := insertOperation(ctx, tx1, winner)
+	if err != nil || !created || conflict {
+		t.Fatalf("insertOperation (winner): created=%v conflict=%v err=%v, want created=true conflict=false err=nil", created, conflict, err)
+	}
+	if err := tx1.Commit(); err != nil {
+		t.Fatalf("commit winner: %v", err)
+	}
+
+	// A second transaction, standing in for a second *sql.DB handle on the
+	// same file, attempts to insert its own row under the SAME idempotency
+	// key: its own idempotency-check SELECT (not exercised directly here;
+	// see CreateOperation) would have already run and found nothing, by
+	// hypothesis, before "winner" above committed.
+	loser := testOperationRequest("op_loser", winner.IdempotencyKey)
+	tx2, err := j.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx (loser): %v", err)
+	}
+	defer tx2.Rollback() //nolint:errcheck // no-op once this test is done with it
+
+	created2, conflict2, err2 := insertOperation(ctx, tx2, loser)
+	if err2 != nil {
+		t.Fatalf("insertOperation (loser) returned a raw, unclassified error instead of conflict=true: %v", err2)
+	}
+	if created2 {
+		t.Error("created = true on a colliding idempotency_key, want false")
+	}
+	if !conflict2 {
+		t.Error("conflict = false, want true: the idempotency_key UNIQUE constraint should have been hit")
+	}
+}
+
+// TestFailInterruptedOperations_SweepsQueuedAndRunningLeavesOthersAlone is
+// item 2's startup-sweep primitive tested directly at the journal layer:
+// core/service.Open's own test (core/service/open_test.go) proves the
+// production wiring calls this, but the actual SQL — which statuses get
+// swept, which don't, and that finished_at/error land correctly — belongs
+// here, next to the rest of this file's operation-transition tests.
+func TestFailInterruptedOperations_SweepsQueuedAndRunningLeavesOthersAlone(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+
+	queued, err := j.CreateOperation(ctx, testOperationRequest("op_queued", "idem-queued"))
+	if err != nil {
+		t.Fatalf("CreateOperation (queued): %v", err)
+	}
+
+	running, err := j.CreateOperation(ctx, testOperationRequest("op_running", "idem-running"))
+	if err != nil {
+		t.Fatalf("CreateOperation (running): %v", err)
+	}
+	if err := j.MarkOperationRunning(ctx, running.Operation.OperationID, time.Now()); err != nil {
+		t.Fatalf("MarkOperationRunning: %v", err)
+	}
+
+	completed, err := j.CreateOperation(ctx, testOperationRequest("op_completed", "idem-completed"))
+	if err != nil {
+		t.Fatalf("CreateOperation (completed): %v", err)
+	}
+	if err := j.CompleteOperation(ctx, completed.Operation.OperationID, time.Now(), "{}"); err != nil {
+		t.Fatalf("CompleteOperation: %v", err)
+	}
+
+	sweptAt := time.Now()
+	n, err := j.FailInterruptedOperations(ctx, sweptAt, "interrupted by restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedOperations: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("swept %d rows, want exactly 2 (queued and running, not completed)", n)
+	}
+
+	for _, id := range []string{queued.Operation.OperationID, running.Operation.OperationID} {
+		got, err := j.GetOperation(ctx, id)
+		if err != nil {
+			t.Fatalf("GetOperation(%q): %v", id, err)
+		}
+		if got.Status != OperationFailed {
+			t.Errorf("operation %q Status = %q, want %q", id, got.Status, OperationFailed)
+		}
+		if got.Error != "interrupted by restart" {
+			t.Errorf("operation %q Error = %q, want %q", id, got.Error, "interrupted by restart")
+		}
+		if got.FinishedAt == nil || !got.FinishedAt.Equal(sweptAt) {
+			t.Errorf("operation %q FinishedAt = %v, want %v", id, got.FinishedAt, sweptAt)
+		}
+	}
+
+	stillCompleted, err := j.GetOperation(ctx, completed.Operation.OperationID)
+	if err != nil {
+		t.Fatalf("GetOperation(completed): %v", err)
+	}
+	if stillCompleted.Status != OperationCompleted {
+		t.Errorf("an already-completed operation must not be touched by the sweep: Status = %q, want %q", stillCompleted.Status, OperationCompleted)
+	}
+
+	// A second sweep, with nothing left at queued/running, must be a
+	// true no-op rather than re-touching what it already fixed once.
+	n2, err := j.FailInterruptedOperations(ctx, time.Now(), "interrupted by restart")
+	if err != nil {
+		t.Fatalf("FailInterruptedOperations (second call): %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("second sweep affected %d rows, want 0", n2)
+	}
+}
