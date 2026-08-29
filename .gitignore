@@ -19,3 +19,8 @@ config.local.*
 
 # Agent worktrees, local only
 .claude/
+
+# A filled-in .env points at real key material on the host, and container/.env
+# is what compose reads. The example stays tracked, the real one must not be.
+.env
+container/.env
