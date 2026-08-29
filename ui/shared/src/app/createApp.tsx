@@ -8,6 +8,7 @@ import { httpApi } from "@shared/api/client";
 import { createMockApi, scenarioFromLocation } from "@shared/api/mock";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import type { PlatformBridge } from "@shared/types/platform";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 /** The single mount path every provider shell calls. A provider supplies its
  *  bridge and, optionally, its own API instance. Nothing provider-specific
@@ -19,13 +20,15 @@ export function createApp(
 ) {
   createRoot(container).render(
     <StrictMode>
-      <PlatformProvider bridge={bridge}>
-        <ApiProvider api={api}>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
-        </ApiProvider>
-      </PlatformProvider>
+      <ErrorBoundary>
+        <PlatformProvider bridge={bridge}>
+          <ApiProvider api={api}>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+          </ApiProvider>
+        </PlatformProvider>
+      </ErrorBoundary>
     </StrictMode>
   );
 }
