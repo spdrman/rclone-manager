@@ -14,12 +14,26 @@
 
 set -euo pipefail
 
+# arch::warn_if_dirty
+# Every check in this file proves a property of `HEAD` (the last commit),
+# not of the working tree: it builds its throwaway worktree from `HEAD`,
+# so an uncommitted change — including one that violates the very boundary
+# being checked — is invisible to it. Warn loudly rather than let a
+# developer running this locally against a dirty tree mistake "OK" for
+# "my mid-edit state is safe to commit."
+arch::warn_if_dirty() {
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "WARNING: working tree has uncommitted changes; this check only proves the property against the last commit (HEAD), not your uncommitted edits." >&2
+  fi
+}
+
 # arch::make_worktree <out_var>
 # Creates a detached worktree of HEAD in a fresh temp directory and writes
 # its path into the caller's named variable. Pair with arch::cleanup_worktree.
 arch::make_worktree() {
   local __outvar=$1
   local dir
+  arch::warn_if_dirty
   dir=$(mktemp -d "${TMPDIR:-/tmp}/rclone-manager-arch-check.XXXXXX")
   # --detach: we are proving a property of the current tree, not making a
   # branch anyone will commit on.
