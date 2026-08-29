@@ -7,7 +7,25 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 )
+
+// TestPollInterval_ReportsTheConfiguredValue is what lets a caller
+// outside core/ (apps/generic's serve command) drive RunOnSchedule at the
+// operator's own configured cadence without needing internal/config
+// access, which it cannot have (§7.2): cmd/backup-manager's own `daemon`
+// command reads cfg.PollInterval.Duration() directly off a
+// *config.Config it constructed itself, a shortcut apps/ has no
+// equivalent for.
+func TestPollInterval_ReportsTheConfiguredValue(t *testing.T) {
+	cfg := testConfig()
+	cfg.PollInterval = config.Duration(37 * time.Minute)
+	svc := New(cfg, openTestJournal(t), nil, nil)
+
+	if got, want := svc.PollInterval(), 37*time.Minute; got != want {
+		t.Errorf("PollInterval() = %s, want %s", got, want)
+	}
+}
 
 // TestRunOnSchedule_RejectsNonPositiveInterval mirrors
 // internal/app.Service.Daemon's own validation (core/internal/app/daemon.go):

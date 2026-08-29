@@ -8,6 +8,19 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
+// PollInterval reports the poll_interval this BackupService was
+// configured with (config.Config.PollInterval), the same value
+// cmd/backup-manager's own `daemon` command reads directly off a
+// *config.Config it constructed itself - a shortcut apps/ has no
+// equivalent for, since it cannot import internal/config at all (§7.2).
+// A caller composing this BackupService with an HTTP API (the generic
+// Web host's `serve` command) needs this to drive RunOnSchedule at the
+// operator's own configured cadence, rather than inventing a second,
+// possibly-drifting interval of its own.
+func (b *BackupService) PollInterval() time.Duration {
+	return b.pollInterval
+}
+
 // RunOnSchedule repeats one internal/app.Service.RunCycle pass at the
 // given interval until ctx is done, the same repeated-cycle shape
 // internal/app.Service.Daemon already gives cmd/backup-manager's own
