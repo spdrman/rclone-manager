@@ -1,15 +1,24 @@
 name: CI
 
-# Builds, vets, and tests every module on every push and pull request, keeps
-# the two UGREEN cross-compile targets honest with a real compile check, and
-# enforces the core/apps/ui-shared repository-structure boundary
-# (docs/EPIC-B-multi-nas.md §7.1, landed in #106/B1.1). rclone's dependency
-# graph is heavy (roughly 1.7GB and 260+ modules to resolve, see
+# Builds, vets, and tests every module on every pull request and on every push
+# to main, keeps the two UGREEN cross-compile targets honest with a real
+# compile check, and enforces the core/apps/ui-shared repository-structure
+# boundary (docs/EPIC-B-multi-nas.md §7.1, landed in #106/B1.1). rclone's
+# dependency graph is heavy (roughly 1.7GB and 260+ modules to resolve, see
 # docs/rclone-upgrade.md), so the Go module and build caches are
 # load-bearing here, not a nice-to-have.
 
+# A bare `push:` alongside `pull_request:` runs this whole matrix TWICE for
+# every commit on a branch that has an open PR: once for the push event, once
+# for the pull_request event. The concurrency group below does not collapse
+# them, because github.ref is refs/heads/<branch> for the push and
+# refs/pull/<n>/merge for the pull_request, so the two land in different
+# groups and both run to completion. Restricting push to main keeps the
+# post-merge signal on the default branch and leaves pre-merge validation to
+# the pull_request event, which is what branch protection actually gates on.
 on:
   push:
+    branches: [main]
   pull_request:
 
 concurrency:
