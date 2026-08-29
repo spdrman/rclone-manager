@@ -174,6 +174,31 @@ project's own setup guide recommends cannot supply a remote hash. See
 below for what that means in practice, but the short version is: against the recommended
 deployment, remote deletes are usually refused, and that's not a bug.
 
+## An artifact is identified by its basename, and that has a consequence
+
+`model.ArtifactID` is a backup set plus a plain basename. It refuses anything containing a
+path separator, which is deliberate: a remote filename is untrusted input, and the cheapest
+place to stop a name like `../../etc/passwd` is the moment it first becomes an identity
+rather than at whichever later call site forgets to check.
+
+The cost shows up now that discovery recurses. Two remote paths that end in the same
+filename collapse to one identity, so `gitea-runs/run-1/backup.dump` and
+`gitea-runs/run-2/backup.dump` are the same artifact as far as the journal is concerned.
+The journal's `UNIQUE (source, backup_set, artifact_name)` refuses the second one, and
+discovery reports it as a conflict naming both paths rather than dropping it silently or
+failing the whole batch.
+
+Listing is sorted by remote path so that outcome is repeatable. Before that fix it was not:
+`walk.GetAll` returns backend order, so whichever path the backend happened to yield first
+won, and the pair swapped places between runs. One cycle ingested `run-1` and reported
+`run-2` as a conflict, the next did the reverse, and neither was reliably backed up.
+
+Sorting makes the conflict stable, not absent. If your producer writes one directory per
+run with a fixed filename inside, you will get exactly one artifact ingested per backup set
+and a conflict for every other run, which is almost certainly not what you want. Until
+identity carries more than a basename, give the artifacts distinct names, for example by
+putting the run stamp in the filename rather than only in the directory.
+
 ## The lifecycle
 
 An artifact moves through twelve states, defined in `internal/lifecycle/state.go` and
