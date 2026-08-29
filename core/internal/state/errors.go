@@ -48,4 +48,19 @@ var (
 	// used per logical attempt; reusing one across different attempts
 	// defeats the guarantee RecordTransition otherwise provides.
 	ErrIdempotencyKeyReused = errors.New("state: idempotency key already used for a different transition")
+
+	// ErrOperationNotFound is returned by GetOperation, MarkOperationRunning,
+	// CompleteOperation and FailOperation when no operation row matches the
+	// given operation_id.
+	ErrOperationNotFound = errors.New("state: operation not found")
+
+	// ErrOperationIdempotencyKeyReused is CreateOperation's equivalent of
+	// ErrIdempotencyKeyReused above: the same idempotency key was presented
+	// for a request whose action or configuration revision does not match
+	// what that key was first recorded against. Unlike RecordTransition's
+	// artifact journal, silently serving back an unrelated operation here
+	// would mean telling a caller "your request is already in flight" about
+	// a request it never actually made, so this is refused rather than
+	// papered over.
+	ErrOperationIdempotencyKeyReused = errors.New("state: idempotency key already used for a different operation")
 )

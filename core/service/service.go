@@ -1,0 +1,284 @@
+// Package service is core's public application-service boundary
+// (docs/EPIC-B-multi-nas.md §3.3, §7.2, issue #94/B1.5).
+//
+// Every package under core/internal is off limits to anything outside
+// core/ by construction: Go's own "internal" import rule means
+// apps/common/webhost (a different module) cannot import
+// core/internal/app, core/internal/config, core/internal/state or
+// core/internal/transport, no matter what core/'s go.mod or the repo-root
+// go.work say. This package is the seam §7.2 calls for: it sits inside
+// core/'s own module tree (so it CAN import those internal packages) and
+// exposes only plain, provider-agnostic types and functions — never a
+// config.Config, a state.Record, a state.Operation, or anything else an
+// internal package owns — to whatever sits on top of it: apps/common/
+// webhost today, a future CLI or another provider tomorrow.
+//
+// BackupService wraps exactly one internal/app.Service, plus the
+// idempotency-keyed, configuration-revision-checked durable-operation
+// plumbing issue #94 adds on top of it (operations.go). Nothing here
+// re-implements lifecycle, discovery, reconciliation or retention policy;
+// see internal/app's own package doc for why none of that belongs here
+// either.
+package service
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
+)
+
+// closeDrainTimeout bounds how long Close (below) waits for an in-flight
+// executeRunCycle to notice ctx was canceled and finish before closing the
+// journal out from under it anyway. It is a var, not a const, so a test can
+// shrink it rather than waiting out the real value.
+//
+// Five seconds is generous next to the one journal write (Complete/
+// FailOperation) left to make once internal/app.Service.RunCycle itself
+// returns, while short enough that an operator restarting a stuck process
+// is not left waiting indefinitely on Close; it bounds the grace period
+// Close gives RunCycle to wind down, not RunCycle's own execution time,
+// which keeps going on its goroutine regardless (Go has no way to force a
+// goroutine to stop) until it next checks ctx.Err() between backup sets
+// (see internal/app/cycle.go's own shutdown-safety doc).
+var closeDrainTimeout = 5 * time.Second
+
+// BackupService is the one exported type provider code depends on. It is
+// deliberately opaque: every field that decides how it behaves is
+// unexported, so a caller outside core/ can only ever drive it through the
+// methods below, never by reaching past them into an internal.Service,
+// a *state.Journal or a *config.Config it could not even name.
+type BackupService struct {
+	inner    *app.Service
+	journal  *state.Journal
+	revision string
+	logger   *obs.Logger
+
+	// ctx/cancel give executeRunCycle a lifetime independent of both
+	// context.Background() and any single request's context: it is
+	// canceled by Close, so a process shutdown can actually ask an
+	// in-flight RunCycle to stop starting new backup sets (see
+	// internal/app/cycle.go's own shutdown-safety doc), something
+	// context.Background() alone could never do. See executeRunCycle's own
+	// doc for why the journal writes that record an operation's outcome
+	// deliberately do NOT use this context.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// wg tracks every executeRunCycle goroutine currently running, so
+	// Close can wait for it to actually finish (bounded by
+	// closeDrainTimeout) instead of returning, and closing the journal,
+	// while one is still writing to it.
+	wg sync.WaitGroup
+
+	// runOnce enforces this package's single-flight invariant: at most one
+	// executeRunCycle call may be inside internal/app.Service.RunCycle at a
+	// time, restoring on the API side the "no concurrent pass over the
+	// same backup set" guarantee cycle.go's own doc says RunCycle provides
+	// "by construction, not by a lock this package has to remember to
+	// take" — a guarantee that held only as long as the CLI, calling
+	// RunCycle once per process invocation, was RunCycle's sole caller.
+	// SubmitRunCycle's goroutine-per-operation is the first caller in this
+	// codebase that can call it concurrently with itself; see that
+	// method's own doc for why a second submission while this is held is
+	// rejected rather than queued.
+	runOnce sync.Mutex
+}
+
+// New builds a BackupService from already-constructed dependencies. This
+// is the constructor core/'s own tests use (they can build a
+// *config.Config and a *state.Journal directly, exactly as
+// internal/app's own tests do); apps/common/webhost, which cannot
+// construct any of those, uses Open instead.
+//
+// tr and logger may be nil, with the same meaning internal/app.New already
+// documents: a nil Transport is only safe for a Config with nothing that
+// ever needs to reach a remote, and a nil logger is a silent no-op — every
+// obs.Logger method used in this package (operations.go) is a safe no-op
+// on a nil *obs.Logger, exactly as internal/obs's own package doc
+// promises.
+//
+// New also sweeps journal for any operation left at "queued" or "running"
+// by a previous process using it (see
+// internal/state.Journal.FailInterruptedOperations's own doc): a fresh
+// BackupService has made no SubmitRunCycle call of its own yet, so any row
+// in either status cannot belong to this instance, and nothing would ever
+// move it out of that state otherwise.
+func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
+	ctx, cancel := context.WithCancel(context.Background())
+	b := &BackupService{
+		inner:    app.New(cfg, journal, tr, logger),
+		journal:  journal,
+		revision: computeConfigRevision(cfg),
+		logger:   logger,
+		ctx:      ctx,
+		cancel:   cancel,
+	}
+
+	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {
+		logger.Error(context.Background(), "sweep-interrupted-operations", err)
+	}
+
+	return b
+}
+
+// OpenConfigAndJournal loads and validates configPath and opens (migrating)
+// its configured SQLite journal at cfg.State.Database. This is the
+// bootstrap sequence Open (below) and cmd/backup-manager's own openService
+// helper both need — the exact same "read this config file, open/migrate
+// this journal" side effects, previously implemented twice — factored out
+// so it exists in exactly one place; see this package's introducing PR
+// description for why that duplication existed in the first place and
+// this issue's own review for why it stopped being acceptable.
+func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, error) {
+	cfg, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("service: load config: %w", err)
+	}
+
+	journal, err := state.Open(ctx, cfg.State.Database)
+	if err != nil {
+		return nil, nil, fmt.Errorf("service: open state: %w", err)
+	}
+
+	return cfg, journal, nil
+}
+
+// Open is the production constructor: it loads and validates configPath,
+// opens (and migrates) its configured SQLite journal (both via
+// OpenConfigAndJournal), and wires a real rclone transport, since a web
+// host has no narrower "read-only" use case the way some CLI subcommands
+// do — the API can always be asked to run a cycle.
+//
+// The returned cleanup func closes the journal; callers should always
+// `defer cleanup()` (or handle its error) once they are done with the
+// returned BackupService.
+func Open(ctx context.Context, configPath string) (*BackupService, func() error, error) {
+	cfg, journal, err := OpenConfigAndJournal(ctx, configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	svc := New(cfg, journal, rclone.New(), obs.New(os.Stdout, obs.LevelInfo))
+	return svc, svc.Close, nil
+}
+
+// Close cancels this BackupService's own execution context (see the ctx
+// field's doc) and waits, up to closeDrainTimeout, for any in-flight
+// executeRunCycle goroutine to finish before releasing the underlying
+// journal handle. Waiting first, rather than closing the journal
+// immediately, is what keeps a RunCycle that is already past its last
+// ctx.Err() check from hitting a closed database mid-write; timing out
+// instead of waiting forever is what keeps a process shutdown from hanging
+// on an operation that ignores cancellation for longer than that (a stuck
+// remote, for example) — Close proceeds anyway once the timeout elapses,
+// though the goroutine itself, unkillable in Go, keeps running until it
+// eventually returns on its own.
+func (b *BackupService) Close() error {
+	b.cancel()
+
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(closeDrainTimeout):
+		b.logger.Error(context.Background(), "close",
+			fmt.Errorf("timed out after %s waiting for an in-flight operation to finish", closeDrainTimeout))
+	}
+
+	return b.journal.Close()
+}
+
+// ConfigRevision identifies the exact configuration content this
+// BackupService was built from. It changes if, and only if, the
+// configuration's content changes: two BackupService instances built from
+// byte-for-byte identical config report the same revision, and any
+// difference in the loaded configuration (a source added, a field edited)
+// changes it. SubmitRunCycle compares a caller-supplied revision against
+// this to refuse acting against a configuration the caller no longer has
+// an accurate picture of (docs/EPIC-B-multi-nas.md §14, §15.6's
+// RETENTION_PLAN_STALE precedent applied to configuration generally).
+//
+// This has no persistence or reload story of its own: it is computed once,
+// at construction time, from whatever *config.Config the caller handed
+// New (or Open loaded from disk). Backup-set CRUD and any other API
+// surface that would actually let a configuration change while a process
+// keeps running are out of this issue's scope (see this package's
+// introducing PR description); today, two BackupService values report
+// different revisions because they were each built from a different
+// config, for example across a restart with an edited YAML file, or, in a
+// test, deliberately, to prove the conflict check itself.
+func (b *BackupService) ConfigRevision() string {
+	return b.revision
+}
+
+// computeConfigRevision hashes a canonical YAML encoding of cfg. YAML
+// (rather than, say, fmt.Sprintf("%+v", cfg)) is used because
+// internal/config's own struct tags are already YAML tags with a fixed,
+// declaration-order field layout and no maps, so encoding it is
+// deterministic without this package needing to canonicalize anything
+// itself, and because it is already an internal/config-side dependency
+// this package pulls in for free (LoadAndValidate uses the same library),
+// not a new one.
+func computeConfigRevision(cfg *config.Config) string {
+	b, err := yaml.Marshal(cfg)
+	if err != nil {
+		// cfg is a plain data structure (strings, ints, durations, slices
+		// of the same): yaml.Marshal failing here would mean
+		// internal/config grew a field this package's assumption no
+		// longer holds for, which is a programmer error to notice loudly,
+		// not a runtime condition to paper over with a fallback revision
+		// that would silently never change.
+		panic(fmt.Sprintf("service: computing config revision: %v", err))
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// Version is the plain, provider-agnostic shape of "what is this binary"
+// (docs/EPIC-B-multi-nas.md §15.1's GET /api/v1/system/version). Field
+// names are chosen so nothing here spells "rclone" or "sqlite": that is
+// enforced by a contract test at the HTTP layer
+// (apps/common/webhost), but choosing neutral names here is what makes
+// that test pass by construction rather than by the HTTP layer having to
+// rename fields defensively.
+type Version struct {
+	CoreVersion   string
+	Commit        string
+	GoVersion     string
+	EngineVersion string
+}
+
+// BuildVersion wraps internal/app.BuildVersionInfo, translating its shape
+// into Version. It is a package-level function, not a BackupService
+// method, because it needs no instance state — exactly like
+// BuildVersionInfo itself.
+func BuildVersion(binaryVersion, commit string) Version {
+	info := app.BuildVersionInfo(binaryVersion, commit)
+	return Version{
+		CoreVersion:   info.BinaryVersion,
+		Commit:        info.Commit,
+		GoVersion:     info.GoVersion,
+		EngineVersion: info.RcloneVersion,
+	}
+}
+
+// now is a seam over time.Now so a future test can freeze the clock this
+// package reads for operation timestamps; nothing currently overrides it.
+var now = func() time.Time { return time.Now().UTC() }

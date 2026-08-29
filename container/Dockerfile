@@ -60,6 +60,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # paths.
 COPY core/cmd/ ./cmd/
 COPY core/internal/ ./internal/
+COPY core/service/ ./service/
 COPY core/migrations/ ./migrations/
 
 # Cross-compiled for the target platform requested by `docker buildx build
