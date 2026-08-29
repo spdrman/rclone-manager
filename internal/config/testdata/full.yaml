@@ -34,6 +34,14 @@ sources:
             executable: /usr/local/bin/validate-postgres-backup
             timeout: 10m
 
+        revalidation:
+          interval: 720h
+          max_per_cycle: 5
+          hash: true
+          command:
+            executable: /usr/local/bin/validate-postgres-backup
+            timeout: 10m
+
 retention:
   timezone: America/Vancouver
   week_starts_on: monday

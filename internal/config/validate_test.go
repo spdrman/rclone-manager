@@ -549,6 +549,111 @@ func TestValidationCommand(t *testing.T) {
 	})
 }
 
+func TestRevalidationDisabledByDefault(t *testing.T) {
+	cfg := validConfig()
+	if cfg.Sources[0].BackupSets[0].Revalidation != (Revalidation{}) {
+		t.Fatalf("validConfig() fixture already sets Revalidation, want the zero value for this test: %#v", cfg.Sources[0].BackupSets[0].Revalidation)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a config with no revalidation block was rejected: %v", err)
+	}
+}
+
+func TestRevalidationRequiresIntervalAndScopeWhenEnabled(t *testing.T) {
+	t.Run("hash alone requires interval and max_per_cycle", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = Revalidation{Hash: true}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("hash: true with no interval or max_per_cycle was accepted")
+		}
+	})
+	t.Run("command alone requires interval and max_per_cycle", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = Revalidation{
+			Command: &Command{Executable: "/usr/local/bin/restore-test", Timeout: Duration(5 * time.Minute)},
+		}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("a command with no interval or max_per_cycle was accepted")
+		}
+	})
+	t.Run("interval and max_per_cycle with neither hash nor command rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = Revalidation{Interval: Duration(24 * time.Hour), MaxPerCycle: 5}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("interval/max_per_cycle set with neither hash nor command was accepted")
+		}
+	})
+	t.Run("fully specified hash-only revalidation is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = Revalidation{
+			Interval:    Duration(720 * time.Hour),
+			MaxPerCycle: 10,
+			Hash:        true,
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a fully specified hash-only revalidation block was rejected: %v", err)
+		}
+	})
+	t.Run("zero max_per_cycle rejected once enabled", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = Revalidation{Interval: Duration(24 * time.Hour), Hash: true}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("max_per_cycle left at zero was accepted once revalidation was enabled")
+		}
+	})
+	t.Run("negative max_per_cycle rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = Revalidation{Interval: Duration(24 * time.Hour), MaxPerCycle: -1, Hash: true}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("a negative max_per_cycle was accepted")
+		}
+	})
+}
+
+func TestRevalidationCommand(t *testing.T) {
+	base := func() Revalidation {
+		return Revalidation{
+			Interval:    Duration(720 * time.Hour),
+			MaxPerCycle: 5,
+			Command:     &Command{Executable: "/usr/local/bin/restore-test", Timeout: Duration(5 * time.Minute)},
+		}
+	}
+	t.Run("fully specified command is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Revalidation = base()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a fully specified restore-test command was rejected: %v", err)
+		}
+	})
+	t.Run("empty executable rejected", func(t *testing.T) {
+		cfg := validConfig()
+		r := base()
+		r.Command.Executable = ""
+		cfg.Sources[0].BackupSets[0].Revalidation = r
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("an empty command executable was accepted")
+		}
+	})
+	t.Run("relative executable rejected", func(t *testing.T) {
+		cfg := validConfig()
+		r := base()
+		r.Command.Executable = "restore-test"
+		cfg.Sources[0].BackupSets[0].Revalidation = r
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("a relative command executable was accepted")
+		}
+	})
+	t.Run("zero timeout rejected", func(t *testing.T) {
+		cfg := validConfig()
+		r := base()
+		r.Command.Timeout = 0
+		cfg.Sources[0].BackupSets[0].Revalidation = r
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("a zero command timeout was accepted")
+		}
+	})
+}
+
 // --- top level ---
 
 func TestPollIntervalMustBePositive(t *testing.T) {

@@ -139,6 +139,7 @@ func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, se
 	}
 
 	v.validateValidation(path+".validation", &bs.Validation)
+	v.validateRevalidation(path+".revalidation", &bs.Revalidation)
 }
 
 func (v *validator) validateRemote(path string, r *Remote) {
@@ -223,6 +224,54 @@ func (v *validator) validateValidation(path string, val *Validation) {
 	// gating on forever; there's no safe default duration to guess here
 	// either, so this is required whenever a command is configured at all.
 	if val.Command.Timeout.Duration() <= 0 {
+		v.addf("%s: timeout must be set to a positive duration", cmdPath)
+	}
+}
+
+// validateRevalidation checks Phase 4's scheduled-revalidation block.
+//
+// Revalidation is opt-in: the zero value (Hash false, Command nil) means
+// disabled, and is accepted with nothing further to check, exactly the
+// same "no key present, nothing enabled" shape validateValidation already
+// gives a nil Command. Once either Hash or Command turns it on, Interval
+// and MaxPerCycle both become required with no default: there is no
+// universally safe cadence or batch size to guess for re-reading, and
+// potentially re-hashing, an unknown amount of already-verified data on a
+// NAS, so an unset value is refused rather than silently treated as
+// "revalidate nothing" (zero) or "revalidate everything, every cycle"
+// (unbounded), either of which would be a guess this package has no basis
+// for making.
+func (v *validator) validateRevalidation(path string, r *Revalidation) {
+	enabled := r.Hash || r.Command != nil
+
+	if !enabled {
+		if r.Interval != 0 || r.MaxPerCycle != 0 {
+			v.addf("%s: interval and max_per_cycle are only used when hash or command is set; remove them", path)
+		}
+		return
+	}
+
+	if r.Interval.Duration() <= 0 {
+		v.addf("%s: interval must be set to a positive duration when hash or command is configured", path)
+	}
+	if r.MaxPerCycle <= 0 {
+		v.addf("%s: max_per_cycle must be a positive integer when hash or command is configured", path)
+	}
+
+	if r.Command == nil {
+		return
+	}
+	cmdPath := path + ".command"
+	if r.Command.Executable == "" {
+		v.addf("%s: executable must not be empty", cmdPath)
+	} else if !filepath.IsAbs(r.Command.Executable) {
+		// Mirrors validateValidation's identical rule on Validation.Command:
+		// a restore-test hook has to resolve to exactly one binary
+		// regardless of the process's working directory or $PATH at the
+		// moment a scheduled pass happens to run it.
+		v.addf("%s: executable %q must be an absolute path", cmdPath, r.Command.Executable)
+	}
+	if r.Command.Timeout.Duration() <= 0 {
 		v.addf("%s: timeout must be set to a positive duration", cmdPath)
 	}
 }
