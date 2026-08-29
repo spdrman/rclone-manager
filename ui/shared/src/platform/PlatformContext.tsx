@@ -1,30 +1,43 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import type { AuthContext as AuthCtx, PlatformBridge } from "@shared/types/platform";
 import { graph, useCausl } from "@shared/state/graph";
 import { authLoadingNode, authNode, bridgeNode, capabilityCopyNode } from "@shared/state/platformNodes";
 import { describeCapabilities } from "./capabilities";
 
+/** Guards against the stale-response race: two auth fetches (the mount
+ *  effect and a manual refreshAuth(), or two refreshAuth() calls in a row)
+ *  can resolve out of order, and only the response to the LAST one issued
+ *  is allowed to land. A plain module-level counter is enough — there is
+ *  only ever one auth per app, unlike resource.ts's per-node WeakMap. */
+let authRequestSeq = 0;
+
 /** Runs (and re-runs, on refreshAuth()) the one auth fetch, committing its
  *  three phases (loading, resolved-or-failed, settled) to the graph. Kept
  *  as a plain function, not a hook, so `refreshAuth()` can call it directly
- *  instead of going through a `nonce` counter and a dependent effect. */
+ *  instead of going through a `nonce` counter and a dependent effect.
+ *  `isLive` additionally gates on the calling PlatformProvider instance
+ *  still being mounted (the effect-cleanup case); `isCurrent` below folds
+ *  that together with "no newer refetchAuth call has been issued since". */
 function refetchAuth(bridge: PlatformBridge, isLive: () => boolean) {
+  const seq = ++authRequestSeq;
+  const isCurrent = () => isLive() && seq === authRequestSeq;
+
   graph.commit("platform/auth-loading", (tx) => tx.set(authLoadingNode, true));
 
   bridge
     .getAuthContext()
     .then((ctx) => {
-      if (isLive()) graph.commit("platform/auth-resolved", (tx) => tx.set(authNode, ctx));
+      if (isCurrent()) graph.commit("platform/auth-resolved", (tx) => tx.set(authNode, ctx));
     })
     .catch(() => {
-      if (isLive())
+      if (isCurrent())
         graph.commit("platform/auth-failed", (tx) =>
           tx.set(authNode, { authenticated: false, username: null, mode: "local-account" })
         );
     })
     .finally(() => {
-      if (isLive()) graph.commit("platform/auth-settled", (tx) => tx.set(authLoadingNode, false));
+      if (isCurrent()) graph.commit("platform/auth-settled", (tx) => tx.set(authLoadingNode, false));
     });
 }
 
@@ -38,10 +51,23 @@ export function PlatformProvider({
   // Committed synchronously during render, not in an effect: an effect
   // runs after children have already rendered once, so a child calling
   // usePlatform() on that first pass would see bridgeNode still `null`.
-  // Guarded by the read so a second render (StrictMode's double-invoke,
-  // or an unrelated re-render) with the same bridge is a no-op.
-  if (graph.read(bridgeNode) !== bridge) {
+  //
+  // Guarded against a local ref, NOT `graph.read(bridgeNode) !== bridge`:
+  // @causlts/core's `createCausl()` wraps every graph in an auto-adapt
+  // layer that does a live, in-place swap to a WASM backend once
+  // commit/subscriber/timing thresholds trip, and `graph.read()`'s
+  // reference stability is not contractually guaranteed to survive that
+  // (see useCausl.ts's read-identity comment). Comparing against it here
+  // would risk firing on every render post-swap, cascading a derived
+  // recompute and a re-render through every usePlatform() consumer while
+  // itself feeding the very commit-count stats that trigger the
+  // migration — exactly the trap useCausl.ts was written to avoid. A
+  // plain useRef never has that problem: it is this component's own
+  // local, ordinary React state, not a read from the graph.
+  const lastCommittedBridge = useRef<PlatformBridge | null>(null);
+  if (lastCommittedBridge.current !== bridge) {
     graph.commit("platform/bridge-mounted", (tx) => tx.set(bridgeNode, bridge));
+    lastCommittedBridge.current = bridge;
   }
 
   useEffect(() => {
@@ -71,13 +97,19 @@ export function usePlatform(): {
     throw new Error("usePlatform must be used inside <PlatformProvider>");
   }
 
-  return {
-    bridge,
-    auth,
-    authLoading,
-    capabilityCopy,
-    refreshAuth: () => refetchAuth(bridge, () => true)
-  };
+  const refreshAuth = useCallback(() => refetchAuth(bridge, () => true), [bridge]);
+
+  // Referential stability restored (it existed before the causl
+  // migration, via useMemo, and was lost when this was rewritten): a
+  // fresh object and a fresh refreshAuth closure on every render is
+  // invisible today, but it is a live trap for a future page author who
+  // puts refreshAuth in a useEffect/useCallback dependency array per
+  // standard React hook hygiene, and gets an infinite refetch loop with
+  // no reason to suspect usePlatform() itself.
+  return useMemo(
+    () => ({ bridge, auth, authLoading, capabilityCopy, refreshAuth }),
+    [bridge, auth, authLoading, capabilityCopy, refreshAuth]
+  );
 }
 
 export function useCapabilities() {
