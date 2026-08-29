@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -23,6 +24,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/spdrman/rclone-manager/internal/transport"
 )
 
 // User is the fixed username created inside the container.
@@ -159,6 +162,63 @@ func Start(t *testing.T) *Fixture {
 	waitForSSHReady(t, f)
 
 	return f
+}
+
+// Source builds the transport.Source a real Adapter needs to reach this
+// fixture, rooted at root (a path relative to UploadDir, "" for the upload
+// directory itself). Every caller building this by hand duplicated the same
+// seven fields; centralising it here means a future field added to
+// transport.Source (or to how this fixture authenticates) only needs
+// updating in one place.
+//
+// root is joined onto "upload", the fixed writable subdirectory this
+// fixture's container exposes UploadDir as (see the atmoz/sftp arguments
+// in Start: "...:upload"): the SFTP account's home directory is the
+// chroot root itself, and UploadDir is not it, so a caller that passed
+// root straight through as Root would have Adapter list, stat, copy and
+// delete against the wrong part of the chroot entirely (including, for
+// root == "", files this fixture mounts for its own purposes outside
+// upload/, such as the authorized_keys directory), not the sandbox this
+// method's caller actually seeded through UploadDir.
+func (f *Fixture) Source(id, root string) transport.Source {
+	return transport.Source{
+		ID:         id,
+		Type:       "sftp",
+		Host:       f.Host,
+		Port:       f.Port,
+		User:       f.User,
+		KeyFile:    f.KeyFile,
+		KnownHosts: f.KnownHostsFile,
+		Root:       path.Join("upload", root),
+	}
+}
+
+// Deny arranges for the object at name (already written under UploadDir) to
+// exist but be unreadable by the fixture's SFTP user, and returns a cleanup
+// func that restores access. It implements the same shape
+// internal/transport/contract.Fixtures.Deny documents, so an SFTP
+// contract-style test can use it directly.
+//
+// Unlike a local-filesystem Deny (see transport_test.go's localFixtures),
+// this needs no "running as root" guard: chmod 0 denies read access to
+// whoever the SFTP session authenticates as inside the container
+// (containerUID, a plain, non-root, non-CAP_DAC_OVERRIDE user), regardless
+// of which user owns the file or what euid the host test process itself
+// happens to run under.
+func (f *Fixture) Deny(t *testing.T, name string) (cleanup func()) {
+	t.Helper()
+	full := filepath.Join(f.UploadDir, filepath.FromSlash(name))
+	info, err := os.Stat(full)
+	if err != nil {
+		t.Fatalf("sftpfixture: Deny: stat %s before chmod: %v", full, err)
+	}
+	if err := os.Chmod(full, 0o000); err != nil {
+		t.Fatalf("sftpfixture: Deny: chmod %s: %v", full, err)
+	}
+	original := info.Mode().Perm()
+	return func() {
+		_ = os.Chmod(full, original)
+	}
 }
 
 // testsRoot finds the tests/ directory regardless of the caller's working
