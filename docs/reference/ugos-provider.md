@@ -1,11 +1,37 @@
+> **This is a reference document, not an active EPIC.**
+>
+> It was written as a UGOS-only EPIC before the project settled on a
+> provider-neutral core with thin platform adapters. That decision lives in
+> `docs/EPIC-B-multi-nas.md`, which is the active EPIC and which covers UGOS as
+> one provider among six.
+>
+> I kept this rather than deleting it because it is still the deepest UGOS
+> material we have. It carries substantially more detail on UPK packaging,
+> `project.yaml`, `ugcli`, the JSSDK bootstrap and App Center readiness than the
+> multi-provider spec has room for, and that detail is needed the moment anyone
+> actually builds the UGOS app.
+>
+> Read it as backing material for these EPIC B issues, not as work in its own
+> right: B1.2 (developer environment and the minimal UPK proof), B1.3 (UGOS
+> authentication and the trusted-proxy boundary), and B4.2 (the UGOS provider
+> app and its UPK). Where the two documents disagree, `docs/EPIC-B-multi-nas.md`
+> wins, because it is the one the issues are filed against.
+>
+> Two things in the Status block below were already stale when this landed and I
+> have corrected them in place: the repository and the implementation root. The
+> rest of the document is unedited.
+
+---
+
 # EPIC: UGOS Pro UI, UPK Packaging, and Headless Docker Distribution for Backup Manager — Adversarial Consensus + Full TDD Revision
 
 ## Status
 
-**Type:** EPIC / Detailed implementation specification  
-**Repository:** `iasbuilt/iac`  
-**Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager — UI-Ready Architecture`  
-**Primary implementation root:** `tools/backup-manager/`  
+**Type:** Reference material for EPIC B's UGOS provider work  
+**Repository:** `spdrman/rclone-manager`  
+**Parent / predecessor EPIC:** `Embedded-rclone NAS Backup Lifecycle Manager` (EPIC A, complete)  
+**Active EPIC:** `docs/EPIC-B-multi-nas.md`  
+**Primary implementation root:** repository root (the `tools/backup-manager/` path this originally assumed was corrected when EPIC A moved into its own repository)  
 **Target platform:** UGREEN NAS / UGOS Pro  
 **Primary UI distribution:** UGOS Pro Docker Application packaged as `.UPK`  
 **Secondary distribution:** headless Docker image/package for terminal operation  
