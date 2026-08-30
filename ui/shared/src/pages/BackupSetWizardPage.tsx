@@ -165,6 +165,8 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
     };
   }, [api]);
 
+  const selectedValidator = (validatorCatalog ?? []).find((v) => v.id === validatorId);
+
   const [hasResetOnMount, setHasResetOnMount] = useState(false);
   if (!hasResetOnMount) {
     resetWizardAnswers();
@@ -732,19 +734,29 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                     disabled={validatorCatalogFailed || validatorCatalog === null}
                     onChange={(e) => setValidatorId(e.target.value)}
                   >
-                    <option value="">None — transfer and checksum verification only</option>
+                    <option value="">None (transfer and checksum verification only)</option>
                     {(validatorCatalog ?? []).map((v) => (
                       <option key={v.id} value={v.id}>
-                        {v.summary}
+                        {v.id}
                       </option>
                     ))}
                   </select>
+                  {/* The option labels are the ids themselves, since an
+                      id is what this actually sends and what an operator
+                      will see again in config.yaml. The chosen entry's
+                      own sentence goes here instead, where there is room
+                      for it. */}
                   <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                     {validatorCatalogFailed
-                      ? "Could not load the available validators — save without one, or retry after reloading."
+                      ? "Could not load the available validators. Save without one, or retry after reloading."
                       : validatorCatalog === null
                         ? "Loading the available validators…"
-                        : "Runs against every artifact after it is transferred and checksummed. A failure quarantines the artifact and leaves the remote copy in place."}
+                        : (selectedValidator?.summary ??
+                          "No application validator: transfer and checksum verification only.")}
+                  </span>
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                    A validator runs against every artifact once it is transferred and checksummed. Rejecting one
+                    quarantines it and leaves the remote copy in place.
                   </span>
                 </label>
               </div>
@@ -763,7 +775,15 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                 <Summary label="Source" lines={[source.host, remoteFolder]} />
                 <Summary label="Destination" lines={[localDestination]} />
                 <Summary label="Retention" lines={["7 daily", "13 weekly", "12 monthly"]} />
-                <Summary label="Validation" lines={["SHA-256", "transfer verify", completionSummaryLabel(completion)]} />
+                <Summary
+                  label="Validation"
+                  lines={[
+                    "SHA-256",
+                    "transfer verify",
+                    validatorId || "no application validator",
+                    completionSummaryLabel(completion)
+                  ]}
+                />
                 <Summary
                   label="Host trust"
                   lines={[hostKeyChanged ? "Host key changed — blocked" : hostTrusted ? "Trusted" : "Not yet trusted"]}
