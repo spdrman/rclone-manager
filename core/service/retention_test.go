@@ -1007,3 +1007,163 @@ func TestApplyRetentionPlan_ConfigurationChangedBetweenPreviewAndApplyIsStale(t 
 		t.Errorf("control failed: Lstat(%s) after applying the re-previewed plan: err=%v, want a not-exist error", aPath, statErr)
 	}
 }
+
+// retentionChain is retentionOn's generalized counterpart (issue #156,
+// B3.8): an explicit FR-18 tier chain of any length, with last-known-good
+// protection live. The three legacy scalars stay zero, which
+// config.ValidateRetention requires alongside an explicit chain.
+func retentionChain(tiers ...config.RetentionTier) config.Retention {
+	on := true
+	return config.Retention{
+		Timezone: "UTC", WeekStartsOn: "monday",
+		Tiers:                tiers,
+		ProtectLastKnownGood: &on,
+	}
+}
+
+// TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual is issue
+// #156's INTEGRATION checklist item: a real multi-tier chain reaching past
+// monthly, driven all the way through PreviewRetention and
+// ApplyRetentionPlan against the genuine internal/retention decision path,
+// confirming the webhost API's verdicts[].tiers names every tier that
+// selected each artifact.
+//
+// The chain is deliberately non-contiguous (daily, then semi-annual, then
+// annual, with nothing covering the months between them), because a
+// contiguous chain would keep every artifact that has a neighbour and
+// prove nothing about Rom's "everything in-between and outside that policy
+// would be deleted". The two artifacts sharing one year bucket are the
+// gap: the older one is a delete candidate that no tier reaches, and the
+// sub-test below is its positive control, showing the identical fixture
+// keeps it once a monthly tier is chained in.
+//
+// Like the mixed-tier test above, this places artifacts relative to the
+// real wall clock (internal/app.Service.now, which this boundary does not
+// let a caller override) rather than to fixed calendar dates, anchoring on
+// the calendar year and half-year starts the tiers themselves bucket by
+// and leaving whole months of slack around every window edge.
+func TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC()
+	yearStart := time.Date(base.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+	halfStart := yearStart
+	if base.Month() >= time.July {
+		halfStart = time.Date(base.Year(), 7, 1, 0, 0, 0, 0, time.UTC)
+	}
+
+	// daily reaches back 3 days; semi_annual reaches back 4 calendar
+	// half-years (18 months before the current half's start); annual
+	// reaches back 10 calendar years.
+	daily := config.RetentionTier{Name: "daily", Granularity: config.GranularityDay, Keep: 3}
+	semiAnnual := config.RetentionTier{Name: "semi_annual", Granularity: config.GranularityHalfYear, Keep: 4}
+	annual := config.RetentionTier{Name: "annual", Granularity: config.GranularityYear, Keep: 10}
+
+	newest := seedCompleteArtifact(t, ctx, journal, bs, "newest.dump", base, "newest")
+	// 45 days before the current half-year began: firmly inside the
+	// previous half-year (six months long), firmly inside semi_annual's
+	// 18-month reach, and far outside daily's three days.
+	seedCompleteArtifact(t, ctx, journal, bs, "prev-half.dump", halfStart.AddDate(0, 0, -45), "prev-half")
+	// Two artifacts in the calendar year three years back, days 100 and
+	// 300 of it, so both are unambiguously inside that year and inside the
+	// annual window while being far outside semi_annual's. Only the newer
+	// one wins the year's bucket.
+	gapYearStart := yearStart.AddDate(-3, 0, 0)
+	seedCompleteArtifact(t, ctx, journal, bs, "gap-loser.dump", gapYearStart.AddDate(0, 0, 100), "gap-loser")
+	seedCompleteArtifact(t, ctx, journal, bs, "gap-winner.dump", gapYearStart.AddDate(0, 0, 300), "gap-winner")
+	// Twelve years back: past the end of the longest tier in the chain.
+	seedCompleteArtifact(t, ctx, journal, bs, "ancient.dump", yearStart.AddDate(-12, 0, 0), "ancient")
+
+	svc := New(retentionTestConfig(bs, retentionChain(daily, semiAnnual, annual)), journal, nil, nil)
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	tiersByArtifact := map[string][]string{}
+	actionByArtifact := map[string]string{}
+	for _, v := range plan.Verdicts {
+		tiersByArtifact[v.Artifact] = v.Tiers
+		actionByArtifact[v.Artifact] = v.Action
+	}
+
+	// The newest artifact wins its day, its half-year and its year, and
+	// carries FR-19's protection on top: a four-way union reported through
+	// the same []string the webhost handler sends as verdicts[].tiers.
+	for _, want := range []string{"DAILY", "SEMI_ANNUAL", "ANNUAL", "LAST_KNOWN_GOOD"} {
+		if !hasTier(tiersByArtifact[newest.Name], want) {
+			t.Errorf("%s tiers = %v, want it to include %s", newest.Name, tiersByArtifact[newest.Name], want)
+		}
+	}
+	if !hasTier(tiersByArtifact["prev-half.dump"], "SEMI_ANNUAL") {
+		t.Errorf("prev-half.dump tiers = %v, want SEMI_ANNUAL", tiersByArtifact["prev-half.dump"])
+	}
+	if hasTier(tiersByArtifact["prev-half.dump"], "DAILY") {
+		t.Errorf("prev-half.dump tiers = %v, want no DAILY: it is far outside the three-day window", tiersByArtifact["prev-half.dump"])
+	}
+	if got := tiersByArtifact["gap-winner.dump"]; len(got) != 1 || got[0] != "ANNUAL" {
+		t.Errorf("gap-winner.dump tiers = %v, want exactly [ANNUAL]", got)
+	}
+
+	// The two artifacts nothing in the chain reaches.
+	for _, name := range []string{"gap-loser.dump", "ancient.dump"} {
+		if actionByArtifact[name] != "DELETE" {
+			t.Errorf("%s action = %q with tiers %v, want DELETE: no configured tier covers it", name, actionByArtifact[name], tiersByArtifact[name])
+		}
+	}
+	for _, name := range []string{"newest.dump", "prev-half.dump", "gap-winner.dump"} {
+		if actionByArtifact[name] != "KEEP" {
+			t.Errorf("%s action = %q, want KEEP", name, actionByArtifact[name])
+		}
+	}
+	if plan.KeepCount != 3 || plan.DeleteCount != 2 {
+		t.Errorf("KeepCount/DeleteCount = %d/%d, want 3/2 (plan=%+v)", plan.KeepCount, plan.DeleteCount, plan)
+	}
+
+	t.Run("control: chaining a monthly tier in rescues the gap artifact", func(t *testing.T) {
+		// Same fixture, same instant, one more link: a monthly tier
+		// reaching back far enough to cover the gap year. If gap-loser
+		// stayed a delete candidate here, the DELETE assertions above
+		// would prove nothing about the gap, only that the fixture is out
+		// of reach of everything.
+		monthly := config.RetentionTier{Name: "monthly", Granularity: config.GranularityMonth, Keep: 60}
+		control := New(retentionTestConfig(bs, retentionChain(daily, monthly, semiAnnual, annual)), journal, nil, nil)
+		got, err := control.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+		if err != nil {
+			t.Fatalf("PreviewRetention (control): %v", err)
+		}
+		for _, v := range got.Verdicts {
+			if v.Artifact != "gap-loser.dump" {
+				continue
+			}
+			if v.Action != "KEEP" || !hasTier(v.Tiers, "MONTHLY") {
+				t.Fatalf("control: gap-loser.dump = %s %v, want KEEP by MONTHLY", v.Action, v.Tiers)
+			}
+			return
+		}
+		t.Fatal("control: no verdict for gap-loser.dump")
+	})
+
+	// Applying the non-contiguous plan removes exactly the two gap and
+	// out-of-range artifacts, and nothing else.
+	applied, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
+	if err != nil {
+		t.Fatalf("ApplyRetentionPlan: %v", err)
+	}
+	if applied.DeleteCount != 2 || applied.KeepCount != 3 {
+		t.Errorf("applied = %+v, want DeleteCount=2, KeepCount=3", applied)
+	}
+	for _, name := range []string{"gap-loser.dump", "ancient.dump"} {
+		if _, statErr := os.Lstat(filepath.Join(bs.LocalPath, name)); !os.IsNotExist(statErr) {
+			t.Errorf("%s survived the apply: Lstat err = %v, want IsNotExist", name, statErr)
+		}
+	}
+	for _, name := range []string{"newest.dump", "prev-half.dump", "gap-winner.dump"} {
+		if _, statErr := os.Lstat(filepath.Join(bs.LocalPath, name)); statErr != nil {
+			t.Errorf("%s was deleted despite a KEEP verdict: %v", name, statErr)
+		}
+	}
+}
