@@ -62,16 +62,24 @@ const DefaultShutdownGrace = 10 * time.Second
 // ctx, or to their own failure (see the three-way select below). That is
 // what "failure of the HTTP listener MUST NOT bypass lifecycle safety"
 // (§9.3) actually requires: if the HTTP listener dies for its own reasons
-// (a bind error, say), that must not itself cancel ctx and tear down the
-// scheduler out from under an in-flight backup - but it also must not
-// leave the process running with no HTTP surface at all forever, so this
-// path DOES still initiate shutdown once noticed. The scheduler's own
-// failure gets the exact same treatment, symmetrically: this used to be
-// missing (moved here from apps/generic/cmd/backup-manager-web's former
-// cmdServe, which only raced ctx.Done() against the HTTP listener's own
-// error channel - a scheduler that failed on its own, independent of ctx
-// cancellation or a listener failure, was invisible until some other
-// event eventually triggered shutdown, or forever if nothing else did).
+// (a bind error, say), that must not itself cancel the caller's ctx and
+// tear down the scheduler out from under an in-flight backup - but it
+// also must not leave the scheduler goroutine running forever past
+// RunEngine's own return, either. RunEngine resolves that by deriving
+// schedCtx, a child of ctx, and handing that (not ctx itself) to
+// scheduler.RunOnSchedule: the moment the primary select below fires, on
+// every branch, RunEngine cancels schedCtx itself, so the scheduler loop
+// gets asked to stop before RunEngine returns even when ctx never was and
+// never will be canceled by anyone else. The caller's own ctx is never
+// touched, so a caller reusing ctx after a non-fatal-looking error is
+// still safe: schedCtx, not ctx, is what stops the scheduler here. The
+// scheduler's own failure gets the exact same treatment, symmetrically:
+// this used to be missing (moved here from
+// apps/generic/cmd/backup-manager-web's former cmdServe, which only raced
+// ctx.Done() against the HTTP listener's own error channel - a scheduler
+// that failed on its own, independent of ctx cancellation or a listener
+// failure, was invisible until some other event eventually triggered
+// shutdown, or forever if nothing else did).
 //
 // scheduler may be nil (e.g. a UI-host-only container with no
 // BackupService of its own, apps/generic's serve-ui) - RunEngine then
@@ -86,10 +94,20 @@ func RunEngine(ctx context.Context, httpServer *http.Server, scheduler Scheduler
 	serverErrCh := make(chan error, 1)
 	go func() { serverErrCh <- httpServer.ListenAndServe() }()
 
+	// schedCtx is the scheduler's own child of ctx, so RunEngine can stop
+	// the scheduler loop on every exit path without ever canceling the
+	// caller's ctx. The defer is a safety net (and keeps `go vet`'s
+	// lostcancel check happy); the explicit call right after the primary
+	// select below is what actually matters, since it lets the scheduler
+	// notice cancellation immediately instead of only once RunEngine's
+	// caller eventually cancels ctx or the process exits.
+	schedCtx, cancelSched := context.WithCancel(ctx)
+	defer cancelSched()
+
 	var schedulerErrCh chan error
 	if scheduler != nil {
 		schedulerErrCh = make(chan error, 1)
-		go func() { schedulerErrCh <- scheduler.RunOnSchedule(ctx, scheduler.PollInterval()) }()
+		go func() { schedulerErrCh <- scheduler.RunOnSchedule(schedCtx, scheduler.PollInterval()) }()
 	}
 
 	var exitErr error
@@ -113,6 +131,13 @@ func RunEngine(ctx context.Context, httpServer *http.Server, scheduler Scheduler
 			exitErr = fmt.Errorf("scheduler: %w", err)
 		}
 	}
+	// Ask the scheduler to stop now, unconditionally, regardless of which
+	// branch above fired - including the serverErrCh branch, where ctx
+	// itself is deliberately left uncanceled (see the doc comment above).
+	// Without this call, an HTTP-listener failure would leave the
+	// scheduler goroutine with nothing able to stop it, running past
+	// RunEngine's own return.
+	cancelSched()
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancelShutdown()

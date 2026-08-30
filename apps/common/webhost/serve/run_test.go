@@ -15,6 +15,7 @@
 package serve_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -169,6 +170,61 @@ func TestRunEngine_ServerErrorIsReported(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunEngine did not report the HTTP listener's own failure within 2s")
+	}
+}
+
+// TestRunEngine_ServerErrorCancelsScheduler is the PR #134 review's
+// mandatory finding, pinned as a regression test: an HTTP listener
+// failure must itself stop the scheduler loop before RunEngine returns,
+// not just report the listener's own error. Before the fix, RunEngine
+// handed the scheduler ctx directly, and ctx here is context.Background()
+// - never canceled by anyone - so the scheduler loop would run forever
+// past RunEngine's return. This test's fake scheduler only ever stops in
+// reaction to ctx.Done(), so it proves RunEngine derives and cancels a
+// context of its own for the scheduler on this path: if it didn't, the
+// scheduler would still be blocked when the shutdownGrace fallback times
+// out below, and RunEngine would report the timeout warning instead of
+// the scheduler's own (nil) result.
+func TestRunEngine_ServerErrorCancelsScheduler(t *testing.T) {
+	schedulerStopped := make(chan struct{})
+	scheduler := fakeScheduler{
+		pollInterval: time.Hour,
+		runFunc: func(ctx context.Context, _ time.Duration) error {
+			<-ctx.Done()
+			close(schedulerStopped)
+			return nil
+		},
+	}
+
+	// An invalid address makes net.Listen (inside ListenAndServe) fail
+	// synchronously, well before any real network I/O.
+	httpServer := serve.NewHTTPServer(":-1", http.NotFoundHandler())
+
+	var warnings bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- serve.RunEngine(context.Background(), httpServer, scheduler, testShutdownGrace, &warnings)
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RunEngine() = nil, want a non-nil error reporting the HTTP listener's failure")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunEngine did not return within 2s of the HTTP listener's own failure")
+	}
+
+	select {
+	case <-schedulerStopped:
+		// The scheduler noticed cancellation - RunEngine derived and
+		// canceled its own context for it rather than relying on ctx.
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduler was never stopped after the HTTP listener failed - RunEngine must cancel a scheduler-specific context on every primary-select branch, not just ctx.Done()")
+	}
+
+	if got := warnings.String(); got != "" {
+		t.Errorf("warnings = %q, want empty - the scheduler should have stopped promptly instead of hitting the shutdownGrace timeout", got)
 	}
 }
 
