@@ -101,29 +101,42 @@ func tokenFromRequest(r *http.Request) string {
 // HttpOnly (§3.6 - never readable by page JavaScript, so an XSS bug
 // cannot exfiltrate it) and SameSite=Strict (never sent on a cross-site
 // request, the first line of defense against CSRF alongside the
-// double-submit check in csrf.go). Secure is set only when the request
-// itself arrived over TLS (r.TLS != nil): docs/deployment.md does not
-// mandate TLS termination in front of this container (many LAN
-// deployments run plain HTTP behind their own reverse proxy, or none at
-// all), and an unconditional Secure flag would make the cookie silently
-// never take effect - and login therefore silently never work - on any
-// deployment that hasn't put TLS in front of it. A deployment that
-// terminates TLS gets Secure automatically; one that doesn't still gets a
-// working, HttpOnly, SameSite=Strict cookie rather than none at all.
-func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time) {
+// double-submit check in csrf.go). Secure is decided by requestIsSecure
+// (forwarded.go): true when the request itself arrived over TLS, or
+// (only when trustForwarded is set - see Config.TrustForwardedHeaders)
+// when the one verified reverse-proxy hop in front of this Service says
+// it did via X-Forwarded-Proto.
+//
+// # Why this can't just be r.TLS != nil
+//
+// apps/generic's two-container split means this Service's own handler
+// (the engine, `serve`) is, in production, never reached directly by a
+// browser - only by apps/generic/server.NewUI's reverse proxy
+// (`serve-ui`), over a plain HTTP internal Docker network connection.
+// r.TLS is therefore permanently nil here regardless of whether an
+// operator put real TLS in front of `serve-ui`'s own published port: a
+// bare r.TLS != nil check would silently make Secure impossible to ever
+// set to true in the shipped topology, defeating a deployment that did
+// everything right on its own end. docs/deployment.md does not mandate
+// TLS termination at all (many LAN deployments run plain HTTP
+// throughout), so Secure still correctly stays false in that case - this
+// is about not FALSELY forcing it false when TLS genuinely is in front of
+// the deployment, just not visible to this exact process.
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string, expiresAt time.Time, trustForwarded bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    token,
 		Path:     "/",
 		Expires:  expiresAt,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   requestIsSecure(r, trustForwarded),
 		SameSite: http.SameSiteStrictMode,
 	})
 }
 
 // clearSessionCookie expires the session cookie immediately, for logout.
-func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+// See setSessionCookie's own doc for why Secure isn't simply r.TLS != nil.
+func clearSessionCookie(w http.ResponseWriter, r *http.Request, trustForwarded bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    "",
@@ -131,7 +144,7 @@ func clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   r.TLS != nil,
+		Secure:   requestIsSecure(r, trustForwarded),
 		SameSite: http.SameSiteStrictMode,
 	})
 }

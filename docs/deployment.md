@@ -339,15 +339,45 @@ enrollment link straight to its own container log:
 backup-manager: no administrator account exists yet. Open http://localhost:8080/enroll?token=... to create one (valid 30 minutes, single use).
 ```
 
-(The printed host/port reflects `rclone-manager`'s own internal listener, not
-`web-ui`'s published one - open the link at `web-ui`'s own published port/host instead;
-the query token itself is what actually matters.) That token is required to complete
-`POST /api/v1/auth/enroll` — reaching the port is not enough to claim the account
-(§49.1) — and is invalidated the moment enrollment completes, or by the next process
-restart before it does. It travels as a URL query parameter, not a form field: neither
-`EnrollmentPage.tsx` nor the design canvas (`docs/design/Backup Manager.dc.html`) has
-one, so `ui/shared/src/api/client.ts` reads it off `window.location.search` and
-attaches it as the `X-Bootstrap-Token` header instead.
+`rclone-manager` has no published port of its own (see above), so its own `--listen`
+address is never something an operator could actually open - printing a link against
+that address was a real bug fixed as part of issue #119's review: `--public-base-url`/
+`$PUBLIC_BASE_URL` tells `serve` what `web-ui`'s own externally-reachable address
+actually is, and `container/compose.yaml` sets it by default to
+`http://localhost:${LISTEN_PORT}`, which tracks whatever host port you actually
+published `web-ui` on. `localhost` only resolves correctly when you open the link on
+the NAS itself; set `PUBLIC_BASE_URL` in `.env` to the NAS's real hostname/IP (see
+`container/.env.example`) to get a link that also works from another machine on the
+LAN. Leaving `PUBLIC_BASE_URL` unset entirely (outside of `compose.yaml`'s own default,
+e.g. when running `/backup-manager-web serve` directly) prints just the raw token
+instead of a clickable but wrong link.
+
+The token itself is required to complete `POST /api/v1/auth/enroll` — reaching the port
+is not enough to claim the account (§49.1) — and is invalidated the moment enrollment
+completes, or by the next process restart before it does. It travels as a URL query
+parameter, not a form field: neither `EnrollmentPage.tsx` nor the design canvas
+(`docs/design/Backup Manager.dc.html`) has one, so `ui/shared/src/api/client.ts` reads
+it off `window.location.search` and attaches it as the `X-Bootstrap-Token` header
+instead.
+
+**Trusting `web-ui`'s reverse proxy (`TRUST_FORWARDED_HEADERS`).** `rclone-manager`
+only ever sees requests from `web-ui`'s own reverse proxy, over the `internal` network -
+every request's `RemoteAddr` is `web-ui`'s own container address, never the real
+external client's. Left uncorrected, that collapses per-IP rate limiting on
+`/api/v1/auth/login` and `/api/v1/auth/enroll` into one shared bucket for every client
+on the internet-facing side (an attacker-usable denial-of-service against the admin's
+own login), and permanently prevents the session/CSRF cookies' `Secure` flag from ever
+being `true`, regardless of TLS in front of `web-ui`'s published port (issue #119's
+review, findings 1 and 4). `container/compose.yaml` sets
+`TRUST_FORWARDED_HEADERS=true` for `rclone-manager` only, which makes it trust
+`X-Forwarded-For`/`X-Forwarded-Proto` from its one caller instead of its own
+`RemoteAddr`/TLS state - safe specifically because network isolation guarantees
+`web-ui` is the only thing that can ever be `rclone-manager`'s direct TCP peer, and
+`apps/generic/server.NewUI`'s reverse proxy always sets both headers itself, derived
+from its own real connection to the browser, never copied from anything the browser
+sent. This is never set for `web-ui` itself: that container IS the actual
+internet-facing edge and must never trust a forwarded header from just anyone hitting
+its published port.
 
 **Two binaries, one image, no `ENTRYPOINT`.** `apps/generic` is its own Go module — it
 has to be, since it imports `apps/common/webhost` and `apps/common/auth/local`, and

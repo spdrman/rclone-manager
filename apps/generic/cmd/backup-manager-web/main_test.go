@@ -42,16 +42,80 @@ func TestEnvOrDefault(t *testing.T) {
 	}
 }
 
-func TestDisplayBaseURL(t *testing.T) {
-	cases := map[string]string{
-		":8080":           "http://localhost:8080",
-		"0.0.0.0:8080":    "http://0.0.0.0:8080",
-		"127.0.0.1:18080": "http://127.0.0.1:18080",
+func TestEnvBoolOrDefault(t *testing.T) {
+	const key = "BACKUP_MANAGER_WEB_TEST_BOOL_VAR"
+
+	t.Setenv(key, "")
+	if got := envBoolOrDefault(key, false); got != false {
+		t.Errorf("envBoolOrDefault(unset, false) = %v, want false", got)
 	}
-	for addr, want := range cases {
-		if got := displayBaseURL(addr); got != want {
-			t.Errorf("displayBaseURL(%q) = %q, want %q", addr, got, want)
-		}
+	if got := envBoolOrDefault(key, true); got != true {
+		t.Errorf("envBoolOrDefault(unset, true) = %v, want true", got)
+	}
+
+	t.Setenv(key, "true")
+	if got := envBoolOrDefault(key, false); got != true {
+		t.Errorf("envBoolOrDefault(\"true\", false) = %v, want true", got)
+	}
+
+	t.Setenv(key, "1")
+	if got := envBoolOrDefault(key, false); got != true {
+		t.Errorf("envBoolOrDefault(\"1\", false) = %v, want true", got)
+	}
+
+	t.Setenv(key, "false")
+	if got := envBoolOrDefault(key, true); got != false {
+		t.Errorf("envBoolOrDefault(\"false\", true) = %v, want false", got)
+	}
+
+	// An unparsable value must not silently flip a security-relevant
+	// default the wrong way - it falls back to def, exactly like an
+	// unset value.
+	t.Setenv(key, "not-a-bool")
+	if got := envBoolOrDefault(key, false); got != false {
+		t.Errorf("envBoolOrDefault(\"not-a-bool\", false) = %v, want false (fall back to def)", got)
+	}
+}
+
+// TestNewHTTPServer_SetsTimeouts is issue #119's review finding that
+// neither http.Server this binary builds set any request-level
+// timeout at all (the standard Go "Slowloris" gap): both cmdServe and
+// cmdServeUI build their *http.Server through this one helper now, so
+// this is the one place that needs to prove the timeouts are actually
+// set.
+func TestNewHTTPServer_SetsTimeouts(t *testing.T) {
+	s := newHTTPServer(":0", http.NotFoundHandler())
+	if s.ReadHeaderTimeout <= 0 {
+		t.Error("ReadHeaderTimeout is not set (Slowloris protection)")
+	}
+	if s.ReadTimeout <= 0 {
+		t.Error("ReadTimeout is not set")
+	}
+	if s.WriteTimeout <= 0 {
+		t.Error("WriteTimeout is not set")
+	}
+	if s.IdleTimeout <= 0 {
+		t.Error("IdleTimeout is not set")
+	}
+}
+
+// TestCmdServe_AcceptsTrustForwardedHeadersAndPublicBaseURLFlags proves
+// both new flags are actually registered on serve's own flag set: the
+// command still fails fast on the missing config file (exit 1, from
+// fail()), never flag.ContinueOnError's own exit 2 for an unrecognized
+// flag - if either flag weren't wired up, this would fail with 2 instead.
+func TestCmdServe_AcceptsTrustForwardedHeadersAndPublicBaseURLFlags(t *testing.T) {
+	got := run([]string{
+		"serve",
+		"--config", "/does/not/exist/config.yaml",
+		"--trust-forwarded-headers",
+		"--public-base-url", "http://example.test:8080",
+	})
+	if got == 0 {
+		t.Error("run with a missing config file = 0, want non-zero")
+	}
+	if got == 2 {
+		t.Error("run = 2 (flag-parsing failure), want a config-open failure - one of the new flags may not be registered")
 	}
 }
 

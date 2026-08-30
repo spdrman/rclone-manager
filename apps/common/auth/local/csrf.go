@@ -1,10 +1,10 @@
 package local
 
 import (
-	"crypto/rand"
-	"crypto/subtle"
-	"encoding/base64"
+	"errors"
 	"net/http"
+
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
 )
 
 // CSRFCookieName and CSRFHeaderName implement the double-submit cookie
@@ -17,9 +17,13 @@ import (
 // READ it (browsers enforce same-origin for both document.cookie and
 // fetch/XHR response/cookie access), so it cannot construct a matching
 // header value - which is the entire defense.
+//
+// Both are re-exported from apps/common/csrf, the actual implementation
+// this package's own routes AND apps/common/webhost's mutating routes
+// (POST /api/v1/operations) share - see that package's own doc for why.
 const (
-	CSRFCookieName = "bm_csrf"
-	CSRFHeaderName = "X-CSRF-Token"
+	CSRFCookieName = csrf.CookieName
+	CSRFHeaderName = csrf.HeaderName
 )
 
 // EnsureCSRFCookie issues a CSRF cookie for any request that doesn't
@@ -30,51 +34,37 @@ const (
 // one: the very first page load is what has to set this cookie, since
 // the login/enroll POST that follows is the first state-changing request
 // a fresh browser session makes.
-func EnsureCSRFCookie(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, err := r.Cookie(CSRFCookieName); err != nil {
-			if token, genErr := randomToken(32); genErr == nil {
-				http.SetCookie(w, &http.Cookie{
-					Name: CSRFCookieName,
-					// Deliberately NOT HttpOnly: the double-submit pattern
-					// requires client-side JavaScript to read this value
-					// so it can echo it back as CSRFHeaderName. It carries
-					// no authority on its own (unlike the session cookie),
-					// only proof that whoever sent the header could also
-					// read this origin's own cookies.
-					Value:    token,
-					Path:     "/",
-					Secure:   r.TLS != nil,
-					SameSite: http.SameSiteStrictMode,
-				})
-			}
-		}
-		next.ServeHTTP(w, r)
+//
+// trustForwardedProto controls whether the issued cookie's Secure flag
+// additionally trusts an X-Forwarded-Proto header when the request itself
+// didn't arrive over TLS - see requestIsSecure (forwarded.go) and
+// Config.TrustForwardedHeaders (service.go) for exactly when that is
+// safe. Pass false from any handler chain that talks to arbitrary/
+// untrusted clients directly (apps/generic/server.NewUI, the
+// browser-facing container, which already observes its own real TLS
+// status via r.TLS and must never trust a forwarded header from just
+// anyone hitting its published port) - only apps/generic/server.NewEngine
+// ever has a reason to pass true, and only when its own Auth Service was
+// itself configured to trust its one verified reverse-proxy peer.
+func EnsureCSRFCookie(trustForwardedProto bool) func(http.Handler) http.Handler {
+	return csrf.EnsureCookie(func(r *http.Request) bool {
+		return requestIsSecure(r, trustForwardedProto)
 	})
 }
 
 // requireCSRF refuses a state-changing request unless its CSRFHeaderName
-// header matches its own CSRFCookieName cookie, in constant time.
+// header matches its own CSRFCookieName cookie, in constant time (see
+// apps/common/csrf.Verify).
 func requireCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(CSRFCookieName)
-		if err != nil || cookie.Value == "" {
+		err := csrf.Verify(r)
+		switch {
+		case err == nil:
+			next.ServeHTTP(w, r)
+		case errors.Is(err, csrf.ErrMissingCookie):
 			writeAuthError(w, http.StatusForbidden, "CSRF_TOKEN_MISSING", "missing CSRF cookie; reload the page and try again")
-			return
-		}
-		header := r.Header.Get(CSRFHeaderName)
-		if header == "" || subtle.ConstantTimeCompare([]byte(header), []byte(cookie.Value)) != 1 {
+		default:
 			writeAuthError(w, http.StatusForbidden, "CSRF_TOKEN_MISMATCH", "missing or mismatched "+CSRFHeaderName+" header")
-			return
 		}
-		next.ServeHTTP(w, r)
 	})
-}
-
-func randomToken(n int) (string, error) {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
 }

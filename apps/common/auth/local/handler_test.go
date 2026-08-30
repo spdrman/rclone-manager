@@ -25,7 +25,7 @@ func testServer(t *testing.T) (*Service, *httptest.Server, *http.Client) {
 
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", svc.Handler()))
-	server := httptest.NewServer(EnsureCSRFCookie(mux))
+	server := httptest.NewServer(EnsureCSRFCookie(false)(mux))
 	t.Cleanup(server.Close)
 
 	jar, err := cookiejar.New(nil)
@@ -248,7 +248,7 @@ func TestHandler_LoginIsRateLimitedPerIP(t *testing.T) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", svc.Handler()))
-	server := httptest.NewServer(EnsureCSRFCookie(mux))
+	server := httptest.NewServer(EnsureCSRFCookie(false)(mux))
 	t.Cleanup(server.Close)
 
 	jar, _ := cookiejar.New(nil)
@@ -265,5 +265,142 @@ func TestHandler_LoginIsRateLimitedPerIP(t *testing.T) {
 	}
 	if last.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("3rd login attempt (limit is 2) status = %d, want %d", last.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
+// TestHandler_TrustedForwardedForKeepsRateLimitBucketsPerClient is issue
+// #119's review's central regression test, at the full HTTP-handler
+// level rather than remoteIP in isolation: apps/generic's two-container
+// split means every request this Service's handler ever sees, in
+// production, arrives from the SAME direct peer (apps/generic/server.NewUI's
+// reverse proxy) regardless of which real external client made it -
+// modelled here by every request in this test sharing the same
+// httptest.Server connection (so the same RemoteAddr host) while carrying
+// DIFFERENT X-Forwarded-For values, exactly as the real proxy's own
+// forwarded requests would. Without Config.TrustForwardedHeaders, this
+// would collapse into one shared bucket (TestHandler_LoginIsRateLimitedPerIP
+// already proves that shape is what happens by default); with it
+// enabled, each forwarded client keeps its own budget.
+func TestHandler_TrustedForwardedForKeepsRateLimitBucketsPerClient(t *testing.T) {
+	svc, err := New(Config{StorePath: filepath.Join(t.TempDir(), "auth.json"), LoginRateLimit: 2, TrustForwardedHeaders: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", svc.Handler()))
+	server := httptest.NewServer(EnsureCSRFCookie(true)(mux))
+	t.Cleanup(server.Close)
+
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+
+	attempt := func(forwardedFor string) *http.Response {
+		return postJSON(t, client, server.URL+"/api/v1/auth/login",
+			credentialsRequest{Username: "bm-admin", Password: "wrong"},
+			map[string]string{CSRFHeaderName: csrf, "X-Forwarded-For": forwardedFor})
+	}
+
+	// Exhaust client A's own budget (limit is 2).
+	for i := 0; i < 2; i++ {
+		attempt("203.0.113.10").Body.Close()
+	}
+	blockedA := attempt("203.0.113.10")
+	blockedA.Body.Close()
+	if blockedA.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("client A's 3rd attempt status = %d, want %d", blockedA.StatusCode, http.StatusTooManyRequests)
+	}
+
+	// A DIFFERENT client (different X-Forwarded-For), arriving over the
+	// exact same underlying connection/RemoteAddr, must have its own,
+	// untouched budget.
+	stillAllowedB := attempt("203.0.113.99")
+	stillAllowedB.Body.Close()
+	if stillAllowedB.StatusCode == http.StatusTooManyRequests {
+		t.Fatal("a different client (different X-Forwarded-For) was rate-limited by client A's own attempts - this is the exact rate-limit collapse the fix is for")
+	}
+}
+
+// TestHandler_SessionCookieIsSecureWhenForwardedProtoIsTrustedAndHTTPS is
+// issue #119's review's central regression test for the Secure-cookie
+// finding: with Config.TrustForwardedHeaders enabled, a plaintext request
+// to this Service's own handler (httptest.NewServer never uses TLS, so
+// r.TLS is nil here exactly as it always is behind
+// apps/generic/server.NewUI's reverse proxy) whose X-Forwarded-Proto says
+// "https" must still get a Secure session cookie.
+func TestHandler_SessionCookieIsSecureWhenForwardedProtoIsTrustedAndHTTPS(t *testing.T) {
+	svc, err := New(Config{StorePath: filepath.Join(t.TempDir(), "auth.json"), TrustForwardedHeaders: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", svc.Handler()))
+	server := httptest.NewServer(EnsureCSRFCookie(true)(mux))
+	t.Cleanup(server.Close)
+
+	// No cookie jar: this test reads the raw Set-Cookie response header
+	// itself rather than letting a jar/client hide it.
+	client := &http.Client{}
+	seedResp, err := client.Get(server.URL + "/api/v1/auth/session")
+	if err != nil {
+		t.Fatalf("seed GET: %v", err)
+	}
+	seedResp.Body.Close()
+
+	var csrfVal string
+	for _, c := range seedResp.Cookies() {
+		if c.Name == CSRFCookieName {
+			csrfVal = c.Value
+		}
+	}
+	if csrfVal == "" {
+		t.Fatal("no CSRF cookie issued by the seed GET")
+	}
+
+	token := currentBootstrapToken(t, svc)
+	body, err := json.Marshal(credentialsRequest{Username: "bm-admin", Password: "correct-horse-battery"})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/auth/enroll", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(CSRFHeaderName, csrfVal)
+	req.Header.Set(BootstrapTokenHeader, token)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.AddCookie(&http.Cookie{Name: CSRFCookieName, Value: csrfVal})
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST enroll: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("enroll status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	var sessionCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == SessionCookieName {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatal("no session cookie issued on enroll")
+	}
+	if !sessionCookie.Secure {
+		t.Error("session cookie Secure = false, want true (plaintext connection, but X-Forwarded-Proto: https and TrustForwardedHeaders enabled)")
+	}
+}
+
+func TestWriteAuthError_SetsCorrelationIdHeader(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeAuthError(rec, http.StatusBadRequest, "INVALID_REQUEST", "bad request")
+
+	if got := rec.Header().Get("X-Correlation-Id"); got == "" {
+		t.Error("X-Correlation-Id header is empty, want a generated correlation id on every auth error response")
 	}
 }

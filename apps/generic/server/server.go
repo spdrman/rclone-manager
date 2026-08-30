@@ -52,6 +52,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
@@ -99,7 +100,13 @@ func NewEngine(cfg EngineConfig) http.Handler {
 	mux.Handle("/health/", apiRouter)
 	mux.Handle("/api/v1/", apiRouter)
 
-	return local.EnsureCSRFCookie(mux)
+	// cfg.Auth.TrustForwardedHeaders() is the SAME setting cfg.Auth
+	// already consults internally for rate limiting and its own session
+	// cookie's Secure flag (apps/common/auth/local.Config.TrustForwardedHeaders) -
+	// reusing it here, rather than a second, independently-configured
+	// field on EngineConfig, is what keeps this CSRF cookie's Secure flag
+	// from being able to drift out of sync with the session cookie's own.
+	return local.EnsureCSRFCookie(cfg.Auth.TrustForwardedHeaders())(mux)
 }
 
 // UIConfig is everything NewUI needs to build the UI-host container's
@@ -118,7 +125,29 @@ type UIConfig struct {
 	// should first fs.Sub it down to "dist" (webui.Assets embeds paths as
 	// "dist/index.html", see that package's own doc).
 	StaticFS fs.FS
+
+	// ProxyResponseHeaderTimeout overrides defaultProxyResponseHeaderTimeout
+	// below. Zero means use the default; this only exists so a test can
+	// use a short timeout instead of waiting out a multi-second one for
+	// real.
+	ProxyResponseHeaderTimeout time.Duration
 }
+
+// defaultProxyResponseHeaderTimeout bounds how long the reverse proxy
+// below waits for the engine to even START responding (send response
+// headers) once it has accepted a connection - issue #119's review,
+// empirically demonstrated: a connection-REFUSED engine fails fast and
+// correctly (502 in ~1ms), but an engine that accepts a connection and
+// then never responds at all hangs the proxied request indefinitely,
+// bounded only by whatever timeout the calling browser's own fetch()
+// happens to set, which for a bare fetch() is no timeout at all. This is
+// a same-host, single-hop, internal Docker network call to a process from
+// this exact same image - a few seconds is already generous, not a real
+// operation's actual latency budget (every route this proxies has its own
+// separate response-body streaming, so this timeout only ever bounds the
+// wait for the FIRST byte back, never a legitimately slow but
+// already-answering request).
+const defaultProxyResponseHeaderTimeout = 5 * time.Second
 
 // NewUI composes cfg into the UI-host container's whole HTTP surface: the
 // shared static UI, plus a reverse proxy forwarding /health/* and
@@ -130,15 +159,60 @@ type UIConfig struct {
 // image" principle this split is itself built on - a dedicated reverse
 // proxy is unwarranted complexity for "forward this path unchanged to one
 // fixed upstream."
+//
+// # X-Forwarded-For/-Proto: exactly one hop's worth, never the client's own
+//
+// The Rewrite func below explicitly deletes any X-Forwarded-For header
+// the incoming request already carries before calling SetXForwarded,
+// which recomputes it from THIS request's own RemoteAddr (the real
+// external client, since nothing sits between the browser and this
+// process in the shipped topology) - never from whatever a client sent.
+// Skipping that delete would let a client set its own X-Forwarded-For
+// directly against this container's published port, and
+// ProxyRequest.SetXForwarded's own documented append-to-existing behavior
+// would then treat that CLIENT-CHOSEN value as the trusted "original
+// client" once it reaches apps/common/auth/local's own
+// Config.TrustForwardedHeaders=true engine (ratelimit.go's remoteIP reads
+// the first entry), letting an attacker rotate a fake header on every
+// request to evade rate limiting entirely - exactly the vulnerability
+// that makes trusting this header anywhere at all conditional on there
+// being only one, verified, network-isolated hop in between. Once
+// deleted, SetXForwarded sets X-Forwarded-For to this request's own
+// RemoteAddr and X-Forwarded-Proto to "https"/"http" based on this
+// request's own r.TLS (never a header), giving the engine exactly what it
+// needs to fix both apps/common/auth/local.Config.TrustForwardedHeaders
+// findings (the rate-limit collapse and the Secure cookie flag) without
+// this container needing to know anything about that config itself.
 func NewUI(cfg UIConfig) http.Handler {
-	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
+	timeout := cfg.ProxyResponseHeaderTimeout
+	if timeout <= 0 {
+		timeout = defaultProxyResponseHeaderTimeout
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = timeout
+
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(cfg.Upstream)
+			pr.Out.Header.Del("X-Forwarded-For")
+			pr.SetXForwarded()
+		},
+		Transport: transport,
+	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/health/", proxy)
 	mux.Handle("/api/v1/", proxy)
 	mux.Handle("/", staticHandler(cfg.StaticFS))
 
-	return local.EnsureCSRFCookie(mux)
+	// false: this container is the actual internet-facing edge (the only
+	// one with a published port) and already observes its own real TLS
+	// status directly via r.TLS - it must never trust a forwarded header
+	// from just anyone hitting its published port the way the engine (on
+	// the OTHER side of this exact proxy) is allowed to trust headers
+	// THIS proxy itself sets.
+	return local.EnsureCSRFCookie(false)(mux)
 }
 
 // staticHandler serves fsys, falling back to index.html for any path

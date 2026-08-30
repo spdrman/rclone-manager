@@ -38,7 +38,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -88,6 +88,37 @@ const shutdownGrace = 10 * time.Second
 // sign of trouble, not something worth waiting out.
 const healthcheckTimeout = 3 * time.Second
 
+// HTTP server timeouts shared by both `serve` and `serve-ui` (see
+// newHTTPServer): issue #119's review flagged that neither http.Server in
+// this binary set any request-level timeout at all - the standard Go
+// "Slowloris" gap, where a client that opens a connection and trickles
+// headers (or a request body) in slowly forever ties up a server
+// goroutine indefinitely. `serve-ui` is the one binary in this whole
+// image actually exposed to untrusted network input via its published
+// port, but both get the same hardening: `serve` sharing a process with
+// the backup scheduler (§9.3) means a resource exhausted here has a wider
+// blast radius than just one stuck request either way.
+const (
+	serverReadHeaderTimeout = 10 * time.Second
+	serverReadTimeout       = 30 * time.Second
+	serverWriteTimeout      = 30 * time.Second
+	serverIdleTimeout       = 120 * time.Second
+)
+
+// newHTTPServer builds the one *http.Server shape both `serve` and
+// `serve-ui` use, so the timeouts above can never be set on one and
+// forgotten on the other.
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		ReadTimeout:       serverReadTimeout,
+		WriteTimeout:      serverWriteTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
+}
+
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
@@ -129,14 +160,35 @@ commands:
               against the way the engine container does.
 
 serve flags:
-  --config PATH       path to the manager's YAML config file
-                       (default /etc/backup-manager/config.yaml)
-  --listen ADDR        address to listen on
-                       (default $LISTEN_ADDR, or :8080)
-  --auth-store PATH    path to the local-auth administrator record
-                       (default /data/state/local-auth.json)
-  --auth-mode MODE     authentication mode; only "local" is implemented
-                       today (default local)
+  --config PATH               path to the manager's YAML config file
+                               (default /etc/backup-manager/config.yaml)
+  --listen ADDR                address to listen on
+                               (default $LISTEN_ADDR, or :8080)
+  --auth-store PATH            path to the local-auth administrator record
+                               (default /data/state/local-auth.json)
+  --auth-mode MODE             authentication mode; only "local" is
+                               implemented today (default local)
+  --trust-forwarded-headers    trust X-Forwarded-For/X-Forwarded-Proto
+                               from the immediate caller (default
+                               $TRUST_FORWARDED_HEADERS, or false) - only
+                               safe when this process is reachable
+                               EXCLUSIVELY through serve-ui's own reverse
+                               proxy over an isolated network
+                               (container/compose.yaml's shipped topology
+                               sets this); never enable it if this
+                               listener might also be reached directly by
+                               an arbitrary client
+  --public-base-url URL        externally-reachable base URL to print in
+                               the one-time enrollment link (default
+                               $PUBLIC_BASE_URL, or unset) - this
+                               process's OWN --listen address is never
+                               externally reachable (container/compose.yaml
+                               gives it no published port at all), so
+                               leaving this unset prints just the raw
+                               bootstrap token instead of a clickable but
+                               wrong link; set it to serve-ui's own
+                               published address, e.g.
+                               http://your-nas:8080
 
 serve-ui flags:
   --listen ADDR    address to listen on (default $LISTEN_ADDR, or :8080)
@@ -156,6 +208,10 @@ func cmdServe(args []string) int {
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
 	authStorePath := fset.String("auth-store", defaultAuthStorePath, "path to the local-auth administrator record")
 	authMode := fset.String("auth-mode", "local", "authentication mode (only \"local\" is implemented)")
+	trustForwardedHeaders := fset.Bool("trust-forwarded-headers", envBoolOrDefault("TRUST_FORWARDED_HEADERS", false),
+		"trust X-Forwarded-For/X-Forwarded-Proto from the immediate caller - only safe behind serve-ui's own reverse proxy over an isolated network (see this command's own --help)")
+	publicBaseURL := fset.String("public-base-url", envOrDefault("PUBLIC_BASE_URL", ""),
+		"externally-reachable base URL for the one-time enrollment link (default: print just the raw token, since this process's own --listen address is never externally reachable)")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}
@@ -178,11 +234,21 @@ func cmdServe(args []string) int {
 	}
 	defer cleanup()
 
-	authSvc, err := local.New(local.Config{StorePath: *authStorePath})
+	authSvc, err := local.New(local.Config{
+		StorePath:             *authStorePath,
+		TrustForwardedHeaders: *trustForwardedHeaders,
+	})
 	if err != nil {
 		return fail(fmt.Errorf("open local-auth store: %w", err))
 	}
-	if err := authSvc.PrintBootstrapNotice(os.Stdout, displayBaseURL(*listenAddr)); err != nil {
+	// *publicBaseURL is empty unless an operator explicitly set
+	// --public-base-url/$PUBLIC_BASE_URL: this process's OWN --listen
+	// address (the fallback issue #119's review flagged) is never
+	// externally reachable in the shipped topology
+	// (container/compose.yaml gives the engine no published port at
+	// all), so PrintBootstrapNotice prints just the raw token in that
+	// case, per its own doc, rather than a clickable but wrong link.
+	if err := authSvc.PrintBootstrapNotice(os.Stdout, *publicBaseURL); err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: printing bootstrap notice:", err)
 	}
 
@@ -193,7 +259,7 @@ func cmdServe(args []string) int {
 		Commit:        commit,
 	})
 
-	httpServer := &http.Server{Addr: *listenAddr, Handler: handler}
+	httpServer := newHTTPServer(*listenAddr, handler)
 
 	// Both goroutines below are driven by the SAME ctx (§9.3: "the HTTP
 	// server and background scheduler SHALL share a common application
@@ -290,7 +356,7 @@ func cmdServeUI(args []string) int {
 	defer stop()
 
 	handler := server.NewUI(server.UIConfig{Upstream: upstreamURL, StaticFS: staticFS})
-	httpServer := &http.Server{Addr: *listenAddr, Handler: handler}
+	httpServer := newHTTPServer(*listenAddr, handler)
 
 	serverErrCh := make(chan error, 1)
 	go func() { serverErrCh <- httpServer.ListenAndServe() }()
@@ -357,28 +423,14 @@ func localHealthcheckURL(listenAddr string) string {
 	host, port, err := net.SplitHostPort(listenAddr)
 	if err != nil {
 		// Not a valid "host:port" pair at all; fall back to treating the
-		// whole value as a port-only suffix the way displayBaseURL does,
-		// rather than producing a URL guaranteed to fail to parse.
+		// whole value as a port-only suffix rather than producing a URL
+		// guaranteed to fail to parse.
 		return "http://127.0.0.1" + listenAddr + "/"
 	}
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/"
-}
-
-// displayBaseURL turns a --listen value (":8080", "0.0.0.0:8080",
-// "127.0.0.1:8080") into a URL an operator could actually open, for the
-// bootstrap-enrollment notice. A bare ":PORT" form (this binary's own
-// default, and container/compose.yaml's LISTEN_ADDR) has no usable host
-// part to print, so this substitutes "localhost" rather than printing a
-// URL with an empty authority.
-func displayBaseURL(listenAddr string) string {
-	host := listenAddr
-	if strings.HasPrefix(host, ":") {
-		host = "localhost" + host
-	}
-	return "http://" + host
 }
 
 func fail(err error) int {
@@ -395,4 +447,22 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envBoolOrDefault is envOrDefault's boolean counterpart, used by
+// --trust-forwarded-headers/$TRUST_FORWARDED_HEADERS: an unset or
+// unparsable value falls back to def rather than failing this command's
+// flag parsing outright, since a malformed environment variable
+// shouldn't be able to silently flip a security-relevant default the
+// wrong way.
+func envBoolOrDefault(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return parsed
 }

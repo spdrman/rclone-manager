@@ -22,6 +22,44 @@ type Config struct {
 	// DefaultEnrollRateLimit.
 	LoginRateLimit  int
 	EnrollRateLimit int
+
+	// TrustForwardedHeaders makes this Service trust X-Forwarded-For (for
+	// rate limiting, ratelimit.go's remoteIP) and X-Forwarded-Proto (for
+	// the session/CSRF cookies' Secure flag, forwarded.go's
+	// requestIsSecure) instead of a request's own RemoteAddr/TLS.
+	//
+	// # Safe ONLY behind one specific, network-isolated reverse proxy
+	//
+	// Both headers are ordinary request headers: anyone who can reach
+	// this Service's handler directly can set either to whatever they
+	// like, which would let them pick their own rate-limit bucket (an
+	// attacker rotating a fake X-Forwarded-For on every request to evade
+	// the limiter entirely) or falsely claim a plaintext connection is
+	// HTTPS. Enable this ONLY when this Service's handler is reachable
+	// exclusively through one specific reverse proxy that (a) is the sole
+	// possible direct TCP peer, by network topology, not merely by
+	// convention, and (b) always sets both headers itself, derived from
+	// its own real connection to the actual client, never copied from
+	// whatever the client sent it.
+	//
+	// apps/generic's two-container split (container/compose.yaml) is
+	// exactly that shape: the engine (this Service, wired by `serve`) has
+	// no published port and joins no network but `internal`, which only
+	// `web-ui` (`serve-ui`, apps/generic/server.NewUI's reverse proxy)
+	// also joins - nothing else on the host, and nothing on the LAN, can
+	// ever be this Service's direct peer. apps/generic/cmd/backup-manager-web's
+	// `--trust-forwarded-headers` flag is what actually turns this on for
+	// that deployment; container/compose.yaml sets it for the
+	// `rclone-manager` (engine) service only, never for `web-ui` itself
+	// (which correctly observes its own real TLS status directly and must
+	// never trust a forwarded header from just anyone hitting its
+	// published port).
+	//
+	// Defaults to false: a Service instantiated without this set (every
+	// test in this package, and any future caller that doesn't know its
+	// own topology guarantees this) trusts nothing but its own directly
+	// observed connection, which is always safe regardless of topology.
+	TrustForwardedHeaders bool
 }
 
 // Default rate limits: generous enough that an operator mistyping a
@@ -38,12 +76,13 @@ const (
 // apps/common/webhost's authMiddleware, and an http.Handler for the
 // login/enroll/logout/session routes themselves.
 type Service struct {
-	store         *Store
-	sessions      *sessionManager
-	bootstrap     *bootstrapIssuer
-	loginLimiter  *RateLimiter
-	enrollLimiter *RateLimiter
-	now           func() time.Time
+	store                 *Store
+	sessions              *sessionManager
+	bootstrap             *bootstrapIssuer
+	loginLimiter          *RateLimiter
+	enrollLimiter         *RateLimiter
+	now                   func() time.Time
+	trustForwardedHeaders bool
 }
 
 // New builds a Service from cfg. If no administrator has enrolled yet
@@ -88,12 +127,13 @@ func New(cfg Config) (*Service, error) {
 	enrollLimiter.now = now
 
 	return &Service{
-		store:         store,
-		sessions:      newSessionManager(now),
-		bootstrap:     bootstrap,
-		loginLimiter:  loginLimiter,
-		enrollLimiter: enrollLimiter,
-		now:           now,
+		store:                 store,
+		sessions:              newSessionManager(now),
+		bootstrap:             bootstrap,
+		loginLimiter:          loginLimiter,
+		enrollLimiter:         enrollLimiter,
+		now:                   now,
+		trustForwardedHeaders: cfg.TrustForwardedHeaders,
 	}, nil
 }
 
@@ -101,6 +141,18 @@ func New(cfg Config) (*Service, error) {
 // authMiddleware should consult for /api/v1 requests.
 func (s *Service) Authenticator() capabilities.Authenticator {
 	return sessionAuthenticator{sessions: s.sessions}
+}
+
+// TrustForwardedHeaders reports whether this Service was configured to
+// trust X-Forwarded-For/X-Forwarded-Proto from its immediate caller (see
+// Config.TrustForwardedHeaders's own doc for exactly when that is safe).
+// apps/generic/server.NewEngine calls this to decide the same thing for
+// the CSRF cookie it issues (EnsureCSRFCookie) that this Service's own
+// session cookie already decides for itself internally (handler.go), so
+// both are governed by the one Config value a caller actually set,
+// instead of two independently-configured, driftable settings.
+func (s *Service) TrustForwardedHeaders() bool {
+	return s.trustForwardedHeaders
 }
 
 // NeedsEnrollment reports whether no administrator has been created yet.

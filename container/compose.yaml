@@ -137,6 +137,33 @@ services:
       # name `rclone-manager` (Docker's own embedded DNS).
       LISTEN_ADDR: ":8080"
 
+      # This container has no published port at all (see the top-of-file
+      # note), so its OWN --listen address is never something an operator
+      # can actually open - `/backup-manager-web serve` used to print the
+      # one-time enrollment link against that internal address anyway,
+      # which was always wrong once this two-container split shipped
+      # (issue #119's review). PUBLIC_BASE_URL is what `web-ui`'s own
+      # published port actually looks like from outside this host;
+      # defaulting it from LISTEN_PORT below keeps the printed link's
+      # port correct even when LISTEN_PORT is overridden in .env.
+      # "localhost" only resolves correctly when opened on the NAS
+      # itself - override PUBLIC_BASE_URL directly in .env (e.g.
+      # http://your-nas.local:8080) to get a link that also works from
+      # another machine on the LAN.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${LISTEN_PORT:-8080}}
+
+      # Config.TrustForwardedHeaders (apps/common/auth/local): safe here
+      # SPECIFICALLY because `rclone-manager` joins only the `internal`
+      # network below, which only `web-ui` also joins - nothing else can
+      # ever be this container's direct peer, so trusting the
+      # X-Forwarded-For/X-Forwarded-Proto headers `web-ui`'s own reverse
+      # proxy sets (apps/generic/server.NewUI) is safe by network
+      # topology, not by convention. Never set this on `web-ui` itself
+      # (below) - that container IS the actual internet-facing edge and
+      # must never trust a forwarded header from just anyone hitting its
+      # published port.
+      TRUST_FORWARDED_HEADERS: "true"
+
     volumes:
       # Persistent SQLite lifecycle journal (FR-9). A directory, per the
       # WAL note above, not a single file. `/backup-manager-web serve` also

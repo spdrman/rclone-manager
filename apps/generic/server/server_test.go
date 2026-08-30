@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/generic/server"
@@ -367,5 +368,136 @@ func TestUI_StaticUIServedForNonAPIRoute(t *testing.T) {
 		if !strings.Contains(string(body), "generic backup-manager UI shell") {
 			t.Errorf("GET %s body = %q, want it to contain the static index.html content (SPA fallback)", path, body)
 		}
+	}
+}
+
+// fakeUpstream stands up a minimal httptest.Server for testing NewUI's
+// reverse-proxy behavior against handler directly, in isolation from a
+// real apps/common/auth/local + apps/common/webhost engine - only the
+// proxy-mechanics tests below use this; every other test in this file
+// proxies to a REAL engine (newEngineHarness) end to end.
+func fakeUpstream(t *testing.T, handler http.HandlerFunc) *url.URL {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(%q): %v", srv.URL, err)
+	}
+	return u
+}
+
+func newUIProxyingTo(t *testing.T, upstream *url.URL, timeout time.Duration) *httptest.Server {
+	t.Helper()
+	staticFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}}
+	ui := httptest.NewServer(server.NewUI(server.UIConfig{
+		Upstream:                   upstream,
+		StaticFS:                   staticFS,
+		ProxyResponseHeaderTimeout: timeout,
+	}))
+	t.Cleanup(ui.Close)
+	return ui
+}
+
+// TestUI_DiscardsAClientSuppliedXForwardedForHeader is issue #119's
+// review's central regression test for the anti-spoofing half of the
+// rate-limit-collapse fix: apps/common/auth/local.Config.TrustForwardedHeaders
+// makes the ENGINE trust X-Forwarded-For, which is only safe because the
+// UI host guarantees that header always reflects ITS OWN observed
+// RemoteAddr, never anything a client sent it directly. Without the
+// explicit delete in NewUI's Rewrite func, net/http/httputil.ProxyRequest's
+// own documented "append to an existing X-Forwarded-For" behavior would
+// let a client's own forged header survive as the (trusted) first entry.
+func TestUI_DiscardsAClientSuppliedXForwardedForHeader(t *testing.T) {
+	var gotForwardedFor string
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		gotForwardedFor = r.Header.Get("X-Forwarded-For")
+		w.WriteHeader(http.StatusOK)
+	})
+	ui := newUIProxyingTo(t, upstream, 0)
+
+	req, err := http.NewRequest(http.MethodGet, ui.URL+"/api/v1/system/version", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Forwarded-For", "6.6.6.6")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET via UI proxy: %v", err)
+	}
+	resp.Body.Close()
+
+	if strings.Contains(gotForwardedFor, "6.6.6.6") {
+		t.Errorf("upstream received X-Forwarded-For = %q, want it to NOT contain the client-forged value %q - the proxy must discard any client-supplied X-Forwarded-For and set its own", gotForwardedFor, "6.6.6.6")
+	}
+	if gotForwardedFor == "" {
+		t.Error("upstream received an empty X-Forwarded-For, want the proxy's own observed client address")
+	}
+}
+
+// TestUI_SetsXForwardedProtoFromItsOwnRealConnection proves the proxy
+// sets X-Forwarded-Proto from the connection it ACTUALLY has with the
+// client (http here - httptest.Server never uses TLS), the header
+// apps/common/auth/local's Secure-cookie fix depends on
+// (Config.TrustForwardedHeaders, forwarded.go's requestIsSecure) - and
+// that a client can't simply override it, either.
+func TestUI_SetsXForwardedProtoFromItsOwnRealConnection(t *testing.T) {
+	var gotProto string
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		gotProto = r.Header.Get("X-Forwarded-Proto")
+		w.WriteHeader(http.StatusOK)
+	})
+	ui := newUIProxyingTo(t, upstream, 0)
+
+	req, err := http.NewRequest(http.MethodGet, ui.URL+"/api/v1/system/version", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Forwarded-Proto", "https") // a client's own claim - must be overridden, not trusted
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET via UI proxy: %v", err)
+	}
+	resp.Body.Close()
+
+	if gotProto != "http" {
+		t.Errorf("upstream received X-Forwarded-Proto = %q, want %q (this connection is plain HTTP, regardless of what the client itself claimed)", gotProto, "http")
+	}
+}
+
+// TestUI_ProxyTimesOutAgainstAHungUpstream is issue #119's review's
+// empirically-demonstrated finding 3: a connection-refused upstream fails
+// fast (502 in ~1ms), but one that accepts a connection and never
+// responds used to hang the proxied request indefinitely, bounded only by
+// whatever timeout the calling client happened to set. This proves
+// UIConfig.ProxyResponseHeaderTimeout actually bounds that wait.
+func TestUI_ProxyTimesOutAgainstAHungUpstream(t *testing.T) {
+	release := make(chan struct{})
+	// Registered AFTER fakeUpstream's own t.Cleanup(srv.Close) below, so
+	// it unwinds BEFORE that Close in t.Cleanup's LIFO order: the
+	// upstream's hung handler goroutine has to be released before
+	// anything waits for it to finish, or that Close call would itself
+	// hang forever waiting on a handler nothing has told to return yet.
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		<-release // never respond on its own - only once this test is done
+	})
+	t.Cleanup(func() { close(release) })
+	ui := newUIProxyingTo(t, upstream, 50*time.Millisecond)
+
+	start := time.Now()
+	resp, err := http.Get(ui.URL + "/api/v1/system/version")
+	if err != nil {
+		t.Fatalf("GET via UI proxy: %v", err)
+	}
+	defer resp.Body.Close()
+	elapsed := time.Since(start)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want %d (net/http/httputil.ReverseProxy's own default error response for a Transport failure)", resp.StatusCode, http.StatusBadGateway)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("request took %s to fail, want it bounded by the configured 50ms ResponseHeaderTimeout, not indefinite", elapsed)
 	}
 }
