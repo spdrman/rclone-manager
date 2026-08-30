@@ -40,7 +40,15 @@ type backupSetRequest struct {
 	CompletionStrategy string   `json:"completion_strategy"`
 	StableForSeconds   int      `json:"stable_for_seconds"`
 	StaleAfterSeconds  int      `json:"stale_after_seconds"`
-	Disabled           bool     `json:"disabled"`
+	// ValidatorID names one entry in the registered application-validator
+	// catalog GET /api/v1/validators serves (handlers_validators.go), or
+	// is omitted for none. It is an id and never a path: this package
+	// could not accept a path here even if a handler wanted to, since
+	// core/service is a separate module whose CreateBackupSetRequest has
+	// no field for one, and refuses any id outside its own catalog
+	// (docs/EPIC-B-multi-nas.md §26 Step 5).
+	ValidatorID string `json:"validator_id"`
+	Disabled    bool   `json:"disabled"`
 	// RunImmediately is the wizard's "Save, enable & run" tier (as
 	// opposed to "Save & enable", RunImmediately: false, Disabled:
 	// false, or "Save disabled", Disabled: true). See
@@ -66,7 +74,13 @@ type backupSetResponse struct {
 	LocalPath          string   `json:"local_path"`
 	Include            []string `json:"include"`
 	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
+	// ValidatorID is the registered validator this backup set selected,
+	// or "" for none. The id only: what it resolves to is a server-side
+	// path, and this package never puts one on the wire (see
+	// service.SSHKeyRef.KeyFile for the same rule applied to imported
+	// keys).
+	ValidatorID string `json:"validator_id"`
+	Disabled    bool   `json:"disabled"`
 }
 
 func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
@@ -81,6 +95,7 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		LocalPath:          bs.LocalPath,
 		Include:            bs.Include,
 		CompletionStrategy: bs.CompletionStrategy,
+		ValidatorID:        string(bs.ValidatorID),
 		Disabled:           bs.Disabled,
 	}
 }
@@ -158,6 +173,7 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		LocalPath:          body.LocalPath,
 		Include:            body.Include,
 		CompletionStrategy: body.CompletionStrategy,
+		ValidatorID:        service.ValidatorID(body.ValidatorID),
 		StableFor:          secondsToDuration(body.StableForSeconds),
 		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
 		Disabled:           body.Disabled,

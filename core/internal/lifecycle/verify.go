@@ -299,6 +299,29 @@ func decide(ctx context.Context, d Deps, source transport.Source, rec state.Reco
 
 	// Layer 3: application validation, gated by an optional validator.
 	if cfg.Command == nil {
+		if cfg.ValidatorID != "" {
+			// The backup set names a registered validator
+			// (config.Validation.ValidatorID) that nothing resolved into a
+			// runnable Command. core/service resolves every id at load time
+			// and refuses to start on one it does not recognize, so
+			// reaching here means some path skipped that step entirely --
+			// and the one thing this must never do is read as "no
+			// validator was configured, carry on". The operator asked for
+			// one; transferring and then deleting the remote source
+			// without it is exactly the outcome FR-13 exists to prevent.
+			//
+			// Failed, not Quarantined, for the same reason runValidator's
+			// own "could not be run at all" branch below is: this is an
+			// infrastructure condition, not the validator forming an
+			// opinion about the artifact's content. Neither state can
+			// reach Committed (machine.go's Transitions table), so remote
+			// deletion is blocked either way.
+			return verifyOutcome{
+				to:     Failed,
+				detail: fmt.Sprintf("application validator %q was never resolved to a runnable command; refusing to treat a configured validator as absent", cfg.ValidatorID),
+				hashes: hashes,
+			}, nil
+		}
 		return verifyOutcome{to: Verified, detail: "transfer and configured checks passed", hashes: hashes}, nil
 	}
 

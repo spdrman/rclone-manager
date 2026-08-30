@@ -260,7 +260,30 @@ const DefaultDeleteSafetyDelay = time.Hour
 // Validation configures how a transferred artifact gets checked before it's
 // allowed to be treated as a good restore point (FR-13).
 type Validation struct {
-	Hash    string   `yaml:"hash"` // "" or "sha256"
+	Hash string `yaml:"hash"` // "" or "sha256"
+
+	// ValidatorID names one entry in core/service's registered
+	// application-validator catalog (docs/EPIC-B-multi-nas.md §26 Step 5,
+	// issues #99/#162). It is the ONLY way the API/UI layer can select an
+	// application validator: that layer never names an executable, and
+	// core/service is the only thing that turns an id back into a
+	// Command.
+	//
+	// This package deliberately does not know the catalog -- core/service
+	// imports this package, not the other way around -- so nothing here
+	// decides whether a given id is registered. An unregistered id is
+	// refused at load time by core/service, which fails startup rather
+	// than quietly running a backup set with no validator the operator
+	// believes is configured. What validate.go does check is the shape:
+	// one bare token, and never alongside a Command.
+	//
+	// Storing the id, rather than the executable path it resolves to, is
+	// the whole point. That path is materialized per deployment and can
+	// move between releases; a config.yaml holding a stale one would fail
+	// every artifact in the backup set after a restart, with an error
+	// naming a directory instead of the cause.
+	ValidatorID string `yaml:"validator_id"`
+
 	Command *Command `yaml:"command"`
 }
 

@@ -103,6 +103,13 @@ type BackupSet struct {
 
 	CompletionStrategy string // "rename", "marker" or "stable"
 
+	// ValidatorID is the registered application validator this backup set
+	// selected (validator.go), or "" for none. It is the id, never the
+	// path it resolves to: a caller outside core/ neither learns nor
+	// needs this deployment's filesystem layout, and an edit path has
+	// something to pre-select a picklist with.
+	ValidatorID ValidatorID
+
 	Disabled bool
 }
 
@@ -156,6 +163,20 @@ type CreateBackupSetRequest struct {
 
 	// StaleAfter defaults to defaultStaleAfter when zero.
 	StaleAfter time.Duration
+
+	// ValidatorID selects this backup set's FR-13 application validator
+	// from the registered catalog (validator.go's RegisteredValidators),
+	// or is "" for none, which is the default and what every request
+	// before issue #162 meant.
+	//
+	// An id, never a path, and that is structural rather than a
+	// convention this field's doc asks a caller to observe: an id outside
+	// the catalog is refused as an invalid request whatever it looks
+	// like, so there is no string a caller can put here that names an
+	// executable of its own (docs/EPIC-B-multi-nas.md §26 Step 5, and
+	// validator_test.go's TestNoAPIRequestCanNameAnExecutable, which
+	// walks this very struct).
+	ValidatorID ValidatorID
 
 	// Disabled excludes this backup set from RunCycle from the moment
 	// it is created ("Save disabled", the wizard's third save tier).
@@ -258,6 +279,22 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, fmt.Errorf("service: re-reading configuration: %w", err)
 	}
 
+	// Materialize the catalog's scripts, and prove this request's id
+	// resolves against them, BEFORE anything is written. validateCreateRequest
+	// above already refused an unregistered id, so what this adds is the
+	// filesystem half: if the state directory cannot hold the scripts, the
+	// honest outcome is a refusal with nothing persisted, not a backup set
+	// on disk that the running process was never able to hot-reload. Same
+	// fail-early reasoning as resolveSSHKeyFile above, and it is what
+	// leaves applyValidatorCatalog (after the write, below) with nothing
+	// left to fail on but a config file hand-edited between these two
+	// lines.
+	if req.ValidatorID != "" {
+		if _, err := resolveValidator(validatorScriptDir(cfg), req.ValidatorID); err != nil {
+			return CreateBackupSetResult{}, err
+		}
+	}
+
 	newSet := config.BackupSet{
 		Name: req.Name,
 		Remote: config.Remote{
@@ -289,7 +326,14 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		// Hash == "" trusting transfer verification alone the honest
 		// posture when hash capability is absent, which for this
 		// account shape is always.
-		Validation: config.Validation{Hash: ""},
+		// ValidatorID is persisted; the config.Command it resolves to is
+		// NOT, and applyValidatorCatalog below only fills it in AFTER this
+		// cfg has been written back to disk. That ordering is the whole
+		// point: the resolved path is this deployment's own materialized
+		// script directory, and a config.yaml holding a stale copy of it
+		// would fail every artifact in this backup set after the next
+		// restart, with an error naming a directory rather than the cause.
+		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
 	}
 	if req.CompletionStrategy == "stable" {
@@ -337,6 +381,17 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// the swap, purely to carry the already-wired Transport forward —
 	// this method is the only writer of b.state while configMu is held,
 	// so this read cannot itself race the swap below.
+	// Now, and only now that the file on disk holds the id, resolve every
+	// id in this config into the config.Command internal/lifecycle
+	// actually runs. cfg is this process's in-memory copy from here on and
+	// is never written back out again, so the resolved path stays out of
+	// config.yaml (see the Validation literal above). req.ValidatorID was
+	// already checked against the catalog by validateCreateRequest, so the
+	// only way this fails is the filesystem refusing to hold the scripts.
+	if err := applyValidatorCatalog(cfg); err != nil {
+		return CreateBackupSetResult{}, err
+	}
+
 	prevInner := b.state.Load().inner
 	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
 	// Alerting is re-decided from the config file this method just
@@ -486,6 +541,14 @@ func validateCreateRequest(req CreateBackupSetRequest) error {
 	if req.CompletionStrategy == "stable" && req.StableFor <= 0 {
 		problems = append(problems, `stable_for must be positive when completion_strategy is "stable"`)
 	}
+	if req.ValidatorID != "" && !isRegisteredValidator(req.ValidatorID) {
+		// Deliberately does not echo the value back. An unregistered id is
+		// refused structurally, whatever it looks like, and repeating a
+		// caller-supplied string that may well BE an attempted executable
+		// path into an error a UI renders is not worth the marginally
+		// better message.
+		problems = append(problems, "validator_id is not a registered validator; choose one the validator catalog lists")
+	}
 	if len(problems) == 0 {
 		return nil
 	}
@@ -508,6 +571,7 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		LocalPath:          bs.LocalPath,
 		Include:            bs.Include,
 		CompletionStrategy: bs.Completion.Strategy,
+		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
 	}
 }

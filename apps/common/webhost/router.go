@@ -165,6 +165,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Post("/backup-sets/test-connection", h.testConnection)
 		r.Get("/backup-sets/*", h.getBackupSet)
 
+		// Issue #162 (B3.2 follow-up): the registered-validator catalog
+		// the wizard's step 5 picklist reads. Read-only (§50), so no
+		// CSRF and no destructive gate, exactly like the GET routes
+		// above; there is deliberately no write counterpart, since a
+		// client-extensible catalog is the arbitrary-command surface §26
+		// Step 5 forbids. Registered as a static path, so it can never
+		// be shadowed by the "/backup-sets/*" catch-all above.
+		r.Get("/validators", h.listValidators)
+
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
 	})

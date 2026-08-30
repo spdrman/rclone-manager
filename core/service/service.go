@@ -166,6 +166,19 @@ type BackupService struct {
 	// a destructive operation.
 	ready bool
 
+	// validatorDir is where this BackupService's registered-validator
+	// scripts materialize: a "validators" directory beside
+	// cfg.State.Database (validatorScriptDir). It is derived once, at
+	// construction, from the config this BackupService was built from,
+	// and never changes -- a hot reload cannot move the state database,
+	// since config.Validate would have to accept a whole new one first,
+	// and CreateBackupSet only ever appends a backup set. Close removes
+	// the directory. It is "" for a BackupService built from a config
+	// with no state.database (a core/ test's in-memory *config.Config),
+	// which is what makes resolving a validator on one fail loudly
+	// instead of writing an executable somewhere guessed.
+	validatorDir string
+
 	// configMu serializes every call that reads-modifies-writes this
 	// BackupService's configuration (today: CreateBackupSet) against
 	// ITSELF — two concurrent CreateBackupSet calls must not interleave
@@ -208,6 +221,16 @@ type configState struct {
 // on a nil *obs.Logger, exactly as internal/obs's own package doc
 // promises.
 //
+// New does NOT resolve a backup set's Validation.ValidatorID into a
+// runnable Validation.Command: that is load-time work, and
+// OpenConfigAndJournal (below) is where it happens, so it covers both
+// production entry points (Open here, and cmd/backup-manager's own
+// openService) in one place rather than each caller of this constructor
+// remembering it. A cfg handed to New with an unresolved ValidatorID is
+// not silently un-validated either: internal/lifecycle/verify.go refuses
+// an artifact whose backup set names a validator that was never resolved,
+// rather than reading it as "no validator configured".
+//
 // New also sweeps journal for any operation left at "queued" or "running"
 // by a previous process using it (see
 // internal/state.Journal.FailInterruptedOperations's own doc): a fresh
@@ -223,6 +246,7 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 		ctx:            ctx,
 		cancel:         cancel,
 		retentionPlans: make(map[string]retentionPlanRecord),
+		validatorDir:   validatorScriptDir(cfg),
 	}
 	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 
@@ -261,6 +285,33 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 
 	journal, releaseJournal, err := runStartupSequence(ctx, cfg.State.Database)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Load-time resolution of every backup set's registered validator
+	// (validator.go's applyValidatorCatalog): the config file carries an
+	// id, the running process carries the command it resolves to. This
+	// happens AFTER runStartupSequence, which is what validated the state
+	// directory the scripts materialize into, and after LoadAndValidate,
+	// which refuses a Validation naming both an id and a command.
+	//
+	// An unregistered id fails startup here, deliberately. The alternative
+	// -- carrying on with no validator for that backup set -- would mean a
+	// typo in validator_id silently disabling the one check standing
+	// between a bad artifact and remote deletion, with the operator
+	// believing it was on.
+	if err := applyValidatorCatalog(cfg); err != nil {
+		// runStartupSequence already took the shared journal lock and
+		// opened the journal, and this function's contract is that a
+		// failure returns a nil *state.Journal. Both have to be given back
+		// here, in that order (see Close's own comment on why the lock is
+		// released only after the handle is closed), or a startup that
+		// fails on a bad validator_id leaves the lock held for the life of
+		// the process that is about to exit anyway.
+		_ = journal.Close()
+		if releaseJournal != nil {
+			_ = releaseJournal()
+		}
 		return nil, nil, nil, err
 	}
 
@@ -338,6 +389,19 @@ func (b *BackupService) Close() error {
 		if releaseErr := b.releaseJournal(); releaseErr != nil && err == nil {
 			err = releaseErr
 		}
+	}
+
+	// The materialized validator scripts go last, after the drain above
+	// has given any in-flight cycle its chance to finish running one.
+	// They are this process's own scaffolding, rewritten from the
+	// embedded copies on the next start, so removing them loses nothing
+	// -- and not removing them is how the previous implementation leaked
+	// a directory per process start. A failure here is logged, never
+	// returned: the caller has nothing to do about it, and reporting a
+	// clean shutdown as failed because a directory would not delete would
+	// be worse than the leak.
+	if rmErr := removeValidatorScripts(b.validatorDir); rmErr != nil {
+		b.logger.Error(context.Background(), "close", rmErr)
 	}
 	return err
 }
