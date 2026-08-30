@@ -70,3 +70,37 @@ func TestValidate_AlertsExplicitThresholdIsLeftAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadParsesTheAlertsBlock proves the YAML key names in the full
+// example file are the ones this package actually reads. Load uses
+// KnownFields(true), so a renamed key here is a parse error rather than a
+// silently-ignored field, which is exactly what makes this worth pinning.
+func TestLoadParsesTheAlertsBlock(t *testing.T) {
+	cfg, err := LoadAndValidate("testdata/full.yaml")
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	if !cfg.Alerts.Enabled {
+		t.Error("alerts.enabled did not parse as true from the full example")
+	}
+	if cfg.Alerts.RepeatedFailureThreshold != 3 {
+		t.Errorf("alerts.repeated_failure_threshold = %d, want 3", cfg.Alerts.RepeatedFailureThreshold)
+	}
+}
+
+// TestMinimalConfigLeavesAlertingOff proves a config file with no alerts
+// block at all, which is every config written before this work package,
+// still loads and still notifies nobody.
+func TestMinimalConfigLeavesAlertingOff(t *testing.T) {
+	cfg, err := LoadAndValidate("testdata/minimal.yaml")
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	if cfg.Alerts.Enabled {
+		t.Error("a config with no alerts block came back with alerting enabled")
+	}
+	if cfg.Alerts.RepeatedFailureThreshold != DefaultRepeatedFailureThreshold {
+		t.Errorf("alerts.repeated_failure_threshold = %d, want the default %d even when the block is absent",
+			cfg.Alerts.RepeatedFailureThreshold, DefaultRepeatedFailureThreshold)
+	}
+}

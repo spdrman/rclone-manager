@@ -39,6 +39,59 @@ type Config struct {
 	State        State     `yaml:"state"`
 	Sources      []Source  `yaml:"sources"`
 	Retention    Retention `yaml:"retention"`
+	Alerts       Alerts    `yaml:"alerts"`
+}
+
+// DefaultRepeatedFailureThreshold is how many artifacts have to be
+// sitting in FAILED for one backup set before Alerts calls that "repeated
+// failure" (docs/EPIC-B-multi-nas.md §71). Three is a deliberate middle:
+// one failed artifact is routine (the retry policy exists precisely
+// because transfers fail), while waiting for a large number would mean
+// the notification arrives long after an operator could still have done
+// something about it.
+const DefaultRepeatedFailureThreshold = 3
+
+// Alerts configures Work Package 3.5's proactive notification path
+// (docs/EPIC-B-multi-nas.md §71): stale backups, repeated failures, a
+// changed SSH host key and critical storage pressure, delivered through
+// the platform's own local notification capability.
+//
+// # Why this is opt-in, and why that is one bool
+//
+// §71 asks for "one explicit opt-in ... mechanism", and this block is
+// where that opt-in is spelled. The zero value (Enabled false) is off, so
+// a configuration written before this block existed, or one that simply
+// leaves it out, does not start notifying anybody after an upgrade. There
+// is deliberately no per-condition on/off switch and no channel
+// selection: §71 also says "do not add a broad notification framework in
+// v1", and a matrix of toggles here is exactly how that starts. An
+// operator either wants to be told about the four conditions this
+// product considers alert-worthy, or does not.
+//
+// Where the alert actually goes is not configured here at all. The
+// delivery mechanism is the platform's own notifier, supplied by the
+// provider app at the apps/ layer (core/ cannot import apps/, §7.1), so
+// there is nothing platform-shaped in this file for an operator to get
+// wrong, and no URL, command or credential for this package to have to
+// validate or redact.
+type Alerts struct {
+	// Enabled is the explicit opt-in. False, including by omission, means
+	// no proactive alert is ever delivered.
+	Enabled bool `yaml:"enabled"`
+
+	// RepeatedFailureThreshold is how many artifacts must currently be in
+	// FAILED for one backup set before that counts as §71's "repeated
+	// failure". Validate fills in DefaultRepeatedFailureThreshold when
+	// this is left at zero; see there for why a literal zero is never
+	// read as "alert on the first failure".
+	//
+	// This threshold governs the accumulated-failures arm only. A backup
+	// set internal/health places in its FAILING state (an irrecoverable
+	// QUARANTINED_LOST artifact, or a FAILED artifact with no retry
+	// scheduled) alerts regardless of this number, because that state
+	// means a human is needed now: see internal/alert's
+	// BackupSetConditions.
+	RepeatedFailureThreshold int `yaml:"repeated_failure_threshold"`
 }
 
 // State configures the SQLite lifecycle journal (FR-9). SQLite is

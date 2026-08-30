@@ -46,6 +46,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/alert"
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -152,6 +153,14 @@ type Service struct {
 	// RetryPolicy bounds this package's own network-facing retries (see
 	// DefaultRetryPolicy). The zero value uses DefaultRetryPolicy.
 	RetryPolicy retry.Policy
+
+	// Alerts is Work Package 3.5's proactive-alert dispatcher
+	// (docs/EPIC-B-multi-nas.md §71). Nil, the zero value, means
+	// alerting is off, which is the default and what every caller that
+	// never calls EnableAlerts gets. Set it through EnableAlerts
+	// (alerts.go) rather than directly: that is where the configured
+	// opt-in is honoured.
+	Alerts *alert.Dispatcher
 
 	mu            sync.Mutex
 	lastPoll      map[model.BackupSetID]time.Time

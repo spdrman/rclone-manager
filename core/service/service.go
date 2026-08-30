@@ -128,6 +128,14 @@ type BackupService struct {
 	// failure a caller needs.
 	configPath string
 
+	// alertSink is the proactive-alert delivery mechanism a provider app
+	// installed through EnableAlerts (alerts.go), or nil when alerting
+	// was never turned on. It is kept here, not only on the wrapped
+	// internal/app.Service, so CreateBackupSet's hot reload can carry
+	// alerting across the swap; it is written once during wiring, before
+	// any goroutine that reads it exists.
+	alertSink AlertSink
+
 	// configMu serializes every call that reads-modifies-writes this
 	// BackupService's configuration (today: CreateBackupSet) against
 	// ITSELF — two concurrent CreateBackupSet calls must not interleave

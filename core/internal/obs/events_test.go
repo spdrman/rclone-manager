@@ -37,6 +37,7 @@ func TestEventNamesAreStable(t *testing.T) {
 		{"EventRetry", EventRetry, "retry"},
 		{"EventStaleBackup", EventStaleBackup, "stale_backup"},
 		{"EventDiskPressure", EventDiskPressure, "disk_pressure"},
+		{"EventAlert", EventAlert, "alert"},
 		{"EventError", EventError, "error"},
 	}
 	seen := make(map[string]string, len(cases))
@@ -366,5 +367,28 @@ func TestErrorEvent(t *testing.T) {
 	got := lines[0]
 	if got["event"] != EventError || got["level"] != "ERROR" || got["op"] != "load_config" {
 		t.Errorf("got %#v", got)
+	}
+}
+
+// TestAlertEvent proves the proactive-alert line carries the typed kind,
+// the backup set it was about, and the operator-facing text that went
+// out, at LevelWarn.
+func TestAlertEvent(t *testing.T) {
+	l, buf := newRecorder(t)
+	l.Alert(context.Background(), "STALE_BACKUP", "production/postgres-primary",
+		"Backup set production/postgres-primary is STALE.")
+
+	got := decodeLines(t, buf)[0]
+	if got["event"] != EventAlert {
+		t.Errorf("event = %v, want %q", got["event"], EventAlert)
+	}
+	if got["level"] != "WARN" {
+		t.Errorf("level = %v, want WARN", got["level"])
+	}
+	if got["alert_kind"] != "STALE_BACKUP" || got["backup_set"] != "production/postgres-primary" {
+		t.Errorf("alert line = %v, want the typed kind and backup set carried through", got)
+	}
+	if got["detail"] != "Backup set production/postgres-primary is STALE." {
+		t.Errorf("detail = %v, want the delivered message", got["detail"])
 	}
 }

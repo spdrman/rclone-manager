@@ -65,8 +65,32 @@ func (c *Config) Validate() error {
 	}
 
 	v.validateRetention(&c.Retention)
+	v.validateAlerts(&c.Alerts)
 
 	return v.err()
+}
+
+// validateAlerts resolves the Alerts block (docs/EPIC-B-multi-nas.md
+// §71). Enabled needs no checking: both of its values are meaningful, and
+// false is the safe one.
+//
+// RepeatedFailureThreshold gets the same treatment validateRetention
+// already gives a retention tier, and for the same reason. A key left out
+// of the YAML file arrives here as a literal zero, and reading that
+// literally would mean "alert as soon as a single artifact fails", which
+// is not what omitting a key asks for; it is how an operator who turned
+// alerting on gets a notification per failed transfer and switches the
+// whole thing back off. So zero means "the documented default" and a
+// negative number is refused outright as a config mistake rather than
+// clamped, since there is no sensible reading of a negative count of
+// failures.
+func (v *validator) validateAlerts(a *Alerts) {
+	switch {
+	case a.RepeatedFailureThreshold == 0:
+		a.RepeatedFailureThreshold = DefaultRepeatedFailureThreshold
+	case a.RepeatedFailureThreshold < 0:
+		v.addf("alerts.repeated_failure_threshold: must be a positive number of failed artifacts (got %d)", a.RepeatedFailureThreshold)
+	}
 }
 
 func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, seenSetIDs map[string]string) {

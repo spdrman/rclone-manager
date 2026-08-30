@@ -110,6 +110,15 @@ sourcesLoop:
 		}
 	}
 
+	// Work Package 3.5's proactive alerting pass, last, so it weighs the
+	// journal state this cycle's own work just produced rather than the
+	// picture from before it ran. It is a no-op unless an administrator
+	// opted in AND a provider app supplied a delivery mechanism (see
+	// alerts.go's EnableAlerts), it computes no condition of its own, and
+	// it can neither fail this cycle nor start any work: an alert is a
+	// notification, never a trigger for retention or deletion (§71).
+	s.evaluateAlerts(ctx, report)
+
 	report.Duration = s.now().Sub(start)
 	s.logger().CycleEnd(ctx, cycleID, report.Duration, ctx.Err())
 	return report

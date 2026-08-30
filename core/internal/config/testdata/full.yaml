@@ -49,3 +49,7 @@ retention:
   weekly_months: 3
   monthly_months: 12
   protect_last_known_good: true
+
+alerts:
+  enabled: true
+  repeated_failure_threshold: 3

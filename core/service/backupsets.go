@@ -334,6 +334,13 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// so this read cannot itself race the swap below.
 	prevInner := b.state.Load().inner
 	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
+	// Carry the already-wired alert dispatcher across the swap rather
+	// than building a fresh one from b.alertSink: the dispatcher holds
+	// which conditions are currently firing (internal/alert's
+	// de-duplication state), and rebuilding it would re-alert every
+	// still-unresolved condition the next time a cycle ran, purely
+	// because somebody added a backup set.
+	newInner.Alerts = prevInner.Alerts
 	newRevision := computeConfigRevision(cfg)
 	b.state.Store(&configState{inner: newInner, revision: newRevision})
 
