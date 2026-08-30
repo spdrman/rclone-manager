@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import type { AsyncState } from "@shared/hooks/useAsync";
 import { PageHeader } from "@shared/components/PageHeader";
@@ -31,6 +32,28 @@ export function QuarantinePage({
   quarantine: AsyncState<BackupArtifact[]>;
 }) {
   const api = useApi();
+  // Neither call resolves with a body worth keeping — the reload of
+  // `quarantine` is what actually updates the row. This state exists only
+  // to give a rejected revalidate/retry a visible outcome instead of a
+  // silent no-op (mandatory review, PR #147): without it, a backend
+  // failure left the button's click looking like it did nothing at all.
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const revalidate = (a: BackupArtifact) => {
+    setActionError(null);
+    api
+      .revalidate(a.id)
+      .then(quarantine.reload)
+      .catch(() => setActionError("Could not revalidate \"" + a.filename + "\". Try again."));
+  };
+
+  const retryIngestion = (a: BackupArtifact) => {
+    setActionError(null);
+    api
+      .retryIngestion(a.id)
+      .then(quarantine.reload)
+      .catch(() => setActionError("Could not retry ingestion for \"" + a.filename + "\". Try again."));
+  };
 
   if (quarantine.error) return <ErrorState {...quarantine.error} onRetry={quarantine.reload} />;
 
@@ -42,6 +65,12 @@ export function QuarantinePage({
         title="Quarantine"
         subtitle="Artifacts held back from the catalog. Their remote originals are retained until the issue is resolved."
       />
+
+      {actionError ? (
+        <div style={{ marginBottom: 14 }}>
+          <ErrorState message={actionError} correlationId="cid_quarantine_action" />
+        </div>
+      ) : null}
 
       {data.length === 0 ? (
         <EmptyState title="No quarantined backups">
@@ -80,10 +109,10 @@ export function QuarantinePage({
                       <td>
                         <span style={{ display: "flex", gap: 7, justifyContent: "flex-end" }}>
                           <button className="btn btn--sm">Inspect</button>
-                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.revalidate(a.id).then(quarantine.reload)}>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => revalidate(a)}>
                             Revalidate
                           </button>
-                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.retryIngestion(a.id).then(quarantine.reload)}>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => retryIngestion(a)}>
                             Retry ingestion
                           </button>
                         </span>
