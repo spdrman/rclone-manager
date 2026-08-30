@@ -285,11 +285,12 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 // currentPassword is then checked against that same administrator's
 // stored hash, the same "prove you know the secret, not just that you
 // hold a cookie" shape login itself uses. A successful rotation revokes
-// every OTHER live session (sessionManager.revokeAll) before issuing a
-// fresh one for the request that performed it, so a stolen or
-// forgotten-open session elsewhere does not survive a password change,
-// while the operator doing the rotation is not logged out by their own
-// action.
+// every OTHER live session and issues a fresh one for the request that
+// performed it as a single atomic step (sessionManager.rotateSession), so
+// a stolen or forgotten-open session elsewhere does not survive a
+// password change, while the operator doing the rotation is not logged
+// out by their own action - including by a second, racing rotation
+// request of their own (double-click, duplicate tab, a retried POST).
 func (s *Service) handleRotatePassword(w http.ResponseWriter, r *http.Request) {
 	if !s.rotateLimiter.Allow(remoteIP(r, s.trustForwardedHeaders)) {
 		writeAuthError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many password change attempts; wait before trying again")
@@ -342,8 +343,7 @@ func (s *Service) handleRotatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.sessions.revokeAll()
-	token, expiresAt, err := s.sessions.create(admin.Username)
+	token, expiresAt, err := s.sessions.rotateSession(admin.Username)
 	if err != nil {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
 		return

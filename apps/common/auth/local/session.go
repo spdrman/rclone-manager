@@ -39,14 +39,25 @@ func newSessionManager(now func() time.Time) *sessionManager {
 	return &sessionManager{byTok: map[string]sessionRecord{}, now: now}
 }
 
+// generateSessionToken returns a fresh, cryptographically random opaque
+// session token. Shared by create and rotateSession so both mint tokens
+// the same way; neither holds m.mu while it runs, since it does not touch
+// byTok at all.
+func generateSessionToken() (string, error) {
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("local: generate session token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
 // create issues a brand new session for username and returns its opaque
 // token and expiry.
 func (m *sessionManager) create(username string) (token string, expiresAt time.Time, err error) {
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
-		return "", time.Time{}, fmt.Errorf("local: generate session token: %w", err)
+	token, err = generateSessionToken()
+	if err != nil {
+		return "", time.Time{}, err
 	}
-	token = base64.RawURLEncoding.EncodeToString(raw)
 	expiresAt = m.now().Add(sessionTTL)
 
 	m.mu.Lock()
@@ -84,17 +95,37 @@ func (m *sessionManager) revoke(token string) {
 	m.mu.Unlock()
 }
 
-// revokeAll invalidates every live session immediately, regardless of
-// expiry - password rotation's session-invalidation guarantee
-// (handler.go's handleRotatePassword): a stolen or forgotten-open session
-// must not survive a password change just because nobody explicitly
-// logged it out. Every session in this package belongs to the one
+// rotateSession atomically revokes every live session and installs a
+// single new one for username, all under one m.mu acquisition - password
+// rotation's session-invalidation guarantee (handler.go's
+// handleRotatePassword): a stolen or forgotten-open session must not
+// survive a password change just because nobody explicitly logged it
+// out, while the operator performing the rotation must not be logged out
+// by their own action. Every session in this package belongs to the one
 // administrator this package supports (§13.4), so there is no per-user
 // distinction to make here.
-func (m *sessionManager) revokeAll() {
+//
+// This has to be one atomic step, not a revoke-everything call followed
+// by a separate create() the way the two used to be composed: those are
+// two independently-locked calls, so if two rotation requests from the
+// same admin raced (a double-click before the button disables, two open
+// tabs, a client retrying a timed-out POST), request B's revoke-all could
+// fire after request A's create() had already installed A's new session,
+// wiping out the very session A's own successful rotation just issued.
+// Replacing the whole map in one locked step means the last rotateSession
+// call to run always wins outright, and no interleaving of concurrent
+// calls can ever leave zero live sessions.
+func (m *sessionManager) rotateSession(username string) (token string, expiresAt time.Time, err error) {
+	token, err = generateSessionToken()
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	expiresAt = m.now().Add(sessionTTL)
+
 	m.mu.Lock()
-	m.byTok = map[string]sessionRecord{}
+	m.byTok = map[string]sessionRecord{token: {username: username, expiresAt: expiresAt}}
 	m.mu.Unlock()
+	return token, expiresAt, nil
 }
 
 // tokenFromRequest reads the session cookie from a real *http.Request
