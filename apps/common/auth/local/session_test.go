@@ -57,6 +57,32 @@ func TestSessionManager_RevokeInvalidatesTheSessionImmediately(t *testing.T) {
 	}
 }
 
+// TestSessionManager_RevokeAllInvalidatesEverySession is password
+// rotation's session-invalidation guarantee (handler.go's
+// handleRotatePassword) at the sessionManager level: a stolen or
+// forgotten-open session must not survive a password change just because
+// nobody explicitly logged it out.
+func TestSessionManager_RevokeAllInvalidatesEverySession(t *testing.T) {
+	m := newSessionManager(time.Now)
+	a, _, err := m.create("bm-admin")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	b, _, err := m.create("bm-admin")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	m.revokeAll()
+
+	if _, ok := m.lookup(a); ok {
+		t.Error("lookup(a) = true after revokeAll, want false")
+	}
+	if _, ok := m.lookup(b); ok {
+		t.Error("lookup(b) = true after revokeAll, want false")
+	}
+}
+
 func TestSessionManager_TwoSessionsGetDifferentTokens(t *testing.T) {
 	m := newSessionManager(time.Now)
 	a, _, err := m.create("bm-admin")

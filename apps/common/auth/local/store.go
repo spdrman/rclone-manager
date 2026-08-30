@@ -100,6 +100,31 @@ func (s *Store) Admin() (*AdminRecord, error) {
 	return f.Admin, nil
 }
 
+// ErrNotEnrolled is returned by Store.SetPassword when no administrator
+// exists yet - rotating a password before enrollment is meaningless, and
+// this is the one method in this package that could otherwise silently
+// create a partial admin record.
+var ErrNotEnrolled = errors.New("local: no administrator account exists yet")
+
+// SetPassword replaces the persisted administrator's password hash with
+// newHash, leaving Username and CreatedAt untouched. It fails with
+// ErrNotEnrolled if no administrator has enrolled yet - password rotation
+// is meaningless before enrollment, and this is the one method in this
+// package that could otherwise silently create a partial admin record.
+func (s *Store) SetPassword(newHash string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.load()
+	if err != nil {
+		return err
+	}
+	if f.Admin == nil {
+		return ErrNotEnrolled
+	}
+	f.Admin.PasswordHash = newHash
+	return s.save(f)
+}
+
 // Enroll persists admin as this store's one administrator record. It
 // fails with ErrAlreadyEnrolled if a record already exists: enrollment is
 // single-shot and irreversible (§49.1), and this is the one method in

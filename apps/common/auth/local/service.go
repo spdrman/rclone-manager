@@ -23,6 +23,11 @@ type Config struct {
 	LoginRateLimit  int
 	EnrollRateLimit int
 
+	// PasswordRateLimit bounds POST /password attempts per remote IP per
+	// minute, the same per-IP rate-limit treatment /login already gets
+	// (issue #128). Zero means DefaultPasswordRateLimit.
+	PasswordRateLimit int
+
 	// TrustForwardedHeaders makes this Service trust X-Forwarded-For (for
 	// rate limiting, ratelimit.go's remoteIP) and X-Forwarded-Proto (for
 	// the session/CSRF cookies' Secure flag, forwarded.go's
@@ -66,9 +71,10 @@ type Config struct {
 // password a few times in a row is never the thing that trips this, tight
 // enough to make an automated guessing loop impractical.
 const (
-	DefaultLoginRateLimit  = 10
-	DefaultEnrollRateLimit = 5
-	rateLimitWindow        = time.Minute
+	DefaultLoginRateLimit    = 10
+	DefaultEnrollRateLimit   = 5
+	DefaultPasswordRateLimit = 10
+	rateLimitWindow          = time.Minute
 )
 
 // Service composes everything this package's doc comment describes into
@@ -81,6 +87,7 @@ type Service struct {
 	bootstrap             *bootstrapIssuer
 	loginLimiter          *RateLimiter
 	enrollLimiter         *RateLimiter
+	rotateLimiter         *RateLimiter
 	now                   func() time.Time
 	trustForwardedHeaders bool
 }
@@ -107,6 +114,10 @@ func New(cfg Config) (*Service, error) {
 	if enrollLimit == 0 {
 		enrollLimit = DefaultEnrollRateLimit
 	}
+	passwordLimit := cfg.PasswordRateLimit
+	if passwordLimit == 0 {
+		passwordLimit = DefaultPasswordRateLimit
+	}
 
 	store := NewStore(cfg.StorePath)
 	admin, err := store.Admin()
@@ -125,6 +136,8 @@ func New(cfg Config) (*Service, error) {
 	loginLimiter.now = now
 	enrollLimiter := NewRateLimiter(enrollLimit, rateLimitWindow)
 	enrollLimiter.now = now
+	rotateLimiter := NewRateLimiter(passwordLimit, rateLimitWindow)
+	rotateLimiter.now = now
 
 	return &Service{
 		store:                 store,
@@ -132,6 +145,7 @@ func New(cfg Config) (*Service, error) {
 		bootstrap:             bootstrap,
 		loginLimiter:          loginLimiter,
 		enrollLimiter:         enrollLimiter,
+		rotateLimiter:         rotateLimiter,
 		now:                   now,
 		trustForwardedHeaders: cfg.TrustForwardedHeaders,
 	}, nil

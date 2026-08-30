@@ -37,6 +37,17 @@ type credentialsRequest struct {
 	Password string `json:"password"`
 }
 
+// rotatePasswordRequest mirrors ui/shared/src/api/client.ts's
+// `rotatePassword` request body ({currentPassword, newPassword} JSON).
+// RED scaffolding (issue #128): POST /password is not wired up in
+// Handler() yet, so every rotation test currently 404s against this
+// package's router - the smallest compiling step before the real route
+// and handler exist.
+type rotatePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
 type sessionResponse struct {
 	Username string `json:"username"`
 }
@@ -80,22 +91,23 @@ func correlationID() string {
 	return "cid_" + base64.RawURLEncoding.EncodeToString(b)
 }
 
-// Handler returns the http.Handler serving this package's four routes,
+// Handler returns the http.Handler serving this package's five routes,
 // relative to whatever prefix the caller mounts it at (apps/generic
 // mounts it at /api/v1/auth, matching ui/shared's own expectation):
 //
 //	POST /login    - {username, password} -> 204 + session cookie
 //	POST /enroll   - {username, password} + X-Bootstrap-Token -> 204 + session cookie
+//	POST /password - {currentPassword, newPassword}, session required -> 204 + fresh session cookie
 //	POST /logout   - -> 204, session cookie cleared
 //	GET  /session  - -> 200 {username} if authenticated, 401 otherwise
 //
-// login/enroll/logout are wrapped in requireCSRF (they mutate
-// server-side state - a new or cleared session - so they need the same
-// protection as any other state-changing route); login/enroll are also
-// rate-limited by remote IP. GET /session deliberately has neither: it
-// mutates nothing, and gating a read with CSRF or a login-attempt budget
-// would only make the page's own "am I signed in" check flaky for no
-// security benefit.
+// login/enroll/logout/password are wrapped in requireCSRF (they mutate
+// server-side state - a new or cleared session, or the persisted password
+// hash - so they need the same protection as any other state-changing
+// route); login/enroll/password are also rate-limited by remote IP. GET
+// /session deliberately has neither: it mutates nothing, and gating a
+// read with CSRF or a login-attempt budget would only make the page's
+// own "am I signed in" check flaky for no security benefit.
 //
 // # This handler alone is NOT self-sufficient - callers MUST also wrap
 //
@@ -116,6 +128,7 @@ func (s *Service) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.With(requireCSRF).Post("/login", s.handleLogin)
 	r.With(requireCSRF).Post("/enroll", s.handleEnroll)
+	r.With(requireCSRF).Post("/password", s.handleRotatePassword)
 	r.With(requireCSRF).Post("/logout", s.handleLogout)
 	r.Get("/session", s.handleSession)
 	return r
@@ -262,6 +275,79 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token, expiresAt, err := s.sessions.create(req.Username)
+	if err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
+		return
+	}
+	setSessionCookie(w, r, token, expiresAt, s.trustForwardedHeaders)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRotatePassword implements POST /password. It requires an already
+// authenticated session (unlike login/enroll, which have to work WITHOUT
+// one) - the session cookie identifies who is rotating, and
+// currentPassword is then checked against that same administrator's
+// stored hash, the same "prove you know the secret, not just that you
+// hold a cookie" shape login itself uses. A successful rotation revokes
+// every OTHER live session (sessionManager.revokeAll) before issuing a
+// fresh one for the request that performed it, so a stolen or
+// forgotten-open session elsewhere does not survive a password change,
+// while the operator doing the rotation is not logged out by their own
+// action.
+func (s *Service) handleRotatePassword(w http.ResponseWriter, r *http.Request) {
+	if !s.rotateLimiter.Allow(remoteIP(r, s.trustForwardedHeaders)) {
+		writeAuthError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many password change attempts; wait before trying again")
+		return
+	}
+
+	username, ok := s.sessions.lookup(tokenFromRequest(r))
+	if !ok {
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "no active session")
+		return
+	}
+
+	var req rotatePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAuthError(w, http.StatusBadRequest, "INVALID_REQUEST", "malformed request body")
+		return
+	}
+
+	admin, err := s.store.Admin()
+	if err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
+		return
+	}
+	if admin == nil || admin.Username != username {
+		// A live session implies an administrator exists and named this
+		// session's own username at creation time (handleLogin/handleEnroll);
+		// this branch guards against that invariant somehow not holding
+		// rather than assuming it always will.
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "no active session")
+		return
+	}
+
+	if err := verifyPassword(admin.PasswordHash, req.CurrentPassword); err != nil {
+		writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "current password is incorrect")
+		return
+	}
+
+	if len(req.NewPassword) < minPasswordLength {
+		writeAuthError(w, http.StatusBadRequest, "INVALID_REQUEST", "password must be at least 12 characters")
+		return
+	}
+
+	hash, err := hashPassword(req.NewPassword)
+	if err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
+		return
+	}
+	if err := s.store.SetPassword(hash); err != nil {
+		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
+		return
+	}
+
+	s.sessions.revokeAll()
+	token, expiresAt, err := s.sessions.create(admin.Username)
 	if err != nil {
 		writeAuthError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "an internal error occurred")
 		return

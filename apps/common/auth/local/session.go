@@ -84,6 +84,19 @@ func (m *sessionManager) revoke(token string) {
 	m.mu.Unlock()
 }
 
+// revokeAll invalidates every live session immediately, regardless of
+// expiry - password rotation's session-invalidation guarantee
+// (handler.go's handleRotatePassword): a stolen or forgotten-open session
+// must not survive a password change just because nobody explicitly
+// logged it out. Every session in this package belongs to the one
+// administrator this package supports (§13.4), so there is no per-user
+// distinction to make here.
+func (m *sessionManager) revokeAll() {
+	m.mu.Lock()
+	m.byTok = map[string]sessionRecord{}
+	m.mu.Unlock()
+}
+
 // tokenFromRequest reads the session cookie from a real *http.Request
 // (the HTTP handlers in handler.go use this); sessionAuthenticator
 // (authenticator.go) reads the same cookie out of a raw header string
