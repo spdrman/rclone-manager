@@ -10,6 +10,8 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/alert"
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
@@ -208,5 +210,134 @@ func TestRunCycle_WithoutASinkStillRunsNormally(t *testing.T) {
 	}
 	if tr.copyToLocalCalls() != 1 {
 		t.Fatalf("CopyToLocal calls = %d, want 1", tr.copyToLocalCalls())
+	}
+}
+
+// TestRunCycle_DisabledBackupSetNeverAlerts proves a backup set an
+// administrator deliberately switched off is not reported as a problem.
+// It ages past stale_after by definition, since nothing polls it, so
+// alerting on it would mean one notification for a state somebody asked
+// for, followed by a condition that can never resolve.
+func TestRunCycle_DisabledBackupSetNeverAlerts(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.StaleAfter = mustParseDuration(t, "1h")
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload", epoch.Unix())
+
+	svc := New(alertingConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	// One good cycle while the set is still enabled, so it has history to
+	// go stale from, then the administrator disables it.
+	svc.RunCycle(context.Background())
+	svc.Config.Sources[0].BackupSets[0].Disabled = true
+
+	svc.Now = fixedNow(epoch.Add(48 * time.Hour))
+	svc.RunCycle(context.Background())
+	svc.Now = fixedNow(epoch.Add(72 * time.Hour))
+	svc.RunCycle(context.Background())
+
+	if got := sink.kinds(); len(got) != 0 {
+		t.Fatalf("a disabled backup set produced alerts %v, want none", got)
+	}
+}
+
+// TestRunCycle_CancelledContextDoesNotResetDeduplication proves a pass
+// that could not look is not read as a pass that looked and saw nothing.
+// A cycle interrupted by shutdown must not clear the dispatcher's memory
+// of what is already firing, or every unresolved condition would alert
+// again on the next start.
+func TestRunCycle_CancelledContextDoesNotResetDeduplication(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.StaleAfter = mustParseDuration(t, "1h")
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload", epoch.Unix())
+
+	svc := New(alertingConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	svc.RunCycle(context.Background())
+	svc.Now = fixedNow(epoch.Add(48 * time.Hour))
+	svc.RunCycle(context.Background())
+	if got := sink.countOf(alert.StaleBackup); got != 1 {
+		t.Fatalf("stale alerts = %d after the first stale pass, want 1", got)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	svc.RunCycle(cancelled)
+
+	// Still stale, and still already reported: the interrupted pass must
+	// not have made the dispatcher forget.
+	svc.Now = fixedNow(epoch.Add(96 * time.Hour))
+	svc.RunCycle(context.Background())
+
+	if got := sink.countOf(alert.StaleBackup); got != 1 {
+		t.Fatalf("stale alerts = %d, want still exactly 1: an interrupted pass must not reset de-duplication", got)
+	}
+}
+
+// listFailingJournal is a Journal whose ListByBackupSet always fails, so
+// a test can prove an alerting pass that cannot read journal state
+// declines to draw any conclusion from that.
+type listFailingJournal struct {
+	Journal
+	err error
+}
+
+func (j listFailingJournal) ListByBackupSet(context.Context, model.BackupSetID) ([]state.Record, error) {
+	return nil, j.err
+}
+
+// TestEvaluateAlerts_UnreadableJournalDoesNotResetDeduplication is the
+// same contract as the cancelled-context case, for the other way a pass
+// can fail to see: if the health report cannot be built, nothing is
+// observed, so nothing is treated as resolved.
+func TestEvaluateAlerts_UnreadableJournalDoesNotResetDeduplication(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.StaleAfter = mustParseDuration(t, "1h")
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload", epoch.Unix())
+
+	journal := openJournal(t)
+	svc := New(alertingConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	svc.RunCycle(context.Background())
+	svc.Now = fixedNow(epoch.Add(48 * time.Hour))
+	svc.RunCycle(context.Background())
+	if got := sink.countOf(alert.StaleBackup); got != 1 {
+		t.Fatalf("stale alerts = %d after the first stale pass, want 1", got)
+	}
+
+	svc.Journal = listFailingJournal{Journal: journal, err: errors.New("database is locked")}
+	svc.evaluateAlerts(context.Background(), CycleReport{})
+
+	svc.Journal = journal
+	svc.evaluateAlerts(context.Background(), CycleReport{})
+
+	if got := sink.countOf(alert.StaleBackup); got != 1 {
+		t.Fatalf("stale alerts = %d, want still exactly 1: a pass that could not read the journal must not reset de-duplication", got)
 	}
 }

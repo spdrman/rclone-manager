@@ -5,6 +5,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/alert"
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
@@ -60,46 +61,90 @@ func (s *Service) EnableAlerts(sink alert.Sink) bool {
 //     assigned when it refused the connection, so the alert rides on the
 //     refusal instead of second-guessing it (§77 invariant #5).
 //
-// A failure building the health report is logged and drops only the
-// health-derived conditions for this pass; the host-key conditions the
-// cycle itself produced still go through. Nothing here returns an error,
-// because there is nothing a cycle could usefully do about a failed
-// alerting pass, and an alerting problem must never be able to fail a
-// backup run.
+// # Why a pass that cannot see clearly declines to run at all
+//
+// Dispatcher.Observe treats its argument as the complete picture: a
+// condition missing from it has resolved, and is forgotten so the next
+// occurrence alerts again. That is the right reading of a pass that
+// looked and saw nothing wrong, and the wrong reading of a pass that
+// could not look. So this returns without observing anything when the
+// health report cannot be built, or when ctx is already done, rather than
+// handing over a partial set. Otherwise one transient journal error, or
+// an interrupted cycle during shutdown, would silently clear the
+// de-duplication state and re-alert every still-unresolved condition on
+// the following pass, which is exactly the storm the de-duplication
+// exists to prevent.
+//
+// Nothing here returns an error: there is nothing a cycle could usefully
+// do about a failed alerting pass, and an alerting problem must never be
+// able to fail a backup run.
 func (s *Service) evaluateAlerts(ctx context.Context, report CycleReport) {
-	if s.Alerts == nil {
+	if s.Alerts == nil || ctx.Err() != nil {
+		return
+	}
+
+	healthReport, err := s.BuildHealthReport(ctx, VersionInfo{})
+	if err != nil {
+		s.logger().Error(ctx, "alert-evaluation", err)
 		return
 	}
 
 	conditions := make([]alert.Condition, 0, len(report.Sets))
 
-	// A changed host key is the one condition that comes from the cycle's
-	// own outcome rather than from journal state, so it is collected even
-	// when the health report below cannot be built.
+	// A changed host key comes from the cycle's own outcome rather than
+	// from journal state, so it is collected from the cycle report.
 	for _, set := range report.Sets {
 		if category, ok := transport.CategoryOf(set.Err); ok {
 			conditions = append(conditions, alert.HostKeyConditions(set.Set.String(), category)...)
 		}
 	}
 
-	if health, err := s.BuildHealthReport(ctx, VersionInfo{}); err != nil {
-		s.logger().Error(ctx, "alert-evaluation", err)
-	} else {
-		threshold := s.Config.Alerts.RepeatedFailureThreshold
-		for _, bs := range health.BackupSets {
-			conditions = append(conditions, alert.BackupSetConditions(bs, threshold)...)
+	alertable := s.alertableBackupSets()
+	threshold := s.Config.Alerts.RepeatedFailureThreshold
 
-			if bs.FreeBytes == nil {
-				continue
-			}
-			assessment, err := capacity.AssessCurrent(capacity.Stat{AvailableBytes: *bs.FreeBytes}, s.Capacity)
-			if err != nil {
-				s.logger().Error(ctx, "alert-evaluation", err)
-				continue
-			}
-			conditions = append(conditions, alert.StorageConditions(bs.Set.String(), assessment)...)
+	for _, bs := range healthReport.BackupSets {
+		if !alertable[bs.Set] {
+			continue
 		}
+		conditions = append(conditions, alert.BackupSetConditions(bs, threshold)...)
+
+		if bs.FreeBytes == nil {
+			continue
+		}
+		assessment, err := capacity.AssessCurrent(capacity.Stat{AvailableBytes: *bs.FreeBytes}, s.Capacity)
+		if err != nil {
+			s.logger().Error(ctx, "alert-evaluation", err)
+			continue
+		}
+		conditions = append(conditions, alert.StorageConditions(bs.Set.String(), assessment)...)
 	}
 
 	s.Alerts.Observe(ctx, conditions, s.now())
+}
+
+// alertableBackupSets is every configured backup set alerting may speak
+// about: every one RunCycle actually processes.
+//
+// A backup set saved disabled (config.BackupSet.Disabled, issue #146's
+// "Save disabled" tier) is excluded, and that exclusion is the whole
+// reason this exists. BuildHealthReport reports a disabled set like any
+// other, correctly: `backup-manager status` should still show it, and
+// FR-24 has no notion of a set being switched off. Alerting is a
+// different question. A disabled set is never polled, so its newest
+// known-good backup ages past stale_after and stays there forever, and
+// alerting on that would mean an administrator who deliberately turned a
+// backup set off gets told about it on the first pass and then, once the
+// condition is dismissed, has a permanently unresolved condition sitting
+// in the dispatcher. Nothing is wrong: somebody asked for exactly this.
+func (s *Service) alertableBackupSets() map[model.BackupSetID]bool {
+	out := map[model.BackupSetID]bool{}
+	for _, src := range s.Config.Sources {
+		for _, bs := range src.BackupSets {
+			if bs.Disabled {
+				continue
+			}
+			out[bs.ID] = true
+		}
+	}
+	return out
 }
