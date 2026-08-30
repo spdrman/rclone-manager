@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
@@ -10,7 +12,10 @@ import type { Severity } from "@shared/types/operation";
 export function ActivityPage() {
   const api = useApi();
   const events = useAsync(() => api.listActivity(), [api]);
-  const sets = useAsync(() => api.listSets(), [api]);
+  // Reads the same shared node BackupSetsPage/DashboardPage/BackupsPage do
+  // (#106) instead of running a fifth independent listSets() fetch just to
+  // populate this filter dropdown (#103).
+  const sets = useCausl(setsNode);
 
   const [setId, setSetId] = useState("");
   const [minSeverity, setMinSeverity] = useState("");
