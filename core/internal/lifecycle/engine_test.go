@@ -24,6 +24,14 @@ func (f *fakeJournal) RecordTransition(_ context.Context, t state.Transition) (s
 	return state.Outcome{Applied: true}, f.err
 }
 
+// LastEnteredAt reports "never entered" rather than a zero time that would
+// read as the distant past. Every caller of this that decides anything
+// destructive treats absent evidence as a refusal, and a fake used by tests
+// about Advance should not be the thing that quietly hands one an answer.
+func (f *fakeJournal) LastEnteredAt(context.Context, model.ArtifactID, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 func mustID(t *testing.T) model.ArtifactID {
 	t.Helper()
 	set, err := model.NewBackupSetID("production", "postgres-primary")

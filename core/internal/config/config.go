@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -164,7 +165,44 @@ func (k Key) isZero() bool {
 type Completion struct {
 	Strategy  string   `yaml:"strategy"` // "rename", "marker" or "stable"
 	StableFor Duration `yaml:"stable_for"`
+
+	// DeleteSafetyDelay is WP3.2's additional deletion-safety delay
+	// (docs/EPIC-B-multi-nas.md §26 Step 3, §71 Work Package 3.2): only
+	// used when Strategy == "stable". "stable" only ever confirms a
+	// size/mtime heuristic, never a producer completion signal the way
+	// "rename"/"marker" do, so FR-15's remote-delete gate
+	// (internal/lifecycle/remotedelete.go) additionally requires this
+	// much time to have passed since the artifact last reached a
+	// confirmed-good journal state before it treats a "stable" artifact
+	// as equivalent to one completed by "rename" or "marker". This is
+	// deliberately a separate field from StableFor, not a second use of
+	// it: StableFor answers "has this looked done long enough to start
+	// processing it at all" (internal/discovery/complete.go); this
+	// answers a different question asked at a different, later, more
+	// dangerous point in the pipeline, "has it looked done long enough
+	// to destroy the only other copy".
+	//
+	// A zero value is not read literally. Validate resolves it to
+	// DefaultDeleteSafetyDelay, the same way validateRetention resolves a
+	// zero tier to its documented default: this key did not exist before
+	// WP3.2, so every config file written against an earlier release
+	// omits it, and reading the omission as "no delay is required" would
+	// silently turn the gate off on exactly the deployments that never
+	// got the chance to opt in. Only a negative value is refused.
+	DeleteSafetyDelay Duration `yaml:"delete_safety_delay"`
 }
+
+// DefaultDeleteSafetyDelay is the Completion.DeleteSafetyDelay that
+// Validate fills in when a "stable" backup set does not set one.
+//
+// One hour is picked to be longer than any plausible gap between a
+// producer finishing a write and the size/mtime heuristic noticing, while
+// still short enough that a daily archive reclaims its remote space on the
+// same day it was captured. It is deliberately much larger than the
+// stable_for values this project documents (minutes), because the two
+// answer different questions: stable_for gates starting work on an
+// artifact, this gates destroying the only other copy of it.
+const DefaultDeleteSafetyDelay = time.Hour
 
 // Validation configures how a transferred artifact gets checked before it's
 // allowed to be treated as a good restore point (FR-13).

@@ -91,7 +91,8 @@ func TestDeleteRemote_SymlinkSwapOfCommittedFile_RefusedViaHashMismatch(t *testi
 		},
 	}
 	_, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Source: transport.Source{ID: "prod-nas"}, Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Source:             transport.Source{ID: "prod-nas"}, Artifact: artifact, AttemptKey: "attempt-1",
 	})
 	refusal := requireRefusal(t, err, "local file")
 	t.Logf("refused as expected: %s", refusal.Reason)
@@ -335,7 +336,8 @@ func TestDeleteRemote_StaleJournalRowThatNeverWentThroughCommitted_Refused(t *te
 		},
 	}
 	_, err = DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Source: transport.Source{ID: "prod-nas"}, Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Source:             transport.Source{ID: "prod-nas"}, Artifact: artifact, AttemptKey: "attempt-1",
 	})
 	refusal := requireRefusal(t, err, "local file")
 	t.Logf("refused as expected: %s", refusal.Reason)

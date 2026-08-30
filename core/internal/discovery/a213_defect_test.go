@@ -109,7 +109,8 @@ func TestRealPipeline_DeleteRemote_ConfirmsIdentityAndProceeds(t *testing.T) {
 	}
 
 	_, deleteErr := lifecycle.DeleteRemote(ctx, lifeDeps, lifecycle.DeleteRemoteRequest{
-		Source: source, Artifact: artifact, AttemptKey: "delete:attempt-1",
+		CompletionStrategy: "rename",
+		Source:             source, Artifact: artifact, AttemptKey: "delete:attempt-1",
 	})
 
 	// This used to assert the opposite. The adapter's Stat never carried a
