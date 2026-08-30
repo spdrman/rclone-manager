@@ -44,13 +44,12 @@ export function App() {
   const health = useResource(healthNode, () => api.getHealth(), [api]);
   const version = useResource(versionNode, () => api.getVersion(), [api]);
   const sets = useResource(setsNode, () => api.listSets(), [api]);
-  // Fetched into the graph purely for the header's quarantine count
-  // (countsNode, below). QuarantinePage does NOT read quarantineNode — it
-  // runs its own separate, uncoordinated api.listQuarantine() fetch via
-  // useAsync (pre-existing duplication, not new to this migration), so the
-  // two can disagree with each other in principle. Rewiring the page onto
-  // this node is arguably B2.5's scope; see #101.
-  useResource(quarantineNode, () => api.listQuarantine(), [api]);
+  // Owns the one fetch of quarantineNode (#101, matching health/sets
+  // above): the header's quarantine badge (countsNode, below) and
+  // QuarantinePage's own list both read this same node, via the
+  // `quarantine` object passed down here, so they cannot disagree about
+  // what is currently quarantined.
+  const quarantine = useResource(quarantineNode, () => api.listQuarantine(), [api]);
   // B2.1 (#95) — the one fetch of operationsNode. DashboardPage and
   // BackupSetsPage both read the node directly (useCausl), never their own
   // listOperations() call, so a poll tick here is the only thing that can
@@ -61,7 +60,8 @@ export function App() {
     health.reload();
     sets.reload();
     operations.reload();
-  }, [health, sets, operations]);
+    quarantine.reload();
+  }, [health, sets, operations, quarantine]);
 
   usePolling(30_000, reloadAll, auth?.authenticated ?? false);
 
@@ -114,7 +114,7 @@ export function App() {
         <Route path="/backups" element={<BackupsPage readOnly={readOnly} />} />
         <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
         <Route path="/activity" element={<ActivityPage />} />
-        <Route path="/quarantine" element={<QuarantinePage readOnly={readOnly} />} />
+        <Route path="/quarantine" element={<QuarantinePage readOnly={readOnly} quarantine={quarantine} />} />
         <Route path="/settings" element={<SettingsPage readOnly={readOnly} />} />
         <Route path="/catalog-recovery" element={<CatalogRecoveryPage readOnly={readOnly} />} />
         <Route path="*" element={<Navigate to="/" replace />} />

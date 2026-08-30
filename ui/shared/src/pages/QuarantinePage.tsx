@@ -1,9 +1,9 @@
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
+import type { AsyncState } from "@shared/hooks/useAsync";
 import { PageHeader } from "@shared/components/PageHeader";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { stamp } from "@shared/utilities/format";
-import type { QuarantineReason } from "@shared/types/backup";
+import type { BackupArtifact, QuarantineReason } from "@shared/types/backup";
 
 const REASON: Record<QuarantineReason, string> = {
   "checksum-mismatch": "Checksum mismatch",
@@ -13,10 +13,25 @@ const REASON: Record<QuarantineReason, string> = {
   "incomplete-transfer": "Incomplete transfer"
 };
 
-/** No "delete remote anyway" action exists here, by design (§18). */
-export function QuarantinePage({ readOnly }: { readOnly: boolean }) {
+/** No "delete remote anyway" action exists here, by design (§18).
+ *
+ *  `quarantine` is the SAME `quarantineNode`-backed resource App.tsx
+ *  fetches to compute the sidebar's `counts.quarantine` badge (see
+ *  appNodes.ts, `useResource(quarantineNode, ...)` in App.tsx) — passed
+ *  down exactly like `sets`/`health` already are. This page used to run
+ *  its own independent `useAsync(() => api.listQuarantine())`, so the
+ *  badge and this list were two separate reads of the same resource that
+ *  could disagree (#101). Reading the shared node here instead means both
+ *  can only ever show what was last committed to that one node. */
+export function QuarantinePage({
+  readOnly,
+  quarantine
+}: {
+  readOnly: boolean;
+  quarantine: AsyncState<BackupArtifact[]>;
+}) {
   const api = useApi();
-  const rows = useAsync(() => api.listQuarantine(), [api]);
+  const rows = quarantine;
 
   if (rows.error) return <ErrorState {...rows.error} onRetry={rows.reload} />;
 
