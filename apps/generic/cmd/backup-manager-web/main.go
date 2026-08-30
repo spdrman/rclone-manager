@@ -51,6 +51,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/notify"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/apps/generic/platform"
 	"github.com/spdrman/rclone-manager/apps/generic/webui"
@@ -239,8 +240,27 @@ func cmdServe(args []string) int {
 	// capability false, local authentication as the fallback) - a future
 	// TrueNAS/Synology/etc. binary builds its own analogous adapter and
 	// hands it to the exact same serve.NewEngine.
+	platformAdapter := platform.New(authSvc)
+
+	// Work Package 3.5's proactive alerting (docs/EPIC-B-multi-nas.md
+	// §71). Both halves have to agree before a single notification goes
+	// out: the administrator opted in through the config file's alerts
+	// block, and this platform actually offers a local notification
+	// capability to deliver through. The generic Docker/Linux adapter
+	// declares none (apps/generic/platform reports every capability
+	// false, never emulated), so on this provider the sink refuses at
+	// wiring time and alerting stays visibly off, printed once here
+	// rather than discovered as silence later. A provider that DOES
+	// declare NativeNotifications gets its alerts through exactly this
+	// wiring with no further change.
+	if sink, err := notify.NewPlatformSink(platformAdapter); err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off:", err)
+	} else if !backend.EnableAlerts(sink) {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off: the configuration has not set alerts.enabled")
+	}
+
 	handler := serve.NewEngine(serve.EngineConfig{
-		Platform:              platform.New(authSvc),
+		Platform:              platformAdapter,
 		AuthRoutes:            authSvc.Handler(),
 		TrustForwardedHeaders: authSvc.TrustForwardedHeaders(),
 		Backend:               backend,

@@ -128,6 +128,17 @@ type BackupService struct {
 	// failure a caller needs.
 	configPath string
 
+	// alertSink is the proactive-alert delivery mechanism a provider app
+	// installed through EnableAlerts (alerts.go), or nil when none was
+	// ever installed. It is kept here, not only on the wrapped
+	// internal/app.Service, because CreateBackupSet's hot reload re-reads
+	// alerts.enabled from disk and has to be able to turn alerting ON, in
+	// a process that started with it off, without a restart: that needs
+	// the mechanism itself, which the wrapped Service does not hold when
+	// alerting is off. It is written under configMu, which is also the
+	// lock CreateBackupSet reads it under.
+	alertSink AlertSink
+
 	// releaseJournal drops the SHARED journal lock runStartupSequence took
 	// on this BackupService's behalf (startup.go, lock_unix.go), and is
 	// called by Close once the journal handle itself is closed. It is nil
