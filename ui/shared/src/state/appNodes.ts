@@ -15,17 +15,6 @@ export const versionNode = createResourceNode<VersionInfo>("app.version");
 export const setsNode = createResourceNode<BackupSet[]>("app.sets");
 export const quarantineNode = createResourceNode<BackupArtifact[]>("app.quarantine");
 
-/**
- * B2.4 — BackupDetailPage's single-artifact read, moved onto the graph the
- * same way as the four resources above. Nothing else fetches this
- * particular artifact today, so this is not eliminating a duplicate fetch
- * (unlike setsNode); it is putting the read on the same mechanism as
- * everything else app-wide state lives on, so it is testable the same way
- * (commit to the node, read it back) instead of being page-local
- * `useAsync` state.
- */
-export const artifactDetailNode = createResourceNode<BackupArtifact>("app.artifactDetail");
-
 export interface AppCounts {
   sets: number | undefined;
   backups: number | undefined;
