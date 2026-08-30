@@ -25,11 +25,19 @@
 // only ever imports FROM core/, never the reverse) and duplicating its
 // command surface would be two implementations of the same thing to keep
 // in sync.
+//
+// Issue #129: this binary itself builds no HTTP routing or
+// shutdown-orchestration logic anymore - that composition (an equivalent
+// of the former apps/generic/server.NewEngine/NewUI, and the former
+// cmdServe's own goroutine/shutdown-context dance) now lives in
+// apps/common/webhost/serve, reusable by any other provider app. What is
+// left here is genuinely generic-provider-specific: flag/env parsing, and
+// constructing this provider's own apps/common/auth/local.Service and
+// apps/generic/platform.Adapter to hand to that shared composition.
 package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -43,7 +51,8 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/generic/server"
+	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
+	"github.com/spdrman/rclone-manager/apps/generic/platform"
 	"github.com/spdrman/rclone-manager/apps/generic/webui"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -80,44 +89,16 @@ const defaultUpstream = "http://rclone-manager:8080"
 // server's graceful Shutdown (and, for `serve`, the scheduler loop's own
 // exit) before giving up on a clean stop and returning anyway - the
 // process is exiting either way once ctx is canceled (SIGTERM/SIGINT);
-// this only decides how long it waits first.
-const shutdownGrace = 10 * time.Second
+// this only decides how long it waits first. Matches
+// serve.DefaultShutdownGrace; named separately here only so this file
+// never has to import serve just to read a constant its own flags don't
+// expose.
+const shutdownGrace = serve.DefaultShutdownGrace
 
 // healthcheckTimeout bounds `healthcheck`'s own HTTP GET - short, since
 // this runs on the HEALTHCHECK interval and a slow answer is itself a
 // sign of trouble, not something worth waiting out.
 const healthcheckTimeout = 3 * time.Second
-
-// HTTP server timeouts shared by both `serve` and `serve-ui` (see
-// newHTTPServer): issue #119's review flagged that neither http.Server in
-// this binary set any request-level timeout at all - the standard Go
-// "Slowloris" gap, where a client that opens a connection and trickles
-// headers (or a request body) in slowly forever ties up a server
-// goroutine indefinitely. `serve-ui` is the one binary in this whole
-// image actually exposed to untrusted network input via its published
-// port, but both get the same hardening: `serve` sharing a process with
-// the backup scheduler (§9.3) means a resource exhausted here has a wider
-// blast radius than just one stuck request either way.
-const (
-	serverReadHeaderTimeout = 10 * time.Second
-	serverReadTimeout       = 30 * time.Second
-	serverWriteTimeout      = 30 * time.Second
-	serverIdleTimeout       = 120 * time.Second
-)
-
-// newHTTPServer builds the one *http.Server shape both `serve` and
-// `serve-ui` use, so the timeouts above can never be set on one and
-// forgotten on the other.
-func newHTTPServer(addr string, handler http.Handler) *http.Server {
-	return &http.Server{
-		Addr:              addr,
-		Handler:           handler,
-		ReadHeaderTimeout: serverReadHeaderTimeout,
-		ReadTimeout:       serverReadTimeout,
-		WriteTimeout:      serverWriteTimeout,
-		IdleTimeout:       serverIdleTimeout,
-	}
-}
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -224,7 +205,8 @@ func cmdServe(args []string) int {
 	// The one signal handler in this binary, matching
 	// core/cmd/backup-manager/daemon.go's own convention exactly: this is
 	// what makes ctx the "process shutdown context" §9.3 requires the HTTP
-	// server and the background scheduler to share (see below).
+	// server and the background scheduler to share - serve.RunEngine below
+	// is what actually drives both off it.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -252,79 +234,37 @@ func cmdServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "backup-manager-web: printing bootstrap notice:", err)
 	}
 
-	handler := server.NewEngine(server.EngineConfig{
-		Backend:       backend,
-		Auth:          authSvc,
-		BinaryVersion: version,
-		Commit:        commit,
+	// platform.New(authSvc) is this provider's own capabilities.PlatformAdapter
+	// (apps/generic/platform - no native auth, no native anything: every
+	// capability false, local authentication as the fallback) - a future
+	// TrueNAS/Synology/etc. binary builds its own analogous adapter and
+	// hands it to the exact same serve.NewEngine.
+	handler := serve.NewEngine(serve.EngineConfig{
+		Platform:              platform.New(authSvc),
+		AuthRoutes:            authSvc.Handler(),
+		TrustForwardedHeaders: authSvc.TrustForwardedHeaders(),
+		Backend:               backend,
+		BinaryVersion:         version,
+		Commit:                commit,
 	})
 
-	httpServer := newHTTPServer(*listenAddr, handler)
+	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
-	// Both goroutines below are driven by the SAME ctx (§9.3: "the HTTP
-	// server and background scheduler SHALL share a common application
-	// service and process shutdown context"): backend is the one
-	// BackupService both the scheduler loop and every /api/v1 handler
-	// call into, and ctx is what tells both of them, independently, that
-	// it is time to stop. Neither one tells the other to stop; both react
-	// to the same cancellation, which is what "failure of the HTTP
-	// listener MUST NOT bypass lifecycle safety" (§9.3) actually requires:
-	// if the HTTP listener dies for its own reasons (a bind error, say),
-	// that must not itself cancel ctx and tear down the scheduler - see
-	// the select below, which treats a serverErr distinctly from ctx.Done().
-	serverErrCh := make(chan error, 1)
-	go func() { serverErrCh <- httpServer.ListenAndServe() }()
-
-	schedulerErrCh := make(chan error, 1)
-	go func() { schedulerErrCh <- backend.RunOnSchedule(ctx, backend.PollInterval()) }()
-
-	var exitErr error
-	select {
-	case <-ctx.Done():
-		// Normal shutdown path: SIGTERM/SIGINT.
-	case err := <-serverErrCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			// The HTTP listener died on its own (e.g. the port is already
-			// in use). Per §9.3, this must not silently take the scheduler
-			// down with it without at least trying to shut down cleanly;
-			// it also must not leave the process running with no HTTP
-			// surface at all forever, so this DOES still initiate shutdown
-			// (there's no HTTP server left to compose with, and running
-			// scheduler-only forever would silently violate "generic Web
-			// UI is authenticated" - it would just never come back). The
-			// distinction from ctx.Done() is that this path reports the
-			// failure as this command's own exit code.
-			exitErr = fmt.Errorf("http server: %w", err)
-		}
-	}
-
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
-	defer cancelShutdown()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil && exitErr == nil {
-		exitErr = fmt.Errorf("http server shutdown: %w", err)
-	}
-
-	select {
-	case err := <-schedulerErrCh:
-		if err != nil && exitErr == nil {
-			exitErr = fmt.Errorf("scheduler: %w", err)
-		}
-	case <-time.After(shutdownGrace):
-		fmt.Fprintln(os.Stderr, "backup-manager-web: timed out waiting for the scheduler loop to stop")
-	}
-
-	if exitErr != nil {
-		return fail(exitErr)
+	// serve.RunEngine owns the §9.3 orchestration (HTTP server + scheduler
+	// share ctx) - see that function's own doc for exactly what each
+	// branch does and why.
+	if err := serve.RunEngine(ctx, httpServer, backend, shutdownGrace, os.Stderr); err != nil {
+		return fail(err)
 	}
 	return 0
 }
 
 // cmdServeUI runs the UI-host container's whole job: serve the shared
 // static UI and reverse-proxy /api/v1 and /health requests to the
-// engine. Deliberately much simpler than cmdServe - a plain HTTP server
-// with no BackupService, no local-auth store, and no scheduler to
-// coordinate a shutdown with, since none of those live in this
-// container.
+// engine. Deliberately much simpler than cmdServe - no BackupService, no
+// local-auth store, and no scheduler to coordinate a shutdown with, since
+// none of those live in this container. serve.RunEngine's nil-Scheduler
+// case covers exactly this shape.
 func cmdServeUI(args []string) int {
 	fset := flag.NewFlagSet("serve-ui", flag.ContinueOnError)
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
@@ -355,29 +295,11 @@ func cmdServeUI(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	handler := server.NewUI(server.UIConfig{Upstream: upstreamURL, StaticFS: staticFS})
-	httpServer := newHTTPServer(*listenAddr, handler)
+	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: staticFS})
+	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
-	serverErrCh := make(chan error, 1)
-	go func() { serverErrCh <- httpServer.ListenAndServe() }()
-
-	var exitErr error
-	select {
-	case <-ctx.Done():
-	case err := <-serverErrCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			exitErr = fmt.Errorf("http server: %w", err)
-		}
-	}
-
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownGrace)
-	defer cancelShutdown()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil && exitErr == nil {
-		exitErr = fmt.Errorf("http server shutdown: %w", err)
-	}
-
-	if exitErr != nil {
-		return fail(exitErr)
+	if err := serve.RunEngine(ctx, httpServer, nil, shutdownGrace, os.Stderr); err != nil {
+		return fail(err)
 	}
 	return 0
 }

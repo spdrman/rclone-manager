@@ -403,7 +403,7 @@ func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 		t.Fatalf("read body: %v", err)
 	}
 	if staticResp.StatusCode == http.StatusOK {
-		t.Errorf("GET / on the engine directly status = %d, want NOT 200 (the engine must not serve the static UI - see apps/generic/server.NewEngine); body=%q", staticResp.StatusCode, body)
+		t.Errorf("GET / on the engine directly status = %d, want NOT 200 (the engine must not serve the static UI - see apps/common/webhost/serve.NewEngine); body=%q", staticResp.StatusCode, body)
 	}
 }
 

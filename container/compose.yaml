@@ -24,7 +24,7 @@
 # differs - matching the "one canonical image, vary command" principle
 # already applied to `/backup-manager` vs. `/backup-manager-web`
 # themselves; no nginx or other new runtime dependency was introduced for
-# this (see apps/generic/server's own doc comment for the plain
+# this (see apps/common/webhost/serve's own doc comment for the plain
 # net/http/httputil.ReverseProxy this uses instead).
 #
 # Network isolation is plain compose topology, nothing more: `internal`
@@ -157,7 +157,7 @@ services:
       # network below, which only `web-ui` also joins - nothing else can
       # ever be this container's direct peer, so trusting the
       # X-Forwarded-For/X-Forwarded-Proto headers `web-ui`'s own reverse
-      # proxy sets (apps/generic/server.NewUI) is safe by network
+      # proxy sets (apps/common/webhost/serve.NewUI) is safe by network
       # topology, not by convention. Never set this on `web-ui` itself
       # (below) - that container IS the actual internet-facing edge and
       # must never trust a forwarded header from just anyone hitting its
@@ -227,7 +227,7 @@ services:
         condition: service_healthy
 
     # `/backup-manager-web serve-ui`: the shared static UI plus a reverse
-    # proxy to the engine (apps/generic/server's own doc comment has the
+    # proxy to the engine (apps/common/webhost/serve's own doc comment has the
     # full routing shape). --upstream defaults to
     # http://rclone-manager:8080 (the engine's own compose service name,
     # resolved through Docker's embedded DNS on the `internal` network

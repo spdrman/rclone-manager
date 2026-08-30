@@ -1,13 +1,20 @@
-// server_test.go proves both halves of the two-container split
-// (project-owner requirement folded into issue #82/B4.1 before merge):
-// NewEngine's HTTP surface standing alone (a real *service.BackupService
-// opened from a real temp config file, real local authentication, the
-// real apps/common/webhost router - no static UI), and NewUI's reverse
-// proxy actually forwarding a real request through to a real engine
-// httptest.Server, end to end, the same shape the two real containers
-// have in production (engine has no published port; the UI host is the
-// only thing a browser ever talks to directly).
-package server_test
+// engine_test.go pins the behavioral contract issue #129 moves here from
+// apps/generic/server (PR #119's own server_test.go): NewEngine's HTTP
+// surface standing alone - a real *service.BackupService opened from a
+// real temp config file, real local authentication, the real
+// apps/common/webhost router, no static UI - proven from ITS NEW location
+// under apps/common/webhost/serve, decoupled from any concrete provider.
+//
+// The one thing that changed on purpose, not just moved: this file never
+// imports apps/generic/platform. testPlatformAdapter below builds a
+// capabilities.PlatformAdapter using nothing but
+// apps/common/auth/local + apps/common/platform/capabilities - both
+// already siblings of this package under apps/common - which is the
+// actual proof this composition no longer lives inside a specific
+// provider's module (docs/EPIC-B-multi-nas.md §9.2, issue #129's own
+// scope: "parameterized by PlatformAdapter/Authenticator/auth-routes-
+// handler the way NewRouter already is").
+package serve_test
 
 import (
 	"bytes"
@@ -26,9 +33,35 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
-	"github.com/spdrman/rclone-manager/apps/generic/server"
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// testPlatformAdapter is a minimal capabilities.PlatformAdapter built only
+// from an apps/common/auth/local.Service - the same information
+// apps/generic/platform.Adapter wraps, but constructed right here instead
+// of importing that provider-specific package, which apps/common must
+// never do (docs/EPIC-B-multi-nas.md §7.1 - the dependency direction is
+// core -> nothing, apps/<provider> -> apps/common, never the reverse).
+type testPlatformAdapter struct {
+	capabilities.BasePlatformAdapter
+	auth *local.Service
+}
+
+func (a testPlatformAdapter) ID() capabilities.PlatformID { return capabilities.PlatformGeneric }
+
+func (a testPlatformAdapter) Capabilities() capabilities.PlatformCapabilities {
+	return capabilities.PlatformCapabilities{}
+}
+
+func (a testPlatformAdapter) Authenticator() capabilities.Authenticator {
+	return a.auth.Authenticator()
+}
+
+func (a testPlatformAdapter) PlatformInfo(_ context.Context) (capabilities.PlatformInfo, error) {
+	return capabilities.PlatformInfo{ID: capabilities.PlatformGeneric, Name: "test"}, nil
+}
 
 // writeTestConfig mirrors core/cmd/backup-manager/main_test.go's own
 // writeTestConfig: a minimal, valid config against real temp directories,
@@ -97,11 +130,13 @@ func newEngineHarness(t *testing.T) *engineHarness {
 		t.Fatalf("local.New: %v", err)
 	}
 
-	handler := server.NewEngine(server.EngineConfig{
-		Backend:       backend,
-		Auth:          authSvc,
-		BinaryVersion: "test",
-		Commit:        "testcommit",
+	handler := serve.NewEngine(serve.EngineConfig{
+		Platform:              testPlatformAdapter{auth: authSvc},
+		AuthRoutes:            authSvc.Handler(),
+		TrustForwardedHeaders: authSvc.TrustForwardedHeaders(),
+		Backend:               backend,
+		BinaryVersion:         "test",
+		Commit:                "testcommit",
 	})
 
 	srv := httptest.NewServer(handler)
@@ -161,10 +196,10 @@ func csrfToken(t *testing.T, client *http.Client, base string) string {
 	return ""
 }
 
-// enrollAndLogIn drives the real POST .../auth/enroll route, against
-// base (either the engine directly or the UI host's proxy - both must
-// behave identically), leaving client holding a real, live session
-// cookie afterward.
+// enrollAndLogIn drives the real POST .../auth/enroll route, against base
+// (either the engine directly or the UI host's proxy - both must behave
+// identically), leaving client holding a real, live session cookie
+// afterward.
 func enrollAndLogIn(t *testing.T, h *engineHarness, client *http.Client, base string) {
 	t.Helper()
 	csrf := csrfToken(t, client, base)
@@ -192,10 +227,7 @@ func enrollAndLogIn(t *testing.T, h *engineHarness, client *http.Client, base st
 
 // TestEngine_UnauthenticatedDestructiveRequestIsRefused proves the
 // destructive POST /api/v1/operations route is unreachable without
-// authentication - exactly the "gate it behind local authentication"
-// half of this issue's scope, exercised against the real engine handler
-// directly (see TestUI_ProxiedDestructiveRequestIsRefusedWithoutAuth for
-// the same proof through the UI host's reverse proxy).
+// authentication, from NewEngine's new home under apps/common/webhost/serve.
 func TestEngine_UnauthenticatedDestructiveRequestIsRefused(t *testing.T) {
 	h := newEngineHarness(t)
 
@@ -217,12 +249,13 @@ func TestEngine_UnauthenticatedDestructiveRequestIsRefused(t *testing.T) {
 	}
 }
 
-// TestEngine_AuthenticatedRequestSucceedsAgainstSystemVersion proves the
-// other half: real local credentials, established through the real
-// enroll/login HTTP flow, are enough to reach apps/common/webhost's own
-// /api/v1/system/version route directly against the engine - the
-// local-auth Authenticator this issue wires and apps/common/webhost's
-// pre-existing authMiddleware actually agree with each other end to end.
+// TestEngine_AuthenticatedRequestSucceedsAgainstSystemVersion proves real
+// local credentials, established through the real enroll/login HTTP flow,
+// are enough to reach apps/common/webhost's own /api/v1/system/version
+// route directly against the engine - the local-auth Authenticator this
+// test's own testPlatformAdapter wires (not apps/generic/platform's) and
+// apps/common/webhost's pre-existing authMiddleware actually agree with
+// each other end to end.
 func TestEngine_AuthenticatedRequestSucceedsAgainstSystemVersion(t *testing.T) {
 	h := newEngineHarness(t)
 	enrollAndLogIn(t, h, h.client, h.server.URL)
@@ -239,11 +272,10 @@ func TestEngine_AuthenticatedRequestSucceedsAgainstSystemVersion(t *testing.T) {
 	}
 }
 
-// TestEngine_ServesNoStaticUI proves the engine's own handler is
-// API-only now (the two-container split's whole point): a browser-shaped
-// GET for a non-API route must NOT get the static shell back from the
-// engine - that is the UI host's job, and the engine has no published
-// port for a browser to reach anyway.
+// TestEngine_ServesNoStaticUI proves the engine's own handler is API-only
+// (the two-container split's whole point): a browser-shaped GET for a
+// non-API route must NOT get a static shell back from NewEngine - that is
+// NewUI's job.
 func TestEngine_ServesNoStaticUI(t *testing.T) {
 	h := newEngineHarness(t)
 
@@ -258,10 +290,52 @@ func TestEngine_ServesNoStaticUI(t *testing.T) {
 	}
 }
 
+// TestEngine_NoAuthRoutesMeansNoUnauthenticatedAuthEndpoint proves
+// AuthRoutes is truly optional, and that leaving it nil never opens an
+// unauthenticated hole: a provider with a native session Authenticator
+// and no login/enroll/logout HTTP surface of its own gets no
+// /api/v1/auth/* route mounted at all - NewEngine doesn't panic on a nil
+// http.Handler, and the request instead falls through to
+// apps/common/webhost's own catch-all /api/v1/ registration, which
+// requires authentication for everything under it. The fail-closed
+// result is a 401, not a distinguishing 404 that would leak whether an
+// auth endpoint exists.
+func TestEngine_NoAuthRoutesMeansNoUnauthenticatedAuthEndpoint(t *testing.T) {
+	backend, cleanup, err := service.Open(context.Background(), writeTestConfig(t))
+	if err != nil {
+		t.Fatalf("service.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	authSvc, err := local.New(local.Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	handler := serve.NewEngine(serve.EngineConfig{
+		Platform:      testPlatformAdapter{auth: authSvc},
+		Backend:       backend,
+		BinaryVersion: "test",
+		Commit:        "testcommit",
+	})
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/api/v1/auth/login")
+	if err != nil {
+		t.Fatalf("GET /api/v1/auth/login: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/auth/login with AuthRoutes unset status = %d, want %d (fail closed, not exposed via a distinguishing 404)", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
 // uiHarness wraps an engineHarness with a real NewUI httptest.Server
 // proxying to it, modelling the real two-container topology: engine has
-// no published port and the UI host proxies through - see this package's
-// own doc comment for the routing shape.
+// no published port and the UI host proxies through.
 type uiHarness struct {
 	*engineHarness
 	ui     *httptest.Server
@@ -281,7 +355,7 @@ func newUIHarness(t *testing.T) *uiHarness {
 		"index.html": &fstest.MapFile{Data: []byte("<html><body>generic backup-manager UI shell</body></html>")},
 	}
 
-	ui := httptest.NewServer(server.NewUI(server.UIConfig{Upstream: upstream, StaticFS: staticFS}))
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{Upstream: upstream, StaticFS: staticFS}))
 	t.Cleanup(ui.Close)
 
 	jar, err := cookiejar.New(nil)
@@ -293,13 +367,10 @@ func newUIHarness(t *testing.T) *uiHarness {
 }
 
 // TestUI_ProxiesAuthenticatedRequestsToTheEngine is this split's central
-// end-to-end proof: enroll and log in THROUGH the UI host's reverse
-// proxy (never touching the engine's httptest.Server directly), then
-// confirm an authenticated GET /api/v1/system/version, also through the
-// proxy, reaches the real engine and succeeds - the UI host forwards the
-// session cookie, the CSRF header, and the response body/status
-// unchanged, exactly as a browser talking only to the UI host in
-// production would experience it.
+// end-to-end proof, exercised from NewUI/NewEngine's new shared home:
+// enroll and log in THROUGH the UI host's reverse proxy, then confirm an
+// authenticated GET /api/v1/system/version, also through the proxy,
+// reaches the real engine and succeeds.
 func TestUI_ProxiesAuthenticatedRequestsToTheEngine(t *testing.T) {
 	h := newUIHarness(t)
 	enrollAndLogIn(t, h.engineHarness, h.client, h.ui.URL)
@@ -321,10 +392,7 @@ func TestUI_ProxiesAuthenticatedRequestsToTheEngine(t *testing.T) {
 
 // TestUI_ProxiedDestructiveRequestIsRefusedWithoutAuthentication proves
 // the same authentication boundary holds when reached through the UI
-// host's proxy, not just directly against the engine
-// (TestEngine_UnauthenticatedDestructiveRequestIsRefused already proves
-// the latter): the proxy must not strip or otherwise defeat the engine's
-// own 401.
+// host's proxy, not just directly against the engine.
 func TestUI_ProxiedDestructiveRequestIsRefusedWithoutAuthentication(t *testing.T) {
 	h := newUIHarness(t)
 
@@ -346,10 +414,8 @@ func TestUI_ProxiedDestructiveRequestIsRefusedWithoutAuthentication(t *testing.T
 	}
 }
 
-// TestUI_StaticUIServedForNonAPIRoute proves the UI host's static
-// handler falls back to index.html for a client-side route (React
-// Router's BrowserRouter needs the server to answer a hard refresh at
-// any app path with the same shell, not a 404), and that the reverse
+// TestUI_StaticUIServedForNonAPIRoute proves the UI host's static handler
+// falls back to index.html for a client-side route, and that the reverse
 // proxy never intercepts a route it doesn't own.
 func TestUI_StaticUIServedForNonAPIRoute(t *testing.T) {
 	h := newUIHarness(t)
@@ -372,10 +438,7 @@ func TestUI_StaticUIServedForNonAPIRoute(t *testing.T) {
 }
 
 // fakeUpstream stands up a minimal httptest.Server for testing NewUI's
-// reverse-proxy behavior against handler directly, in isolation from a
-// real apps/common/auth/local + apps/common/webhost engine - only the
-// proxy-mechanics tests below use this; every other test in this file
-// proxies to a REAL engine (newEngineHarness) end to end.
+// reverse-proxy behavior in isolation from a real engine.
 func fakeUpstream(t *testing.T, handler http.HandlerFunc) *url.URL {
 	t.Helper()
 	srv := httptest.NewServer(handler)
@@ -390,7 +453,7 @@ func fakeUpstream(t *testing.T, handler http.HandlerFunc) *url.URL {
 func newUIProxyingTo(t *testing.T, upstream *url.URL, timeout time.Duration) *httptest.Server {
 	t.Helper()
 	staticFS := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}}
-	ui := httptest.NewServer(server.NewUI(server.UIConfig{
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
 		Upstream:                   upstream,
 		StaticFS:                   staticFS,
 		ProxyResponseHeaderTimeout: timeout,
@@ -401,13 +464,7 @@ func newUIProxyingTo(t *testing.T, upstream *url.URL, timeout time.Duration) *ht
 
 // TestUI_DiscardsAClientSuppliedXForwardedForHeader is issue #119's
 // review's central regression test for the anti-spoofing half of the
-// rate-limit-collapse fix: apps/common/auth/local.Config.TrustForwardedHeaders
-// makes the ENGINE trust X-Forwarded-For, which is only safe because the
-// UI host guarantees that header always reflects ITS OWN observed
-// RemoteAddr, never anything a client sent it directly. Without the
-// explicit delete in NewUI's Rewrite func, net/http/httputil.ProxyRequest's
-// own documented "append to an existing X-Forwarded-For" behavior would
-// let a client's own forged header survive as the (trusted) first entry.
+// rate-limit-collapse fix, re-proven from NewUI's new location.
 func TestUI_DiscardsAClientSuppliedXForwardedForHeader(t *testing.T) {
 	var gotForwardedFor string
 	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
@@ -429,7 +486,7 @@ func TestUI_DiscardsAClientSuppliedXForwardedForHeader(t *testing.T) {
 	resp.Body.Close()
 
 	if strings.Contains(gotForwardedFor, "6.6.6.6") {
-		t.Errorf("upstream received X-Forwarded-For = %q, want it to NOT contain the client-forged value %q - the proxy must discard any client-supplied X-Forwarded-For and set its own", gotForwardedFor, "6.6.6.6")
+		t.Errorf("upstream received X-Forwarded-For = %q, want it to NOT contain the client-forged value %q", gotForwardedFor, "6.6.6.6")
 	}
 	if gotForwardedFor == "" {
 		t.Error("upstream received an empty X-Forwarded-For, want the proxy's own observed client address")
@@ -438,10 +495,7 @@ func TestUI_DiscardsAClientSuppliedXForwardedForHeader(t *testing.T) {
 
 // TestUI_SetsXForwardedProtoFromItsOwnRealConnection proves the proxy
 // sets X-Forwarded-Proto from the connection it ACTUALLY has with the
-// client (http here - httptest.Server never uses TLS), the header
-// apps/common/auth/local's Secure-cookie fix depends on
-// (Config.TrustForwardedHeaders, forwarded.go's requestIsSecure) - and
-// that a client can't simply override it, either.
+// client, re-proven from NewUI's new location.
 func TestUI_SetsXForwardedProtoFromItsOwnRealConnection(t *testing.T) {
 	var gotProto string
 	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +508,7 @@ func TestUI_SetsXForwardedProtoFromItsOwnRealConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	req.Header.Set("X-Forwarded-Proto", "https") // a client's own claim - must be overridden, not trusted
+	req.Header.Set("X-Forwarded-Proto", "https")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -463,25 +517,18 @@ func TestUI_SetsXForwardedProtoFromItsOwnRealConnection(t *testing.T) {
 	resp.Body.Close()
 
 	if gotProto != "http" {
-		t.Errorf("upstream received X-Forwarded-Proto = %q, want %q (this connection is plain HTTP, regardless of what the client itself claimed)", gotProto, "http")
+		t.Errorf("upstream received X-Forwarded-Proto = %q, want %q", gotProto, "http")
 	}
 }
 
 // TestUI_ProxyTimesOutAgainstAHungUpstream is issue #119's review's
-// empirically-demonstrated finding 3: a connection-refused upstream fails
-// fast (502 in ~1ms), but one that accepts a connection and never
-// responds used to hang the proxied request indefinitely, bounded only by
-// whatever timeout the calling client happened to set. This proves
-// UIConfig.ProxyResponseHeaderTimeout actually bounds that wait.
+// empirically-demonstrated finding 3, re-proven from NewUI's new
+// location: UIConfig.ProxyResponseHeaderTimeout actually bounds the wait
+// for a connection that accepts but never responds.
 func TestUI_ProxyTimesOutAgainstAHungUpstream(t *testing.T) {
 	release := make(chan struct{})
-	// Registered AFTER fakeUpstream's own t.Cleanup(srv.Close) below, so
-	// it unwinds BEFORE that Close in t.Cleanup's LIFO order: the
-	// upstream's hung handler goroutine has to be released before
-	// anything waits for it to finish, or that Close call would itself
-	// hang forever waiting on a handler nothing has told to return yet.
 	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		<-release // never respond on its own - only once this test is done
+		<-release
 	})
 	t.Cleanup(func() { close(release) })
 	ui := newUIProxyingTo(t, upstream, 50*time.Millisecond)
@@ -495,9 +542,9 @@ func TestUI_ProxyTimesOutAgainstAHungUpstream(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if resp.StatusCode != http.StatusBadGateway {
-		t.Errorf("status = %d, want %d (net/http/httputil.ReverseProxy's own default error response for a Transport failure)", resp.StatusCode, http.StatusBadGateway)
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
 	}
 	if elapsed > 2*time.Second {
-		t.Errorf("request took %s to fail, want it bounded by the configured 50ms ResponseHeaderTimeout, not indefinite", elapsed)
+		t.Errorf("request took %s to fail, want it bounded by the configured 50ms ResponseHeaderTimeout", elapsed)
 	}
 }

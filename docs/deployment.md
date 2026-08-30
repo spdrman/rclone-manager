@@ -281,7 +281,7 @@ from the exact same image - only `command:` differs, the same "one canonical ima
 vary command" principle already applied to `/backup-manager` vs. `/backup-manager-web`
 themselves. No nginx or other new runtime dependency was introduced for the split: the
 UI-host container's reverse proxy is a plain `net/http/httputil.ReverseProxy`
-(`apps/generic/server.NewUI`).
+(`apps/common/webhost/serve.NewUI`).
 
 ```text
                           published port (LISTEN_PORT)
@@ -373,15 +373,15 @@ review, findings 1 and 4). `container/compose.yaml` sets
 `X-Forwarded-For`/`X-Forwarded-Proto` from its one caller instead of its own
 `RemoteAddr`/TLS state - safe specifically because network isolation guarantees
 `web-ui` is the only thing that can ever be `rclone-manager`'s direct TCP peer, and
-`apps/generic/server.NewUI`'s reverse proxy always sets both headers itself, derived
+`apps/common/webhost/serve.NewUI`'s reverse proxy always sets both headers itself, derived
 from its own real connection to the browser, never copied from anything the browser
 sent. This is never set for `web-ui` itself: that container IS the actual
 internet-facing edge and must never trust a forwarded header from just anyone hitting
 its published port.
 
 **Two binaries, one image, no `ENTRYPOINT`.** `apps/generic` is its own Go module — it
-has to be, since it imports `apps/common/webhost` and `apps/common/auth/local`, and
-`core/`'s own module cannot depend on `apps/` in either direction (§7.1) — so
+has to be, since it imports `apps/common/webhost/serve` and `apps/common/auth/local`,
+and `core/`'s own module cannot depend on `apps/` in either direction (§7.1) — so
 `/backup-manager-web` is a second binary alongside the unchanged `/backup-manager`,
 not a new subcommand of it. `container/Dockerfile` sets no `ENTRYPOINT` for exactly
 this reason (a fixed `ENTRYPOINT` can only ever prefix one binary): every `command:` in

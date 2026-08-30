@@ -40,10 +40,10 @@ const (
 // didn't arrive over TLS - see requestIsSecure (forwarded.go) and
 // Config.TrustForwardedHeaders (service.go) for exactly when that is
 // safe. Pass false from any handler chain that talks to arbitrary/
-// untrusted clients directly (apps/generic/server.NewUI, the
+// untrusted clients directly (apps/common/webhost/serve.NewUI, the
 // browser-facing container, which already observes its own real TLS
 // status via r.TLS and must never trust a forwarded header from just
-// anyone hitting its published port) - only apps/generic/server.NewEngine
+// anyone hitting its published port) - only apps/common/webhost/serve.NewEngine
 // ever has a reason to pass true, and only when its own Auth Service was
 // itself configured to trust its one verified reverse-proxy peer.
 func EnsureCSRFCookie(trustForwardedProto bool) func(http.Handler) http.Handler {

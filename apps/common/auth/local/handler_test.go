@@ -272,7 +272,7 @@ func TestHandler_LoginIsRateLimitedPerIP(t *testing.T) {
 // #119's review's central regression test, at the full HTTP-handler
 // level rather than remoteIP in isolation: apps/generic's two-container
 // split means every request this Service's handler ever sees, in
-// production, arrives from the SAME direct peer (apps/generic/server.NewUI's
+// production, arrives from the SAME direct peer (apps/common/webhost/serve.NewUI's
 // reverse proxy) regardless of which real external client made it -
 // modelled here by every request in this test sharing the same
 // httptest.Server connection (so the same RemoteAddr host) while carrying
@@ -327,7 +327,7 @@ func TestHandler_TrustedForwardedForKeepsRateLimitBucketsPerClient(t *testing.T)
 // finding: with Config.TrustForwardedHeaders enabled, a plaintext request
 // to this Service's own handler (httptest.NewServer never uses TLS, so
 // r.TLS is nil here exactly as it always is behind
-// apps/generic/server.NewUI's reverse proxy) whose X-Forwarded-Proto says
+// apps/common/webhost/serve.NewUI's reverse proxy) whose X-Forwarded-Proto says
 // "https" must still get a Secure session cookie.
 func TestHandler_SessionCookieIsSecureWhenForwardedProtoIsTrustedAndHTTPS(t *testing.T) {
 	svc, err := New(Config{StorePath: filepath.Join(t.TempDir(), "auth.json"), TrustForwardedHeaders: true})

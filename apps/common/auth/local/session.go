@@ -111,7 +111,7 @@ func tokenFromRequest(r *http.Request) string {
 //
 // apps/generic's two-container split means this Service's own handler
 // (the engine, `serve`) is, in production, never reached directly by a
-// browser - only by apps/generic/server.NewUI's reverse proxy
+// browser - only by apps/common/webhost/serve.NewUI's reverse proxy
 // (`serve-ui`), over a plain HTTP internal Docker network connection.
 // r.TLS is therefore permanently nil here regardless of whether an
 // operator put real TLS in front of `serve-ui`'s own published port: a

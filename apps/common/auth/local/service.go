@@ -45,7 +45,7 @@ type Config struct {
 	// apps/generic's two-container split (container/compose.yaml) is
 	// exactly that shape: the engine (this Service, wired by `serve`) has
 	// no published port and joins no network but `internal`, which only
-	// `web-ui` (`serve-ui`, apps/generic/server.NewUI's reverse proxy)
+	// `web-ui` (`serve-ui`, apps/common/webhost/serve.NewUI's reverse proxy)
 	// also joins - nothing else on the host, and nothing on the LAN, can
 	// ever be this Service's direct peer. apps/generic/cmd/backup-manager-web's
 	// `--trust-forwarded-headers` flag is what actually turns this on for
@@ -146,11 +146,13 @@ func (s *Service) Authenticator() capabilities.Authenticator {
 // TrustForwardedHeaders reports whether this Service was configured to
 // trust X-Forwarded-For/X-Forwarded-Proto from its immediate caller (see
 // Config.TrustForwardedHeaders's own doc for exactly when that is safe).
-// apps/generic/server.NewEngine calls this to decide the same thing for
-// the CSRF cookie it issues (EnsureCSRFCookie) that this Service's own
-// session cookie already decides for itself internally (handler.go), so
-// both are governed by the one Config value a caller actually set,
-// instead of two independently-configured, driftable settings.
+// apps/generic/cmd/backup-manager-web calls this to fill
+// apps/common/webhost/serve.EngineConfig.TrustForwardedHeaders, which
+// decides the same thing for the CSRF cookie NewEngine issues
+// (EnsureCSRFCookie) that this Service's own session cookie already
+// decides for itself internally (handler.go), so both are governed by
+// the one Config value a caller actually set, instead of two
+// independently-configured, driftable settings.
 func (s *Service) TrustForwardedHeaders() bool {
 	return s.trustForwardedHeaders
 }
