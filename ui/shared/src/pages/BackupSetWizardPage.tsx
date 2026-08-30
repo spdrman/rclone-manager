@@ -5,6 +5,8 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import type { CompletionMethod } from "@shared/types/backup";
+import { graph, useCausl } from "@shared/state/graph";
+import { resetWizardAnswers, wizardCanSaveNode, wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
 
 const STEPS = [
   "Source",
@@ -18,18 +20,118 @@ const STEPS = [
 const PUBLIC_KEY =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4pQ7mXvR2tYc8nJ0dKeW1sBfHgZaTqOo9UiKrEu backup-manager@nas-01";
 
+/** Purely presentational — nothing here processes the operator's real
+ *  paste (see the import step below); a real import always returns a
+ *  server-computed fingerprint, never one derived client-side from key
+ *  material that must never leave this screen unhashed. */
+const IMPORTED_KEY_FINGERPRINT = "ed25519 · SHA256:7pMwK3nRt+Vc9jXe1sHfB0oZaGdQ8yTiKrEuM4x";
+
+const TRUSTED_FINGERPRINT = "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM";
+/** Only ever shown once `wizard.hostKeyChanged` is true — a different
+ *  fingerprint than the one this session originally trusted. */
+const CHANGED_FINGERPRINT = "SHA256:2xNfR9mKp+Wb4hTe6qJcZ1sYoUgVaLdQ7iBrHuXeK";
+
+function completionSummaryLabel(method: CompletionMethod): string {
+  if (method === "atomic-rename") return "atomic rename";
+  if (method === "stable-size") return "stable size";
+  return "completion marker";
+}
+
 export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   const navigate = useNavigate();
   const { bridge } = usePlatform();
   const caps = bridge.capabilities();
 
   const [step, setStep] = useState(1);
+
+  // Source/authentication field values are local, in-progress wizard
+  // state (nothing outside this component reads them while the wizard is
+  // open) — but they must be CONTROLLED, not `defaultValue`, or they are
+  // lost the moment another step's panel is shown (each step's subtree
+  // unmounts while it isn't the active one) and the review step below
+  // has nothing real to read back.
+  const [source, setSource] = useState({
+    name: "Production PostgreSQL",
+    host: "prod-db-01.internal",
+    port: "22",
+    username: "backup-agent"
+  });
+  const updateSource = (field: keyof typeof source, value: string) =>
+    setSource((s) => ({ ...s, [field]: value }));
+
+  const [keySource, setKeySource] = useState<"generate" | "managed" | "import">("generate");
+  const [importPasted, setImportPasted] = useState("");
+  const [importedFingerprint, setImportedFingerprint] = useState<string | null>(null);
+
+  // The wizard's other answers — completion method and the deletion
+  // acknowledgement — are local too, same tier as `source` above: nothing
+  // outside this component reads them while the wizard is open (see
+  // state/wizardNodes.ts's module comment for the actual local-vs-graph
+  // rule).
   const [completion, setCompletion] = useState<CompletionMethod>("completion-marker");
-  const [hostTrusted, setHostTrusted] = useState(false);
-  // §12 — saving is gated on this acknowledgement. Nothing enables without it.
   const [acknowledged, setAcknowledged] = useState(false);
 
-  const saveDisabled = readOnly || !acknowledged;
+  // Host trust is local too, but it needs to remember WHICH host/port it
+  // was granted for, not just whether it was granted: editing the
+  // hostname after trusting host A must not leave host B showing
+  // "trusted" (see revalidateHostTrust below, wired to the field's
+  // onBlur).
+  const [hostTrusted, setHostTrusted] = useState(false);
+  const [trustedHostKey, setTrustedHostKey] = useState<string | null>(null);
+
+  // wizard.hostKeyChanged lives on the shared graph — see
+  // state/wizardNodes.ts for why this one node earns that spot when the
+  // rest of the wizard's answers don't. Resetting it on mount means
+  // opening "Add backup set" a second time never inherits a previous
+  // session's stale value.
+  //
+  // Committed synchronously during render, not in an effect — an effect
+  // runs after the first paint has already happened, so a freshly opened
+  // wizard would flash whatever a previous session last left on the
+  // graph before self-correcting on the next render. Same pattern (and
+  // same reasoning) as PlatformContext.tsx's bridge-mounted commit.
+  const [hasResetOnMount, setHasResetOnMount] = useState(false);
+  if (!hasResetOnMount) {
+    resetWizardAnswers();
+    setHasResetOnMount(true);
+  }
+
+  const hostKeyChanged = useCausl(wizardHostKeyChangedNode);
+  // §12 — the graph answers "is saving structurally possible at all"
+  // (not blocked by the app-wide readOnly node (#106) or a changed host
+  // key (WP 2.3's "changed host key blocks operation")); combined here
+  // with the session's own acknowledgement to get the actual gate. This
+  // is the only place `readOnly` is consulted for gating — the `readOnly`
+  // prop below is read only to pick which hint text to show.
+  const canSave = useCausl(wizardCanSaveNode);
+  const saveDisabled = !canSave || !acknowledged;
+
+  const trustHost = () => {
+    setHostTrusted(true);
+    setTrustedHostKey(source.host + ":" + source.port);
+    graph.commit("wizard/trustHost", (tx) => tx.set(wizardHostKeyChangedNode, false));
+  };
+
+  // M1 fix (#98 PR #145 review): a host trusted on step 3 must not still
+  // read as trusted once the operator goes back and points step 1's
+  // hostname/port at a different server — that would defeat the whole
+  // point of a fingerprint-pinning UI. Scoped to blur (a field losing
+  // focus with a changed value), not every keystroke, so retyping the
+  // same hostname mid-edit doesn't re-prompt trust on every character.
+  const revalidateHostTrust = () => {
+    if (!hostTrusted || trustedHostKey === null) return;
+    if (trustedHostKey !== source.host + ":" + source.port) {
+      setHostTrusted(false);
+      setTrustedHostKey(null);
+    }
+  };
+
+  let saveHint = "";
+  if (hostKeyChanged) {
+    saveHint = "The host key changed since it was trusted — resolve that on the Verify server step before saving.";
+  } else if (saveDisabled && !readOnly) {
+    saveHint = "Acknowledge remote-source handling to enable saving.";
+  }
 
   return (
     <div style={{ maxWidth: 900, width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -69,7 +171,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               >
                 <span className="mono" style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "var(--text-xs)" }}>
                   {"0" + n}
-                  <span aria-hidden="true" style={{ color: "var(--ok)", opacity: done ? 1 : 0 }}>\u2713</span>
+                  <span aria-hidden="true" style={{ color: "var(--ok)", opacity: done ? 1 : 0 }}>✓</span>
                 </span>
                 <span style={{ fontSize: "var(--text-sm)", fontWeight: 500 }}>{label}</span>
               </button>
@@ -86,10 +188,16 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               lede="The remote server that produces the backup artifacts. Backup Manager pulls — it is never given write access to your data."
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
-                <Field label="Backup set name" defaultValue="Production PostgreSQL" span />
-                <Field label="Server hostname" defaultValue="prod-db-01.internal" mono />
-                <Field label="SSH port" defaultValue="22" mono />
-                <Field label="Username" defaultValue="backup-agent" mono />
+                <Field label="Backup set name" value={source.name} onChange={(v) => updateSource("name", v)} span />
+                <Field
+                  label="Server hostname" value={source.host} onChange={(v) => updateSource("host", v)}
+                  onBlur={revalidateHostTrust} mono
+                />
+                <Field
+                  label="SSH port" value={source.port} onChange={(v) => updateSource("port", v)}
+                  onBlur={revalidateHostTrust} mono
+                />
+                <Field label="Username" value={source.username} onChange={(v) => updateSource("username", v)} mono />
               </div>
             </StepBody>
           ) : null}
@@ -100,25 +208,130 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               lede="Install the public key on the remote server. Private keys stay on this NAS and are never shown after creation."
             >
               <div role="radiogroup" aria-label="Key source" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(216px, 1fr))", gap: 10 }}>
-                <Choice name="keysrc" defaultChecked title="Generate dedicated SSH key" detail="Recommended · scoped to this set only" />
-                <Choice name="keysrc" title="Use managed key" detail="Reuse an existing Backup Manager key" />
-                <Choice name="keysrc" title="Import key" detail="Paste once · stored encrypted, never displayed" />
+                <Choice
+                  name="keysrc" title="Generate dedicated SSH key" detail="Recommended · scoped to this set only"
+                  checked={keySource === "generate"} onChange={() => setKeySource("generate")}
+                />
+                <Choice
+                  name="keysrc" title="Use managed key" detail="Reuse an existing Backup Manager key"
+                  checked={keySource === "managed"} onChange={() => setKeySource("managed")}
+                />
+                <Choice
+                  name="keysrc" title="Import key" detail="Paste once · stored encrypted, never displayed"
+                  checked={keySource === "import"} onChange={() => setKeySource("import")}
+                />
               </div>
 
-              <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden", marginTop: 18 }}>
-                <div className="card__header" style={{ background: "var(--surface-2)" }}>
-                  <span className="eyebrow" style={{ fontSize: "var(--text-xs)" }}>Public key · ed25519</span>
-                  <button className="btn btn--sm" onClick={() => navigator.clipboard?.writeText(PUBLIC_KEY)}>
-                    Copy public key
-                  </button>
+              {keySource === "generate" ? (
+                <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden", marginTop: 18 }}>
+                  <div className="card__header" style={{ background: "var(--surface-2)" }}>
+                    <span className="eyebrow" style={{ fontSize: "var(--text-xs)" }}>Public key · ed25519</span>
+                    <button className="btn btn--sm" onClick={() => navigator.clipboard?.writeText(PUBLIC_KEY)}>
+                      Copy public key
+                    </button>
+                  </div>
+                  <div className="mono" style={{ padding: "13px 14px", fontSize: "var(--text-sm)", lineHeight: 1.6, wordBreak: "break-all" }}>
+                    {PUBLIC_KEY}
+                  </div>
+                  <p style={{ margin: 0, padding: "0 14px 13px", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                    Add to <span className="mono">/home/backup-agent/.ssh/authorized_keys</span> on the remote server.
+                  </p>
                 </div>
-                <div className="mono" style={{ padding: "13px 14px", fontSize: "var(--text-sm)", lineHeight: 1.6, wordBreak: "break-all" }}>
-                  {PUBLIC_KEY}
+              ) : null}
+
+              {keySource === "managed" ? (
+                <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <label className="field">
+                    <span className="field__label">Managed key</span>
+                    <select className="select">
+                      <option>nas-01-postgres · ed25519 · SHA256:9kQ2m…</option>
+                      <option>nas-01-billing · ed25519 · SHA256:7bTmQ…</option>
+                    </select>
+                  </label>
+                  <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
+                    <span aria-hidden="true">i</span>
+                    <span>
+                      Already installed on 2 other backup sets. A key in use can&rsquo;t be deleted from
+                      Settings until every set referencing it is reassigned or disabled.
+                    </span>
+                  </div>
                 </div>
-                <p style={{ margin: 0, padding: "0 14px 13px", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                  Add to <span className="mono">/home/backup-agent/.ssh/authorized_keys</span> on the remote server.
-                </p>
-              </div>
+              ) : null}
+
+              {keySource === "import" ? (
+                <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 10 }}>
+                  {importedFingerprint ? (
+                    <div className="banner banner--ok" style={{ alignItems: "flex-start" }}>
+                      <span aria-hidden="true" style={{ color: "var(--ok)" }}>✓</span>
+                      <span style={{ flex: 1 }}>
+                        <span style={{ display: "block", fontWeight: 600, fontSize: "var(--text-base)" }}>Key imported</span>
+                        <span className="mono" style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
+                          {importedFingerprint}
+                        </span>
+                        <span style={{ display: "block", marginTop: 5, fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                          The pasted key material has already been discarded from this screen. It cannot be shown again.
+                        </span>
+                      </span>
+                      <button
+                        className="btn btn--sm"
+                        onClick={() => {
+                          setImportedFingerprint(null);
+                          setImportPasted("");
+                        }}
+                      >
+                        Replace
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="field">
+                        <span className="field__label">Private key (OpenSSH or PEM)</span>
+                        <textarea
+                          className="input input--mono"
+                          rows={5}
+                          value={importPasted}
+                          onChange={(e) => setImportPasted(e.target.value)}
+                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                          style={{ height: "auto", padding: "10px 11px", resize: "vertical" }}
+                          // M2 (#98 PR #145 review): key material must never
+                          // leave this screen unhashed, and cloud/"enhanced"
+                          // spellcheck (on by default in some browsers) sends
+                          // the full contents of an unmasked text field to a
+                          // third-party service as the user types or pastes.
+                          spellCheck={false}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                        />
+                      </label>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <button
+                          className="btn btn--primary"
+                          disabled={importPasted.trim().length === 0}
+                          onClick={() => {
+                            setImportedFingerprint(IMPORTED_KEY_FINGERPRINT);
+                            setImportPasted("");
+                          }}
+                        >
+                          Import key
+                        </button>
+                        <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                          {importPasted.trim().length === 0
+                            ? "Paste a private key to enable Import."
+                            : "Nothing checks this on this screen — the backend validates it against the server on import."}
+                        </span>
+                      </div>
+                      <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
+                        <span aria-hidden="true">i</span>
+                        <span>
+                          Sent once, straight to the backend. Never written to this page&rsquo;s own logs, never
+                          included in a config export, never echoed back after import.
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : null}
             </StepBody>
           ) : null}
 
@@ -127,15 +340,29 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               title="Verify server"
               lede="Confirm this fingerprint through a channel other than this connection before trusting the host."
             >
+              {hostKeyChanged ? (
+                <div style={{ marginBottom: 16 }}>
+                  <WarningBanner tone="danger" eyebrow="Host key changed">
+                    The host key for {source.host || "this server"} has changed since it was trusted. This can
+                    mean the server was rebuilt, or that something is intercepting the connection — verify the
+                    new fingerprint independently before trusting it.
+                  </WarningBanner>
+                </div>
+              ) : null}
               <FingerprintDisplay
-                host="prod-db-01.internal:22"
+                host={source.host + ":" + source.port}
                 algorithm="ssh-ed25519"
-                fingerprint="SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM"
-                trustedAt={hostTrusted ? new Date().toISOString() : null}
+                fingerprint={hostKeyChanged ? CHANGED_FINGERPRINT : TRUSTED_FINGERPRINT}
+                changedFrom={hostKeyChanged ? TRUSTED_FINGERPRINT : undefined}
+                trustedAt={hostTrusted && !hostKeyChanged ? new Date().toISOString() : null}
               />
-              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                <button className="btn btn--primary" disabled={hostTrusted} onClick={() => setHostTrusted(true)}>
-                  {hostTrusted ? "Host trusted" : "Trust host"}
+              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+                <button
+                  className={"btn " + (hostKeyChanged ? "btn--destructive-confirm" : "btn--primary")}
+                  disabled={hostTrusted && !hostKeyChanged}
+                  onClick={trustHost}
+                >
+                  {hostKeyChanged ? "Trust new fingerprint" : hostTrusted ? "Host trusted" : "Trust host"}
                 </button>
                 <button className="btn">Re-fetch fingerprint</button>
               </div>
@@ -257,10 +484,14 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                   borderRadius: "var(--radius-lg)", overflow: "hidden"
                 }}
               >
-                <Summary label="Source" lines={["prod-db-01.internal", "/backups/postgresql/"]} />
+                <Summary label="Source" lines={[source.host, "/backups/postgresql/"]} />
                 <Summary label="Destination" lines={["/data/backups/production/", "postgres/"]} />
                 <Summary label="Retention" lines={["7 daily", "13 weekly", "12 monthly"]} />
-                <Summary label="Validation" lines={["SHA-256", "transfer verify", "marker completion"]} />
+                <Summary label="Validation" lines={["SHA-256", "transfer verify", completionSummaryLabel(completion)]} />
+                <Summary
+                  label="Host trust"
+                  lines={[hostKeyChanged ? "Host key changed — blocked" : hostTrusted ? "Trusted" : "Not yet trusted"]}
+                />
               </div>
 
               <div style={{ border: "1.5px solid var(--warn)", borderRadius: 9, overflow: "hidden", marginTop: 18 }}>
@@ -270,7 +501,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                     borderBottom: "1px solid var(--warn)", display: "flex", alignItems: "center", gap: 9
                   }}
                 >
-                  <span aria-hidden="true" style={{ color: "var(--warn)" }}>\u25b2</span>
+                  <span aria-hidden="true" style={{ color: "var(--warn)" }}>▲</span>
                   <span className="eyebrow" style={{ fontSize: "var(--text-xs)", color: "var(--text)", fontWeight: 600 }}>
                     Remote source handling
                   </span>
@@ -292,7 +523,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                     {["Discovered", "Transferred", "Verified", "Committed", "Safe state persisted"].map((p) => (
                       <li key={p} style={{ display: "flex", gap: 8 }}>
                         <span>{p}</span>
-                        <span aria-hidden="true">\u2192</span>
+                        <span aria-hidden="true">→</span>
                       </li>
                     ))}
                     <li style={{ color: "var(--warn)", fontWeight: 600 }}>Remote artifact deleted</li>
@@ -322,9 +553,9 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                 <button className="btn btn--primary" disabled={saveDisabled}>Save, enable &amp; run</button>
                 <button className="btn" disabled={saveDisabled}>Save &amp; enable</button>
                 <button className="btn btn--quiet">Save disabled</button>
-                {saveDisabled && !readOnly ? (
-                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                    Acknowledge remote-source handling to enable saving.
+                {saveHint ? (
+                  <span style={{ fontSize: "var(--text-sm)", color: hostKeyChanged ? "var(--danger)" : "var(--text-3)" }}>
+                    {saveHint}
                   </span>
                 ) : null}
               </div>
@@ -362,13 +593,25 @@ function StepBody({ title, lede, children }: { title: string; lede: string; chil
   );
 }
 
-function Field({
-  label, defaultValue, mono, span
-}: { label: string; defaultValue: string; mono?: boolean; span?: boolean }) {
+function Field(
+  props:
+    | {
+        label: string; value: string; onChange: (v: string) => void; onBlur?: () => void;
+        mono?: boolean; span?: boolean; defaultValue?: undefined;
+      }
+    | { label: string; defaultValue: string; mono?: boolean; span?: boolean; value?: undefined; onChange?: undefined; onBlur?: undefined }
+) {
+  const { label, mono, span } = props;
+  const style = span ? { gridColumn: "1 / -1", maxWidth: 420 } : undefined;
+  const className = "input" + (mono ? " input--mono" : "");
   return (
-    <label className="field" style={span ? { gridColumn: "1 / -1", maxWidth: 420 } : undefined}>
+    <label className="field" style={style}>
       <span className="field__label">{label}</span>
-      <input className={"input" + (mono ? " input--mono" : "")} defaultValue={defaultValue} />
+      {"onChange" in props && props.onChange ? (
+        <input className={className} value={props.value} onChange={(e) => props.onChange(e.target.value)} onBlur={props.onBlur} />
+      ) : (
+        <input className={className} defaultValue={props.defaultValue} />
+      )}
     </label>
   );
 }
