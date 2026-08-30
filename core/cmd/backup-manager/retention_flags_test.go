@@ -321,3 +321,144 @@ func TestRun_CLIOverrideAndEquivalentConfigFileValueProduceIdenticalOutput(t *te
 		t.Fatalf("output disagrees between a file-configured policy and the identical policy set via CLI overrides:\n--- file ---\n%s\n--- flags ---\n%s", fileOut, flagOut)
 	}
 }
+
+// --- issue #156 (B3.8): the -tier chain flag ---
+
+// parseRetentionArgs runs registerRetentionFlags and resolveRetentionFlags
+// over a real argv, so these tests exercise the same path `backup-manager
+// retention` does rather than hand-building a retentionOverrides.
+func parseRetentionArgs(t *testing.T, args ...string) retentionOverrides {
+	t.Helper()
+	fs := flag.NewFlagSet("retention", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	rf := registerRetentionFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parsing %v: %v", args, err)
+	}
+	return resolveRetentionFlags(rf)
+}
+
+func TestResolveRetentionFlags_TierChainIsOrderedAndRepeatable(t *testing.T) {
+	o := parseRetentionArgs(t,
+		"-tier", "daily:day:7",
+		"-tier", "weekly:week:3:month",
+		"-tier", "semi_annual:half_year:6",
+		"-tier", "fortnightly:days=14:26",
+	)
+	want := []config.RetentionTier{
+		{Name: "daily", Granularity: config.GranularityDay, Keep: 7},
+		{Name: "weekly", Granularity: config.GranularityWeek, Keep: 3, WindowUnit: config.GranularityMonth},
+		{Name: "semi_annual", Granularity: config.GranularityHalfYear, Keep: 6},
+		{Name: "fortnightly", Granularity: config.GranularityDays, PeriodDays: 14, Keep: 26},
+	}
+	if len(o.tiers) != len(want) {
+		t.Fatalf("parsed %d tier(s), want %d: %+v", len(o.tiers), len(want), o.tiers)
+	}
+	for i := range want {
+		if o.tiers[i] != want[i] {
+			t.Errorf("tiers[%d] = %+v, want %+v", i, o.tiers[i], want[i])
+		}
+	}
+}
+
+func TestResolveRetentionFlags_MalformedTierSpecIsRefused(t *testing.T) {
+	for _, spec := range []string{"daily", "daily:day", "daily:day:seven", "daily:days=x:7", "a:b:c:d:e"} {
+		t.Run(spec, func(t *testing.T) {
+			fs := flag.NewFlagSet("retention", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			registerRetentionFlags(fs)
+			if err := fs.Parse([]string{"-tier", spec}); err == nil {
+				t.Fatalf("-tier %q was accepted", spec)
+			}
+		})
+	}
+
+	t.Run("control: a well-formed spec parses", func(t *testing.T) {
+		o := parseRetentionArgs(t, "-tier", "daily:day:7")
+		if len(o.tiers) != 1 {
+			t.Fatalf("parsed %+v, want one tier", o.tiers)
+		}
+	})
+}
+
+func TestApplyRetentionOverrides_TierChainReplacesTheLegacyScalars(t *testing.T) {
+	r := resolvedRetention(t) // 7/3/12, no explicit chain
+	o := parseRetentionArgs(t, "-tier", "daily:day:2", "-tier", "annual:year:10")
+	if err := applyRetentionOverrides(&r, o); err != nil {
+		t.Fatalf("applyRetentionOverrides: %v", err)
+	}
+	if len(r.Tiers) != 2 {
+		t.Fatalf("Tiers = %+v, want the two tiers named on the command line", r.Tiers)
+	}
+	if r.DailyDays != 0 || r.WeeklyMonths != 0 || r.MonthlyMonths != 0 {
+		t.Errorf("the legacy scalars survived a -tier chain as %d/%d/%d; config.ValidateRetention refuses both spellings at once, so they must be cleared",
+			r.DailyDays, r.WeeklyMonths, r.MonthlyMonths)
+	}
+	if len(r.EffectiveTiers()) != 2 {
+		t.Errorf("EffectiveTiers() = %+v, want the overridden chain", r.EffectiveTiers())
+	}
+}
+
+func TestApplyRetentionOverrides_TierChainAndScalarFlagsAreMutuallyExclusive(t *testing.T) {
+	t.Run("both spellings on one command line", func(t *testing.T) {
+		r := resolvedRetention(t)
+		o := parseRetentionArgs(t, "-tier", "daily:day:2", "-daily-days", "5")
+		err := applyRetentionOverrides(&r, o)
+		if err == nil {
+			t.Fatal("applyRetentionOverrides accepted -tier alongside -daily-days")
+		}
+		if !strings.Contains(err.Error(), "-tier") || !strings.Contains(err.Error(), "-daily-days") {
+			t.Errorf("error %q should name both flags", err)
+		}
+	})
+
+	t.Run("a scalar flag against a config file that already defines a chain", func(t *testing.T) {
+		r := config.Retention{Timezone: "UTC", WeekStartsOn: "monday",
+			Tiers: []config.RetentionTier{{Name: "annual", Granularity: config.GranularityYear, Keep: 10}}}
+		if err := config.ValidateRetention(&r); err != nil {
+			t.Fatalf("baseline chain policy: %v", err)
+		}
+		o := parseRetentionArgs(t, "-daily-days", "5")
+		if err := applyRetentionOverrides(&r, o); err == nil {
+			t.Fatal("applyRetentionOverrides let -daily-days silently sit alongside a configured tiers chain")
+		}
+	})
+
+	t.Run("control: -tier alone against that same config file is accepted", func(t *testing.T) {
+		r := config.Retention{Timezone: "UTC", WeekStartsOn: "monday",
+			Tiers: []config.RetentionTier{{Name: "annual", Granularity: config.GranularityYear, Keep: 10}}}
+		if err := config.ValidateRetention(&r); err != nil {
+			t.Fatalf("baseline chain policy: %v", err)
+		}
+		o := parseRetentionArgs(t, "-tier", "daily:day:2")
+		if err := applyRetentionOverrides(&r, o); err != nil {
+			t.Fatalf("applyRetentionOverrides refused a plain -tier override: %v", err)
+		}
+		if len(r.Tiers) != 1 || r.Tiers[0].Name != "daily" {
+			t.Errorf("Tiers = %+v, want just the overridden daily tier", r.Tiers)
+		}
+	})
+}
+
+// TestApplyRetentionOverrides_InvalidTierIsRefusedWithConfigsOwnErrorText
+// keeps the CLI from growing a second, divergent validation path: a
+// mistake in -tier must be reported in the same words the same mistake in
+// the YAML file gets.
+func TestApplyRetentionOverrides_InvalidTierIsRefusedWithConfigsOwnErrorText(t *testing.T) {
+	r := resolvedRetention(t)
+	o := parseRetentionArgs(t, "-tier", "daily:fortnight:7")
+	err := applyRetentionOverrides(&r, o)
+	if err == nil {
+		t.Fatal("applyRetentionOverrides accepted an unknown granularity")
+	}
+
+	fileEquivalent := config.Retention{Timezone: "UTC", WeekStartsOn: "monday",
+		Tiers: []config.RetentionTier{{Name: "daily", Granularity: "fortnight", Keep: 7}}}
+	wantErr := config.ValidateRetention(&fileEquivalent)
+	if wantErr == nil {
+		t.Fatal("the config-file equivalent was accepted; this test cannot compare error text")
+	}
+	if err.Error() != wantErr.Error() {
+		t.Errorf("CLI error text diverged from the config file's:\n cli  = %v\n file = %v", err, wantErr)
+	}
+}

@@ -377,7 +377,7 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 		Artifact: rec.Artifact,
 		Action:   PruneDelete,
 		Path:     safePath,
-		Reason: "no GFS tier (daily, weekly, monthly) selects this artifact and it does not hold last-known-good protection; " +
+		Reason: "no configured GFS retention tier selects this artifact and it does not hold last-known-good protection; " +
 			"its canonical path was confirmed beneath the backup-set root, confirmed a final managed artifact, and confirmed not a symlink",
 	}
 }

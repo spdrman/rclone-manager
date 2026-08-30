@@ -58,7 +58,16 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
-// GFSTier names one of the three tiers FR-18's retention table defines.
+// GFSTier names one tier of FR-18's retention chain, as it appears on the
+// wire: apps/common/webhost sends these strings straight through to the
+// client as a verdict's tiers, so a tier name is API surface, not an
+// internal label.
+//
+// A tier's name comes from configuration (config.RetentionTier.Name),
+// upper-cased. The three constants below are the names FR-18's default
+// chain has always used and are pinned here because renaming any of them
+// would break every existing client: a tier configured as "daily" reports
+// as DAILY, exactly as it did when there were only ever three tiers.
 type GFSTier string
 
 const (
@@ -66,6 +75,15 @@ const (
 	GFSWeekly  GFSTier = "WEEKLY"
 	GFSMonthly GFSTier = "MONTHLY"
 )
+
+// gfsTierName renders a configured tier's name for the wire. Uppercasing
+// is the whole transformation: config.Validate already constrains a name
+// to lower_snake_case, so this cannot produce anything a client has to
+// parse defensively, and "daily" lands on GFSDaily by construction rather
+// than through a lookup table that could fall out of step with it.
+func gfsTierName(configured string) GFSTier {
+	return GFSTier(strings.ToUpper(configured))
+}
 
 // GFSVerdict is one backup set artifact's GFS classification.
 //
@@ -79,15 +97,15 @@ type GFSVerdict struct {
 	// bucket's representative.
 	Keep bool
 
-	// Tiers lists every tier that selected this artifact, in the fixed
-	// order Daily, Weekly, Monthly (never reordered, so two runs over the
+	// Tiers lists every tier that selected this artifact, in the order the
+	// configured chain lists them (never reordered, so two runs over the
 	// same inputs render it identically). Nil when Keep is false.
 	//
-	// GFSDecide itself only ever appends GFSDaily, GFSWeekly or GFSMonthly
-	// here. TierLastKnownGood (lastknowngood.go) can appear too, but only
-	// after ApplyLastKnownGood composes FR-19's protected term into a
-	// GFSDecide result; it is always appended after any GFS tiers already
-	// present, so the Daily/Weekly/Monthly ordering above is unaffected.
+	// For the default chain that is still Daily, Weekly, Monthly.
+	// TierLastKnownGood (lastknowngood.go) can appear too, but only after
+	// ApplyLastKnownGood composes FR-19's protected term into a GFSDecide
+	// result; it is always appended after any GFS tiers already present,
+	// so the configured chain's own ordering above is unaffected.
 	Tiers []GFSTier
 }
 
@@ -144,6 +162,20 @@ var gfsWeekdaysByName = map[string]time.Weekday{
 // negative is treated as disabled (it selects nothing), not as an error,
 // since a caller that bypasses Validate has no other way to spell that.
 //
+// The chain GFSDecide decides with is cfg.EffectiveTiers(): the explicit
+// cfg.Tiers list when one is configured, and otherwise the three legacy
+// daily_days/weekly_months/monthly_months scalars expanded through
+// config.DefaultTierChain. That expansion lives in internal/config rather
+// than here so there is exactly one definition of what the old keys mean,
+// and it is what makes a config file written before FR-18 was generalized
+// produce the identical decisions it always has.
+//
+// A tier GFSDecide cannot evaluate at all (an unknown granularity, a
+// custom period with no length, an empty name) is an error, not a tier
+// that quietly selects nothing. The difference matters because this
+// output feeds FR-20: a chain silently reduced to "keeps nothing" would
+// turn a config typo into a proposal to delete every backup in the set.
+//
 // records must all belong to set: retention is calculated strictly per
 // backup set (FR-7), and GFSDecide refuses a record from another set
 // rather than silently folding it in. Records outside the managed-complete
@@ -196,44 +228,10 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 	// tiers is a slice, not a map, deliberately: GFSVerdict.Tiers is built
 	// by appending in this exact order as each tier is processed, which is
 	// what makes its contents reproducible without a separate sort step.
-	tiers := []struct {
-		tier   GFSTier
-		inSpan func(gfsCivilDate) bool
-		bucket func(gfsCivilDate) gfsCivilDate
-	}{
-		{
-			tier: GFSDaily,
-			inSpan: func(d gfsCivilDate) bool {
-				if cfg.DailyDays <= 0 {
-					return false
-				}
-				start := today.addDays(-(cfg.DailyDays - 1))
-				return !d.before(start) && !d.after(today)
-			},
-			bucket: func(d gfsCivilDate) gfsCivilDate { return d },
-		},
-		{
-			tier: GFSWeekly,
-			inSpan: func(d gfsCivilDate) bool {
-				if cfg.WeeklyMonths <= 0 {
-					return false
-				}
-				start := today.firstOfMonth().addMonths(-(cfg.WeeklyMonths - 1))
-				return !d.before(start) && !d.after(today)
-			},
-			bucket: func(d gfsCivilDate) gfsCivilDate { return d.weekStart(weekStartDay) },
-		},
-		{
-			tier: GFSMonthly,
-			inSpan: func(d gfsCivilDate) bool {
-				if cfg.MonthlyMonths <= 0 {
-					return false
-				}
-				start := today.firstOfMonth().addMonths(-(cfg.MonthlyMonths - 1))
-				return !d.before(start) && !d.after(today)
-			},
-			bucket: func(d gfsCivilDate) gfsCivilDate { return d.firstOfMonth() },
-		},
+	// The order is the order the administrator wrote the chain in.
+	tiers, err := gfsResolveChain(cfg.EffectiveTiers(), today, weekStartDay)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, tb := range tiers {

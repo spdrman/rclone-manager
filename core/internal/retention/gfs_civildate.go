@@ -103,3 +103,71 @@ func (c gfsCivilDate) compare(o gfsCivilDate) int {
 		return c.Day - o.Day
 	}
 }
+
+// firstOfQuarter returns the 1st of January, April, July or October,
+// whichever calendar quarter c falls in.
+func (c gfsCivilDate) firstOfQuarter() gfsCivilDate {
+	m := time.Month(((int(c.Month)-1)/3)*3 + 1)
+	return gfsCivilDate{Year: c.Year, Month: m, Day: 1}
+}
+
+// firstOfHalfYear returns the 1st of January or the 1st of July,
+// whichever calendar half c falls in.
+//
+// A calendar half, rather than "six months back from wherever we are",
+// is what makes a semi-annual tier's buckets stable: two runs a week
+// apart put the same backup in the same bucket, and an operator can say
+// which backup a semi-annual policy is holding without knowing what day
+// the last retention pass ran.
+func (c gfsCivilDate) firstOfHalfYear() gfsCivilDate {
+	m := time.January
+	if c.Month >= time.July {
+		m = time.July
+	}
+	return gfsCivilDate{Year: c.Year, Month: m, Day: 1}
+}
+
+// firstOfYear returns the 1st of January of c's year.
+func (c gfsCivilDate) firstOfYear() gfsCivilDate {
+	return gfsCivilDate{Year: c.Year, Month: time.January, Day: 1}
+}
+
+// gfsPeriodEpoch anchors the custom "every N days" granularity.
+//
+// A custom period has no calendar landmark to hang a bucket on the way a
+// month has its 1st, so it needs a fixed reference point, and the one
+// thing it must not be is "today": buckets counted back from the current
+// date shift by a day every day, which would move a backup from one
+// bucket to the next between two runs and make the tier's selection
+// depend on when the pass happened to run. That is exactly the
+// determinism this package's doc rules out. 1970-01-01 is arbitrary but
+// permanent, which is the only property that matters here.
+var gfsPeriodEpoch = gfsCivilDate{Year: 1970, Month: time.January, Day: 1}
+
+// daysSinceEpoch returns the number of whole days between gfsPeriodEpoch
+// and c (negative for dates before it). This is calendar arithmetic
+// grounded in UTC midnights, so it is unaffected by any DST transition in
+// the configured retention timezone; see this file's type doc.
+func (c gfsCivilDate) daysSinceEpoch() int {
+	return int(c.utc().Sub(gfsPeriodEpoch.utc()).Hours() / 24)
+}
+
+// periodStart returns the first day of the n-day period c falls in,
+// counting periods from gfsPeriodEpoch. n must be positive; callers
+// resolve a non-positive period before reaching here (see gfs.go's
+// gfsResolveTier).
+//
+// Euclidean division, not Go's truncating division, is deliberate: a date
+// before the epoch has a negative day count, and truncation there would
+// round toward zero and hand two adjacent pre-epoch dates the same bucket
+// as two post-epoch ones. No production config dates a backup to the
+// 1960s, but a bucket function that is wrong on half its domain is not
+// something to leave sitting in a code path that deletes files.
+func (c gfsCivilDate) periodStart(n int) gfsCivilDate {
+	days := c.daysSinceEpoch()
+	idx := days / n
+	if days%n < 0 {
+		idx--
+	}
+	return gfsPeriodEpoch.addDays(idx * n)
+}
