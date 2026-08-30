@@ -90,6 +90,26 @@ func (b *BackupService) RunOnSchedule(ctx context.Context, interval time.Duratio
 // operation in the first place (it is not caller-submitted work with an
 // idempotency key to account for), it simply runs again at the next
 // tick.
+//
+// # Panic recovery (issue #119's review, finding 5)
+//
+// executeRunCycle (operations.go) already recovers a panic inside RunCycle
+// specifically because an unrecovered one there "would crash the entire
+// persistent API server hosting this BackupService, not just one CLI
+// invocation" (that method's own doc) - true here for exactly the same
+// reason, and RunOnSchedule (this file) is what first makes THIS method
+// share a process with that same persistent API server. The deferred
+// recover below is declared AFTER b.runOnce.Unlock() specifically so it
+// runs BEFORE it (defer is LIFO): a panic must release the single-flight
+// lock the same way a normal return does, or a single panicking cycle
+// would permanently wedge every future scheduled tick AND every future
+// API-submitted operation behind a lock nothing will ever release again.
+// This is deliberately NOT a bare catch-and-continue: the panic is logged
+// at error level, loudly, exactly like executeRunCycle's own recovery
+// does, rather than silently swallowed - running the next tick against
+// state a panic just proved was unexpected is its own risk, and an
+// operator watching logs needs to see that this happened, not just that
+// the scheduler loop kept ticking as if nothing had.
 func (b *BackupService) runScheduledCycle(ctx context.Context) {
 	if !b.runOnce.TryLock() {
 		b.logger.Event(ctx, obs.LevelInfo, "scheduled_cycle_skipped",
@@ -97,6 +117,11 @@ func (b *BackupService) runScheduledCycle(ctx context.Context) {
 		return
 	}
 	defer b.runOnce.Unlock()
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error(context.Background(), "scheduled-cycle-panic", fmt.Errorf("recovered panic: %v", r))
+		}
+	}()
 
 	runCycle(b.inner, ctx)
 }

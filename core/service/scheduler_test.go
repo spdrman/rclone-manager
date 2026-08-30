@@ -127,3 +127,85 @@ func TestRunOnSchedule_NeverOverlapsAnAPISubmittedRunCycle(t *testing.T) {
 		t.Errorf("runCycle ran %d time(s) concurrently with the held API operation, want 0 (every scheduled tick must be skipped while runOnce is held)", got)
 	}
 }
+
+// TestRunScheduledCycle_RecoversFromPanicAndReleasesTheLock is issue
+// #119's review finding 5: runScheduledCycle used to call runCycle with
+// no panic recovery at all, unlike its sibling executeRunCycle
+// (operations.go), even though this package is what first makes the
+// scheduler share a process with the persistent API server that same
+// sibling's own doc comment warns an unrecovered panic would crash. This
+// test reaching its final assertion at all is itself part of what it
+// proves: an unrecovered panic inside runCycle would crash this whole
+// test binary, not just fail this one test.
+func TestRunScheduledCycle_RecoversFromPanicAndReleasesTheLock(t *testing.T) {
+	svc := newTestService(t)
+
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		panic("boom: simulated panic inside a scheduled RunCycle pass")
+	})
+
+	svc.runScheduledCycle(context.Background())
+
+	// The single-flight lock must have been released by the panic-recovery
+	// path, not left held forever: both a subsequent scheduled tick AND a
+	// subsequent API-submitted operation must still be able to run
+	// afterward.
+	if !svc.runOnce.TryLock() {
+		t.Fatal("runOnce is still held after a panicking scheduled cycle recovered - the lock was never released")
+	}
+	svc.runOnce.Unlock()
+
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		return app.CycleReport{}
+	})
+	op, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "idem-after-scheduled-panic",
+		Actor:          "alice",
+		ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("SubmitRunCycle after a recovered scheduled-cycle panic: %v", err)
+	}
+	done := waitForTerminalStatus(t, svc, op.ID)
+	if done.Status != "completed" {
+		t.Fatalf("operation submitted after the recovered panic: Status = %q, want %q (Error = %q)", done.Status, "completed", done.Error)
+	}
+}
+
+// TestRunOnSchedule_ContinuesTickingAfterAPanickingCycle proves the
+// panic-recovery fix at RunOnSchedule's own level, not just
+// runScheduledCycle in isolation: a tick that panics must not kill the
+// scheduler loop itself - it has to keep running at the next interval,
+// the same "just try again next tick" behavior a skipped tick already
+// gets.
+func TestRunOnSchedule_ContinuesTickingAfterAPanickingCycle(t *testing.T) {
+	svc := newTestService(t)
+
+	var cycles int32
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		n := atomic.AddInt32(&cycles, 1)
+		if n == 1 {
+			panic("boom: simulated panic on the first scheduled tick")
+		}
+		return app.CycleReport{}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- svc.RunOnSchedule(ctx, 20*time.Millisecond) }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("RunOnSchedule returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunOnSchedule did not return after its context was canceled")
+	}
+
+	if got := atomic.LoadInt32(&cycles); got < 2 {
+		t.Errorf("runCycle ran %d time(s) over 150ms at a 20ms interval after an initial panic, want at least 2 (the loop must survive a panicking tick)", got)
+	}
+}
