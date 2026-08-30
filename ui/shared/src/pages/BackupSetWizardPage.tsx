@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { PageHeader } from "@shared/components/PageHeader";
@@ -6,14 +6,7 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import type { CompletionMethod } from "@shared/types/backup";
 import { graph, useCausl } from "@shared/state/graph";
-import {
-  resetWizardAnswers,
-  wizardAcknowledgedNode,
-  wizardCanSaveNode,
-  wizardCompletionNode,
-  wizardHostKeyChangedNode,
-  wizardHostTrustedNode
-} from "@shared/state/wizardNodes";
+import { resetWizardAnswers, wizardCanSaveNode, wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
 
 const STEPS = [
   "Source",
@@ -70,35 +63,68 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   const [importPasted, setImportPasted] = useState("");
   const [importedFingerprint, setImportedFingerprint] = useState<string | null>(null);
 
-  // The wizard's ANSWERS — completion method, host trust, and the
-  // deletion acknowledgement — live on the shared graph, not here (see
-  // state/wizardNodes.ts). Resetting them on mount means opening "Add
-  // backup set" a second time never inherits a previous session's
-  // answers, since these are graph-singleton nodes, not component state.
-  useEffect(() => {
+  // The wizard's other answers — completion method and the deletion
+  // acknowledgement — are local too, same tier as `source` above: nothing
+  // outside this component reads them while the wizard is open (see
+  // state/wizardNodes.ts's module comment for the actual local-vs-graph
+  // rule).
+  const [completion, setCompletion] = useState<CompletionMethod>("completion-marker");
+  const [acknowledged, setAcknowledged] = useState(false);
+
+  // Host trust is local too, but it needs to remember WHICH host/port it
+  // was granted for, not just whether it was granted: editing the
+  // hostname after trusting host A must not leave host B showing
+  // "trusted" (see revalidateHostTrust below, wired to the field's
+  // onBlur).
+  const [hostTrusted, setHostTrusted] = useState(false);
+  const [trustedHostKey, setTrustedHostKey] = useState<string | null>(null);
+
+  // wizard.hostKeyChanged lives on the shared graph — see
+  // state/wizardNodes.ts for why this one node earns that spot when the
+  // rest of the wizard's answers don't. Resetting it on mount means
+  // opening "Add backup set" a second time never inherits a previous
+  // session's stale value.
+  //
+  // Committed synchronously during render, not in an effect — an effect
+  // runs after the first paint has already happened, so a freshly opened
+  // wizard would flash whatever a previous session last left on the
+  // graph before self-correcting on the next render. Same pattern (and
+  // same reasoning) as PlatformContext.tsx's bridge-mounted commit.
+  const [hasResetOnMount, setHasResetOnMount] = useState(false);
+  if (!hasResetOnMount) {
     resetWizardAnswers();
-  }, []);
+    setHasResetOnMount(true);
+  }
 
-  const completion = useCausl(wizardCompletionNode);
-  const hostTrusted = useCausl(wizardHostTrustedNode);
   const hostKeyChanged = useCausl(wizardHostKeyChangedNode);
-  const acknowledged = useCausl(wizardAcknowledgedNode);
-  // §12 — saving is gated on this, computed by the graph from
-  // acknowledged + the app-wide readOnly node (#106) + a changed host
-  // key (WP 2.3's "changed host key blocks operation"), so nothing here
-  // has to remember to recompute it by hand.
+  // §12 — the graph answers "is saving structurally possible at all"
+  // (not blocked by the app-wide readOnly node (#106) or a changed host
+  // key (WP 2.3's "changed host key blocks operation")); combined here
+  // with the session's own acknowledgement to get the actual gate. This
+  // is the only place `readOnly` is consulted for gating — the `readOnly`
+  // prop below is read only to pick which hint text to show.
   const canSave = useCausl(wizardCanSaveNode);
-  const saveDisabled = readOnly || !canSave;
+  const saveDisabled = !canSave || !acknowledged;
 
-  const setCompletion = (value: CompletionMethod) =>
-    graph.commit("wizard/completion", (tx) => tx.set(wizardCompletionNode, value));
-  const setAcknowledged = (value: boolean) =>
-    graph.commit("wizard/acknowledged", (tx) => tx.set(wizardAcknowledgedNode, value));
-  const trustHost = () =>
-    graph.commit("wizard/trustHost", (tx) => {
-      tx.set(wizardHostTrustedNode, true);
-      tx.set(wizardHostKeyChangedNode, false);
-    });
+  const trustHost = () => {
+    setHostTrusted(true);
+    setTrustedHostKey(source.host + ":" + source.port);
+    graph.commit("wizard/trustHost", (tx) => tx.set(wizardHostKeyChangedNode, false));
+  };
+
+  // M1 fix (#98 PR #145 review): a host trusted on step 3 must not still
+  // read as trusted once the operator goes back and points step 1's
+  // hostname/port at a different server — that would defeat the whole
+  // point of a fingerprint-pinning UI. Scoped to blur (a field losing
+  // focus with a changed value), not every keystroke, so retyping the
+  // same hostname mid-edit doesn't re-prompt trust on every character.
+  const revalidateHostTrust = () => {
+    if (!hostTrusted || trustedHostKey === null) return;
+    if (trustedHostKey !== source.host + ":" + source.port) {
+      setHostTrusted(false);
+      setTrustedHostKey(null);
+    }
+  };
 
   let saveHint = "";
   if (hostKeyChanged) {
@@ -163,8 +189,14 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
                 <Field label="Backup set name" value={source.name} onChange={(v) => updateSource("name", v)} span />
-                <Field label="Server hostname" value={source.host} onChange={(v) => updateSource("host", v)} mono />
-                <Field label="SSH port" value={source.port} onChange={(v) => updateSource("port", v)} mono />
+                <Field
+                  label="Server hostname" value={source.host} onChange={(v) => updateSource("host", v)}
+                  onBlur={revalidateHostTrust} mono
+                />
+                <Field
+                  label="SSH port" value={source.port} onChange={(v) => updateSource("port", v)}
+                  onBlur={revalidateHostTrust} mono
+                />
                 <Field label="Username" value={source.username} onChange={(v) => updateSource("username", v)} mono />
               </div>
             </StepBody>
@@ -261,6 +293,15 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                           onChange={(e) => setImportPasted(e.target.value)}
                           placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                           style={{ height: "auto", padding: "10px 11px", resize: "vertical" }}
+                          // M2 (#98 PR #145 review): key material must never
+                          // leave this screen unhashed, and cloud/"enhanced"
+                          // spellcheck (on by default in some browsers) sends
+                          // the full contents of an unmasked text field to a
+                          // third-party service as the user types or pastes.
+                          spellCheck={false}
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
                         />
                       </label>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -277,7 +318,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                         <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                           {importPasted.trim().length === 0
                             ? "Paste a private key to enable Import."
-                            : "Validated locally for shape only — the backend confirms it against the server."}
+                            : "Nothing checks this on this screen — the backend validates it against the server on import."}
                         </span>
                       </div>
                       <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
@@ -554,8 +595,11 @@ function StepBody({ title, lede, children }: { title: string; lede: string; chil
 
 function Field(
   props:
-    | { label: string; value: string; onChange: (v: string) => void; mono?: boolean; span?: boolean; defaultValue?: undefined }
-    | { label: string; defaultValue: string; mono?: boolean; span?: boolean; value?: undefined; onChange?: undefined }
+    | {
+        label: string; value: string; onChange: (v: string) => void; onBlur?: () => void;
+        mono?: boolean; span?: boolean; defaultValue?: undefined;
+      }
+    | { label: string; defaultValue: string; mono?: boolean; span?: boolean; value?: undefined; onChange?: undefined; onBlur?: undefined }
 ) {
   const { label, mono, span } = props;
   const style = span ? { gridColumn: "1 / -1", maxWidth: 420 } : undefined;
@@ -564,7 +608,7 @@ function Field(
     <label className="field" style={style}>
       <span className="field__label">{label}</span>
       {"onChange" in props && props.onChange ? (
-        <input className={className} value={props.value} onChange={(e) => props.onChange(e.target.value)} />
+        <input className={className} value={props.value} onChange={(e) => props.onChange(e.target.value)} onBlur={props.onBlur} />
       ) : (
         <input className={className} defaultValue={props.defaultValue} />
       )}

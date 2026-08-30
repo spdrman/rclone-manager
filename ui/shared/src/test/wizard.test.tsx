@@ -7,7 +7,7 @@ import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { versionNode } from "@shared/state/appNodes";
-import { wizardCompletionNode, wizardHostKeyChangedNode, wizardHostTrustedNode } from "@shared/state/wizardNodes";
+import { wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
 
 function renderWizard(readOnly = false) {
   return render(
@@ -19,11 +19,14 @@ function renderWizard(readOnly = false) {
   );
 }
 
-// A wizard's ANSWERS now live on the shared causl graph (issue #98 —
+// wizard.hostKeyChanged lives on the shared causl graph (issue #98 —
 // state/wizardNodes.ts), not in this component's own useState, precisely
 // so something outside the wizard (a host-key re-probe, another test) can
-// change them while it is open. That means test isolation now depends on
-// resetting the graph between tests, the same as PlatformContext.test.tsx.
+// change it while the wizard is open. That means test isolation depends
+// on resetting the graph between tests, the same as
+// PlatformContext.test.tsx — even though the wizard's other answers
+// (completion, host trust, acknowledgement) are plain component state and
+// need no such reset.
 afterEach(() => {
   cleanup();
   resetGraphForTests();
@@ -96,6 +99,30 @@ describe("add backup set wizard", () => {
       expect(document.body.textContent).not.toContain(fixtureKey);
     });
 
+    it("guards the private-key textarea against cloud spellcheck / autofill leakage (M2, #98 PR #145 review)", async () => {
+      renderWizard();
+      await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
+      await userEvent.click(screen.getByRole("radio", { name: /Import key/ }));
+
+      const textarea = screen.getByLabelText(/private key/i);
+      expect(textarea).toHaveAttribute("spellcheck", "false");
+      expect(textarea).toHaveAttribute("autocomplete", "off");
+      expect(textarea).toHaveAttribute("autocorrect", "off");
+      expect(textarea).toHaveAttribute("autocapitalize", "off");
+    });
+
+    it("does not claim a shape-validation step that doesn't run (M3, #98 PR #145 review)", async () => {
+      renderWizard();
+      await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
+      await userEvent.click(screen.getByRole("radio", { name: /Import key/ }));
+
+      const textarea = screen.getByLabelText(/private key/i);
+      await userEvent.type(textarea, "FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+
+      expect(screen.queryByText(/validated locally/i)).toBeNull();
+      expect(screen.queryByText(/shape only/i)).toBeNull();
+    });
+
     it("shows that a managed key already in use cannot simply be deleted", async () => {
       renderWizard();
       await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
@@ -128,31 +155,50 @@ describe("add backup set wizard", () => {
     });
   });
 
-  describe("the review step reads the graph fresh, not a stale snapshot (#98)", () => {
-    it("updates the completion-method summary when wizard.completion changes on the graph, with no remount", async () => {
+  describe("the review step reads step 2/4's real answers, not fixed example text (#98)", () => {
+    it("reflects the completion method chosen on step 4, surviving the trip to review", async () => {
       renderWizard();
+      await userEvent.click(screen.getByRole("button", { name: "Discovery" }));
+      await userEvent.click(screen.getByRole("radio", { name: /Atomic rename/ }));
+
       await userEvent.click(screen.getByRole("button", { name: "Review" }));
-      expect(screen.getByText(/completion marker/i)).toBeTruthy();
-
-      act(() => {
-        graph.commit("test/wizard-completion", (tx) => tx.set(wizardCompletionNode, "atomic-rename"));
-      });
-
       expect(screen.getByText(/atomic rename/i)).toBeTruthy();
       expect(screen.queryByText(/completion marker/i)).toBeNull();
     });
 
-    it("updates the host-trust summary when wizard.hostTrusted changes on the graph, with no remount", async () => {
+    it("reflects a trust decision made on step 3, surviving the trip to review", async () => {
       renderWizard();
+      await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
+
       await userEvent.click(screen.getByRole("button", { name: "Review" }));
-      expect(screen.getByText(/not yet trusted/i)).toBeTruthy();
-
-      act(() => {
-        graph.commit("test/wizard-host-trusted", (tx) => tx.set(wizardHostTrustedNode, true));
-      });
-
       expect(screen.queryByText(/not yet trusted/i)).toBeNull();
       expect(screen.getByText(/^trusted$/i)).toBeTruthy();
+    });
+  });
+
+  describe("host trust does not survive a hostname edit (M1, #98 PR #145 review)", () => {
+    it("resets host trust once the hostname changes after Trust host, but not while it still matches", async () => {
+      renderWizard();
+
+      await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
+      expect(screen.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+
+      // Re-visiting the same step with the hostname unchanged must not
+      // un-trust it — only an actual edit should.
+      await userEvent.click(screen.getByRole("button", { name: "Source" }));
+      await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      expect(screen.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+
+      await userEvent.click(screen.getByRole("button", { name: "Source" }));
+      const hostField = screen.getByLabelText("Server hostname");
+      await userEvent.clear(hostField);
+      await userEvent.type(hostField, "a-different-server.internal");
+      await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+
+      expect(screen.queryByRole("button", { name: "Host trusted" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled();
     });
   });
 
