@@ -54,6 +54,7 @@ var commands = map[string]func([]string) int{
 	"retention": cmdRetention,
 	"reconcile": cmdReconcile,
 	"validate":  cmdValidate,
+	"catalog":   cmdCatalog,
 	"version":   cmdVersion,
 }
 
@@ -71,6 +72,7 @@ commands:
   retention [--dry-run]                          preview GFS/last-known-good retention decisions
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
+  catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config.yaml)

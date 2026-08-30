@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/recovery"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -205,11 +206,17 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		// A previous attempt using this same CommittingKey ran all the way
 		// through to COMMITTED before this call was made (or observed
 		// success from a call that crashed only after the fact). Converge
-		// without touching the filesystem or the journal again.
+		// without touching the filesystem or the journal again, other than
+		// re-ensuring the recovery manifest exists (see writeRecoveryManifest's
+		// doc: a process killed after COMMITTED landed but before the
+		// manifest was ever written must not leave it missing forever).
 		if committing.Record.LocalPath != final {
 			return state.Outcome{}, fmt.Errorf(
 				"lifecycle: commit %s: already COMMITTED at %q, not the final path %q this LocalDir computes",
 				in.Artifact, committing.Record.LocalPath, final)
+		}
+		if err := writeRecoveryManifest(in.LocalDir, committing.Record); err != nil {
+			return state.Outcome{}, err
 		}
 		return committing, nil
 	case committing.Record.State == string(Committing):
@@ -243,7 +250,56 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 	if err != nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: recording COMMITTED: %w", in.Artifact, err)
 	}
+	if err := writeRecoveryManifest(in.LocalDir, committed.Record); err != nil {
+		return state.Outcome{}, err
+	}
 	return committed, nil
+}
+
+// writeRecoveryManifest writes rec's EPIC-B section 19.3 sidecar recovery
+// manifest into localDir, deriving every field from rec itself, which,
+// like every internal/state.Record, never carries a secret (see
+// internal/recovery's package doc for the structural guarantee this
+// relies on).
+//
+// It is called from both of Commit's success paths above: the
+// fresh/resumed one and the already-converged one. That duplication is
+// deliberate, not an oversight: a process killed after the COMMITTED
+// journal write landed but before the manifest was ever written must
+// still get one written on the very next call with the same
+// CommittingKey/CommittedKey, via the already-converged branch, rather
+// than silently staying without recovery metadata forever. Since the
+// manifest's content is derived entirely, deterministically, from the
+// journal record, writing it again on a later converged call is always
+// safe: it overwrites the same bytes it would have written the first time.
+func writeRecoveryManifest(localDir string, rec state.Record) error {
+	size := int64(0)
+	switch {
+	case rec.Transfer != nil:
+		size = rec.Transfer.BytesTransferred
+	case rec.Remote.Size != nil:
+		size = *rec.Remote.Size
+	}
+
+	m := recovery.Manifest{
+		FormatVersion:      recovery.CurrentFormatVersion,
+		Source:             rec.Artifact.Set.Source,
+		BackupSet:          rec.Artifact.Set.Set,
+		ArtifactName:       rec.Artifact.Name,
+		RemotePath:         rec.RemotePath,
+		ProducerTimestamp:  rec.Remote.ModTime,
+		ReceivedTimestamp:  rec.UpdatedAt,
+		RetentionTimestamp: rec.DiscoveredAt,
+		SizeBytes:          size,
+		Checksum:           rec.LocalHash,
+		ChecksumAlgorithm:  rec.LocalHashAlg,
+		ValidationPassed:   rec.ValidationPassed,
+		ValidationDetail:   rec.ValidationDetail,
+	}
+	if err := recovery.WriteManifest(localDir, m); err != nil {
+		return fmt.Errorf("lifecycle: commit %s: writing recovery manifest: %w", rec.Artifact, err)
+	}
+	return nil
 }
 
 // commitFile performs FR-14 steps 3 through 5: fsync the transferred file's
