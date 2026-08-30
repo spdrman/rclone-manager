@@ -14,6 +14,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // --- fixtures ---
@@ -553,5 +554,98 @@ func TestRun_MaxPerCycleSpreadsWorkAcrossCalls(t *testing.T) {
 
 	if len(seen) != len(artifacts) {
 		t.Fatalf("saw %d distinct artifacts across 3 bounded Run calls, want all %d eventually covered", len(seen), len(artifacts))
+	}
+}
+
+// --- WP3.2 integration: an artifact FR-15's stable-mode gate held back is
+// picked up by this package's own scheduled re-check, with zero changes
+// required to this package's own selection or verdict-routing logic ---
+
+// unreachedDeleteTransport is a transport.Transport whose every method
+// panics. WP3.2's stable-mode safety check (internal/lifecycle/
+// remotedelete.go) refuses before lifecycle.DeleteRemote ever reaches a
+// transport call, so the test below needs a Transport only to satisfy
+// DeleteRemote's own non-nil precondition, never expects any of it to
+// actually run.
+type unreachedDeleteTransport struct{}
+
+func (unreachedDeleteTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
+	panic("unreachedDeleteTransport: List not used")
+}
+
+func (unreachedDeleteTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
+	panic("unreachedDeleteTransport: Stat not used")
+}
+
+func (unreachedDeleteTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+	panic("unreachedDeleteTransport: CopyToLocal not used")
+}
+
+func (unreachedDeleteTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+	panic("unreachedDeleteTransport: RemoteHash not used")
+}
+
+func (unreachedDeleteTransport) DeleteRemote(context.Context, transport.Source, string) error {
+	panic("unreachedDeleteTransport: DeleteRemote not used")
+}
+
+var _ transport.Transport = unreachedDeleteTransport{}
+
+// TestRun_PicksUpArtifactWP32HeldBackFromDeletion is the INTEGRATION test
+// docs/EPIC-B-multi-nas.md §71 Work Package 3.2 asks for: "internal/
+// revalidate's scheduled re-check picking up an artifact this work
+// package quarantined". WP3.2's stable-mode gate does not move a held-back
+// artifact into QUARANTINED: it leaves it exactly at COMMITTED, already
+// one of this package's own eligibleStates (select.go), refuses the
+// delete, and preserves the remote source (see remotedelete.go's own doc
+// for why). This test proves that composition end to end: a real
+// lifecycle.DeleteRemote refusal, on a real journal, produces a record
+// this package's own SelectDue and Run pick straight back up, with zero
+// changes required to this package's own selection or verdict-routing
+// logic.
+func TestRun_PicksUpArtifactWP32HeldBackFromDeletion(t *testing.T) {
+	j := openJournal(t)
+	artifact := artifactNamed(t, "backup.dump")
+	content := []byte("hello world")
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	commitArtifact(t, j, artifact, content, t0)
+
+	_, err := lifecycle.DeleteRemote(context.Background(),
+		lifecycle.Deps{Journal: j, Transport: unreachedDeleteTransport{}, Now: func() time.Time { return t0 }},
+		lifecycle.DeleteRemoteRequest{
+			Artifact:   artifact,
+			AttemptKey: "attempt-1",
+			Completion: config.Completion{Strategy: "stable", DeleteSafetyDelay: config.Duration(10 * time.Minute)},
+		})
+	if _, ok := lifecycle.AsRemoteDeleteRefusal(err); !ok {
+		t.Fatalf("DeleteRemote error = %v, want a refusal: WP3.2's own safety delay has not elapsed yet", err)
+	}
+
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.Committed) {
+		t.Fatalf("state = %q, want %s: the remote source must be preserved, held back rather than routed anywhere else", rec.State, lifecycle.Committed)
+	}
+
+	cfg := config.Revalidation{Hash: true, Interval: config.Duration(5 * time.Minute), MaxPerCycle: 10}
+	dueAt := t0.Add(6 * time.Minute)
+
+	due := SelectDue([]state.Record{rec}, cfg, dueAt)
+	if len(due) != 1 {
+		t.Fatalf("SelectDue returned %d records, want 1: this held-back artifact must be selected", len(due))
+	}
+
+	report, err := Run(context.Background(), Deps{Journal: j, Now: func() time.Time { return dueAt }}, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("report.Findings = %+v, want exactly 1", report.Findings)
+	}
+	if f := report.Findings[0]; !f.Checked || !f.Passed {
+		t.Fatalf("Finding = %+v, want a checked, passed re-verification: the content on disk has not actually changed", f)
 	}
 }

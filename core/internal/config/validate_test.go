@@ -38,8 +38,9 @@ func validConfig() Config {
 						LocalPath:  "/backups/production/postgres",
 						Include:    []string{"*.dump.zst"},
 						Completion: Completion{
-							Strategy:  "stable",
-							StableFor: Duration(10 * time.Minute),
+							Strategy:          "stable",
+							StableFor:         Duration(10 * time.Minute),
+							DeleteSafetyDelay: Duration(30 * time.Minute),
 						},
 						StaleAfter: Duration(30 * time.Hour),
 						Validation: Validation{
@@ -695,9 +696,21 @@ func TestEmptyPathsRejected(t *testing.T) {
 func TestCompletionStrategyValidation(t *testing.T) {
 	t.Run("stable requires stable_for", func(t *testing.T) {
 		cfg := validConfig()
-		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "stable"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "stable", DeleteSafetyDelay: Duration(30 * time.Minute)}
 		if err := cfg.Validate(); err == nil {
 			t.Fatal("strategy stable with no stable_for was accepted")
+		}
+	})
+	// WP3.2: "stable" alone (stable_for set, delete_safety_delay not) must
+	// be rejected the same way a missing stable_for is: stable-size
+	// completion must never be able to silently masquerade as
+	// producer-confirmed completion by simply omitting the extra safety
+	// delay this issue adds.
+	t.Run("stable requires delete_safety_delay", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "stable", StableFor: Duration(10 * time.Minute)}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("strategy stable with no delete_safety_delay was accepted")
 		}
 	})
 	for _, strategy := range []string{"rename", "marker"} {
@@ -706,6 +719,13 @@ func TestCompletionStrategyValidation(t *testing.T) {
 			cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: strategy, StableFor: Duration(time.Minute)}
 			if err := cfg.Validate(); err == nil {
 				t.Fatalf("strategy %s with stable_for set was accepted", strategy)
+			}
+		})
+		t.Run(strategy+" rejects delete_safety_delay", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: strategy, DeleteSafetyDelay: Duration(time.Minute)}
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("strategy %s with delete_safety_delay set was accepted", strategy)
 			}
 		})
 		t.Run(strategy+" alone is accepted", func(t *testing.T) {

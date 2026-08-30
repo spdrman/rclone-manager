@@ -18,4 +18,5 @@ sources:
         completion:
           strategy: stable
           stable_for: 10m
+          delete_safety_delay: 60m
         stale_after: 30h

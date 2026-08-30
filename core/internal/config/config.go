@@ -164,6 +164,23 @@ func (k Key) isZero() bool {
 type Completion struct {
 	Strategy  string   `yaml:"strategy"` // "rename", "marker" or "stable"
 	StableFor Duration `yaml:"stable_for"`
+
+	// DeleteSafetyDelay is WP3.2's additional deletion-safety delay
+	// (docs/EPIC-B-multi-nas.md §26 Step 3, §71 Work Package 3.2): only
+	// used, and required, when Strategy == "stable". "stable" only ever
+	// confirms a size/mtime heuristic, never a producer completion
+	// signal the way "rename"/"marker" do, so FR-15's remote-delete gate
+	// (internal/lifecycle/remotedelete.go) additionally requires this
+	// much time to have passed since the artifact last reached a
+	// confirmed-good journal state before it treats a "stable" artifact
+	// as equivalent to one completed by "rename" or "marker". This is
+	// deliberately a separate field from StableFor, not a second use of
+	// it: StableFor answers "has this looked done long enough to start
+	// processing it at all" (internal/discovery/complete.go); this
+	// answers a different question asked at a different, later, more
+	// dangerous point in the pipeline, "has it looked done long enough
+	// to destroy the only other copy".
+	DeleteSafetyDelay Duration `yaml:"delete_safety_delay"`
 }
 
 // Validation configures how a transferred artifact gets checked before it's

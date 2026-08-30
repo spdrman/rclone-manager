@@ -78,6 +78,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -110,6 +111,26 @@ type DeleteRemoteRequest struct {
 	// a caller retrying purely because the process restarted reuses the
 	// same one it used before.
 	AttemptKey string
+
+	// Completion is the backup set's FR-8 completion configuration
+	// (WP3.2, docs/EPIC-B-multi-nas.md §26 Step 3, §71 Work Package 3.2).
+	// DeleteRemote reads only Completion.Strategy and
+	// Completion.DeleteSafetyDelay from it, and only to decide whether an
+	// extra deletion-safety delay gates this attempt: see the "stable
+	// completion safety delay" revalidation below.
+	//
+	// The zero value (Strategy == "") is treated exactly like "rename" or
+	// "marker": no extra delay is required. That is deliberate, not an
+	// oversight -- a caller that does not populate this field is opting
+	// out of a dimension of behavior it was never asking DeleteRemote to
+	// have an opinion about, exactly the same convention this package
+	// already uses for config.Validation's zero value in verify.go. In
+	// production this can never silently hide a real "stable" backup set:
+	// config.Validate refuses to let Completion.Strategy ever be empty in
+	// a validated config, so the only caller in this codebase that
+	// reaches DeleteRemote in production (internal/app/pipeline.go)
+	// always has a real, non-empty strategy to hand it.
+	Completion config.Completion
 }
 
 const (
@@ -233,6 +254,53 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 			Artifact: req.Artifact,
 			Check:    "local file",
 			Reason:   err.Error(),
+		}
+	}
+
+	// --- revalidation (WP3.2): a "stable" completion strategy only ever
+	// confirmed a size/mtime heuristic, never a producer completion
+	// signal the way "rename"/"marker" do (see internal/discovery/
+	// complete.go), so it may not be treated as equivalent to them at this
+	// gate without an additional deletion-safety delay having elapsed
+	// since this artifact last reached a confirmed-good journal state
+	// (req.Completion.DeleteSafetyDelay; config.Validate requires this to
+	// be set whenever Strategy == "stable"). rec.UpdatedAt is the closest
+	// thing this journal row has to "when was this record last confirmed
+	// good": it is set by the COMMITTED write itself and, for an artifact
+	// still sitting at COMMITTED, is left untouched by anything else
+	// except a later same-state pass (internal/revalidate's own scheduled
+	// re-check, or this very check refusing again).
+	//
+	// Every other strategy, and a zero-value Completion a caller did not
+	// populate (see DeleteRemoteRequest.Completion's own doc), skips this
+	// entirely.
+	//
+	// Like the local-file check just above, this is a pure,
+	// side-effect-free comparison that runs before any journal write:
+	// refusing here leaves rec.UpdatedAt exactly where it was, so a
+	// stable-strategy artifact that keeps getting refused on every cycle
+	// never has its own safety clock reset by the refusal itself, only by
+	// a genuine journal event. The practical effect of that refusal is
+	// exactly what WP3.2's behavioral contract asks for: the remote
+	// source is preserved (nothing here calls the transport), and the
+	// artifact is left exactly where internal/revalidate's own SelectDue
+	// already treats COMMITTED/REMOTE_DELETE_PENDING artifacts as
+	// eligible for a scheduled re-check, so an operator with revalidation
+	// configured for this backup set gets it re-examined without this
+	// package having to teach internal/revalidate anything new about
+	// WP3.2 at all.
+	if req.Completion.Strategy == "stable" {
+		delay := req.Completion.DeleteSafetyDelay.Duration()
+		elapsed := d.now().Sub(rec.UpdatedAt)
+		if elapsed < delay {
+			return state.Outcome{}, &RemoteDeleteRefusalError{
+				Artifact: req.Artifact,
+				Check:    "stable completion safety delay",
+				Reason: fmt.Sprintf(
+					"completion strategy \"stable\" only confirms size/mtime stability, not producer-confirmed completion; only %s of the required %s deletion-safety delay has elapsed since this artifact last reached a confirmed-good state",
+					elapsed.Round(time.Second), delay,
+				),
+			}
 		}
 	}
 

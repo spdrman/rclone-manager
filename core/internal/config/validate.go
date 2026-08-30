@@ -262,9 +262,20 @@ func (v *validator) validateCompletion(path string, c *Completion) {
 		if c.StableFor.Duration() <= 0 {
 			v.addf("%s: stable_for must be set to a positive duration when strategy is \"stable\"", path)
 		}
+		// WP3.2: "stable" is a heuristic, not a producer completion
+		// signal, so an extra deletion-safety delay is mandatory, not
+		// optional, exactly like stable_for itself above. See
+		// Completion.DeleteSafetyDelay's own doc for why this is a
+		// distinct field from stable_for rather than a second use of it.
+		if c.DeleteSafetyDelay.Duration() <= 0 {
+			v.addf("%s: delete_safety_delay must be set to a positive duration when strategy is \"stable\" (WP3.2: stable-size completion alone must not be treated as producer-confirmed)", path)
+		}
 	case "rename", "marker":
 		if c.StableFor.Duration() != 0 {
 			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.DeleteSafetyDelay.Duration() != 0 {
+			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
 		}
 	case "":
 		v.addf("%s: strategy must be set (\"rename\", \"marker\" or \"stable\", FR-8)", path)

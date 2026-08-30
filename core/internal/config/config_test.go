@@ -46,7 +46,7 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if len(bs.Include) != 1 || bs.Include[0] != "*.dump.zst" {
 		t.Fatalf("Include decoded wrong: %#v", bs.Include)
 	}
-	if bs.Completion.Strategy != "stable" || bs.Completion.StableFor.Duration() != 10*time.Minute {
+	if bs.Completion.Strategy != "stable" || bs.Completion.StableFor.Duration() != 10*time.Minute || bs.Completion.DeleteSafetyDelay.Duration() != 60*time.Minute {
 		t.Fatalf("Completion decoded wrong: %#v", bs.Completion)
 	}
 	if got, want := bs.StaleAfter.Duration(), 30*time.Hour; got != want {
