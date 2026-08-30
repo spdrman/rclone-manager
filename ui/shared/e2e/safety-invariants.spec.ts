@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 /** The product's non-negotiables, asserted across the whole UI rather than in
  *  one component. If any of these fail the design has regressed, not the code. */

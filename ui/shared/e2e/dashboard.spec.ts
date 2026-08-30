@@ -5,7 +5,10 @@ test.describe("dashboard", () => {
     await bm.goto("/");
     // §8 — the headline is about backups; the daemon is a supporting chip.
     await expect(page.getByText(/^BACKUPS /)).toBeVisible();
-    await expect(page.getByText(/Service running/)).toBeVisible();
+    // Scoped to the header — the dashboard body's own health summary widget
+    // repeats "Service running" with a different suffix (uptime, not
+    // version), so an unscoped match is ambiguous.
+    await expect(page.getByRole("banner").getByText(/Service running/)).toBeVisible();
     await expect(page.getByText(/a healthy daemon is not a healthy backup|not produced a verified backup|halted/i).first()).toBeVisible();
   });
 

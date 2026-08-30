@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 /** §32 — keyboard, semantics and non-colour-only status, checked structurally
  *  rather than with a snapshot so failures point at a real defect. */
@@ -90,7 +90,9 @@ test.describe("accessibility", () => {
   test("dialogs are modal, labelled and Escape-dismissible", async ({ page }) => {
     await page.goto("/sets");
     await page.getByRole("article").first().getByRole("button", { name: "Open" }).click();
-    await page.getByRole("button", { name: "Preview retention" }).click();
+    // exact: true — disambiguates from the detail page's other
+    // "Preview retention plan" button.
+    await page.getByRole("button", { name: "Preview retention", exact: true }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveAttribute("aria-modal", "true");

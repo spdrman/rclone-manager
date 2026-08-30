@@ -13,8 +13,10 @@ test.describe("quarantine", () => {
   });
 
   test("shows all six documented columns", async ({ page }) => {
+    // exact: true — "Backup" is otherwise a substring match of the
+    // "Backup set" column too.
     for (const col of ["Backup", "Backup set", "Reason", "Detected", "Remote source", "Actions"]) {
-      await expect(page.getByRole("columnheader", { name: col })).toBeVisible();
+      await expect(page.getByRole("columnheader", { name: col, exact: true })).toBeVisible();
     }
   });
 

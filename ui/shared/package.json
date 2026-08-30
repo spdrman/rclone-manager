@@ -15,7 +15,7 @@
     "typecheck:providers": "tsc --noEmit -p tsconfig.providers.json",
     "e2e:ui": "playwright test --ui",
     "e2e:providers": "playwright test --project=providers",
-    "e2e:all-providers": "for p in generic ugos synology truenas unraid openmediavault proxmox; do VITE_PLATFORM=$p playwright test --project=providers || exit 1; done",
+    "e2e:all-providers": "node scripts/e2e-all-providers.mjs",
     "test:all": "npm run lint && npm run eslint && npm run typecheck:providers && npm test && npm run e2e"
   },
   "dependencies": {

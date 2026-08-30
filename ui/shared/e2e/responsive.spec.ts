@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 /** §31 — desktop-first, but a small app window must stay fully usable. This
  *  project runs at 940x720; the regression it guards is a clipped table column. */
@@ -53,7 +53,9 @@ test.describe("small app window", () => {
   test("dialogs remain fully visible", async ({ page }) => {
     await page.goto("/sets");
     await page.getByRole("article").first().getByRole("button", { name: "Open" }).click();
-    await page.getByRole("button", { name: "Preview retention" }).click();
+    // exact: true — disambiguates from the detail page's other
+    // "Preview retention plan" button.
+    await page.getByRole("button", { name: "Preview retention", exact: true }).click();
 
     const dialog = page.getByRole("dialog");
     const box = await dialog.boundingBox();

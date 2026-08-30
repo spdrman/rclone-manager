@@ -50,4 +50,13 @@ export default tseslint.config(
       "react-hooks/rules-of-hooks": "off",
     },
   },
+  {
+    // A Node CLI script (scripts/e2e-all-providers.mjs), not browser code —
+    // needs Node's globals, not the DOM ones the rest of this config
+    // implicitly assumes.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: { process: "readonly", console: "readonly" },
+    },
+  },
 );
