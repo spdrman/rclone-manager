@@ -59,10 +59,6 @@ var ErrRetentionPlanStale = errors.New("service: retention plan is stale")
 // see ApplyRetentionPlan's own doc.
 var ErrRetentionPlanNotFound = errors.New("service: retention plan not found")
 
-// ErrBackupSetNotFound is returned by PreviewRetention when source/set
-// names no backup set in this BackupService's own loaded configuration.
-var ErrBackupSetNotFound = errors.New("service: backup set not found")
-
 // RetentionArtifactVerdict is one managed artifact's FR-18/FR-19/FR-20
 // classification within a RetentionPlan: internal/retention.PruneVerdict,
 // translated into the plain, provider-agnostic shape this package's own
@@ -154,7 +150,17 @@ func (b *BackupService) PreviewRetention(ctx context.Context, source, set string
 		return RetentionPlan{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
-	plan, err := b.inner.PrunePreview(ctx, id)
+	// One atomic read of {inner, revision} up front, exactly as
+	// SubmitRunCycle does (operations.go): the configuration revision this
+	// plan records as its own must be the revision of the very
+	// internal/app.Service that computed it, never one from a hot-reload
+	// that landed in between (see BackupService.state's own doc). Reading
+	// the two separately is precisely the mismatched pair configState
+	// exists to make impossible, and here it would mean recording a
+	// staleness baseline no observation ever actually saw.
+	st := b.state.Load()
+
+	plan, err := st.inner.PrunePreview(ctx, id)
 	if err != nil {
 		var nf *app.NotFoundError
 		if errors.As(err, &nf) {
@@ -167,13 +173,18 @@ func (b *BackupService) PreviewRetention(ctx context.Context, source, set string
 		return RetentionPlan{}, fmt.Errorf("service: preview retention: an internal error occurred")
 	}
 
-	return b.newRetentionPlan(id, plan), nil
+	return b.newRetentionPlan(id, st.revision, plan), nil
 }
 
 // newRetentionPlan issues plan a fresh plan_id, records its bookkeeping
 // for ApplyRetentionPlan's later staleness check, and returns the plain
 // RetentionPlan shape this package hands to callers outside core/.
-func (b *BackupService) newRetentionPlan(set model.BackupSetID, plan app.PrunePlan) RetentionPlan {
+//
+// configRevision is passed in rather than re-read from b.state here, so it
+// is guaranteed to be the revision of the exact configState whose inner
+// produced plan: see PreviewRetention's own doc for why re-reading would
+// reopen the mismatched-pair window.
+func (b *BackupService) newRetentionPlan(set model.BackupSetID, configRevision string, plan app.PrunePlan) RetentionPlan {
 	created := now()
 	planID := "retplan_" + uuid.New().String()
 	inventoryRevision := computeInventoryRevision(plan.Records)
@@ -184,12 +195,12 @@ func (b *BackupService) newRetentionPlan(set model.BackupSetID, plan app.PrunePl
 		planID:            planID,
 		set:               set,
 		inventoryRevision: inventoryRevision,
-		configRevision:    b.revision,
+		configRevision:    configRevision,
 		expiresAt:         expiresAt,
 	}
 	b.retentionMu.Unlock()
 
-	return summarizeRetentionPlan(set, planID, inventoryRevision, b.revision, expiresAt, "", plan)
+	return summarizeRetentionPlan(set, planID, inventoryRevision, configRevision, expiresAt, "", plan)
 }
 
 // ApplyRetentionPlan applies exactly the plan named by req.PlanID, or
@@ -255,11 +266,21 @@ func (b *BackupService) ApplyRetentionPlan(ctx context.Context, req ApplyRetenti
 		return RetentionPlan{}, fmt.Errorf("%w: plan %s expired at %s", ErrRetentionPlanStale, req.PlanID, stored.expiresAt.Format(time.RFC3339))
 	}
 
+	// One atomic read of {inner, revision} for the whole rest of this
+	// call: the revision the staleness check below compares against, the
+	// revision written to the operations row, and the internal/app.Service
+	// that ultimately deletes anything must all come from the same
+	// configState. Re-reading b.state at each of those three points would
+	// let a hot-reload land in between and produce exactly the situation
+	// this method exists to prevent, a delete carried out under a
+	// configuration the staleness check never saw.
+	st := b.state.Load()
+
 	currentRecords, err := b.journal.ListByBackupSet(ctx, stored.set)
 	if err != nil {
 		return RetentionPlan{}, fmt.Errorf("service: apply retention: an internal error occurred")
 	}
-	if computeInventoryRevision(currentRecords) != stored.inventoryRevision || b.revision != stored.configRevision {
+	if computeInventoryRevision(currentRecords) != stored.inventoryRevision || st.revision != stored.configRevision {
 		b.discardRetentionPlan(req.PlanID)
 		return RetentionPlan{}, fmt.Errorf("%w: backup set %s changed since plan %s was previewed", ErrRetentionPlanStale, stored.set, req.PlanID)
 	}
@@ -270,7 +291,7 @@ func (b *BackupService) ApplyRetentionPlan(ctx context.Context, req ApplyRetenti
 		IdempotencyKey: "retention_apply_" + req.PlanID,
 		Actor:          req.Actor,
 		BackupSet:      stored.set.String(),
-		ConfigRevision: b.revision,
+		ConfigRevision: st.revision,
 		Action:         ActionRetentionApply,
 		Parameters:     fmt.Sprintf(`{"plan_id":%q}`, req.PlanID),
 		CreatedAt:      nowT,
@@ -283,7 +304,7 @@ func (b *BackupService) ApplyRetentionPlan(ctx context.Context, req ApplyRetenti
 		b.logger.Error(context.Background(), "mark-retention-apply-running", err)
 	}
 
-	applied, err := b.inner.PruneApply(ctx, stored.set)
+	applied, err := st.inner.PruneApply(ctx, stored.set)
 	b.discardRetentionPlan(req.PlanID)
 	if err != nil {
 		if failErr := b.journal.FailOperation(context.Background(), opID, now(), "an internal error occurred while applying retention"); failErr != nil {

@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -61,10 +62,25 @@ var closeDrainTimeout = 5 * time.Second
 // methods below, never by reaching past them into an internal.Service,
 // a *state.Journal or a *config.Config it could not even name.
 type BackupService struct {
-	inner    *app.Service
-	journal  *state.Journal
-	revision string
-	logger   *obs.Logger
+	// state bundles inner (the wrapped internal/app.Service) and revision
+	// (ConfigRevision's value) behind one atomic.Pointer, so every reader
+	// — ConfigRevision, SubmitRunCycle/executeRunCycle (operations.go),
+	// the scheduler's own tick (scheduler.go), TestConnection
+	// (backupsets.go) and ListBackupSets/GetBackupSet (backupsets.go) —
+	// always observes one consistent, non-torn {inner, revision} pair
+	// with a lock-free Load(), no matter how many goroutines read
+	// concurrently with CreateBackupSet's own hot-reload Store() after a
+	// config write. Before this, inner and revision were two plain
+	// fields written under configMu (below) but read by every one of
+	// those call sites with no lock at all — a real, reachable data race
+	// under the Go memory model (net/http runs each request on its own
+	// goroutine, and the scheduler ticks independently), not merely a
+	// theoretical one; see CreateBackupSet's own doc for the write side
+	// of this contract.
+	state atomic.Pointer[configState]
+
+	journal *state.Journal
+	logger  *obs.Logger
 
 	// pollInterval is cfg.PollInterval.Duration(), copied out at
 	// construction time so PollInterval() (scheduler.go) can report it
@@ -112,6 +128,44 @@ type BackupService struct {
 	// durable (the apply itself, once confirmed).
 	retentionMu    sync.Mutex
 	retentionPlans map[string]retentionPlanRecord
+
+	// configPath is the YAML file this BackupService was opened from
+	// (Open), or "" for a BackupService built directly with New (every
+	// core/ test, which constructs its own *config.Config in memory and
+	// has no file backing it). CreateBackupSet (backupsets.go) refuses to
+	// run at all when this is "": persisting a backup-set change to a
+	// config that has no file of its own to write back to would either
+	// silently no-op or panic deeper in, neither of which is the honest
+	// failure a caller needs.
+	configPath string
+
+	// configMu serializes every call that reads-modifies-writes this
+	// BackupService's configuration (today: CreateBackupSet) against
+	// ITSELF — two concurrent CreateBackupSet calls must not interleave
+	// their read-modify-write of the config file. It is a separate lock
+	// from runOnce on purpose: runOnce guards "at most one RunCycle
+	// executing", a completely different invariant, and a backup-set
+	// creation blocking on, or being blocked by, an in-progress run_cycle
+	// would be a surprising and unnecessary coupling between the two.
+	// configMu does NOT protect state (above) — state's own
+	// atomic.Pointer is what makes every READ of it safe with no lock at
+	// all; configMu only ever needs to keep two WRITERS (two overlapping
+	// CreateBackupSet calls) from racing each other's file write (see
+	// backupsets.go's CreateBackupSet for the full sequence).
+	configMu sync.Mutex
+}
+
+// configState bundles a BackupService's wrapped internal/app.Service
+// (inner) with the configuration revision (revision) computed from
+// exactly the *config.Config inner was itself built from, so the two can
+// never be swapped independently and observed as a mismatched pair: a
+// reader that Load()s one configState always gets the revision that
+// actually describes that inner, never inner from one hot-reload and
+// revision from another. See BackupService.state's own doc for why this
+// is a Pointer, not two separate fields.
+type configState struct {
+	inner    *app.Service
+	revision string
 }
 
 // New builds a BackupService from already-constructed dependencies. This
@@ -136,15 +190,14 @@ type BackupService struct {
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &BackupService{
-		inner:          app.New(cfg, journal, tr, logger),
 		journal:        journal,
-		revision:       computeConfigRevision(cfg),
 		logger:         logger,
 		pollInterval:   cfg.PollInterval.Duration(),
 		ctx:            ctx,
 		cancel:         cancel,
 		retentionPlans: make(map[string]retentionPlanRecord),
 	}
+	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 
 	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {
 		logger.Error(context.Background(), "sweep-interrupted-operations", err)
@@ -191,6 +244,7 @@ func Open(ctx context.Context, configPath string) (*BackupService, func() error,
 	}
 
 	svc := New(cfg, journal, rclone.New(), obs.New(os.Stdout, obs.LevelInfo))
+	svc.configPath = configPath
 	return svc, svc.Close, nil
 }
 
@@ -234,17 +288,16 @@ func (b *BackupService) Close() error {
 // an accurate picture of (docs/EPIC-B-multi-nas.md §14, §15.6's
 // RETENTION_PLAN_STALE precedent applied to configuration generally).
 //
-// This has no persistence or reload story of its own: it is computed once,
-// at construction time, from whatever *config.Config the caller handed
-// New (or Open loaded from disk). Backup-set CRUD and any other API
-// surface that would actually let a configuration change while a process
-// keeps running are out of this issue's scope (see this package's
-// introducing PR description); today, two BackupService values report
-// different revisions because they were each built from a different
-// config, for example across a restart with an edited YAML file, or, in a
-// test, deliberately, to prove the conflict check itself.
+// It is computed at construction time from whatever *config.Config the
+// caller handed New (or Open loaded from disk), and again by
+// CreateBackupSet (backupsets.go) every time it hot-reloads b.state after
+// persisting a change: two BackupService values (or the same one, before
+// and after a CreateBackupSet call) report different revisions exactly
+// when their underlying configuration content actually differs, whether
+// that difference came from a restart against a manually edited YAML
+// file or from an in-process backup-set creation.
 func (b *BackupService) ConfigRevision() string {
-	return b.revision
+	return b.state.Load().revision
 }
 
 // computeConfigRevision hashes a canonical YAML encoding of cfg. YAML

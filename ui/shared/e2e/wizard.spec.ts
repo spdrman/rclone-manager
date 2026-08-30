@@ -129,6 +129,25 @@ test.describe("add backup set wizard", () => {
   });
 
   test("saving is blocked until the acknowledgement is checked", async ({ page }) => {
+    // Every OTHER save precondition is satisfied first — import a key on
+    // step 2 and trust the host on step 3 — so this isolates the
+    // acknowledgement checkbox as the one variable under test. Since M7
+    // (#146 review) those two also gate the Save buttons, so reaching
+    // Review cold would leave Save disabled for reasons this test isn't
+    // about (mirrors wizard.test.tsx's advanceToReviewReady).
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await page.getByRole("radio", { name: /Import key/ }).click();
+    // Synthetic fixture only — never a real key.
+    await page.getByLabel(/private key/i).fill("FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+    await page.getByRole("button", { name: "Import key" }).click();
+    await expect(page.getByText(/key imported/i)).toBeVisible();
+
+    await page.getByRole("button", { name: "Verify server" }).click();
+    const trust = page.getByRole("button", { name: "Trust host" });
+    await expect(trust).toBeEnabled();
+    await trust.click();
+    await expect(page.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+
     await page.getByRole("button", { name: "Review" }).click();
 
     const runNow = page.getByRole("button", { name: /Save, enable & run/ });
@@ -181,5 +200,57 @@ test.describe("add backup set wizard", () => {
     await expect(page.getByText(/key imported/i)).toBeVisible();
     await expect(page.getByLabel(/private key/i)).toHaveCount(0);
     expect(await page.locator("body").innerText()).not.toContain(fixtureKey);
+  });
+
+  // Issue #146 (B2.7): the wizard's Save buttons previously had no
+  // onClick at all. This drives the full wizard-to-save flow through the
+  // real running app (against the mock API this whole suite runs
+  // against — see playwright.config.ts's own comment on why) and
+  // confirms a backup set actually exists afterward, visible on the
+  // sets list, not just a success toast.
+  test("completing the wizard and clicking Save & enable persists a new backup set, visible on the sets list", async ({ page, bm }) => {
+    const uniqueName = "E2E Wizard Set " + Date.now();
+    await page.getByLabel("Backup set name").fill(uniqueName);
+
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await page.getByRole("radio", { name: /Import key/ }).click();
+    await page.getByLabel(/private key/i).fill("FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+    await page.getByRole("button", { name: "Import key" }).click();
+    await expect(page.getByText(/key imported/i)).toBeVisible();
+
+    await page.getByRole("button", { name: "Verify server" }).click();
+    const trust = page.getByRole("button", { name: "Trust host" });
+    await expect(trust).toBeEnabled();
+    await trust.click();
+    await expect(page.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Review" }).click();
+    await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).check();
+
+    await page.getByRole("button", { name: /^Save & enable$/ }).click();
+
+    // Saving navigates back to the sets list (BackupSetWizardPage's
+    // handleSave), and the newly created set is there without a manual
+    // page reload — the shared setsNode refresh (appNodes.ts/
+    // resource.ts's fetchResource) this wizard triggers on success.
+    await expect(bm.heading("Backup sets")).toBeVisible();
+    await expect(page.getByText(uniqueName)).toBeVisible();
+  });
+
+  test("Save stays disabled without an imported key or a trusted host, even after acknowledging", async ({ page }) => {
+    // Before M7 (#146 review) this scenario was reachable by clicking
+    // Save: the button stayed enabled with no key imported and no host
+    // trusted, and handleSave's own ad hoc guard rejected the request
+    // after the click, surfacing an inline error. Save is now
+    // structurally disabled for this same combination instead — proven
+    // here by the buttons refusing to be clicked at all, mirroring
+    // wizard.test.tsx's "keeps Save disabled without an imported key or
+    // a trusted host" unit test.
+    await page.getByRole("button", { name: "Review" }).click();
+    await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).check();
+
+    await expect(page.getByRole("button", { name: /Save, enable & run/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Save & enable$/ })).toBeDisabled();
+    await expect(page.getByRole("heading", { level: 1, name: "Add backup set" })).toBeVisible();
   });
 });

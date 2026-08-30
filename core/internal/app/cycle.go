@@ -97,6 +97,15 @@ sourcesLoop:
 			if ctx.Err() != nil {
 				break sourcesLoop
 			}
+			// A backup set saved "disabled" (issue #146's "Save disabled"
+			// wizard tier, config.BackupSet.Disabled) is skipped entirely:
+			// no reconcile, no discovery, nothing that would touch its
+			// journal rows or its remote. It stays configured (visible to
+			// `sources`/GET /backup-sets) without ever being acted on,
+			// until an operator re-enables it.
+			if bs.Disabled {
+				continue
+			}
 			report.Sets = append(report.Sets, s.processBackupSet(ctx, src, bs))
 		}
 	}

@@ -51,6 +51,34 @@ type BackupServiceClient interface {
 	// operations gate: this is the one operation in the whole EPIC that
 	// deletes local restore points.
 	ApplyRetentionPlan(ctx context.Context, req service.ApplyRetentionRequest) (service.RetentionPlan, error)
+
+	// ListBackupSets and GetBackupSet back GET /api/v1/backup-sets and
+	// GET /api/v1/backup-sets/{id} (issue #146/B2.7): read-only, no
+	// destructive gate, matching docs/EPIC-B-multi-nas.md §50's
+	// read-only bucket ("list sources", "view configuration").
+	ListBackupSets(ctx context.Context) ([]service.BackupSet, error)
+	GetBackupSet(ctx context.Context, id string) (service.BackupSet, error)
+
+	// CreateBackupSet backs POST /api/v1/backup-sets: the add-backup-set
+	// wizard's (#98) three Save buttons, wired for the first time by
+	// issue #146. See service.BackupService.CreateBackupSet's own doc
+	// for the persist-then-hot-reload sequence this method performs.
+	CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error)
+
+	// ImportSSHKey backs POST /api/v1/ssh-keys: the wizard's "Import
+	// key" step, persisting client-validated key material server-side
+	// for the first time (issue #146).
+	ImportSSHKey(ctx context.Context, raw []byte) (service.SSHKeyRef, error)
+
+	// ProbeHostKey backs POST /api/v1/ssh/host-key-probe: the wizard's
+	// "Verify server" step, fetching a real fingerprint instead of a
+	// mock (issue #146). Read-only, per §50.
+	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
+
+	// TestConnection backs POST /api/v1/backup-sets/test-connection: a
+	// pre-save, non-destructive reachability/auth check against a
+	// candidate source (issue #146). Read-only, per §50 ("test SSH").
+	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
 }
 
 var _ BackupServiceClient = (*service.BackupService)(nil)

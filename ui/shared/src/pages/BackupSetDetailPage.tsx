@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
+import { useResource } from "@shared/state/resource";
+import { currentSetActivityNode, currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
@@ -10,6 +11,7 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
+import { EditBackupSetDialog } from "./EditBackupSetDialog";
 import { bytes, relativeAge } from "@shared/utilities/format";
 
 const COMPLETION_COPY = {
@@ -22,13 +24,24 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const { setId = "" } = useParams();
   const api = useApi();
   const navigate = useNavigate();
-  const set = useAsync(() => api.getSet(setId), [api, setId]);
-  const activity = useAsync(() => api.listActivity(), [api]);
+  // B2.2 (#97) — graph-backed, not page-local useAsync state: an edit
+  // form opened against `set.data` needs a value with a real commit
+  // history behind it to check staleness against (see
+  // state/backupSetDetailNodes.ts's captureSetEditSnapshot/isSetEditStale).
+  const set = useResource(currentSetDetailNode, () => api.getSet(setId), [api, setId]);
+  const activity = useResource(currentSetActivityNode, () => api.listActivity(), [api]);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   if (set.error) return <ErrorState {...set.error} onRetry={set.reload} />;
-  if (!set.data) return null;
+  // Both checks matter, same as BackupDetailPage.tsx's equivalent fix
+  // (B2.4 mandatory review): React Router does not remount this
+  // component for a :setId change alone, so navigating set A -> set B
+  // re-triggers this fetch while `data` still holds set A until the new
+  // fetch resolves. Gating on `loading` too closes that window instead
+  // of rendering set A's fields under set B's url.
+  if (!set.data || set.loading) return null;
 
   const s = set.data;
   const [methodLabel, methodDetail] = COMPLETION_COPY[s.completionMethod];
@@ -55,7 +68,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               Run now
             </button>
             <button className="btn" disabled={readOnly} onClick={() => api.testConnection(s.id)}>Test connection</button>
-            <button className="btn" disabled={readOnly}>Edit</button>
+            <button className="btn" disabled={readOnly} onClick={() => setEditOpen(true)}>Edit</button>
             <button className="btn" disabled={readOnly} onClick={() => setPreviewOpen(true)}>Preview retention</button>
           </>
         }
@@ -203,6 +216,8 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       </div>
 
       <RetentionPreviewDialog source={s.source} set={s.set} open={previewOpen} onClose={() => setPreviewOpen(false)} />
+
+      <EditBackupSetDialog set={s} open={editOpen} onClose={() => setEditOpen(false)} />
 
       <ConfirmationDialog
         open={removeOpen}

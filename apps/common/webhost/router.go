@@ -36,6 +36,20 @@ type handlers struct {
 	backend       BackupServiceClient
 	binaryVersion string
 	commit        string
+
+	// gate is the same DestructiveGate requireDestructiveGate wraps
+	// POST /api/v1/operations in (below). createBackupSet
+	// (handlers_backupsets.go) also consults it directly, NOT through
+	// that middleware: a plain "just persist" create is deliberately
+	// exempt from the gate at the route level (destructiveGateExemptRoutes,
+	// router_test.go — creating a backup set never touches remote or
+	// local backup data by itself), but request.run_immediately turns
+	// that same call into "also start a run_cycle", the exact action
+	// requireDestructiveGate exists to block — so createBackupSet checks
+	// gate itself, conditionally, only on that branch, rather than the
+	// route being gated unconditionally (mandatory review finding M3, PR
+	// #155).
+	gate DestructiveGate
 }
 
 // NewRouter builds the /api/v1 HTTP surface plus /health/live and
@@ -70,6 +84,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		backend:       cfg.Backend,
 		binaryVersion: cfg.BinaryVersion,
 		commit:        cfg.Commit,
+		gate:          gate,
 	}
 
 	r := chi.NewRouter()
@@ -92,8 +107,63 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// /operations/{id} above. Apply is the one route in this whole
 		// package that can delete local restore points, so it carries
 		// both, exactly like POST /operations.
+		//
+		// The preview route is registered as two param segments plus a
+		// static tail, so chi's own node ordering (static, then param,
+		// then catch-all) matches it ahead of the "/backup-sets/*"
+		// catch-all registered below, and a GET that does not match this
+		// shape still falls through to getBackupSet as before. That
+		// ordering is a property of chi's trie, not of registration
+		// order, so the two routes can coexist here in either order;
+		// handlers_retention_test.go drives every one of its cases
+		// through this very NewRouter, which is what proves the preview
+		// route is actually reached rather than swallowed by the
+		// catch-all.
 		r.Get("/backup-sets/{source}/{set}/retention/preview", h.previewRetention)
 		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/backup-sets/{source}/{set}/retention/apply", h.applyRetention)
+
+		// Issue #146 (B2.7): the add-backup-set wizard's (#98) write path.
+		// Every POST here carries requireCSRF: create-backup-set and
+		// ssh-key-import are state-changing but non-destructive
+		// (docs/EPIC-B-multi-nas.md §50), never wrapped in
+		// requireDestructiveGate at the route level (createBackupSet
+		// checks that gate itself, but only for its own run_immediately
+		// branch — see that handler's own doc, handlers_backupsets.go).
+		// host-key-probe and test-connection are read-only in effect
+		// (§50: "probe host key", "test SSH" — neither trusts nor
+		// persists anything) but each still opens a real outbound
+		// TCP/SSH connection to a caller-supplied host:port, which is
+		// exactly the side effect CSRF protection exists for regardless
+		// of a route's destructive-gate tier (mandatory review finding
+		// M5, PR #155) — without it, a cross-site `<form
+		// enctype="text/plain">` POST could turn this server into a
+		// network-probing primitive against an admin's own internal/NAS
+		// network with no token of any kind. Both used to be listed as
+		// CSRF-exempt read-only routes alongside GET /system/version and
+		// GET /operations/{id} above; that was the gap.
+		//
+		// test-connection's own path segment ("test-connection") is
+		// registered as a static route, not folded into
+		// /backup-sets/*, precisely because it runs BEFORE a backup set
+		// has an id at all (the wizard's pre-save check); chi matches a
+		// static child before a wildcard sibling, so this never collides
+		// with getBackupSet's own "/backup-sets/*" route below.
+		//
+		// getBackupSet uses chi's bare "*" catch-all, not a
+		// "{id:.*}"-style regexp param: chi's regexp params are matched
+		// per PATH SEGMENT (split on "/") even when the regexp itself
+		// would otherwise span one, so "{id:.*}" only ever matches a
+		// single segment and 404s on a real "source/name" id — proven
+		// directly against chi/v5 v5.3.1 while building this route. "*"
+		// is chi's own documented way to capture the rest of the path,
+		// read back with chi.URLParam(r, "*").
+		r.With(requireCSRF).Post("/backup-sets", h.createBackupSet)
+		r.Get("/backup-sets", h.listBackupSets)
+		r.With(requireCSRF).Post("/backup-sets/test-connection", h.testConnection)
+		r.Get("/backup-sets/*", h.getBackupSet)
+
+		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
+		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
 	})
 
 	return r
