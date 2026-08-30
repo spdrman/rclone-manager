@@ -104,6 +104,27 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
 		r.Get("/operations/{id}", h.getOperation)
 
+		// Preview is read-only (docs/EPIC-B-multi-nas.md §50 lists "preview
+		// retention" under Read-only/low risk) so it carries neither
+		// requireCSRF nor requireDestructiveGate, exactly like GET
+		// /operations/{id} above. Apply is the one route in this whole
+		// package that can delete local restore points, so it carries
+		// both, exactly like POST /operations.
+		//
+		// The preview route is registered as two param segments plus a
+		// static tail, so chi's own node ordering (static, then param,
+		// then catch-all) matches it ahead of the "/backup-sets/*"
+		// catch-all registered below, and a GET that does not match this
+		// shape still falls through to getBackupSet as before. That
+		// ordering is a property of chi's trie, not of registration
+		// order, so the two routes can coexist here in either order;
+		// handlers_retention_test.go drives every one of its cases
+		// through this very NewRouter, which is what proves the preview
+		// route is actually reached rather than swallowed by the
+		// catch-all.
+		r.Get("/backup-sets/{source}/{set}/retention/preview", h.previewRetention)
+		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/backup-sets/{source}/{set}/retention/apply", h.applyRetention)
+
 		// Issue #146 (B2.7): the add-backup-set wizard's (#98) write path.
 		// Every POST here carries requireCSRF: create-backup-set and
 		// ssh-key-import are state-changing but non-destructive

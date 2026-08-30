@@ -105,10 +105,15 @@ describe("destructive confirmation", () => {
 describe("retention plan integrity", () => {
   it("refuses to apply a stale plan instead of recalculating", async () => {
     const api = createMockApi();
-    await api.previewRetention("set_pg_prod"); // first plan is current
-    const stale = await api.previewRetention("set_pg_prod"); // second goes stale
-    expect(stale.stale).toBe(true);
-    await expect(api.applyRetention(stale.planId)).rejects.toThrow();
+    const first = await api.previewRetention("production", "postgres-primary");
+    // A second preview moves the mock's own "inventory" forward one tick —
+    // `first`'s plan_id is no longer the current one, exactly like a real
+    // inventory change would make it stale (core/service.ApplyRetentionPlan's
+    // own revision check).
+    await api.previewRetention("production", "postgres-primary");
+    await expect(
+      api.applyRetention("production", "postgres-primary", first.planId)
+    ).rejects.toThrow();
   });
 });
 
@@ -166,9 +171,12 @@ describe("storage pressure (\u00a756)", () => {
   // sibling B3.1 branch, which the arity check would have broken against
   // while quietly weakening the claim to "takes three of something".
   it("can only be asked to apply a plan the server already issued", async () => {
+    // The whole ask, URL plus method plus body: B3.1 routes the backup set
+    // through the path and carries the plan id in the body, so checking the
+    // URL alone would no longer see the plan id at all.
     const requested: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      requested.push(String(input) + " " + (init?.method ?? "GET"));
+      requested.push(String(input) + " " + (init?.method ?? "GET") + " " + String(init?.body ?? ""));
       return new Response(JSON.stringify({ error: { code: "RETENTION_PLAN_STALE", message: "no such plan" } }), {
         status: 409,
         headers: { "Content-Type": "application/json" }
@@ -176,13 +184,16 @@ describe("storage pressure (\u00a756)", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     try {
-      await expect(httpApi.applyRetention("plan_the_server_never_issued")).rejects.toThrow();
+      await expect(
+        httpApi.applyRetention("production", "postgres-primary", "plan_the_server_never_issued")
+      ).rejects.toThrow();
     } finally {
       vi.unstubAllGlobals();
     }
 
     // One request, naming the plan id, and nothing that could mean "free
-    // up space": the plan id is the entire payload of the ask.
+    // up space": the backup set and the plan id are the entire payload of
+    // the ask.
     expect(requested).toHaveLength(1);
     expect(requested[0]).toContain("plan_the_server_never_issued");
     expect(requested[0]).not.toMatch(/bytes|free|reclaim|until/i);
@@ -190,11 +201,31 @@ describe("storage pressure (\u00a756)", () => {
     // Positive control for the rejection above: the identical call against
     // a server that accepts the plan resolves, so the rejection is the
     // server's refusal being propagated rather than applyRetention being
-    // unable to succeed at all.
-    const okMock = vi.fn(async () => new Response(null, { status: 204 }));
+    // unable to succeed at all. The body has to be a real plan now that
+    // applyRetention returns one rather than void.
+    const okMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            plan_id: "plan_the_server_did_issue",
+            backup_set_id: "production/postgres-primary",
+            inventory_revision: "inv_1",
+            config_revision: "cfg_1",
+            expires_at: "2026-08-29T06:09:48Z",
+            keep_count: 1,
+            delete_count: 1,
+            reclaim_bytes: 4096,
+            operation_id: "op_1",
+            verdicts: []
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    );
     vi.stubGlobal("fetch", okMock);
     try {
-      await expect(httpApi.applyRetention("plan_the_server_did_issue")).resolves.not.toThrow();
+      await expect(
+        httpApi.applyRetention("production", "postgres-primary", "plan_the_server_did_issue")
+      ).resolves.not.toThrow();
     } finally {
       vi.unstubAllGlobals();
     }

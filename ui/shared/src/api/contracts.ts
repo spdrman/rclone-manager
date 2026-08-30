@@ -6,37 +6,84 @@ import type {
   VersionInfo
 } from "@shared/types/operation";
 
+/**
+ * Every error code this frontend's backends can actually put on the wire.
+ *
+ * A runtime array, not a bare type union, because client.ts has to turn an
+ * arbitrary string off the network into one of these: `as ApiErrorCode` is
+ * an assertion with no check behind it, so an unrecognised code used to
+ * flow into `ApiError.code` and silently fail every comparison against it.
+ * See toApiErrorCode below.
+ *
+ * Two naming conventions live here on purpose, because two Go packages do:
+ * the kebab-case values are this UI's own design-canvas vocabulary, while
+ * apps/common/auth/local (handler.go/csrf.go) and apps/common/webhost
+ * (errors.go and every handler in that package) both emit UPPER_SNAKE_CASE
+ * and are listed verbatim rather than translated. Translating would mean a
+ * mapping table that has to be kept current with two packages; listing the
+ * real tokens means a code either appears here or resolves to "unknown",
+ * with nothing in between (issue #96's review, mandatory finding M2 — the
+ * webhost half of this list was missing entirely, which is why the one
+ * branch in this frontend that reads a code, the retention dialog's stale
+ * banner, could never match).
+ */
+export const API_ERROR_CODES = [
+  // This UI's own vocabulary (the design canvas's error states).
+  "authentication-failed",
+  "ssh-host-key-changed",
+  "permission-denied",
+  "remote-path-missing",
+  "checksum-mismatch",
+  "backup-stale",
+  "storage-critical",
+  "version-mismatch",
+  "operation-conflict",
+  "unknown",
+
+  // apps/common/auth/local (handler.go, csrf.go).
+  "UNAUTHENTICATED",
+  "RATE_LIMITED",
+  "INVALID_REQUEST",
+  "ENROLLMENT_CLOSED",
+  "BOOTSTRAP_TOKEN_INVALID",
+  "INTERNAL_ERROR",
+  "CSRF_TOKEN_MISSING",
+  "CSRF_TOKEN_MISMATCH",
+
+  // apps/common/webhost (handlers_*.go, errors.go). INVALID_REQUEST,
+  // UNAUTHENTICATED and the two CSRF codes are shared with the list above
+  // rather than repeated.
+  "RETENTION_PLAN_STALE",
+  "RETENTION_PLAN_NOT_FOUND",
+  "RETENTION_APPLY_BUSY",
+  "BACKUP_SET_NOT_FOUND",
+  "OPERATION_NOT_FOUND",
+  "OPERATION_ALREADY_RUNNING",
+  "IDEMPOTENCY_KEY_CONFLICT",
+  "CONFIG_REVISION_STALE",
+  "SSH_KEY_NOT_FOUND",
+  "HOST_KEY_PROBE_FAILED",
+  "DESTRUCTIVE_OPERATIONS_DISABLED",
+  "INTERNAL"
+] as const;
+
 /** Correlation id travels with every failure and is shown under "Advanced
  *  details". Raw stack traces are never rendered (§37). */
-export type ApiErrorCode =
-  | "authentication-failed"
-  | "ssh-host-key-changed"
-  | "permission-denied"
-  | "remote-path-missing"
-  | "checksum-mismatch"
-  | "backup-stale"
-  | "storage-critical"
-  | "retention-plan-stale"
-  | "version-mismatch"
-  | "operation-conflict"
-  | "unknown"
-  // apps/common/auth/local's own error codes (handler.go/csrf.go),
-  // returned directly by every /api/v1/auth/* route. A different naming
-  // convention (UPPER_SNAKE_CASE) from the values above, matching that
-  // package's own vocabulary rather than being translated to this
-  // union's existing kebab-case style - nothing in this frontend yet
-  // renders these distinctly from a generic fallback message (see
-  // LoginPage.tsx/EnrollmentPage.tsx), so only their PRESENCE here
-  // matters for now, so client.ts's `as ApiError` assertion is honest
-  // about what the backend can actually send (issue #119's review).
-  | "UNAUTHENTICATED"
-  | "RATE_LIMITED"
-  | "INVALID_REQUEST"
-  | "ENROLLMENT_CLOSED"
-  | "BOOTSTRAP_TOKEN_INVALID"
-  | "INTERNAL_ERROR"
-  | "CSRF_TOKEN_MISSING"
-  | "CSRF_TOKEN_MISMATCH";
+export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
+
+const KNOWN_API_ERROR_CODES: ReadonlySet<string> = new Set(API_ERROR_CODES);
+
+/** Narrows a code read off the wire to ApiErrorCode, or "unknown" for
+ *  anything this frontend does not know. The one place a network string
+ *  becomes an ApiErrorCode: a caller comparing against a literal is then
+ *  comparing against a value that really can appear, and an unrecognised
+ *  code degrades to the generic error path instead of quietly matching
+ *  nothing. */
+export function toApiErrorCode(value: unknown): ApiErrorCode {
+  return typeof value === "string" && KNOWN_API_ERROR_CODES.has(value)
+    ? (value as ApiErrorCode)
+    : "unknown";
+}
 
 export interface ApiError {
   code: ApiErrorCode;
@@ -186,9 +233,17 @@ export interface BackupManagerApi {
   revalidate(artifactId: string): Promise<void>;
   retryIngestion(artifactId: string): Promise<void>;
 
-  /** Server computes and owns the plan. The UI may only apply it by id. */
-  previewRetention(setId: string): Promise<RetentionPlan>;
-  applyRetention(planId: string): Promise<void>;
+  /**
+   * Server computes and owns the plan. The UI may only apply it by id.
+   * `source`/`set` are BackupSet's own two-part identity (core's
+   * model.BackupSetID) — apps/common/webhost/router.go's
+   * `/backup-sets/{source}/{set}/retention/...` routes key on exactly
+   * these, not on BackupSet.id. applyRetention still takes `source`/`set`
+   * to build the same URL, even though `planId` alone is what the backend
+   * actually resolves the plan by (service.ApplyRetentionPlan's own doc).
+   */
+  previewRetention(source: string, set: string): Promise<RetentionPlan>;
+  applyRetention(source: string, set: string, planId: string): Promise<RetentionPlan>;
 
   scanCatalog(): Promise<CatalogScanPreview>;
   rebuildCatalog(): Promise<void>;

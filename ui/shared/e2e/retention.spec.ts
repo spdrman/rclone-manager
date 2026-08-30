@@ -11,17 +11,13 @@ test.describe("retention preview and apply", () => {
     await page.getByRole("button", { name: "Preview retention", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Retention preview" })).toBeVisible();
     // The dialog renders immediately with "Requesting plan…" while
-    // previewRetention() is still in flight; several tests below read the
-    // "Continue…" button's disabled state as a proxy for "is this plan
-    // stale", but that button is ALSO disabled purely because no plan has
-    // loaded yet (disabled={!p || p.stale || …}). Wait for the plan to
-    // actually resolve before any test runs, or that early "disabled because
-    // loading" reading gets mistaken for "disabled because stale".
-    await expect(page.getByText(/Plan plan_.* issued by the backup service/)).toBeVisible();
+    // previewRetention() is still in flight. Wait for the plan to actually
+    // resolve before any test runs.
+    await expect(page.getByText(/Plan retplan_.* issued by the backup service/)).toBeVisible();
   });
 
   test("shows the server-issued plan id", async ({ page }) => {
-    await expect(page.getByText(/Plan plan_.* issued by the backup service/)).toBeVisible();
+    await expect(page.getByText(/Plan retplan_.* issued by the backup service/)).toBeVisible();
   });
 
   test("summarises keep, delete and reclaim", async ({ page }) => {
@@ -33,39 +29,29 @@ test.describe("retention preview and apply", () => {
 
   test("itemises what is kept and why, and what is deleted and why", async ({ page }) => {
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText(/Not selected by current policy/).first()).toBeVisible();
+    await expect(dialog.getByText(/Not selected by current retention policy/).first()).toBeVisible();
     await expect(dialog.getByText("Protected").first()).toBeVisible();
   });
 
-  test("a stale plan blocks the destructive path and offers a refresh", async ({ page }) => {
+  // §96 design pass: a refused delete is a third, deliberate verdict
+  // (FR-20), not an error — it must read as calm and informational, never
+  // as a fault the operator has to dismiss.
+  test("shows a refused artifact calmly, not as an error", async ({ page }) => {
     const dialog = page.getByRole("dialog");
-    const staleNotice = dialog.getByText("Retention preview changed");
+    const refuseSection = dialog.getByText(/^Refuse/);
+    await expect(refuseSection).toBeVisible();
 
-    if (await staleNotice.isVisible().catch(() => false)) {
-      await expect(dialog.getByText(/No files were deleted/)).toBeVisible();
-      await expect(dialog.getByRole("button", { name: "Continue…" })).toBeDisabled();
-      await dialog.getByRole("button", { name: "Review new plan" }).click();
-      await expect(dialog.getByRole("button", { name: "Continue…" })).toBeEnabled();
-    } else {
-      // Current plan: reopening the preview produces the stale variant next.
-      await dialog.getByRole("button", { name: "Cancel" }).click();
-      // exact: true — the detail page also has a "Preview retention plan"
-    // button further down (Retention section); non-exact matching is
-    // ambiguous between the two once the page is actually reachable.
-    await page.getByRole("button", { name: "Preview retention", exact: true }).click();
-      const second = page.getByRole("dialog");
-      await expect(second.getByText("Retention preview changed")).toBeVisible();
-      await expect(second.getByRole("button", { name: "Continue…" })).toBeDisabled();
-    }
+    const refusedRow = dialog.locator(".banner--info", { hasText: "sibling-prefix directory" });
+    await expect(refusedRow).toBeVisible();
+    // Never the alert role, and never the danger banner class — that's
+    // reserved for genuine faults (a broken transfer, an unreachable host).
+    await expect(refusedRow).not.toHaveAttribute("role", "alert");
+    await expect(dialog.locator(".banner--danger")).toHaveCount(0);
   });
 
   test("confirmation names the exact count and reclaimed size", async ({ page }) => {
     const dialog = page.getByRole("dialog");
-    const cont = dialog.getByRole("button", { name: "Continue…" });
-    if (await cont.isDisabled()) {
-      await dialog.getByRole("button", { name: "Review new plan" }).click();
-    }
-    await cont.click();
+    await dialog.getByRole("button", { name: "Continue…" }).click();
 
     const confirm = page.getByRole("dialog", { name: "Apply retention" });
     await expect(confirm).toContainText("Destructive action");
@@ -77,9 +63,7 @@ test.describe("retention preview and apply", () => {
 
   test("the confirm button states the consequence and is not the default focus", async ({ page }) => {
     const dialog = page.getByRole("dialog");
-    const cont = dialog.getByRole("button", { name: "Continue…" });
-    if (await cont.isDisabled()) await dialog.getByRole("button", { name: "Review new plan" }).click();
-    await cont.click();
+    await dialog.getByRole("button", { name: "Continue…" }).click();
 
     const confirm = page.getByRole("dialog", { name: "Apply retention" });
     await expect(confirm.getByRole("button", { name: /^Delete \d+ backups$/ })).toBeVisible();
@@ -89,9 +73,7 @@ test.describe("retention preview and apply", () => {
 
   test("Escape cancels without deleting anything", async ({ page }) => {
     const dialog = page.getByRole("dialog");
-    const cont = dialog.getByRole("button", { name: "Continue…" });
-    if (await cont.isDisabled()) await dialog.getByRole("button", { name: "Review new plan" }).click();
-    await cont.click();
+    await dialog.getByRole("button", { name: "Continue…" }).click();
 
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Apply retention" })).toHaveCount(0);
@@ -99,6 +81,19 @@ test.describe("retention preview and apply", () => {
 
   test("clicking the scrim dismisses the preview", async ({ page }) => {
     await page.locator(".dialog-scrim").click({ position: { x: 5, y: 5 } });
+    await expect(page.getByRole("dialog", { name: "Retention preview" })).toHaveCount(0);
+  });
+
+  // §29.3's full wizard flow: obtain a plan, present counts, confirm,
+  // submit that exact plan_id, and the dialog closes on success.
+  test("confirming applies the exact reviewed plan and closes the dialog", async ({ page }) => {
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Continue…" }).click();
+
+    const confirm = page.getByRole("dialog", { name: "Apply retention" });
+    await confirm.getByRole("button", { name: /^Delete \d+ backups$/ }).click();
+
+    await expect(page.getByRole("dialog", { name: "Apply retention" })).toHaveCount(0);
     await expect(page.getByRole("dialog", { name: "Retention preview" })).toHaveCount(0);
   });
 });

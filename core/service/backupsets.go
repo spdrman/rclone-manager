@@ -65,7 +65,12 @@ const defaultSourceName = "api"
 const defaultStaleAfter = 48 * time.Hour
 
 // ErrBackupSetNotFound is returned by GetBackupSet when no backup set
-// matches the given id.
+// matches the given id, and by PreviewRetention (retention.go) when
+// source/set names no backup set in this BackupService's own loaded
+// configuration. It is one error for one condition, deliberately: both
+// callers are answering the same question about the same configuration,
+// and a caller outside core/ (apps/common/webhost's handlers) maps it to
+// the same 404 either way.
 var ErrBackupSetNotFound = errors.New("service: backup set not found")
 
 // ErrConfigNotFileBacked is returned by CreateBackupSet when this

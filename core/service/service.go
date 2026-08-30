@@ -118,6 +118,17 @@ type BackupService struct {
 	// rejected rather than queued.
 	runOnce sync.Mutex
 
+	// retentionMu guards retentionPlans (retention.go): every previewed
+	// retention plan this BackupService currently holds, keyed by its own
+	// plan_id, until ApplyRetentionPlan consumes it (applied, found stale,
+	// or expired) or it is simply never applied at all. This is
+	// deliberately an in-memory, non-durable store, unlike the operations
+	// table: a preview carries its own expires_at precisely so nothing
+	// needs to survive a restart — see retention.go's own doc for what IS
+	// durable (the apply itself, once confirmed).
+	retentionMu    sync.Mutex
+	retentionPlans map[string]retentionPlanRecord
+
 	// configPath is the YAML file this BackupService was opened from
 	// (Open), or "" for a BackupService built directly with New (every
 	// core/ test, which constructs its own *config.Config in memory and
@@ -206,11 +217,12 @@ type configState struct {
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &BackupService{
-		journal:      journal,
-		logger:       logger,
-		pollInterval: cfg.PollInterval.Duration(),
-		ctx:          ctx,
-		cancel:       cancel,
+		journal:        journal,
+		logger:         logger,
+		pollInterval:   cfg.PollInterval.Duration(),
+		ctx:            ctx,
+		cancel:         cancel,
+		retentionPlans: make(map[string]retentionPlanRecord),
 	}
 	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 

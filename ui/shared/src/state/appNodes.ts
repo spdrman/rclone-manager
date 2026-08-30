@@ -1,6 +1,6 @@
-import type { BackupArtifact, BackupSet } from "@shared/types/backup";
+import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type { Operation, SystemHealth, VersionInfo } from "@shared/types/operation";
-import { graph } from "./graph";
+import { graph, registerInput } from "./graph";
 import { createResourceNode } from "./resource";
 
 /**
@@ -44,4 +44,92 @@ export const countsNode = graph.derived<AppCounts>("app.counts", (get) => ({
 export const readOnlyNode = graph.derived<boolean>("app.readOnly", (get) => {
   const version = get(versionNode).data;
   return version ? !version.compatible : false;
+});
+
+/**
+ * B3.1 (#96) — the retention plan RetentionPreviewDialog is currently
+ * showing, as a graph resource node rather than page-local `useAsync`
+ * state. This is what lets retentionPlanStaleNode below compare the plan
+ * against the graph's OWN evidence instead of only ever reading a `stale`
+ * field the server handed over (issue #96's "causl-ts for staleness, not a
+ * boolean parsed off the response").
+ */
+export const retentionPlanNode = createResourceNode<RetentionPlan>("retention.plan");
+
+export interface RetentionRevisions {
+  inventoryRevision: string;
+  configRevision: string;
+}
+
+/**
+ * What this graph has itself most recently observed as the previewed
+ * backup set's committed inventory_revision/config_revision — independent
+ * of what retentionPlanNode's own captured revisions say. `null` until a
+ * preview has resolved at least once.
+ *
+ * Seeded to match a freshly-read plan's own revisions the moment that plan
+ * is committed (a plan is never stale the instant it is read — see
+ * commitRetentionRevisions's call site, RetentionPreviewDialog.tsx).
+ *
+ * # This node has no producer yet, so the gate below cannot fire
+ *
+ * That seed is currently the ONLY non-test caller of
+ * commitRetentionRevisions: nothing polls the revisions, nothing pushes
+ * them, and no other page moves this node. The two values are therefore
+ * identical by construction, and retentionPlanStaleNode below is a
+ * constant false outside tests. Stated plainly because the mechanism reads
+ * like a live guard and is not one (issue #96's review, mandatory finding
+ * M9): today the server's own 409 RETENTION_PLAN_STALE, re-checked in
+ * RetentionPreviewDialog's handleApply, is the only staleness detection
+ * that can actually refuse a real apply. The derived node landed ahead of
+ * its producer, deliberately and with its own tests, which drive it by
+ * committing here directly.
+ *
+ * Anything wiring a real producer (a poll, a push, GET /system/version's
+ * own config_revision) has one prerequisite: this is a single global, not
+ * keyed by backup set, so revisions left over from one set would read as
+ * staleness against another set's plan. Key it before feeding it.
+ */
+export const retentionRevisionsNode = registerInput<RetentionRevisions | null>(
+  "retention.revisions",
+  null
+);
+
+/** Commits a freshly observed inventory_revision/config_revision pair —
+ *  the one write path for retentionRevisionsNode, so every caller (the
+ *  dialog seeding its baseline, a test simulating an external inventory
+ *  change) goes through the same intent name. */
+export function commitRetentionRevisions(revisions: RetentionRevisions): void {
+  graph.commit("retention/revisions", (tx) => tx.set(retentionRevisionsNode, revisions));
+}
+
+/**
+ * "Is the plan RetentionPreviewDialog is showing stale" — derived by
+ * comparing retentionPlanNode's own captured inventory_revision/
+ * config_revision against retentionRevisionsNode's current values, NOT by
+ * reading a boolean off the wire (there isn't one — see RetentionPlan's
+ * own doc, types/backup.ts). `current === null` means nothing has been
+ * observed independently of the plan itself yet, so there is no evidence
+ * of staleness to assert: false, not true.
+ *
+ * This is the node issue #96's own required TDD case exercises directly:
+ * committing a changed inventory_revision into retentionRevisionsNode
+ * (simulating the graph learning of a real inventory change) flips this to
+ * true, and the dialog's apply button disables from that alone — before
+ * any apply request ever reaches the API.
+ *
+ * That case is a test committing the change by hand, standing in for a
+ * producer that does not exist yet: see retentionRevisionsNode's own doc
+ * above. In a running app this node is always false, so treat it as the
+ * mechanism for a staleness signal rather than as a staleness signal that
+ * is currently arriving.
+ */
+export const retentionPlanStaleNode = graph.derived<boolean>("retention.planStale", (get) => {
+  const plan = get(retentionPlanNode).data;
+  const current = get(retentionRevisionsNode);
+  if (!plan || !current) return false;
+  return (
+    current.inventoryRevision !== plan.inventoryRevision ||
+    current.configRevision !== plan.configRevision
+  );
 });

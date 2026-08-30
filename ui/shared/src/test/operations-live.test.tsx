@@ -15,6 +15,8 @@ const noop = () => {};
 
 const SET: BackupSet = {
   id: "set_test",
+  source: "production",
+  set: "postgres-primary",
   name: "Production PostgreSQL",
   host: "prod-db-01.internal",
   port: 22,

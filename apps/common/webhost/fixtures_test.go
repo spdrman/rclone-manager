@@ -3,6 +3,7 @@ package webhost
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -104,13 +105,26 @@ func (alwaysPassGate) Passed() bool { return true }
 // shapes and would otherwise have to poll for an async result that adds
 // nothing to what they are proving. errOnSubmit, when non-nil, is returned
 // by SubmitRunCycle unconditionally, letting a test drive every error
-// branch handlers_operations.go maps to an HTTP status.
+// branch handlers_operations.go maps to an HTTP status. errOnPreview and
+// errOnApply are their retention equivalents, for handlers_retention.go's
+// own error-mapping tests.
 type syncFakeBackend struct {
 	mu             sync.Mutex
 	configRevision string
 	ops            map[string]service.Operation
 	errOnSubmit    error
 	nextID         int
+
+	// plans holds every plan PreviewRetention has issued and
+	// ApplyRetentionPlan has not yet consumed, mirroring core/service's
+	// own single-use plan store closely enough for handlers_retention_test.go
+	// to exercise a real preview-then-apply round trip (including the
+	// stale/not-found paths) without needing a real journal.
+	plans        map[string]service.RetentionPlan
+	planNextID   int
+	errOnPreview error
+	errOnApply   error
+
 	// notReady makes Ready report false, standing in for a backend whose
 	// §46.1 startup sequence did not complete. It is a field rather than a
 	// second fake type because readiness is now a fact the backend owns
@@ -120,10 +134,66 @@ type syncFakeBackend struct {
 }
 
 func newSyncFakeBackend() *syncFakeBackend {
-	return &syncFakeBackend{configRevision: "rev-1", ops: map[string]service.Operation{}}
+	return &syncFakeBackend{configRevision: "rev-1", ops: map[string]service.Operation{}, plans: map[string]service.RetentionPlan{}}
 }
 
 func (f *syncFakeBackend) ConfigRevision() string { return f.configRevision }
+
+// PreviewRetention returns a fixed, single-artifact DELETE plan for any
+// source/set, storing it exactly once so a matching ApplyRetentionPlan
+// call can consume it and any other plan_id is correctly reported not
+// found.
+func (f *syncFakeBackend) PreviewRetention(_ context.Context, source, set string) (service.RetentionPlan, error) {
+	if f.errOnPreview != nil {
+		return service.RetentionPlan{}, f.errOnPreview
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.planNextID++
+	plan := service.RetentionPlan{
+		PlanID:            fmt.Sprintf("retplan_test_%d", f.planNextID),
+		BackupSetID:       source + "/" + set,
+		InventoryRevision: "inv-test-1",
+		ConfigRevision:    f.configRevision,
+		ExpiresAt:         time.Now().UTC().Add(10 * time.Minute),
+		KeepCount:         0,
+		DeleteCount:       1,
+		ReclaimBytes:      1024,
+		Verdicts: []service.RetentionArtifactVerdict{
+			{Artifact: "backup.dump", Action: "DELETE", Reason: "no GFS tier selects this artifact (test fixture)"},
+		},
+	}
+	f.plans[plan.PlanID] = plan
+	return plan, nil
+}
+
+// ApplyRetentionPlan consumes a plan PreviewRetention issued (single-use,
+// mirroring core/service.BackupService.ApplyRetentionPlan's own contract),
+// or reports service.ErrRetentionPlanNotFound for any plan_id it does not
+// hold.
+func (f *syncFakeBackend) ApplyRetentionPlan(_ context.Context, req service.ApplyRetentionRequest) (service.RetentionPlan, error) {
+	if f.errOnApply != nil {
+		return service.RetentionPlan{}, f.errOnApply
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	plan, ok := f.plans[req.PlanID]
+	if !ok {
+		return service.RetentionPlan{}, fmt.Errorf("%w: %s", service.ErrRetentionPlanNotFound, req.PlanID)
+	}
+	// The real service cross-checks the {source}/{set} the request was
+	// routed by against the backup set the plan was issued for, and
+	// consumes nothing when they disagree (see
+	// service.ApplyRetentionRequest.Source's own doc). This fake enforces
+	// the same thing, so a handler that dropped the URL parameters on the
+	// floor could not pass handlers_retention_test.go.
+	if plan.BackupSetID != req.Source+"/"+req.Set {
+		return service.RetentionPlan{}, fmt.Errorf("%w: plan %s was not issued for backup set %s/%s", service.ErrInvalidRequest, req.PlanID, req.Source, req.Set)
+	}
+	delete(f.plans, req.PlanID)
+	plan.OperationID = "op_test_retention_apply"
+	return plan, nil
+}
 
 func (f *syncFakeBackend) Ready() bool { return !f.notReady }
 
@@ -263,6 +333,18 @@ func (f *asyncFakeBackend) GetOperation(_ context.Context, id string) (service.O
 		return service.Operation{}, service.ErrOperationNotFound
 	}
 	return op, nil
+}
+
+// PreviewRetention and ApplyRetentionPlan below only exist to satisfy
+// BackupServiceClient: asyncFakeBackend's whole reason to exist is
+// disconnect_test.go's SubmitRunCycle-specific race, and no test in this
+// package needs it to behave like a real retention backend too.
+func (f *asyncFakeBackend) PreviewRetention(_ context.Context, _, _ string) (service.RetentionPlan, error) {
+	return service.RetentionPlan{}, errors.New("asyncFakeBackend: PreviewRetention is not implemented")
+}
+
+func (f *asyncFakeBackend) ApplyRetentionPlan(_ context.Context, _ service.ApplyRetentionRequest) (service.RetentionPlan, error) {
+	return service.RetentionPlan{}, errors.New("asyncFakeBackend: ApplyRetentionPlan is not implemented")
 }
 
 // release lets every SubmitRunCycle call currently blocked on f.gate
