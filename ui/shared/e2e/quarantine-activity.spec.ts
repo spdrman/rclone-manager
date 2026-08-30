@@ -47,8 +47,13 @@ test.describe("quarantine", () => {
 });
 
 test.describe("activity", () => {
-  test.beforeEach(async ({ bm }) => {
+  test.beforeEach(async ({ bm, page }) => {
     await bm.goto("/activity");
+    // ActivityPage's events/sets fetches are async (mock listActivity() /
+    // listSets()); until they settle, filtered.length reads 0 and the page
+    // shows "No matching events" — wait for the real unfiltered list before
+    // any test reads counts or text off it, or it races that resolve.
+    await expect(page.getByRole("listitem").first()).toBeVisible();
   });
 
   test("lists events with timestamp, severity glyph and set", async ({ page }) => {

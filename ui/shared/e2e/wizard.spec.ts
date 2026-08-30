@@ -20,12 +20,16 @@ test.describe("add backup set wizard", () => {
     await expect(page.getByText("Step 1 of 6")).toBeVisible();
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(page.getByText("Step 2 of 6")).toBeVisible();
-    await page.getByRole("button", { name: "Back" }).click();
+    // exact: true — "← Cancel and return to backup sets" also contains
+    // "back" (as a substring of "backup"), so a non-exact match is ambiguous
+    // once that cancel link and the step-nav "Back" button are both present.
+    await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(page.getByText("Step 1 of 6")).toBeVisible();
   });
 
   test("Back is disabled on the first step and Continue on the last", async ({ page }) => {
-    await expect(page.getByRole("button", { name: "Back" })).toBeDisabled();
+    // exact: true — see the comment in the previous test.
+    await expect(page.getByRole("button", { name: "Back", exact: true })).toBeDisabled();
     await page.getByRole("button", { name: "Review" }).click();
     await expect(page.getByRole("button", { name: "Continue" })).toBeDisabled();
   });
@@ -42,7 +46,11 @@ test.describe("add backup set wizard", () => {
     await expect(page.getByText("Generate dedicated SSH key")).toBeVisible();
     await expect(page.getByText(/never displayed/)).toBeVisible();
     await expect(page.getByText(/^ssh-ed25519 AAAA/)).toBeVisible();
-    expect(await page.locator("body").innerText()).not.toMatch(/PRIVATE KEY/i);
+    // The step's own copy legitimately says "Private keys stay on this NAS
+    // and are never shown" — a bare /PRIVATE KEY/i match flags that
+    // sentence as a false positive. Match the actual PEM marker instead
+    // (same pattern safety-invariants.spec.ts uses for a real key leak).
+    expect(await page.locator("body").innerText()).not.toMatch(/BEGIN (OPENSSH|RSA|EC) PRIVATE KEY/i);
   });
 
   test("step 2 copy button is present for the public key", async ({ page }) => {
@@ -88,9 +96,12 @@ test.describe("add backup set wizard", () => {
 
   test("step 5 defaults retention and protects the known-good backup", async ({ page }) => {
     await page.getByRole("button", { name: "Storage & retention" }).click();
-    await expect(page.getByDisplayValue("7 days")).toBeVisible();
-    await expect(page.getByDisplayValue("3 months")).toBeVisible();
-    await expect(page.getByDisplayValue("12 months")).toBeVisible();
+    // getByDisplayValue is a Testing Library method, not one Playwright's
+    // Locator API exposes — these are plain <input defaultValue=…> fields
+    // (BackupSetWizardPage's Field()), matched by their <label> text instead.
+    await expect(page.getByLabel("Daily")).toHaveValue("7 days");
+    await expect(page.getByLabel("Weekly")).toHaveValue("3 months");
+    await expect(page.getByLabel("Monthly")).toHaveValue("12 months");
     await expect(page.getByRole("checkbox", { name: /Protect newest known-good/ })).toBeChecked();
   });
 

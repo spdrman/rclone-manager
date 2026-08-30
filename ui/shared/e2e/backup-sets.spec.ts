@@ -21,6 +21,10 @@ test.describe("backup sets", () => {
   test("state is never conveyed by colour alone", async ({ bm, page }) => {
     await bm.goto("/sets");
     const cards = page.getByRole("article");
+    // .count() doesn't auto-retry like a web-first assertion does — wait for
+    // the first card to actually render (the mock listSets() fetch is async)
+    // before counting, or this reads 0 while the page is still loading.
+    await expect(cards.first()).toBeVisible();
     const count = await cards.count();
     expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {

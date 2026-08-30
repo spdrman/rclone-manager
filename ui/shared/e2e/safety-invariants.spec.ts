@@ -61,6 +61,11 @@ test.describe("safety invariants", () => {
     await page.getByRole("article").first().getByRole("button", { name: "Open" }).click();
 
     const destructive = page.getByRole("button", { name: /Apply retention now|Remove set configuration/ });
+    // BackupSetDetailPage returns null until its own getSet() fetch
+    // resolves, so these buttons don't exist yet right after the click that
+    // navigated here. .count() doesn't retry like a web-first assertion —
+    // wait for the first one to actually render before counting.
+    await expect(destructive.first()).toBeVisible();
     const count = await destructive.count();
     expect(count).toBeGreaterThan(0);
 
