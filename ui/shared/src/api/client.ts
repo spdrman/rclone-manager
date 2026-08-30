@@ -9,6 +9,7 @@ import type {
   CreatedBackupSet,
   SSHKeyImportResult
 } from "./contracts";
+import type { BackupSet, CompletionMethod } from "@shared/types/backup";
 
 const BASE = "/api/v1";
 
@@ -198,12 +199,105 @@ function fromWireCreatedBackupSet(body: WireCreatedBackupSet): CreatedBackupSet 
   };
 }
 
+/** The wire shape GET /api/v1/backup-sets and GET /api/v1/backup-sets/{id}
+ *  actually return (handlers_backupsets.go's backupSetResponse) — a
+ *  narrow, persistence-facing shape carrying none of the health/
+ *  retention/validation fields BackupSet (types/backup.ts) models,
+ *  because nothing in this codebase computes that data yet. Before
+ *  issue #146, neither route existed at all, so this file's own request()
+ *  return type was cast straight to BackupSet with no mapping and no
+ *  runtime check — harmless only because the request always 404'd first.
+ *  #146 is what first makes these routes answer for real, which is what
+ *  turned that cast into a confirmed crash the moment BackupSetDetailPage
+ *  dereferences a field (s.retention.daily, s.validations.includes(...))
+ *  the wire response never sent (mandatory review finding M4, PR #155). */
+interface WireBackupSet {
+  id: string;
+  source_name: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  remote_path: string;
+  local_path: string;
+  include: string[];
+  completion_strategy: string;
+  disabled: boolean;
+}
+
+interface WireListBackupSetsResponse {
+  backup_sets: WireBackupSet[];
+}
+
+const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
+  rename: "atomic-rename",
+  marker: "completion-marker",
+  stable: "stable-size"
+};
+
+/**
+ * Maps a WireBackupSet onto BackupSet's full shape. Every field the wire
+ * response actually carries maps across (with a name/polarity fix:
+ * `user` -> `username`, `remote_path` -> `remoteFolder`,
+ * `completion_strategy` -> `completionMethod`'s own vocabulary, and
+ * `disabled` -> the INVERSE of `enabled`, not the same boolean under a
+ * different name).
+ *
+ * Every field the backend does not yet compute — health/retention/
+ * validation/last-run data, none of which exists anywhere in
+ * core/service yet — gets an honest, clearly-labeled placeholder instead
+ * of being left `undefined` against a type that declares it required:
+ * `state: "stale"` with a stateNote that says why, zeroed counters,
+ * empty arrays, null timestamps. This is deliberately NOT the richer fix
+ * (enriching the Go response to compute real health/retention data) —
+ * that data does not exist yet anywhere in this codebase to enrich FROM
+ * — so BackupSetsPage/BackupSetDetailPage render a correctly-typed, if
+ * visibly incomplete, page against a real deployment instead of
+ * throwing, until a future issue actually computes this data server-side.
+ */
+function fromWireBackupSet(bs: WireBackupSet): BackupSet {
+  return {
+    id: bs.id,
+    name: bs.name,
+    host: bs.host,
+    port: bs.port,
+    username: bs.user,
+    remoteFolder: bs.remote_path,
+    includePatterns: bs.include,
+    excludePatterns: [],
+    completionMethod: COMPLETION_STRATEGY_TO_METHOD[bs.completion_strategy] ?? "atomic-rename",
+    destination: bs.local_path,
+    retention: {
+      daily: 0,
+      weekly: 0,
+      monthly: 0,
+      timezone: "UTC",
+      weekStartsOn: "monday",
+      protectLastKnownGood: false
+    },
+    validations: [],
+    state: "stale",
+    stateNote: "Health details are not yet reported by the server for this backup set.",
+    enabled: !bs.disabled,
+    halted: false,
+    newestKnownGoodAt: null,
+    lastRunAt: null,
+    lastValidation: "not-run",
+    expectedIntervalHours: 0,
+    retainedCount: 0,
+    retainedBytes: 0,
+    hostFingerprint: "",
+    fingerprintTrustedAt: null
+  };
+}
+
 export const httpApi: BackupManagerApi = {
   getVersion: () => request("/version"),
   getHealth: () => request("/health"),
 
-  listSets: () => request("/backup-sets"),
-  getSet: (id) => request("/backup-sets/" + id),
+  listSets: () =>
+    request<WireListBackupSetsResponse>("/backup-sets").then((r) => r.backup_sets.map(fromWireBackupSet)),
+  getSet: (id) => request<WireBackupSet>("/backup-sets/" + id).then(fromWireBackupSet),
   runSet: (id) => post("/backup-sets/" + id + "/run"),
   testConnection: (id) => request("/backup-sets/" + id + "/test-connection", { method: "POST" }),
   setEnabled: (id, enabled) => post("/backup-sets/" + id + "/enabled", { enabled }),

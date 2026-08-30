@@ -51,10 +51,15 @@ function renderWizardWithRoutes(api: BackupManagerApi) {
 }
 
 /** Drives the wizard through Authentication (import a key), Verify
- *  server (wait for the probe, trust it), and Review (acknowledge) —
- *  everything every one of the three Save buttons needs to be enabled
- *  and to have a real sshKeyId/knownHostsLine to send (issue #146). */
-async function completeWizardUpToReview() {
+ *  server (wait for the probe, trust it), and on to Review — everything
+ *  the Save buttons need to have a real sshKeyId/knownHostsLine to send
+ *  (issue #146), EXCEPT acknowledgement, deliberately left to the
+ *  caller: several tests below need to isolate "acknowledged" from the
+ *  key-import/host-trust preconditions (M7, #146 review) rather than
+ *  flip all three at once. completeWizardUpToReview (below) is this plus
+ *  the acknowledgement click, for tests that just need every
+ *  precondition met. */
+async function advanceToReviewReady() {
   await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
   await userEvent.click(screen.getByRole("radio", { name: /Import key/ }));
   await userEvent.type(screen.getByLabelText(/private key/i), "FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
@@ -66,6 +71,10 @@ async function completeWizardUpToReview() {
   await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
 
   await userEvent.click(screen.getByRole("button", { name: "Review" }));
+}
+
+async function completeWizardUpToReview() {
+  await advanceToReviewReady();
   await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
 }
 
@@ -90,13 +99,30 @@ describe("add backup set wizard", () => {
 
   it("blocks saving until remote deletion is acknowledged", async () => {
     renderWizard();
-    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    // Every OTHER save precondition (imported key, trusted host) is
+    // satisfied first, so this isolates acknowledgement as the one
+    // variable under test — see M7 (#146 review) on why those two now
+    // also gate the button.
+    await advanceToReviewReady();
 
     const save = screen.getByRole("button", { name: /Save, enable & run/ });
     expect(save).toBeDisabled();
 
     await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
     expect(save).toBeEnabled();
+  });
+
+  // M7 (#146 review): the wizard's own save-preconditions gap. Save used
+  // to stay clickable with no key imported and no host trusted -
+  // clicking it fired handleSave, which rejected the request via its own
+  // ad hoc guard rather than the button ever refusing to be clicked.
+  it("keeps Save disabled without an imported key or a trusted host, even after acknowledging (M7, #146 review)", async () => {
+    renderWizard();
+    await userEvent.click(screen.getByRole("button", { name: "Review" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
+
+    expect(screen.getByRole("button", { name: /Save, enable & run/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Save & enable$/ })).toBeDisabled();
   });
 
   it("warns when stable-size completion is chosen", async () => {
@@ -266,7 +292,11 @@ describe("add backup set wizard", () => {
   describe("a changed host key blocks saving (WP 2.3 acceptance: 'changed host key blocks operation')", () => {
     it("disables both gated save actions the instant the host key changes, even though acknowledged is still checked", async () => {
       renderWizard();
-      await userEvent.click(screen.getByRole("button", { name: "Review" }));
+      // M7 (#146 review): the key-import/host-trust preconditions are
+      // satisfied first (advanceToReviewReady), same as the
+      // acknowledgement test above, so this isolates the host-key-change
+      // effect as the one variable under test.
+      await advanceToReviewReady();
       await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
 
       const runNow = screen.getByRole("button", { name: /Save, enable & run/ });
@@ -393,7 +423,14 @@ describe("add backup set wizard", () => {
       expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
     });
 
-    it("refuses to save with a clear inline message when the key source isn't the wired 'import' path, instead of attempting a doomed request", async () => {
+    // Before M7 (#146 review), this scenario was reachable by clicking
+    // Save: the button stayed enabled with no key imported, and
+    // handleSave's own ad hoc guard rejected the request after the
+    // click. Save is now structurally disabled for this same
+    // combination instead — proven here by confirming the button itself
+    // is disabled and createBackupSet is never called, rather than by
+    // clicking a button that no longer accepts clicks.
+    it("keeps Save disabled when the key source isn't the wired 'import' path, instead of allowing a doomed request", async () => {
       const api = createMockApi();
       const spy = vi.spyOn(api, "createBackupSet");
       renderWizardWithRoutes(api);
@@ -405,9 +442,7 @@ describe("add backup set wizard", () => {
       await userEvent.click(screen.getByRole("button", { name: "Review" }));
       await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
 
-      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
-
-      expect(await screen.findByText(/isn't available yet/i)).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Save & enable$/ })).toBeDisabled();
       expect(spy).not.toHaveBeenCalled();
       expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
     });

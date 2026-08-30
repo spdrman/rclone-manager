@@ -319,6 +319,90 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
     expect(result.operation).toBeUndefined();
   });
 
+  it("listSets maps the wire backup_sets array onto BackupSet's full shape, with honest placeholders for fields the backend does not yet send (M4, #146 review)", async () => {
+    const fetchMock = mockFetchOk(
+      {
+        backup_sets: [
+          {
+            id: "api/postgres-primary",
+            source_name: "api",
+            name: "postgres-primary",
+            host: "prod-db-01.internal",
+            port: 22,
+            user: "backup-agent",
+            remote_path: "/backups/postgresql",
+            local_path: "/data/backups/postgres",
+            include: ["*.dump.zst"],
+            completion_strategy: "marker",
+            disabled: true
+          }
+        ]
+      },
+      200
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await httpApi.listSets();
+
+    expect(result).toHaveLength(1);
+    const s = result[0];
+    // Fields the backend actually sends: name AND polarity both mapped
+    // correctly (user -> username, remote_path -> remoteFolder,
+    // disabled: true -> enabled: false, not the same boolean re-read
+    // under the wrong name).
+    expect(s.id).toBe("api/postgres-primary");
+    expect(s.username).toBe("backup-agent");
+    expect(s.remoteFolder).toBe("/backups/postgresql");
+    expect(s.completionMethod).toBe("completion-marker");
+    expect(s.enabled).toBe(false);
+
+    // Fields the backend does NOT yet send: present, correctly typed and
+    // never undefined — this is exactly what crashed
+    // BackupSetDetailPage's s.retention.daily / s.validations.includes(...)
+    // (a real TypeError) the first time these routes returned real data
+    // instead of 404ing.
+    expect(s.retention).toEqual({
+      daily: 0,
+      weekly: 0,
+      monthly: 0,
+      timezone: "UTC",
+      weekStartsOn: "monday",
+      protectLastKnownGood: false
+    });
+    expect(s.validations).toEqual([]);
+    expect(s.state).toBe("stale");
+    expect(s.newestKnownGoodAt).toBeNull();
+    expect(s.lastRunAt).toBeNull();
+  });
+
+  it("getSet maps the same wire shape for a single backup set", async () => {
+    const fetchMock = mockFetchOk(
+      {
+        id: "api/x",
+        source_name: "api",
+        name: "x",
+        host: "h",
+        port: 22,
+        user: "u",
+        remote_path: "/r",
+        local_path: "/l",
+        include: [],
+        completion_strategy: "rename",
+        disabled: false
+      },
+      200
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const s = await httpApi.getSet("api/x");
+
+    expect(s.id).toBe("api/x");
+    expect(s.completionMethod).toBe("atomic-rename");
+    expect(s.enabled).toBe(true);
+    expect(s.retention.daily).toBe(0);
+    expect(s.validations).toEqual([]);
+  });
+
   it("importSSHKey posts private_key_pem and returns id/algorithm/fingerprint", async () => {
     const fetchMock = mockFetchOk({ id: "key_1", algorithm: "ssh-ed25519", fingerprint: "SHA256:abc" }, 201);
     vi.stubGlobal("fetch", fetchMock);

@@ -148,7 +148,18 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   // is the only place `readOnly` is consulted for gating — the `readOnly`
   // prop below is read only to pick which hint text to show.
   const canSave = useCausl(wizardCanSaveNode);
-  const saveDisabled = !canSave || !acknowledged;
+  // M7 (#146 review): folds in the two preconditions this issue itself
+  // added — an imported key and a trusted host — that handleSave already
+  // refuses to save without (see its own early-return guards below).
+  // Before this, only !canSave || !acknowledged gated the button, so
+  // clicking Save with no key imported or no host trusted was not
+  // disabled at all: it fired handleSave, which then rejected the
+  // request via its own ad hoc check and a freshly-set saveError string,
+  // instead of the button structurally refusing to be clicked in the
+  // first place — the exact clickable-then-rejected shape this
+  // safety-tool's own review flags everywhere else it appears.
+  const saveDisabled =
+    !canSave || !acknowledged || keySource !== "import" || !importedKeyId || !trustedKnownHostsLine;
 
   const trustHost = () => {
     setHostTrusted(true);
@@ -279,9 +290,22 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
     }
   }
 
+  // M7 (#146 review): each new precondition gets its own hint, in the
+  // same words handleSave's own early-return guards already use, rather
+  // than every disabled reason falling through to the acknowledgement
+  // hint below regardless of which precondition actually failed.
   let saveHint = "";
   if (hostKeyChanged) {
     saveHint = "The host key changed since it was trusted — resolve that on the Verify server step before saving.";
+  } else if (keySource !== "import" || !importedKeyId) {
+    saveHint =
+      keySource === "generate"
+        ? "Generating a key on save isn't available yet — import a key on the Authentication step instead."
+        : keySource === "managed"
+          ? "Reusing a managed key on save isn't available yet — import a key on the Authentication step instead."
+          : "Import an SSH key on the Authentication step before saving.";
+  } else if (!trustedKnownHostsLine) {
+    saveHint = "Trust the host's fingerprint on the Verify server step before saving.";
   } else if (saveDisabled && !readOnly) {
     saveHint = "Acknowledge remote-source handling to enable saving.";
   } else if (saveError) {
