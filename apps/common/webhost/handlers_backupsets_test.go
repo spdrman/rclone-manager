@@ -379,3 +379,45 @@ func TestGetBackupSet_UnknownIDReturns404(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
+
+// TestCreateBackupSet_CarriesValidatorIDThroughToTheService is issue
+// #162's HTTP-side wiring proof: validator_id off the wire reaches
+// service.CreateBackupSetRequest.ValidatorID unchanged, and comes back on
+// the 201 so a UI can render what it just saved without a second fetch.
+func TestCreateBackupSet_CarriesValidatorIDThroughToTheService(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	body := strings.Replace(validCreateBody,
+		`"completion_strategy": "marker"`,
+		`"completion_strategy": "marker",
+	"validator_id": "trailer-marker"`, 1)
+
+	rec := postBackupSet(t, tr.router, body, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if got := string(tr.backend.lastCreate.ValidatorID); got != "trailer-marker" {
+		t.Errorf("service.CreateBackupSetRequest.ValidatorID = %q, want %q", got, "trailer-marker")
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshalling the response: %v", err)
+	}
+	if resp["validator_id"] != "trailer-marker" {
+		t.Errorf("response validator_id = %v, want %q", resp["validator_id"], "trailer-marker")
+	}
+}
+
+// TestCreateBackupSet_WithoutAValidatorSendsNone is the control for the
+// test above: an omitted validator_id must reach the service as the empty
+// id (no validator), never as some default this layer invented.
+func TestCreateBackupSet_WithoutAValidatorSendsNone(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if tr.backend.lastCreate.ValidatorID != "" {
+		t.Errorf("service.CreateBackupSetRequest.ValidatorID = %q, want empty", tr.backend.lastCreate.ValidatorID)
+	}
+}

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BackupSetWizardPage } from "@shared/pages/BackupSetWizardPage";
@@ -407,6 +407,53 @@ describe("add backup set wizard", () => {
       const req = spy.mock.calls[0][0];
       expect(req.disabled).toBe(true);
       expect(req.runImmediately).toBe(false);
+    });
+
+    it("sends the chosen application validator's id, and nothing that could name an executable (issue #162)", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await userEvent.click(screen.getByRole("button", { name: "Storage & retention" }));
+      const picker = await screen.findByLabelText(/application validation/i);
+      // A real picklist, not the decorative toggle #98 shipped: the
+      // options come from the backend's own registered catalog.
+      await waitFor(() => expect(within(picker as HTMLSelectElement).getAllByRole("option").length).toBeGreaterThan(1));
+      await userEvent.selectOptions(picker, "trailer-marker");
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      await screen.findByText("SETS LIST PAGE");
+      const req = spy.mock.calls[0][0];
+      expect(req.validatorId).toBe("trailer-marker");
+
+      const banned = ["command", "executable", "argv", "script", "shell", "binary", "exec"];
+      const offending = Object.keys(req).filter((k) => banned.some((w) => k.toLowerCase().includes(w)));
+      expect(offending).toEqual([]);
+    });
+
+    it("sends no validator at all when the operator leaves the picklist on its default (issue #162)", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      await screen.findByText("SETS LIST PAGE");
+      expect(spy.mock.calls[0][0].validatorId).toBeUndefined();
+    });
+
+    it("says so when the validator catalog cannot be loaded, rather than showing an empty picklist (issue #162)", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "listValidators").mockRejectedValue(
+        new BackupManagerError({ code: "INTERNAL", message: "nope", correlationId: "cid_2" })
+      );
+      renderWizard(false, api);
+
+      await userEvent.click(screen.getByRole("button", { name: "Storage & retention" }));
+      expect(await screen.findByText(/could not load the available validators/i)).toBeTruthy();
     });
 
     it("surfaces a failed save inline instead of navigating or silently doing nothing", async () => {

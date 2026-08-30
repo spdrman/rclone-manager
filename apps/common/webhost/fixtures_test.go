@@ -400,6 +400,12 @@ type backupSetFakeBackend struct {
 	sets map[string]service.BackupSet
 	keys map[string]service.SSHKeyRef
 
+	// lastCreate records the exact service.CreateBackupSetRequest the
+	// handler built, so a test can assert on what crossed the HTTP-to-core
+	// seam (issue #162's validator_id, in particular) rather than only on
+	// what came back out of it.
+	lastCreate service.CreateBackupSetRequest
+
 	errOnCreate  error
 	errOnList    error
 	errOnGet     error
@@ -465,9 +471,11 @@ func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.
 		LocalPath:          req.LocalPath,
 		Include:            req.Include,
 		CompletionStrategy: req.CompletionStrategy,
+		ValidatorID:        req.ValidatorID,
 		Disabled:           req.Disabled,
 	}
 	f.mu.Lock()
+	f.lastCreate = req
 	f.sets[set.ID] = set
 	f.mu.Unlock()
 
