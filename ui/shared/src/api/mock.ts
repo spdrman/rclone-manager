@@ -273,10 +273,19 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     listSets: () => delay(empty ? [] : SETS),
     getSet: (id) => {
       const found = SETS.find((s) => s.id === id);
+      // A rejected promise, not a synchronous throw: getSet's own type
+      // signature promises Promise<BackupSet>, and every caller (useAsync,
+      // useResource/fetchResource) reaches for fetchFn().then/.catch to
+      // turn a failure into a typed error, never a try/catch around the
+      // call itself — a synchronous throw here escaped that entirely and
+      // crashed the caller instead of producing the error state the UI
+      // is built to show (found while wiring #97's error-state test).
       if (!found)
-        throw new BackupManagerError({
-          code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
-        });
+        return Promise.reject(
+          new BackupManagerError({
+            code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
+          })
+        );
       return delay(found);
     },
     runSet: () => delay(undefined),

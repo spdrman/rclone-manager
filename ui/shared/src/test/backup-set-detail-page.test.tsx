@@ -168,6 +168,6 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
     // No backend endpoint exists yet to persist a backup-set edit (#146) —
     // the honest outcome of a non-stale submit is a clear "not saved"
     // notice, never a silent no-op that looks like success.
-    expect(await screen.findByText(/doesn't yet support saving/i)).toBeTruthy();
+    expect(await screen.findByText(/doesn.t yet support saving/i)).toBeTruthy();
   });
 });
