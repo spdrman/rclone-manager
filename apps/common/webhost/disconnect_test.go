@@ -69,7 +69,7 @@ func TestSubmitOperation_SurvivesClientDisconnect(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&submitted); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	operationID, _ := submitted["operation_id"].(string)
 	if operationID == "" {
 		t.Fatal("submitted operation_id is empty")

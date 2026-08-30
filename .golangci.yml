@@ -1,0 +1,53 @@
+version: "2"
+
+# This project's golangci-lint policy. Added alongside scripts/ci-local.sh
+# (the local CI mirror) as a new permanent gate, run per-module the same way
+# go build/vet/test already are.
+#
+# errcheck's exclude-functions list below is a deliberate project-wide
+# policy, not a way to silence findings without looking at them: every
+# excluded signature was checked by hand first (see the PR that added this
+# file) and found to be a Close()/Rollback() call either on a read-only
+# resource after a successful read, or on an already-failing error-cleanup
+# path where the close/rollback error is never more informative than the
+# error already being returned. A *new* instance of one of these calls is
+# still someone's job to think about once, the same way the ones already
+# checked were; this list exists so linting doesn't force re-litigating the
+# same, already-settled question 27 times over.
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (*os.File).Close
+        - (*os.File).Sync
+        - os.Remove
+        - os.RemoveAll
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (net.Listener).Close
+        - (io.Closer).Close
+  exclusions:
+    rules:
+      # TestDiscoverKey_SamePathIsDeterministic deliberately calls
+      # discoverKey twice with the identical input to prove it's
+      # deterministic — the "identical expressions" this rule flags is
+      # the entire point of the test, not a copy-paste bug.
+      - path: internal/discovery/complete_test.go
+        linters:
+          - staticcheck
+        text: "SA4000"
+      # selfDestruct's trailing `for {}` is a documented belt-and-braces
+      # guard for the brief window between SIGKILL being sent and the
+      # kernel actually tearing the process down, not an accidental busy
+      # loop — see the function's own doc comment.
+      - path: tests/crashmatrix/harness/decorators.go
+        linters:
+          - staticcheck
+        text: "SA5002"

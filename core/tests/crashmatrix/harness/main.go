@@ -144,7 +144,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("state.Open: %w", err)
 	}
-	defer realJournal.Close()
+	defer func() { _ = realJournal.Close() }()
 
 	journal := newKillAfterStateJournal(realJournal, *killAfter)
 
@@ -192,7 +192,7 @@ func run() error {
 		Completion: config.Completion{Strategy: "rename"},
 	}
 	if _, err := discovery.Discover(ctx, discovery.Deps{Transport: kt, Journal: journal}, source, discoverSet); err != nil {
-		return fmt.Errorf("Discover: %w", err)
+		return fmt.Errorf("discover: %w", err)
 	}
 
 	switch *killPlanFlag {
@@ -239,7 +239,7 @@ func run() error {
 			if _, err := lifecycle.Transfer(ctx, deps, lifecycle.TransferParams{
 				Artifact: artifact, Source: source, LocalDir: *localDir, AttemptKey: transferKey,
 			}); err != nil {
-				return fmt.Errorf("Transfer: %w", err)
+				return fmt.Errorf("transfer: %w", err)
 			}
 
 		case lifecycle.Transferred, lifecycle.Verifying:
@@ -279,10 +279,10 @@ func run() error {
 				mid := time.Duration(float64(d) * *midFraction)
 				fmt.Printf("CALIBRATED verify_read=%s kill_after=%s\n", d, mid)
 				if _, err := raceKill(mid, &timedOut, verifyCall); err != nil {
-					return fmt.Errorf("Verify: %w", err)
+					return fmt.Errorf("verify: %w", err)
 				}
 			} else if _, err := verifyCall(); err != nil {
-				return fmt.Errorf("Verify: %w", err)
+				return fmt.Errorf("verify: %w", err)
 			}
 
 		case lifecycle.Verified, lifecycle.Committing:
@@ -300,10 +300,10 @@ func run() error {
 				mid := time.Duration(float64(d) * *midFraction)
 				fmt.Printf("CALIBRATED commit=%s kill_after=%s\n", d, mid)
 				if _, err := raceKill(mid, &timedOut, commitCall); err != nil {
-					return fmt.Errorf("Commit: %w", err)
+					return fmt.Errorf("commit: %w", err)
 				}
 			} else if _, err := commitCall(); err != nil {
-				return fmt.Errorf("Commit: %w", err)
+				return fmt.Errorf("commit: %w", err)
 			}
 
 		case lifecycle.Committed, lifecycle.RemoteDeletePending:

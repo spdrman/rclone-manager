@@ -37,7 +37,7 @@ func TestWithStatHash_LetsAGenuinelySafeDeleteProceed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer journal.Close()
+	defer func() { _ = journal.Close() }()
 
 	set, err := model.NewBackupSetID("with-stat-hash-source", "set")
 	if err != nil {

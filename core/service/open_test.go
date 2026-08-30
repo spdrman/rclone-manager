@@ -72,7 +72,7 @@ func TestOpen_WiresARealServiceAgainstARealConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 
 	if svc.ConfigRevision() == "" {
 		t.Fatal("ConfigRevision is empty for a successfully opened service")
@@ -99,7 +99,7 @@ func TestOpen_InvalidConfigPathFails(t *testing.T) {
 	_, cleanup, err := Open(context.Background(), filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {
 		if cleanup != nil {
-			cleanup()
+			_ = cleanup()
 		}
 		t.Fatal("Open with a nonexistent config path: error = nil, want an error")
 	}
@@ -155,7 +155,7 @@ func TestOpen_SweepsInterruptedOperationsFromAPreviousProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 
 	op, err := svc.GetOperation(context.Background(), "op_interrupted")
 	if err != nil {

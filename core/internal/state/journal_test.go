@@ -19,7 +19,7 @@ func openJournal(t *testing.T) (*Journal, string) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j, path
 }
 
@@ -214,7 +214,7 @@ func TestRecordTransition_SurvivesCloseAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer j2.Close()
+	defer func() { _ = j2.Close() }()
 
 	rec, err := j2.Get(ctx, artifact)
 	if err != nil {

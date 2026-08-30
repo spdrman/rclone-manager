@@ -34,11 +34,25 @@ unset GIT_INDEX_FILE GIT_DIR GIT_WORK_TREE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR G
 
 FAST="${CI_LOCAL_FAST:-0}"
 
+if ! command -v golangci-lint >/dev/null 2>&1; then
+  echo "==> golangci-lint not found. Install it (brew install golangci-lint) and re-run." >&2
+  exit 1
+fi
+
+# Captured once, from repo root (where this script is always invoked from,
+# per .husky/pre-commit), so every module below can reference the one
+# project-wide .golangci.yml with an absolute path instead of working out
+# its own relative depth back to the repo root.
+REPO_ROOT="$(pwd)"
+
 echo "==> core/ go build"
 (cd core && GOWORK=off go build ./...)
 
 echo "==> core/ go vet"
 (cd core && GOWORK=off go vet ./...)
+
+echo "==> core/ golangci-lint"
+(cd core && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ "$FAST" = "1" ]; then
   echo "==> core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
@@ -51,14 +65,23 @@ fi
 echo "==> apps/common go build, vet, test"
 (cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
 
+echo "==> apps/common golangci-lint"
+(cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
+
 if [ -f apps/generic/go.mod ]; then
   echo "==> apps/generic go build, vet, test"
   (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+
+  echo "==> apps/generic golangci-lint"
+  (cd apps/generic && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
 if [ -f apps/ugos/backend/go.mod ]; then
   echo "==> apps/ugos/backend go build, vet, test"
   (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+
+  echo "==> apps/ugos/backend golangci-lint"
+  (cd apps/ugos/backend && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
   if [ "$FAST" != "1" ]; then
     echo "==> apps/ugos/backend cross-compile linux/amd64"
