@@ -335,3 +335,145 @@ func TestPreviewRetention_UnknownBackupSetReturnsErrBackupSetNotFound(t *testing
 		t.Fatalf("PreviewRetention error = %v, want errors.Is(err, ErrBackupSetNotFound)", err)
 	}
 }
+
+// retentionOn is retentionAllTiersDisabled's opposite: every GFS tier and
+// last-known-good protection live, for the one test below that actually
+// needs them.
+func retentionOn(dailyDays, weeklyMonths, monthlyMonths int) config.Retention {
+	on := true
+	return config.Retention{
+		Timezone: "UTC", WeekStartsOn: "monday",
+		DailyDays: dailyDays, WeeklyMonths: weeklyMonths, MonthlyMonths: monthlyMonths,
+		ProtectLastKnownGood: &on,
+	}
+}
+
+// hasTier reports whether tiers contains want, tolerating internal/
+// retention.GFSTier's own string type without this file importing that
+// package just to spell the comparison.
+func hasTier(tiers []string, want string) bool {
+	for _, t := range tiers {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPreviewThenApply_MixedGFSTiersAndLastKnownGood is this issue's own
+// INTEGRATION checklist item: a boundary test through the real internal/
+// retention decision path (not a mock), against a backup set with daily/
+// weekly/monthly and last-known-good artifacts mixed together — every
+// other test in this file either disables every tier
+// (retentionAllTiersDisabled) or exercises exactly one artifact, neither of
+// which proves the daily/weekly/monthly/last-known-good union (FR-18's own
+// formula) actually composes correctly all the way from PreviewRetention
+// through ApplyRetentionPlan.
+//
+// GFSDecide's own window arithmetic (gfs.go) anchors every tier's start at
+// the first of a calendar month, N-1 months back — see that file's
+// DailyDays/WeeklyMonths/MonthlyMonths handling — so this test places
+// artifacts relative to the real wall clock (internal/app.Service.now,
+// which this boundary does not let a caller override) rather than fixed
+// calendar dates, choosing offsets with a full calendar month of slack on
+// either side of each window edge so the result cannot depend on which day
+// of the month the suite happens to run on.
+func TestPreviewThenApply_MixedGFSTiersAndLastKnownGood(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC()
+	monthStart := time.Date(base.Year(), base.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	// DailyDays=3, WeeklyMonths=2, MonthlyMonths=3: daily's window is the
+	// last 3 calendar days; weekly's window starts at the first of LAST
+	// month; monthly's window starts at the first of the month two months
+	// back. Every artifact below sits well inside or outside the window it
+	// is meant to test, never near a boundary.
+	svc := New(retentionTestConfig(bs, retentionOn(3, 2, 3)), journal, nil, nil)
+
+	dailyToday := seedCompleteArtifact(t, ctx, journal, bs, "daily-today.dump", base, "daily-today")
+	seedCompleteArtifact(t, ctx, journal, bs, "daily-yesterday.dump", base.AddDate(0, 0, -1), "daily-yesterday")
+	// Well inside last month (weekly's window), well outside the daily window.
+	seedCompleteArtifact(t, ctx, journal, bs, "weekly.dump", monthStart.AddDate(0, -1, 14), "weekly-artifact")
+	// Well inside the month two months back (monthly's window only), well
+	// outside weekly's one-month reach.
+	seedCompleteArtifact(t, ctx, journal, bs, "monthly.dump", monthStart.AddDate(0, -2, 14), "monthly-artifact")
+	// Four months back: outside every tier's window and not the newest
+	// artifact, so last-known-good does not save it either — the one
+	// artifact this plan actually deletes.
+	deletePath := filepath.Join(bs.LocalPath, "too-old.dump")
+	seedCompleteArtifact(t, ctx, journal, bs, "too-old.dump", monthStart.AddDate(0, -4, 14), "too-old-payload")
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	if plan.KeepCount != 4 {
+		t.Errorf("KeepCount = %d, want 4 (plan=%+v)", plan.KeepCount, plan)
+	}
+	if plan.DeleteCount != 1 {
+		t.Errorf("DeleteCount = %d, want 1 (plan=%+v)", plan.DeleteCount, plan)
+	}
+	if plan.ReclaimBytes != int64(len("too-old-payload")) {
+		t.Errorf("ReclaimBytes = %d, want %d", plan.ReclaimBytes, len("too-old-payload"))
+	}
+
+	var sawDaily, sawWeekly, sawMonthly, sawLastKnownGood bool
+	verdictByArtifact := make(map[string]string, len(plan.Verdicts))
+	for _, v := range plan.Verdicts {
+		verdictByArtifact[v.Artifact] = v.Action
+		if hasTier(v.Tiers, "DAILY") {
+			sawDaily = true
+		}
+		if hasTier(v.Tiers, "WEEKLY") {
+			sawWeekly = true
+		}
+		if hasTier(v.Tiers, "MONTHLY") {
+			sawMonthly = true
+		}
+		if hasTier(v.Tiers, "LAST_KNOWN_GOOD") {
+			sawLastKnownGood = true
+			// The newest eligible artifact is the one last-known-good
+			// protection actually names (lastknowngood.go's own doc).
+			if v.Artifact != dailyToday.Name {
+				t.Errorf("LAST_KNOWN_GOOD protected %q, want the newest artifact %q", v.Artifact, dailyToday.Name)
+			}
+		}
+	}
+	if !sawDaily || !sawWeekly || !sawMonthly || !sawLastKnownGood {
+		t.Errorf("plan did not mix every tier: daily=%v weekly=%v monthly=%v lastKnownGood=%v (verdicts=%+v)",
+			sawDaily, sawWeekly, sawMonthly, sawLastKnownGood, plan.Verdicts)
+	}
+	if verdictByArtifact["too-old.dump"] != "DELETE" {
+		t.Errorf("too-old.dump verdict = %q, want DELETE", verdictByArtifact["too-old.dump"])
+	}
+	for _, name := range []string{"daily-today.dump", "daily-yesterday.dump", "weekly.dump", "monthly.dump"} {
+		if verdictByArtifact[name] != "KEEP" {
+			t.Errorf("%s verdict = %q, want KEEP", name, verdictByArtifact[name])
+		}
+	}
+
+	// WHEN this exact plan is applied (nothing has changed since preview).
+	applied, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"})
+	if err != nil {
+		t.Fatalf("ApplyRetentionPlan: %v", err)
+	}
+	if applied.DeleteCount != 1 || applied.KeepCount != 4 {
+		t.Errorf("applied = %+v, want DeleteCount=1, KeepCount=4", applied)
+	}
+
+	// THEN the one DELETE verdict's file is actually gone, and every KEEP
+	// verdict's file is still exactly where it was — the real
+	// internal/retention.PruneApply path, not a mock.
+	if _, statErr := os.Lstat(deletePath); !os.IsNotExist(statErr) {
+		t.Errorf("Lstat(%s) after apply: err=%v, want a not-exist error", deletePath, statErr)
+	}
+	for _, name := range []string{"daily-today.dump", "daily-yesterday.dump", "weekly.dump", "monthly.dump"} {
+		if _, statErr := os.Lstat(filepath.Join(bs.LocalPath, name)); statErr != nil {
+			t.Errorf("Lstat(%s) after apply: %v, want the kept artifact still present", name, statErr)
+		}
+	}
+}
