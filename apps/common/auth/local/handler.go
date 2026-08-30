@@ -39,10 +39,6 @@ type credentialsRequest struct {
 
 // rotatePasswordRequest mirrors ui/shared/src/api/client.ts's
 // `rotatePassword` request body ({currentPassword, newPassword} JSON).
-// RED scaffolding (issue #128): POST /password is not wired up in
-// Handler() yet, so every rotation test currently 404s against this
-// package's router - the smallest compiling step before the real route
-// and handler exist.
 type rotatePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
