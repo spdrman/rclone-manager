@@ -220,6 +220,24 @@ type Revalidation struct {
 // (FR-19). See validate.go for the default each field falls back to when
 // left at its YAML zero value, and why those particular defaults were
 // chosen rather than the field's literal zero value.
+//
+// # Global, not per-backup-set (issue #111 decision)
+//
+// This block is deliberately one policy for the whole Config, applied to
+// every backup set through GFSDecide/PruneDecide's shared cfg argument,
+// not a field on BackupSet. That is a decision, not an oversight: the
+// shared web UI's own BackupSet type (ui/shared/src/types/backup.ts)
+// already models a `retention` field per backup set, and its mock
+// fixtures (ui/shared/src/api/mock.ts) already give two backup sets
+// different override values, which could easily be mistaken for evidence
+// that per-set retention is already a real, working capability. It is
+// not: nothing in this package or internal/retention has ever supported
+// a per-backup-set override, and issue #111 keeps it that way rather than
+// letting the UI's already-drawn shape settle the question by accident.
+// Introducing real per-set overrides is a legitimate future capability,
+// but it is a separate, larger change (new schema, new validation, a new
+// resolution order between set-level and global values) that deserves its
+// own issue rather than riding in on a config/CLI-first change.
 type Retention struct {
 	Timezone             string `yaml:"timezone"`
 	WeekStartsOn         string `yaml:"week_starts_on"`

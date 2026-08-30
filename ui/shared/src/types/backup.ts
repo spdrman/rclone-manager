@@ -9,6 +9,22 @@ export type RetentionClass = "daily" | "weekly" | "monthly" | "protected";
 
 export type ValidationKind = "transfer" | "checksum" | "application";
 
+/**
+ * Mirrors core's config.Retention (core/internal/config/config.go) shape,
+ * field for field.
+ *
+ * This type is modeled per BackupSet below, and mock.ts's fixtures give
+ * different backup sets different values, but that is not evidence a
+ * per-set override is a real, working capability: the actual backend
+ * (internal/config, internal/retention) has exactly one Retention block
+ * for the whole Config, applied to every backup set. Issue #111 (B3.6)
+ * decided, explicitly, to keep retention policy global for now rather
+ * than let this type's already-drawn per-set shape settle the question by
+ * accident; see config.go's own "Global, not per-backup-set" doc for the
+ * full reasoning. A real per-backup-set override is a legitimate future
+ * capability, but it needs its own schema/validation/resolution-order
+ * design on the backend first, which this type alone does not provide.
+ */
 export interface RetentionPolicy {
   daily: number;
   weekly: number;

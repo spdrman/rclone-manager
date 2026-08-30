@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -64,6 +65,34 @@ func validConfig() Config {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// retentionEqual compares two Retention values field by field, dereferencing
+// ProtectLastKnownGood rather than comparing its pointer identity: two
+// independently-built Retention values that both resolved to "true" have
+// different *bool pointers, and a plain == or reflect.DeepEqual on the
+// struct would wrongly report them as disagreeing.
+func retentionEqual(a, b Retention) bool {
+	if a.Timezone != b.Timezone || a.WeekStartsOn != b.WeekStartsOn ||
+		a.DailyDays != b.DailyDays || a.WeeklyMonths != b.WeeklyMonths || a.MonthlyMonths != b.MonthlyMonths {
+		return false
+	}
+	if (a.ProtectLastKnownGood == nil) != (b.ProtectLastKnownGood == nil) {
+		return false
+	}
+	if a.ProtectLastKnownGood != nil && *a.ProtectLastKnownGood != *b.ProtectLastKnownGood {
+		return false
+	}
+	return true
+}
+
+func retentionString(r Retention) string {
+	protect := "nil"
+	if r.ProtectLastKnownGood != nil {
+		protect = fmt.Sprintf("%v", *r.ProtectLastKnownGood)
+	}
+	return fmt.Sprintf("{Timezone:%q WeekStartsOn:%q DailyDays:%d WeeklyMonths:%d MonthlyMonths:%d ProtectLastKnownGood:%s}",
+		r.Timezone, r.WeekStartsOn, r.DailyDays, r.WeeklyMonths, r.MonthlyMonths, protect)
+}
 
 func TestValidConfigPasses(t *testing.T) {
 	cfg := validConfig()
@@ -189,6 +218,83 @@ func TestRetentionWeekStartsOnValidated(t *testing.T) {
 			t.Fatal("a non-weekday week_starts_on was accepted")
 		}
 	})
+}
+
+// --- ValidateRetention: the exported, standalone entry point issue #111's
+// CLI (and any future UI-backing surface) must funnel through, pinned
+// field-by-field against exactly what an embedded retention block resolves
+// to through cfg.Validate(), so a later refactor of either path can never
+// silently let the two disagree. ---
+
+// TestValidateRetentionMatchesConfigValidateForEverySixFields is the
+// locked baseline issue #111's RED plan calls for: for each of the six
+// retention fields, the absent/invalid/(for the bool) explicit-false
+// behavior of the standalone ValidateRetention(r) call must be identical,
+// error text included, to what the same value produces embedded in a
+// whole Config through cfg.Validate(). A caller (the CLI's override
+// flags, or a future settings endpoint) that validates a candidate value
+// through ValidateRetention must be refused, or accepted, for the exact
+// same reason the config file itself would be.
+func TestValidateRetentionMatchesConfigValidateForEverySixFields(t *testing.T) {
+	errText := func(err error) string {
+		if err == nil {
+			return ""
+		}
+		return err.Error()
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Retention)
+	}{
+		{"all six absent", func(r *Retention) { *r = Retention{} }},
+		{"timezone: empty defaults to UTC", func(r *Retention) { r.Timezone = "" }},
+		{"timezone: unloadable is refused", func(r *Retention) { r.Timezone = "Mars/Phobos" }},
+		{"week_starts_on: empty defaults to monday", func(r *Retention) { r.WeekStartsOn = "" }},
+		{"week_starts_on: non-weekday is refused", func(r *Retention) { r.WeekStartsOn = "someday" }},
+		{"week_starts_on: mixed case is normalized", func(r *Retention) { r.WeekStartsOn = "Tuesday" }},
+		{"daily_days: zero defaults to 7", func(r *Retention) { r.DailyDays = 0 }},
+		{"daily_days: negative is refused", func(r *Retention) { r.DailyDays = -1 }},
+		{"weekly_months: zero defaults to 3", func(r *Retention) { r.WeeklyMonths = 0 }},
+		{"weekly_months: negative is refused", func(r *Retention) { r.WeeklyMonths = -1 }},
+		{"monthly_months: zero defaults to 12", func(r *Retention) { r.MonthlyMonths = 0 }},
+		{"monthly_months: negative is refused", func(r *Retention) { r.MonthlyMonths = -1 }},
+		{"protect_last_known_good: absent defaults to true", func(r *Retention) { r.ProtectLastKnownGood = nil }},
+		{"protect_last_known_good: explicit true is honored", func(r *Retention) { r.ProtectLastKnownGood = boolPtr(true) }},
+		{"protect_last_known_good: explicit false is honored, not coerced to true", func(r *Retention) { r.ProtectLastKnownGood = boolPtr(false) }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Path 1: embedded in a whole Config, exactly as the YAML file
+			// itself goes through.
+			viaConfig := validConfig()
+			tc.mutate(&viaConfig.Retention)
+			configErr := viaConfig.Validate()
+
+			// Path 2: the standalone, exported entry point issue #111
+			// adds for the CLI/UI.
+			viaStandalone := validConfig().Retention
+			tc.mutate(&viaStandalone)
+			standaloneErr := ValidateRetention(&viaStandalone)
+
+			if (configErr == nil) != (standaloneErr == nil) {
+				t.Fatalf("cfg.Validate() err=%v, ValidateRetention() err=%v: presence of an error disagrees", configErr, standaloneErr)
+			}
+
+			// Retention-specific problems are a substring of cfg.Validate's
+			// aggregate ValidationError text; ValidateRetention's own error
+			// (when there is exactly one problem, which every case above
+			// produces) must be the identical sentence, not a rephrasing.
+			if standaloneErr != nil && !strings.Contains(errText(configErr), errText(standaloneErr)) {
+				t.Fatalf("error text disagrees:\n  cfg.Validate():      %s\n  ValidateRetention():  %s", errText(configErr), errText(standaloneErr))
+			}
+
+			if !retentionEqual(viaConfig.Retention, viaStandalone) {
+				t.Fatalf("resolved retention disagrees:\n  cfg.Validate():      %s\n  ValidateRetention(): %s", retentionString(viaConfig.Retention), retentionString(viaStandalone))
+			}
+		})
+	}
 }
 
 // --- stale_after: the other case the task calls out ---
