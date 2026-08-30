@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { BackupsPage } from "@shared/pages/BackupsPage";
 import { ApiProvider } from "@shared/api/ApiContext";
@@ -97,5 +97,51 @@ describe("backups page loading vs. empty", () => {
 
     act(() => resolveArtifacts([]));
     await screen.findByText("No backups yet");
+  });
+});
+
+// Mandatory review on #144: the filter dropdown re-fetches via
+// `useAsync(..., [api, setFilter])`, and useAsync never resets `data` back
+// to null on reload — only `loading`/`error`. Without also gating on
+// `artifacts.loading`, the previous filter's rows stayed on screen, fully
+// clickable, for the whole duration of the new filter's fetch. Reachable on
+// every ordinary filter change.
+describe("backups page filter change mid-flight", () => {
+  afterEach(() => {
+    resetGraphForTests();
+  });
+
+  it("does not show or allow clicking the previous filter's rows while the new filter's fetch is in flight", async () => {
+    const api = createMockApi();
+    const allSets = await createMockApi().listSets();
+    const allArtifacts = await createMockApi().listArtifacts();
+    seedSets(allSets);
+
+    const resolvers: Array<(value: BackupArtifact[]) => void> = [];
+    vi.spyOn(api, "listArtifacts").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    renderBackups(api);
+
+    act(() => resolvers[0](allArtifacts));
+    const target = allArtifacts[0];
+    await screen.findByText(target.filename);
+
+    const select = await screen.findByLabelText("Filter by backup set");
+    fireEvent.change(select, { target: { value: target.setId } });
+
+    // The refetch triggered by the filter change is in flight: the
+    // previous filter's row must not still be on screen (and therefore not
+    // clickable through to the wrong artifact).
+    expect(screen.queryByText(target.filename)).toBeNull();
+
+    act(() =>
+      resolvers[1](allArtifacts.filter((a) => a.setId === target.setId))
+    );
+    await screen.findByText(target.filename);
   });
 });

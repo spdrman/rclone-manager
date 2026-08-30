@@ -67,8 +67,15 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
         nothing here until loading actually finishes also keeps the table
         (with its header row) and its data rows appearing atomically,
         instead of a header-only table flashing on screen first.
+
+        Also gate on `artifacts.loading`, not only `!artifacts.data`
+        (mandatory review on #144): useAsync resets loading/error on every
+        reload triggered by the filter dropdown changing, but never resets
+        data back to null, so without this the table kept showing the
+        PREVIOUS filter's rows — fully clickable, navigating to the wrong
+        artifact — until the new filter's fetch resolved.
       */}
-      {!artifacts.data ? null : rows.length === 0 ? (
+      {!artifacts.data || artifacts.loading ? null : rows.length === 0 ? (
         <EmptyState title="No backups yet">
           This backup set has not completed its first successful ingestion.
         </EmptyState>
