@@ -159,12 +159,12 @@ func TestOnlyCommittedPrecedesRemoteDeletePending(t *testing.T) {
 
 	for _, s := range AllStates {
 		err := Validate(s, RemoteDeletePending)
-		switch {
-		case s == Committed:
+		switch s {
+		case Committed:
 			if err != nil {
 				t.Errorf("Validate(COMMITTED, REMOTE_DELETE_PENDING) = %v, want nil", err)
 			}
-		case s == RemoteDeletePending:
+		case RemoteDeletePending:
 			// The idempotent no-op case, not a "predecessor" in the graph
 			// sense: re-recording the same intent must still succeed.
 			if err != nil {
@@ -191,12 +191,12 @@ func TestOnlyCompletePrecedesQuarantinedLost(t *testing.T) {
 
 	for _, s := range AllStates {
 		err := Validate(s, QuarantinedLost)
-		switch {
-		case s == Complete:
+		switch s {
+		case Complete:
 			if err != nil {
 				t.Errorf("Validate(COMPLETE, QUARANTINED_LOST) = %v, want nil", err)
 			}
-		case s == QuarantinedLost:
+		case QuarantinedLost:
 			if err != nil {
 				t.Errorf("Validate(QUARANTINED_LOST, QUARANTINED_LOST) = %v, want nil (idempotent)", err)
 			}

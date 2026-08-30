@@ -26,7 +26,7 @@ func openTestJournal(t *testing.T) *state.Journal {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j
 }
 
@@ -229,7 +229,7 @@ func TestDeleteRemote_RefusesWhenJournalStateIsWrong(t *testing.T) {
 				Artifact: artifact, AttemptKey: "attempt-1",
 			})
 
-			requireRefusal(t, err, "journal state")
+			_ = requireRefusal(t, err, "journal state")
 			if tp.deleteCalls != 0 {
 				t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 			}
@@ -262,7 +262,7 @@ func TestDeleteRemote_RefusesWhenLocalFileIsMissing(t *testing.T) {
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
 
-	requireRefusal(t, err, "local file")
+	_ = requireRefusal(t, err, "local file")
 	if tp.deleteCalls != 0 {
 		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 	}
@@ -294,7 +294,7 @@ func TestDeleteRemote_RefusesWhenLocalFileIsWrongSize(t *testing.T) {
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
 
-	requireRefusal(t, err, "local file")
+	_ = requireRefusal(t, err, "local file")
 	if tp.deleteCalls != 0 {
 		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 	}
@@ -320,7 +320,7 @@ func TestDeleteRemote_RefusesWhenLocalHashDoesNotMatch(t *testing.T) {
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
 
-	requireRefusal(t, err, "local file")
+	_ = requireRefusal(t, err, "local file")
 	if tp.deleteCalls != 0 {
 		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 	}
@@ -344,7 +344,7 @@ func TestDeleteRemote_RefusesWhenRecordedSizesDisagreeWithEachOther(t *testing.T
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
 
-	requireRefusal(t, err, "local file")
+	_ = requireRefusal(t, err, "local file")
 	if tp.deleteCalls != 0 {
 		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 	}
@@ -487,7 +487,7 @@ func TestDeleteRemote_RefusesWhenRemoteCannotBeStatted(t *testing.T) {
 		Artifact: artifact, AttemptKey: "attempt-1",
 	})
 
-	requireRefusal(t, err, "remote identity")
+	_ = requireRefusal(t, err, "remote identity")
 	if tp.deleteCalls != 0 {
 		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 	}
@@ -517,7 +517,7 @@ func TestDeleteRemote_RefusesFromRemoteDeletePendingWhenIdentityChanged(t *testi
 		Artifact: artifact, AttemptKey: "restart-attempt",
 	})
 
-	requireRefusal(t, err, "remote identity")
+	_ = requireRefusal(t, err, "remote identity")
 	if tp.deleteCalls != 0 {
 		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 	}

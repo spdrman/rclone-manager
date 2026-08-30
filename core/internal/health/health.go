@@ -141,10 +141,7 @@ type ProcessHealth struct {
 
 // NewProcessHealth builds the process-liveness half of an FR-24 report.
 func NewProcessHealth(in ProcessInputs) ProcessHealth {
-	return ProcessHealth{
-		BinaryVersion: in.BinaryVersion,
-		RcloneVersion: in.RcloneVersion,
-	}
+	return ProcessHealth(in)
 }
 
 // BackupSetInputs is what one backup set's BackupSetHealth needs that

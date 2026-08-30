@@ -307,7 +307,7 @@ func TestDeleteRemote_RefusesFromQuarantine(t *testing.T) {
 		_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 			Artifact: artifact, AttemptKey: "attempt-1",
 		})
-		requireRefusal(t, err, "journal state")
+		_ = requireRefusal(t, err, "journal state")
 		if tp.deleteCalls != 0 {
 			t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 		}
@@ -329,7 +329,7 @@ func TestDeleteRemote_RefusesFromQuarantine(t *testing.T) {
 		_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
 			Artifact: artifact, AttemptKey: "attempt-1",
 		})
-		requireRefusal(t, err, "journal state")
+		_ = requireRefusal(t, err, "journal state")
 		if tp.deleteCalls != 0 {
 			t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
 		}

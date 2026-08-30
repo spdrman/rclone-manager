@@ -243,7 +243,7 @@ func openJournalReadOnly(t *testing.T, path string) *state.Journal {
 	if err != nil {
 		t.Fatalf("state.Open(%s): %v", path, err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j
 }
 
@@ -273,7 +273,7 @@ func reconcileLocal(t *testing.T, s localScenario) reconcile.Report {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	tr := classifytransport.Wrap(classifytransport.WithStatHash(rclone.New()))
 	set, err := model.NewBackupSetID(scenarioSource, scenarioSet)
@@ -877,7 +877,7 @@ func TestCrash_RemoteDeletionInFlight_SFTP(t *testing.T) {
 	if len(report.Errors) != 0 {
 		t.Fatalf("Reconcile reported errors: %+v", report.Errors)
 	}
-	j.Close()
+	_ = j.Close()
 
 	// Resume the pipeline for real: a resumed DeleteRemote attempt is
 	// exactly how the real system would proceed from here.
