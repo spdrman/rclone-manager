@@ -77,27 +77,11 @@ func TestEnvBoolOrDefault(t *testing.T) {
 	}
 }
 
-// TestNewHTTPServer_SetsTimeouts is issue #119's review finding that
-// neither http.Server this binary builds set any request-level
-// timeout at all (the standard Go "Slowloris" gap): both cmdServe and
-// cmdServeUI build their *http.Server through this one helper now, so
-// this is the one place that needs to prove the timeouts are actually
-// set.
-func TestNewHTTPServer_SetsTimeouts(t *testing.T) {
-	s := newHTTPServer(":0", http.NotFoundHandler())
-	if s.ReadHeaderTimeout <= 0 {
-		t.Error("ReadHeaderTimeout is not set (Slowloris protection)")
-	}
-	if s.ReadTimeout <= 0 {
-		t.Error("ReadTimeout is not set")
-	}
-	if s.WriteTimeout <= 0 {
-		t.Error("WriteTimeout is not set")
-	}
-	if s.IdleTimeout <= 0 {
-		t.Error("IdleTimeout is not set")
-	}
-}
+// issue #119's review finding that neither http.Server this binary built
+// set any request-level timeout at all (the standard Go "Slowloris" gap)
+// is now proven at its source: apps/common/webhost/serve's own
+// TestNewHTTPServer_SetsTimeouts, since serve.NewHTTPServer is what both
+// cmdServe and cmdServeUI build their *http.Server through (issue #129).
 
 // TestCmdServe_AcceptsTrustForwardedHeadersAndPublicBaseURLFlags proves
 // both new flags are actually registered on serve's own flag set: the

@@ -109,7 +109,7 @@ func correlationID() string {
 // it back. This is easy to miss (nothing here fails to compile if you
 // don't), and it's the first thing every future consumer of this package
 // - the reusable auth for every provider besides UGOS - needs to get
-// right that a type signature alone can't enforce. apps/generic/server.go's
+// right that a type signature alone can't enforce. apps/common/webhost/serve's
 // NewEngine/NewUI (both wrap their ENTIRE composed mux, auth routes
 // included) are the reference example to copy, not routes-only wrapping.
 func (s *Service) Handler() http.Handler {

@@ -290,12 +290,17 @@ func TestEngine_ServesNoStaticUI(t *testing.T) {
 	}
 }
 
-// TestEngine_NoAuthRoutesMeansNoAuthEndpoint proves AuthRoutes is truly
-// optional: a provider with a native session Authenticator and no
-// login/enroll/logout HTTP surface of its own gets no /api/v1/auth/*
-// route registered at all, rather than NewEngine panicking on a nil
-// http.Handler.
-func TestEngine_NoAuthRoutesMeansNoAuthEndpoint(t *testing.T) {
+// TestEngine_NoAuthRoutesMeansNoUnauthenticatedAuthEndpoint proves
+// AuthRoutes is truly optional, and that leaving it nil never opens an
+// unauthenticated hole: a provider with a native session Authenticator
+// and no login/enroll/logout HTTP surface of its own gets no
+// /api/v1/auth/* route mounted at all - NewEngine doesn't panic on a nil
+// http.Handler, and the request instead falls through to
+// apps/common/webhost's own catch-all /api/v1/ registration, which
+// requires authentication for everything under it. The fail-closed
+// result is a 401, not a distinguishing 404 that would leak whether an
+// auth endpoint exists.
+func TestEngine_NoAuthRoutesMeansNoUnauthenticatedAuthEndpoint(t *testing.T) {
 	backend, cleanup, err := service.Open(context.Background(), writeTestConfig(t))
 	if err != nil {
 		t.Fatalf("service.Open: %v", err)
@@ -323,8 +328,8 @@ func TestEngine_NoAuthRoutesMeansNoAuthEndpoint(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("GET /api/v1/auth/login with AuthRoutes unset status = %d, want %d (no route registered)", resp.StatusCode, http.StatusNotFound)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/auth/login with AuthRoutes unset status = %d, want %d (fail closed, not exposed via a distinguishing 404)", resp.StatusCode, http.StatusUnauthorized)
 	}
 }
 

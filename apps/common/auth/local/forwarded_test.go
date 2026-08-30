@@ -34,7 +34,7 @@ func TestRequestIsSecure_PlaintextWithoutTrustIsNeverSecure(t *testing.T) {
 // review's central regression test for finding 4 (the Secure cookie flag
 // can never be true behind the two-container split): with trust enabled,
 // a plaintext request whose X-Forwarded-Proto says "https" (exactly what
-// apps/generic/server.NewUI's reverse proxy sends, derived from the
+// apps/common/webhost/serve.NewUI's reverse proxy sends, derived from the
 // REAL browser<->web-ui connection, never from anything the browser
 // itself sent - see ProxyRequest.SetXForwarded) must be treated as
 // secure.

@@ -112,9 +112,9 @@ func (r *RateLimiter) sweepExpiredLocked(cutoff time.Time) {
 // When trustForwarded is true, this instead reads the first entry of
 // X-Forwarded-For, falling back to RemoteAddr if that header is absent.
 // This is the fix for the two-container split's rate-limit collapse
-// (issue #119's review): apps/generic/server.NewEngine's HTTP surface is,
+// (issue #119's review): apps/common/webhost/serve.NewEngine's HTTP surface is,
 // in the shipped topology, reachable ONLY from
-// apps/generic/server.NewUI's reverse proxy, over a Docker network
+// apps/common/webhost/serve.NewUI's reverse proxy, over a Docker network
 // nothing else can join - every request this Service's handler sees
 // therefore carries the proxy's own container address as RemoteAddr
 // regardless of which real external client made it, which collapsed

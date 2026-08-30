@@ -19,7 +19,7 @@ import (
 //
 // This package only ever verifies, never issues: the cookie itself is set
 // by whichever EnsureCookie/EnsureCSRFCookie call wraps the outermost
-// handler for a given deployment (apps/generic/server.go does this, for
+// handler for a given deployment (apps/common/webhost/serve does this, for
 // both NewEngine and NewUI, using apps/common/auth/local's own
 // EnsureCSRFCookie - this package doesn't need its own issuance path as
 // long as SOME caller upstream of it guarantees one).

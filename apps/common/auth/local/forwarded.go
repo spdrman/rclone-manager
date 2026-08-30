@@ -10,7 +10,7 @@ import (
 // ORIGINAL client/hop's own value, since net/http/httputil.ReverseProxy
 // (and any further proxy in a longer chain) appends its own hop rather
 // than replacing what came before (see ProxyRequest.SetXForwarded's own
-// doc). apps/generic/server.NewUI's reverse proxy is deliberately built
+// doc). apps/common/webhost/serve.NewUI's reverse proxy is deliberately built
 // to guarantee there is only ever one hop's worth of value here in this
 // project's own shipped topology (it deletes any X-Forwarded-For a client
 // sent it before recomputing its own), but this still reads the FIRST
@@ -40,7 +40,7 @@ func firstForwardedValue(v string) string {
 // because, in the ONE deployment shape that ever sets
 // Config.TrustForwardedHeaders (container/compose.yaml's two-container
 // split), network isolation guarantees the ONLY thing that can ever be
-// directly connected to this listener is apps/generic/server.NewUI's own
+// directly connected to this listener is apps/common/webhost/serve.NewUI's own
 // reverse proxy - which the same compose file gives no other peer any way
 // to route around - and that proxy always sets this header itself,
 // derived from ITS OWN real connection to the actual browser, never
