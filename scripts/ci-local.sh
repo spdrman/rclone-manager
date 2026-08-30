@@ -116,6 +116,9 @@ if [ -d ui/shared ]; then
     echo "==> ui/shared typecheck every provider"
     (cd ui/shared && npm run --silent typecheck:providers)
 
+    echo "==> ui/shared eslint"
+    (cd ui/shared && npm run --silent eslint)
+
     echo "==> ui/shared tests"
     (cd ui/shared && npm test --silent)
 
@@ -128,6 +131,12 @@ fi
 
 if [ "$FAST" != "1" ] && [ -d apps/common/tests ]; then
   if [ -d apps/common/tests/node_modules ]; then
+    echo "==> apps/common/tests typecheck"
+    (cd apps/common/tests && npm run --silent lint)
+
+    echo "==> apps/common/tests eslint"
+    (cd apps/common/tests && npm run --silent eslint)
+
     echo "==> cross-provider conformance suite (apps/common/tests)"
     (cd apps/common/tests && npm test --silent)
   else

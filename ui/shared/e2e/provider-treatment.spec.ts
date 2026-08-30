@@ -55,7 +55,7 @@ test.describe("provider: " + PLATFORM, () => {
 
   test("draws window chrome only when the platform is embedded", async ({ page }) => {
     await page.goto("/");
-    const titlebar = page.getByText(new RegExp("Backup Manager .* " + expected.name.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")));
+    const titlebar = page.getByText(new RegExp("Backup Manager .* " + expected.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     if (expected.chrome) {
       await expect(titlebar.first()).toBeVisible();
     } else {

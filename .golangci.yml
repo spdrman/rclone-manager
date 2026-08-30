@@ -51,3 +51,11 @@ linters:
         linters:
           - staticcheck
         text: "SA5002"
+      # webui.go's package doc discusses the go:embed directive in prose
+      # ("go:embed cannot reach outside its own package's module tree"),
+      # it isn't an attempted directive with a stray space before it —
+      # staticcheck can't tell the difference from the text alone.
+      - path: webui/webui.go
+        linters:
+          - staticcheck
+        text: "SA9009"

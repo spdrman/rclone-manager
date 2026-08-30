@@ -232,7 +232,7 @@ func cmdServe(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	defer cleanup()
+	defer func() { _ = cleanup() }()
 
 	authSvc, err := local.New(local.Config{
 		StorePath:             *authStorePath,
