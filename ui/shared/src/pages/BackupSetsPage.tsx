@@ -1,7 +1,8 @@
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
 import type { AsyncState } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
@@ -16,7 +17,10 @@ export function BackupSetsPage({
 }) {
   const api = useApi();
   const navigate = useNavigate();
-  const operations = useAsync(() => api.listOperations(), [api]);
+  // Reads the same shared node DashboardPage does (#95) — previously this
+  // page ran its own independent listOperations() poll, so the two could
+  // disagree about what was currently running for a given set.
+  const operations = useCausl(operationsNode);
 
   if (sets.error) return <ErrorState {...sets.error} onRetry={sets.reload} />;
 
@@ -67,6 +71,20 @@ export function BackupSetsPage({
         }
       />
 
+      {/* operations.data is null until the first fetch resolves — that is
+          "not known yet", not "nothing running for any set", so it must
+          not be indistinguishable from a genuinely idle card below
+          (mandatory review, PR #143). A failed fetch gets its own small
+          inline notice here rather than a full-page ErrorState, since
+          operations is secondary to sets on this page (sets.error owns
+          that treatment via the early return above). */}
+      {operations.error ? (
+        <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+          Live operation status is unavailable ({operations.error.message}) — current-operation
+          badges below may be stale.
+        </div>
+      ) : null}
+
       <div
         style={{
           display: "grid",
@@ -76,11 +94,16 @@ export function BackupSetsPage({
       >
         {data.map((set) => {
           const op = operations.data?.find((o) => o.setId === set.id);
+          const currentOperation = op
+            ? op.label.toLowerCase() + " " + op.percent + "%"
+            : operations.data === null
+              ? "checking…"
+              : undefined;
           return (
             <BackupSetCard
               key={set.id}
               set={set}
-              currentOperation={op ? op.label.toLowerCase() + " " + op.percent + "%" : undefined}
+              currentOperation={currentOperation}
               onOpen={() => navigate("/sets/" + set.id)}
               onRun={() => api.runSet(set.id).then(sets.reload)}
               onTest={() => api.testConnection(set.id)}

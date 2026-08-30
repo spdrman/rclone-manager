@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { InputNode } from "@causlts/core";
 import { BackupManagerError } from "@shared/api/contracts";
 import type { ApiError } from "@shared/api/contracts";
@@ -96,5 +96,14 @@ export function useResource<T>(
     reload();
   }, [reload]);
 
-  return { ...state, reload };
+  // `state` (useCausl) and `reload` (useCallback above) are both already
+  // referentially stable when nothing changed — useCausl caches its read
+  // by graph.now (see useCausl.ts), and reload's own deps (node, run) only
+  // change when the caller's `deps` array does. Without this useMemo,
+  // though, `{ ...state, reload }` was a fresh object literal on every
+  // call regardless, so a caller like App.tsx's `reloadAll` — a
+  // useCallback keyed on health/sets/operations — churned identity on
+  // every render, tearing down and rebuilding usePolling's setInterval
+  // instead of letting it run for a full 30s (mandatory review, PR #143).
+  return useMemo(() => ({ ...state, reload }), [state, reload]);
 }

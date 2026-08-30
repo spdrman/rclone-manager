@@ -1,5 +1,5 @@
 import type { BackupArtifact, BackupSet } from "@shared/types/backup";
-import type { SystemHealth, VersionInfo } from "@shared/types/operation";
+import type { Operation, SystemHealth, VersionInfo } from "@shared/types/operation";
 import { graph } from "./graph";
 import { createResourceNode } from "./resource";
 
@@ -14,6 +14,18 @@ export const healthNode = createResourceNode<SystemHealth>("app.health");
 export const versionNode = createResourceNode<VersionInfo>("app.version");
 export const setsNode = createResourceNode<BackupSet[]>("app.sets");
 export const quarantineNode = createResourceNode<BackupArtifact[]>("app.quarantine");
+
+/**
+ * B2.1 (#95) — the durable-operation-polling equivalent of the four nodes
+ * above. `DashboardPage` and `BackupSetsPage` (#97) each used to run their
+ * own `useAsync(() => api.listOperations())`, so the two could disagree
+ * with each other and neither updated without its own re-fetch. `App.tsx`
+ * is this node's one fetch owner (`useResource`, folded into the existing
+ * 30s `reloadAll` poll, same as healthNode/setsNode); every page that
+ * needs live operation progress reads this node directly via `useCausl`,
+ * exactly like quarantineNode is fetched once and meant to be read
+ * directly rather than re-fetched per page. */
+export const operationsNode = createResourceNode<Operation[]>("app.operations");
 
 export interface AppCounts {
   sets: number | undefined;
