@@ -85,11 +85,27 @@ class DeploymentError(Exception):
     is caught."""
 
 
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    """Combines default-value display (every flag's help text already
+    shows its own default) with preserved line breaks for description/
+    epilog text (RawDescriptionHelpFormatter) - the usage example in
+    epilog below needs its own line breaks kept exactly as written,
+    which ArgumentDefaultsHelpFormatter alone would rewrap into a single
+    paragraph."""
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="deploy_generic.py",
         description="Deploy the generic backup-manager Docker app (issue #82/B4.1).",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=_HelpFormatter,
+        epilog=(
+            "example:\n"
+            "  python3 scripts/deploy/deploy_generic.py \\\n"
+            "      --ssh-key /path/to/id_ed25519 --known-hosts /path/to/known_hosts \\\n"
+            "      --host sftp.example.com --user backupuser --remote-path /uploads \\\n"
+            "      --state-dir /srv/backup-manager/state --backup-dir /srv/backup-manager/backups\n"
+        ),
     )
 
     key_group = parser.add_argument_group("SSH credentials (required)")
@@ -115,10 +131,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                                help="Glob of filenames to include (repeatable). Default: '*'.")
 
     set_group = parser.add_argument_group("Backup set identity")
-    set_group.add_argument("--source-id", default="production")
-    set_group.add_argument("--backup-set-id", default="primary")
-    set_group.add_argument("--stale-after", default="24h")
-    set_group.add_argument("--poll-interval", default="1h")
+    set_group.add_argument("--source-id", default="production",
+                            help="Config-level source id this backup set belongs to (config.yaml's sources[].id).")
+    set_group.add_argument("--backup-set-id", default="primary",
+                            help="This backup set's own id within --source-id (config.yaml's backup_sets[].id).")
+    set_group.add_argument("--stale-after", default="24h",
+                            help="Duration (e.g. 24h) after which a backup set with no successful cycle is reported STALE.")
+    set_group.add_argument("--poll-interval", default="1h",
+                            help="Duration (e.g. 1h) between scheduled run_cycle passes (config.yaml's top-level poll_interval).")
 
     paths_group = parser.add_argument_group("Host paths")
     paths_group.add_argument(
@@ -130,11 +150,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     paths_group.add_argument("--backup-dir", required=True, help="Host directory completed artifacts land in.")
 
     deploy_group = parser.add_argument_group("Deployment")
-    deploy_group.add_argument("--listen-port", default=DEFAULT_LISTEN_PORT)
-    deploy_group.add_argument("--puid", default=DEFAULT_PUID)
-    deploy_group.add_argument("--pgid", default=DEFAULT_PGID)
-    deploy_group.add_argument("--version", default="dev")
-    deploy_group.add_argument("--commit", default="none")
+    deploy_group.add_argument("--listen-port", default=DEFAULT_LISTEN_PORT,
+                               help="Host port web-ui's HTTP listener is published on (container/.env.example's own LISTEN_PORT).")
+    deploy_group.add_argument("--puid", default=DEFAULT_PUID,
+                               help="Host uid the containers run as - must already own --state-dir/--backup-dir.")
+    deploy_group.add_argument("--pgid", default=DEFAULT_PGID,
+                               help="Host gid the containers run as - must already own --state-dir/--backup-dir.")
+    deploy_group.add_argument("--image-version", default="dev",
+                               help="Build stamp baked into the image via container/Dockerfile's VERSION build arg "
+                                    "(not this script's own version - deploy_generic.py has none to report).")
+    deploy_group.add_argument("--image-commit", default="none",
+                               help="Build stamp baked into the image via container/Dockerfile's COMMIT build arg "
+                                    "(not this script's own commit - deploy_generic.py has none to report).")
     deploy_group.add_argument(
         "--project-name",
         default="backup-manager",
@@ -260,8 +287,8 @@ def render_env_file(args: argparse.Namespace) -> str:
         f"SSH_KEY_FILE={args.ssh_key}",
         f"KNOWN_HOSTS_FILE={args.known_hosts}",
         f"LISTEN_PORT={args.listen_port}",
-        f"VERSION={args.version}",
-        f"COMMIT={args.commit}",
+        f"VERSION={args.image_version}",
+        f"COMMIT={args.image_commit}",
     ]
     return "\n".join(lines) + "\n"
 
