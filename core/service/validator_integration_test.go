@@ -22,7 +22,7 @@ import (
 // API/UI validator wiring, not just at internal/lifecycle.Verify
 // directly." Both tests below build their backup set's
 // config.Validation.Command by calling this package's own
-// ResolveValidator (validator.go), the new API/UI wiring, and then drive
+// resolveValidator (validator.go), the new API/UI wiring, and then drive
 // the resulting config through this package's real public entry point
 // (SubmitRunCycle -> internal/app.Service.RunCycle -> the full FR-11
 // pipeline), never a hand-built lifecycle.VerifyParams.
@@ -113,13 +113,13 @@ var wp32Epoch = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 
 // trailerMarkerBackupSet builds a backup set whose FR-13 application
 // validator is the "trailer-marker" registered validator, resolved
-// through this package's own ResolveValidator: nothing in this test file
+// through this package's own resolveValidator: nothing in this test file
 // ever builds a config.Command by hand.
 func trailerMarkerBackupSet(t *testing.T, localDir string) (config.Source, config.BackupSet) {
 	t.Helper()
-	cmd, err := ResolveValidator(ValidatorTrailerMarker)
+	cmd, err := resolveValidator(ValidatorTrailerMarker)
 	if err != nil {
-		t.Fatalf("ResolveValidator: %v", err)
+		t.Fatalf("resolveValidator: %v", err)
 	}
 	setID, err := model.NewBackupSetID("production", "postgres-primary")
 	if err != nil {

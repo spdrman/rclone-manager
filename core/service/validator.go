@@ -9,15 +9,38 @@
 // second validation engine. What it adds is the one thing that path never
 // had to have and the API/UI layer must never be handed anyway: a way to
 // select a validator by a fixed, code-defined identifier instead of by
-// naming an executable at all. ResolveValidator is the only function in
+// naming an executable at all. resolveValidator is the only function in
 // this package that turns a ValidatorID into an internal/config.Command,
 // and it can only ever return one of the catalog entries this file itself
 // defines, never anything built from caller input. A caller that hands it
 // a raw path, or any other string outside RegisteredValidators, gets
-// ErrUnregisteredValidator, exactly like a typo would: this package does
+// errUnregisteredValidator, exactly like a typo would: this package does
 // not special-case "that looks like a path" detection, because it does
 // not need to -- an unrecognized identifier is refused structurally,
 // regardless of what it happens to look like.
+//
+// # What crosses this package's boundary, and what does not
+//
+// resolveValidator is deliberately unexported. This package's own doc
+// promises it exposes "only plain, provider-agnostic types and functions,
+// never a config.Config, a state.Record, or anything else an internal
+// package owns", and a config.Command is exactly that. Exporting it also
+// made it useless to the layer it exists for: apps/common/webhost is a
+// separate module and cannot name config.Command, so it could not have
+// stored the return value, put it in a request struct, or passed it
+// anywhere typed even if it wanted to.
+//
+// So ValidatorID and RegisteredValidators are the whole exported surface
+// for now: an id and the list of ids, both plain strings. When validator
+// selection is actually wired (a ValidatorID field on
+// CreateBackupSetRequest, resolved inside CreateBackupSet, and a read-only
+// route serving the list to the wizard's step 5), the resolution stays on
+// this side of the boundary and only the id crosses it. Until then nothing
+// in this repository selects a validator at all, so the "the API/UI layer
+// can only ever select a validator this way" claim this catalog was
+// written for is currently satisfied by the feature not existing, not by
+// anything enforcing it, and issue #99's "required validation failure
+// prevents remote deletion" box is not ticked on the strength of it.
 package service
 
 import (
@@ -59,30 +82,33 @@ var catalogScripts = map[ValidatorID]string{
 // runs is something a caller outside this package gets to choose.
 const validatorTimeout = 30 * time.Second
 
-// ErrUnregisteredValidator is returned by ResolveValidator for any id not
+// errUnregisteredValidator is returned by resolveValidator for any id not
 // in RegisteredValidators, including a raw executable path: see this
 // file's package doc for why this package does not attempt to detect a
 // path shape specifically.
-var ErrUnregisteredValidator = errors.New("service: not a registered validator identifier")
+//
+// Unexported alongside resolveValidator: an exported sentinel for an error
+// no caller outside this package can provoke is API that does nothing.
+var errUnregisteredValidator = errors.New("service: not a registered validator identifier")
 
-// RegisteredValidators lists every ValidatorID ResolveValidator currently
+// RegisteredValidators lists every ValidatorID resolveValidator currently
 // accepts, in a fixed, deterministic order, for a caller (a future
 // backup-set-creation UI) that wants to offer this as a picklist.
 func RegisteredValidators() []ValidatorID {
 	return []ValidatorID{ValidatorTrailerMarker}
 }
 
-// ResolveValidator maps id onto the internal/config.Command FR-13's
+// resolveValidator maps id onto the internal/config.Command FR-13's
 // application-validator step (internal/lifecycle/verify.go's
 // runValidator) actually runs. The returned Command flows into exactly
 // the same config.Validation.Command field, and exactly the same
 // runValidator, the trusted CLI/YAML config path already uses: this
 // function only ever narrows what a caller may put there, it never adds a
 // second way of running one.
-func ResolveValidator(id ValidatorID) (config.Command, error) {
+func resolveValidator(id ValidatorID) (config.Command, error) {
 	scriptName, ok := catalogScripts[id]
 	if !ok {
-		return config.Command{}, fmt.Errorf("%w: %q", ErrUnregisteredValidator, id)
+		return config.Command{}, fmt.Errorf("%w: %q", errUnregisteredValidator, id)
 	}
 
 	dir, err := materializedScriptDir()
@@ -103,7 +129,7 @@ var (
 )
 
 // materializedScriptDir writes every embedded validator script out to a
-// fixed, process-lifetime temp directory, once, so ResolveValidator can
+// fixed, process-lifetime temp directory, once, so resolveValidator can
 // hand out a stable absolute path config.Validation.Command.Executable can
 // run directly (internal/lifecycle/verify.go's runValidator invokes
 // Executable as a plain argv[0], never through a shell, so it has to be a

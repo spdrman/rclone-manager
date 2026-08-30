@@ -167,10 +167,11 @@ func (r DeleteRemoteRequest) key(tag string) string {
 type RemoteDeleteRefusalError struct {
 	Artifact model.ArtifactID
 
-	// Check names which FR-15 revalidation check refused the delete:
-	// "journal state", "local file", "remote identity", or "remote
-	// delete" (the transport call itself failed after every check
-	// upstream of it passed).
+	// Check names which revalidation check refused the delete:
+	// "journal state", "local file", "remote identity" or "remote delete"
+	// (FR-15's own four, the last being the transport call itself failing
+	// after every check upstream of it passed), plus WP3.2's two:
+	// "stable completion safety delay" and "unknown completion strategy".
 	Check string
 
 	// Reason is a short, human-readable explanation suitable for a log
