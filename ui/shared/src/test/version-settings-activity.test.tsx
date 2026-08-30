@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { ActivityPage } from "@shared/pages/ActivityPage";
@@ -79,6 +79,11 @@ function SettingsHarness() {
  *  just ordinary network timing). */
 describe("SettingsPage reads the shared version node", () => {
   afterEach(() => {
+    // Unmount BEFORE resetting the graph (PlatformContext.test.tsx's own
+    // fix for this): resetting versionNode while SettingsPage is still
+    // mounted commits it back to its initial state mid-render, which is a
+    // test-isolation artifact, not the thing under test.
+    cleanup();
     resetGraphForTests();
   });
 
@@ -143,7 +148,10 @@ describe("SettingsPage reads the shared version node", () => {
     // one without the other, because both read versionNode, not their own
     // fetch of it.
     expect(screen.getByTestId("header-readonly-probe").textContent).toBe("true");
-    expect(screen.getByText("1.2.0")).toBeTruthy();
+    // INCOMPATIBLE_VERSION deliberately gives service and core the same
+    // value (mirrors mock.ts's own version-mismatch fixture), so both the
+    // "Service version" and "Core version" rows legitimately show it.
+    expect(screen.getAllByText("1.2.0").length).toBeGreaterThan(0);
     expect(getVersion).not.toHaveBeenCalled();
   });
 
@@ -200,6 +208,11 @@ describe("SettingsPage reads the shared version node", () => {
  *  populate a dropdown. */
 describe("ActivityPage reads the shared sets node", () => {
   afterEach(() => {
+    // Unmount BEFORE resetting the graph (PlatformContext.test.tsx's own
+    // fix for this): resetting versionNode while SettingsPage is still
+    // mounted commits it back to its initial state mid-render, which is a
+    // test-isolation artifact, not the thing under test.
+    cleanup();
     resetGraphForTests();
   });
 

@@ -1,18 +1,22 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { notificationCopy } from "@shared/platform/capabilities";
+import { useCausl } from "@shared/state/graph";
+import { versionNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
-  const api = useApi();
   const navigate = useNavigate();
   const { bridge, capabilityCopy } = usePlatform();
-  const version = useAsync(() => api.getVersion(), [api]);
+  // Reads the same shared node App.tsx already fetches once for its own
+  // readOnly derivation (#103), instead of running a second independent
+  // getVersion() here — the two could otherwise briefly disagree about
+  // which version is current.
+  const version = useCausl(versionNode);
 
   return (
     <>
@@ -144,7 +148,16 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                   <Row label="Architecture" value={version.data.architecture} />
                   <Row label="Build commit" value={version.data.buildCommit} />
                 </dl>
-              ) : null}
+              ) : version.error ? (
+                // versionNode's one fetch is owned by App.tsx, not this page,
+                // so there is nothing here to retry (mirrors BackupSetsPage's
+                // operations.error inline notice, same reasoning).
+                <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                  {"Version information is unavailable (" + version.error.message + ") — details below may be out of date."}
+                </div>
+              ) : (
+                <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Loading version information…</p>
+              )}
             </div>
           </section>
         </div>
