@@ -83,7 +83,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/system/version", h.systemVersion)
 		r.Get("/system/capabilities", h.systemCapabilities)
 
-		r.With(requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
+		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
 		r.Get("/operations/{id}", h.getOperation)
 	})
 

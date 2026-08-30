@@ -1,6 +1,8 @@
 package webhost
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 )
@@ -23,7 +25,25 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	var resp errorResponse
 	resp.Error.Code = code
 	resp.Error.Message = message
+	// ui/shared/src/api/client.ts reads this off every non-2xx response's
+	// X-Correlation-Id header, falling back to "unavailable" if absent -
+	// which, before this, it always was for every route in this package.
+	w.Header().Set("X-Correlation-Id", correlationID())
 	writeJSON(w, status, resp)
+}
+
+// correlationID is a short, opaque, per-response identifier an operator
+// could quote when asking for help; it carries no session or credential
+// material. Mirrors apps/common/auth/local's own correlationID
+// (handler.go) - not shared as a common helper, since generating an
+// opaque diagnostic string has no cross-package consistency requirement
+// the way the CSRF check (apps/common/csrf) does.
+func correlationID() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "cid_unavailable"
+	}
+	return "cid_" + base64.RawURLEncoding.EncodeToString(b)
 }
 
 // configRevisionStaleResponse extends errorResponse with the current
@@ -51,6 +71,7 @@ func writeConfigRevisionStale(w http.ResponseWriter, message, current string) {
 	resp.Error.Code = "CONFIG_REVISION_STALE"
 	resp.Error.Message = message
 	resp.ConfigRevision = current
+	w.Header().Set("X-Correlation-Id", correlationID())
 	writeJSON(w, http.StatusConflict, resp)
 }
 

@@ -4105,6 +4105,15 @@ Include:
 
 ## Work Package 4.3 — TrueNAS + Unraid + OpenMediaVault Container Provider Packages
 
+> If a packaging profile here runs `/backup-manager-web serve-ui` as its own
+> container (the same two-container split B4.1 shipped for the generic Docker
+> app), remember to override the canonical image's own baked-in `HEALTHCHECK`
+> independently for that container: it runs `backup-manager status`, which
+> needs a config file and a state database `serve-ui` never has. See
+> `container/compose.yaml`'s `web-ui` service and docs/deployment.md's
+> "Healthchecks differ per container" for the working example
+> (`/backup-manager-web healthcheck` instead).
+
 ### TrueNAS
 
 Implement under `apps/truenas/`:

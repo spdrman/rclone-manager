@@ -1,29 +1,40 @@
 # syntax=docker/dockerfile:1.7
 
-# backup-manager container image (A3.9).
+# backup-manager container image (A3.9, extended by issue #82/B4.1).
 #
-# Two stages: a builder that compiles the single Go binary (manager logic
-# plus the embedded rclone packages, see core/internal/transport/rclone),
-# and a distroless runtime that carries nothing but that binary and the TLS
-# root store. There is no `rclone` executable anywhere in this image: rclone
-# is consumed as a Go module (core/go.mod pins github.com/rclone/rclone),
+# Four stages:
+#   1. `build`          - the provider-neutral core binary (manager logic
+#                          plus the embedded rclone packages, see
+#                          core/internal/transport/rclone). Unchanged by
+#                          #82: everything this stage needs still comes
+#                          from core/, never from apps/ or ui/.
+#   2. `frontend-build` - ui/shared's static bundle (`npm run build`).
+#   3. `build-web`      - the generic Web host binary (apps/generic),
+#                          which imports core/service + apps/common and
+#                          embeds stage 2's output via go:embed
+#                          (apps/generic/webui).
+#   4. (untagged)       - the distroless runtime, carrying both binaries
+#                          and nothing else.
+#
+# There is no `rclone` executable anywhere in this image: rclone is
+# consumed as a Go module (core/go.mod pins github.com/rclone/rclone),
 # imported as packages, and compiled straight into /backup-manager. See
 # docs/deployment.md for how that claim is verified against the built
 # image, rather than just asserted here.
 #
-# The engine lives in its own core/ Go module (docs/EPIC-B-multi-nas.md
-# §7 — B1.1/#106 drew this boundary): everything this build needs comes
-# from core/, never from apps/ or ui/.
-#
-# cmd/backup-manager currently only implements a `version` subcommand
-# (execution modes and the rest of the CLI are separate, still-open issues).
-# This image and container/compose.yaml are deliberately packaging ahead of
-# that work: they define the shape a real deployment will run in
-# (volumes, uid/gid, restart policy, health check) without pretending a
-# daemon exists yet. Search this file and container/compose.yaml for
-# "TODO(daemon)" for the two spots that need to change once it does.
+# `/backup-manager` (stage 1) implements every execution mode FR-1/FR-24
+# call for: `run`, `daemon`, `check`, `status`, `sources`, `artifacts`,
+# `fetch`, `retention`, `reconcile`, `validate` and `version`.
+# `/backup-manager-web` (stage 3) adds exactly one more: `serve`, the
+# generic Web host (docs/EPIC-B-multi-nas.md §9.2) - the shared UI, the
+# versioned API, local authentication and the backup scheduler in one
+# process. Two binaries, not one with two names, because apps/generic
+# needs to import apps/common/webhost and apps/common/auth/local, and
+# core/'s own module cannot depend on apps/ in either direction (§7.1) -
+# see apps/generic/cmd/backup-manager-web/main.go's own doc for the full
+# reasoning.
 
-# ---- builder ----------------------------------------------------------
+# ---- core builder ---------------------------------------------------------
 # Pinned by digest, not just tag, so this stage resolves to the exact same
 # toolchain bytes on every rebuild. golang:1.27-bookworm matches this
 # module's `go 1.27.0` directive (go.mod); a mismatched builder would either
@@ -85,9 +96,9 @@ ARG COMMIT=none
 # bit) it can read off a .git directory that may or may not be in the build
 # context; VERSION/COMMIT above are the one deliberate source of that
 # information instead.
-# -ldflags -s -w: drop the symbol table and DWARF info; cmd/backup-manager
-# only exposes `version` today, there is no debugger-driven use case that
-# needs them in the shipped image, and it shrinks the minimal runtime image.
+# -ldflags -s -w: drop the symbol table and DWARF info; there is no
+# debugger-driven use case that needs them in the shipped image, and it
+# shrinks the minimal runtime image.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
@@ -97,38 +108,139 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/backup-manager \
         ./cmd/backup-manager
 
+# ---- frontend builder -------------------------------------------------
+# ui/shared's static bundle (docs/EPIC-B-multi-nas.md §9.2/§11): built
+# once here, embedded into /backup-manager-web below via go:embed
+# (apps/generic/webui). Node/npm are build-time dependencies only -
+# neither ships in the runtime stage.
+#
+# Pinned by digest for the same reproducibility reason as the Go builder
+# above. Not $BUILDPLATFORM-native the way the Go stage is: a Vite build
+# produces the same platform-independent static output (HTML/CSS/JS)
+# regardless of which architecture ran `npm run build`, so there is no
+# cross-compilation concern here to justify pinning a build platform.
+FROM node@sha256:8a34c4ab3ea2c5cd194f07e317b2a8f09461d3c8b05c4e34c8ccd56d56024c4d AS frontend-build
+
+# WORKDIR /src (not /src/ui/shared): ui/shared/vite.config.ts resolves its
+# "@platform-entry" alias, and some of ui/shared's own test files
+# reference a provider bridge directly, as repo-root-relative paths
+# (../../apps/<platform>/frontend/...) - the same relative structure
+# apps/generic's own go.mod replace directives need in the Go builder
+# stage above, for the same underlying reason: something under this repo
+# resolves a sibling directory by relative path, so the build context has
+# to preserve that shape rather than flattening it.
+WORKDIR /src
+
+# Dependency layer first, matching the Go stages' own caching shape.
+COPY ui/shared/package.json ui/shared/package-lock.json ./ui/shared/
+RUN --mount=type=cache,target=/root/.npm \
+    cd ui/shared && npm ci --no-audit --no-fund
+
+COPY ui/shared/ ./ui/shared/
+COPY apps/ ./apps/
+RUN cd ui/shared && npm run build
+
+# ---- generic Web host builder ------------------------------------------
+# apps/generic's own binary (issue #82/B4.1): imports core/service and
+# apps/common (webhost + auth/local), and embeds the frontend stage's
+# dist/ output. Reuses the exact same base image/toolchain settings as
+# the core builder above for the same reproducibility reasons.
+FROM --platform=$BUILDPLATFORM golang@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS build-web
+
+ENV CGO_ENABLED=0 \
+    GOTOOLCHAIN=local \
+    GOFLAGS=-mod=readonly
+
+WORKDIR /src
+
+# apps/generic's go.mod replaces core/ and apps/common/ with relative
+# filesystem paths (../../core, ../common - see apps/generic/go.mod's own
+# comment), so this layout preserves the repo's real relative directory
+# structure under /src, unlike the core-only `build` stage above (which
+# flattens core/ to /src's own root, since it never needs to resolve a
+# sibling module by relative path).
+COPY core/go.mod core/go.sum ./core/
+COPY apps/common/go.mod apps/common/go.sum ./apps/common/
+COPY apps/generic/go.mod apps/generic/go.sum ./apps/generic/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    cd apps/generic && go mod download
+
+COPY core/cmd/ ./core/cmd/
+COPY core/internal/ ./core/internal/
+COPY core/service/ ./core/service/
+COPY core/migrations/ ./core/migrations/
+COPY apps/common/ ./apps/common/
+COPY apps/generic/ ./apps/generic/
+
+# Overwrites apps/generic/webui/dist's checked-in placeholder (see that
+# directory's own doc comment) with the real built frontend, before
+# go:embed ever sees it.
+COPY --from=frontend-build /src/ui/shared/dist/ ./apps/generic/webui/dist/
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+ARG COMMIT=none
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    cd apps/generic && GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+        -trimpath \
+        -buildvcs=false \
+        -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
+        -o /out/backup-manager-web \
+        ./cmd/backup-manager-web
+
 # ---- runtime ------------------------------------------------------------
 # distroless static, nonroot variant: no shell, no package manager, no libc
-# (the binary needs none, see CGO_ENABLED=0 above), and no `rclone` binary
-# on it or on anything the base image could have carried in. Pinned by
-# digest for the same reproducibility reason as the builder. The nonroot
-# variant already runs as uid/gid 65532 by default; container/compose.yaml
-# overrides that at deploy time to match the UGREEN host's actual storage
-# ownership (see "Non-root and the NAS uid/gid" in docs/deployment.md for
-# why that has to be an override rather than a value baked in here).
+# (neither binary needs any, see CGO_ENABLED=0 above), and no `rclone`
+# binary on it or on anything the base image could have carried in. Pinned
+# by digest for the same reproducibility reason as the builders. The
+# nonroot variant already runs as uid/gid 65532 by default;
+# container/compose.yaml overrides that at deploy time to match the
+# UGREEN host's actual storage ownership (see "Non-root and the NAS
+# uid/gid" in docs/deployment.md for why that has to be an override
+# rather than a value baked in here).
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 COPY --from=build /out/backup-manager /backup-manager
+COPY --from=build-web /out/backup-manager-web /backup-manager-web
 
-ENTRYPOINT ["/backup-manager"]
-# TODO(daemon): once `backup-manager run` / `daemon` exist, this is where a
-# real deployment's long-running command goes; today the only subcommand
-# that exists is `version`, so there is nothing to default CMD to that
-# would actually stay up. container/compose.yaml supplies `command:
-# ["version"]` explicitly for the same reason.
+# Documentary only - EXPOSE does not itself publish anything (see
+# container/compose.yaml's own `ports:` for what actually does): this is
+# `/backup-manager-web serve`'s own default --listen port, self-documented
+# on the image for `docker inspect`/`docker port`/tooling. A headless-only
+# deployment that never runs `serve` simply never binds it.
+EXPOSE 8080
 
-# `backup-manager status` (issue #26) doesn't exist yet, so this can't ask
-# "is the service healthy" the way FR-24's health states are meant to be
-# read. It asks the narrower question that's actually answerable today: can
-# the binary still start up and exit 0. That's process liveness, not
-# backup freshness (the failure-safety invariants are explicit that those
-# are not the same fact) — it exists so the container has *a* health check
-# now, not so it substitutes for one.
-#
-# TODO(#26): replace this CMD with `["/backup-manager", "status"]` (or
-# whatever flag makes it exit non-zero on DEGRADED/STALE/FAILING) the day
-# that subcommand ships. Until then, a HEALTHCHECK that always reports
-# healthy would be actively misleading, so this one is left checking the
-# one true thing available: the binary runs.
+# Deliberately NO ENTRYPOINT: this image now ships two binaries, and an
+# ENTRYPOINT is a fixed prefix Docker prepends to whatever `command:` (or
+# `docker run <image> ...`) supplies, so a single ENTRYPOINT could only
+# ever name one of the two - exactly the trap an earlier version of this
+# file fell into (`ENTRYPOINT ["/backup-manager"]` plus `command:
+# ["/backup-manager-web", "serve"]` resolves to running
+# "/backup-manager /backup-manager-web serve", not what anyone intended).
+# Every `command:` in container/compose.yaml and every `docker run`
+# example in docs/deployment.md therefore names its binary explicitly by
+# full path (`/backup-manager-web serve`, `/backup-manager daemon`,
+# `/backup-manager version`, ...). This image's own default CMD stays
+# unset for the same reason: there is no single default that would be
+# right for both binaries, so a bare `docker run <image>` with no command
+# fails immediately with "no command specified" - a loud, safe failure,
+# not a silent no-op or an ambiguous guess.
+
+# `backup-manager status` (issue #26, FR-24) exits 0 only when every
+# configured backup set reports HEALTHY, and non-zero on DEGRADED, STALE or
+# FAILING (see core/cmd/backup-manager/status.go's own doc for the exact
+# contract). This is the real backup-freshness signal FR-24's health states
+# are meant to be read through - not process liveness, which is what the
+# previous `version`-based HEALTHCHECK could only ever answer. Verified
+# directly (see docs/deployment.md and apps/generic/tests/dockercli): a container
+# whose one backup set is DEGRADED now reports Docker health "unhealthy",
+# not "healthy". This runs against the plain `/backup-manager` binary
+# regardless of which command the container's own main process
+# (`/backup-manager-web serve`, or a headless `/backup-manager daemon`) is
+# running: `status` is a fresh, read-only check against the same shared
+# state database file either way.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["/backup-manager", "version"]
+    CMD ["/backup-manager", "status"]

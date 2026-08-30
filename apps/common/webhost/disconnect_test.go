@@ -57,6 +57,7 @@ func TestSubmitOperation_SurvivesClientDisconnect(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "idem-disconnect")
+	attachValidCSRF(req)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {

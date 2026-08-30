@@ -66,6 +66,12 @@ type BackupService struct {
 	revision string
 	logger   *obs.Logger
 
+	// pollInterval is cfg.PollInterval.Duration(), copied out at
+	// construction time so PollInterval() (scheduler.go) can report it
+	// without exposing *config.Config itself, which a caller outside
+	// core/ cannot even name.
+	pollInterval time.Duration
+
 	// ctx/cancel give executeRunCycle a lifetime independent of both
 	// context.Background() and any single request's context: it is
 	// canceled by Close, so a process shutdown can actually ask an
@@ -119,12 +125,13 @@ type BackupService struct {
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &BackupService{
-		inner:    app.New(cfg, journal, tr, logger),
-		journal:  journal,
-		revision: computeConfigRevision(cfg),
-		logger:   logger,
-		ctx:      ctx,
-		cancel:   cancel,
+		inner:        app.New(cfg, journal, tr, logger),
+		journal:      journal,
+		revision:     computeConfigRevision(cfg),
+		logger:       logger,
+		pollInterval: cfg.PollInterval.Duration(),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 
 	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {
