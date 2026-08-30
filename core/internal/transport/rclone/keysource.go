@@ -230,6 +230,39 @@ func validateAndWrapKey(raw []byte) (obs.Secret, error) {
 	return obs.NewSecret(string(raw)), nil
 }
 
+// ValidateImportedPrivateKey checks raw the same way validateAndWrapKey
+// checks a key.env/key.command resolver's output (must parse as an
+// unencrypted SSH private key, never echoed back on failure), and, on
+// success, also reports the key's algorithm and SHA256 fingerprint in
+// the same "SHA256:base64…" form `ssh-keygen -lf` prints and
+// FingerprintDisplay.tsx already renders.
+//
+// This is issue #146 (B2.7)'s SSH-key-import API surface reusing this
+// file's existing validation rather than a second, parallel
+// implementation of "is this an unencrypted SSH private key" at the HTTP
+// layer: core/service calls this directly (core/service is inside
+// core/'s own module tree, same as every other internal/ caller), and
+// never re-derives the parse/fingerprint logic itself.
+//
+// The fingerprint is computed with ssh.ParsePrivateKey rather than the
+// ssh.ParseRawPrivateKey validateAndWrapKey already called, because only
+// the former returns an ssh.Signer with a PublicKey() to fingerprint;
+// both calls succeed or fail together for the same input; this function
+// never wraps or returns anything from a validateAndWrapKey failure.
+func ValidateImportedPrivateKey(raw []byte) (secret obs.Secret, algorithm, fingerprint string, err error) {
+	secret, err = validateAndWrapKey(raw)
+	if err != nil {
+		return obs.Secret{}, "", "", err
+	}
+	signer, parseErr := ssh.ParsePrivateKey(raw)
+	if parseErr != nil {
+		// Same "report the shape of the problem, never the bytes" rule
+		// validateAndWrapKey's own doc states: raw is never included here.
+		return obs.Secret{}, "", "", fmt.Errorf("resolved key material does not parse as a valid SSH private key: %v", parseErr)
+	}
+	return secret, signer.PublicKey().Type(), ssh.FingerprintSHA256(signer.PublicKey()), nil
+}
+
 // zeroBytes overwrites b in place. runtime.KeepAlive after the loop is
 // there so the compiler cannot prove the writes are dead and elide them,
 // which is as far as "zeroed... where Go allows" reaches: Go has no

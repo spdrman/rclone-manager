@@ -1,4 +1,13 @@
-import type { BackupManagerApi, CatalogScanPreview } from "./contracts";
+import type {
+  BackupManagerApi,
+  CatalogScanPreview,
+  ConnectionTestOutcome,
+  ConnectionTestParams,
+  CreateBackupSetRequest,
+  CreatedBackupSet,
+  HostKeyProbeResult,
+  SSHKeyImportResult
+} from "./contracts";
 import { BackupManagerError } from "./contracts";
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type {
@@ -249,6 +258,58 @@ function plan(stale: boolean): RetentionPlan {
 const delay = <T,>(value: T, ms = 180): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
+/** Issue #146 (B2.7): a deterministic in-memory stand-in for the real
+ *  create-backup-set/import/probe/test-connection endpoints, mirroring
+ *  every other resource in this file (listSets/getSet, ...) — nothing
+ *  here talks to a real server, exactly per this file's own module doc.
+ *  mockImportedKeyFingerprint/mockProbedFingerprint are fixed, not
+ *  randomised, so a test asserting on a specific displayed value stays
+ *  deterministic across runs. */
+const mockImportedKeyFingerprint = "SHA256:7pMwK3nRt+Vc9jXe1sHfB0oZaGdQ8yTiKrEuM4x";
+const mockProbedFingerprint = "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM";
+
+function completionMethodFromStrategy(strategy: CreateBackupSetRequest["completionStrategy"]): BackupSet["completionMethod"] {
+  if (strategy === "rename") return "atomic-rename";
+  if (strategy === "stable") return "stable-size";
+  return "completion-marker";
+}
+
+/** Turns a create request into a full BackupSet row (the mock's own
+ *  fixture shape, see types/backup.ts), filling every field a REAL
+ *  freshly-created set has no history for yet with its own honest
+ *  "just created" value (0 retained bytes, no last run, "not-run"
+ *  validation, ...) rather than inventing activity that never
+ *  happened. */
+function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet {
+  const sourceName = req.sourceName ?? "api";
+  return {
+    id: sourceName + "/" + req.name,
+    name: req.name,
+    host: req.host,
+    port: req.port,
+    username: req.user,
+    remoteFolder: req.remotePath,
+    includePatterns: req.include,
+    excludePatterns: [],
+    completionMethod: completionMethodFromStrategy(req.completionStrategy),
+    destination: req.localPath,
+    retention: defaultRetention,
+    validations: ["transfer"],
+    state: "healthy",
+    stateNote: "Created just now; no runs yet.",
+    enabled: !req.disabled,
+    halted: false,
+    newestKnownGoodAt: null,
+    lastRunAt: null,
+    lastValidation: "not-run",
+    expectedIntervalHours: 24,
+    retainedCount: 0,
+    retainedBytes: 0,
+    hostFingerprint: mockProbedFingerprint,
+    fingerprintTrustedAt: new Date().toISOString()
+  };
+}
+
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
   let planIsStale = false;
@@ -291,6 +352,36 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     runSet: () => delay(undefined),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
     setEnabled: () => delay(undefined),
+
+    createBackupSet: (req: CreateBackupSetRequest): Promise<CreatedBackupSet> => {
+      const set = mockBackupSetFromCreateRequest(req);
+      // SETS is declared const, not let: pushing onto it (rather than
+      // reassigning the binding) is what makes a freshly created set
+      // show up in a later listSets() call within the same session,
+      // exactly the "no manual refetch" behaviour appNodes.ts's
+      // setsNode/fetchResource gives the real backend.
+      SETS.push(set);
+      const runImmediately = req.runImmediately && !req.disabled;
+      return delay({
+        id: set.id,
+        sourceName: req.sourceName ?? "api",
+        name: set.name,
+        host: set.host,
+        port: set.port,
+        user: set.username,
+        remotePath: set.remoteFolder,
+        localPath: set.destination,
+        include: set.includePatterns,
+        completionStrategy: req.completionStrategy,
+        disabled: !!req.disabled,
+        operation: runImmediately ? { operationId: "op_mock_" + set.id, status: "completed" } : undefined
+      });
+    },
+    importSSHKey: (): Promise<SSHKeyImportResult> =>
+      delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
+    probeHostKey: (): Promise<HostKeyProbeResult> =>
+      delay({ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint, knownHostsLine: "mock-host.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5mock" }),
+    testCandidateConnection: (_params: ConnectionTestParams): Promise<ConnectionTestOutcome> => delay({ ok: true }),
 
     listArtifacts: (setId) =>
       delay(empty ? [] : ARTIFACTS.filter((a) => !a.quarantine && (!setId || a.setId === setId))),

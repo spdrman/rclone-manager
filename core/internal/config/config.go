@@ -70,12 +70,22 @@ type BackupSet struct {
 	// succeeds.
 	ID model.BackupSetID `yaml:"-"`
 
-	Remote       Remote       `yaml:"remote"`
-	RemotePath   string       `yaml:"remote_path"`
-	LocalPath    string       `yaml:"local_path"`
-	Include      []string     `yaml:"include"`
-	Completion   Completion   `yaml:"completion"`
-	StaleAfter   Duration     `yaml:"stale_after"`
+	Remote     Remote     `yaml:"remote"`
+	RemotePath string     `yaml:"remote_path"`
+	LocalPath  string     `yaml:"local_path"`
+	Include    []string   `yaml:"include"`
+	Completion Completion `yaml:"completion"`
+	StaleAfter Duration   `yaml:"stale_after"`
+
+	// Disabled excludes this backup set from RunCycle (internal/app/
+	// cycle.go) without removing its configuration: FR-7's "disable
+	// source" state-changing-but-non-destructive action (§50), and
+	// issue #146 (B2.7)'s "Save disabled" wizard tier. The zero value
+	// (false) is enabled, so every backup set an operator already has
+	// running today, written before this field existed, keeps running
+	// unchanged after an upgrade.
+	Disabled bool `yaml:"disabled"`
+
 	Validation   Validation   `yaml:"validation"`
 	Revalidation Revalidation `yaml:"revalidation"`
 }
@@ -84,10 +94,10 @@ type BackupSet struct {
 // which of the two backends FR-4 registers is used; the fields that matter
 // depend on which one.
 type Remote struct {
-	Type       string `yaml:"type"` // "local" or "sftp"; see FR-4
-	Host       string `yaml:"host"`
-	Port       int    `yaml:"port"` // 0 means the backend's default port
-	User       string `yaml:"user"`
+	Type string `yaml:"type"` // "local" or "sftp"; see FR-4
+	Host string `yaml:"host"`
+	Port int    `yaml:"port"` // 0 means the backend's default port
+	User string `yaml:"user"`
 
 	// KeyFile is deprecated in favour of Key.File, and still works exactly
 	// as before (#74): docs/ssh-setup.md and docs/deployment.md both

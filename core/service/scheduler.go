@@ -123,5 +123,5 @@ func (b *BackupService) runScheduledCycle(ctx context.Context) {
 		}
 	}()
 
-	runCycle(b.inner, ctx)
+	runCycle(b.state.Load().inner, ctx)
 }

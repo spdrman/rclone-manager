@@ -1,0 +1,381 @@
+package webhost
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
+type backupSetsTestRouter struct {
+	router  http.Handler
+	backend *backupSetFakeBackend
+}
+
+func newBackupSetsTestRouter(t *testing.T) backupSetsTestRouter {
+	t.Helper()
+	backend := newBackupSetFakeBackend()
+	router := NewRouter(RouterConfig{
+		Platform:      allowingPlatform("alice"),
+		Backend:       backend,
+		Gate:          alwaysPassGate{},
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+	return backupSetsTestRouter{router: router, backend: backend}
+}
+
+func postBackupSet(t *testing.T, router http.Handler, body string, csrf bool) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backup-sets", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if csrf {
+		attachValidCSRF(req)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
+const validCreateBody = `{
+	"name": "postgres-primary",
+	"host": "prod-db-01.internal",
+	"port": 22,
+	"user": "backup-agent",
+	"ssh_key_id": "key_test_1",
+	"known_hosts_line": "prod-db-01.internal ssh-ed25519 AAAAfaketest",
+	"remote_path": "/backups/postgresql",
+	"local_path": "/data/backups/production/postgres",
+	"include": ["*.dump.zst"],
+	"completion_strategy": "marker"
+}`
+
+// TestCreateBackupSet_Success_Returns201WithBackupSetJSON is the RED
+// plan's request/response contract case: a well-formed create request
+// returns 201 with the persisted backup set's shape, not merely 2xx.
+func TestCreateBackupSet_Success_Returns201WithBackupSetJSON(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["id"] != "api/postgres-primary" {
+		t.Errorf("id = %v, want %q", body["id"], "api/postgres-primary")
+	}
+	if body["name"] != "postgres-primary" {
+		t.Errorf("name = %v, want %q", body["name"], "postgres-primary")
+	}
+	if body["host"] != "prod-db-01.internal" {
+		t.Errorf("host = %v, want %q", body["host"], "prod-db-01.internal")
+	}
+	if _, hasOperation := body["operation"]; hasOperation {
+		t.Errorf("operation present = %v, want absent (run_immediately was not set)", body["operation"])
+	}
+}
+
+// TestCreateBackupSet_RunImmediately_IncludesOperation is "Save, enable &
+// run": the response carries the run_cycle operation it kicked off.
+func TestCreateBackupSet_RunImmediately_IncludesOperation(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	withRun := strings.TrimSuffix(strings.TrimSpace(validCreateBody), "}") + `,"run_immediately":true}`
+	rec := postBackupSet(t, tr.router, withRun, true)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	op, ok := body["operation"].(map[string]any)
+	if !ok {
+		t.Fatalf("operation missing or wrong shape in response: %v", body)
+	}
+	if op["operation_id"] == "" || op["operation_id"] == nil {
+		t.Error("operation.operation_id is missing/empty")
+	}
+}
+
+// TestCreateBackupSet_Disabled_NeverRunsEvenIfRequested is "Save
+// disabled": run_immediately is ignored when disabled is true, matching
+// service.CreateBackupSetRequest.RunImmediately's own doc.
+func TestCreateBackupSet_Disabled_NeverRunsEvenIfRequested(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	body := strings.TrimSuffix(strings.TrimSpace(validCreateBody), "}") + `,"disabled":true,"run_immediately":true}`
+	rec := postBackupSet(t, tr.router, body, true)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["disabled"] != true {
+		t.Errorf("disabled = %v, want true", resp["disabled"])
+	}
+	if _, hasOperation := resp["operation"]; hasOperation {
+		t.Errorf("operation present = %v, want absent (disabled sets never auto-run)", resp["operation"])
+	}
+}
+
+// TestCreateBackupSet_RunImmediately_CreateSucceedsButRunFails_Returns201WithRunError
+// is the mandatory review's M6 finding (PR #155): a successful create
+// with a failed immediate run must not collapse to a bare 500 as if
+// creation itself had failed — the backup set IS already durably
+// persisted at that point (service.CreateBackupSet's own doc says so
+// explicitly). Proven two ways: the response is 201 with run_error set
+// and no operation field, AND the set is actually there afterward (a
+// follow-up GET finds it) — not merely claimed in a response a retry
+// would otherwise contradict.
+func TestCreateBackupSet_RunImmediately_CreateSucceedsButRunFails_Returns201WithRunError(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	tr.backend.errOnSubmit = errBoom
+	body := strings.TrimSuffix(strings.TrimSpace(validCreateBody), "}") + `,"run_immediately":true}`
+	rec := postBackupSet(t, tr.router, body, true)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var respBody map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if respBody["id"] != "api/postgres-primary" {
+		t.Errorf("id = %v, want %q (the set must be reported as created)", respBody["id"], "api/postgres-primary")
+	}
+	if respBody["run_error"] == "" || respBody["run_error"] == nil {
+		t.Error("run_error is missing/empty; the caller must be told the requested run failed to start")
+	}
+	if _, hasOperation := respBody["operation"]; hasOperation {
+		t.Errorf("operation present = %v, want absent (the run never actually started)", respBody["operation"])
+	}
+
+	// The set is really persisted, not just claimed in this response: a
+	// follow-up GET finds it.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/backup-sets/api/postgres-primary", nil)
+	rec2 := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("GET after create-succeeded-run-failed: status = %d, want %d, body: %s", rec2.Code, http.StatusOK, rec2.Body.String())
+	}
+}
+
+func TestCreateBackupSet_MalformedJSONReturns400(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	rec := postBackupSet(t, tr.router, `{not json`, true)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+// TestCreateBackupSet_InvalidRequestFromBackendReturns400 proves
+// service.ErrInvalidRequest (a missing field, a bad completion strategy,
+// config.Validate's own rejection, ...) maps to 400 INVALID_REQUEST, with
+// the backend's own message echoed (service's own contract: that message
+// is always safe to show).
+func TestCreateBackupSet_InvalidRequestFromBackendReturns400(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	tr.backend.errOnCreate = service.ErrInvalidRequest
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "INVALID_REQUEST" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "INVALID_REQUEST")
+	}
+}
+
+func TestCreateBackupSet_SSHKeyNotFoundReturns400WithItsOwnCode(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	tr.backend.errOnCreate = service.ErrSSHKeyNotFound
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "SSH_KEY_NOT_FOUND" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "SSH_KEY_NOT_FOUND")
+	}
+}
+
+func TestCreateBackupSet_UnclassifiedBackendErrorReturns500WithoutLeakingDetails(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	tr.backend.errOnCreate = errBoom
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), errBoom.Error()) {
+		t.Errorf("response leaked the unclassified backend error verbatim: %s", rec.Body.String())
+	}
+}
+
+func TestCreateBackupSet_MissingCSRFCookieReturns403(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	rec := postBackupSet(t, tr.router, validCreateBody, false)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+// TestCreateBackupSet_RequiresAuthentication is this endpoint's own
+// positive control alongside router_test.go's structural walk: proves a
+// genuinely unauthenticated request is rejected, not merely that SOME
+// route is (the walk already proves that broadly; this pins it to this
+// specific one, the way every other handler test file in this package
+// pins its own route too).
+func TestCreateBackupSet_RequiresAuthentication(t *testing.T) {
+	backend := newBackupSetFakeBackend()
+	router := NewRouter(RouterConfig{
+		Platform:      noAuthWiredAdapter{},
+		Backend:       backend,
+		Gate:          alwaysPassGate{},
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+	rec := postBackupSet(t, router, validCreateBody, true)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
+	}
+}
+
+// TestCreateBackupSet_RunImmediately_GateNotPassedReturns403AndCreatesNothing
+// is the mandatory review's M3 finding (PR #155): request.run_immediately
+// turns a plain create into "also start a run_cycle" — the exact
+// destructive action requireDestructiveGate exists to block
+// (handlers_operations.go's submitOperation) — so it must be refused the
+// same way, even though this ROUTE is itself deliberately exempt from
+// that middleware for a plain create (destructiveGateExemptRoutes,
+// router_test.go). Proven two ways: the response is 403
+// DESTRUCTIVE_OPERATIONS_DISABLED, AND nothing was persisted either —
+// the whole call is refused up front, not "create it anyway but skip the
+// run".
+func TestCreateBackupSet_RunImmediately_GateNotPassedReturns403AndCreatesNothing(t *testing.T) {
+	backend := newBackupSetFakeBackend()
+	router := NewRouter(RouterConfig{
+		Platform:      allowingPlatform("alice"),
+		Backend:       backend,
+		Gate:          NotYetImplementedGate{}, // gate NOT passed
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+	body := strings.TrimSuffix(strings.TrimSpace(validCreateBody), "}") + `,"run_immediately":true}`
+	rec := postBackupSet(t, router, body, true)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	var respBody map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &respBody)
+	errObj, _ := respBody["error"].(map[string]any)
+	if errObj["code"] != "DESTRUCTIVE_OPERATIONS_DISABLED" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "DESTRUCTIVE_OPERATIONS_DISABLED")
+	}
+	if len(backend.sets) != 0 {
+		t.Errorf("backend.sets = %v, want empty; a refused run_immediately create must not have persisted anything either", backend.sets)
+	}
+}
+
+// TestCreateBackupSet_PlainCreateSucceedsEvenWhenGateNotPassed pins the
+// other half of M3's fix: a create that does NOT set run_immediately
+// must stay unaffected by whether #92's destructive gate has been
+// verified yet — the whole reason this route is exempt from
+// requireDestructiveGate at the route level in the first place
+// (destructiveGateExemptRoutes' own justification, router_test.go: a
+// plain create never touches remote or local backup data).
+func TestCreateBackupSet_PlainCreateSucceedsEvenWhenGateNotPassed(t *testing.T) {
+	backend := newBackupSetFakeBackend()
+	router := NewRouter(RouterConfig{
+		Platform:      allowingPlatform("alice"),
+		Backend:       backend,
+		Gate:          NotYetImplementedGate{}, // gate NOT passed
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+	rec := postBackupSet(t, router, validCreateBody, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestListBackupSets_Success_ReturnsArray(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	postBackupSet(t, tr.router, validCreateBody, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-sets", nil)
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body struct {
+		BackupSets []map[string]any `json:"backup_sets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.BackupSets) != 1 {
+		t.Fatalf("len(backup_sets) = %d, want 1, body: %s", len(body.BackupSets), rec.Body.String())
+	}
+	if body.BackupSets[0]["id"] != "api/postgres-primary" {
+		t.Errorf("backup_sets[0].id = %v, want %q", body.BackupSets[0]["id"], "api/postgres-primary")
+	}
+}
+
+func TestListBackupSets_DoesNotRequireCSRF(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-sets", nil)
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a read should never need a CSRF token), body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestGetBackupSet_Success_ReturnsBackupSetJSON(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	postBackupSet(t, tr.router, validCreateBody, true)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-sets/api/postgres-primary", nil)
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["name"] != "postgres-primary" {
+		t.Errorf("name = %v, want %q", body["name"], "postgres-primary")
+	}
+}
+
+func TestGetBackupSet_UnknownIDReturns404(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backup-sets/api/does-not-exist", nil)
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}

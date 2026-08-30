@@ -26,6 +26,7 @@ type BackupSetSummary struct {
 	RemotePath string
 	LocalPath  string
 	StaleAfter time.Duration
+	Disabled   bool
 }
 
 // Sources lists every configured source and its backup sets. This never
@@ -42,6 +43,7 @@ func (s *Service) Sources() []SourceSummary {
 				RemotePath: bs.RemotePath,
 				LocalPath:  bs.LocalPath,
 				StaleAfter: bs.StaleAfter.Duration(),
+				Disabled:   bs.Disabled,
 			})
 		}
 		out = append(out, sum)
