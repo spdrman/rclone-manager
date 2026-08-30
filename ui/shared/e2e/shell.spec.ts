@@ -6,7 +6,11 @@ test.describe("application shell", () => {
 
     await expect(page.getByRole("img", { name: "Backup Manager" })).toBeVisible();
     await expect(page.getByText("rclone-manager")).toBeVisible();
-    await expect(page.getByText(/Service running/)).toBeVisible();
+    // Scoped to the header (role "banner") — the dashboard body's own
+    // health summary widget repeats "Service running" with a different
+    // suffix (uptime, not version), so an unscoped match is ambiguous once
+    // the dashboard is actually reachable.
+    await expect(page.getByRole("banner").getByText(/Service running/)).toBeVisible();
 
     for (const label of ["Dashboard", "Backup sets", "Backups", "Activity", "Quarantine", "Settings"]) {
       await expect(bm.nav(label)).toBeVisible();
@@ -41,7 +45,9 @@ test.describe("application shell", () => {
 
   test("names the platform it is running on", async ({ bm, page }) => {
     await bm.goto("/");
-    await expect(page.getByText("Running on")).toBeVisible();
+    // exact: true — the footer line ("Backup Manager running on <platform>")
+    // otherwise makes this an ambiguous substring match too.
+    await expect(page.getByText("Running on", { exact: true })).toBeVisible();
   });
 
   test("theme toggle flips and survives reload", async ({ bm }) => {

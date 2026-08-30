@@ -56,12 +56,20 @@ test.describe("local authentication", () => {
     const submit = page.getByRole("button", { name: "Create administrator" });
     await expect(submit).toBeDisabled();
 
+    // Prefix regex, not exact: true — the "Minimum 12 characters." warning
+    // renders inside this field's own <label>, so its accessible name grows
+    // from "Password" to "PasswordMinimum 12 characters." (Playwright's own
+    // label-text accumulation, unlike a screen reader's accessibility tree,
+    // does not insert a separator between sibling text nodes) the moment a
+    // too-short value is typed. A leading-anchored prefix still can't
+    // collide with "Confirm password", which starts with "Confirm".
+    const password = page.getByLabel(/^Password/);
     await page.getByLabel("Username").fill("bm-admin");
-    await page.getByLabel("Password", { exact: true }).fill("short");
+    await password.fill("short");
     await expect(page.getByText(/Minimum 12 characters/).first()).toBeVisible();
     await expect(submit).toBeDisabled();
 
-    await page.getByLabel("Password", { exact: true }).fill("a-long-enough-passphrase");
+    await password.fill("a-long-enough-passphrase");
     await page.getByLabel("Confirm password").fill("different-passphrase");
     await expect(page.getByText("Passwords do not match")).toBeVisible();
     await expect(submit).toBeDisabled();
