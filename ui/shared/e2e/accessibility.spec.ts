@@ -74,18 +74,23 @@ test.describe("accessibility", () => {
     throw new Error("Section navigation was not reachable within 12 tab stops");
   });
 
-  test("focus is visible on the focused control", async ({ page }) => {
-    await page.goto("/");
+  test("focus is visible on the focused control", async ({ page, bm }) => {
+    // bm.goto() (not a bare page.goto()) so this test waits on the same
+    // real signal — the section nav rendering — the rest of this PR's
+    // fixes use, instead of racing the app's mount.
+    await bm.goto("/");
     // Not part of the async-data race the rest of this file's siblings
     // share (confirmed by hand: the CSS's :focus-visible rule is correct,
     // and the very first Tab keypress after goto() is what's unreliable —
     // dispatching it immediately, before Chromium has settled page focus
     // post-navigation, deterministically leaves focus on <body> in headless
-    // mode. A no-op round trip through the page (waiting one animation
-    // frame) reliably fixes it; a bare extra `page.keyboard.press("Tab")`
-    // would too, but would then be testing the second tab stop, not the
-    // first). This is the harness workaround #113 already anticipated.
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+    // mode). The real signal being waited on is the browser's document
+    // focus actually settling post-navigation, so assert that directly
+    // instead of guessing at how many frames it takes; a bare extra
+    // `page.keyboard.press("Tab")` would also dodge the race, but would
+    // then be testing the second tab stop, not the first. This is the
+    // harness workaround #113 already anticipated.
+    await page.waitForFunction(() => document.hasFocus());
     await page.keyboard.press("Tab");
     const outline = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
