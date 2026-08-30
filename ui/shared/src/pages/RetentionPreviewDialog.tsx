@@ -1,30 +1,132 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
-import type { RetentionPlan } from "@shared/types/backup";
+import { BackupManagerError } from "@shared/api/contracts";
+import type { ApiError } from "@shared/api/contracts";
+import {
+  commitRetentionRevisions,
+  retentionPlanNode,
+  retentionPlanStaleNode
+} from "@shared/state/appNodes";
+import { useCausl } from "@shared/state/graph";
+import { useResource } from "@shared/state/resource";
+import type { RetentionClass, RetentionPlan, RetentionVerdict } from "@shared/types/backup";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
 import { bytes } from "@shared/utilities/format";
 
+/** internal/retention.GFSTier / TierLastKnownGood's own string values,
+ *  mapped to RetentionBadge's vocabulary. Any tier this dialog doesn't
+ *  recognise is simply not badged — never a crash over an unexpected string. */
+const TIER_TO_CLASS: Record<string, RetentionClass> = {
+  DAILY: "daily",
+  WEEKLY: "weekly",
+  MONTHLY: "monthly",
+  LAST_KNOWN_GOOD: "protected"
+};
+
+function tierClasses(tiers: string[]): RetentionClass[] {
+  return tiers.map((t) => TIER_TO_CLASS[t]).filter((c): c is RetentionClass => c !== undefined);
+}
+
+function describeApplyError(e: unknown): ApiError {
+  return e instanceof BackupManagerError
+    ? e.api
+    : {
+        code: "unknown",
+        message: "Backup Manager could not complete that request.",
+        correlationId: "unavailable"
+      };
+}
+
 /** §17 — the plan is server-issued and immutable. If it goes stale we refuse to
- *  apply and never silently recalculate a different deletion set. */
+ *  apply and never silently recalculate a different deletion set.
+ *
+ * `source`/`set` are BackupSetID's own two-part identity (core/internal/
+ * model/ids.go), matching apps/common/webhost/router.go's
+ * `/backup-sets/{source}/{set}/retention/...` routes — see BackupSet.source/
+ * BackupSet.set's own doc (types/backup.ts). */
 export function RetentionPreviewDialog({
-  setId,
+  source,
+  set,
   open,
   onClose
 }: {
-  setId: string;
+  source: string;
+  set: string;
   open: boolean;
   onClose(): void;
 }) {
   const api = useApi();
   const [confirming, setConfirming] = useState(false);
-  const plan = useAsync(() => (open ? api.previewRetention(setId) : Promise.resolve(null as never)), [api, setId, open]);
+  // Local and ephemeral, exactly like `confirming` above (issue #96's own
+  // "State management" section) — a failed apply's error is this ONE
+  // dialog session's concern, not shared graph state.
+  const [applyError, setApplyError] = useState<ApiError | null>(null);
+
+  const plan = useResource<RetentionPlan>(
+    retentionPlanNode,
+    () => (open ? api.previewRetention(source, set) : Promise.resolve(null as never)),
+    [api, source, set, open]
+  );
+  // The graph's own evidence, not a field trusted off the wire — see
+  // retentionPlanStaleNode's own doc (state/appNodes.ts).
+  const stale = useCausl(retentionPlanStaleNode);
+
+  const planId = plan.data?.planId;
+  useEffect(() => {
+    // A freshly read plan is, by definition, not stale against itself: seed
+    // the graph's own "current revisions" baseline to match it — syncing
+    // local component state with the external causl graph is exactly what
+    // an effect is for. Anything that later moves retentionRevisionsNode
+    // away from this baseline (a re-preview, or — future wiring — a live
+    // poll/push) is what retentionPlanStaleNode actually asserts on.
+    if (plan.data) {
+      commitRetentionRevisions({
+        inventoryRevision: plan.data.inventoryRevision,
+        configRevision: plan.data.configRevision
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planId]);
+
+  // applyError needs to reset whenever a genuinely new plan arrives (a
+  // fresh "Review new plan" or dialog reopen), but this is adjusting local
+  // state from a prop-derived value, not synchronizing with an external
+  // system — react.dev's own "storing information from previous renders"
+  // pattern: setState during render, never inside an effect, so it cannot
+  // cascade an extra render.
+  const [applyErrorForPlanId, setApplyErrorForPlanId] = useState<string | undefined>(planId);
+  if (planId !== applyErrorForPlanId) {
+    setApplyErrorForPlanId(planId);
+    if (applyError) setApplyError(null);
+  }
 
   if (!open) return null;
 
-  const p: RetentionPlan | null = plan.data;
+  // While an apply attempt was refused, the plan detail is hidden until the
+  // operator reviews a fresh one — the canvas's State 4. Continue is
+  // disabled by `!p` alone; no separate flag needed.
+  const p: RetentionPlan | null = applyError ? null : plan.data;
+
+  const keepVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "KEEP") ?? [];
+  const refuseVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "REFUSE") ?? [];
+  const deleteVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "DELETE") ?? [];
+  const lastKnownGood = keepVerdicts.find((v) => v.tiers.includes("LAST_KNOWN_GOOD"));
+
+  function handleApply() {
+    if (!plan.data) return;
+    api
+      .applyRetention(source, set, plan.data.planId)
+      .then(() => {
+        setConfirming(false);
+        onClose();
+      })
+      .catch((e: unknown) => {
+        setConfirming(false);
+        setApplyError(describeApplyError(e));
+      });
+  }
 
   return (
     <>
@@ -39,11 +141,41 @@ export function RetentionPreviewDialog({
           <div style={{ padding: "18px 22px", borderBottom: "1px solid var(--border)" }}>
             <h2>Retention preview</h2>
             <p style={{ margin: "4px 0 0", fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
-              {p ? "Plan " + p.planId + " \u00b7 issued by the backup service" : "Requesting plan…"}
+              {applyError
+                ? "Plan rejected"
+                : p
+                  ? "Plan " + p.planId + " · issued by the backup service"
+                  : "Requesting plan…"}
             </p>
           </div>
 
-          {p?.stale ? (
+          {applyError ? (
+            <div style={{ padding: "16px 22px 0" }}>
+              <WarningBanner
+                tone="danger"
+                title={
+                  applyError.code === "retention-plan-stale"
+                    ? "Retention plan rejected — nothing was deleted"
+                    : "Could not apply retention"
+                }
+                actions={
+                  applyError.code === "retention-plan-stale" ? (
+                    <button
+                      className="btn btn--sm"
+                      onClick={() => {
+                        setApplyError(null);
+                        plan.reload();
+                      }}
+                    >
+                      Review new plan
+                    </button>
+                  ) : undefined
+                }
+              >
+                {applyError.remediation ?? applyError.message}
+              </WarningBanner>
+            </div>
+          ) : stale ? (
             <div style={{ padding: "16px 22px 0" }}>
               <WarningBanner
                 tone="warn"
@@ -67,30 +199,58 @@ export function RetentionPreviewDialog({
                   borderRadius: "var(--radius-lg)", overflow: "hidden"
                 }}
               >
-                <Stat label="Keep" value={String(p.keep.length)} />
-                <Stat label="Delete" value={String(p.delete.length)} tone="var(--danger)" />
+                <Stat label="Keep" value={String(p.keepCount)} />
+                <Stat label="Delete" value={String(p.deleteCount)} tone="var(--danger)" />
                 <Stat label="Reclaim" value={bytes(p.reclaimBytes)} />
               </div>
 
               <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
                 <div>
-                  <div className="eyebrow" style={{ color: "var(--ok)", marginBottom: 8 }}>Keep</div>
+                  <div className="eyebrow" style={{ color: "var(--ok)", marginBottom: 8 }}>
+                    {"Keep · " + keepVerdicts.length}
+                  </div>
                   <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
-                    {p.keep.map((k) => (
-                      <li key={k.artifactId} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: "var(--text-sm)" }}>
-                        <span className="mono">{k.date}</span>
-                        <RetentionBadges classes={k.classes} />
+                    {keepVerdicts.map((v) => (
+                      <li key={v.artifact} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: "var(--text-sm)" }}>
+                        <span className="mono">{v.artifact}</span>
+                        <RetentionBadges classes={tierClasses(v.tiers)} />
                       </li>
                     ))}
                   </ul>
                 </div>
+
+                {refuseVerdicts.length > 0 ? (
+                  <div>
+                    {/* Deliberately the calmest tone of the three (§96 design
+                        pass): a refused delete is the plan working correctly,
+                        a candidate policy did not select AND that failed an
+                        FR-20 safety check — not an error to alarm over. */}
+                    <div className="eyebrow" style={{ color: "var(--text-2)", marginBottom: 8 }}>
+                      {"Refuse · " + refuseVerdicts.length}
+                    </div>
+                    <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
+                      {refuseVerdicts.map((v) => (
+                        <li key={v.artifact} className="banner banner--info" style={{ padding: "8px 10px", fontSize: "var(--text-sm)" }}>
+                          <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
+                          <span>
+                            <span className="mono">{v.artifact}</span>
+                            <span style={{ color: "var(--text-2)" }}>{" — " + v.reason}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
                 <div>
-                  <div className="eyebrow" style={{ color: "var(--danger)", marginBottom: 8 }}>Delete</div>
+                  <div className="eyebrow" style={{ color: "var(--danger)", marginBottom: 8 }}>
+                    {"Delete · " + deleteVerdicts.length}
+                  </div>
                   <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
-                    {p.delete.map((d) => (
-                      <li key={d.artifactId} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: "var(--text-sm)" }}>
-                        <span className="mono">{d.date}</span>
-                        <span style={{ color: "var(--text-2)" }}>{d.reason}</span>
+                    {deleteVerdicts.map((v) => (
+                      <li key={v.artifact} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: "var(--text-sm)" }}>
+                        <span className="mono">{v.artifact}</span>
+                        <span style={{ color: "var(--text-2)" }}>{v.reason}</span>
                       </li>
                     ))}
                   </ul>
@@ -103,7 +263,7 @@ export function RetentionPreviewDialog({
             <button className="btn" onClick={onClose}>Cancel</button>
             <button
               className="btn btn--destructive"
-              disabled={!p || p.stale || p.delete.length === 0}
+              disabled={!p || stale || p.deleteCount === 0}
               onClick={() => setConfirming(true)}
             >
               Continue…
@@ -118,24 +278,19 @@ export function RetentionPreviewDialog({
           destructive
           eyebrow="Destructive action"
           title="Apply retention"
-          confirmLabel={"Delete " + p.delete.length + " backups"}
+          confirmLabel={"Delete " + p.deleteCount + " backups"}
           onCancel={() => setConfirming(false)}
-          onConfirm={() =>
-            api.applyRetention(p.planId).then(() => {
-              setConfirming(false);
-              onClose();
-            })
-          }
+          onConfirm={handleApply}
         >
           <p style={{ margin: 0 }}>
-            {p.delete.length + " retained backup files will be permanently removed from NAS storage."}
+            {p.deleteCount + " retained backup files will be permanently removed from NAS storage."}
           </p>
           <p style={{ margin: 0, color: "var(--text-2)" }}>
-            {bytes(p.reclaimBytes) + " will be reclaimed. This is the exact plan you reviewed \u2014 it will not be recalculated."}
+            {bytes(p.reclaimBytes) + " will be reclaimed. This applies exactly plan " + p.planId + " — it will not be recalculated."}
           </p>
-          {p.protectedArtifactId ? (
+          {lastKnownGood ? (
             <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-              <span aria-hidden="true" style={{ color: "var(--ok)" }}>\u2713</span>
+              <span aria-hidden="true" style={{ color: "var(--ok)" }}>✓</span>
               <span>The newest known-good backup is protected.</span>
             </div>
           ) : null}

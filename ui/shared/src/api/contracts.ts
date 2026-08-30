@@ -79,9 +79,17 @@ export interface BackupManagerApi {
   revalidate(artifactId: string): Promise<void>;
   retryIngestion(artifactId: string): Promise<void>;
 
-  /** Server computes and owns the plan. The UI may only apply it by id. */
-  previewRetention(setId: string): Promise<RetentionPlan>;
-  applyRetention(planId: string): Promise<void>;
+  /**
+   * Server computes and owns the plan. The UI may only apply it by id.
+   * `source`/`set` are BackupSet's own two-part identity (core's
+   * model.BackupSetID) — apps/common/webhost/router.go's
+   * `/backup-sets/{source}/{set}/retention/...` routes key on exactly
+   * these, not on BackupSet.id. applyRetention still takes `source`/`set`
+   * to build the same URL, even though `planId` alone is what the backend
+   * actually resolves the plan by (service.ApplyRetentionPlan's own doc).
+   */
+  previewRetention(source: string, set: string): Promise<RetentionPlan>;
+  applyRetention(source: string, set: string, planId: string): Promise<RetentionPlan>;
 
   scanCatalog(): Promise<CatalogScanPreview>;
   rebuildCatalog(): Promise<void>;

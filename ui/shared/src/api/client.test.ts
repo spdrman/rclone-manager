@@ -120,6 +120,97 @@ describe("httpApi CSRF/bootstrap-token wiring", () => {
   });
 });
 
+describe("retention preview/apply: wire contract (apps/common/webhost/handlers_retention.go)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const WIRE_VERDICT = { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY"] };
+
+  it("previewRetention issues a plain GET against the two-segment {source}/{set} route and maps snake_case to camelCase", async () => {
+    const fetchMock = mockFetchOk({
+      plan_id: "retplan_abc",
+      backup_set_id: "production/postgres-primary",
+      inventory_revision: "inv_1",
+      config_revision: "cfg_1",
+      expires_at: "2026-08-29T06:09:48Z",
+      keep_count: 1,
+      delete_count: 1,
+      reclaim_bytes: 4096,
+      verdicts: [WIRE_VERDICT, { artifact: "b.dump", action: "DELETE", reason: "not selected" }]
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const plan = await httpApi.previewRetention("production", "postgres-primary");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/backup-sets/production/postgres-primary/retention/preview");
+    expect(init.method ?? "GET").toBe("GET");
+    expect(plan).toEqual({
+      planId: "retplan_abc",
+      backupSetId: "production/postgres-primary",
+      inventoryRevision: "inv_1",
+      configRevision: "cfg_1",
+      expiresAt: "2026-08-29T06:09:48Z",
+      keepCount: 1,
+      deleteCount: 1,
+      reclaimBytes: 4096,
+      operationId: undefined,
+      verdicts: [
+        { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY"] },
+        // tiers defaults to [] when the wire omits it (DELETE/REFUSE never carry one).
+        { artifact: "b.dump", action: "DELETE", reason: "not selected", tiers: [] }
+      ]
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("applyRetention POSTs {plan_id} with a CSRF token attached, against the same two-segment route", async () => {
+    setCsrfCookie("csrf-value-123");
+    const fetchMock = mockFetchOk({
+      plan_id: "retplan_abc",
+      backup_set_id: "production/postgres-primary",
+      inventory_revision: "inv_1",
+      config_revision: "cfg_1",
+      expires_at: "2026-08-29T06:09:48Z",
+      keep_count: 1,
+      delete_count: 1,
+      reclaim_bytes: 4096,
+      operation_id: "op_1",
+      verdicts: [WIRE_VERDICT]
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const plan = await httpApi.applyRetention("production", "postgres-primary", "retplan_abc");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/backup-sets/production/postgres-primary/retention/apply");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({ plan_id: "retplan_abc" });
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-CSRF-Token"]).toBe("csrf-value-123");
+    expect(plan.operationId).toBe("op_1");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("URL-encodes source/set independently, so a literal '/' or space in either half cannot smuggle an extra path segment", async () => {
+    const fetchMock = mockFetchOk({
+      plan_id: "x", backup_set_id: "a b/c/d", inventory_revision: "i", config_revision: "c",
+      expires_at: "t", keep_count: 0, delete_count: 0, reclaim_bytes: 0, verdicts: []
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.previewRetention("a b", "c/d");
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/backup-sets/a%20b/c%2Fd/retention/preview");
+
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("ApiErrorCode covers every code apps/common/auth/local actually emits", () => {
   // Mirrors the literal strings passed to writeAuthError across
   // apps/common/auth/local/handler.go and csrf.go - kept here by hand,

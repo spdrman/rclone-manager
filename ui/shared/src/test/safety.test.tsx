@@ -103,10 +103,15 @@ describe("destructive confirmation", () => {
 describe("retention plan integrity", () => {
   it("refuses to apply a stale plan instead of recalculating", async () => {
     const api = createMockApi();
-    await api.previewRetention("set_pg_prod"); // first plan is current
-    const stale = await api.previewRetention("set_pg_prod"); // second goes stale
-    expect(stale.stale).toBe(true);
-    await expect(api.applyRetention(stale.planId)).rejects.toThrow();
+    const first = await api.previewRetention("production", "postgres-primary");
+    // A second preview moves the mock's own "inventory" forward one tick —
+    // `first`'s plan_id is no longer the current one, exactly like a real
+    // inventory change would make it stale (core/service.ApplyRetentionPlan's
+    // own revision check).
+    await api.previewRetention("production", "postgres-primary");
+    await expect(
+      api.applyRetention("production", "postgres-primary", first.planId)
+    ).rejects.toThrow();
   });
 });
 

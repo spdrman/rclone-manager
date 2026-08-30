@@ -35,7 +35,7 @@ const defaultRetention = {
 
 const SETS: BackupSet[] = [
   {
-    id: "set_pg_prod", name: "Production PostgreSQL",
+    id: "set_pg_prod", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
     excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker",
@@ -52,7 +52,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-08-02T10:14:00+02:00"
   },
   {
-    id: "set_mysql_billing", name: "Billing MySQL",
+    id: "set_mysql_billing", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
     excludePatterns: ["*.part"], completionMethod: "atomic-rename",
@@ -69,7 +69,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-07-19T09:02:00+02:00"
   },
   {
-    id: "set_auth_cfg", name: "Auth service config",
+    id: "set_auth_cfg", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
     excludePatterns: [], completionMethod: "stable-size",
@@ -87,7 +87,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: null
   },
   {
-    id: "set_media", name: "Media archive",
+    id: "set_media", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
     excludePatterns: [], completionMethod: "completion-marker",
@@ -223,26 +223,35 @@ const VERSION: VersionInfo = {
   schema: 41, architecture: "linux/arm64", buildCommit: "9f4c1ab", compatible: true
 };
 
-function plan(stale: boolean): RetentionPlan {
+/**
+ * A fresh RetentionPlan, as apps/common/webhost's real handler would return
+ * it (see toRetentionPlan/client.ts) — no `stale` field. `tick` fingerprints
+ * "the world as of this preview" the same way the real service's
+ * inventory_revision does: two previews with the same tick are the same
+ * world, so applyRetention below only ever honors the MOST RECENT tick's
+ * plan_id, exactly like ApplyRetentionPlan's own single-use, revision-
+ * checked contract (core/service/retention.go).
+ */
+function retentionPlan(source: string, set: string, tick: number): RetentionPlan {
   return {
-    planId: stale ? "plan_stale_7712" : "plan_current_4410",
-    setId: "set_pg_prod",
-    createdAt: "2026-08-29T05:59:48+02:00",
-    stale,
-    keep: [
-      { artifactId: "art_01J9F4M2QK8Z", date: "2026-08-28", classes: ["daily", "weekly", "protected"] },
-      { artifactId: "art_01J9F1B22XQ0", date: "2026-08-27", classes: ["daily"] },
-      { artifactId: "art_01J9880PLM31", date: "2026-08-01", classes: ["monthly"] },
-      { artifactId: "art_01J8T40RRV18", date: "2026-07-01", classes: ["monthly"] }
-    ],
-    delete: [
-      { artifactId: "art_01J9AA10ZK52", date: "2026-08-13", reason: "Not selected by current policy" },
-      { artifactId: "art_01J99120TT77", date: "2026-08-06", reason: "Not selected by current policy" },
-      { artifactId: "art_01J8YY55MM10", date: "2026-07-23", reason: "Not selected by current policy" },
-      { artifactId: "art_01J8WW33KK09", date: "2026-07-16", reason: "Not selected by current policy" }
-    ],
+    planId: "retplan_mock_" + tick,
+    backupSetId: source + "/" + set,
+    inventoryRevision: "inv_" + tick,
+    configRevision: "cfg_9f2a41",
+    expiresAt: "2026-08-29T06:09:48+02:00",
+    keepCount: 4,
+    deleteCount: 3,
     reclaimBytes: 55620000000,
-    protectedArtifactId: "art_01J9F4M2QK8Z"
+    verdicts: [
+      { artifact: "backup-20260828.dump.zst", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY", "LAST_KNOWN_GOOD"] },
+      { artifact: "backup-20260827.dump.zst", action: "KEEP", reason: "GFS weekly tier", tiers: ["WEEKLY"] },
+      { artifact: "backup-20260801.dump.zst", action: "KEEP", reason: "GFS monthly tier", tiers: ["MONTHLY"] },
+      { artifact: "backup-20260701.dump.zst", action: "KEEP", reason: "GFS monthly tier", tiers: ["MONTHLY"] },
+      { artifact: "backup-20260813.dump.zst", action: "REFUSE", reason: "sibling-prefix directory found at the computed path; refusing to delete", tiers: [] },
+      { artifact: "backup-20260806.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
+      { artifact: "backup-20260723.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
+      { artifact: "backup-20260716.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
+    ]
   };
 }
 
@@ -251,7 +260,11 @@ const delay = <T,>(value: T, ms = 180): Promise<T> =>
 
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
-  let planIsStale = false;
+  // Every previewRetention call advances this backup set's "inventory" by
+  // one tick and issues a plan captured against it. applyRetention only
+  // ever honors the plan_id from the LATEST tick — anything older is,
+  // correctly, stale — mirroring ApplyRetentionPlan's real revision check.
+  let retentionTick = 0;
 
   return {
     getVersion: () =>
@@ -293,25 +306,24 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),
 
-    previewRetention: () => {
-      const p = plan(planIsStale);
-      // Every second preview goes stale, so the stale-plan UI is exercised.
-      planIsStale = !planIsStale;
-      return delay(p);
+    previewRetention: (source, set) => {
+      retentionTick += 1;
+      return delay(retentionPlan(source, set, retentionTick));
     },
-    applyRetention: (planId) => {
-      // This has to REJECT, not throw synchronously. applyRetention is typed
-      // Promise<void>, so a bare throw escapes before a promise exists and a
-      // caller's .catch() never runs, which is the one path that must not fail
-      // open for a stale retention plan.
-      if (planId.startsWith("plan_stale"))
+    applyRetention: (source, set, planId) => {
+      // This has to REJECT, not throw synchronously. applyRetention is a
+      // Promise, so a bare throw escapes before a promise exists and a
+      // caller's .catch() never runs — the one path that must not fail open
+      // for a stale retention plan.
+      const current = retentionPlan(source, set, retentionTick);
+      if (planId !== current.planId)
         return Promise.reject(new BackupManagerError({
           code: "retention-plan-stale",
           message: "The backup inventory changed after this preview was created.",
           remediation: "No files were deleted. Review the updated retention plan before continuing.",
           correlationId: "cid_stale991"
         }));
-      return delay(undefined);
+      return delay({ ...current, operationId: "op_mock_retention_" + retentionTick });
     },
 
     scanCatalog: () =>

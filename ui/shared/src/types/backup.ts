@@ -36,6 +36,18 @@ export interface RetentionPolicy {
 
 export interface BackupSet {
   id: string;
+  /**
+   * The two halves of core's own model.BackupSetID (core/internal/model/
+   * ids.go): `source` names the configured remote source this set backs up
+   * from, `set` names this particular backup set under that source.
+   * apps/common/webhost's retention routes are the first to key a URL by
+   * this composite shape directly (router.go: `/backup-sets/{source}/{set}/
+   * retention/...`) rather than by `id` alone, so client.ts's
+   * previewRetention/applyRetention take these two fields rather than
+   * guessing how to split a flat `id` back into them.
+   */
+  source: string;
+  set: string;
   name: string;
   host: string;
   port: number;
@@ -96,14 +108,60 @@ export interface QuarantineRecord {
   remoteSourceRetained: true;
 }
 
+/**
+ * core/service.RetentionArtifactVerdict (core/service/retention.go),
+ * translated by client.ts from apps/common/webhost's snake_case wire shape
+ * (handlers_retention.go's retentionVerdictResponse). "KEEP", "DELETE" or
+ * "REFUSE" — internal/retention.PruneAction's own three values (FR-20):
+ * REFUSE is a third, deliberate outcome distinct from KEEP, not an error —
+ * an artifact policy did not select AND that fails a safety check.
+ */
+export type RetentionVerdictAction = "KEEP" | "DELETE" | "REFUSE";
+
+export interface RetentionVerdict {
+  /** The artifact's filename within its backup set, not an opaque id
+   *  (service.RetentionArtifactVerdict.Artifact is v.Artifact.Name). */
+  artifact: string;
+  action: RetentionVerdictAction;
+  reason: string;
+  /**
+   * Populated only for a KEEP verdict: which GFS tier(s) selected it
+   * ("DAILY"/"WEEKLY"/"MONTHLY") and/or "LAST_KNOWN_GOOD"
+   * (internal/retention.TierLastKnownGood) if last-known-good protection
+   * is what kept it. Empty for DELETE/REFUSE.
+   */
+  tiers: string[];
+}
+
+/**
+ * docs/EPIC-B-multi-nas.md §15.6's own preview/apply response shape
+ * (apps/common/webhost's retentionPlanResponse, translated to camelCase by
+ * client.ts). GET .../retention/preview and POST .../retention/apply both
+ * return exactly this shape — a caller never has to reconcile "what would
+ * happen" against a differently-shaped "what happened".
+ *
+ * There is deliberately no `stale` field here: whether this plan is stale
+ * is derived client-side (state/appNodes.ts's retentionPlanStaleNode) by
+ * comparing inventoryRevision/configRevision against what the graph has
+ * itself most recently observed, not trusted as a boolean the wire hands
+ * over (issue #96's own "causl-ts for staleness, not a boolean parsed off
+ * the response").
+ */
 export interface RetentionPlan {
-  /** Server-issued, immutable. The UI applies exactly this or nothing. */
+  /** Server-issued, immutable, single-use. The UI applies exactly this
+   *  plan_id or nothing (§17). */
   planId: string;
-  setId: string;
-  createdAt: string;
-  stale: boolean;
-  keep: Array<{ artifactId: string; date: string; classes: RetentionClass[] }>;
-  delete: Array<{ artifactId: string; date: string; reason: string }>;
+  backupSetId: string;
+  inventoryRevision: string;
+  configRevision: string;
+  /** RFC3339Nano. After this instant ApplyRetentionPlan always answers
+   *  RETENTION_PLAN_STALE, even if nothing else changed. */
+  expiresAt: string;
+  keepCount: number;
+  deleteCount: number;
   reclaimBytes: number;
-  protectedArtifactId: string | null;
+  /** The durable operation this apply was recorded under. Empty on a plan
+   *  a preview returned — a preview creates no operation. */
+  operationId?: string;
+  verdicts: RetentionVerdict[];
 }

@@ -202,7 +202,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </div>
       </div>
 
-      <RetentionPreviewDialog setId={s.id} open={previewOpen} onClose={() => setPreviewOpen(false)} />
+      <RetentionPreviewDialog source={s.source} set={s.set} open={previewOpen} onClose={() => setPreviewOpen(false)} />
 
       <ConfirmationDialog
         open={removeOpen}

@@ -23,6 +23,12 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
   // node is already populated by the time this page can render.
   const sets = useCausl(setsNode);
   const artifacts = useAsync(() => api.listArtifacts(setFilter || undefined), [api, setFilter]);
+  // previewFor is the flat BackupSet.id the <select> below is keyed by
+  // (matching every other set-picker in this file); RetentionPreviewDialog
+  // itself takes source/set (BackupSetID's own two-part identity — see
+  // BackupSet.source/set's own doc), so this resolves the one from the
+  // other.
+  const previewSet = previewFor ? (sets.data ?? []).find((s) => s.id === previewFor) : null;
 
   if (artifacts.error) return <ErrorState {...artifacts.error} onRetry={artifacts.reload} />;
 
@@ -147,8 +153,8 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
         </div>
       )}
 
-      {previewFor ? (
-        <RetentionPreviewDialog setId={previewFor} open onClose={() => setPreviewFor(null)} />
+      {previewSet ? (
+        <RetentionPreviewDialog source={previewSet.source} set={previewSet.set} open onClose={() => setPreviewFor(null)} />
       ) : null}
     </>
   );

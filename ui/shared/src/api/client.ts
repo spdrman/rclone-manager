@@ -1,5 +1,6 @@
 import { BackupManagerError } from "./contracts";
 import type { ApiError, BackupManagerApi } from "./contracts";
+import type { RetentionPlan, RetentionVerdictAction } from "@shared/types/backup";
 
 const BASE = "/api/v1";
 
@@ -83,6 +84,60 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 const post = (path: string, body?: unknown) =>
   request<void>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 
+/**
+ * The wire shape GET .../retention/preview and POST .../retention/apply
+ * actually return (apps/common/webhost/handlers_retention.go's
+ * retentionPlanResponse) — snake_case, unlike the rest of this file's
+ * BackupSet/Operation/etc. types, which this service already emits in the
+ * camelCase RetentionPlan carries. toRetentionPlan below is the one place
+ * that has to know the wire uses snake_case here; nothing past it does.
+ */
+interface RetentionVerdictWire {
+  artifact: string;
+  action: string;
+  reason: string;
+  tiers?: string[];
+}
+
+interface RetentionPlanWire {
+  plan_id: string;
+  backup_set_id: string;
+  inventory_revision: string;
+  config_revision: string;
+  expires_at: string;
+  keep_count: number;
+  delete_count: number;
+  reclaim_bytes: number;
+  operation_id?: string;
+  verdicts: RetentionVerdictWire[];
+}
+
+function toRetentionPlan(wire: RetentionPlanWire): RetentionPlan {
+  return {
+    planId: wire.plan_id,
+    backupSetId: wire.backup_set_id,
+    inventoryRevision: wire.inventory_revision,
+    configRevision: wire.config_revision,
+    expiresAt: wire.expires_at,
+    keepCount: wire.keep_count,
+    deleteCount: wire.delete_count,
+    reclaimBytes: wire.reclaim_bytes,
+    operationId: wire.operation_id,
+    verdicts: wire.verdicts.map((v) => ({
+      artifact: v.artifact,
+      action: v.action as RetentionVerdictAction,
+      reason: v.reason,
+      tiers: v.tiers ?? []
+    }))
+  };
+}
+
+/** apps/common/webhost/router.go's `{source}/{set}` route params
+ *  (model.BackupSetID's own composite shape), URL-encoded independently —
+ *  see BackupSet.source/BackupSet.set's own doc (types/backup.ts). */
+const retentionPath = (source: string, set: string) =>
+  "/backup-sets/" + encodeURIComponent(source) + "/" + encodeURIComponent(set) + "/retention";
+
 export const httpApi: BackupManagerApi = {
   getVersion: () => request("/version"),
   getHealth: () => request("/health"),
@@ -103,10 +158,19 @@ export const httpApi: BackupManagerApi = {
   revalidate: (id) => post("/quarantine/" + id + "/revalidate"),
   retryIngestion: (id) => post("/quarantine/" + id + "/retry"),
 
-  previewRetention: (setId) => request("/backup-sets/" + setId + "/retention/preview", { method: "POST" }),
-  // Applying by planId is what makes a stale plan a server-side 409 rather
-  // than a silent recalculation (§17).
-  applyRetention: (planId) => post("/retention/plans/" + planId + "/apply"),
+  // Preview is read-only end to end (router.go deliberately does not gate
+  // it behind requireCSRF/requireDestructiveGate) — a plain GET, not POST.
+  previewRetention: (source, set) =>
+    request<RetentionPlanWire>(retentionPath(source, set) + "/preview").then(toRetentionPlan),
+  // Applying by plan_id (not by recomputing) is what makes a stale plan a
+  // server-side 409 rather than a silent recalculation (§17). The response
+  // re-expresses the exact plan that was just applied, the same shape a
+  // preview returns, so the caller never reconciles two different shapes.
+  applyRetention: (source, set, planId) =>
+    request<RetentionPlanWire>(retentionPath(source, set) + "/apply", {
+      method: "POST",
+      body: JSON.stringify({ plan_id: planId })
+    }).then(toRetentionPlan),
 
   scanCatalog: () => request("/catalog/scan", { method: "POST" }),
   rebuildCatalog: () => post("/catalog/rebuild"),
