@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
@@ -16,7 +18,10 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
   const [setFilter, setSetFilter] = useState("");
   const [previewFor, setPreviewFor] = useState<string | null>(null);
 
-  const sets = useAsync(() => api.listSets(), [api]);
+  // The shared sets node (App.tsx fetches it once, #106) — not this page's
+  // own listSets() call. App.tsx always mounts above every route, so the
+  // node is already populated by the time this page can render.
+  const sets = useCausl(setsNode);
   const artifacts = useAsync(() => api.listArtifacts(setFilter || undefined), [api, setFilter]);
 
   if (artifacts.error) return <ErrorState {...artifacts.error} onRetry={artifacts.reload} />;
@@ -55,7 +60,15 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
         }
       />
 
-      {rows.length === 0 ? (
+      {/*
+        artifacts.data is null while still loading and [] once genuinely
+        empty — those are different states and must not be conflated (the
+        identical bug BackupSetsPage fixed for `sets` in #141). Rendering
+        nothing here until loading actually finishes also keeps the table
+        (with its header row) and its data rows appearing atomically,
+        instead of a header-only table flashing on screen first.
+      */}
+      {!artifacts.data ? null : rows.length === 0 ? (
         <EmptyState title="No backups yet">
           This backup set has not completed its first successful ingestion.
         </EmptyState>

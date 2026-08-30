@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
+import { useResource } from "@shared/state/resource";
+import { artifactDetailNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
@@ -12,7 +13,11 @@ export function BackupDetailPage() {
   const { artifactId = "" } = useParams();
   const api = useApi();
   const navigate = useNavigate();
-  const artifact = useAsync(() => api.getArtifact(artifactId), [api, artifactId]);
+  // Graph-backed the same way App.tsx's four resources are (B2.4): nothing
+  // else reads this particular artifact today, but this keeps every fetched
+  // resource on the one mechanism instead of leaving this page on
+  // page-local useAsync state.
+  const artifact = useResource(artifactDetailNode, () => api.getArtifact(artifactId), [api, artifactId]);
 
   if (artifact.error) return <ErrorState {...artifact.error} onRetry={artifact.reload} />;
   if (!artifact.data) return null;
