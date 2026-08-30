@@ -25,6 +25,33 @@ export function BackupSetsPage({
   const stale = data.filter((s) => s.state === "stale").length;
   const failing = data.filter((s) => s.state === "failing").length;
 
+  // Loading and "genuinely zero sets" are different states (sets.data is
+  // null vs. an empty array \u2014 see ResourceState/AsyncState) and must not be
+  // conflated: the header's own "Add backup set" action button is always
+  // present below, so treating "still loading" as "empty" briefly rendered
+  // the EmptyState's second copy of that same button while sets.data was
+  // still null. Only render the EmptyState (with its own action button, no
+  // header action button) once loading has actually finished with zero
+  // sets, matching DashboardPage's equivalent early return.
+  if (sets.data && data.length === 0) {
+    return (
+      <>
+        <PageHeader title="Backup sets" subtitle="No backup sets configured" />
+        <EmptyState
+          title="No backup sets yet"
+          action={
+            <button className="btn btn--primary" onClick={() => navigate("/sets/new")}>
+              Add backup set
+            </button>
+          }
+        >
+          Connect Backup Manager to your first server to begin collecting and
+          retaining verified backups.
+        </EmptyState>
+      </>
+    );
+  }
+
   return (
     <>
       <PageHeader
@@ -40,42 +67,28 @@ export function BackupSetsPage({
         }
       />
 
-      {data.length === 0 ? (
-        <EmptyState
-          title="No backup sets yet"
-          action={
-            <button className="btn btn--primary" onClick={() => navigate("/sets/new")}>
-              Add backup set
-            </button>
-          }
-        >
-          Connect Backup Manager to your first server to begin collecting and
-          retaining verified backups.
-        </EmptyState>
-      ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(372px, 1fr))",
-            gap: 14
-          }}
-        >
-          {data.map((set) => {
-            const op = operations.data?.find((o) => o.setId === set.id);
-            return (
-              <BackupSetCard
-                key={set.id}
-                set={set}
-                currentOperation={op ? op.label.toLowerCase() + " " + op.percent + "%" : undefined}
-                onOpen={() => navigate("/sets/" + set.id)}
-                onRun={() => api.runSet(set.id).then(sets.reload)}
-                onTest={() => api.testConnection(set.id)}
-                actionsDisabled={readOnly}
-              />
-            );
-          })}
-        </div>
-      )}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(372px, 1fr))",
+          gap: 14
+        }}
+      >
+        {data.map((set) => {
+          const op = operations.data?.find((o) => o.setId === set.id);
+          return (
+            <BackupSetCard
+              key={set.id}
+              set={set}
+              currentOperation={op ? op.label.toLowerCase() + " " + op.percent + "%" : undefined}
+              onOpen={() => navigate("/sets/" + set.id)}
+              onRun={() => api.runSet(set.id).then(sets.reload)}
+              onTest={() => api.testConnection(set.id)}
+              actionsDisabled={readOnly}
+            />
+          );
+        })}
+      </div>
     </>
   );
 }
