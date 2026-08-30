@@ -101,6 +101,28 @@ type BackupService struct {
 	// method's own doc for why a second submission while this is held is
 	// rejected rather than queued.
 	runOnce sync.Mutex
+
+	// configPath is the YAML file this BackupService was opened from
+	// (Open), or "" for a BackupService built directly with New (every
+	// core/ test, which constructs its own *config.Config in memory and
+	// has no file backing it). CreateBackupSet (backupsets.go) refuses to
+	// run at all when this is "": persisting a backup-set change to a
+	// config that has no file of its own to write back to would either
+	// silently no-op or panic deeper in, neither of which is the honest
+	// failure a caller needs.
+	configPath string
+
+	// configMu serializes every call that reads-modifies-writes this
+	// BackupService's configuration (today: CreateBackupSet). It is a
+	// separate lock from runOnce on purpose: runOnce guards "at most one
+	// RunCycle executing", a completely different invariant, and a
+	// backup-set creation blocking on, or being blocked by, an
+	// in-progress run_cycle would be a surprising and unnecessary
+	// coupling between the two. configMu only ever guards the
+	// read-modify-write of the config file plus the in-memory swap of
+	// b.inner/b.revision that makes it take effect immediately (see
+	// backupsets.go's CreateBackupSet for the full sequence).
+	configMu sync.Mutex
 }
 
 // New builds a BackupService from already-constructed dependencies. This
@@ -179,6 +201,7 @@ func Open(ctx context.Context, configPath string) (*BackupService, func() error,
 	}
 
 	svc := New(cfg, journal, rclone.New(), obs.New(os.Stdout, obs.LevelInfo))
+	svc.configPath = configPath
 	return svc, svc.Close, nil
 }
 
@@ -222,15 +245,14 @@ func (b *BackupService) Close() error {
 // an accurate picture of (docs/EPIC-B-multi-nas.md §14, §15.6's
 // RETENTION_PLAN_STALE precedent applied to configuration generally).
 //
-// This has no persistence or reload story of its own: it is computed once,
-// at construction time, from whatever *config.Config the caller handed
-// New (or Open loaded from disk). Backup-set CRUD and any other API
-// surface that would actually let a configuration change while a process
-// keeps running are out of this issue's scope (see this package's
-// introducing PR description); today, two BackupService values report
-// different revisions because they were each built from a different
-// config, for example across a restart with an edited YAML file, or, in a
-// test, deliberately, to prove the conflict check itself.
+// It is computed at construction time from whatever *config.Config the
+// caller handed New (or Open loaded from disk), and again by
+// CreateBackupSet (backupsets.go) every time it hot-reloads b.inner after
+// persisting a change: two BackupService values (or the same one, before
+// and after a CreateBackupSet call) report different revisions exactly
+// when their underlying configuration content actually differs, whether
+// that difference came from a restart against a manually edited YAML
+// file or from an in-process backup-set creation.
 func (b *BackupService) ConfigRevision() string {
 	return b.revision
 }

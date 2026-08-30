@@ -25,8 +25,12 @@ func cmdSources(args []string) int {
 	for _, src := range svc.Sources() {
 		fmt.Printf("%s\n", src.Name)
 		for _, bs := range src.BackupSets {
-			fmt.Printf("  %-40s remote=%-6s remote_path=%-30s local_path=%-30s stale_after=%s\n",
-				bs.ID, bs.RemoteType, bs.RemotePath, bs.LocalPath, bs.StaleAfter)
+			status := "enabled"
+			if bs.Disabled {
+				status = "disabled"
+			}
+			fmt.Printf("  %-40s remote=%-6s remote_path=%-30s local_path=%-30s stale_after=%-8s status=%s\n",
+				bs.ID, bs.RemoteType, bs.RemotePath, bs.LocalPath, bs.StaleAfter, status)
 		}
 	}
 	return 0

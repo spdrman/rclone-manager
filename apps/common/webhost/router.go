@@ -85,6 +85,41 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
 		r.Get("/operations/{id}", h.getOperation)
+
+		// Issue #146 (B2.7): the add-backup-set wizard's (#98) write path.
+		// create-backup-set and ssh-key-import are state-changing but
+		// non-destructive (docs/EPIC-B-multi-nas.md §50), so they get
+		// requireCSRF but NOT requireDestructiveGate — creating a backup
+		// set or persisting an imported key never touches remote or local
+		// backup data by itself, the same reasoning gate.go's own doc
+		// draws between "mutating" and "destructive". host-key-probe and
+		// test-connection are read-only per §50 ("probe host key", "test
+		// SSH"), so neither CSRF nor the destructive gate applies to them
+		// — the same tier GET /system/version and GET /operations/{id}
+		// above are already in.
+		//
+		// test-connection's own path segment ("test-connection") is
+		// registered as a static route, not folded into
+		// /backup-sets/*, precisely because it runs BEFORE a backup set
+		// has an id at all (the wizard's pre-save check); chi matches a
+		// static child before a wildcard sibling, so this never collides
+		// with getBackupSet's own "/backup-sets/*" route below.
+		//
+		// getBackupSet uses chi's bare "*" catch-all, not a
+		// "{id:.*}"-style regexp param: chi's regexp params are matched
+		// per PATH SEGMENT (split on "/") even when the regexp itself
+		// would otherwise span one, so "{id:.*}" only ever matches a
+		// single segment and 404s on a real "source/name" id — proven
+		// directly against chi/v5 v5.3.1 while building this route. "*"
+		// is chi's own documented way to capture the rest of the path,
+		// read back with chi.URLParam(r, "*").
+		r.With(requireCSRF).Post("/backup-sets", h.createBackupSet)
+		r.Get("/backup-sets", h.listBackupSets)
+		r.Post("/backup-sets/test-connection", h.testConnection)
+		r.Get("/backup-sets/*", h.getBackupSet)
+
+		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
+		r.Post("/ssh/host-key-probe", h.probeHostKey)
 	})
 
 	return r

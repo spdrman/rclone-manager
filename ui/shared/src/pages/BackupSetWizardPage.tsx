@@ -1,11 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";
+import { useApi } from "@shared/api/ApiContext";
+import { BackupManagerError } from "@shared/api/contracts";
 import { PageHeader } from "@shared/components/PageHeader";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import type { CompletionMethod } from "@shared/types/backup";
 import { graph, useCausl } from "@shared/state/graph";
+import { setsNode } from "@shared/state/appNodes";
+import { fetchResource } from "@shared/state/resource";
 import { resetWizardAnswers, wizardCanSaveNode, wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
 
 const STEPS = [
@@ -20,16 +24,22 @@ const STEPS = [
 const PUBLIC_KEY =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4pQ7mXvR2tYc8nJ0dKeW1sBfHgZaTqOo9UiKrEu backup-manager@nas-01";
 
-/** Purely presentational — nothing here processes the operator's real
- *  paste (see the import step below); a real import always returns a
- *  server-computed fingerprint, never one derived client-side from key
- *  material that must never leave this screen unhashed. */
-const IMPORTED_KEY_FINGERPRINT = "ed25519 · SHA256:7pMwK3nRt+Vc9jXe1sHfB0oZaGdQ8yTiKrEuM4x";
+/** Shown only until the real probe (issue #146) resolves for the first
+ *  time — see the "Verify server" step below — so step 3 never renders
+ *  a completely blank fingerprint while that request is in flight.
+ *  Never what "Trust host" actually trusts: that always reads the real
+ *  probedKnownHostsLine state, never this constant. */
+const FINGERPRINT_PLACEHOLDER = "SHA256:…probing…";
 
-const TRUSTED_FINGERPRINT = "SHA256:9kQ2mVv+Rt4hLc0pXeN1sJfB7yUwZaGdQ8oT3iKrEuM";
-/** Only ever shown once `wizard.hostKeyChanged` is true — a different
- *  fingerprint than the one this session originally trusted. */
-const CHANGED_FINGERPRINT = "SHA256:2xNfR9mKp+Wb4hTe6qJcZ1sYoUgVaLdQ7iBrHuXeK";
+function errorMessage(e: unknown, fallback: string): string {
+  return e instanceof BackupManagerError ? e.api.message : fallback;
+}
+
+function completionStrategyFor(method: CompletionMethod): "rename" | "marker" | "stable" {
+  if (method === "atomic-rename") return "rename";
+  if (method === "stable-size") return "stable";
+  return "marker";
+}
 
 function completionSummaryLabel(method: CompletionMethod): string {
   if (method === "atomic-rename") return "atomic rename";
@@ -41,6 +51,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   const navigate = useNavigate();
   const { bridge } = usePlatform();
   const caps = bridge.capabilities();
+  const api = useApi();
 
   const [step, setStep] = useState(1);
 
@@ -62,6 +73,22 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   const [keySource, setKeySource] = useState<"generate" | "managed" | "import">("generate");
   const [importPasted, setImportPasted] = useState("");
   const [importedFingerprint, setImportedFingerprint] = useState<string | null>(null);
+  // The backend reference the import step's fingerprint stands for
+  // (issue #146): CreateBackupSetRequest.sshKeyId, never the key
+  // material itself, which never lives in this component's state at
+  // all past the one importSSHKey call below.
+  const [importedKeyId, setImportedKeyId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  // Discovery/storage fields a valid create-backup-set request needs
+  // (issue #146): promoted from #98's `defaultValue`-only placeholders
+  // to real controlled state, same reasoning as `source` above — the
+  // Save buttons need to read back whatever an operator actually typed
+  // here, not the built-in example text.
+  const [remoteFolder, setRemoteFolder] = useState("/backups/postgresql/");
+  const [includePatterns, setIncludePatterns] = useState("*.dump.zst");
+  const [localDestination, setLocalDestination] = useState(() => bridgeDefaultPath(bridge.deployment.storageMount));
 
   // The wizard's other answers — completion method and the deletion
   // acknowledgement — are local too, same tier as `source` above: nothing
@@ -78,6 +105,23 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   // onBlur).
   const [hostTrusted, setHostTrusted] = useState(false);
   const [trustedHostKey, setTrustedHostKey] = useState<string | null>(null);
+  // The known_hosts line CreateBackupSetRequest.knownHostsLine carries
+  // once "Trust host" is actually clicked — the real trust anchor a
+  // subsequent connection is checked against, not merely display text
+  // (issue #146).
+  const [trustedKnownHostsLine, setTrustedKnownHostsLine] = useState<string | null>(null);
+
+  // Real host-key probe (issue #146), replacing #98's hardcoded
+  // fingerprint constants: probedFor is the "host:port" the CURRENT
+  // probe results are for, so the effect below re-probes automatically
+  // whenever source.host/source.port changes while step 3 is open,
+  // without needing revalidateHostTrust to also manage this state.
+  const [probing, setProbing] = useState(false);
+  const [probeError, setProbeError] = useState<string | null>(null);
+  const [probedFor, setProbedFor] = useState<string | null>(null);
+  const [probedFingerprint, setProbedFingerprint] = useState<string | null>(null);
+  const [probedAlgorithm, setProbedAlgorithm] = useState<string | null>(null);
+  const [probedKnownHostsLine, setProbedKnownHostsLine] = useState<string | null>(null);
 
   // wizard.hostKeyChanged lives on the shared graph — see
   // state/wizardNodes.ts for why this one node earns that spot when the
@@ -109,6 +153,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   const trustHost = () => {
     setHostTrusted(true);
     setTrustedHostKey(source.host + ":" + source.port);
+    setTrustedKnownHostsLine(probedKnownHostsLine);
     graph.commit("wizard/trustHost", (tx) => tx.set(wizardHostKeyChangedNode, false));
   };
 
@@ -123,14 +168,124 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
     if (trustedHostKey !== source.host + ":" + source.port) {
       setHostTrusted(false);
       setTrustedHostKey(null);
+      setTrustedKnownHostsLine(null);
     }
   };
+
+  // probeHost is issue #146's real replacement for #98's hardcoded
+  // TRUSTED_FINGERPRINT/CHANGED_FINGERPRINT constants: it fetches
+  // host:port's actual current host key, trusting nothing itself (see
+  // core's ProbeHostKey doc) — only "Trust host" (above) turns a probed
+  // result into something a later connection is actually checked
+  // against.
+  async function probeHost() {
+    const key = source.host + ":" + source.port;
+    setProbing(true);
+    setProbeError(null);
+    // Cleared up front, not just overwritten on success: while a new
+    // probe (for a just-edited host) is in flight, "Trust host" must
+    // not stay enabled against the PREVIOUS host's stale fingerprint —
+    // see !probedFingerprint in the button's own disabled condition
+    // below.
+    setProbedFingerprint(null);
+    setProbedAlgorithm(null);
+    setProbedKnownHostsLine(null);
+    try {
+      const result = await api.probeHostKey(source.host, Number(source.port) || 22);
+      setProbedFingerprint(result.fingerprint);
+      setProbedAlgorithm(result.algorithm);
+      setProbedKnownHostsLine(result.knownHostsLine);
+    } catch (e) {
+      setProbeError(errorMessage(e, "Could not reach this server to fetch its host key."));
+    } finally {
+      setProbedFor(key);
+      setProbing(false);
+    }
+  }
+
+  // Probes automatically the first time step 3 is opened, and again
+  // whenever source.host/source.port changes while it stays open —
+  // "Re-fetch fingerprint" (below) calls probeHost() directly for an
+  // explicit re-check of the SAME host.
+  useEffect(() => {
+    const key = source.host + ":" + source.port;
+    if (step === 3 && probedFor !== key && !probing) {
+      // probeHost's first statement is setProbing(true), a genuine,
+      // deliberate "start loading" state update synchronous with this
+      // effect running — the canonical fetch-on-mount shape, not the
+      // unbounded render cascade this rule otherwise guards against
+      // (there is nothing recursive here: probedFor is set at the end
+      // of probeHost, which is what stops this same effect from
+      // re-triggering itself once the fetch resolves).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void probeHost();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, source.host, source.port]);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // handleSave is every one of the wizard's three Save buttons' onClick
+  // (issue #146): "Save, enable & run" and "Save & enable" pass
+  // disabled: false, differing only in runImmediately; "Save disabled"
+  // passes disabled: true. A failure surfaces inline via saveError
+  // (never a silent no-op); a success navigates back to the sets list,
+  // after refreshing the shared setsNode so BackupSetsPage shows the
+  // new set with no manual refetch of its own (appNodes.ts's setsNode +
+  // resource.ts's fetchResource, exactly as that module's own doc
+  // describes for a mutation elsewhere).
+  async function handleSave(disabled: boolean, runImmediately: boolean) {
+    if (keySource !== "import" || !importedKeyId) {
+      setSaveError(
+        keySource === "generate"
+          ? "Generating a key on save isn't available yet — import a key on the Authentication step instead."
+          : "Reusing a managed key on save isn't available yet — import a key on the Authentication step instead."
+      );
+      return;
+    }
+    if (!trustedKnownHostsLine) {
+      setSaveError("Trust the host's fingerprint on the Verify server step before saving.");
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.createBackupSet({
+        name: source.name,
+        host: source.host,
+        port: Number(source.port) || 22,
+        user: source.username,
+        sshKeyId: importedKeyId,
+        knownHostsLine: trustedKnownHostsLine,
+        remotePath: remoteFolder,
+        localPath: localDestination,
+        include: includePatterns
+          .split(",")
+          .map((p) => p.trim())
+          .filter(Boolean),
+        completionStrategy: completionStrategyFor(completion),
+        stableForSeconds: completion === "stable-size" ? 3600 : undefined,
+        disabled,
+        runImmediately
+      });
+      fetchResource(setsNode, () => api.listSets());
+      navigate("/sets");
+    } catch (e) {
+      setSaveError(errorMessage(e, "Could not save this backup set."));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   let saveHint = "";
   if (hostKeyChanged) {
     saveHint = "The host key changed since it was trusted — resolve that on the Verify server step before saving.";
   } else if (saveDisabled && !readOnly) {
     saveHint = "Acknowledge remote-source handling to enable saving.";
+  } else if (saveError) {
+    saveHint = saveError;
   }
 
   return (
@@ -307,13 +462,23 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <button
                           className="btn btn--primary"
-                          disabled={importPasted.trim().length === 0}
-                          onClick={() => {
-                            setImportedFingerprint(IMPORTED_KEY_FINGERPRINT);
-                            setImportPasted("");
+                          disabled={importPasted.trim().length === 0 || importing}
+                          onClick={async () => {
+                            setImporting(true);
+                            setImportError(null);
+                            try {
+                              const result = await api.importSSHKey(importPasted);
+                              setImportedFingerprint(result.algorithm + " · " + result.fingerprint);
+                              setImportedKeyId(result.id);
+                              setImportPasted("");
+                            } catch (e) {
+                              setImportError(errorMessage(e, "Could not import this key."));
+                            } finally {
+                              setImporting(false);
+                            }
                           }}
                         >
-                          Import key
+                          {importing ? "Importing…" : "Import key"}
                         </button>
                         <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
                           {importPasted.trim().length === 0
@@ -321,6 +486,12 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                             : "Nothing checks this on this screen — the backend validates it against the server on import."}
                         </span>
                       </div>
+                      {importError ? (
+                        <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                          <span aria-hidden="true">!</span>
+                          <span>{importError}</span>
+                        </div>
+                      ) : null}
                       <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
                         <span aria-hidden="true">i</span>
                         <span>
@@ -349,22 +520,30 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                   </WarningBanner>
                 </div>
               ) : null}
+              {probeError ? (
+                <div style={{ marginBottom: 16 }}>
+                  <WarningBanner tone="danger" eyebrow="Could not fetch the host key">
+                    {probeError}
+                  </WarningBanner>
+                </div>
+              ) : null}
               <FingerprintDisplay
                 host={source.host + ":" + source.port}
-                algorithm="ssh-ed25519"
-                fingerprint={hostKeyChanged ? CHANGED_FINGERPRINT : TRUSTED_FINGERPRINT}
-                changedFrom={hostKeyChanged ? TRUSTED_FINGERPRINT : undefined}
+                algorithm={probedAlgorithm ?? "ssh-ed25519"}
+                fingerprint={probedFingerprint ?? FINGERPRINT_PLACEHOLDER}
                 trustedAt={hostTrusted && !hostKeyChanged ? new Date().toISOString() : null}
               />
-              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap", alignItems: "center" }}>
                 <button
                   className={"btn " + (hostKeyChanged ? "btn--destructive-confirm" : "btn--primary")}
-                  disabled={hostTrusted && !hostKeyChanged}
+                  disabled={(hostTrusted && !hostKeyChanged) || probing || !probedFingerprint}
                   onClick={trustHost}
                 >
                   {hostKeyChanged ? "Trust new fingerprint" : hostTrusted ? "Host trusted" : "Trust host"}
                 </button>
-                <button className="btn">Re-fetch fingerprint</button>
+                <button className="btn" disabled={probing} onClick={() => void probeHost()}>
+                  {probing ? "Fetching…" : "Re-fetch fingerprint"}
+                </button>
               </div>
               <div style={{ marginTop: 16 }}>
                 <WarningBanner tone="danger" eyebrow="If this ever changes">
@@ -382,8 +561,12 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               lede="Where artifacts appear, and how Backup Manager knows one is finished being written."
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
-                <Field label="Remote folder" defaultValue="/backups/postgresql/" mono span />
-                <Field label="Include patterns" defaultValue="*.dump.zst" mono />
+                <Field label="Remote folder" value={remoteFolder} onChange={setRemoteFolder} mono span />
+                <Field label="Include patterns" value={includePatterns} onChange={setIncludePatterns} mono />
+                {/* Exclude patterns stays display-only (#98): core's
+                    config.BackupSet has no exclude field yet (only
+                    Include, see core/internal/config/config.go), so
+                    there is nowhere real for this to be sent. */}
                 <Field label="Exclude patterns" defaultValue="*.tmp, *.part" mono />
               </div>
 
@@ -435,7 +618,12 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               <label className="field" style={{ maxWidth: 560 }}>
                 <span className="field__label">NAS destination</span>
                 <span style={{ display: "flex", gap: 8 }}>
-                  <input className="input input--mono" style={{ flex: 1 }} defaultValue={bridgeDefaultPath(bridge.deployment.storageMount)} />
+                  <input
+                    className="input input--mono"
+                    style={{ flex: 1 }}
+                    value={localDestination}
+                    onChange={(e) => setLocalDestination(e.target.value)}
+                  />
                   {/* Do not fake a native picker the platform does not have (§22). */}
                   <button className="btn" style={{ whiteSpace: "nowrap" }}>
                     {caps.storagePicker ? "Browse volumes…" : "Validate path"}
@@ -484,8 +672,8 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                   borderRadius: "var(--radius-lg)", overflow: "hidden"
                 }}
               >
-                <Summary label="Source" lines={[source.host, "/backups/postgresql/"]} />
-                <Summary label="Destination" lines={["/data/backups/production/", "postgres/"]} />
+                <Summary label="Source" lines={[source.host, remoteFolder]} />
+                <Summary label="Destination" lines={[localDestination]} />
                 <Summary label="Retention" lines={["7 daily", "13 weekly", "12 monthly"]} />
                 <Summary label="Validation" lines={["SHA-256", "transfer verify", completionSummaryLabel(completion)]} />
                 <Summary
@@ -550,11 +738,30 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
-                <button className="btn btn--primary" disabled={saveDisabled}>Save, enable &amp; run</button>
-                <button className="btn" disabled={saveDisabled}>Save &amp; enable</button>
-                <button className="btn btn--quiet">Save disabled</button>
+                <button
+                  className="btn btn--primary"
+                  disabled={saveDisabled || saving}
+                  onClick={() => void handleSave(false, true)}
+                >
+                  {saving ? "Saving…" : "Save, enable & run"}
+                </button>
+                <button
+                  className="btn"
+                  disabled={saveDisabled || saving}
+                  onClick={() => void handleSave(false, false)}
+                >
+                  {saving ? "Saving…" : "Save & enable"}
+                </button>
+                <button className="btn btn--quiet" disabled={saving} onClick={() => void handleSave(true, false)}>
+                  {saving ? "Saving…" : "Save disabled"}
+                </button>
                 {saveHint ? (
-                  <span style={{ fontSize: "var(--text-sm)", color: hostKeyChanged ? "var(--danger)" : "var(--text-3)" }}>
+                  <span
+                    style={{
+                      fontSize: "var(--text-sm)",
+                      color: hostKeyChanged || saveError ? "var(--danger)" : "var(--text-3)"
+                    }}
+                  >
                     {saveHint}
                   </span>
                 ) : null}
