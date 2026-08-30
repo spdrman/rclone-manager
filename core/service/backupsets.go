@@ -339,6 +339,25 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// so this read cannot itself race the swap below.
 	prevInner := b.state.Load().inner
 	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
+	// Alerting is re-decided from the config file this method just
+	// re-read, then carried across the swap. This is the one moment an
+	// edited alerts.enabled can take effect in a running process, so it
+	// is the one moment it must not be ignored: an administrator who set
+	// alerts.enabled: false and then added a backup set kept getting
+	// notified until the next restart, and one who turned it on stayed
+	// silent, while repeated_failure_threshold from the same block did
+	// hot-reload. AdoptAlerts re-reads the opt-in and carries the
+	// dispatcher only if it is still on, because the dispatcher holds
+	// which conditions are currently firing (internal/alert's
+	// de-duplication state) and rebuilding it would re-alert every
+	// still-unresolved condition the next time a cycle ran, purely
+	// because somebody added a backup set. When it declines (alerting was
+	// off before this reload, or has just been turned off), the question
+	// is settled from b.alertSink instead, which is what makes turning
+	// alerting ON take effect here too.
+	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
+		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
+	}
 	newRevision := computeConfigRevision(cfg)
 	b.state.Store(&configState{inner: newInner, revision: newRevision})
 
@@ -517,11 +536,12 @@ func orDefault(v, def time.Duration) time.Duration {
 // writeConfigAtomically marshals cfg as YAML and writes it to path via a
 // temp-file-plus-rename, so a reader (this process's own next config.Load
 // re-read, or an operator's own `cat`) never observes a partially-written
-// file. This is a config file, not a lifecycle-committed artifact, so it
-// deliberately does not reach for internal/lifecycle/commit.go's fuller
-// fsync-both-file-and-directory ceremony; os.Rename's own atomicity on a
-// POSIX filesystem (same directory, so same filesystem) is what this
-// method relies on.
+// file. It fsyncs the temp file before the rename and the containing
+// directory after it (via snapshot.go's fsyncDir), because os.Rename's
+// atomicity on a POSIX filesystem only promises no reader sees a half-file
+// — it promises nothing about the rename itself surviving a power loss,
+// and a backup set an operator was told was saved has to still be there
+// after the crash that follows.
 func writeConfigAtomically(path string, cfg *config.Config) error {
 	b, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -551,6 +571,9 @@ func writeConfigAtomically(path string, cfg *config.Config) error {
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replacing configuration file: %w", err)
+	}
+	if err := fsyncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("syncing the configuration directory: %w", err)
 	}
 	return nil
 }

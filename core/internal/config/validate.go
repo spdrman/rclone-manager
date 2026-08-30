@@ -65,8 +65,32 @@ func (c *Config) Validate() error {
 	}
 
 	v.validateRetention(&c.Retention)
+	v.validateAlerts(&c.Alerts)
 
 	return v.err()
+}
+
+// validateAlerts resolves the Alerts block (docs/EPIC-B-multi-nas.md
+// §71). Enabled needs no checking: both of its values are meaningful, and
+// false is the safe one.
+//
+// RepeatedFailureThreshold gets the same treatment validateRetention
+// already gives a retention tier, and for the same reason. A key left out
+// of the YAML file arrives here as a literal zero, and reading that
+// literally would mean "alert as soon as a single artifact fails", which
+// is not what omitting a key asks for; it is how an operator who turned
+// alerting on gets a notification per failed transfer and switches the
+// whole thing back off. So zero means "the documented default" and a
+// negative number is refused outright as a config mistake rather than
+// clamped, since there is no sensible reading of a negative count of
+// failures.
+func (v *validator) validateAlerts(a *Alerts) {
+	switch {
+	case a.RepeatedFailureThreshold == 0:
+		a.RepeatedFailureThreshold = DefaultRepeatedFailureThreshold
+	case a.RepeatedFailureThreshold < 0:
+		v.addf("alerts.repeated_failure_threshold: must be a positive number of failed artifacts (got %d)", a.RepeatedFailureThreshold)
+	}
 }
 
 func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, seenSetIDs map[string]string) {
@@ -262,9 +286,39 @@ func (v *validator) validateCompletion(path string, c *Completion) {
 		if c.StableFor.Duration() <= 0 {
 			v.addf("%s: stable_for must be set to a positive duration when strategy is \"stable\"", path)
 		}
+		// WP3.2: "stable" is a heuristic, not a producer completion
+		// signal, so FR-15's remote-delete gate needs an extra
+		// deletion-safety delay before it treats a stable artifact as
+		// producer-confirmed. See Completion.DeleteSafetyDelay's own doc
+		// for why this is a distinct field from stable_for rather than a
+		// second use of it.
+		//
+		// Unlike stable_for just above, an omitted or zero value is
+		// resolved to DefaultDeleteSafetyDelay rather than refused. The
+		// key is new in WP3.2, so every config file written against an
+		// earlier release omits it; refusing those would stop the daemon
+		// loading a config that was valid the day before an upgrade, and
+		// would reject every stable-strategy backup set the API layer
+		// builds (service.CreateBackupSet has no field for this key), for
+		// a value the project has a documented safe default for. Reading
+		// the omission literally as "no delay required" is the other
+		// wrong answer: it would silently disable the gate on exactly the
+		// deployments that never had the chance to opt in. Only a
+		// negative duration, which can only ever be something the
+		// operator typed on purpose and which would make the gate a
+		// no-op, is refused.
+		switch {
+		case c.DeleteSafetyDelay.Duration() < 0:
+			v.addf("%s: delete_safety_delay must not be negative (got %s); omit it to use the default of %s", path, c.DeleteSafetyDelay, DefaultDeleteSafetyDelay)
+		case c.DeleteSafetyDelay.Duration() == 0:
+			c.DeleteSafetyDelay = Duration(DefaultDeleteSafetyDelay)
+		}
 	case "rename", "marker":
 		if c.StableFor.Duration() != 0 {
 			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.DeleteSafetyDelay.Duration() != 0 {
+			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
 		}
 	case "":
 		v.addf("%s: strategy must be set (\"rename\", \"marker\" or \"stable\", FR-8)", path)

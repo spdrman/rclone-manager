@@ -43,6 +43,17 @@ describe("provider conformance", () => {
         expect(Boolean(bridge.notify)).toBe(caps.nativeNotifications);
       });
 
+      /** §22, the same refusal the Go half makes at wiring time
+       *  (apps/common/platform/notify.NewPlatformSink): a provider that
+       *  CLAIMS native notifications and cannot reach its host binding must
+       *  reject, because a resolved promise is how every caller reads
+       *  "the operator was notified". */
+      it("rejects rather than resolving when its host notification binding is missing", async () => {
+        const notify = bridge.notify;
+        if (!notify) return;
+        await expect(notify.call(bridge, "Backup is stale", "production/pg has no recent backup")).rejects.toThrow();
+      });
+
       it("documents its deployment and storage mount", () => {
         expect(bridge.deployment.label).toBeTruthy();
         expect(bridge.deployment.storageMount.startsWith("/")).toBe(true);
@@ -50,6 +61,28 @@ describe("provider conformance", () => {
       });
     });
   }
+
+  /** Keeps the assertion above from being vacuous: if no provider declared
+   *  the capability, every bridge would skip it and the suite would still be
+   *  green. */
+  it("keeps UGOS as the only provider claiming native notifications today", () => {
+    const notifying = ALL_BRIDGES.filter((b) => b.capabilities().nativeNotifications).map((b) => b.id);
+    expect(notifying).toEqual(["ugos"]);
+  });
+
+  it("delivers through the host binding when it IS present", async () => {
+    const ugos = ALL_BRIDGES.find((b) => b.id === "ugos");
+    if (!ugos?.notify) throw new Error("the ugos bridge no longer exposes notify()");
+
+    const hostNotify = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("ugos", { notify: hostNotify });
+    try {
+      await expect(ugos.notify("Backup is stale", "production/pg")).resolves.toBeUndefined();
+      expect(hostNotify).toHaveBeenCalledWith("Backup is stale", "production/pg");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 
   it("keeps UGOS as the only native-session provider today", () => {
     const native = ALL_BRIDGES.filter((b) => b.capabilities().nativeAuth).map((b) => b.id);

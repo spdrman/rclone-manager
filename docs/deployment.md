@@ -403,6 +403,45 @@ all. `backup-manager status` works identically either way, since it is always a 
 read-only check against the shared state database file, independent of which binary is
 actually running as `rclone-manager`'s main process.
 
+## Proactive alerting
+
+Backup manager can tell an administrator that something is wrong without anyone
+having to open the dashboard. It notifies on exactly four conditions
+(`docs/EPIC-B-multi-nas.md` §71): a **stale backup**, **repeated failure** on a backup
+set, a **changed SSH host key**, and **critical storage pressure**. That list is
+deliberately closed; this is one narrow notification path, not a general alerting
+framework, and it will not grow one in v1.
+
+It is off unless you turn it on:
+
+```yaml
+alerts:
+  enabled: true
+  # How many artifacts must be sitting in FAILED for one backup set before
+  # that counts as "repeated failure". Omit it for the default of 3.
+  repeated_failure_threshold: 3
+```
+
+A config file with no `alerts:` block at all keeps working exactly as before and
+notifies nobody, so turning this on is always a deliberate edit.
+
+**Where the alert goes is not configured here.** Delivery is the platform's own local
+notification capability, supplied by the provider app rather than by this file, which
+is why there is no URL, command or credential to get wrong. A platform that declares
+no native notification capability, and the generic Docker/Linux host is one, cannot
+deliver: `/backup-manager-web serve` prints `proactive alerting is off` at startup and
+carries on running backups normally. It never emulates delivery, so alerting is either
+visibly on or visibly off, never silently swallowed.
+
+**An alert is a notification and nothing else.** A critical-storage or repeated-failure
+alert never triggers retention, never deletes anything to free space, and a changed
+host key still requires you to verify the new key out of band and update `known_hosts`
+yourself. The connection stays refused until you do.
+
+**The same unresolved problem is reported once**, not once per poll. A condition that
+clears and later comes back does alert again, so a recurrence is never lost behind a
+notification you already dismissed.
+
 ## Release hashes
 
 `scripts/release/record-release-hashes.sh` builds `container/Dockerfile` for both

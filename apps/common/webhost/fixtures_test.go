@@ -124,6 +124,13 @@ type syncFakeBackend struct {
 	planNextID   int
 	errOnPreview error
 	errOnApply   error
+
+	// notReady makes Ready report false, standing in for a backend whose
+	// §46.1 startup sequence did not complete. It is a field rather than a
+	// second fake type because readiness is now a fact the backend owns
+	// (BackupServiceClient.Ready), so "not ready" is a state a real
+	// backend can be in, not only a missing one.
+	notReady bool
 }
 
 func newSyncFakeBackend() *syncFakeBackend {
@@ -187,6 +194,8 @@ func (f *syncFakeBackend) ApplyRetentionPlan(_ context.Context, req service.Appl
 	plan.OperationID = "op_test_retention_apply"
 	return plan, nil
 }
+
+func (f *syncFakeBackend) Ready() bool { return !f.notReady }
 
 func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {
 	if f.errOnSubmit != nil {
@@ -255,6 +264,10 @@ func (f *syncFakeBackend) TestConnection(context.Context, service.ConnectionTest
 	return service.ConnectionTestResult{}, errors.New("syncFakeBackend: TestConnection not implemented")
 }
 
+func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	return nil, nil
+}
+
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
 // behaves like the real core/service.BackupService's own contract:
 // persist synchronously, then finish the work later on a goroutine that
@@ -275,6 +288,8 @@ func newAsyncFakeBackend() *asyncFakeBackend {
 }
 
 func (f *asyncFakeBackend) ConfigRevision() string { return "rev-1" }
+
+func (f *asyncFakeBackend) Ready() bool { return true }
 
 func (f *asyncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {
 	f.mu.Lock()
@@ -362,6 +377,10 @@ func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.H
 
 func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
 	return service.ConnectionTestResult{}, errors.New("asyncFakeBackend: TestConnection not implemented")
+}
+
+func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	return nil, nil
 }
 
 var errBoom = errors.New("boom")

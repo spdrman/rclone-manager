@@ -286,3 +286,86 @@ func TestProcessArtifact_ResumesDeleteFromAPreviousCycle(t *testing.T) {
 		t.Error("the remote object was never deleted on the retried attempt")
 	}
 }
+
+// stableBackupSet is testBackupSet's WP3.2 twin: a "stable"-strategy
+// backup set instead of "rename", with both the discovery-time stability
+// window (StableFor) and WP3.2's own additional deletion-safety delay
+// (DeleteSafetyDelay) configured.
+func stableBackupSet(t *testing.T, localDir string, safetyDelay time.Duration) config.BackupSet {
+	t.Helper()
+	bs := testBackupSet(t, localDir)
+	bs.Completion = config.Completion{
+		Strategy:          "stable",
+		StableFor:         config.Duration(5 * time.Minute),
+		DeleteSafetyDelay: config.Duration(safetyDelay),
+	}
+	return bs
+}
+
+// TestProcessArtifact_StableStrategy_DeleteGateWaitsForSafetyDelay is
+// WP3.2's own boundary/INTEGRATION proof (docs/EPIC-B-multi-nas.md §71
+// Work Package 3.2): a full transfer -> verify -> commit -> (WP3.2's
+// stable-mode gate) -> delete-gate pass for a "stable"-strategy backup
+// set, run twice against the identical fake transport and journal like
+// TestProcessArtifact_TransientDeleteFailure_RetriedOnNextCycle above.
+//
+// The first call reaches COMMITTED and then finds the configured
+// delete_safety_delay has not elapsed yet: remote deletion must not fire
+// early, so the remote object must still be present and the journal must
+// still read COMMITTED afterward. The second call, with svc.Now moved far
+// enough past that same COMMITTED write, finds the delay satisfied and
+// completes the delete exactly as a "rename"/"marker" backup set already
+// does in TestProcessArtifact_NoShutdown_CompletesAndDeletesRemote.
+func TestProcessArtifact_StableStrategy_DeleteGateWaitsForSafetyDelay(t *testing.T) {
+	localDir := t.TempDir()
+	safetyDelay := 10 * time.Minute
+	bs := stableBackupSet(t, localDir, safetyDelay)
+	source := transport.Source{ID: "stable-gate-test"}
+
+	tr := newFakeTransport()
+	// Well before epoch - StableFor, so discovery's own "stable"
+	// completion check (internal/discovery/complete.go) already treats
+	// this candidate as complete as of epoch, exactly like every other
+	// fixture in this file that discovers at a fixed `epoch`.
+	tr.put("backup.dump", "payload bytes", epoch.Add(-time.Hour).Unix())
+
+	journal := openJournal(t)
+	rec := discoverOneRecord(t, context.Background(), journal, tr, source, bs)
+
+	svc := New(&config.Config{}, journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.processArtifact(context.Background(), source, bs, rec)
+
+	afterFirstCall, err := journal.Get(context.Background(), rec.Artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if afterFirstCall.State != string(lifecycle.Committed) {
+		t.Fatalf("after the first call: journal state = %q, want %q: the stable-mode safety delay has not elapsed, so the pipeline must stop at COMMITTED, not advance toward a delete", afterFirstCall.State, lifecycle.Committed)
+	}
+	if got := tr.deleteCallCount(); got != 0 {
+		t.Fatalf("after the first call: DeleteRemote was called %d time(s), want 0: remote deletion must not fire before the safety delay elapses", got)
+	}
+	if _, stillThere := tr.objects["backup.dump"]; !stillThere {
+		t.Fatal("after the first call: the remote object should still be present, remote deletion must not fire early")
+	}
+
+	// A later cycle, run far enough past the first COMMITTED write that
+	// the configured delete_safety_delay has genuinely elapsed.
+	svc.Now = fixedNow(epoch.Add(safetyDelay + time.Minute))
+	svc.processArtifact(context.Background(), source, bs, afterFirstCall)
+
+	final, err := journal.Get(context.Background(), rec.Artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != string(lifecycle.Complete) {
+		t.Fatalf("after the second call: journal state = %q, want %q: once the safety delay has elapsed, a stable-strategy artifact must be able to complete exactly like a rename/marker one", final.State, lifecycle.Complete)
+	}
+	if got := tr.deleteCallCount(); got != 1 {
+		t.Fatalf("after the second call: DeleteRemote was called %d time(s), want exactly 1", got)
+	}
+	if _, stillThere := tr.objects["backup.dump"]; stillThere {
+		t.Error("after the second call: the remote object was never deleted")
+	}
+}

@@ -44,13 +44,19 @@ func newFlagSet(name string) (*flag.FlagSet, *string) {
 // The returned cleanup func closes the journal; callers should always
 // `defer cleanup()` immediately.
 func openService(ctx context.Context, configPath string, withTransport bool) (*app.Service, *config.Config, func(), error) {
-	cfg, journal, err := service.OpenConfigAndJournal(ctx, configPath)
+	cfg, journal, releaseJournal, err := service.OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
 	cleanup := func() {
 		if err := journal.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+		}
+		// Only after the journal handle is closed: the shared journal lock
+		// is what keeps another process from migrating this journal while
+		// this command still has it open (see core/service's startup.go).
+		if err := releaseJournal(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: releasing the state database lock: %v\n", err)
 		}
 	}
 

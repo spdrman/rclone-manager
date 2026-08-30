@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -243,4 +246,72 @@ func splitStatements(script string) []string {
 		}
 	}
 	return out
+}
+
+// PendingMigration reports whether Open would actually apply a migration to
+// the database at path, without opening, migrating or otherwise changing
+// anything itself.
+//
+// It exists so core/service's startup sequence can skip its pre-migration
+// snapshot (and the restore that goes with it) on the overwhelmingly common
+// start where the schema is already current: taking a copy of a journal
+// nothing is about to change, and keeping a restore path armed against it,
+// is pure risk with no upside. See core/service/startup.go for what that
+// buys.
+//
+// A path that does not exist yet is reported as pending: Open would create
+// the database and apply every migration to it, which is exactly the case a
+// snapshot ("nothing existed") is still meaningful for.
+//
+// The two refusals migrate() makes (ErrUnknownSchemaVersion, ErrSchemaDrift)
+// are deliberately NOT reported as pending. Neither one applies anything, so
+// there is nothing for a snapshot to protect, and Open reports them itself
+// with the same words it always has. This function's job is only "would a
+// migration run", never "would Open succeed".
+func PendingMigration(ctx context.Context, path string) (bool, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return true, nil
+		}
+		return false, fmt.Errorf("state: checking for pending migrations at %s: %w", path, err)
+	}
+
+	known, err := loadMigrations()
+	if err != nil {
+		return false, err
+	}
+
+	db, err := sql.Open(driverName, path)
+	if err != nil {
+		return false, fmt.Errorf("state: checking for pending migrations at %s: %w", path, err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	if _, err := db.ExecContext(ctx, "PRAGMA busy_timeout = 5000"); err != nil {
+		return false, fmt.Errorf("state: checking for pending migrations at %s: %w", path, err)
+	}
+
+	var tracked string
+	err = db.QueryRowContext(ctx,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").Scan(&tracked)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// No tracking table: Open bootstraps it and applies everything.
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("state: checking for pending migrations at %s: %w", path, err)
+	}
+
+	applied, err := appliedMigrations(ctx, db)
+	if err != nil {
+		return false, err
+	}
+
+	for _, m := range known {
+		if _, ok := applied[m.version]; !ok {
+			return true, nil
+		}
+	}
+	return false, nil
 }

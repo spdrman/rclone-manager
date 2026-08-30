@@ -25,6 +25,7 @@ sources:
         completion:
           strategy: stable
           stable_for: 10m
+          delete_safety_delay: 60m
 
         stale_after: 30h
 
@@ -49,3 +50,7 @@ retention:
   weekly_months: 3
   monthly_months: 12
   protect_last_known_good: true
+
+alerts:
+  enabled: true
+  repeated_failure_threshold: 3

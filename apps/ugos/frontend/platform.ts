@@ -34,9 +34,17 @@ export const ugosBridge: PlatformBridge = {
   },
 
   async notify(title: string, message: string) {
-    // Bridged to the host notification centre. If the bridge is missing we stay
-    // silent rather than pretending the notification was delivered.
+    // Bridged to the host notification centre. Declaring nativeNotifications is
+    // a promise that a notification actually goes out, so a missing bridge
+    // rejects: resolving is how a caller reads "delivered", and silently
+    // resolving here is the §22 emulation the Go half refuses at wiring time
+    // (apps/common/platform/notify.NewPlatformSink turns an undeclared
+    // capability into a typed refusal rather than a sink that drops alerts).
+    // A caller that fires and forgets has to catch, which is the point.
     const host = (window as unknown as { ugos?: { notify?(t: string, m: string): Promise<void> } }).ugos;
-    if (host?.notify) await host.notify(title, message);
+    if (!host?.notify) {
+      throw new Error("ugos: window.ugos.notify is unavailable, so the notification was not delivered");
+    }
+    await host.notify(title, message);
   }
 };

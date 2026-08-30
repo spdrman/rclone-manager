@@ -144,3 +144,65 @@ func TestParseMigrationFilename(t *testing.T) {
 		}
 	}
 }
+
+// TestPendingMigration_OnlyTrueWhenSomethingWouldActuallyBeApplied is the
+// check core/service's startup sequence uses to decide whether to take a
+// pre-migration snapshot at all. Getting it wrong in the "true" direction
+// costs only a needless copy; getting it wrong in the "false" direction
+// would migrate without one, so each case here states which side it pins.
+func TestPendingMigration_OnlyTrueWhenSomethingWouldActuallyBeApplied(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	// A database that does not exist yet: Open would create it and apply
+	// everything.
+	pending, err := PendingMigration(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("PendingMigration (nonexistent): %v", err)
+	}
+	if !pending {
+		t.Fatal("PendingMigration on a nonexistent database = false, want true")
+	}
+
+	journal, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// The same database, now fully migrated. This is the case that matters:
+	// every start after the first, and every CLI command run against a
+	// journal a daemon already migrated.
+	pending, err = PendingMigration(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("PendingMigration (migrated): %v", err)
+	}
+	if pending {
+		t.Fatal("PendingMigration on a fully migrated database = true, want false: an ordinary start must not snapshot or arm a restore")
+	}
+
+	// And the positive control for that false: put the database back one
+	// migration and it must report true again, so the false above is a
+	// real reading rather than a function that always says no.
+	db, err := sql.Open(driverName, dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)"); err != nil {
+		t.Fatalf("delete the newest applied migration: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	pending, err = PendingMigration(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("PendingMigration (one migration missing): %v", err)
+	}
+	if !pending {
+		t.Fatal("PendingMigration with a migration un-applied = false, want true")
+	}
+}

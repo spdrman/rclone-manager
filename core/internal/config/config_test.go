@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if len(bs.Include) != 1 || bs.Include[0] != "*.dump.zst" {
 		t.Fatalf("Include decoded wrong: %#v", bs.Include)
 	}
-	if bs.Completion.Strategy != "stable" || bs.Completion.StableFor.Duration() != 10*time.Minute {
+	if bs.Completion.Strategy != "stable" || bs.Completion.StableFor.Duration() != 10*time.Minute || bs.Completion.DeleteSafetyDelay.Duration() != 60*time.Minute {
 		t.Fatalf("Completion decoded wrong: %#v", bs.Completion)
 	}
 	if got, want := bs.StaleAfter.Duration(), 30*time.Hour; got != want {
@@ -140,6 +141,48 @@ func TestLoadAndValidateMinimalExampleAppliesDefaults(t *testing.T) {
 	}
 	if got, want := bs.ID.String(), "production/postgres-primary"; got != want {
 		t.Errorf("BackupSet.ID = %q, want %q", got, want)
+	}
+}
+
+// TestLoadAndValidatePreWP32StableConfigStillLoads is the upgrade proof for
+// WP3.2's delete_safety_delay key.
+//
+// The key did not exist before WP3.2, so every config file on disk in the
+// field omits it. If Validate refused a stable-strategy set without it, the
+// daemon would stop loading a file that was valid the day before the
+// upgrade, OpenConfigAndJournal would return no journal, and nothing would
+// be backed up until an operator hand-edited YAML, all reported as an error
+// naming a key their previous release had never heard of.
+//
+// The first assertion below is the positive control for the second, and it
+// is the assertion that actually protects this test from rotting. A
+// negative claim ("this config still loads") is worthless if the fixture
+// quietly gains the key it is supposed to be missing, which is exactly what
+// happened to all four fixtures in this package's first pass at WP3.2. So
+// read the bytes and fail loudly if minimal.yaml ever grows the key again,
+// rather than trusting it to stay minimal.
+func TestLoadAndValidatePreWP32StableConfigStillLoads(t *testing.T) {
+	raw, err := os.ReadFile("testdata/minimal.yaml")
+	if err != nil {
+		t.Fatalf("reading fixture: %v", err)
+	}
+	if strings.Contains(string(raw), "delete_safety_delay") {
+		t.Fatal("testdata/minimal.yaml sets delete_safety_delay, so it no longer stands in for a config written before WP3.2 and this test proves nothing; keep that key in full.yaml only")
+	}
+	if !strings.Contains(string(raw), "strategy: stable") {
+		t.Fatal("testdata/minimal.yaml no longer uses the stable completion strategy, so it does not exercise the WP3.2 gate at all")
+	}
+
+	cfg, err := LoadAndValidate("testdata/minimal.yaml")
+	if err != nil {
+		t.Fatalf("a config written before WP3.2 no longer loads: %v", err)
+	}
+
+	// And it must come back with the gate armed at the documented default,
+	// not at a literal zero, which would be the same as having no gate.
+	got := cfg.Sources[0].BackupSets[0].Completion.DeleteSafetyDelay.Duration()
+	if got != DefaultDeleteSafetyDelay {
+		t.Fatalf("delete_safety_delay = %s, want the default %s", got, DefaultDeleteSafetyDelay)
 	}
 }
 

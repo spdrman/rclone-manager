@@ -65,6 +65,23 @@ func (b *BackupService) RunOnSchedule(ctx context.Context, interval time.Duratio
 		return fmt.Errorf("service: RunOnSchedule needs a positive poll interval, got %s", interval)
 	}
 
+	// Work Package 3.5's alerting pass runs on its own timer beside this
+	// loop, not only at the end of a cycle (see internal/app's AlertTick).
+	// A cycle that wedges on one slow transfer never reaches the pass at
+	// its end, and neither does a tick this loop skipped because an
+	// API-submitted operation is stuck holding runOnce - both of which are
+	// exactly "the manager is up and not producing backups", the situation
+	// the stale alert exists to report. It shares this loop's interval
+	// rather than inventing a second cadence, and stops when ctx does; the
+	// deferred receive keeps this method from returning while it is still
+	// running.
+	alertsStopped := make(chan struct{})
+	go func() {
+		defer close(alertsStopped)
+		b.runAlertTicks(ctx, interval)
+	}()
+	defer func() { <-alertsStopped }()
+
 	for {
 		b.runScheduledCycle(ctx)
 
@@ -124,4 +141,42 @@ func (b *BackupService) runScheduledCycle(ctx context.Context) {
 	}()
 
 	runCycle(b.state.Load().inner, ctx)
+}
+
+// runAlertTicks repeats one out-of-cycle alerting pass at interval until
+// ctx is done, against whatever Service the latest configuration
+// hot-reload left in place (b.state is re-read every tick, so a pass
+// after a CreateBackupSet speaks about the new config, not the one this
+// loop started with).
+//
+// It deliberately does NOT take runOnce. That lock exists so two passes
+// never process the same backup set at once, and this pass processes
+// nothing: it reads a health report and hands verdicts to the dispatcher,
+// which is safe for concurrent use. Taking it would make this tick skip
+// in exactly the case it was added for, a cycle that is stuck holding it.
+func (b *BackupService) runAlertTicks(ctx context.Context, interval time.Duration) {
+	for {
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		b.tickAlerts(ctx)
+	}
+}
+
+// tickAlerts runs one pass, with the same panic recovery
+// runScheduledCycle documents: this goroutine shares a process with a
+// persistent API server, so an unrecovered panic here would take that
+// server down, and an alerting problem must never be able to do that.
+func (b *BackupService) tickAlerts(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			b.logger.Error(context.Background(), "alert-tick-panic", fmt.Errorf("recovered panic: %v", r))
+		}
+	}()
+
+	b.state.Load().inner.AlertTick(ctx)
 }

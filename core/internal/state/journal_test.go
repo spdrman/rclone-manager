@@ -561,3 +561,79 @@ func TestRecordTransition_ConcurrentSameKeyAppliesExactlyOnce(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// TestLastEnteredAt_IgnoresSameStateWrites is the property
+// internal/lifecycle's WP3.2 stable-completion delete gate is built on: the
+// answer must be the moment an artifact BECAME committed, and must not move
+// when something writes a same-state COMMITTED -> COMMITTED pass over it.
+//
+// internal/revalidate's scheduled re-check writes exactly that transition
+// every time it passes, and the delete gate's own refusals write same-state
+// passes of their own. The artifacts row's updated_at is advanced by all of
+// them, which is what makes it the wrong clock: a backup set whose
+// revalidation interval was shorter than its deletion-safety delay would
+// have the delay restarted before it could ever elapse, so the gate would
+// never open and the remote copy would never be reclaimed, silently.
+//
+// The UpdatedAt assertion at the end is the positive control. It proves the
+// same-state write really did land and really did move the shared
+// timestamp, so the stable answer above is this function ignoring it rather
+// than nothing having happened at all.
+func TestLastEnteredAt_IgnoresSameStateWrites(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+	artifact := testArtifact(t)
+
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := j.Discover(ctx, artifact, "discover-1", "/incoming/backup.dump", RemoteIdentity{}, t0); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+
+	if _, ok, err := j.LastEnteredAt(ctx, artifact, "COMMITTED"); err != nil || ok {
+		t.Fatalf("LastEnteredAt before any COMMITTED = (ok %v, err %v), want (false, nil): an artifact that has never been committed must report no evidence, not a zero time", ok, err)
+	}
+
+	for _, tr := range []Transition{
+		{Artifact: artifact, Key: "t1", From: "DISCOVERED", To: "TRANSFERRING", OccurredAt: t0},
+		{Artifact: artifact, Key: "t2", From: "TRANSFERRING", To: "TRANSFERRED", OccurredAt: t0},
+		{Artifact: artifact, Key: "t3", From: "TRANSFERRED", To: "VERIFYING", OccurredAt: t0},
+		{Artifact: artifact, Key: "t4", From: "VERIFYING", To: "VERIFIED", OccurredAt: t0},
+		{Artifact: artifact, Key: "t5", From: "VERIFIED", To: "COMMITTING", OccurredAt: t0},
+		{Artifact: artifact, Key: "t6", From: "COMMITTING", To: "COMMITTED", OccurredAt: t0},
+	} {
+		if _, err := j.RecordTransition(ctx, tr); err != nil {
+			t.Fatalf("-> %s: %v", tr.To, err)
+		}
+	}
+
+	at, ok, err := j.LastEnteredAt(ctx, artifact, "COMMITTED")
+	if err != nil || !ok {
+		t.Fatalf("LastEnteredAt after COMMITTED = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	if !at.Equal(t0) {
+		t.Fatalf("LastEnteredAt = %s, want the COMMITTING -> COMMITTED transition's own time %s", at, t0)
+	}
+
+	later := t0.Add(6 * time.Minute)
+	if _, err := j.RecordTransition(ctx, Transition{
+		Artifact: artifact, Key: "revalidate-1", From: "COMMITTED", To: "COMMITTED", OccurredAt: later,
+	}); err != nil {
+		t.Fatalf("same-state COMMITTED pass: %v", err)
+	}
+
+	again, ok, err := j.LastEnteredAt(ctx, artifact, "COMMITTED")
+	if err != nil || !ok {
+		t.Fatalf("LastEnteredAt after a same-state pass = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	if !again.Equal(t0) {
+		t.Fatalf("LastEnteredAt = %s after a same-state COMMITTED pass, want it unmoved at %s: a scheduled re-check must not restart the deletion-safety clock", again, t0)
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !rec.UpdatedAt.Equal(later) {
+		t.Fatalf("UpdatedAt = %s, want the same-state pass to have advanced it to %s; if it did not, this test never exercised the write it is about", rec.UpdatedAt, later)
+	}
+}

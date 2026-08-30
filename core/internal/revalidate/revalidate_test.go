@@ -14,6 +14,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // --- fixtures ---
@@ -555,3 +556,185 @@ func TestRun_MaxPerCycleSpreadsWorkAcrossCalls(t *testing.T) {
 		t.Fatalf("saw %d distinct artifacts across 3 bounded Run calls, want all %d eventually covered", len(seen), len(artifacts))
 	}
 }
+
+// --- WP3.2 integration: an artifact FR-15's stable-mode gate held back is
+// picked up by this package's own scheduled re-check, with zero changes
+// required to this package's own selection or verdict-routing logic ---
+
+// unreachedDeleteTransport is a transport.Transport whose every method
+// panics. WP3.2's stable-mode safety check (internal/lifecycle/
+// remotedelete.go) refuses before lifecycle.DeleteRemote ever reaches a
+// transport call, so the test below needs a Transport only to satisfy
+// DeleteRemote's own non-nil precondition, never expects any of it to
+// actually run.
+type unreachedDeleteTransport struct{}
+
+func (unreachedDeleteTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
+	panic("unreachedDeleteTransport: List not used")
+}
+
+func (unreachedDeleteTransport) Stat(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
+	panic("unreachedDeleteTransport: Stat not used")
+}
+
+func (unreachedDeleteTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+	panic("unreachedDeleteTransport: CopyToLocal not used")
+}
+
+func (unreachedDeleteTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+	panic("unreachedDeleteTransport: RemoteHash not used")
+}
+
+func (unreachedDeleteTransport) DeleteRemote(context.Context, transport.Source, string) error {
+	panic("unreachedDeleteTransport: DeleteRemote not used")
+}
+
+var _ transport.Transport = unreachedDeleteTransport{}
+
+// TestRun_PicksUpArtifactWP32HeldBackFromDeletion is the INTEGRATION test
+// docs/EPIC-B-multi-nas.md §71 Work Package 3.2 asks for: "internal/
+// revalidate's scheduled re-check picking up an artifact this work
+// package quarantined". WP3.2's stable-mode gate does not move a held-back
+// artifact into QUARANTINED: it leaves it exactly at COMMITTED, already
+// one of this package's own eligibleStates (select.go), refuses the
+// delete, and preserves the remote source (see remotedelete.go's own doc
+// for why). This test proves that composition end to end: a real
+// lifecycle.DeleteRemote refusal, on a real journal, produces a record
+// this package's own SelectDue and Run pick straight back up, with zero
+// changes required to this package's own selection or verdict-routing
+// logic.
+func TestRun_PicksUpArtifactWP32HeldBackFromDeletion(t *testing.T) {
+	j := openJournal(t)
+	artifact := artifactNamed(t, "backup.dump")
+	content := []byte("hello world")
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	const safetyDelay = 10 * time.Minute
+
+	commitArtifact(t, j, artifact, content, t0)
+
+	_, err := lifecycle.DeleteRemote(context.Background(),
+		lifecycle.Deps{Journal: j, Transport: unreachedDeleteTransport{}, Now: func() time.Time { return t0 }},
+		lifecycle.DeleteRemoteRequest{
+			Artifact:           artifact,
+			AttemptKey:         "attempt-1",
+			CompletionStrategy: "stable",
+			DeleteSafetyDelay:  safetyDelay,
+		})
+	if _, ok := lifecycle.AsRemoteDeleteRefusal(err); !ok {
+		t.Fatalf("DeleteRemote error = %v, want a refusal: WP3.2's own safety delay has not elapsed yet", err)
+	}
+
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.Committed) {
+		t.Fatalf("state = %q, want %s: the remote source must be preserved, held back rather than routed anywhere else", rec.State, lifecycle.Committed)
+	}
+
+	cfg := config.Revalidation{Hash: true, Interval: config.Duration(5 * time.Minute), MaxPerCycle: 10}
+	dueAt := t0.Add(6 * time.Minute)
+
+	due := SelectDue([]state.Record{rec}, cfg, dueAt)
+	if len(due) != 1 {
+		t.Fatalf("SelectDue returned %d records, want 1: this held-back artifact must be selected", len(due))
+	}
+
+	report, err := Run(context.Background(), Deps{Journal: j, Now: func() time.Time { return dueAt }}, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("report.Findings = %+v, want exactly 1", report.Findings)
+	}
+	if f := report.Findings[0]; !f.Checked || !f.Passed {
+		t.Fatalf("Finding = %+v, want a checked, passed re-verification: the content on disk has not actually changed", f)
+	}
+
+	// --- third phase: the gate has to actually open afterwards.
+	//
+	// The two phases above prove this package picks a held-back artifact
+	// up. On their own they say nothing about the half that can livelock,
+	// because they never ask lifecycle.DeleteRemote a second time. Run's
+	// passing re-check just wrote a same-state COMMITTED -> COMMITTED
+	// transition, and the first version of WP3.2's gate measured its
+	// safety delay from state.Record.UpdatedAt, which that write advances.
+	// Any backup set whose revalidation.interval was shorter than its
+	// delete_safety_delay would therefore have had the clock reset on
+	// every scheduled pass, the delay would never have elapsed, and the
+	// remote copy would never have been reclaimed, silently, with the
+	// artifact reporting healthy the whole time.
+	reread, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get after Run: %v", err)
+	}
+
+	// Positive control for the assertion below. The re-check must really
+	// have moved UpdatedAt off t0, otherwise the delete succeeding at
+	// t0+11m would prove nothing at all: it would just mean the old clock
+	// and the new one happened to agree on this fixture.
+	if !reread.UpdatedAt.After(t0) {
+		t.Fatalf("UpdatedAt = %s, want it advanced past %s by the passing re-check; if the scheduled pass does not move this field, this test cannot distinguish the shared timestamp from the COMMITTED transition and proves nothing", reread.UpdatedAt, t0)
+	}
+
+	// t0+11m is past the 10m delay measured from the COMMITTED transition,
+	// and short of it measured from the re-check's own UpdatedAt (t0+6m),
+	// so this call passes the gate only if the clock is the transition.
+	retryAt := t0.Add(safetyDelay + time.Minute)
+	tp := &statMismatchTransport{}
+	_, err = lifecycle.DeleteRemote(context.Background(),
+		lifecycle.Deps{Journal: j, Transport: tp, Now: func() time.Time { return retryAt }},
+		lifecycle.DeleteRemoteRequest{
+			Artifact:           artifact,
+			AttemptKey:         "attempt-2",
+			CompletionStrategy: "stable",
+			DeleteSafetyDelay:  safetyDelay,
+		})
+
+	refusal, ok := lifecycle.AsRemoteDeleteRefusal(err)
+	if !ok {
+		t.Fatalf("second DeleteRemote error = %v (%T), want a refusal from a later check", err, err)
+	}
+	if refusal.Check == "stable completion safety delay" {
+		t.Fatalf("the safety delay refused again at %s, %s after this artifact reached COMMITTED: a scheduled re-check must not restart the deletion-safety clock, or the gate can never open and the remote is never reclaimed (%v)", retryAt, safetyDelay+time.Minute, refusal)
+	}
+	if refusal.Check != "remote identity" {
+		t.Fatalf("refusal.Check = %q, want %q: the safety delay should have been cleared and the FR-16 identity check should be what holds this back now", refusal.Check, "remote identity")
+	}
+	if tp.statCalls != 1 {
+		t.Fatalf("transport.Stat called %d times, want exactly 1: the delete never got as far as re-checking the remote identity", tp.statCalls)
+	}
+}
+
+// statMismatchTransport answers Stat with a remote object that cannot
+// possibly be the one that was captured at discovery, so FR-16's identity
+// comparison refuses. It exists so the test above can prove WP3.2's safety
+// gate OPENED without also having to arrange a real, deletable remote: the
+// refusal it produces comes from a later check, and its DeleteRemote panics
+// so a gate that let a delete through would be impossible to miss.
+type statMismatchTransport struct {
+	statCalls int
+}
+
+func (t *statMismatchTransport) List(context.Context, transport.Source) ([]transport.RemoteArtifact, error) {
+	panic("statMismatchTransport: List not used")
+}
+
+func (t *statMismatchTransport) Stat(_ context.Context, _ transport.Source, path string) (transport.RemoteArtifact, error) {
+	t.statCalls++
+	return transport.RemoteArtifact{Path: path, Size: 999999}, nil
+}
+
+func (t *statMismatchTransport) CopyToLocal(context.Context, transport.Source, string, string) (transport.TransferResult, error) {
+	panic("statMismatchTransport: CopyToLocal not used")
+}
+
+func (t *statMismatchTransport) RemoteHash(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+	panic("statMismatchTransport: RemoteHash not used")
+}
+
+func (t *statMismatchTransport) DeleteRemote(context.Context, transport.Source, string) error {
+	panic("statMismatchTransport: DeleteRemote must never be reached: the remote identity does not match")
+}
+
+var _ transport.Transport = (*statMismatchTransport)(nil)

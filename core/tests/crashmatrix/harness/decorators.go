@@ -76,6 +76,7 @@ type lifecycleJournal interface {
 	Get(ctx context.Context, id model.ArtifactID) (state.Record, error)
 	RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error)
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
+	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 }
 
 func newKillAfterStateJournal(real *state.Journal, target string) *killAfterStateJournal {
@@ -88,6 +89,10 @@ func (k *killAfterStateJournal) Get(ctx context.Context, id model.ArtifactID) (s
 
 func (k *killAfterStateJournal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error) {
 	return k.real.ListByBackupSet(ctx, set)
+}
+
+func (k *killAfterStateJournal) LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error) {
+	return k.real.LastEnteredAt(ctx, id, st)
 }
 
 func (k *killAfterStateJournal) RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error) {

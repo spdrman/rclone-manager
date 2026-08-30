@@ -97,6 +97,9 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.Get("/system/version", h.systemVersion)
 		r.Get("/system/capabilities", h.systemCapabilities)
+		// Issue #104 (B3.4): FR-21's existing capacity refusal, surfaced
+		// honestly. Read-only, same as the two routes above.
+		r.Get("/system/storage", h.systemStorage)
 
 		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
 		r.Get("/operations/{id}", h.getOperation)
