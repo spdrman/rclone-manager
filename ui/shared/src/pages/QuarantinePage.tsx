@@ -31,11 +31,10 @@ export function QuarantinePage({
   quarantine: AsyncState<BackupArtifact[]>;
 }) {
   const api = useApi();
-  const rows = quarantine;
 
-  if (rows.error) return <ErrorState {...rows.error} onRetry={rows.reload} />;
+  if (quarantine.error) return <ErrorState {...quarantine.error} onRetry={quarantine.reload} />;
 
-  const data = rows.data ?? [];
+  const data = quarantine.data ?? [];
 
   return (
     <>
@@ -81,10 +80,10 @@ export function QuarantinePage({
                       <td>
                         <span style={{ display: "flex", gap: 7, justifyContent: "flex-end" }}>
                           <button className="btn btn--sm">Inspect</button>
-                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.revalidate(a.id).then(rows.reload)}>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.revalidate(a.id).then(quarantine.reload)}>
                             Revalidate
                           </button>
-                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.retryIngestion(a.id).then(rows.reload)}>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.retryIngestion(a.id).then(quarantine.reload)}>
                             Retry ingestion
                           </button>
                         </span>
