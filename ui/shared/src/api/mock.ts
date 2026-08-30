@@ -320,6 +320,18 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     login: () => delay(undefined),
     enrollAdministrator: () => delay(undefined),
+    rotatePassword: (currentPassword) =>
+      // Mirrors apps/common/auth/local's handleRotatePassword: only this
+      // one sentinel current-password value is ever "wrong" here, so the
+      // rejected-rotation UI path has something to exercise against a
+      // dev-fixture backend that otherwise has no real stored password.
+      currentPassword === "wrong-current-password"
+        ? Promise.reject(new BackupManagerError({
+            code: "UNAUTHENTICATED",
+            message: "Current password is incorrect.",
+            correlationId: "cid_mockpw401"
+          }))
+        : delay(undefined),
     logout: () => delay(undefined)
   };
 }
