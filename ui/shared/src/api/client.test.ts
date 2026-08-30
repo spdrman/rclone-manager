@@ -71,6 +71,26 @@ describe("httpApi CSRF/bootstrap-token wiring", () => {
     vi.unstubAllGlobals();
   });
 
+  it("posts currentPassword/newPassword to /auth/password and attaches X-CSRF-Token", async () => {
+    setCsrfCookie("csrf-value-123");
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.rotatePassword("old-password-value", "new-password-value");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/auth/password");
+    expect(JSON.parse(init.body as string)).toEqual({
+      currentPassword: "old-password-value",
+      newPassword: "new-password-value"
+    });
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-CSRF-Token"]).toBe("csrf-value-123");
+
+    vi.unstubAllGlobals();
+  });
+
   it("attaches X-Bootstrap-Token, read from the URL's ?token= param, only for enrollAdministrator", async () => {
     window.history.pushState({}, "", "/enroll?token=bootstrap-abc");
     const fetchMock = mockFetchOk(undefined, 204);

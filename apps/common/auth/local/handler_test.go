@@ -396,6 +396,225 @@ func TestHandler_SessionCookieIsSecureWhenForwardedProtoIsTrustedAndHTTPS(t *tes
 	}
 }
 
+// enrollDefaultAdmin enrolls "bm-admin"/"correct-horse-battery" against
+// server using client's already-seeded CSRF token, and returns 204's
+// success as a *testing.T fatal if it didn't happen - every rotation test
+// below needs a live administrator and session before it can exercise
+// POST /password at all.
+func enrollDefaultAdmin(t *testing.T, svc *Service, server *httptest.Server, client *http.Client, csrfToken string) {
+	t.Helper()
+	bootstrapToken := currentBootstrapToken(t, svc)
+	resp := postJSON(t, client, server.URL+"/api/v1/auth/enroll",
+		credentialsRequest{Username: "bm-admin", Password: "correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrfToken, BootstrapTokenHeader: bootstrapToken})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("enroll status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+}
+
+func TestHandler_RotatePasswordWithCorrectCurrentPasswordSucceedsAndUpdatesTheStoredHash(t *testing.T) {
+	svc, server, client := testServer(t)
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+	enrollDefaultAdmin(t, svc, server, client, csrf)
+
+	rotateResp := postJSON(t, client, server.URL+"/api/v1/auth/password",
+		rotatePasswordRequest{CurrentPassword: "correct-horse-battery", NewPassword: "new-correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	rotateResp.Body.Close()
+	if rotateResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("rotate status = %d, want %d", rotateResp.StatusCode, http.StatusNoContent)
+	}
+
+	logoutResp := postJSON(t, client, server.URL+"/api/v1/auth/logout", struct{}{}, map[string]string{CSRFHeaderName: csrf})
+	logoutResp.Body.Close()
+
+	// The OLD password must no longer work.
+	oldLogin := postJSON(t, client, server.URL+"/api/v1/auth/login",
+		credentialsRequest{Username: "bm-admin", Password: "correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	oldLogin.Body.Close()
+	if oldLogin.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("login with old password after rotation: status = %d, want %d", oldLogin.StatusCode, http.StatusUnauthorized)
+	}
+
+	// The NEW password must work.
+	newLogin := postJSON(t, client, server.URL+"/api/v1/auth/login",
+		credentialsRequest{Username: "bm-admin", Password: "new-correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	newLogin.Body.Close()
+	if newLogin.StatusCode != http.StatusNoContent {
+		t.Fatalf("login with new password after rotation: status = %d, want %d", newLogin.StatusCode, http.StatusNoContent)
+	}
+}
+
+func TestHandler_RotatePasswordRejectsWrongCurrentPassword(t *testing.T) {
+	svc, server, client := testServer(t)
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+	enrollDefaultAdmin(t, svc, server, client, csrf)
+
+	rotateResp := postJSON(t, client, server.URL+"/api/v1/auth/password",
+		rotatePasswordRequest{CurrentPassword: "wrong-password-entirely", NewPassword: "new-correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	rotateResp.Body.Close()
+	if rotateResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("rotate with wrong current password: status = %d, want %d", rotateResp.StatusCode, http.StatusUnauthorized)
+	}
+
+	// The original password must still work - the rejected attempt must
+	// not have changed anything.
+	stillWorks := postJSON(t, client, server.URL+"/api/v1/auth/login",
+		credentialsRequest{Username: "bm-admin", Password: "correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	stillWorks.Body.Close()
+	if stillWorks.StatusCode != http.StatusNoContent {
+		t.Fatalf("login with original password after a rejected rotation: status = %d, want %d", stillWorks.StatusCode, http.StatusNoContent)
+	}
+}
+
+func TestHandler_RotatePasswordRequiresAnActiveSession(t *testing.T) {
+	_, server, client := testServer(t)
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+
+	// Deliberately no enrollment/login at all: no session cookie exists.
+	resp := postJSON(t, client, server.URL+"/api/v1/auth/password",
+		rotatePasswordRequest{CurrentPassword: "whatever-12345", NewPassword: "new-correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("rotate without a session: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+}
+
+func TestHandler_RotatePasswordRejectsTooShortNewPassword(t *testing.T) {
+	svc, server, client := testServer(t)
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+	enrollDefaultAdmin(t, svc, server, client, csrf)
+
+	rotateResp := postJSON(t, client, server.URL+"/api/v1/auth/password",
+		rotatePasswordRequest{CurrentPassword: "correct-horse-battery", NewPassword: "short"},
+		map[string]string{CSRFHeaderName: csrf})
+	rotateResp.Body.Close()
+	if rotateResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("rotate with too-short new password: status = %d, want %d", rotateResp.StatusCode, http.StatusBadRequest)
+	}
+
+	// A rejected too-short new password must not have changed anything.
+	stillWorks := postJSON(t, client, server.URL+"/api/v1/auth/login",
+		credentialsRequest{Username: "bm-admin", Password: "correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	stillWorks.Body.Close()
+	if stillWorks.StatusCode != http.StatusNoContent {
+		t.Fatalf("login with original password after a rejected rotation: status = %d, want %d", stillWorks.StatusCode, http.StatusNoContent)
+	}
+}
+
+func TestHandler_RotatePasswordRequiresMatchingCSRFHeader(t *testing.T) {
+	svc, server, client := testServer(t)
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+	enrollDefaultAdmin(t, svc, server, client, csrf)
+
+	// Deliberately no CSRFHeaderName header at all, even though the CSRF
+	// cookie is present in the jar (and will be sent automatically) - the
+	// same shape as a forged cross-site request.
+	resp := postJSON(t, client, server.URL+"/api/v1/auth/password",
+		rotatePasswordRequest{CurrentPassword: "correct-horse-battery", NewPassword: "new-correct-horse-battery"}, nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("rotate without X-CSRF-Token header: status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+}
+
+func TestHandler_RotatePasswordIsRateLimitedPerIP(t *testing.T) {
+	svc, err := New(Config{StorePath: filepath.Join(t.TempDir(), "auth.json"), PasswordRateLimit: 2})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", svc.Handler()))
+	server := httptest.NewServer(EnsureCSRFCookie(false)(mux))
+	t.Cleanup(server.Close)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+	enrollDefaultAdmin(t, svc, server, client, csrf)
+
+	var last *http.Response
+	for i := 0; i < 3; i++ {
+		last = postJSON(t, client, server.URL+"/api/v1/auth/password",
+			rotatePasswordRequest{CurrentPassword: "wrong-on-purpose", NewPassword: "new-correct-horse-battery"},
+			map[string]string{CSRFHeaderName: csrf})
+		last.Body.Close()
+	}
+	if last.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("3rd rotate attempt (limit is 2) status = %d, want %d", last.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
+// TestHandler_RotatePasswordInvalidatesOtherExistingSessions proves the
+// session-invalidation guarantee at the full HTTP-handler level: a second,
+// independent session for the same administrator (a different browser, or
+// a stolen cookie) must not survive a password rotation performed from a
+// different session, while the session that performed the rotation stays
+// signed in under its own (freshly reissued) cookie.
+func TestHandler_RotatePasswordInvalidatesOtherExistingSessions(t *testing.T) {
+	svc, server, client := testServer(t)
+	seedCSRFCookie(t, client, server)
+	csrf := csrfTokenFromJar(t, client, server)
+	enrollDefaultAdmin(t, svc, server, client, csrf)
+
+	otherJar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New: %v", err)
+	}
+	otherClient := &http.Client{Jar: otherJar}
+	seedCSRFCookie(t, otherClient, server)
+	otherCSRF := csrfTokenFromJar(t, otherClient, server)
+	otherLogin := postJSON(t, otherClient, server.URL+"/api/v1/auth/login",
+		credentialsRequest{Username: "bm-admin", Password: "correct-horse-battery"},
+		map[string]string{CSRFHeaderName: otherCSRF})
+	otherLogin.Body.Close()
+	if otherLogin.StatusCode != http.StatusNoContent {
+		t.Fatalf("second-client login status = %d, want %d", otherLogin.StatusCode, http.StatusNoContent)
+	}
+
+	rotateResp := postJSON(t, client, server.URL+"/api/v1/auth/password",
+		rotatePasswordRequest{CurrentPassword: "correct-horse-battery", NewPassword: "new-correct-horse-battery"},
+		map[string]string{CSRFHeaderName: csrf})
+	rotateResp.Body.Close()
+	if rotateResp.StatusCode != http.StatusNoContent {
+		t.Fatalf("rotate status = %d, want %d", rotateResp.StatusCode, http.StatusNoContent)
+	}
+
+	otherSession, err := otherClient.Get(server.URL + "/api/v1/auth/session")
+	if err != nil {
+		t.Fatalf("GET session (other client): %v", err)
+	}
+	otherSession.Body.Close()
+	if otherSession.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("other client's session after rotation: status = %d, want %d (revoked)", otherSession.StatusCode, http.StatusUnauthorized)
+	}
+
+	firstSession, err := client.Get(server.URL + "/api/v1/auth/session")
+	if err != nil {
+		t.Fatalf("GET session (first client): %v", err)
+	}
+	firstSession.Body.Close()
+	if firstSession.StatusCode != http.StatusOK {
+		t.Fatalf("first client's own session after rotation: status = %d, want %d (still signed in)", firstSession.StatusCode, http.StatusOK)
+	}
+}
+
 func TestWriteAuthError_SetsCorrelationIdHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeAuthError(rec, http.StatusBadRequest, "INVALID_REQUEST", "bad request")

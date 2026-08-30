@@ -83,6 +83,65 @@ func TestStore_PersistsAcrossANewStoreInstance(t *testing.T) {
 	}
 }
 
+func TestStore_SetPasswordUpdatesHashAndPreservesUsernameAndCreatedAt(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	created := time.Now().UTC().Truncate(time.Second)
+	if err := store.Enroll(AdminRecord{Username: "bm-admin", PasswordHash: "$argon2id$old", CreatedAt: created}); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+
+	if err := store.SetPassword("$argon2id$new"); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+
+	got, err := store.Admin()
+	if err != nil {
+		t.Fatalf("Admin: %v", err)
+	}
+	if got.PasswordHash != "$argon2id$new" {
+		t.Errorf("Admin().PasswordHash = %q, want %q", got.PasswordHash, "$argon2id$new")
+	}
+	if got.Username != "bm-admin" {
+		t.Errorf("Admin().Username = %q after SetPassword, want unchanged %q", got.Username, "bm-admin")
+	}
+	if !got.CreatedAt.Equal(created) {
+		t.Errorf("Admin().CreatedAt = %v after SetPassword, want unchanged %v", got.CreatedAt, created)
+	}
+}
+
+// TestStore_SetPasswordFailsBeforeEnrollment guards against SetPassword
+// ever silently creating a partial administrator record: rotation is
+// meaningless before an administrator exists at all.
+func TestStore_SetPasswordFailsBeforeEnrollment(t *testing.T) {
+	store := NewStore(filepath.Join(t.TempDir(), "auth.json"))
+	err := store.SetPassword("$argon2id$new")
+	if !errors.Is(err, ErrNotEnrolled) {
+		t.Fatalf("SetPassword before enrollment error = %v, want errors.Is(err, ErrNotEnrolled)", err)
+	}
+}
+
+func TestStore_SetPasswordPersistsAcrossANewStoreInstance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "auth.json")
+	first := NewStore(path)
+	if err := first.Enroll(AdminRecord{Username: "bm-admin", PasswordHash: "$argon2id$old"}); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	if err := first.SetPassword("$argon2id$new"); err != nil {
+		t.Fatalf("SetPassword: %v", err)
+	}
+
+	// A brand new Store value pointed at the same path (simulating a
+	// process restart) must see the rotated hash, not the pre-rotation one.
+	second := NewStore(path)
+	admin, err := second.Admin()
+	if err != nil {
+		t.Fatalf("Admin: %v", err)
+	}
+	if admin == nil || admin.PasswordHash != "$argon2id$new" {
+		t.Errorf("Admin() after reopening the store = %+v, want PasswordHash %q", admin, "$argon2id$new")
+	}
+}
+
 func TestStore_NeverWritesAPlaintextPassword(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "auth.json")
 	store := NewStore(path)

@@ -88,5 +88,9 @@ export interface BackupManagerApi {
 
   login(username: string, password: string): Promise<void>;
   enrollAdministrator(username: string, password: string): Promise<void>;
+  /** apps/common/auth/local's POST /password (issue #128). Requires an
+   *  already-authenticated session; rotates the stored password hash and
+   *  revokes every other live session for this administrator. */
+  rotatePassword(currentPassword: string, newPassword: string): Promise<void>;
   logout(): Promise<void>;
 }

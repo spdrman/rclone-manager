@@ -113,5 +113,7 @@ export const httpApi: BackupManagerApi = {
 
   login: (username, password) => post("/auth/login", { username, password }),
   enrollAdministrator: (username, password) => post("/auth/enroll", { username, password }),
+  rotatePassword: (currentPassword, newPassword) =>
+    post("/auth/password", { currentPassword, newPassword }),
   logout: () => post("/auth/logout")
 };

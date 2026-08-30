@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
@@ -5,6 +6,7 @@ import { usePlatform } from "@shared/platform/PlatformContext";
 import { notificationCopy } from "@shared/platform/capabilities";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
+import { ErrorState } from "@shared/components/EmptyState";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
   const api = useApi();
@@ -83,6 +85,8 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
             </div>
           </section>
 
+          <ChangePasswordCard readOnly={readOnly} />
+
           <section className="card" style={{ borderColor: "var(--warn)" }}>
             <div className="card__header"><h2 className="eyebrow">Catalog recovery</h2></div>
             <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -155,5 +159,118 @@ function Row({ label, value }: { label: string; value: string }) {
       <dt style={{ color: "var(--text-2)" }}>{label}</dt>
       <dd className="mono" style={{ margin: 0 }}>{value}</dd>
     </>
+  );
+}
+
+const MIN_PASSWORD_LENGTH = 12;
+
+/** §13A password rotation (issue #128) - reuses EnrollmentPage.tsx's own
+ *  validation shape (minimum length, confirm-match) since it is the same
+ *  "pick a new password" moment, just for an existing account instead of
+ *  a first-run one. A successful rotation signs out every OTHER session
+ *  for this administrator (apps/common/auth/local's handleRotatePassword);
+ *  this tab's own session is reissued, so no redirect/sign-out happens
+ *  here. */
+function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
+  const api = useApi();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const tooShort = next.length > 0 && next.length < MIN_PASSWORD_LENGTH;
+  const mismatch = confirm.length > 0 && confirm !== next;
+  const valid = current.length > 0 && next.length >= MIN_PASSWORD_LENGTH && confirm === next;
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!valid || readOnly) return;
+    setBusy(true);
+    setError(null);
+    setSuccess(false);
+    api
+      .rotatePassword(current, next)
+      .then(() => {
+        setSuccess(true);
+        setCurrent("");
+        setNext("");
+        setConfirm("");
+      })
+      .catch(() => setError("That current password was not accepted."))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="card">
+      <div className="card__header"><h2 className="eyebrow">Administrator password</h2></div>
+      <div className="card__body">
+        <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <label className="field">
+            <span className="field__label">Current password</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="current-password"
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+              disabled={readOnly}
+              required
+            />
+          </label>
+          <label className="field">
+            <span className="field__label">New password</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              disabled={readOnly}
+              required
+            />
+            {tooShort ? (
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                {"Minimum " + MIN_PASSWORD_LENGTH + " characters."}
+              </span>
+            ) : null}
+          </label>
+          <label className="field">
+            <span className="field__label">Confirm new password</span>
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              disabled={readOnly}
+              required
+            />
+            {mismatch ? (
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                Passwords do not match.
+              </span>
+            ) : null}
+          </label>
+          {success ? (
+            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+              Password changed. Other signed-in sessions have been signed out.
+            </div>
+          ) : null}
+          {error ? <ErrorState message={error} correlationId="cid_rotate_password" /> : null}
+          <div>
+            <button
+              className="btn btn--primary"
+              type="submit"
+              disabled={!valid || busy || readOnly}
+              style={{ height: 40 }}
+            >
+              {busy ? "Changing…" : "Change password"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
   );
 }
