@@ -652,7 +652,8 @@ func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 	}
 
 	_, deleteErr := lifecycle.DeleteRemote(ctx, deps, lifecycle.DeleteRemoteRequest{
-		Source: source, Artifact: artifact, AttemptKey: "delete:attempt-1",
+		CompletionStrategy: bs.Completion.Strategy,
+		Source:             source, Artifact: artifact, AttemptKey: "delete:attempt-1",
 	})
 	refusal, ok := lifecycle.AsRemoteDeleteRefusal(deleteErr)
 	if !ok {

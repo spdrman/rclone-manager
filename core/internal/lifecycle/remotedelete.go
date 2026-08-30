@@ -112,25 +112,32 @@ type DeleteRemoteRequest struct {
 	// same one it used before.
 	AttemptKey string
 
-	// Completion is the backup set's FR-8 completion configuration
-	// (WP3.2, docs/EPIC-B-multi-nas.md §26 Step 3, §71 Work Package 3.2).
-	// DeleteRemote reads only Completion.Strategy and
-	// Completion.DeleteSafetyDelay from it, and only to decide whether an
-	// extra deletion-safety delay gates this attempt: see the "stable
-	// completion safety delay" revalidation below.
+	// CompletionStrategy is the backup set's FR-8 completion strategy,
+	// "rename", "marker" or "stable" (config.Completion.Strategy). It is
+	// REQUIRED, and an empty or unrecognised value is refused, not waved
+	// through: see the "stable completion safety delay" revalidation
+	// below for what this decides.
 	//
-	// The zero value (Strategy == "") is treated exactly like "rename" or
-	// "marker": no extra delay is required. That is deliberate, not an
-	// oversight -- a caller that does not populate this field is opting
-	// out of a dimension of behavior it was never asking DeleteRemote to
-	// have an opinion about, exactly the same convention this package
-	// already uses for config.Validation's zero value in verify.go. In
-	// production this can never silently hide a real "stable" backup set:
-	// config.Validate refuses to let Completion.Strategy ever be empty in
-	// a validated config, so the only caller in this codebase that
-	// reaches DeleteRemote in production (internal/app/pipeline.go)
-	// always has a real, non-empty strategy to hand it.
-	Completion config.Completion
+	// It is a plain string, and DeleteSafetyDelay a plain time.Duration,
+	// rather than the config.Completion the two are read out of, because
+	// of the failure mode the first version of this field had. Embedding
+	// the whole struct made the gate's default position "no gate": a
+	// caller that never filled the field in got Strategy == "" and skipped
+	// the check entirely, and three of the four call sites in this
+	// repository, the crash matrix included, did exactly that. Two named
+	// values a caller has to supply on purpose cannot be forgotten
+	// quietly, and refusing the zero value means the worst a forgetful
+	// caller can now do is preserve a remote copy.
+	CompletionStrategy string
+
+	// DeleteSafetyDelay is WP3.2's additional deletion-safety delay
+	// (docs/EPIC-B-multi-nas.md §26 Step 3, §71 Work Package 3.2), read
+	// from config.Completion.DeleteSafetyDelay. It is required, and must
+	// be positive, when CompletionStrategy is "stable", and is ignored
+	// entirely otherwise. config.Validate fills in
+	// config.DefaultDeleteSafetyDelay for any stable backup set that does
+	// not set one, so a validated config always has a positive value here.
+	DeleteSafetyDelay time.Duration
 }
 
 const (
@@ -138,6 +145,11 @@ const (
 	deleteAttemptTagRefused  = "remote-delete-refused"
 	deleteAttemptTagComplete = "remote-delete-complete"
 )
+
+// stableSafetyDelayCheck is the RemoteDeleteRefusalError.Check value every
+// WP3.2 stable-completion refusal carries, named once so a caller matching
+// on it and the tests asserting it cannot drift apart.
+const stableSafetyDelayCheck = "stable completion safety delay"
 
 func (r DeleteRemoteRequest) key(tag string) string {
 	return r.AttemptKey + ":" + tag
@@ -258,49 +270,45 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 	}
 
 	// --- revalidation (WP3.2): a "stable" completion strategy only ever
-	// confirmed a size/mtime heuristic, never a producer completion
-	// signal the way "rename"/"marker" do (see internal/discovery/
-	// complete.go), so it may not be treated as equivalent to them at this
-	// gate without an additional deletion-safety delay having elapsed
-	// since this artifact last reached a confirmed-good journal state
-	// (req.Completion.DeleteSafetyDelay; config.Validate requires this to
-	// be set whenever Strategy == "stable"). rec.UpdatedAt is the closest
-	// thing this journal row has to "when was this record last confirmed
-	// good": it is set by the COMMITTED write itself and, for an artifact
-	// still sitting at COMMITTED, is left untouched by anything else
-	// except a later same-state pass (internal/revalidate's own scheduled
-	// re-check, or this very check refusing again).
+	// confirmed a size/mtime heuristic, never a producer completion signal
+	// the way "rename"/"marker" do (see internal/discovery/complete.go),
+	// so it may not be treated as equivalent to them at this gate without
+	// an additional deletion-safety delay having elapsed since this
+	// artifact last reached a confirmed-good journal state.
 	//
-	// Every other strategy, and a zero-value Completion a caller did not
-	// populate (see DeleteRemoteRequest.Completion's own doc), skips this
-	// entirely.
+	// An unrecognised strategy, the empty string included, is refused
+	// rather than waved through. This gate decides whether the only other
+	// copy of an artifact may be destroyed, so its default position has to
+	// be "do not delete", not "no gate": a caller that has not said which
+	// completion signal this artifact carries has not given this function
+	// enough to authorise anything.
 	//
-	// Like the local-file check just above, this is a pure,
-	// side-effect-free comparison that runs before any journal write:
-	// refusing here leaves rec.UpdatedAt exactly where it was, so a
-	// stable-strategy artifact that keeps getting refused on every cycle
-	// never has its own safety clock reset by the refusal itself, only by
-	// a genuine journal event. The practical effect of that refusal is
-	// exactly what WP3.2's behavioral contract asks for: the remote
+	// Like the local-file check just above, everything here is a pure,
+	// side-effect-free comparison that runs before any journal write, so a
+	// refusal never leaves a mark of its own. The practical effect of one
+	// is exactly what WP3.2's behavioral contract asks for: the remote
 	// source is preserved (nothing here calls the transport), and the
 	// artifact is left exactly where internal/revalidate's own SelectDue
-	// already treats COMMITTED/REMOTE_DELETE_PENDING artifacts as
-	// eligible for a scheduled re-check, so an operator with revalidation
-	// configured for this backup set gets it re-examined without this
-	// package having to teach internal/revalidate anything new about
-	// WP3.2 at all.
-	if req.Completion.Strategy == "stable" {
-		delay := req.Completion.DeleteSafetyDelay.Duration()
-		elapsed := d.now().Sub(rec.UpdatedAt)
-		if elapsed < delay {
-			return state.Outcome{}, &RemoteDeleteRefusalError{
-				Artifact: req.Artifact,
-				Check:    "stable completion safety delay",
-				Reason: fmt.Sprintf(
-					"completion strategy \"stable\" only confirms size/mtime stability, not producer-confirmed completion; only %s of the required %s deletion-safety delay has elapsed since this artifact last reached a confirmed-good state",
-					elapsed.Round(time.Second), delay,
-				),
-			}
+	// already treats COMMITTED/REMOTE_DELETE_PENDING artifacts as eligible
+	// for a scheduled re-check, so an operator with revalidation configured
+	// for this backup set gets it re-examined without this package having
+	// to teach internal/revalidate anything new about WP3.2 at all.
+	switch req.CompletionStrategy {
+	case "rename", "marker":
+		// A producer completion signal was observed at discovery. FR-15's
+		// four checks above are the whole gate for these.
+	case "stable":
+		if err := checkStableSafetyDelay(ctx, d, req); err != nil {
+			return state.Outcome{}, err
+		}
+	default:
+		return state.Outcome{}, &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    "unknown completion strategy",
+			Reason: fmt.Sprintf(
+				"completion strategy %q is not one this gate knows how to reason about; it must be \"rename\", \"marker\" or \"stable\" (FR-8), and an unrecognised one is refused rather than treated as producer-confirmed",
+				req.CompletionStrategy,
+			),
 		}
 	}
 
@@ -419,6 +427,94 @@ func persistDeleteOutcome(ctx context.Context, d Deps, req DeleteRemoteRequest, 
 		Deletion: &state.DeletionUpdate{Error: deleteErr, DeletedAt: deletedAt},
 	})
 	return err
+}
+
+// checkStableSafetyDelay is WP3.2's extra gate for a "stable" backup set:
+// enough time must have passed since the artifact last reached a
+// confirmed-good state for a size/mtime heuristic to stand in for a
+// producer completion signal. It returns a *RemoteDeleteRefusalError when
+// it has not, and never writes anything.
+//
+// # Why the clock is the COMMITTED transition and not rec.UpdatedAt
+//
+// rec.UpdatedAt looks like the obvious answer and is the wrong one. The
+// artifacts row's updated_at is stamped by EVERY transition write
+// (internal/state/journal.go's updateArtifact), including three that happen
+// on a completely routine cadence to an artifact this gate is holding back:
+//
+//   - internal/revalidate's scheduled re-check writes a same-state
+//     COMMITTED -> COMMITTED pass every time it passes, so any backup set
+//     whose revalidation.interval is shorter than its delete_safety_delay
+//     would have the clock reset before the delay could ever elapse;
+//   - this function's own success path is followed immediately by the
+//     COMMITTED -> REMOTE_DELETE_PENDING intent write below, so a transport
+//     failure after that point would restart the clock and buy the retry
+//     another full delay;
+//   - refuseRemoteIdentity records a same-state REMOTE_DELETE_PENDING pass,
+//     and this package's own doc calls an identity refusal the routine
+//     outcome against the hardened SFTP account docs/ssh-setup.md
+//     recommends, not a rare one.
+//
+// All three fail in the safe direction, nothing gets deleted, and that is
+// what makes them dangerous: the gate would simply never open, the remote
+// copy would never be reclaimed, the artifact would stay healthy, and the
+// only signal an operator would get is a refusal that counts down and then
+// silently starts over. A safety delay that can never elapse is not a
+// safety delay.
+//
+// Journal.LastEnteredAt asks the append-only transition log the question
+// this gate actually has, "when did this artifact last BECOME committed",
+// and ignores same-state writes, so none of the three above move it. It
+// needs no schema change: the log already records occurred_at per
+// transition and is idempotency-keyed, so a replayed transition reuses its
+// original row rather than stamping a new time.
+//
+// An artifact with no recorded COMMITTED entry at all is refused, not
+// admitted. That is the same fail-closed reading as the unknown-strategy
+// case: no evidence is not evidence of age.
+func checkStableSafetyDelay(ctx context.Context, d Deps, req DeleteRemoteRequest) error {
+	if req.DeleteSafetyDelay <= 0 {
+		return &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    stableSafetyDelayCheck,
+			Reason: fmt.Sprintf(
+				"completion strategy \"stable\" requires a positive deletion-safety delay and this request carries %s; config.Validate fills in %s for a stable backup set that does not set one, so a non-positive value here means the caller built this request without one",
+				req.DeleteSafetyDelay, config.DefaultDeleteSafetyDelay,
+			),
+		}
+	}
+
+	confirmedAt, ok, err := d.Journal.LastEnteredAt(ctx, req.Artifact, string(Committed))
+	if err != nil {
+		return fmt.Errorf("lifecycle: reading the last COMMITTED transition for %s: %w", req.Artifact, err)
+	}
+	if !ok {
+		return &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    stableSafetyDelayCheck,
+			Reason:   "completion strategy \"stable\" needs a recorded COMMITTED transition to measure its deletion-safety delay from, and this artifact's journal has none",
+		}
+	}
+
+	// Inclusive at the boundary: elapsed == delay admits. "Wait at least
+	// this long" is what the key is documented as meaning, and a delay is
+	// satisfied the instant it has been served, not one tick afterwards.
+	// Pinned by its own subtests either side of the boundary in
+	// remotedelete_test.go, because which side is inclusive on a gate that
+	// authorises destroying data should never be something a reader has to
+	// infer from the operator.
+	elapsed := d.now().Sub(confirmedAt)
+	if elapsed < req.DeleteSafetyDelay {
+		return &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    stableSafetyDelayCheck,
+			Reason: fmt.Sprintf(
+				"completion strategy \"stable\" only confirms size/mtime stability, not producer-confirmed completion; only %s of the required %s deletion-safety delay has elapsed since this artifact last reached a confirmed-good state",
+				elapsed.Round(time.Second), req.DeleteSafetyDelay,
+			),
+		}
+	}
+	return nil
 }
 
 // verifyLocalFinal is FR-15's second and third revalidation: the expected

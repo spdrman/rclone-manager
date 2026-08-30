@@ -289,11 +289,14 @@ func (s *Service) deleteRemoteOne(ctx context.Context, source transport.Source, 
 		Source:     source,
 		Artifact:   rec.Artifact,
 		AttemptKey: base + ":delete",
-		// WP3.2: bs.Completion is what lets DeleteRemote tell a "stable"
+		// WP3.2: these two are what let DeleteRemote tell a "stable"
 		// backup set apart from "rename"/"marker" and gate it behind an
-		// extra deletion-safety delay; see DeleteRemoteRequest.Completion
-		// and remotedelete.go's own doc for the full reasoning.
-		Completion: bs.Completion,
+		// extra deletion-safety delay. DeleteRemote refuses an empty or
+		// unrecognised strategy outright, so passing them is not optional;
+		// see DeleteRemoteRequest.CompletionStrategy and remotedelete.go's
+		// own doc for the full reasoning.
+		CompletionStrategy: bs.Completion.Strategy,
+		DeleteSafetyDelay:  bs.Completion.DeleteSafetyDelay.Duration(),
 	})
 }
 

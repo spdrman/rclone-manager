@@ -18,6 +18,14 @@ import (
 type Journal interface {
 	Get(ctx context.Context, id model.ArtifactID) (state.Record, error)
 	RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error)
+
+	// LastEnteredAt reports when an artifact most recently entered a state
+	// from a different one, ignoring same-state writes, and whether it ever
+	// did. remotedelete.go's WP3.2 stable-completion gate needs it: the
+	// only other timestamp on hand, state.Record.UpdatedAt, is advanced by
+	// every transition write there is, including the routine same-state
+	// ones that would otherwise keep restarting that gate's safety clock.
+	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 }
 
 // Deps is what every lifecycle step is handed. Steps take this rather than

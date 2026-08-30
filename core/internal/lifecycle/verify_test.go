@@ -41,10 +41,23 @@ type verifyJournal struct {
 	recordErr error
 	seen      map[string]state.Outcome
 	recorded  []state.Transition
+
+	// enteredAt mirrors what state.Journal.LastEnteredAt reads out of the
+	// real transition log: the time of the newest transition INTO a state
+	// from a different one. A same-state pass does not touch it, which is
+	// the whole property remotedelete.go's WP3.2 gate depends on, so a
+	// fake that simply stamped every write here would quietly hide the bug
+	// that check exists to prevent.
+	enteredAt map[string]time.Time
 }
 
 func newVerifyJournal(rec state.Record) *verifyJournal {
-	return &verifyJournal{rec: rec, seen: make(map[string]state.Outcome)}
+	return &verifyJournal{rec: rec, seen: make(map[string]state.Outcome), enteredAt: make(map[string]time.Time)}
+}
+
+func (j *verifyJournal) LastEnteredAt(_ context.Context, _ model.ArtifactID, st string) (time.Time, bool, error) {
+	at, ok := j.enteredAt[st]
+	return at, ok, nil
 }
 
 func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, error) {
@@ -67,6 +80,9 @@ func (j *verifyJournal) RecordTransition(_ context.Context, t state.Transition) 
 		return state.Outcome{}, fmt.Errorf("verifyJournal: state mismatch: have %q, want from %q", j.rec.State, t.From)
 	}
 
+	if t.To != t.From {
+		j.enteredAt[t.To] = t.OccurredAt
+	}
 	j.rec.State = t.To
 	if t.Hashes != nil {
 		j.rec.LocalHash = t.Hashes.Hash

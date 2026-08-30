@@ -82,7 +82,8 @@ func TestWithStatHash_LetsAGenuinelySafeDeleteProceed(t *testing.T) {
 	}
 
 	if _, err := lifecycle.DeleteRemote(ctx, deps, lifecycle.DeleteRemoteRequest{
-		Source: source, Artifact: artifact, AttemptKey: "delete:attempt-1",
+		CompletionStrategy: bs.Completion.Strategy,
+		Source:             source, Artifact: artifact, AttemptKey: "delete:attempt-1",
 	}); err != nil {
 		t.Fatalf("DeleteRemote with WithStatHash still refused: %v", err)
 	}

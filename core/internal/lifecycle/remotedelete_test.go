@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -227,7 +226,8 @@ func TestDeleteRemote_RefusesWhenJournalStateIsWrong(t *testing.T) {
 
 			tp := &deleteTransport{}
 			_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-				Artifact: artifact, AttemptKey: "attempt-1",
+				CompletionStrategy: "rename",
+				Artifact:           artifact, AttemptKey: "attempt-1",
 			})
 
 			_ = requireRefusal(t, err, "journal state")
@@ -260,7 +260,8 @@ func TestDeleteRemote_RefusesWhenLocalFileIsMissing(t *testing.T) {
 
 	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	_ = requireRefusal(t, err, "local file")
@@ -292,7 +293,8 @@ func TestDeleteRemote_RefusesWhenLocalFileIsWrongSize(t *testing.T) {
 
 	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	_ = requireRefusal(t, err, "local file")
@@ -318,7 +320,8 @@ func TestDeleteRemote_RefusesWhenLocalHashDoesNotMatch(t *testing.T) {
 
 	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	_ = requireRefusal(t, err, "local file")
@@ -342,7 +345,8 @@ func TestDeleteRemote_RefusesWhenRecordedSizesDisagreeWithEachOther(t *testing.T
 
 	tp := &deleteTransport{}
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	_ = requireRefusal(t, err, "local file")
@@ -376,7 +380,8 @@ func TestDeleteRemote_RefusesWhenRemoteIdentityConfirmedChanged(t *testing.T) {
 	}
 
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	refusal := requireRefusal(t, err, "remote identity")
@@ -439,7 +444,8 @@ func TestDeleteRemote_RefusesWhenRemoteIdentityCannotBeConfirmed(t *testing.T) {
 	}
 
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	refusal := requireRefusal(t, err, "remote identity")
@@ -485,7 +491,8 @@ func TestDeleteRemote_RefusesWhenRemoteCannotBeStatted(t *testing.T) {
 	}
 
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 
 	_ = requireRefusal(t, err, "remote identity")
@@ -515,7 +522,8 @@ func TestDeleteRemote_RefusesFromRemoteDeletePendingWhenIdentityChanged(t *testi
 	}
 
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "restart-attempt",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "restart-attempt",
 	})
 
 	_ = requireRefusal(t, err, "remote identity")
@@ -531,7 +539,8 @@ func TestDeleteRemote_RequiresAnAttemptKey(t *testing.T) {
 	j := openTestJournal(t)
 	tp := &deleteTransport{}
 	_, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: mustID(t),
+		CompletionStrategy: "rename",
+		Artifact:           mustID(t),
 	})
 	if err == nil {
 		t.Fatal("DeleteRemote accepted an empty AttemptKey")
@@ -544,47 +553,65 @@ func TestDeleteRemote_RequiresAnAttemptKey(t *testing.T) {
 // --- WP3.2: stable-strategy artifacts need an additional deletion-safety
 // delay before this gate treats them as equivalent to rename/marker ---
 
+// stableFixture is a freshly-committed artifact whose remote object still
+// matches what discovery captured, so every FR-15 check other than WP3.2's
+// own safety delay clears. Everything below varies one thing against it.
+func stableFixture(t *testing.T) (*state.Journal, model.ArtifactID, *deleteTransport) {
+	t.Helper()
+	j := openTestJournal(t)
+	artifact := mustID(t)
+	localPath, localSum := writeLocalFile(t, 10)
+	size := int64(10)
+
+	discoverAndAdvance(t, j, artifact, testRemotePath,
+		state.RemoteIdentity{Size: &size, Hash: localSum, HashAlg: "sha256"},
+		localPath, &state.TransferResult{BytesTransferred: 10},
+		&state.HashUpdate{Alg: "sha256", Hash: localSum},
+		Committed)
+
+	tp := &deleteTransport{
+		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
+			return transport.RemoteArtifact{Path: testRemotePath, Size: 10, Hash: localSum, HashAlg: transport.SHA256}, nil
+		},
+	}
+	return j, artifact, tp
+}
+
+// committedAt reads back the moment an artifact entered COMMITTED, so a
+// test can place Deps.Now an exact distance from the one timestamp WP3.2's
+// gate actually measures against.
+func committedAt(t *testing.T, j *state.Journal, artifact model.ArtifactID) time.Time {
+	t.Helper()
+	at, ok, err := j.LastEnteredAt(context.Background(), artifact, string(Committed))
+	if err != nil {
+		t.Fatalf("LastEnteredAt: %v", err)
+	}
+	if !ok {
+		t.Fatal("the fixture has no recorded COMMITTED transition")
+	}
+	return at
+}
+
 // TestDeleteRemote_StableStrategyRequiresSafetyDelay is WP3.2's own RED
 // proof (docs/EPIC-B-multi-nas.md §71 Work Package 3.2, §26 Step 3): a
 // "stable"-strategy artifact that has not yet satisfied its configured
 // delete_safety_delay must be refused here, at the exact same fresh-commit
 // journal state a "rename" or "marker" artifact sails through unrefused.
-// Every subtest below shares one fixture (a freshly-committed artifact, so
-// the elapsed time since it reached COMMITTED is effectively zero) and
-// only varies Completion.Strategy, so a passing rename/marker subtest next
-// to a refused stable one proves this is specifically about the "stable"
-// heuristic, not some other difference between the fixtures.
+// Every subtest below shares one fixture and only varies
+// CompletionStrategy, so a passing rename/marker subtest next to a refused
+// stable one proves this is specifically about the "stable" heuristic, not
+// some other difference between the fixtures.
 func TestDeleteRemote_StableStrategyRequiresSafetyDelay(t *testing.T) {
 	delay := 10 * time.Minute
 
-	newFixture := func(t *testing.T) (*state.Journal, model.ArtifactID, *deleteTransport) {
-		t.Helper()
-		j := openTestJournal(t)
-		artifact := mustID(t)
-		localPath, localSum := writeLocalFile(t, 10)
-		size := int64(10)
-
-		discoverAndAdvance(t, j, artifact, testRemotePath,
-			state.RemoteIdentity{Size: &size, Hash: localSum, HashAlg: "sha256"},
-			localPath, &state.TransferResult{BytesTransferred: 10},
-			&state.HashUpdate{Alg: "sha256", Hash: localSum},
-			Committed)
-
-		tp := &deleteTransport{
-			statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
-				return transport.RemoteArtifact{Path: testRemotePath, Size: 10, Hash: localSum, HashAlg: transport.SHA256}, nil
-			},
-		}
-		return j, artifact, tp
-	}
-
 	t.Run("stable is refused before the safety delay elapses", func(t *testing.T) {
-		j, artifact, tp := newFixture(t)
+		j, artifact, tp := stableFixture(t)
 
 		_, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-			Artifact:   artifact,
-			AttemptKey: "attempt-1",
-			Completion: config.Completion{Strategy: "stable", DeleteSafetyDelay: config.Duration(delay)},
+			Artifact:           artifact,
+			AttemptKey:         "attempt-1",
+			CompletionStrategy: "stable",
+			DeleteSafetyDelay:  delay,
 		})
 
 		_ = requireRefusal(t, err, "stable completion safety delay")
@@ -602,12 +629,12 @@ func TestDeleteRemote_StableStrategyRequiresSafetyDelay(t *testing.T) {
 
 	for _, strategy := range []string{"rename", "marker"} {
 		t.Run(strategy+" is not gated by the safety delay", func(t *testing.T) {
-			j, artifact, tp := newFixture(t)
+			j, artifact, tp := stableFixture(t)
 
 			outcome, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-				Artifact:   artifact,
-				AttemptKey: "attempt-1",
-				Completion: config.Completion{Strategy: strategy},
+				Artifact:           artifact,
+				AttemptKey:         "attempt-1",
+				CompletionStrategy: strategy,
 			})
 			if err != nil {
 				t.Fatalf("strategy %s was refused in the exact same journal state a fresh commit ordinarily deletes from: %v", strategy, err)
@@ -624,32 +651,19 @@ func TestDeleteRemote_StableStrategyRequiresSafetyDelay(t *testing.T) {
 
 // TestDeleteRemote_StableStrategyProceedsOnceSafetyDelayElapses is the
 // above test's positive complement: the identical stable-strategy fixture
-// and configured delay, but Deps.Now moved far enough past rec.UpdatedAt
-// that the delay has genuinely elapsed. This is what proves the gate above
-// is a delay, not a disguised permanent refusal of every "stable" artifact.
+// and configured delay, but Deps.Now moved far enough past the COMMITTED
+// transition that the delay has genuinely elapsed. This is what proves the
+// gate above is a delay, not a disguised permanent refusal of every
+// "stable" artifact.
 func TestDeleteRemote_StableStrategyProceedsOnceSafetyDelayElapses(t *testing.T) {
-	j := openTestJournal(t)
-	artifact := mustID(t)
-	localPath, localSum := writeLocalFile(t, 10)
-	size := int64(10)
-
-	discoverAndAdvance(t, j, artifact, testRemotePath,
-		state.RemoteIdentity{Size: &size, Hash: localSum, HashAlg: "sha256"},
-		localPath, &state.TransferResult{BytesTransferred: 10},
-		&state.HashUpdate{Alg: "sha256", Hash: localSum},
-		Committed)
-
-	tp := &deleteTransport{
-		statFn: func(context.Context, transport.Source, string) (transport.RemoteArtifact, error) {
-			return transport.RemoteArtifact{Path: testRemotePath, Size: 10, Hash: localSum, HashAlg: transport.SHA256}, nil
-		},
-	}
+	j, artifact, tp := stableFixture(t)
 
 	future := func() time.Time { return time.Now().UTC().Add(time.Hour) }
 	outcome, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp, Now: future}, DeleteRemoteRequest{
-		Artifact:   artifact,
-		AttemptKey: "attempt-1",
-		Completion: config.Completion{Strategy: "stable", DeleteSafetyDelay: config.Duration(10 * time.Minute)},
+		Artifact:           artifact,
+		AttemptKey:         "attempt-1",
+		CompletionStrategy: "stable",
+		DeleteSafetyDelay:  10 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("a stable-strategy delete whose safety delay has genuinely elapsed was refused: %v", err)
@@ -659,6 +673,213 @@ func TestDeleteRemote_StableStrategyProceedsOnceSafetyDelayElapses(t *testing.T)
 	}
 	if tp.deleteCalls != 1 {
 		t.Fatalf("transport.DeleteRemote called %d times, want exactly 1", tp.deleteCalls)
+	}
+}
+
+// TestDeleteRemote_StableSafetyDelayBoundary pins which side of
+// "elapsed < delay" is inclusive.
+//
+// The two tests above cover elapsed near zero and elapsed an hour past a
+// ten minute delay, which leaves the boundary itself inferred from the
+// operator rather than stated. On a comparison that authorises destroying
+// the only other copy of an artifact that is not good enough, and the
+// sibling capacity package uses "at or below" for its own thresholds, so
+// the two would otherwise read inconsistently with nothing pinning either.
+//
+// Exactly at the delay admits: "wait at least this long" is satisfied the
+// instant it has been served. One nanosecond short refuses.
+func TestDeleteRemote_StableSafetyDelayBoundary(t *testing.T) {
+	delay := 10 * time.Minute
+
+	t.Run("exactly at the delay is admitted", func(t *testing.T) {
+		j, artifact, tp := stableFixture(t)
+		at := committedAt(t, j, artifact).Add(delay)
+
+		outcome, err := DeleteRemote(context.Background(),
+			Deps{Journal: j, Transport: tp, Now: func() time.Time { return at }},
+			DeleteRemoteRequest{
+				Artifact:           artifact,
+				AttemptKey:         "attempt-1",
+				CompletionStrategy: "stable",
+				DeleteSafetyDelay:  delay,
+			})
+		if err != nil {
+			t.Fatalf("elapsed == delay was refused: %v", err)
+		}
+		if outcome.Record.State != string(Complete) {
+			t.Fatalf("final state = %q, want COMPLETE", outcome.Record.State)
+		}
+		if tp.deleteCalls != 1 {
+			t.Fatalf("transport.DeleteRemote called %d times, want exactly 1", tp.deleteCalls)
+		}
+	})
+
+	t.Run("one nanosecond short of the delay is refused", func(t *testing.T) {
+		j, artifact, tp := stableFixture(t)
+		at := committedAt(t, j, artifact).Add(delay - time.Nanosecond)
+
+		_, err := DeleteRemote(context.Background(),
+			Deps{Journal: j, Transport: tp, Now: func() time.Time { return at }},
+			DeleteRemoteRequest{
+				Artifact:           artifact,
+				AttemptKey:         "attempt-1",
+				CompletionStrategy: "stable",
+				DeleteSafetyDelay:  delay,
+			})
+		_ = requireRefusal(t, err, "stable completion safety delay")
+		if tp.deleteCalls != 0 {
+			t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
+		}
+	})
+}
+
+// TestDeleteRemote_RefusesAnUnknownCompletionStrategy is the gate's default
+// position.
+//
+// The first version of this field embedded the whole config.Completion and
+// documented the zero value as equivalent to "rename": no extra delay
+// required. That made "no gate" the default for any caller that did not
+// fill the struct in, and three of the four call sites in this repository
+// did not, the crash matrix among them, which is the suite most likely to
+// catch a regression in exactly this code. The argument for it was that
+// config.Validate never lets Strategy be empty in a validated config, which
+// is a property of a different package this function cannot check and which
+// says nothing about a caller building a config.BackupSet in Go.
+//
+// So an empty or unrecognised strategy is now a refusal. Nothing is
+// deleted, nothing is written, and the caller is told which value it sent.
+func TestDeleteRemote_RefusesAnUnknownCompletionStrategy(t *testing.T) {
+	for _, strategy := range []string{"", "STABLE", "whatever"} {
+		name := strategy
+		if name == "" {
+			name = "the zero value"
+		}
+		t.Run(name, func(t *testing.T) {
+			j, artifact, tp := stableFixture(t)
+
+			_, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
+				Artifact:           artifact,
+				AttemptKey:         "attempt-1",
+				CompletionStrategy: strategy,
+			})
+
+			_ = requireRefusal(t, err, "unknown completion strategy")
+			if tp.deleteCalls != 0 {
+				t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
+			}
+			rec, getErr := j.Get(context.Background(), artifact)
+			if getErr != nil {
+				t.Fatalf("Get: %v", getErr)
+			}
+			if rec.State != string(Committed) {
+				t.Errorf("journal state = %q, want it left untouched at COMMITTED", rec.State)
+			}
+		})
+	}
+
+	// The positive control. Every subtest above asserts a refusal, and a
+	// gate wired to refuse everything would pass all of them. This is the
+	// same fixture, the same elapsed time, the same everything, with a
+	// strategy the gate does recognise, and it deletes.
+	t.Run("a recognised strategy on the same fixture deletes", func(t *testing.T) {
+		j, artifact, tp := stableFixture(t)
+
+		outcome, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
+			Artifact:           artifact,
+			AttemptKey:         "attempt-1",
+			CompletionStrategy: "rename",
+		})
+		if err != nil {
+			t.Fatalf("strategy \"rename\" was refused on the fixture every subtest above uses: %v", err)
+		}
+		if outcome.Record.State != string(Complete) {
+			t.Fatalf("final state = %q, want COMPLETE", outcome.Record.State)
+		}
+		if tp.deleteCalls != 1 {
+			t.Fatalf("transport.DeleteRemote called %d times, want exactly 1", tp.deleteCalls)
+		}
+	})
+}
+
+// TestDeleteRemote_StableStrategyRefusesWithoutASafetyDelay covers the
+// other half of the same default-position argument. A request that says
+// "stable" but carries no delay has not said how long to wait, and the
+// answer to that is not "no time at all".
+func TestDeleteRemote_StableStrategyRefusesWithoutASafetyDelay(t *testing.T) {
+	j, artifact, tp := stableFixture(t)
+
+	_, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
+		Artifact:           artifact,
+		AttemptKey:         "attempt-1",
+		CompletionStrategy: "stable",
+	})
+
+	_ = requireRefusal(t, err, "stable completion safety delay")
+	if tp.deleteCalls != 0 {
+		t.Fatalf("transport.DeleteRemote called %d times, want 0", tp.deleteCalls)
+	}
+}
+
+// TestDeleteRemote_StableSafetyClockSurvivesItsOwnIntentWrite is the retry
+// half of the same livelock internal/revalidate's own WP3.2 test covers
+// from the scheduled-re-check side.
+//
+// The gate's success path is followed immediately by the COMMITTED ->
+// REMOTE_DELETE_PENDING intent write, and refuseRemoteIdentity records a
+// same-state REMOTE_DELETE_PENDING pass on every routine identity refusal,
+// which this package's own doc describes as the expected outcome against a
+// hardened SFTP account rather than a rare one. Both of those advance the
+// artifacts row's updated_at. If the safety clock were that field, a
+// transport failure after the intent write, or one ordinary identity
+// refusal, would buy the next attempt another full delay, forever.
+//
+// Here the transport fails the delete once, then the same artifact is
+// retried at the same instant. Measured from the COMMITTED transition the
+// delay is still satisfied, so the retry must get through the gate and
+// reach the transport a second time.
+func TestDeleteRemote_StableSafetyClockSurvivesItsOwnIntentWrite(t *testing.T) {
+	delay := 10 * time.Minute
+	j, artifact, tp := stableFixture(t)
+	at := committedAt(t, j, artifact).Add(delay + time.Minute)
+	now := func() time.Time { return at }
+
+	tp.deleteErr = errors.New("transport: connection reset")
+	req := DeleteRemoteRequest{
+		Artifact:           artifact,
+		AttemptKey:         "attempt-1",
+		CompletionStrategy: "stable",
+		DeleteSafetyDelay:  delay,
+	}
+
+	if _, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp, Now: now}, req); err == nil {
+		t.Fatal("a failing transport delete returned no error")
+	}
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(RemoteDeletePending) {
+		t.Fatalf("state after the failed delete = %q, want REMOTE_DELETE_PENDING", rec.State)
+	}
+
+	// The positive control for the retry below: the intent write really did
+	// move the shared timestamp forward, past the point where a clock built
+	// on it would refuse. Without this, the retry succeeding would not
+	// distinguish the two clocks.
+	if !rec.UpdatedAt.After(at.Add(-delay)) {
+		t.Fatalf("UpdatedAt = %s, want it advanced to within %s of %s by the intent write; if it is not, this test cannot tell the shared timestamp apart from the COMMITTED transition", rec.UpdatedAt, delay, at)
+	}
+
+	tp.deleteErr = nil
+	outcome, err := DeleteRemote(context.Background(), Deps{Journal: j, Transport: tp, Now: now}, req)
+	if err != nil {
+		t.Fatalf("the retry was refused after the first attempt recorded intent: %v", err)
+	}
+	if outcome.Record.State != string(Complete) {
+		t.Fatalf("final state = %q, want COMPLETE", outcome.Record.State)
+	}
+	if tp.deleteCalls != 2 {
+		t.Fatalf("transport.DeleteRemote called %d times, want 2 (the failure and the retry)", tp.deleteCalls)
 	}
 }
 
@@ -700,9 +921,10 @@ func TestDeleteRemote_PositiveControl_SafeDeleteProceeds(t *testing.T) {
 	}
 
 	outcome, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Source:     transport.Source{ID: "prod-nas"},
-		Artifact:   artifact,
-		AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Source:             transport.Source{ID: "prod-nas"},
+		Artifact:           artifact,
+		AttemptKey:         "attempt-1",
 	})
 	if err != nil {
 		t.Fatalf("a genuinely safe delete was refused: %v", err)
@@ -754,7 +976,8 @@ func TestDeleteRemote_PositiveControl_ProceedsFromRemoteDeletePending(t *testing
 	}
 
 	outcome, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "restart-attempt",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "restart-attempt",
 	})
 	if err != nil {
 		t.Fatalf("a genuinely safe retry from REMOTE_DELETE_PENDING was refused: %v", err)
@@ -788,7 +1011,8 @@ func TestDeleteRemote_RecordsTransportDeleteFailure(t *testing.T) {
 	}
 
 	_, err := DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
-		Artifact: artifact, AttemptKey: "attempt-1",
+		CompletionStrategy: "rename",
+		Artifact:           artifact, AttemptKey: "attempt-1",
 	})
 	if err == nil {
 		t.Fatal("DeleteRemote succeeded despite the transport delete call failing")
