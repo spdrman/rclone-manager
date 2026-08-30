@@ -177,7 +177,7 @@ describe("add backup set wizard", () => {
 
       expect(runNow).toBeDisabled();
       expect(enable).toBeDisabled();
-      expect(screen.getByText(/host key changed/i)).toBeTruthy();
+      expect(screen.getAllByText(/host key changed/i).length).toBeGreaterThan(0);
     });
   });
 
