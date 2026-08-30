@@ -19,7 +19,24 @@ export type ApiErrorCode =
   | "retention-plan-stale"
   | "version-mismatch"
   | "operation-conflict"
-  | "unknown";
+  | "unknown"
+  // apps/common/auth/local's own error codes (handler.go/csrf.go),
+  // returned directly by every /api/v1/auth/* route. A different naming
+  // convention (UPPER_SNAKE_CASE) from the values above, matching that
+  // package's own vocabulary rather than being translated to this
+  // union's existing kebab-case style - nothing in this frontend yet
+  // renders these distinctly from a generic fallback message (see
+  // LoginPage.tsx/EnrollmentPage.tsx), so only their PRESENCE here
+  // matters for now, so client.ts's `as ApiError` assertion is honest
+  // about what the backend can actually send (issue #119's review).
+  | "UNAUTHENTICATED"
+  | "RATE_LIMITED"
+  | "INVALID_REQUEST"
+  | "ENROLLMENT_CLOSED"
+  | "BOOTSTRAP_TOKEN_INVALID"
+  | "INTERNAL_ERROR"
+  | "CSRF_TOKEN_MISSING"
+  | "CSRF_TOKEN_MISMATCH";
 
 export interface ApiError {
   code: ApiErrorCode;
@@ -43,6 +60,99 @@ export interface CatalogScanPreview {
   requiresReview: number;
 }
 
+/**
+ * Issue #146 (B2.7): the add-backup-set wizard's (#98) real write path,
+ * backed by apps/common/webhost's create-backup-set, SSH-key-import,
+ * host-key-probe and connection-test endpoints.
+ *
+ * SSHKeyId/knownHostsLine carry a REFERENCE, never key material or an
+ * unverified fingerprint directly — importSSHKey and probeHostKey are
+ * what produce those references in the first place, mirroring core's own
+ * config.Key (a backup set's config never carries raw key bytes, only
+ * where to find them).
+ */
+export interface CreateBackupSetRequest {
+  sourceName?: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  sshKeyId: string;
+  knownHostsLine: string;
+  remotePath: string;
+  localPath: string;
+  include: string[];
+  completionStrategy: "rename" | "marker" | "stable";
+  stableForSeconds?: number;
+  staleAfterSeconds?: number;
+  /** "Save disabled" — excludes the set from every run cycle until an
+   *  operator re-enables it. */
+  disabled?: boolean;
+  /** "Save, enable & run" — submits a run_cycle operation immediately
+   *  after this set is persisted. Ignored (never runs anything) when
+   *  disabled is true. */
+  runImmediately?: boolean;
+}
+
+/** What a submitted run_cycle operation looks like from
+ *  createBackupSet's own response — deliberately NOT the richer
+ *  UI-progress Operation type (types/operation.ts): that type models a
+ *  transfer's on-screen progress (stage, percent, bytes/sec, ...), a
+ *  different shape from what the backend's run_cycle operation record
+ *  itself carries (docs/EPIC-B-multi-nas.md §14). */
+export interface RunCycleSubmission {
+  operationId: string;
+  status: string;
+}
+
+export interface CreatedBackupSet {
+  id: string;
+  sourceName: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  remotePath: string;
+  localPath: string;
+  include: string[];
+  completionStrategy: string;
+  disabled: boolean;
+  /** Present only when the request's runImmediately was set AND
+   *  honoured (never when disabled was also set — see
+   *  CreateBackupSetRequest.runImmediately's own doc). */
+  operation?: RunCycleSubmission;
+}
+
+export interface SSHKeyImportResult {
+  id: string;
+  algorithm: string;
+  fingerprint: string;
+}
+
+export interface HostKeyProbeResult {
+  algorithm: string;
+  fingerprint: string;
+  knownHostsLine: string;
+}
+
+export interface ConnectionTestOutcome {
+  ok: boolean;
+  message?: string;
+}
+
+/** The subset of CreateBackupSetRequest's SSH-facing fields a pre-save
+ *  connection test needs — everything a subsequent createBackupSet call
+ *  would carry, minus the fields that only matter once a set actually
+ *  exists (name, paths, completion, ...). */
+export interface ConnectionTestParams {
+  host: string;
+  port: number;
+  user: string;
+  sshKeyId: string;
+  knownHostsLine: string;
+  remotePath?: string;
+}
+
 export interface BackupManagerApi {
   getVersion(): Promise<VersionInfo>;
   getHealth(): Promise<SystemHealth>;
@@ -52,6 +162,20 @@ export interface BackupManagerApi {
   runSet(id: string): Promise<void>;
   testConnection(id: string): Promise<{ ok: boolean; fingerprint: string }>;
   setEnabled(id: string, enabled: boolean): Promise<void>;
+
+  /** Issue #146 (B2.7): the wizard's three Save buttons. */
+  createBackupSet(req: CreateBackupSetRequest): Promise<CreatedBackupSet>;
+  /** The wizard's "Import key" step (#98 step 2). Sent once; the
+   *  caller discards its own copy of privateKeyPem the instant this
+   *  resolves, per that step's own on-screen copy. */
+  importSSHKey(privateKeyPem: string): Promise<SSHKeyImportResult>;
+  /** The wizard's "Verify server" step (#98 step 3): fetches a real
+   *  fingerprint for host:port, trusting nothing yet. */
+  probeHostKey(host: string, port: number): Promise<HostKeyProbeResult>;
+  /** A pre-save reachability/auth check, run before createBackupSet —
+   *  distinct from testConnection(id) above, which checks an ALREADY
+   *  persisted set. */
+  testCandidateConnection(params: ConnectionTestParams): Promise<ConnectionTestOutcome>;
 
   listArtifacts(setId?: string): Promise<BackupArtifact[]>;
   getArtifact(id: string): Promise<BackupArtifact>;
@@ -71,5 +195,9 @@ export interface BackupManagerApi {
 
   login(username: string, password: string): Promise<void>;
   enrollAdministrator(username: string, password: string): Promise<void>;
+  /** apps/common/auth/local's POST /password (issue #128). Requires an
+   *  already-authenticated session; rotates the stored password hash and
+   *  revokes every other live session for this administrator. */
+  rotatePassword(currentPassword: string, newPassword: string): Promise<void>;
   logout(): Promise<void>;
 }

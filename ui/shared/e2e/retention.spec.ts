@@ -5,8 +5,19 @@ test.describe("retention preview and apply", () => {
   test.beforeEach(async ({ bm, page }) => {
     await bm.goto("/sets");
     await page.getByRole("article").first().getByRole("button", { name: "Open" }).click();
-    await page.getByRole("button", { name: "Preview retention" }).click();
+    // exact: true — the detail page also has a "Preview retention plan"
+    // button further down (Retention section); non-exact matching is
+    // ambiguous between the two once the page is actually reachable.
+    await page.getByRole("button", { name: "Preview retention", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Retention preview" })).toBeVisible();
+    // The dialog renders immediately with "Requesting plan…" while
+    // previewRetention() is still in flight; several tests below read the
+    // "Continue…" button's disabled state as a proxy for "is this plan
+    // stale", but that button is ALSO disabled purely because no plan has
+    // loaded yet (disabled={!p || p.stale || …}). Wait for the plan to
+    // actually resolve before any test runs, or that early "disabled because
+    // loading" reading gets mistaken for "disabled because stale".
+    await expect(page.getByText(/Plan plan_.* issued by the backup service/)).toBeVisible();
   });
 
   test("shows the server-issued plan id", async ({ page }) => {
@@ -38,7 +49,10 @@ test.describe("retention preview and apply", () => {
     } else {
       // Current plan: reopening the preview produces the stale variant next.
       await dialog.getByRole("button", { name: "Cancel" }).click();
-      await page.getByRole("button", { name: "Preview retention" }).click();
+      // exact: true — the detail page also has a "Preview retention plan"
+    // button further down (Retention section); non-exact matching is
+    // ambiguous between the two once the page is actually reachable.
+    await page.getByRole("button", { name: "Preview retention", exact: true }).click();
       const second = page.getByRole("dialog");
       await expect(second.getByText("Retention preview changed")).toBeVisible();
       await expect(second.getByRole("button", { name: "Continue…" })).toBeDisabled();

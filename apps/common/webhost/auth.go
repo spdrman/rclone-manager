@@ -73,12 +73,32 @@ func authMiddleware(platform capabilities.PlatformAdapter) func(http.Handler) ht
 func requireDestructiveGate(gate DestructiveGate) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if gate == nil || !gate.Passed() {
-				writeError(w, http.StatusForbidden, "DESTRUCTIVE_OPERATIONS_DISABLED",
-					"destructive operations are disabled until the trusted-proxy authentication gate (issue #92) has been verified for this deployment")
+			if !destructiveGatePassed(gate) {
+				writeDestructiveGateDenied(w)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// destructiveGatePassed reports whether gate actually allows a
+// destructive action to proceed, treating a nil gate the same as one
+// that reports false: there is no code path in this package where the
+// absence of a gate means "allow" (see DestructiveGate's own doc).
+// Shared by requireDestructiveGate above and createBackupSet
+// (handlers_backupsets.go), which consults the identical gate directly
+// rather than through that middleware — see handlers.gate's own doc for
+// why.
+func destructiveGatePassed(gate DestructiveGate) bool {
+	return gate != nil && gate.Passed()
+}
+
+// writeDestructiveGateDenied writes the one 403 body both
+// requireDestructiveGate and createBackupSet's own run_immediately check
+// use, so the two call sites can never drift into reporting the same
+// denial with different codes or text.
+func writeDestructiveGateDenied(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, "DESTRUCTIVE_OPERATIONS_DISABLED",
+		"destructive operations are disabled until the trusted-proxy authentication gate (issue #92) has been verified for this deployment")
 }

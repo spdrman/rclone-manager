@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import type { InputNode } from "@causlts/core";
 import { BackupManagerError } from "@shared/api/contracts";
 import type { ApiError } from "@shared/api/contracts";
@@ -83,14 +83,27 @@ export function useResource<T>(
   deps: unknown[] = []
 ): ResourceState<T> & { reload(): void } {
   const state = useCausl(node);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // This wrapper's whole job is forwarding a caller-supplied deps array
+  // to useCallback, which the newer react-hooks/use-memo rule can't
+  // statically verify (it requires a literal array so it can compare
+  // entries itself). Each call site below already lists its own real
+  // dependencies in `deps`; this hook has nothing more specific to add.
+  // eslint-disable-next-line react-hooks/use-memo, react-hooks/exhaustive-deps
   const run = useCallback(fetchFn, deps);
   const reload = useCallback(() => fetchResource(node, run), [node, run]);
 
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
-  return { ...state, reload };
+  // `state` (useCausl) and `reload` (useCallback above) are both already
+  // referentially stable when nothing changed — useCausl caches its read
+  // by graph.now (see useCausl.ts), and reload's own deps (node, run) only
+  // change when the caller's `deps` array does. Without this useMemo,
+  // though, `{ ...state, reload }` was a fresh object literal on every
+  // call regardless, so a caller like App.tsx's `reloadAll` — a
+  // useCallback keyed on health/sets/operations — churned identity on
+  // every render, tearing down and rebuilding usePolling's setInterval
+  // instead of letting it run for a full 30s (mandatory review, PR #143).
+  return useMemo(() => ({ ...state, reload }), [state, reload]);
 }

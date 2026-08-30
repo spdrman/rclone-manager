@@ -728,7 +728,7 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	artifact := testArtifact(t)
 	content := []byte("dump-bytes")
@@ -806,7 +806,7 @@ func TestVerify_SameAttemptKey_IsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	artifact := testArtifact(t)
 	content := []byte("dump-bytes")

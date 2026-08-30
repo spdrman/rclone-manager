@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 /** §46 — provider treatment is 5-10%: accent token, window chrome, native
  *  capabilities. This spec proves the shared product is identical across
@@ -55,7 +55,11 @@ test.describe("provider: " + PLATFORM, () => {
 
   test("draws window chrome only when the platform is embedded", async ({ page }) => {
     await page.goto("/");
-    const titlebar = page.getByText(new RegExp("Backup Manager .* " + expected.name.replace(/[.*+?^\${}()|[\]\\]/g, "\\$&")));
+    // Anchored on the em dash the titlebar actually uses ("Backup Manager
+    // — <platform>", AppShell.tsx) — the looser ".*" also matched the
+    // page footer's "Backup Manager running on <platform>", which exists
+    // regardless of chrome and made this always find something.
+    const titlebar = page.getByText(new RegExp("Backup Manager — " + expected.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     if (expected.chrome) {
       await expect(titlebar.first()).toBeVisible();
     } else {
@@ -88,7 +92,9 @@ test.describe("provider: " + PLATFORM, () => {
   test("reports the correct authentication mode", async ({ page }) => {
     await page.goto("/settings");
     if (expected.nativeAuth) {
-      await expect(page.getByText(new RegExp(expected.name + " session"))).toBeVisible();
+      // .first() — Settings renders both a compact and a full PlatformBadge,
+      // so this text is legitimately repeated more than once on this page.
+      await expect(page.getByText(new RegExp(expected.name + " session")).first()).toBeVisible();
     } else {
       await expect(page.getByText("Backup Manager local account").first()).toBeVisible();
     }

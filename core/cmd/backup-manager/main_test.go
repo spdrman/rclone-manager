@@ -113,6 +113,41 @@ func TestRun_RunCommandProcessesAnArtifactEndToEnd(t *testing.T) {
 	}
 }
 
+// TestRun_CatalogRequiresRebuildSubcommand proves `catalog` with no
+// subcommand, and `catalog` with an unknown one, both fail with a usage
+// error rather than a panic or a silent no-op.
+func TestRun_CatalogRequiresRebuildSubcommand(t *testing.T) {
+	if got := run([]string{"catalog"}); got != 2 {
+		t.Errorf("run([\"catalog\"]) = %d, want 2", got)
+	}
+	if got := run([]string{"catalog", "frobnicate"}); got != 2 {
+		t.Errorf("run([\"catalog\", \"frobnicate\"]) = %d, want 2", got)
+	}
+}
+
+// TestRun_CatalogRebuildAgainstAWorkingConfig is this binary's own
+// end-to-end smoke test for `catalog rebuild`: run a real cycle so a
+// committed artifact and its sidecar recovery manifest both exist, then
+// confirm `catalog rebuild --dry-run` (against the still-intact journal,
+// so every artifact is already present) and the real `catalog rebuild`
+// both succeed.
+func TestRun_CatalogRebuildAgainstAWorkingConfig(t *testing.T) {
+	configPath := writeTestConfig(t)
+
+	if got := run([]string{"run", "--config", configPath}); got != 0 {
+		t.Fatalf("run([\"run\", \"--config\", %q]) = %d, want 0", configPath, got)
+	}
+
+	for _, args := range [][]string{
+		{"catalog", "rebuild", "--dry-run", "--config", configPath},
+		{"catalog", "rebuild", "--config", configPath},
+	} {
+		if got := run(args); got != 0 {
+			t.Errorf("run(%v) = %d, want 0", args, got)
+		}
+	}
+}
+
 // TestRun_FetchRequiresSourceAndBackupSet proves fetch's required flags
 // are actually enforced with a clear usage error, not a nil-pointer panic.
 func TestRun_FetchRequiresSourceAndBackupSet(t *testing.T) {

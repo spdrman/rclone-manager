@@ -2,6 +2,8 @@ import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
 import type { AsyncState } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import type { SystemHealth } from "@shared/types/operation";
 import { PageHeader } from "@shared/components/PageHeader";
@@ -25,7 +27,11 @@ export function DashboardPage({
 }) {
   const api = useApi();
   const navigate = useNavigate();
-  const operations = useAsync(() => api.listOperations(), [api]);
+  // Live operation progress (§52, #95) reads the shared graph node directly
+  // — App.tsx owns the one fetch/poll of it, so this page never re-fetches
+  // its own copy. BackupSetsPage (#97) reads the exact same node, so the
+  // two can never disagree about what is currently running.
+  const operations = useCausl(operationsNode);
   const activity = useAsync(() => api.listActivity(), [api]);
 
   if (health.error)
@@ -134,23 +140,45 @@ export function DashboardPage({
         <div className="card__header">
           <h2 className="eyebrow">Active operations</h2>
           <span style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
-            {(operations.data?.length ?? 0) + " running"}
+            {operations.data ? operations.data.length + " running" : "…"}
           </span>
         </div>
-        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 20 }}>
-          {operations.data?.length
-            ? operations.data.map((op, i) => (
-                <div
-                  key={op.id}
-                  style={{
-                    paddingTop: i === 0 ? 0 : 18,
-                    borderTop: i === 0 ? undefined : "1px solid var(--border)"
-                  }}
-                >
-                  <OperationProgress operation={op} />
+        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* operations.data is null until the first fetch resolves — that is
+              "not known yet", not "zero", so it must not fall into the
+              "Nothing running right now." branch below (mandatory review,
+              PR #143). A failed fetch gets its own small inline notice
+              rather than the page's full-page ErrorState, since operations
+              is a secondary resource here (health owns that treatment via
+              the early return above) and a stale-but-known operations list
+              should stay visible under the notice rather than being
+              replaced by it. */}
+          {operations.error ? (
+            <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+              Live operation status is unavailable ({operations.error.message}).
+            </div>
+          ) : null}
+          {operations.data === null
+            ? (operations.error
+                ? null
+                : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking for active operations…</p>)
+            : operations.data.length
+              ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                  {operations.data.map((op, i) => (
+                    <div
+                      key={op.id}
+                      style={{
+                        paddingTop: i === 0 ? 0 : 18,
+                        borderTop: i === 0 ? undefined : "1px solid var(--border)"
+                      }}
+                    >
+                      <OperationProgress operation={op} />
+                    </div>
+                  ))}
                 </div>
-              ))
-            : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Nothing running right now.</p>}
+              )
+              : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Nothing running right now.</p>}
         </div>
       </section>
 

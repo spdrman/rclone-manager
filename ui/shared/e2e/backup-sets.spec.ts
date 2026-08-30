@@ -21,6 +21,10 @@ test.describe("backup sets", () => {
   test("state is never conveyed by colour alone", async ({ bm, page }) => {
     await bm.goto("/sets");
     const cards = page.getByRole("article");
+    // .count() doesn't auto-retry like a web-first assertion does — wait for
+    // the first card to actually render (the mock listSets() fetch is async)
+    // before counting, or this reads 0 while the page is still loading.
+    await expect(cards.first()).toBeVisible();
     const count = await cards.count();
     expect(count).toBeGreaterThan(0);
     for (let i = 0; i < count; i++) {
@@ -57,14 +61,19 @@ test.describe("backup set detail", () => {
   });
 
   test("shows all six documented sections", async ({ page }) => {
+    // Each section title is an <h2>; matched by heading role rather than
+    // plain text so "Activity" can't collide with the identically-named
+    // section nav link in the sidebar.
     for (const section of ["Overview", "Connection", "Backup discovery", "Retention", "Validation", "Activity"]) {
-      await expect(page.getByText(section, { exact: true })).toBeVisible();
+      await expect(page.getByRole("heading", { name: section, exact: true })).toBeVisible();
     }
   });
 
   test("offers ordinary actions in the header", async ({ page }) => {
+    // exact: true — "Preview retention" is otherwise a substring match of
+    // the Retention section's "Preview retention plan" button too.
     for (const action of ["Run now", "Test connection", "Edit", "Preview retention"]) {
-      await expect(page.getByRole("button", { name: action })).toBeVisible();
+      await expect(page.getByRole("button", { name: action, exact: true })).toBeVisible();
     }
   });
 
@@ -76,7 +85,11 @@ test.describe("backup set detail", () => {
 
   test("never displays a private key", async ({ page }) => {
     await expect(page.getByText(/The private key never leaves this NAS/)).toBeVisible();
-    expect(await page.locator("body").innerText()).not.toMatch(/PRIVATE KEY/i);
+    // Matches the actual PEM block shape (see safety-invariants.spec.ts) —
+    // a bare /PRIVATE KEY/i self-matches the reassurance sentence just
+    // asserted above, which says "private key" precisely because it is
+    // reassuring the reader none is shown.
+    expect(await page.locator("body").innerText()).not.toMatch(/BEGIN (OPENSSH|RSA|EC) PRIVATE KEY/i);
   });
 
   test("shows the trusted host fingerprint", async ({ page }) => {

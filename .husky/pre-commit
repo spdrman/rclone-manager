@@ -1,81 +1,24 @@
 #!/usr/bin/env sh
-# Pre-commit gate mirroring .github/workflows/ci.yml, in the same spirit as
-# iasbuilt/webapp's hook: stop a commit that cannot build, not a commit with
-# style debt.
+# GitHub Actions is no longer the gate for this repo (see the "on:" blocks
+# in .github/workflows/*.yml — ci.yml and rclone-upgrade-gate.yml are both
+# workflow_dispatch-only now, nightly-e2e.yml's schedule trigger is
+# disabled). This hook, via scripts/ci-local.sh, IS the CI: it mirrors
+# ci.yml job-for-job, not just a fast subset of it.
 #
-# WHAT RUNS HERE, AND WHY THIS SUBSET.
+# This makes commits slow (the full core/ suite includes the Docker-backed
+# crash matrix and SFTP integration tests, plus two cross-compiles, three
+# frontend installs/builds, and the dependency-rules worktree-deletion
+# proofs). That's the deliberate tradeoff of relying on this instead of
+# GitHub Actions: see scripts/ci-local.sh's own header for the CI_LOCAL_FAST
+# escape hatch for iteration, and never rely on it before a merge.
 #
-# Go: build, vet, and core/'s ./internal/... suite (core/ is its own Go
-# module as of #106/B1.1 — docs/EPIC-B-multi-nas.md §7). Deliberately NOT
-# `go test ./...`. core/'s ./tests/... tree holds the crash matrix, the SFTP
-# integration suite and the destructive-safety suite, which stand up Docker
-# containers and kill real processes. Those take minutes, need a working
-# Docker daemon, and would make this hook unusable on a laptop with Docker
-# stopped. CI runs them on every push, which is where a suite that slow
-# belongs. `./internal/...` is around a minute and covers every package the
-# commit is likely to have touched.
+# Playwright e2e is still not here, matching nightly-e2e.yml's own reasoning
+# (too slow, too flaky to sit in front of every commit) — run it by hand
+# (`cd ui/shared && npm run e2e`) or via workflow_dispatch before a release.
 #
-# apps/common is a second, much smaller Go module (the platform-capability
-# contract plus reserved webhost/auth/local scaffolding) — build, vet and
-# test run in full since none of it is slow.
-#
-# Frontend: tsc --noEmit and the vitest suite, both of which are about a second.
-# Playwright is NOT here, for the same reason as the Go integration tree: it
-# needs browsers installed and takes far longer than a commit should. Run
-# `npm run e2e` before a PR.
-#
-# ESLint is not here either, matching webapp's reasoning: a lint ratchet exists
-# to block a merge, and a local commit is not a merge.
-#
-# THE THREE TIERS, so nobody has to reconstruct them from three files:
-#   this hook      build, vet, ./internal/... , ui typecheck and unit tests
-#   ci.yml         the same, plus the UI build and both cross-compiles
-#   nightly-e2e    Playwright, on main only, because a browser suite is too
-#                  slow and too flaky to sit in front of a merge
-#
-# `git commit --no-verify` is the documented escape hatch for a WIP commit you
-# will fix before pushing.
+# `git commit --no-verify` is the documented escape hatch for a WIP commit
+# you will fix before pushing.
 
 set -e
 
-export PATH="/opt/homebrew/bin:$PATH"
-
-# GOWORK=off: prove core/'s own go.mod stands alone, independent of the
-# repo-root go.work (which also lists ./apps/common for local multi-module
-# development convenience).
-echo "==> pre-commit: core/ go build"
-(cd core && GOWORK=off go build ./...)
-
-echo "==> pre-commit: core/ go vet"
-(cd core && GOWORK=off go vet ./...)
-
-echo "==> pre-commit: core/ go test ./internal/..."
-(cd core && GOWORK=off go test ./internal/...)
-
-if [ -d apps/common ]; then
-  # GOWORK=off, matching core/ above: apps/common has no dependencies
-  # today, so this changes nothing observable yet, but apps/common/webhost
-  # is the deliberate seam for #94, which will need to import core/, and
-  # leaving GOWORK on would let go.work's `use` directives silently
-  # substitute the local core/ directory regardless of apps/common's own
-  # module pin.
-  echo "==> pre-commit: apps/common go build, vet, test"
-  (cd apps/common && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
-fi
-
-# The frontend only exists once ui/shared is present, and a Go-only checkout
-# should not fail this hook.
-if [ -d ui/shared ]; then
-  if [ ! -d ui/shared/node_modules ]; then
-    echo "==> pre-commit: ui/shared has no node_modules, skipping frontend checks"
-    echo "    run 'cd ui/shared && npm install' to enable them"
-  else
-    echo "==> pre-commit: ui typecheck"
-    (cd ui/shared && npm run --silent lint)
-
-    echo "==> pre-commit: ui tests"
-    (cd ui/shared && npm test --silent)
-  fi
-fi
-
-echo "==> pre-commit: ok"
+bash scripts/ci-local.sh

@@ -8,8 +8,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spdrman/rclone-manager/apps/common/csrf"
 	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// testCSRFToken is an arbitrary, fixed value every test in this file uses
+// for both the CSRF cookie and header on a submitted request: requireCSRF
+// (csrf.go) only ever checks that the two match each other, never any
+// specific value, so any fixed string both sides agree on exercises the
+// real check exactly as a real client's own randomly-issued token would.
+const testCSRFToken = "test-csrf-token"
+
+// attachValidCSRF adds a matching CSRF cookie/header pair to req, as if a
+// real client had already loaded a page from this origin and echoed back
+// the cookie EnsureCookie/EnsureCSRFCookie issued it. Every test in this
+// file that submits a mutating request goes through this (via
+// submitOperation) now that POST /api/v1/operations enforces CSRF - see
+// TestSubmitOperation_MissingCSRFCookieReturns403 for the dedicated proof
+// that the check itself actually rejects a request without this.
+func attachValidCSRF(req *http.Request) {
+	req.AddCookie(&http.Cookie{Name: csrf.CookieName, Value: testCSRFToken})
+	req.Header.Set(csrf.HeaderName, testCSRFToken)
+}
 
 type operationsTestRouter struct {
 	router  http.Handler
@@ -36,6 +56,7 @@ func submitOperation(t *testing.T, router http.Handler, idempotencyKey, body str
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
+	attachValidCSRF(req)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
@@ -293,6 +314,96 @@ func TestSubmitOperation_GateIsCheckedAfterAuthentication(t *testing.T) {
 	rec := submitOperation(t, router, "idem-1", `{"action":"run_cycle","config_revision":"rev-1"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d (auth must be checked first)", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// TestSubmitOperation_MissingCSRFCookieReturns403 is issue #119's review
+// finding that POST /api/v1/operations had no CSRF check of its own at
+// all, made concrete: a real, authenticated, gate-passed request with no
+// CSRF cookie must still be refused. Every other test in this file goes
+// through submitOperation, which attaches a valid CSRF cookie/header pair
+// via attachValidCSRF - this one deliberately builds its own request
+// without that, to prove the check is actually wired in, not merely
+// present in the source and unreachable.
+func TestSubmitOperation_MissingCSRFCookieReturns403(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations", strings.NewReader(`{"action":"run_cycle","config_revision":"rev-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "idem-no-csrf")
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "CSRF_TOKEN_MISSING" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "CSRF_TOKEN_MISSING")
+	}
+}
+
+// TestSubmitOperation_MismatchedCSRFHeaderReturns403 covers the other
+// half of requireCSRF: a cookie is present, but the echoed header doesn't
+// match it (a cross-site attacker can make a victim's browser send the
+// cookie, but cannot read its value to construct a matching header - see
+// apps/common/csrf's own doc for why that's the entire defense).
+func TestSubmitOperation_MismatchedCSRFHeaderReturns403(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations", strings.NewReader(`{"action":"run_cycle","config_revision":"rev-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "idem-bad-csrf")
+	req.AddCookie(&http.Cookie{Name: csrf.CookieName, Value: testCSRFToken})
+	req.Header.Set(csrf.HeaderName, "a-completely-different-value")
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "CSRF_TOKEN_MISMATCH" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "CSRF_TOKEN_MISMATCH")
+	}
+}
+
+// TestSubmitOperation_CSRFIsCheckedEvenWhenTheGateWouldAlsoRefuse proves
+// CSRF verification isn't accidentally short-circuited by the destructive
+// gate: a request that would fail BOTH checks must be reported as the
+// CSRF failure, matching requireCSRF's position first in the middleware
+// chain (router.go) - a caller must learn its request is fundamentally
+// forgeable-looking before learning anything about server-side
+// authorization state, the same ordering principle
+// TestSubmitOperation_GateIsCheckedAfterAuthentication already pins down
+// for auth vs. the gate.
+func TestSubmitOperation_CSRFIsCheckedEvenWhenTheGateWouldAlsoRefuse(t *testing.T) {
+	tr := newOperationsTestRouter(t, NotYetImplementedGate{}) // gate NOT passed
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations", strings.NewReader(`{"action":"run_cycle","config_revision":"rev-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "idem-no-csrf-no-gate")
+	rec := httptest.NewRecorder()
+	tr.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "CSRF_TOKEN_MISSING" {
+		t.Errorf("error.code = %v, want %q (CSRF must be checked before the destructive gate)", errObj["code"], "CSRF_TOKEN_MISSING")
 	}
 }
 

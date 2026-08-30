@@ -43,7 +43,7 @@ func openTestJournal(t *testing.T) *state.Journal {
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j
 }
 

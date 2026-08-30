@@ -1,16 +1,21 @@
 name: CI
 
-# Builds, vets, and tests every module on every push and pull request, keeps
-# the two UGREEN cross-compile targets honest with a real compile check, and
-# enforces the core/apps/ui-shared repository-structure boundary
+# Builds, vets, and tests every module, keeps the two UGREEN cross-compile
+# targets honest with a real compile check, and enforces the
+# core/apps/ui-shared repository-structure boundary
 # (docs/EPIC-B-multi-nas.md §7.1, landed in #106/B1.1). rclone's dependency
 # graph is heavy (roughly 1.7GB and 260+ modules to resolve, see
 # docs/rclone-upgrade.md), so the Go module and build caches are
 # load-bearing here, not a nice-to-have.
+#
+# NOT auto-triggered on push or pull_request. scripts/ci-local.sh mirrors
+# every job below and runs via .husky/pre-commit on every commit instead —
+# see that script's header for why. This workflow is kept for occasional
+# manual runs (workflow_dispatch, from the Actions tab) when a second,
+# independent-environment signal is worth the Actions minutes.
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -92,6 +97,39 @@ jobs:
         working-directory: apps/common
         run: go test ./...
 
+  apps-generic-build-vet-test:
+    name: apps/generic build, vet, test
+    runs-on: ubuntu-latest
+    # GOWORK=off, matching apps-common-build-vet-test above: apps/generic
+    # is the generic Web host's own binary (issue #82/B4.1), wiring
+    # core/service + apps/common/webhost + apps/common/auth/local
+    # together — its own go.mod's replace directives, not go.work's `use`
+    # list, are what have to resolve correctly here.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/generic/go.mod
+
+      - name: Build
+        working-directory: apps/generic
+        run: go build ./...
+
+      - name: Vet
+        working-directory: apps/generic
+        run: go vet ./...
+
+      - name: Test
+        working-directory: apps/generic
+        run: go test ./...
+
   ugreen-cross-compile:
     name: UGREEN cross-compile (${{ matrix.goarch }})
     runs-on: ubuntu-latest
@@ -140,7 +178,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -188,7 +226,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -233,7 +271,7 @@ jobs:
           cache-dependency-path: core/go.sum
 
       - name: Set up Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm

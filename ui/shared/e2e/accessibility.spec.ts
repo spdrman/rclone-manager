@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 /** §32 — keyboard, semantics and non-colour-only status, checked structurally
  *  rather than with a snapshot so failures point at a real defect. */
@@ -74,8 +74,23 @@ test.describe("accessibility", () => {
     throw new Error("Section navigation was not reachable within 12 tab stops");
   });
 
-  test("focus is visible on the focused control", async ({ page }) => {
-    await page.goto("/");
+  test("focus is visible on the focused control", async ({ page, bm }) => {
+    // bm.goto() (not a bare page.goto()) so this test waits on the same
+    // real signal — the section nav rendering — the rest of this PR's
+    // fixes use, instead of racing the app's mount.
+    await bm.goto("/");
+    // Not part of the async-data race the rest of this file's siblings
+    // share (confirmed by hand: the CSS's :focus-visible rule is correct,
+    // and the very first Tab keypress after goto() is what's unreliable —
+    // dispatching it immediately, before Chromium has settled page focus
+    // post-navigation, deterministically leaves focus on <body> in headless
+    // mode). The real signal being waited on is the browser's document
+    // focus actually settling post-navigation, so assert that directly
+    // instead of guessing at how many frames it takes; a bare extra
+    // `page.keyboard.press("Tab")` would also dodge the race, but would
+    // then be testing the second tab stop, not the first. This is the
+    // harness workaround #113 already anticipated.
+    await page.waitForFunction(() => document.hasFocus());
     await page.keyboard.press("Tab");
     const outline = await page.evaluate(() => {
       const el = document.activeElement as HTMLElement | null;
@@ -90,7 +105,9 @@ test.describe("accessibility", () => {
   test("dialogs are modal, labelled and Escape-dismissible", async ({ page }) => {
     await page.goto("/sets");
     await page.getByRole("article").first().getByRole("button", { name: "Open" }).click();
-    await page.getByRole("button", { name: "Preview retention" }).click();
+    // exact: true — disambiguates from the detail page's other
+    // "Preview retention plan" button.
+    await page.getByRole("button", { name: "Preview retention", exact: true }).click();
 
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveAttribute("aria-modal", "true");

@@ -57,6 +57,7 @@ func TestSubmitOperation_SurvivesClientDisconnect(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "idem-disconnect")
+	attachValidCSRF(req)
 
 	resp, err := srv.Client().Do(req)
 	if err != nil {
@@ -69,7 +70,7 @@ func TestSubmitOperation_SurvivesClientDisconnect(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&submitted); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	operationID, _ := submitted["operation_id"].(string)
 	if operationID == "" {
 		t.Fatal("submitted operation_id is empty")

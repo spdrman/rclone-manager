@@ -54,6 +54,7 @@ var commands = map[string]func([]string) int{
 	"retention": cmdRetention,
 	"reconcile": cmdReconcile,
 	"validate":  cmdValidate,
+	"catalog":   cmdCatalog,
 	"version":   cmdVersion,
 }
 
@@ -68,9 +69,12 @@ commands:
   sources                                        list configured sources and backup sets
   artifacts [--source S] [--backup-set B]        list journal artifacts
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
-  retention [--dry-run]                          preview GFS/last-known-good retention decisions
+  retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
+                                                  preview GFS/last-known-good retention decisions; each retention flag
+                                                  overrides the loaded config's own resolved value for this preview only
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
+  catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config.yaml)

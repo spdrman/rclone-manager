@@ -48,3 +48,13 @@ node_modules/
 
 # Coverage
 /ui/shared/coverage/
+
+# --- Python (scripts/deploy) ----------------------------------------------
+__pycache__/
+*.pyc
+
+# scripts/deploy/deploy_generic.py's own default --deploy-dir: rendered
+# config.yaml/.env, which (per that script's own doc) point at real host
+# key paths - generated locally, never committed, matching container/.env's
+# own gitignore entry above.
+/container/.generated/

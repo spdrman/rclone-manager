@@ -5,7 +5,10 @@ test.describe("dashboard", () => {
     await bm.goto("/");
     // §8 — the headline is about backups; the daemon is a supporting chip.
     await expect(page.getByText(/^BACKUPS /)).toBeVisible();
-    await expect(page.getByText(/Service running/)).toBeVisible();
+    // Scoped to the header — the dashboard body's own health summary widget
+    // repeats "Service running" with a different suffix (uptime, not
+    // version), so an unscoped match is ambiguous.
+    await expect(page.getByRole("banner").getByText(/Service running/)).toBeVisible();
     await expect(page.getByText(/a healthy daemon is not a healthy backup|not produced a verified backup|halted/i).first()).toBeVisible();
   });
 
@@ -59,8 +62,18 @@ test.describe("dashboard", () => {
     expect(value).toBeGreaterThan(0);
     expect(value).toBeLessThanOrEqual(100);
 
+    // getByText(exact: true) matches an element's whole DOM text content,
+    // which here includes the stage glyph (aria-hidden span rendered right
+    // before the label, e.g. "✓Discovering") — an exact match on the label
+    // alone never resolves. "listitem" has no ARIA name-from-content (name
+    // is author-only per the ARIA role table), so getByRole(…, {name}) can't
+    // find it either — a plain substring getByText is the fix, scoped to the
+    // stage list itself (not the whole region) since "Transferring" is also
+    // a substring of the op's own label, "Transferring backup", rendered
+    // above the list.
+    const stageList = ops.getByRole("list");
     for (const stage of ["Discovering", "Transferring", "Verifying", "Committing", "Cleaning remote source", "Complete"]) {
-      await expect(ops.getByText(stage, { exact: true })).toBeVisible();
+      await expect(stageList.getByText(stage)).toBeVisible();
     }
     await expect(ops.getByRole("listitem").filter({ has: page.locator("[aria-current='step']") })).toHaveCount(0);
   });

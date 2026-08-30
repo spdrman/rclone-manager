@@ -369,6 +369,33 @@ var validWeekdays = map[string]bool{
 	"sunday":    true,
 }
 
+// ValidateRetention validates and resolves-in-place the six FR-18/FR-19
+// retention fields (timezone, week_starts_on, daily_days, weekly_months,
+// monthly_months, protect_last_known_good), exactly as Validate does for
+// a whole Config's embedded Retention block: it is not a second
+// implementation of that logic, it is the same validateRetention method
+// this file's Validate already calls, exported so a caller outside this
+// package can run a candidate Retention value through the identical
+// checks and defaults the config file itself goes through.
+//
+// This exists for issue #111 (B3.6): the CLI's retention override flags
+// and any future UI-backing settings surface both need "a value set here
+// means exactly what the same value written into the YAML file means,"
+// including the same error text for the same mistake. Reimplementing
+// "is this timezone loadable" or "is this tier negative" a second time in
+// either of those places would be exactly the kind of second, potentially
+// divergent, validation path this function exists to make unnecessary.
+//
+// Like Validate itself, this is safe to call more than once on the same
+// Retention: every default it fills in is only applied when the field is
+// still at its zero value, so a value already resolved by a previous call
+// (or by the YAML file's own Validate pass) is left alone.
+func ValidateRetention(r *Retention) error {
+	v := &validator{}
+	v.validateRetention(r)
+	return v.err()
+}
+
 func (v *validator) validateRetention(r *Retention) {
 	if r.Timezone == "" {
 		r.Timezone = "UTC"

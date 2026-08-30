@@ -156,6 +156,36 @@ func (f *syncFakeBackend) GetOperation(_ context.Context, id string) (service.Op
 	return op, nil
 }
 
+// The five methods below satisfy BackupServiceClient's issue #146
+// surface. syncFakeBackend's own tests (handlers_operations_test.go) never
+// call any of these — they exist only so this type still compiles as a
+// BackupServiceClient; handlers_backupsets_test.go and
+// handlers_ssh_test.go use backupSetFakeBackend (below) instead, which
+// actually exercises them.
+func (f *syncFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {
+	return nil, nil
+}
+
+func (f *syncFakeBackend) GetBackupSet(context.Context, string) (service.BackupSet, error) {
+	return service.BackupSet{}, service.ErrBackupSetNotFound
+}
+
+func (f *syncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupSetRequest) (service.CreateBackupSetResult, error) {
+	return service.CreateBackupSetResult{}, errors.New("syncFakeBackend: CreateBackupSet not implemented")
+}
+
+func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
+}
+
+func (f *syncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
+	return service.HostKeyProbe{}, errors.New("syncFakeBackend: ProbeHostKey not implemented")
+}
+
+func (f *syncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	return service.ConnectionTestResult{}, errors.New("syncFakeBackend: TestConnection not implemented")
+}
+
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
 // behaves like the real core/service.BackupService's own contract:
 // persist synchronously, then finish the work later on a goroutine that
@@ -225,4 +255,168 @@ func (f *asyncFakeBackend) GetOperation(_ context.Context, id string) (service.O
 // finish. Safe to call exactly once.
 func (f *asyncFakeBackend) release() { close(f.gate) }
 
+// asyncFakeBackend's own tests (disconnect_test.go) only exercise
+// SubmitRunCycle/GetOperation's async-disconnect behavior; these five
+// stubs exist purely so it still satisfies BackupServiceClient, same
+// reasoning as syncFakeBackend's identical block above.
+func (f *asyncFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) GetBackupSet(context.Context, string) (service.BackupSet, error) {
+	return service.BackupSet{}, service.ErrBackupSetNotFound
+}
+
+func (f *asyncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupSetRequest) (service.CreateBackupSetResult, error) {
+	return service.CreateBackupSetResult{}, errors.New("asyncFakeBackend: CreateBackupSet not implemented")
+}
+
+func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte) (service.SSHKeyRef, error) {
+	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
+}
+
+func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
+	return service.HostKeyProbe{}, errors.New("asyncFakeBackend: ProbeHostKey not implemented")
+}
+
+func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	return service.ConnectionTestResult{}, errors.New("asyncFakeBackend: TestConnection not implemented")
+}
+
 var errBoom = errors.New("boom")
+
+// backupSetFakeBackend is a BackupServiceClient double for
+// handlers_backupsets_test.go and handlers_ssh_test.go: an in-memory
+// store for backup sets and imported SSH keys, so those tests can drive
+// every request/response/error branch the issue #146 handlers add
+// without a real config file, journal or transport. Operations-surface
+// methods (SubmitRunCycle/GetOperation/ConfigRevision) delegate to an
+// embedded syncFakeBackend, since createBackupSet's RunImmediately path
+// calls through to those too.
+type backupSetFakeBackend struct {
+	*syncFakeBackend
+
+	mu   sync.Mutex
+	sets map[string]service.BackupSet
+	keys map[string]service.SSHKeyRef
+
+	errOnCreate  error
+	errOnList    error
+	errOnGet     error
+	errOnImport  error
+	errOnProbe   error
+	errOnConnect error
+
+	probeResult      service.HostKeyProbe
+	connectionResult service.ConnectionTestResult
+}
+
+func newBackupSetFakeBackend() *backupSetFakeBackend {
+	return &backupSetFakeBackend{
+		syncFakeBackend:  newSyncFakeBackend(),
+		sets:             map[string]service.BackupSet{},
+		keys:             map[string]service.SSHKeyRef{},
+		connectionResult: service.ConnectionTestResult{OK: true},
+	}
+}
+
+func (f *backupSetFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {
+	if f.errOnList != nil {
+		return nil, f.errOnList
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]service.BackupSet, 0, len(f.sets))
+	for _, s := range f.sets {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+func (f *backupSetFakeBackend) GetBackupSet(_ context.Context, id string) (service.BackupSet, error) {
+	if f.errOnGet != nil {
+		return service.BackupSet{}, f.errOnGet
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sets[id]
+	if !ok {
+		return service.BackupSet{}, service.ErrBackupSetNotFound
+	}
+	return s, nil
+}
+
+func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error) {
+	if f.errOnCreate != nil {
+		return service.CreateBackupSetResult{}, f.errOnCreate
+	}
+	sourceName := req.SourceName
+	if sourceName == "" {
+		sourceName = "api"
+	}
+	set := service.BackupSet{
+		ID:                 sourceName + "/" + req.Name,
+		SourceName:         sourceName,
+		Name:               req.Name,
+		Host:               req.Host,
+		Port:               req.Port,
+		User:               req.User,
+		RemotePath:         req.RemotePath,
+		LocalPath:          req.LocalPath,
+		Include:            req.Include,
+		CompletionStrategy: req.CompletionStrategy,
+		Disabled:           req.Disabled,
+	}
+	f.mu.Lock()
+	f.sets[set.ID] = set
+	f.mu.Unlock()
+
+	result := service.CreateBackupSetResult{Set: set}
+	if req.RunImmediately && !req.Disabled {
+		op, err := f.SubmitRunCycle(ctx, service.RunCycleRequest{
+			IdempotencyKey: "create:" + set.ID,
+			Actor:          req.Actor,
+			ConfigRevision: f.ConfigRevision(),
+		})
+		if err != nil {
+			return result, err
+		}
+		result.Operation = &op
+	}
+	return result, nil
+}
+
+func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte) (service.SSHKeyRef, error) {
+	if f.errOnImport != nil {
+		return service.SSHKeyRef{}, f.errOnImport
+	}
+	if len(raw) == 0 {
+		return service.SSHKeyRef{}, service.ErrInvalidRequest
+	}
+	ref := service.SSHKeyRef{ID: "key_test_1", KeyFile: "/fake/ssh_keys/key_test_1", Algorithm: "ssh-ed25519", Fingerprint: "SHA256:faketestfingerprint"}
+	f.mu.Lock()
+	f.keys[ref.ID] = ref
+	f.mu.Unlock()
+	return ref, nil
+}
+
+func (f *backupSetFakeBackend) ProbeHostKey(context.Context, string, int) (service.HostKeyProbe, error) {
+	if f.errOnProbe != nil {
+		return service.HostKeyProbe{}, f.errOnProbe
+	}
+	if f.probeResult.Algorithm == "" {
+		return service.HostKeyProbe{
+			Algorithm:      "ssh-ed25519",
+			Fingerprint:    "SHA256:faketesthostfingerprint",
+			KnownHostsLine: "example.internal ssh-ed25519 AAAAfaketest",
+		}, nil
+	}
+	return f.probeResult, nil
+}
+
+func (f *backupSetFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
+	if f.errOnConnect != nil {
+		return service.ConnectionTestResult{}, f.errOnConnect
+	}
+	return f.connectionResult, nil
+}

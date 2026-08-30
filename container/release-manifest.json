@@ -1,0 +1,24 @@
+{
+  "version": "c51a07f",
+  "commit": "c51a07f0e377b69d43260186c0c73764e1d65f6b",
+  "generated_at": "2026-08-29T15:17:09Z",
+  "note": "local_image_id_sha256 is this build's local Docker image ID, not a registry digest - no registry is configured for this repository yet. A real release additionally records the digest a registry assigns on push (docker buildx build --push, or docker buildx imagetools inspect <ref>).",
+  "architectures": [
+    {
+      "architecture": "amd64",
+      "binary_sha256": {
+        "backup-manager": "91d5727a3aef5c6c3e707a31ad3d994274a03b716b3f49fcb4f1cf78b447ca7e",
+        "backup-manager-web": "250b3b4f6eeeeb134e96928a7bd999ffe8e7085e299c853e913ed9ffab3a2f16"
+      },
+      "local_image_id_sha256": "3d311fbfa88fa28d9733ee170da44d7a3bf8c8df6e2db3f05aae089ce8a7dbb0"
+    },
+    {
+      "architecture": "arm64",
+      "binary_sha256": {
+        "backup-manager": "5141ca26fc93420bb6e31bb610b05d84b974f7da63205ff7e3c0fbce7de7e0d0",
+        "backup-manager-web": "a04c87e95e0d8f7c93f41a92b7ed3b9045eed501275f0695eea198dafb32b07e"
+      },
+      "local_image_id_sha256": "1c51382c0dbcbc13d6e01b854b604e4a93ec429615327ce0a7579efd6de5a9dd"
+    }
+  ]
+}

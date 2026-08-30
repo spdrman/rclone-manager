@@ -21,19 +21,48 @@ import (
 // real delete function, wiring `retention` (without --dry-run) to actually
 // call it is a small, well-scoped follow-up this comment is deliberately
 // easy to find and delete.
+//
+// # Retention override flags (issue #111, B3.6)
+//
+// This command also accepts one optional flag per FR-18/FR-19 field
+// (--timezone, --week-starts-on, --daily-days, --weekly-months,
+// --monthly-months, --protect-last-known-good): see
+// registerRetentionFlags and applyRetentionOverrides (retention_flags.go)
+// for exactly how each is folded onto the loaded config's own resolved
+// retention.Config and re-validated. None of them are ever persisted back
+// to the config file; they change only this one invocation's preview, the
+// same way --dry-run already only ever affects this one invocation. An
+// operator who wants a policy change to survive past one preview still
+// edits the YAML file, exactly as before this issue.
 func cmdRetention(args []string) int {
 	fs, cfgPath := newFlagSet("retention")
 	dryRun := fs.Bool("dry-run", false, "preview only; see this command's note below about the other mode")
+	rf := registerRetentionFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	ctx := context.Background()
-	svc, _, cleanup, err := openService(ctx, *cfgPath, false)
+	svc, cfg, cleanup, err := openService(ctx, *cfgPath, false)
 	if err != nil {
 		return fail(err)
 	}
 	defer cleanup()
+
+	// Issue #111 (B3.6): fold in whichever of the six FR-18/FR-19 flags
+	// the operator actually passed, validated through the identical
+	// config.ValidateRetention path the YAML file's own retention block
+	// goes through, so an invalid override is refused for the same
+	// reason an invalid file value would be. An operator who passes none
+	// of these flags gets cfg.Retention completely untouched: exactly
+	// today's file-only behavior. cfg is the same *config.Config pointer
+	// svc was built from (see openService's doc), so this mutation is
+	// this command's own, one-time, explicit preview-input step, not
+	// ambient state Service itself ever reads or writes.
+	overrides := resolveRetentionFlags(rf)
+	if err := applyRetentionOverrides(&cfg.Retention, overrides); err != nil {
+		return fail(fmt.Errorf("retention flags: %w", err))
+	}
 
 	reports, err := svc.RetentionPreviewAll(ctx)
 	if err != nil {

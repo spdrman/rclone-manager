@@ -13,8 +13,10 @@ test.describe("quarantine", () => {
   });
 
   test("shows all six documented columns", async ({ page }) => {
+    // exact: true — "Backup" is otherwise a substring match of the
+    // "Backup set" column too.
     for (const col of ["Backup", "Backup set", "Reason", "Detected", "Remote source", "Actions"]) {
-      await expect(page.getByRole("columnheader", { name: col })).toBeVisible();
+      await expect(page.getByRole("columnheader", { name: col, exact: true })).toBeVisible();
     }
   });
 
@@ -45,8 +47,13 @@ test.describe("quarantine", () => {
 });
 
 test.describe("activity", () => {
-  test.beforeEach(async ({ bm }) => {
+  test.beforeEach(async ({ bm, page }) => {
     await bm.goto("/activity");
+    // ActivityPage's events/sets fetches are async (mock listActivity() /
+    // listSets()); until they settle, filtered.length reads 0 and the page
+    // shows "No matching events" — wait for the real unfiltered list before
+    // any test reads counts or text off it, or it races that resolve.
+    await expect(page.getByRole("listitem").first()).toBeVisible();
   });
 
   test("lists events with timestamp, severity glyph and set", async ({ page }) => {

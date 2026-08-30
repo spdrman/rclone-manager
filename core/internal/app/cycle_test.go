@@ -83,6 +83,45 @@ func TestRunCycle_ProcessesArtifactThroughToComplete(t *testing.T) {
 	}
 }
 
+// TestRunCycle_SkipsADisabledBackupSet is issue #146 (B2.7)'s "Save
+// disabled" wizard tier made concrete at the actual cycle level: a
+// backup set with config.BackupSet.Disabled set is never reconciled,
+// discovered or processed at all — it does not even appear in
+// CycleReport.Sets — while a sibling, enabled set in the same cycle is
+// processed normally. Disabled is checked in RunCycle's own loop
+// (cycle.go), before processBackupSet is ever called for that set.
+// fakeTransport's List (helpers_test.go) is not source-scoped — every
+// configured backup set sees the same fake remote objects — so a single
+// seeded artifact is enough here: what this test isolates is COUNT and
+// IDENTITY of CycleReport.Sets, not which artifacts each set happens to
+// discover.
+func TestRunCycle_SkipsADisabledBackupSet(t *testing.T) {
+	enabledDir := t.TempDir()
+	enabledBS := testBackupSet(t, enabledDir)
+
+	disabledDir := t.TempDir()
+	disabledBS := testBackupSet(t, disabledDir)
+	disabledBS.Name = "disabled-set"
+	disabledBS.ID = mustSetID(t, "production", "disabled-set")
+	disabledBS.Disabled = true
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "shared fake remote payload", epoch.Unix())
+
+	journal := openJournal(t)
+	svc := New(testConfig(t, testSource("production", enabledBS, disabledBS)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	report := svc.RunCycle(context.Background())
+
+	if len(report.Sets) != 1 {
+		t.Fatalf("len(report.Sets) = %d, want exactly 1 (the disabled set must not appear at all): %+v", len(report.Sets), report.Sets)
+	}
+	if report.Sets[0].Set.String() != enabledBS.ID.String() {
+		t.Fatalf("the one processed set = %q, want the enabled one %q", report.Sets[0].Set, enabledBS.ID)
+	}
+}
+
 // TestRunCycle_ContinuesAfterOneBackupSetFails proves FR-1's "continue
 // processing unrelated sources after one source fails": a systemic
 // discovery failure for one backup set (its remote is entirely

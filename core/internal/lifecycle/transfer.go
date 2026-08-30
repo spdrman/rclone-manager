@@ -181,6 +181,17 @@ func partialPath(localDir string, artifact model.ArtifactID) string {
 	return finalPath(localDir, artifact) + partialSuffix
 }
 
+// FinalArtifactPath is finalPath exported for callers outside this
+// package that need to agree on exactly where Commit will have placed an
+// artifact's durable local copy, without duplicating the join logic. The
+// one caller today is internal/app's catalog-rebuild use case (issue
+// #102), which has to compute the same LocalPath a normal commit would
+// have recorded for a journal row it is reconstructing from a sidecar
+// recovery manifest rather than from a live Commit call.
+func FinalArtifactPath(localDir string, artifact model.ArtifactID) string {
+	return finalPath(localDir, artifact)
+}
+
 // Transfer runs FR-11's copy step for one artifact: it records TRANSFERRING
 // with the .partial destination, copies the remote object to that
 // destination through Transport.CopyToLocal (retried under Policy for
