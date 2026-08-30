@@ -117,7 +117,9 @@ func TestRunEngine_SchedulerErrorIsReportedPromptly(t *testing.T) {
 	// context.Background(): deliberately never canceled by this test -
 	// the whole point is that RunEngine must notice the scheduler's own
 	// failure without any help from ctx cancellation.
-	go func() { done <- serve.RunEngine(context.Background(), httpServer, scheduler, testShutdownGrace, io.Discard) }()
+	go func() {
+		done <- serve.RunEngine(context.Background(), httpServer, scheduler, testShutdownGrace, io.Discard)
+	}()
 
 	select {
 	case err := <-done:
@@ -153,7 +155,9 @@ func TestRunEngine_ServerErrorIsReported(t *testing.T) {
 	httpServer := serve.NewHTTPServer(":-1", http.NotFoundHandler())
 
 	done := make(chan error, 1)
-	go func() { done <- serve.RunEngine(context.Background(), httpServer, scheduler, testShutdownGrace, io.Discard) }()
+	go func() {
+		done <- serve.RunEngine(context.Background(), httpServer, scheduler, testShutdownGrace, io.Discard)
+	}()
 
 	select {
 	case err := <-done:
