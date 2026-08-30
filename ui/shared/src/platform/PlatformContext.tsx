@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { AuthContext as AuthCtx, PlatformBridge } from "@shared/types/platform";
 import { graph, useCausl } from "@shared/state/graph";
@@ -52,7 +52,7 @@ export function PlatformProvider({
   // runs after children have already rendered once, so a child calling
   // usePlatform() on that first pass would see bridgeNode still `null`.
   //
-  // Guarded against a local ref, NOT `graph.read(bridgeNode) !== bridge`:
+  // Guarded against local state, NOT `graph.read(bridgeNode) !== bridge`:
   // @causlts/core's `createCausl()` wraps every graph in an auto-adapt
   // layer that does a live, in-place swap to a WASM backend once
   // commit/subscriber/timing thresholds trip, and `graph.read()`'s
@@ -61,13 +61,23 @@ export function PlatformProvider({
   // would risk firing on every render post-swap, cascading a derived
   // recompute and a re-render through every usePlatform() consumer while
   // itself feeding the very commit-count stats that trigger the
-  // migration — exactly the trap useCausl.ts was written to avoid. A
-  // plain useRef never has that problem: it is this component's own
-  // local, ordinary React state, not a read from the graph.
-  const lastCommittedBridge = useRef<PlatformBridge | null>(null);
-  if (lastCommittedBridge.current !== bridge) {
+  // migration — exactly the trap useCausl.ts was written to avoid.
+  //
+  // useState, not useRef: this is React's own documented "adjusting state
+  // when a prop changes" pattern (a set function called during render is
+  // explicitly safe there, since React re-renders immediately with the
+  // new value before committing anything to the screen). A ref mutated
+  // during render is not safe the same way — a render React discards
+  // (StrictMode's double-invoke, an interrupted concurrent update) leaves
+  // the mutation applied anyway, since nothing about a ref is tied to
+  // whether its owning render actually commits. That's the same class of
+  // bug this whole guard exists to avoid, just moved from the graph to
+  // this component's own local state, and it doesn't survive eslint's
+  // react-hooks/refs rule either.
+  const [lastCommittedBridge, setLastCommittedBridge] = useState<PlatformBridge | null>(null);
+  if (lastCommittedBridge !== bridge) {
     graph.commit("platform/bridge-mounted", (tx) => tx.set(bridgeNode, bridge));
-    lastCommittedBridge.current = bridge;
+    setLastCommittedBridge(bridge);
   }
 
   useEffect(() => {

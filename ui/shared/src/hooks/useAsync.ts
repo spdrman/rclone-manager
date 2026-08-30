@@ -17,11 +17,24 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
   const [loading, setLoading] = useState(true);
   const [nonce, setNonce] = useState(0);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // This wrapper's whole job is forwarding a caller-supplied deps array
+  // to useCallback, which the newer react-hooks/use-memo rule can't
+  // statically verify (it requires a literal array so it can compare
+  // entries itself). Each call site below already lists its own real
+  // dependencies in `deps`; this hook has nothing more specific to add.
+  // eslint-disable-next-line react-hooks/use-memo, react-hooks/exhaustive-deps
   const run = useCallback(fn, deps);
 
   useEffect(() => {
     let live = true;
+    // Resetting loading/error at the start of a fetch (including a
+    // reload triggered by `nonce` changing) is the standard shape of this
+    // pattern; the newer react-hooks/set-state-in-effect rule flags any
+    // synchronous setState call here on general principle (an extra
+    // render pass), but there's no external system or prop to derive
+    // this from instead, and no correctness issue: `live` still guards
+    // every subsequent setState against a stale/unmounted effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setError(null);
     run()

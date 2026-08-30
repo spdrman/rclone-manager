@@ -228,7 +228,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
 	t.Cleanup(func() {
-		exec.Command("docker", "rm", "-f", name).Run()
+		_ = exec.Command("docker", "rm", "-f", name).Run()
 	})
 	return name
 }
@@ -368,7 +368,7 @@ func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docker run: %v\n%s", err, out)
 	}
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", name).Run() })
 
 	hostPort := publishedPort(t, name, "8080/tcp")
 	base := "http://127.0.0.1:" + hostPort
@@ -611,7 +611,7 @@ func startComposeStack(t *testing.T, image string, listenPort int) *composeProje
 			"down", "-v", "--remove-orphans",
 		)
 		down.Env = up.Env
-		down.Run()
+		_ = down.Run()
 	})
 
 	return p

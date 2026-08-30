@@ -83,13 +83,17 @@ export function useResource<T>(
   deps: unknown[] = []
 ): ResourceState<T> & { reload(): void } {
   const state = useCausl(node);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // This wrapper's whole job is forwarding a caller-supplied deps array
+  // to useCallback, which the newer react-hooks/use-memo rule can't
+  // statically verify (it requires a literal array so it can compare
+  // entries itself). Each call site below already lists its own real
+  // dependencies in `deps`; this hook has nothing more specific to add.
+  // eslint-disable-next-line react-hooks/use-memo, react-hooks/exhaustive-deps
   const run = useCallback(fetchFn, deps);
   const reload = useCallback(() => fetchResource(node, run), [node, run]);
 
   useEffect(() => {
     reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   return { ...state, reload };
