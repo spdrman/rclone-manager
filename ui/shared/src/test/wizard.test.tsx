@@ -1,22 +1,72 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { BackupSetWizardPage } from "@shared/pages/BackupSetWizardPage";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
+import { ApiProvider } from "@shared/api/ApiContext";
+import { createMockApi } from "@shared/api/mock";
+import { BackupManagerError } from "@shared/api/contracts";
+import type { BackupManagerApi } from "@shared/api/contracts";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { versionNode } from "@shared/state/appNodes";
 import { wizardHostKeyChangedNode } from "@shared/state/wizardNodes";
 
-function renderWizard(readOnly = false) {
+// Issue #146 (B2.7): the wizard now reads useApi() (step 2's import, step
+// 3's host-key probe, step 6's Save buttons all call through it), so
+// every render needs an ApiProvider — createMockApi() is the same
+// deterministic fixture ui/shared/e2e's own Playwright suite runs
+// against (playwright.config.ts's own comment), reused here for the
+// same reason.
+function renderWizard(readOnly = false, api: BackupManagerApi = createMockApi()) {
   return render(
     <MemoryRouter>
-      <PlatformProvider bridge={genericBridge}>
-        <BackupSetWizardPage readOnly={readOnly} />
-      </PlatformProvider>
+      <ApiProvider api={api}>
+        <PlatformProvider bridge={genericBridge}>
+          <BackupSetWizardPage readOnly={readOnly} />
+        </PlatformProvider>
+      </ApiProvider>
     </MemoryRouter>
   );
+}
+
+/** Same providers as renderWizard, but with an actual route table
+ *  (rather than a bare MemoryRouter) so navigate("/sets") on a
+ *  successful save (issue #146) is observable — renderWizard alone has
+ *  nowhere for that navigation to land. */
+function renderWizardWithRoutes(api: BackupManagerApi) {
+  return render(
+    <MemoryRouter initialEntries={["/sets/new"]}>
+      <ApiProvider api={api}>
+        <PlatformProvider bridge={genericBridge}>
+          <Routes>
+            <Route path="/sets/new" element={<BackupSetWizardPage readOnly={false} />} />
+            <Route path="/sets" element={<div>SETS LIST PAGE</div>} />
+          </Routes>
+        </PlatformProvider>
+      </ApiProvider>
+    </MemoryRouter>
+  );
+}
+
+/** Drives the wizard through Authentication (import a key), Verify
+ *  server (wait for the probe, trust it), and Review (acknowledge) —
+ *  everything every one of the three Save buttons needs to be enabled
+ *  and to have a real sshKeyId/knownHostsLine to send (issue #146). */
+async function completeWizardUpToReview() {
+  await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
+  await userEvent.click(screen.getByRole("radio", { name: /Import key/ }));
+  await userEvent.type(screen.getByLabelText(/private key/i), "FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+  await userEvent.click(screen.getByRole("button", { name: "Import key" }));
+  await screen.findByText(/key imported/i);
+
+  await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
+  await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
+
+  await userEvent.click(screen.getByRole("button", { name: "Review" }));
+  await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
 }
 
 // wizard.hostKeyChanged lives on the shared causl graph (issue #98 —
@@ -94,8 +144,11 @@ describe("add backup set wizard", () => {
 
       await userEvent.click(importBtn);
 
+      // Import now goes through api.importSSHKey (issue #146), a real
+      // (mocked) async call — findByText waits for that to resolve
+      // instead of asserting the instant before it has.
+      expect(await screen.findByText(/key imported/i)).toBeTruthy();
       expect(screen.queryByLabelText(/private key/i)).toBeNull();
-      expect(screen.getByText(/key imported/i)).toBeTruthy();
       expect(document.body.textContent).not.toContain(fixtureKey);
     });
 
@@ -169,6 +222,9 @@ describe("add backup set wizard", () => {
     it("reflects a trust decision made on step 3, surviving the trip to review", async () => {
       renderWizard();
       await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      // Issue #146: "Trust host" stays disabled until the real (mocked)
+      // host-key probe resolves — see BackupSetWizardPage's probeHost.
+      await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
       await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
 
       await userEvent.click(screen.getByRole("button", { name: "Review" }));
@@ -182,11 +238,14 @@ describe("add backup set wizard", () => {
       renderWizard();
 
       await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
       await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
       expect(screen.getByRole("button", { name: "Host trusted" })).toBeDisabled();
 
       // Re-visiting the same step with the hostname unchanged must not
-      // un-trust it — only an actual edit should.
+      // un-trust it — only an actual edit should. No new probe fires
+      // either (same host:port already probed), so no wait is needed
+      // here.
       await userEvent.click(screen.getByRole("button", { name: "Source" }));
       await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
       expect(screen.getByRole("button", { name: "Host trusted" })).toBeDisabled();
@@ -198,7 +257,9 @@ describe("add backup set wizard", () => {
       await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
 
       expect(screen.queryByRole("button", { name: "Host trusted" })).toBeNull();
-      expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled();
+      // A new host means a new probe: "Trust host" only becomes
+      // enabled again once that (mocked) probe resolves.
+      await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
     });
   });
 
@@ -254,6 +315,101 @@ describe("add backup set wizard", () => {
 
       expect(screen.getByRole("button", { name: /Save, enable & run/ })).toBeDisabled();
       expect(screen.getByRole("button", { name: /^Save & enable$/ })).toBeDisabled();
+    });
+  });
+
+  // Issue #146 (B2.7): RED plan's "the wizard's Save buttons actually
+  // call the create endpoint and handle its response (success ->
+  // navigate/confirm, failure -> surface the error, not a silent
+  // no-op)".
+  describe("the Save buttons persist a backup set for real (issue #146)", () => {
+    it("Save & enable calls createBackupSet with disabled:false, runImmediately:false and navigates to the sets list on success", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      expect(await screen.findByText("SETS LIST PAGE")).toBeTruthy();
+      expect(spy).toHaveBeenCalledTimes(1);
+      const req = spy.mock.calls[0][0];
+      expect(req.disabled).toBe(false);
+      expect(req.runImmediately).toBe(false);
+      expect(req.sshKeyId).toBeTruthy();
+      expect(req.knownHostsLine).toBeTruthy();
+    });
+
+    it("Save, enable & run calls createBackupSet with runImmediately:true", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /Save, enable & run/ }));
+
+      await screen.findByText("SETS LIST PAGE");
+      const req = spy.mock.calls[0][0];
+      expect(req.disabled).toBe(false);
+      expect(req.runImmediately).toBe(true);
+    });
+
+    it("Save disabled calls createBackupSet with disabled:true and needs no acknowledgement", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
+      await userEvent.click(screen.getByRole("radio", { name: /Import key/ }));
+      await userEvent.type(screen.getByLabelText(/private key/i), "FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+      await userEvent.click(screen.getByRole("button", { name: "Import key" }));
+      await screen.findByText(/key imported/i);
+      await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
+      await userEvent.click(screen.getByRole("button", { name: "Review" }));
+      // Deliberately no acknowledgement checkbox click — this is the
+      // whole point of the "Save disabled" escape hatch.
+
+      await userEvent.click(screen.getByRole("button", { name: "Save disabled" }));
+
+      await screen.findByText("SETS LIST PAGE");
+      const req = spy.mock.calls[0][0];
+      expect(req.disabled).toBe(true);
+      expect(req.runImmediately).toBe(false);
+    });
+
+    it("surfaces a failed save inline instead of navigating or silently doing nothing", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "createBackupSet").mockRejectedValue(
+        new BackupManagerError({ code: "INVALID_REQUEST", message: "remote_path is required", correlationId: "cid_1" })
+      );
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      expect(await screen.findByText("remote_path is required")).toBeTruthy();
+      expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
+    });
+
+    it("refuses to save with a clear inline message when the key source isn't the wired 'import' path, instead of attempting a doomed request", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      // Default keySource is "generate" — never touch Authentication.
+      await userEvent.click(screen.getByRole("button", { name: "Verify server" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Trust host" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Trust host" }));
+      await userEvent.click(screen.getByRole("button", { name: "Review" }));
+      await userEvent.click(screen.getByRole("checkbox", { name: /remote backup will be removed only after/i }));
+
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      expect(await screen.findByText(/isn't available yet/i)).toBeTruthy();
+      expect(spy).not.toHaveBeenCalled();
+      expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
     });
   });
 });

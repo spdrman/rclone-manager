@@ -182,4 +182,51 @@ test.describe("add backup set wizard", () => {
     await expect(page.getByLabel(/private key/i)).toHaveCount(0);
     expect(await page.locator("body").innerText()).not.toContain(fixtureKey);
   });
+
+  // Issue #146 (B2.7): the wizard's Save buttons previously had no
+  // onClick at all. This drives the full wizard-to-save flow through the
+  // real running app (against the mock API this whole suite runs
+  // against — see playwright.config.ts's own comment on why) and
+  // confirms a backup set actually exists afterward, visible on the
+  // sets list, not just a success toast.
+  test("completing the wizard and clicking Save & enable persists a new backup set, visible on the sets list", async ({ page, bm }) => {
+    const uniqueName = "E2E Wizard Set " + Date.now();
+    await page.getByLabel("Backup set name").fill(uniqueName);
+
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await page.getByRole("radio", { name: /Import key/ }).click();
+    await page.getByLabel(/private key/i).fill("FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+    await page.getByRole("button", { name: "Import key" }).click();
+    await expect(page.getByText(/key imported/i)).toBeVisible();
+
+    await page.getByRole("button", { name: "Verify server" }).click();
+    const trust = page.getByRole("button", { name: "Trust host" });
+    await expect(trust).toBeEnabled();
+    await trust.click();
+    await expect(page.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Review" }).click();
+    await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).check();
+
+    await page.getByRole("button", { name: /^Save & enable$/ }).click();
+
+    // Saving navigates back to the sets list (BackupSetWizardPage's
+    // handleSave), and the newly created set is there without a manual
+    // page reload — the shared setsNode refresh (appNodes.ts/
+    // resource.ts's fetchResource) this wizard triggers on success.
+    await expect(bm.heading("Backup sets")).toBeVisible();
+    await expect(page.getByText(uniqueName)).toBeVisible();
+  });
+
+  test("a failed save surfaces an inline error and does not navigate away from the wizard", async ({ page }) => {
+    // No key imported, no host trusted: handleSave's own guard refuses
+    // to call the backend at all, and must say so inline rather than
+    // silently doing nothing or navigating as if it had succeeded.
+    await page.getByRole("button", { name: "Review" }).click();
+    await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).check();
+    await page.getByRole("button", { name: /^Save & enable$/ }).click();
+
+    await expect(page.getByText(/isn't available yet/i)).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Add backup set" })).toBeVisible();
+  });
 });

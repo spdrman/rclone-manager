@@ -77,12 +77,23 @@ func TestNoAPIRouteBypassesAuthentication(t *testing.T) {
 
 // destructiveGateExemptRoutes names every non-GET /api/v1 route that is
 // deliberately NOT behind requireDestructiveGate, and (in a real entry, not
-// just this comment) why. It is empty today: the only mutating route this
-// skeleton has, POST /api/v1/operations, is gated. A future route added to
-// this map without a genuine justification is defeating the point of
+// just this comment) why. A future route added to this map without a
+// genuine justification is defeating the point of
 // TestNoMutatingAPIRouteBypassesTheDestructiveGate below, not satisfying
 // it.
-var destructiveGateExemptRoutes = map[string]bool{}
+var destructiveGateExemptRoutes = map[string]bool{
+	// Issue #146 (B2.7): every one of these is "state-changing but
+	// non-destructive" or outright read-only under
+	// docs/EPIC-B-multi-nas.md §50 ("create/edit backup set", "generate
+	// SSH key" are the non-destructive bucket; "test SSH", "probe host
+	// key" are read-only), never "destructive" — none of them touch,
+	// let alone delete, remote or local backup data. See router.go's own
+	// comment on this route group for the full reasoning.
+	"POST /api/v1/backup-sets":                 true,
+	"POST /api/v1/backup-sets/test-connection": true,
+	"POST /api/v1/ssh-keys":                    true,
+	"POST /api/v1/ssh/host-key-probe":          true,
+}
 
 // TestNoMutatingAPIRouteBypassesTheDestructiveGate is issue #118 item 3's
 // structural regression test, mirroring
