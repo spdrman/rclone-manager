@@ -186,6 +186,10 @@ func (f *syncFakeBackend) TestConnection(context.Context, service.ConnectionTest
 	return service.ConnectionTestResult{}, errors.New("syncFakeBackend: TestConnection not implemented")
 }
 
+func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	return nil, nil
+}
+
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
 // behaves like the real core/service.BackupService's own contract:
 // persist synchronously, then finish the work later on a goroutine that
@@ -281,6 +285,10 @@ func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.H
 
 func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
 	return service.ConnectionTestResult{}, errors.New("asyncFakeBackend: TestConnection not implemented")
+}
+
+func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	return nil, nil
 }
 
 var errBoom = errors.New("boom")

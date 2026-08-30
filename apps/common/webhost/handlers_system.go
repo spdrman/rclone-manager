@@ -29,6 +29,20 @@ type versionResponse struct {
 	GoVersion      string `json:"go_version"`
 	EngineVersion  string `json:"engine_version"`
 	ConfigRevision string `json:"config_revision"`
+
+	// Ready is issue #104 (B3.4)'s startup-readiness flag
+	// (docs/EPIC-B-multi-nas.md §46.1/§36): true once this process has a
+	// backend wired that has actually completed its startup sequence
+	// (state-dir validation, the startup lock, the pre-migration
+	// snapshot, and migration itself — see core/service.
+	// OpenConfigAndJournal's own doc). A process whose startup sequence
+	// failed never reaches this handler at all today (see that function's
+	// doc for why a failed migration means BackupService and the
+	// daemon/API never start), so in practice this is only ever observed
+	// true; it is still computed the same defensive way healthReady
+	// (below) already does, rather than hardcoded true, so it degrades
+	// honestly instead of lying if that ever changes.
+	Ready bool `json:"ready"`
 }
 
 func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +63,7 @@ func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 		GoVersion:      v.GoVersion,
 		EngineVersion:  v.EngineVersion,
 		ConfigRevision: configRevision,
+		Ready:          isReady(h.backend),
 	})
 }
 
@@ -89,9 +104,16 @@ func healthLive(w http.ResponseWriter, r *http.Request) {
 // check available that still proves the backend is actually up rather
 // than merely that this process is listening.
 func (h *handlers) healthReady(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil || h.backend.ConfigRevision() == "" {
+	if !isReady(h.backend) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// isReady is the one definition of "ready" both healthReady and
+// systemVersion's Ready field use, so the two can never quietly disagree
+// about what readiness means.
+func isReady(backend BackupServiceClient) bool {
+	return backend != nil && backend.ConfigRevision() != ""
 }

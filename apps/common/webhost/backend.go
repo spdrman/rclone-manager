@@ -61,6 +61,16 @@ type BackupServiceClient interface {
 	// pre-save, non-destructive reachability/auth check against a
 	// candidate source (issue #146). Read-only, per §50 ("test SSH").
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
+
+	// ListStorageStatus backs GET /api/v1/system/storage: the FR-21
+	// capacity assessment for every configured backup set's local
+	// destination (docs/EPIC-B-multi-nas.md §56's Storage UX), issue #104
+	// (B3.4). Read-only, per §50 ("view configuration"/health-adjacent
+	// surface) — see core/service.BackupService.ListStorageStatus and
+	// this package's own handlers_storage.go for why nothing reachable
+	// from here can turn a "critical" result into a deletion or a call
+	// into internal/retention's apply path.
+	ListStorageStatus(ctx context.Context) ([]service.StorageStatus, error)
 }
 
 var _ BackupServiceClient = (*service.BackupService)(nil)

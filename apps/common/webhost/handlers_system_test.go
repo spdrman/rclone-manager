@@ -58,6 +58,41 @@ func TestSystemVersion_ReportsBinaryVersionAndCommit(t *testing.T) {
 	if body["config_revision"] != "rev-1" {
 		t.Errorf("config_revision = %v, want %q (from the backend's own ConfigRevision())", body["config_revision"], "rev-1")
 	}
+	// Issue #104 (B3.4): the startup-readiness flag must be visible on
+	// this endpoint. A router built with a real backend whose
+	// ConfigRevision() is non-empty (newSyncFakeBackend's "rev-1", above)
+	// is exactly what a process that completed docs/EPIC-B-multi-nas.md
+	// §46.1's startup sequence looks like.
+	if body["ready"] != true {
+		t.Errorf("ready = %v, want true for a router built with a working backend", body["ready"])
+	}
+}
+
+// TestSystemVersion_ReportsNotReadyWhenNoBackendIsWired is this issue's
+// negative control for the Ready field above: a router built with no
+// backend at all (the same "not fully wired yet" case healthReady
+// already handles) must report ready: false, not omit the field or
+// default it to true.
+func TestSystemVersion_ReportsNotReadyWhenNoBackendIsWired(t *testing.T) {
+	router := NewRouter(RouterConfig{
+		Platform:      fakePlatformAdapter{caps: capabilities.PlatformCapabilities{}, auth: fakeAuthenticator{authenticated: true, username: "alice"}},
+		Backend:       nil,
+		Gate:          alwaysPassGate{},
+		BinaryVersion: "9.9.9",
+		Commit:        "deadbeef",
+	})
+	rec := doGet(t, router, "/api/v1/system/version")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["ready"] != false {
+		t.Errorf("ready = %v, want false for a router with no backend wired", body["ready"])
+	}
 }
 
 func TestSystemCapabilities_ReflectsThePlatformAdapter(t *testing.T) {
