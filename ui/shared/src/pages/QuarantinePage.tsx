@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
+import type { AsyncState } from "@shared/hooks/useAsync";
 import { PageHeader } from "@shared/components/PageHeader";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { stamp } from "@shared/utilities/format";
-import type { QuarantineReason } from "@shared/types/backup";
+import type { BackupArtifact, QuarantineReason } from "@shared/types/backup";
 
 const REASON: Record<QuarantineReason, string> = {
   "checksum-mismatch": "Checksum mismatch",
@@ -13,14 +14,50 @@ const REASON: Record<QuarantineReason, string> = {
   "incomplete-transfer": "Incomplete transfer"
 };
 
-/** No "delete remote anyway" action exists here, by design (§18). */
-export function QuarantinePage({ readOnly }: { readOnly: boolean }) {
+/** No "delete remote anyway" action exists here, by design (§18).
+ *
+ *  `quarantine` is the SAME `quarantineNode`-backed resource App.tsx
+ *  fetches to compute the sidebar's `counts.quarantine` badge (see
+ *  appNodes.ts, `useResource(quarantineNode, ...)` in App.tsx) — passed
+ *  down exactly like `sets`/`health` already are. This page used to run
+ *  its own independent `useAsync(() => api.listQuarantine())`, so the
+ *  badge and this list were two separate reads of the same resource that
+ *  could disagree (#101). Reading the shared node here instead means both
+ *  can only ever show what was last committed to that one node. */
+export function QuarantinePage({
+  readOnly,
+  quarantine
+}: {
+  readOnly: boolean;
+  quarantine: AsyncState<BackupArtifact[]>;
+}) {
   const api = useApi();
-  const rows = useAsync(() => api.listQuarantine(), [api]);
+  // Neither call resolves with a body worth keeping — the reload of
+  // `quarantine` is what actually updates the row. This state exists only
+  // to give a rejected revalidate/retry a visible outcome instead of a
+  // silent no-op (mandatory review, PR #147): without it, a backend
+  // failure left the button's click looking like it did nothing at all.
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  if (rows.error) return <ErrorState {...rows.error} onRetry={rows.reload} />;
+  const revalidate = (a: BackupArtifact) => {
+    setActionError(null);
+    api
+      .revalidate(a.id)
+      .then(quarantine.reload)
+      .catch(() => setActionError("Could not revalidate \"" + a.filename + "\". Try again."));
+  };
 
-  const data = rows.data ?? [];
+  const retryIngestion = (a: BackupArtifact) => {
+    setActionError(null);
+    api
+      .retryIngestion(a.id)
+      .then(quarantine.reload)
+      .catch(() => setActionError("Could not retry ingestion for \"" + a.filename + "\". Try again."));
+  };
+
+  if (quarantine.error) return <ErrorState {...quarantine.error} onRetry={quarantine.reload} />;
+
+  const data = quarantine.data ?? [];
 
   return (
     <>
@@ -28,6 +65,12 @@ export function QuarantinePage({ readOnly }: { readOnly: boolean }) {
         title="Quarantine"
         subtitle="Artifacts held back from the catalog. Their remote originals are retained until the issue is resolved."
       />
+
+      {actionError ? (
+        <div style={{ marginBottom: 14 }}>
+          <ErrorState message={actionError} correlationId="cid_quarantine_action" />
+        </div>
+      ) : null}
 
       {data.length === 0 ? (
         <EmptyState title="No quarantined backups">
@@ -66,10 +109,10 @@ export function QuarantinePage({ readOnly }: { readOnly: boolean }) {
                       <td>
                         <span style={{ display: "flex", gap: 7, justifyContent: "flex-end" }}>
                           <button className="btn btn--sm">Inspect</button>
-                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.revalidate(a.id).then(rows.reload)}>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => revalidate(a)}>
                             Revalidate
                           </button>
-                          <button className="btn btn--sm" disabled={readOnly} onClick={() => api.retryIngestion(a.id).then(rows.reload)}>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => retryIngestion(a)}>
                             Retry ingestion
                           </button>
                         </span>
