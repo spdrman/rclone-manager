@@ -2,6 +2,8 @@ import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useAsync } from "@shared/hooks/useAsync";
 import type { AsyncState } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import type { SystemHealth } from "@shared/types/operation";
 import { PageHeader } from "@shared/components/PageHeader";
@@ -25,7 +27,11 @@ export function DashboardPage({
 }) {
   const api = useApi();
   const navigate = useNavigate();
-  const operations = useAsync(() => api.listOperations(), [api]);
+  // Live operation progress (§52, #95) reads the shared graph node directly
+  // — App.tsx owns the one fetch/poll of it, so this page never re-fetches
+  // its own copy. BackupSetsPage (#97) reads the exact same node, so the
+  // two can never disagree about what is currently running.
+  const operations = useCausl(operationsNode);
   const activity = useAsync(() => api.listActivity(), [api]);
 
   if (health.error)

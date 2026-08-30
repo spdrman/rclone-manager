@@ -8,7 +8,7 @@ import { usePlatform } from "@shared/platform/PlatformContext";
 import { usePolling } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
 import { useResource } from "@shared/state/resource";
-import { countsNode, healthNode, quarantineNode, readOnlyNode, setsNode, versionNode } from "@shared/state/appNodes";
+import { countsNode, healthNode, operationsNode, quarantineNode, readOnlyNode, setsNode, versionNode } from "@shared/state/appNodes";
 import { AppShell } from "@shared/layouts/AppShell";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { DashboardPage } from "@shared/pages/DashboardPage";
@@ -51,11 +51,17 @@ export function App() {
   // two can disagree with each other in principle. Rewiring the page onto
   // this node is arguably B2.5's scope; see #101.
   useResource(quarantineNode, () => api.listQuarantine(), [api]);
+  // B2.1 (#95) — the one fetch of operationsNode. DashboardPage and
+  // BackupSetsPage both read the node directly (useCausl), never their own
+  // listOperations() call, so a poll tick here is the only thing that can
+  // move either page's live operation progress.
+  const operations = useResource(operationsNode, () => api.listOperations(), [api]);
 
   const reloadAll = useCallback(() => {
     health.reload();
     sets.reload();
-  }, [health, sets]);
+    operations.reload();
+  }, [health, sets, operations]);
 
   usePolling(30_000, reloadAll, auth?.authenticated ?? false);
 

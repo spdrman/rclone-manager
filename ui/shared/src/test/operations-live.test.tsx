@@ -94,11 +94,15 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
     resetGraphForTests();
   });
 
-  it("updates DashboardPage's active-operations list and OperationProgress on a direct graph commit, with no operations fetch from the page itself", () => {
+  it("updates DashboardPage's active-operations list and OperationProgress on a direct graph commit, with no operations fetch from the page itself", async () => {
     const listOperations = vi.fn(() =>
       Promise.reject(new Error("DashboardPage must not fetch operations itself — it reads operationsNode"))
     );
-    const api = { ...createMockApi(), listOperations };
+    // listActivity is unrelated to this test; resolved with no artificial
+    // delay (unlike the mock's own 180ms `delay()`) so its pending promise
+    // settles before this test ends instead of firing a setState warning
+    // after cleanup has already unmounted the tree.
+    const api = { ...createMockApi(), listOperations, listActivity: () => Promise.resolve([]) };
 
     render(
       <MemoryRouter>
@@ -107,6 +111,9 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
         </ApiProvider>
       </MemoryRouter>
     );
+    // Lets listActivity's pending resolve -> then(setData) ->
+    // finally(setLoading) chain settle before asserting.
+    await act(async () => {});
 
     const region = screen.getByRole("region", { name: "Active operations" });
     expect(within(region).getByText("0 running")).toBeTruthy();
@@ -127,14 +134,14 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
     expect(listOperations).not.toHaveBeenCalled();
   });
 
-  it("DashboardPage and BackupSetsPage observe the identical operation list at the same commit", () => {
+  it("DashboardPage and BackupSetsPage observe the identical operation list at the same commit", async () => {
     // Neither page may reach for its own listOperations() any more — both
     // read operationsNode. A rejecting mock proves that: today (pre-fix)
     // each page's own useAsync would show this operation only if ITS OWN
     // fetch happened to succeed; wiring both through the shared node makes
     // that irrelevant.
     const listOperations = vi.fn(() => Promise.reject(new Error("must not be called")));
-    const api = { ...createMockApi(), listOperations };
+    const api = { ...createMockApi(), listOperations, listActivity: () => Promise.resolve([]) };
 
     act(() => {
       graph.commit("test/seed-operation", (tx) =>
@@ -150,6 +157,9 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
         </ApiProvider>
       </MemoryRouter>
     );
+    // Lets listActivity's pending resolve -> then(setData) ->
+    // finally(setLoading) chain settle before asserting.
+    await act(async () => {});
 
     const dashboardOps = screen.getByRole("region", { name: "Active operations" });
     expect(within(dashboardOps).getByText(SET.name)).toBeTruthy();

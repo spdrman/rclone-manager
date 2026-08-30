@@ -1,7 +1,8 @@
 import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useAsync } from "@shared/hooks/useAsync";
 import type { AsyncState } from "@shared/hooks/useAsync";
+import { useCausl } from "@shared/state/graph";
+import { operationsNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
@@ -16,7 +17,10 @@ export function BackupSetsPage({
 }) {
   const api = useApi();
   const navigate = useNavigate();
-  const operations = useAsync(() => api.listOperations(), [api]);
+  // Reads the same shared node DashboardPage does (#95) — previously this
+  // page ran its own independent listOperations() poll, so the two could
+  // disagree about what was currently running for a given set.
+  const operations = useCausl(operationsNode);
 
   if (sets.error) return <ErrorState {...sets.error} onRetry={sets.reload} />;
 
