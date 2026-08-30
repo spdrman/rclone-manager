@@ -68,7 +68,9 @@ commands:
   sources                                        list configured sources and backup sets
   artifacts [--source S] [--backup-set B]        list journal artifacts
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
-  retention [--dry-run]                          preview GFS/last-known-good retention decisions
+  retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
+                                                  preview GFS/last-known-good retention decisions; each retention flag
+                                                  overrides the loaded config's own resolved value for this preview only
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   version                                        report version information
