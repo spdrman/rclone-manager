@@ -224,7 +224,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 	if ctx.Err() != nil {
 		return
 	}
-	out, err := s.deleteRemoteOne(ctx, source, rec, base)
+	out, err := s.deleteRemoteOne(ctx, source, bs, rec, base)
 	if err != nil {
 		var refusal *lifecycle.RemoteDeleteRefusalError
 		if errors.As(err, &refusal) {
@@ -284,11 +284,19 @@ func (s *Service) commitOne(ctx context.Context, bs config.BackupSet, rec state.
 // straight to processArtifact as this call's own error, and is left for
 // the next cycle to retry, which DeleteRemote's own documented, tested
 // idempotency under a reused AttemptKey makes safe to do).
-func (s *Service) deleteRemoteOne(ctx context.Context, source transport.Source, rec state.Record, base string) (state.Outcome, error) {
+func (s *Service) deleteRemoteOne(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record, base string) (state.Outcome, error) {
 	return lifecycle.DeleteRemote(ctx, s.lifecycleDeps(), lifecycle.DeleteRemoteRequest{
 		Source:     source,
 		Artifact:   rec.Artifact,
 		AttemptKey: base + ":delete",
+		// WP3.2: these two are what let DeleteRemote tell a "stable"
+		// backup set apart from "rename"/"marker" and gate it behind an
+		// extra deletion-safety delay. DeleteRemote refuses an empty or
+		// unrecognised strategy outright, so passing them is not optional;
+		// see DeleteRemoteRequest.CompletionStrategy and remotedelete.go's
+		// own doc for the full reasoning.
+		CompletionStrategy: bs.Completion.Strategy,
+		DeleteSafetyDelay:  bs.Completion.DeleteSafetyDelay.Duration(),
 	})
 }
 

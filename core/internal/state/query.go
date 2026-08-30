@@ -197,6 +197,55 @@ func (j *Journal) Get(ctx context.Context, artifact model.ArtifactID) (Record, e
 	return rec, nil
 }
 
+// LastEnteredAt reports when artifact most recently ENTERED state st, and
+// whether it ever did.
+//
+// "Entered" is the load-bearing word: it reads the append-only
+// state_transitions log for the newest row whose to_state is st and whose
+// from_state is something else, so a same-state st -> st write (an
+// internal/revalidate re-check pass, or a refusal recording itself against
+// an artifact that is already there) does not count as a fresh entry and
+// does not move the answer. The artifacts row's own UpdatedAt cannot make
+// that distinction: it is stamped by every transition write there is, which
+// is exactly right for "when was this row last touched" and exactly wrong
+// for "when did this artifact last become good".
+//
+// This exists for internal/lifecycle's WP3.2 stable-completion delete gate,
+// which needs to measure a safety delay from the moment an artifact reached
+// COMMITTED and must not have that clock restarted by a routine re-check or
+// by its own retry. Reading it out of the transition log rather than adding
+// a column keeps the fact where it already is: the log is append-only and
+// idempotency-keyed, so a replayed transition reuses its original
+// occurred_at instead of writing a second row (see RecordTransition).
+//
+// ok is false, with a nil error, when the artifact exists but has never
+// entered st. Callers deciding anything destructive on the answer should
+// treat that as "no evidence", never as "long ago".
+func (j *Journal) LastEnteredAt(ctx context.Context, artifact model.ArtifactID, st string) (time.Time, bool, error) {
+	var occurred string
+	err := j.db.QueryRowContext(ctx,
+		`SELECT t.occurred_at
+		   FROM state_transitions t
+		   JOIN artifacts a ON a.id = t.artifact_id
+		  WHERE a.source = ? AND a.backup_set = ? AND a.artifact_name = ?
+		    AND t.to_state = ? AND t.from_state <> ?
+		  ORDER BY t.id DESC
+		  LIMIT 1`,
+		artifact.Set.Source, artifact.Set.Set, artifact.Name, st, st,
+	).Scan(&occurred)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("state: last entered %s for %s: %w", st, artifact, err)
+	}
+	at, err := parseTime(occurred)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("state: last entered %s for %s: parsing occurred_at %q: %w", st, artifact, occurred, err)
+	}
+	return at, true, nil
+}
+
 // ListByState returns every artifact currently recorded in the given state.
 // Reconciliation (FR-17) and retry scheduling are the expected callers.
 func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, error) {

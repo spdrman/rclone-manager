@@ -63,6 +63,14 @@ func (f *fakeTransferJournal) Get(_ context.Context, _ model.ArtifactID) (state.
 	return f.rec, nil
 }
 
+// LastEnteredAt reports "never entered". This fake is only ever used by
+// Transfer's own tests, which never reach remotedelete.go's WP3.2 gate, and
+// "no evidence" is the only honest answer a fake with no transition log can
+// give a check that decides whether a remote copy may be destroyed.
+func (f *fakeTransferJournal) LastEnteredAt(context.Context, model.ArtifactID, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 func (f *fakeTransferJournal) RecordTransition(_ context.Context, t state.Transition) (state.Outcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

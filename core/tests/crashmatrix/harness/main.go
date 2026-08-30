@@ -308,7 +308,8 @@ func run() error {
 
 		case lifecycle.Committed, lifecycle.RemoteDeletePending:
 			_, err := lifecycle.DeleteRemote(ctx, deps, lifecycle.DeleteRemoteRequest{
-				Source: source, Artifact: artifact, AttemptKey: deleteKey,
+				CompletionStrategy: discoverSet.Completion.Strategy,
+				Source:             source, Artifact: artifact, AttemptKey: deleteKey,
 			})
 			if err != nil {
 				if refusal, ok := lifecycle.AsRemoteDeleteRefusal(err); ok {

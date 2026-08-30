@@ -139,6 +139,22 @@ type BackupService struct {
 	// lock CreateBackupSet reads it under.
 	alertSink AlertSink
 
+	// releaseJournal drops the SHARED journal lock runStartupSequence took
+	// on this BackupService's behalf (startup.go, lock_unix.go), and is
+	// called by Close once the journal handle itself is closed. It is nil
+	// for a BackupService built with New, which never took one: New's
+	// caller opened the journal itself and owns whatever locking that
+	// implied.
+	releaseJournal func() error
+
+	// ready records that this BackupService came from Open, and therefore
+	// that §46.1's startup sequence completed. See Ready's own doc for why
+	// this is stored rather than re-derived: the previous definition of
+	// readiness (a non-empty config revision) was true for every
+	// BackupService that could exist, on the one flag §36 puts in front of
+	// a destructive operation.
+	ready bool
+
 	// configMu serializes every call that reads-modifies-writes this
 	// BackupService's configuration (today: CreateBackupSet) against
 	// ITSELF — two concurrent CreateBackupSet calls must not interleave
@@ -213,18 +229,30 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // so it exists in exactly one place; see this package's introducing PR
 // description for why that duplication existed in the first place and
 // this issue's own review for why it stopped being acceptable.
-func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, error) {
+//
+// Everything between loading the config and having a usable journal is
+// docs/EPIC-B-multi-nas.md §46.1's startup sequence, and it lives in
+// runStartupSequence (startup.go), not here: read that function's own doc
+// for the ordered steps, why the state directory is validated before the
+// lock is taken, and exactly what each failure between them does to the
+// data already on disk. What matters at THIS level is the contract it
+// gives every caller: a failure returns a non-nil error and a nil
+// *state.Journal, which Open (below) and cmd/backup-manager's openService
+// both already treat as fatal, so a failed migration means no
+// BackupService is ever constructed and no daemon, API, scheduler tick or
+// transfer ever starts.
+func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, func() error, error) {
 	cfg, err := config.LoadAndValidate(configPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("service: load config: %w", err)
+		return nil, nil, nil, fmt.Errorf("service: load config: %w", err)
 	}
 
-	journal, err := state.Open(ctx, cfg.State.Database)
+	journal, releaseJournal, err := runStartupSequence(ctx, cfg.State.Database)
 	if err != nil {
-		return nil, nil, fmt.Errorf("service: open state: %w", err)
+		return nil, nil, nil, err
 	}
 
-	return cfg, journal, nil
+	return cfg, journal, releaseJournal, nil
 }
 
 // Open is the production constructor: it loads and validates configPath,
@@ -237,13 +265,27 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 // `defer cleanup()` (or handle its error) once they are done with the
 // returned BackupService.
 func Open(ctx context.Context, configPath string) (*BackupService, func() error, error) {
-	cfg, journal, err := OpenConfigAndJournal(ctx, configPath)
+	logger := obs.New(os.Stdout, obs.LevelInfo)
+
+	cfg, journal, releaseJournal, err := OpenConfigAndJournal(ctx, configPath)
 	if err != nil {
+		// §46.1 asks for a failed startup to be actionable, not merely
+		// fatal. The process is about to exit without ever constructing a
+		// BackupService (which is what makes readiness fail closed), so
+		// this line is the only record of WHY it did: without it an
+		// operator diagnosing a container that will not come up has a
+		// non-zero exit code and nothing else.
+		logger.Error(ctx, "startup", err)
 		return nil, nil, err
 	}
 
-	svc := New(cfg, journal, rclone.New(), obs.New(os.Stdout, obs.LevelInfo))
+	svc := New(cfg, journal, rclone.New(), logger)
 	svc.configPath = configPath
+	svc.releaseJournal = releaseJournal
+	// ready is set here, and only here: Open is the one constructor that
+	// runs §46.1's startup sequence, so it is the one constructor that can
+	// truthfully report the sequence completed. See the field's own doc.
+	svc.ready = true
 	return svc, svc.Close, nil
 }
 
@@ -274,7 +316,33 @@ func (b *BackupService) Close() error {
 			fmt.Errorf("timed out after %s waiting for an in-flight operation to finish", closeDrainTimeout))
 	}
 
-	return b.journal.Close()
+	err := b.journal.Close()
+	// The shared journal lock is released only after the journal handle
+	// itself is closed, never before: the whole point of holding it is that
+	// no other process migrates this journal while THIS process still has
+	// it open, and "still has it open" ends at the line above, not at the
+	// start of Close.
+	if b.releaseJournal != nil {
+		if releaseErr := b.releaseJournal(); releaseErr != nil && err == nil {
+			err = releaseErr
+		}
+	}
+	return err
+}
+
+// Ready reports whether this BackupService was constructed by Open, having
+// completed docs/EPIC-B-multi-nas.md §46.1's startup sequence in full
+// (state-directory validation, the startup lock, the pending-migration
+// check, any migration, and the shared journal lock it still holds).
+//
+// It is a fact this value owns, not something re-derived from its
+// configuration: a BackupService built with New has not run that sequence
+// (its caller opened the journal some other way, or handed in one built
+// for a test) and says so. §36 makes readiness the precondition an API
+// client checks before a destructive operation, and a precondition that
+// cannot be false is worse than no precondition at all.
+func (b *BackupService) Ready() bool {
+	return b.ready
 }
 
 // ConfigRevision identifies the exact configuration content this

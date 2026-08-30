@@ -531,11 +531,12 @@ func orDefault(v, def time.Duration) time.Duration {
 // writeConfigAtomically marshals cfg as YAML and writes it to path via a
 // temp-file-plus-rename, so a reader (this process's own next config.Load
 // re-read, or an operator's own `cat`) never observes a partially-written
-// file. This is a config file, not a lifecycle-committed artifact, so it
-// deliberately does not reach for internal/lifecycle/commit.go's fuller
-// fsync-both-file-and-directory ceremony; os.Rename's own atomicity on a
-// POSIX filesystem (same directory, so same filesystem) is what this
-// method relies on.
+// file. It fsyncs the temp file before the rename and the containing
+// directory after it (via snapshot.go's fsyncDir), because os.Rename's
+// atomicity on a POSIX filesystem only promises no reader sees a half-file
+// — it promises nothing about the rename itself surviving a power loss,
+// and a backup set an operator was told was saved has to still be there
+// after the crash that follows.
 func writeConfigAtomically(path string, cfg *config.Config) error {
 	b, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -565,6 +566,9 @@ func writeConfigAtomically(path string, cfg *config.Config) error {
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replacing configuration file: %w", err)
+	}
+	if err := fsyncDir(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("syncing the configuration directory: %w", err)
 	}
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
@@ -251,6 +252,70 @@ func TestCreateBackupSet_InvalidCompletionStrategyIsCaughtByConfigValidate(t *te
 	}
 	if !strings.Contains(err.Error(), "already used") {
 		t.Errorf("err = %v, want it to explain the id is already used", err)
+	}
+}
+
+// TestCreateBackupSet_StableStrategy is the wizard's "stable-size"
+// completion option going through the real CreateBackupSet, end to end,
+// against a real config file.
+//
+// This is the regression the WP3.2 review caught: making
+// completion.delete_safety_delay a hard requirement with no default made
+// every one of these calls fail. CreateBackupSetRequest has no field for
+// that key and CreateBackupSet never sets one, so cfg.Validate() refused
+// the config it had just built, and the shipped BackupSetWizardPage
+// option that maps to "stable" returned INVALID_REQUEST naming a YAML key
+// the API surface cannot express. Nothing in this package covered the
+// stable path at all before this test: the one completion test here uses
+// "marker" on purpose.
+//
+// The three assertions are one claim each: the create succeeds, the
+// operator's own stable_for survives the round trip, and the FR-15 delete
+// gate ends up armed at the documented default rather than at a literal
+// zero, which would be the same as having no gate. The last one is what
+// keeps "make it load again" from being fixed the wrong way.
+func TestCreateBackupSet_StableStrategy(t *testing.T) {
+	svc, configPath := openTestService(t)
+	req := validCreateReq(t, svc, "stable-set")
+	req.CompletionStrategy = "stable"
+	req.StableFor = 10 * time.Minute
+
+	if _, err := svc.CreateBackupSet(context.Background(), req); err != nil {
+		t.Fatalf("CreateBackupSet with the wizard's stable-size option: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(configPath): %v", err)
+	}
+	var onDisk config.Config
+	if err := yaml.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("yaml.Unmarshal(configPath): %v", err)
+	}
+
+	var created *config.BackupSet
+	for i, src := range onDisk.Sources {
+		if src.Name != "api" {
+			continue
+		}
+		for j := range onDisk.Sources[i].BackupSets {
+			if onDisk.Sources[i].BackupSets[j].Name == "stable-set" {
+				created = &onDisk.Sources[i].BackupSets[j]
+			}
+		}
+	}
+	if created == nil {
+		t.Fatalf("the on-disk config file does not contain the new stable backup set:\n%s", raw)
+	}
+
+	if created.Completion.Strategy != "stable" {
+		t.Errorf("persisted completion.strategy = %q, want %q", created.Completion.Strategy, "stable")
+	}
+	if got, want := created.Completion.StableFor.Duration(), 10*time.Minute; got != want {
+		t.Errorf("persisted completion.stable_for = %s, want %s", got, want)
+	}
+	if got := created.Completion.DeleteSafetyDelay.Duration(); got != config.DefaultDeleteSafetyDelay {
+		t.Errorf("persisted completion.delete_safety_delay = %s, want the default %s; a zero here disarms the FR-15 stable-completion delete gate entirely", got, config.DefaultDeleteSafetyDelay)
 	}
 }
 

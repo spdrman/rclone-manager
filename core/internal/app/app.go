@@ -76,6 +76,7 @@ type Journal interface {
 	RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error)
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
 	ListByState(ctx context.Context, st string) ([]state.Record, error)
+	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 }
 
 var _ Journal = (*state.Journal)(nil)

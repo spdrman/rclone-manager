@@ -168,3 +168,35 @@ func TestOpen_SweepsInterruptedOperationsFromAPreviousProcess(t *testing.T) {
 		t.Error("Error is empty on a swept operation, want a reason")
 	}
 }
+
+// TestReady_IsOwnedByOpen_NotDerivedFromTheConfiguration is the review's
+// M4 fix. Readiness is §36's precondition for a destructive operation, and
+// it used to be re-derived at the HTTP layer as "the backend reports a
+// non-empty config revision" — true of every BackupService that can exist,
+// since the revision is a hash of a *config.Config the constructor
+// required. A precondition that cannot be false is worse than none.
+//
+// The two halves here are each other's control: Open runs §46.1's startup
+// sequence and reports ready, New does not run it and says so, and the
+// config revision (the value the old definition was derived from) is
+// non-empty in both.
+func TestReady_IsOwnedByOpen_NotDerivedFromTheConfiguration(t *testing.T) {
+	svc, cleanup, err := Open(context.Background(), writeTestConfigFile(t))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = cleanup() }()
+
+	if !svc.Ready() {
+		t.Error("Ready() = false after a successful Open, which is exactly the sequence readiness reports on")
+	}
+
+	built := New(testConfig(), openTestJournal(t), nil, nil)
+	defer func() { _ = built.Close() }()
+	if built.Ready() {
+		t.Error("Ready() = true for a BackupService built with New, which never ran the startup sequence at all")
+	}
+	if built.ConfigRevision() == "" {
+		t.Error("ConfigRevision() = \"\" for a New-built service: without this the check above would pass under the OLD definition of readiness too, and prove nothing about the new one")
+	}
+}

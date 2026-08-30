@@ -29,6 +29,28 @@ type versionResponse struct {
 	GoVersion      string `json:"go_version"`
 	EngineVersion  string `json:"engine_version"`
 	ConfigRevision string `json:"config_revision"`
+
+	// Ready is issue #104 (B3.4)'s startup-readiness flag
+	// (docs/EPIC-B-multi-nas.md §46.1/§36): true once this process has a
+	// backend wired that has actually completed its startup sequence
+	// (state-dir validation, the startup lock, the pending-migration
+	// check, any migration, and the shared journal lock it holds
+	// afterwards — see core/service's startup.go).
+	//
+	// It is read from the backend itself (BackupServiceClient.Ready),
+	// which is the only thing that knows. It used to be re-derived here
+	// as "the backend reports a non-empty config revision", which was
+	// true of every BackupService that could be constructed, including
+	// one built without running the startup sequence at all: a flag on
+	// §36's destructive-operation precondition that could not be false.
+	//
+	// Today a process whose startup sequence failed exits instead of
+	// serving, so a client will normally only ever observe true here and
+	// a connection error otherwise; the reason it failed goes to the
+	// process's own log (core/service.Open). Serving a degraded process
+	// that answers "not ready, and here is why" is a bigger change than
+	// this endpoint, and is deliberately not what this field claims.
+	Ready bool `json:"ready"`
 }
 
 func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +71,7 @@ func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 		GoVersion:      v.GoVersion,
 		EngineVersion:  v.EngineVersion,
 		ConfigRevision: configRevision,
+		Ready:          isReady(h.backend),
 	})
 }
 
@@ -85,13 +108,24 @@ func healthLive(w http.ResponseWriter, r *http.Request) {
 }
 
 // healthReady is GET /health/ready: ready means "a BackupServiceClient is
-// wired and can report its own configuration revision", the cheapest
-// check available that still proves the backend is actually up rather
-// than merely that this process is listening.
+// wired, and that backend completed §46.1's startup sequence", which is
+// what an orchestrator wanting to know whether to send traffic here is
+// actually asking. It carries no reason for a false — this route is
+// unauthenticated, and why a process is not ready is operational detail
+// that belongs in the process's log and on the authenticated
+// /system/version, not on a probe anyone can hit.
 func (h *handlers) healthReady(w http.ResponseWriter, r *http.Request) {
-	if h.backend == nil || h.backend.ConfigRevision() == "" {
+	if !isReady(h.backend) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// isReady is the one definition of "ready" both healthReady and
+// systemVersion's Ready field use, so the two can never quietly disagree
+// about what readiness means: a backend is wired, and that backend says
+// its own startup sequence completed.
+func isReady(backend BackupServiceClient) bool {
+	return backend != nil && backend.Ready()
 }
