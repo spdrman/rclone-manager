@@ -129,6 +129,25 @@ test.describe("add backup set wizard", () => {
   });
 
   test("saving is blocked until the acknowledgement is checked", async ({ page }) => {
+    // Every OTHER save precondition is satisfied first — import a key on
+    // step 2 and trust the host on step 3 — so this isolates the
+    // acknowledgement checkbox as the one variable under test. Since M7
+    // (#146 review) those two also gate the Save buttons, so reaching
+    // Review cold would leave Save disabled for reasons this test isn't
+    // about (mirrors wizard.test.tsx's advanceToReviewReady).
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await page.getByRole("radio", { name: /Import key/ }).click();
+    // Synthetic fixture only — never a real key.
+    await page.getByLabel(/private key/i).fill("FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789");
+    await page.getByRole("button", { name: "Import key" }).click();
+    await expect(page.getByText(/key imported/i)).toBeVisible();
+
+    await page.getByRole("button", { name: "Verify server" }).click();
+    const trust = page.getByRole("button", { name: "Trust host" });
+    await expect(trust).toBeEnabled();
+    await trust.click();
+    await expect(page.getByRole("button", { name: "Host trusted" })).toBeDisabled();
+
     await page.getByRole("button", { name: "Review" }).click();
 
     const runNow = page.getByRole("button", { name: /Save, enable & run/ });
@@ -218,15 +237,20 @@ test.describe("add backup set wizard", () => {
     await expect(page.getByText(uniqueName)).toBeVisible();
   });
 
-  test("a failed save surfaces an inline error and does not navigate away from the wizard", async ({ page }) => {
-    // No key imported, no host trusted: handleSave's own guard refuses
-    // to call the backend at all, and must say so inline rather than
-    // silently doing nothing or navigating as if it had succeeded.
+  test("Save stays disabled without an imported key or a trusted host, even after acknowledging", async ({ page }) => {
+    // Before M7 (#146 review) this scenario was reachable by clicking
+    // Save: the button stayed enabled with no key imported and no host
+    // trusted, and handleSave's own ad hoc guard rejected the request
+    // after the click, surfacing an inline error. Save is now
+    // structurally disabled for this same combination instead — proven
+    // here by the buttons refusing to be clicked at all, mirroring
+    // wizard.test.tsx's "keeps Save disabled without an imported key or
+    // a trusted host" unit test.
     await page.getByRole("button", { name: "Review" }).click();
     await page.getByRole("checkbox", { name: /remote backup will be removed only after/i }).check();
-    await page.getByRole("button", { name: /^Save & enable$/ }).click();
 
-    await expect(page.getByText(/isn't available yet/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: /Save, enable & run/ })).toBeDisabled();
+    await expect(page.getByRole("button", { name: /^Save & enable$/ })).toBeDisabled();
     await expect(page.getByRole("heading", { level: 1, name: "Add backup set" })).toBeVisible();
   });
 });
