@@ -30,9 +30,31 @@ type storageStatusResponse struct {
 	LocalPath   string `json:"local_path"`
 	Available   bool   `json:"available"`
 
-	TotalBytes uint64 `json:"total_bytes"`
-	FreeBytes  uint64 `json:"free_bytes"`
+	// UnavailableReason is "not_created", "unreadable" or "misconfigured"
+	// when available is false, and "" when it is true. A client that shows
+	// "not initialised yet" for every unavailable reading would be telling
+	// an operator whose mount has vanished exactly the wrong thing, which
+	// is what this field exists to prevent.
+	UnavailableReason string `json:"unavailable_reason"`
 
+	TotalBytes uint64 `json:"total_bytes"`
+
+	// FreeBytes is observability only, for display beside total_bytes.
+	// available_bytes, not this, is what level and FR-21's transfer
+	// refusal are computed from; the two differ by whatever the filesystem
+	// reserves for a privileged process (5% by default on ext4).
+	FreeBytes uint64 `json:"free_bytes"`
+
+	// AvailableBytes is the free space this process can actually use
+	// (df's Avail), which is the number level below was decided from.
+	AvailableBytes uint64 `json:"available_bytes"`
+
+	// WarningFreeBytes and CriticalFreeBytes are both always 0 today:
+	// internal/config carries no capacity thresholds yet, so nothing
+	// populates them in a running process and level can only read "OK"
+	// short of a genuinely full disk. See core/service.StorageStatus's own
+	// doc for the full statement of that, and why FR-21's refusal is
+	// nonetheless intact.
 	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
 	CriticalFreeBytes uint64 `json:"critical_free_bytes"`
 
@@ -54,8 +76,10 @@ func toStorageStatusResponse(s service.StorageStatus) storageStatusResponse {
 		BackupSetID:       s.BackupSetID,
 		LocalPath:         s.LocalPath,
 		Available:         s.Available,
+		UnavailableReason: string(s.UnavailableReason),
 		TotalBytes:        s.TotalBytes,
 		FreeBytes:         s.FreeBytes,
+		AvailableBytes:    s.AvailableBytes,
 		WarningFreeBytes:  s.WarningFreeBytes,
 		CriticalFreeBytes: s.CriticalFreeBytes,
 		Level:             s.Level,
@@ -65,7 +89,14 @@ func toStorageStatusResponse(s service.StorageStatus) storageStatusResponse {
 // systemStorage is GET /api/v1/system/storage: docs/EPIC-B-multi-nas.md
 // §56's exact display list (backup root, total/free capacity, the
 // configured warning/critical thresholds), one entry per configured
-// backup set. Read-only, like GET /system/version and
+// backup set.
+//
+// Read the threshold caveat on storageStatusResponse before building a
+// screen on this: the two threshold numbers are structurally zero until
+// internal/config grows capacity fields, so today this route reports a
+// level of "OK" for anything short of a completely full disk. The refusal
+// FR-21 promises still happens; what does not exist yet is a warning
+// level to display ahead of it. Read-only, like GET /system/version and
 // GET /system/capabilities alongside it — no CSRF, no destructive gate,
 // both structurally verified for every route in this package by
 // TestNoAPIRouteBypassesAuthentication and

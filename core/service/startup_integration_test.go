@@ -107,11 +107,14 @@ func TestStartupSequence_ForcedMidMigrationCrash_RestoresSnapshotAndRestartRecov
 	// must succeed and see the original data, proving the restored bytes
 	// are not merely byte-identical but a genuinely valid, usable SQLite
 	// database.
-	_, restarted, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
+	_, restarted, releaseRestarted, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
 	if err != nil {
 		t.Fatalf("OpenConfigAndJournal after restore (the restart): %v", err)
 	}
-	defer func() { _ = restarted.Close() }()
+	defer func() {
+		_ = restarted.Close()
+		_ = releaseRestarted()
+	}()
 
 	rec, err := restarted.Get(context.Background(), artifact)
 	if err != nil {

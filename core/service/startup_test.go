@@ -9,8 +9,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -38,10 +40,13 @@ func TestOpenConfigAndJournal_UnreadableDatabaseFile_NeverReturnsAJournal(t *tes
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	_, journal, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
+	_, journal, releaseJournal, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
 	if err == nil {
 		if journal != nil {
 			_ = journal.Close()
+		}
+		if releaseJournal != nil {
+			_ = releaseJournal()
 		}
 		t.Fatal("OpenConfigAndJournal against an unwritable database file: error = nil, want an error")
 	}
@@ -74,10 +79,13 @@ func TestOpenConfigAndJournal_NewerSchema_FailsClosedWithoutBypassingTheExisting
 	}
 	seedFutureSchemaVersion(t, dbPath)
 
-	_, journal2, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
+	_, journal2, releaseJournal, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
 	if !errors.Is(err, state.ErrUnknownSchemaVersion) {
 		if journal2 != nil {
 			_ = journal2.Close()
+		}
+		if releaseJournal != nil {
+			_ = releaseJournal()
 		}
 		t.Fatalf("OpenConfigAndJournal error = %v, want errors.Is(_, state.ErrUnknownSchemaVersion)", err)
 	}
@@ -104,10 +112,13 @@ func TestOpenConfigAndJournal_ConcurrentStartup_SecondCallRefused(t *testing.T) 
 	}
 	defer func() { _ = held.release() }()
 
-	_, journal, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
+	_, journal, releaseJournal, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
 	if !errors.Is(err, ErrStartupLocked) {
 		if journal != nil {
 			_ = journal.Close()
+		}
+		if releaseJournal != nil {
+			_ = releaseJournal()
 		}
 		t.Fatalf("OpenConfigAndJournal error = %v, want errors.Is(_, ErrStartupLocked)", err)
 	}
@@ -128,20 +139,26 @@ func TestOpenConfigAndJournal_SucceedsAndReleasesTheLockForALaterCaller(t *testi
 	dbPath := filepath.Join(dir, "state.db")
 	configPath := writeConfigFileFor(t, dir, dbPath)
 
-	_, journal, err := OpenConfigAndJournal(context.Background(), configPath)
+	_, journal, releaseJournal, err := OpenConfigAndJournal(context.Background(), configPath)
 	if err != nil {
 		t.Fatalf("first OpenConfigAndJournal: %v", err)
 	}
 	if err := journal.Close(); err != nil {
 		t.Fatalf("close first journal: %v", err)
 	}
+	if err := releaseJournal(); err != nil {
+		t.Fatalf("release first journal lock: %v", err)
+	}
 
-	_, journal2, err := OpenConfigAndJournal(context.Background(), configPath)
+	_, journal2, releaseJournal2, err := OpenConfigAndJournal(context.Background(), configPath)
 	if err != nil {
 		t.Fatalf("second OpenConfigAndJournal (must not still be locked by the first): %v", err)
 	}
 	if err := journal2.Close(); err != nil {
 		t.Fatalf("close second journal: %v", err)
+	}
+	if err := releaseJournal2(); err != nil {
+		t.Fatalf("release second journal lock: %v", err)
 	}
 }
 
@@ -280,5 +297,266 @@ func TestOpen_FailedStartupSequence_ConstructsNoBackupService(t *testing.T) {
 				t.Error("Open returned a non-nil cleanup func alongside an error — there is nothing to clean up, and a caller deferring it would be closing a journal that was never opened")
 			}
 		})
+	}
+}
+
+// TestOpenConfigAndJournal_UpToDateSchema_CoexistsWithALiveJournalHolder
+// and its sibling below are the pair that pins the review's M1 fix: the
+// snapshot-and-restore mechanism must be reachable ONLY on a start that is
+// genuinely about to migrate, and a start that is about to migrate must
+// refuse while another process still has the journal open.
+//
+// The observable used for both is the journal lock itself, because it is
+// the one difference between the two paths that survives outside the
+// process: an ordinary start takes it SHARED, a migrating start takes it
+// EXCLUSIVELY. Holding it shared from "another process" therefore lets the
+// first through and stops the second, and there is no way to be wrong
+// about which path was taken.
+func TestOpenConfigAndJournal_UpToDateSchema_CoexistsWithALiveJournalHolder(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	configPath := writeConfigFileFor(t, dir, dbPath)
+
+	// Migrate it once, exactly as a first-ever start would.
+	_, journal, release, err := OpenConfigAndJournal(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("first OpenConfigAndJournal: %v", err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatalf("close first journal: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release first journal lock: %v", err)
+	}
+
+	// Stand in for a live daemon: another process holding this journal
+	// open, i.e. holding the shared journal lock.
+	live, err := acquireSharedJournalLock(dbPath + journalLockSuffix)
+	if err != nil {
+		t.Fatalf("acquireSharedJournalLock (standing in for a live daemon): %v", err)
+	}
+	defer func() { _ = live.release() }()
+
+	_, journal2, release2, err := OpenConfigAndJournal(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("OpenConfigAndJournal against an already-migrated journal another process has open: %v — an ordinary start must never need the exclusive lock, because it must never snapshot or arm a restore", err)
+	}
+	if err := journal2.Close(); err != nil {
+		t.Fatalf("close second journal: %v", err)
+	}
+	if err := release2(); err != nil {
+		t.Fatalf("release second journal lock: %v", err)
+	}
+}
+
+// TestOpenConfigAndJournal_PendingMigration_RefusesWhileAnotherProcessHoldsTheJournal
+// is the positive control for the test above, and M1's actual safety
+// claim. Same fixture, same shared lock held by a stand-in live process —
+// the ONLY difference is that a migration is genuinely pending — and the
+// call must now be refused rather than snapshot, migrate, and (on a
+// failure) rename-overwrite the journal file underneath the process that
+// still has it open.
+func TestOpenConfigAndJournal_PendingMigration_RefusesWhileAnotherProcessHoldsTheJournal(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	configPath := writeConfigFileFor(t, dir, dbPath)
+
+	// No journal exists yet, so every embedded migration is pending.
+	pending, err := state.PendingMigration(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("PendingMigration: %v", err)
+	}
+	if !pending {
+		t.Fatal("PendingMigration on a database that does not exist yet = false, want true — this test proves nothing without a genuinely pending migration")
+	}
+
+	live, err := acquireSharedJournalLock(dbPath + journalLockSuffix)
+	if err != nil {
+		t.Fatalf("acquireSharedJournalLock (standing in for a live daemon): %v", err)
+	}
+	defer func() { _ = live.release() }()
+
+	_, journal, release, err := OpenConfigAndJournal(context.Background(), configPath)
+	if !errors.Is(err, ErrJournalInUse) {
+		if journal != nil {
+			_ = journal.Close()
+		}
+		if release != nil {
+			_ = release()
+		}
+		t.Fatalf("OpenConfigAndJournal error = %v, want errors.Is(_, ErrJournalInUse): migrating a journal another process still has open can rename a new inode in underneath it", err)
+	}
+	if journal != nil {
+		t.Fatal("OpenConfigAndJournal returned a non-nil *state.Journal while refusing to migrate")
+	}
+}
+
+// TestOpenConfigAndJournal_ReleasingTheJournalLockLetsAMigratorIn proves
+// the shared lock above is genuinely scoped to "for as long as this caller
+// keeps the journal open", not leaked for the process's lifetime: once the
+// returned release func has run, a migrating process can take the
+// exclusive lock again.
+func TestOpenConfigAndJournal_ReleasingTheJournalLockLetsAMigratorIn(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	configPath := writeConfigFileFor(t, dir, dbPath)
+
+	_, journal, release, err := OpenConfigAndJournal(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("OpenConfigAndJournal: %v", err)
+	}
+	if _, err := acquireExclusiveJournalLock(dbPath + journalLockSuffix); !errors.Is(err, ErrJournalInUse) {
+		t.Fatalf("exclusive journal lock while the journal is open: err = %v, want errors.Is(_, ErrJournalInUse)", err)
+	}
+
+	if err := journal.Close(); err != nil {
+		t.Fatalf("close journal: %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release journal lock: %v", err)
+	}
+
+	migrator, err := acquireExclusiveJournalLock(dbPath + journalLockSuffix)
+	if err != nil {
+		t.Fatalf("exclusive journal lock after release: %v, want it to be free again", err)
+	}
+	_ = migrator.release()
+}
+
+// TestOpenConfigAndJournal_NewerSchema_LeavesTheJournalFileUntouched is
+// the review's M1 remedy 1: internal/state's ErrUnknownSchemaVersion is
+// decided before a single migration is applied, so the files on disk are
+// provably unchanged and restoring a copy over them is pure risk. restore
+// writes through a rename, so the file's inode number is the exact,
+// unfakeable witness of whether it happened.
+func TestOpenConfigAndJournal_NewerSchema_LeavesTheJournalFileUntouched(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+
+	journal, err := state.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("state.Open (seed): %v", err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatalf("close seed journal: %v", err)
+	}
+	// A version this binary does not know AND a known one missing, so the
+	// pending-migration check reports "yes, something is pending" and the
+	// snapshot really is taken: without that this test would pass because
+	// nothing was ever armed, rather than because the refusal declined to
+	// fire it.
+	seedFutureSchemaVersion(t, dbPath)
+	deleteHighestAppliedMigration(t, dbPath)
+
+	pending, err := state.PendingMigration(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("PendingMigration: %v", err)
+	}
+	if !pending {
+		t.Fatal("PendingMigration = false, want true — this test needs the snapshot to genuinely have been taken for the un-restore to mean anything")
+	}
+	before := inodeOf(t, dbPath)
+
+	_, journal2, release, err := OpenConfigAndJournal(context.Background(), writeConfigFileFor(t, dir, dbPath))
+	if !errors.Is(err, state.ErrUnknownSchemaVersion) {
+		if journal2 != nil {
+			_ = journal2.Close()
+		}
+		if release != nil {
+			_ = release()
+		}
+		t.Fatalf("OpenConfigAndJournal error = %v, want errors.Is(_, state.ErrUnknownSchemaVersion)", err)
+	}
+	if after := inodeOf(t, dbPath); after != before {
+		t.Errorf("the journal file's inode changed (%d -> %d): a refusal that applied nothing rename-overwrote the journal anyway", before, after)
+	}
+}
+
+// TestMigrationFailure_RestoresOnlyWhenSomethingCouldHaveChanged is the
+// unit-level statement of the same rule, with its own positive control
+// built in: the same snapshot, the same damaged file, and the only
+// difference between the two cases is the class of the failure.
+func TestMigrationFailure_RestoresOnlyWhenSomethingCouldHaveChanged(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		cause       error
+		wantContent string
+	}{
+		{
+			name:        "a refusal that applied nothing restores nothing",
+			cause:       fmt.Errorf("state: migrate: %w", state.ErrUnknownSchemaVersion),
+			wantContent: "damaged",
+		},
+		{
+			name:        "schema drift is the same kind of refusal",
+			cause:       fmt.Errorf("state: migrate: %w", state.ErrSchemaDrift),
+			wantContent: "damaged",
+		},
+		{
+			// The positive control. Without this case the two above would
+			// pass just as happily against a restore path that had been
+			// deleted outright.
+			name:        "any other failure could have half-applied a migration, so it does restore",
+			cause:       errors.New("disk I/O error partway through migration 0003"),
+			wantContent: "original",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "state.db")
+			if err := os.WriteFile(dbPath, []byte("original"), 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			snap, err := snapshotSQLite(dbPath)
+			if err != nil {
+				t.Fatalf("snapshotSQLite: %v", err)
+			}
+			if err := os.WriteFile(dbPath, []byte("damaged"), 0o600); err != nil {
+				t.Fatalf("WriteFile (damage): %v", err)
+			}
+
+			if got := migrationFailure(snap, tc.cause); !errors.Is(got, tc.cause) {
+				t.Fatalf("migrationFailure returned %v, want it to wrap the cause", got)
+			}
+
+			got, err := os.ReadFile(dbPath)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			if string(got) != tc.wantContent {
+				t.Errorf("database content = %q, want %q", got, tc.wantContent)
+			}
+		})
+	}
+}
+
+// inodeOf reports dbPath's inode number, which changes if and only if the
+// name was pointed at a different file — which is exactly what a
+// temp-file-plus-rename restore does, and what a no-op does not.
+func inodeOf(t *testing.T, path string) uint64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat %s: %v", path, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skipf("no inode information available on %T", info.Sys())
+	}
+	return uint64(st.Ino)
+}
+
+// deleteHighestAppliedMigration removes the newest recorded migration from
+// schema_migrations, so this binary's own embedded set has something left
+// to apply and PendingMigration reports true.
+func deleteHighestAppliedMigration(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open %s: %v", dbPath, err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations WHERE version < 9000)"); err != nil {
+		t.Fatalf("delete highest applied migration: %v", err)
 	}
 }

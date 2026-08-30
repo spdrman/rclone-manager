@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -155,14 +156,45 @@ func TestRunCycle_SustainedCriticalStorage_DeletesNothingToMakeRoom(t *testing.T
 	svc.Capacity.WarningFreeBytes = b34ImpossibleFreeBytes
 	svc.Capacity.CriticalFreeBytes = b34ImpossibleFreeBytes
 
+	// Every assertion after this loop is a negative one (nothing was
+	// copied, nothing was deleted, the file is untouched), and every one of
+	// them is equally true of a run that discovered nothing and never
+	// reached the capacity gate at all. So the loop asserts, on every
+	// cycle, the positive fact they all depend on: the artifact really is
+	// there, and really is still sitting at DISCOVERED waiting for room
+	// that never comes. Without this the test would keep passing if
+	// discovery broke entirely.
 	const cycles = 10
+	var waiting model.ArtifactID
 	for i := 0; i < cycles; i++ {
 		report := svc.RunCycle(context.Background())
 		if len(report.Sets) != 1 {
 			t.Fatalf("cycle %d: len(report.Sets) = %d, want 1", i, len(report.Sets))
 		}
-		if err := report.Sets[0].Err; err != nil {
+		set := report.Sets[0]
+		if err := set.Err; err != nil {
 			t.Fatalf("cycle %d: BackupSetCycleResult.Err = %v, want nil", i, err)
+		}
+
+		// Only the first cycle discovers it; every later one recognises the
+		// same artifact as already known, which is itself the proof that
+		// the refusal is being re-made against the same waiting artifact
+		// rather than against an empty remote.
+		if i == 0 {
+			if got := len(set.Discovery.Discovered); got != 1 {
+				t.Fatalf("cycle 0: Discovery.Discovered has %d entries, want 1 — with nothing discovered, every assertion below this loop is vacuous", got)
+			}
+			waiting = set.Discovery.Discovered[0].Artifact
+		} else if got := len(set.Discovery.AlreadyKnown); got != 1 {
+			t.Fatalf("cycle %d: Discovery.AlreadyKnown has %d entries, want 1 — the artifact stopped being seen at all, so this cycle refused nothing", i, got)
+		}
+
+		rec, err := journal.Get(context.Background(), waiting)
+		if err != nil {
+			t.Fatalf("cycle %d: Get: %v", i, err)
+		}
+		if rec.State != string(lifecycle.Discovered) {
+			t.Fatalf("cycle %d: journal state = %q, want %q — the artifact has to be genuinely stuck behind the capacity gate for the deletion assertions below to be about anything", i, rec.State, lifecycle.Discovered)
 		}
 	}
 

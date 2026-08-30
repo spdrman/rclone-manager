@@ -59,10 +59,9 @@ func TestSystemVersion_ReportsBinaryVersionAndCommit(t *testing.T) {
 		t.Errorf("config_revision = %v, want %q (from the backend's own ConfigRevision())", body["config_revision"], "rev-1")
 	}
 	// Issue #104 (B3.4): the startup-readiness flag must be visible on
-	// this endpoint. A router built with a real backend whose
-	// ConfigRevision() is non-empty (newSyncFakeBackend's "rev-1", above)
-	// is exactly what a process that completed docs/EPIC-B-multi-nas.md
-	// §46.1's startup sequence looks like.
+	// this endpoint, and it is read from the backend itself
+	// (BackupServiceClient.Ready), which is the only thing that knows
+	// whether docs/EPIC-B-multi-nas.md §46.1's startup sequence completed.
 	if body["ready"] != true {
 		t.Errorf("ready = %v, want true for a router built with a working backend", body["ready"])
 	}
@@ -168,5 +167,54 @@ func TestHealthReady_ReportsOKWhenBackendIsConfigured(t *testing.T) {
 	rec := doGet(t, router, "/health/ready")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestReadiness_ReportsFalseWhenTheBackendItselfIsNotReady is the review's
+// M4 fix at this layer. The previous definition of ready — the backend
+// reports a non-empty config revision — could only be false when there was
+// no backend at all, a shape production never produces, so the flag §36
+// puts in front of a destructive operation had no reachable false state.
+//
+// This drives a fully wired backend that answers the question honestly,
+// and asserts both surfaces that share isReady move together. The
+// config-revision assertion is the control: it is non-empty throughout, so
+// a ready:false here can only come from the backend's own answer.
+func TestReadiness_ReportsFalseWhenTheBackendItselfIsNotReady(t *testing.T) {
+	backend := newSyncFakeBackend()
+	backend.notReady = true
+	router := NewRouter(RouterConfig{
+		Platform:      fakePlatformAdapter{caps: capabilities.PlatformCapabilities{}, auth: fakeAuthenticator{authenticated: true, username: "alice"}},
+		Backend:       backend,
+		Gate:          alwaysPassGate{},
+		BinaryVersion: "9.9.9",
+		Commit:        "deadbeef",
+	})
+
+	rec := doGet(t, router, "/api/v1/system/version")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["ready"] != false {
+		t.Errorf("ready = %v, want false for a wired backend that reports its own startup sequence did not complete", body["ready"])
+	}
+	if body["config_revision"] != "rev-1" {
+		t.Errorf("config_revision = %v, want %q: the old definition of readiness was derived from this value, so it has to still be non-empty for the assertion above to mean anything", body["config_revision"], "rev-1")
+	}
+
+	ready := doGet(t, router, "/health/ready")
+	if ready.Code != http.StatusServiceUnavailable {
+		t.Errorf("/health/ready status = %d, want 503: the readiness probe and the version endpoint share one definition and must never disagree", ready.Code)
+	}
+
+	// The positive control: the same router with a ready backend answers
+	// the other way on both surfaces.
+	backend.notReady = false
+	if again := doGet(t, router, "/health/ready"); again.Code != http.StatusOK {
+		t.Errorf("/health/ready status = %d for a ready backend, want 200", again.Code)
 	}
 }

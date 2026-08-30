@@ -22,6 +22,15 @@ type BackupServiceClient interface {
 	// detected (docs/EPIC-B-multi-nas.md §14).
 	ConfigRevision() string
 
+	// Ready reports whether this backend completed
+	// docs/EPIC-B-multi-nas.md §46.1's startup sequence. It is the fact
+	// behind /health/ready and GET /system/version's "ready" field, and
+	// §36 makes it the precondition a client checks before a destructive
+	// operation — so it is asked of the backend, which knows, rather than
+	// inferred in this package from some other value that happens to be
+	// non-empty. See core/service.BackupService.Ready.
+	Ready() bool
+
 	// SubmitRunCycle persists and starts (or, replaying an idempotency
 	// key, returns the already-submitted) run_cycle operation. See
 	// core/service.BackupService.SubmitRunCycle's doc for the durability

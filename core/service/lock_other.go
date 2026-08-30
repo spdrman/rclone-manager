@@ -30,3 +30,24 @@ func acquireStartupLock(lockPath string) (*startupLock, error) {
 }
 
 func (l *startupLock) release() error { return nil }
+
+// ErrJournalInUse mirrors lock_unix.go's sentinel of the same name so
+// callers on any GOOS can compare against one identifier; it is never
+// actually returned on this build.
+var ErrJournalInUse = errors.New("service: another process still has this journal open, so it cannot be migrated right now")
+
+// journalLock is the non-unix stand-in for lock_unix.go's real
+// implementation.
+type journalLock struct{}
+
+func acquireSharedJournalLock(lockPath string) (*journalLock, error) {
+	return nil, fmt.Errorf("service: journal locking is not implemented on %s", runtime.GOOS)
+}
+
+func acquireExclusiveJournalLock(lockPath string) (*journalLock, error) {
+	return nil, fmt.Errorf("service: journal locking is not implemented on %s", runtime.GOOS)
+}
+
+func (l *journalLock) downgradeToShared() error { return nil }
+
+func (l *journalLock) release() error { return nil }

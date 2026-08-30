@@ -69,3 +69,97 @@ func (l *startupLock) release() error {
 	_ = unix.Flock(int(l.f.Fd()), unix.LOCK_UN)
 	return l.f.Close()
 }
+
+// ErrJournalInUse is returned by acquireExclusiveJournalLock when another
+// process still holds this journal open while this one needs to migrate it.
+//
+// This is the other half of the section-46.1 locking story, and the half
+// the startup lock above deliberately does not cover. The startup lock
+// serialises two processes that are both inside runStartupSequence; it says
+// nothing about a process that finished its own startup sequence long ago
+// and is now running with the journal open. Migrating (and, worse,
+// restoring a pre-migration snapshot over the top) underneath such a
+// process would rename a new inode into place while that process still
+// holds the old one open, so its subsequent writes would go to an unlinked
+// file and vanish. Refusing to migrate is the fail-closed answer: an
+// operator stops the running process and retries, and no data is at risk in
+// the meantime.
+var ErrJournalInUse = errors.New("service: another process still has this journal open, so it cannot be migrated right now")
+
+// journalLock is an OS-level advisory lock on a journal's own lock file,
+// taken SHARED by every process that opens the journal and held for as long
+// as that journal stays open, and taken EXCLUSIVE only by a process that is
+// about to snapshot and migrate.
+//
+// Shared-versus-exclusive is what lets both of the things this codebase
+// wants be true at once: any number of processes can have the journal open
+// together (an operator's `backup-manager status` alongside a live `serve`
+// is ordinary use of this CLI), while a process that needs to CHANGE the
+// schema can prove, with the kernel rather than with a convention, that it
+// is the only one there.
+type journalLock struct {
+	f *os.File
+}
+
+// acquireSharedJournalLock takes a shared flock(2) on lockPath, which
+// succeeds against any number of other shared holders and fails only while
+// a migrating process holds the exclusive lock.
+func acquireSharedJournalLock(lockPath string) (*journalLock, error) {
+	return acquireJournalLock(lockPath, unix.LOCK_SH)
+}
+
+// acquireExclusiveJournalLock takes an exclusive flock(2) on lockPath. It
+// fails with ErrJournalInUse if any other process currently has the journal
+// open (holding the shared lock), which is precisely the condition under
+// which migrating would be unsafe.
+func acquireExclusiveJournalLock(lockPath string) (*journalLock, error) {
+	return acquireJournalLock(lockPath, unix.LOCK_EX)
+}
+
+func acquireJournalLock(lockPath string, how int) (*journalLock, error) {
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("service: open journal lock %s: %w", lockPath, err)
+	}
+
+	if err := unix.Flock(int(f.Fd()), how|unix.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return nil, fmt.Errorf("%w: %s", ErrJournalInUse, lockPath)
+		}
+		return nil, fmt.Errorf("service: lock %s: %w", lockPath, err)
+	}
+
+	return &journalLock{f: f}, nil
+}
+
+// downgradeToShared converts an exclusive journal lock into a shared one on
+// the same open file description, so the process that just migrated keeps
+// its journal open under the same shared lock every other process uses,
+// instead of holding everyone else out for its whole lifetime.
+//
+// flock(2) does not promise the conversion is atomic, and it does not need
+// to be here: the only thing that could slip into the gap is another
+// process taking the exclusive lock, and to want it that process would have
+// to find a migration pending, which the migration this call is the tail of
+// has just applied.
+func (l *journalLock) downgradeToShared() error {
+	if l == nil || l.f == nil {
+		return nil
+	}
+	if err := unix.Flock(int(l.f.Fd()), unix.LOCK_SH); err != nil {
+		return fmt.Errorf("service: downgrading journal lock to shared: %w", err)
+	}
+	return nil
+}
+
+// release drops the lock and closes the underlying file handle. Safe to
+// call on a nil *journalLock (a no-op), so a caller can defer it
+// unconditionally.
+func (l *journalLock) release() error {
+	if l == nil || l.f == nil {
+		return nil
+	}
+	_ = unix.Flock(int(l.f.Fd()), unix.LOCK_UN)
+	return l.f.Close()
+}
