@@ -1,16 +1,21 @@
 name: CI
 
-# Builds, vets, and tests every module on every push and pull request, keeps
-# the two UGREEN cross-compile targets honest with a real compile check, and
-# enforces the core/apps/ui-shared repository-structure boundary
+# Builds, vets, and tests every module, keeps the two UGREEN cross-compile
+# targets honest with a real compile check, and enforces the
+# core/apps/ui-shared repository-structure boundary
 # (docs/EPIC-B-multi-nas.md §7.1, landed in #106/B1.1). rclone's dependency
 # graph is heavy (roughly 1.7GB and 260+ modules to resolve, see
 # docs/rclone-upgrade.md), so the Go module and build caches are
 # load-bearing here, not a nice-to-have.
+#
+# NOT auto-triggered on push or pull_request. scripts/ci-local.sh mirrors
+# every job below and runs via .husky/pre-commit on every commit instead —
+# see that script's header for why. This workflow is kept for occasional
+# manual runs (workflow_dispatch, from the Actions tab) when a second,
+# independent-environment signal is worth the Actions minutes.
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}

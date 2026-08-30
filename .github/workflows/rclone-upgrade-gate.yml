@@ -12,12 +12,14 @@ name: rclone upgrade gate
 # ones that are not, instead of reporting a suite as green when nothing
 # ran. See docs/rclone-upgrade.md for the full checklist and the
 # non-negotiable "never auto-merge" rule this gate exists to protect.
+#
+# NOT auto-triggered on pull_request. scripts/ci-local.sh prints the same
+# release-notes reminder (item 8 below) whenever core/go.mod or core/go.sum
+# is staged, and runs the same build/test steps (items 2-3) via
+# .husky/pre-commit. Kept for occasional manual runs (workflow_dispatch).
 
 on:
-  pull_request:
-    paths:
-      - "core/go.mod"
-      - "core/go.sum"
+  workflow_dispatch:
 
 permissions:
   contents: read
