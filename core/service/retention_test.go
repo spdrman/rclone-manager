@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,7 +189,7 @@ func TestApplyRetentionPlan_StalePlanRejectedWithZeroDeletions(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "b.dump", discoveredAt.Add(time.Hour), "payload-b")
 
 	// WHEN P is applied.
-	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"})
+	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
 
 	// THEN ... RETENTION_PLAN_STALE (ErrRetentionPlanStale) is returned.
 	if !errors.Is(err, ErrRetentionPlanStale) {
@@ -205,7 +206,7 @@ func TestApplyRetentionPlan_StalePlanRejectedWithZeroDeletions(t *testing.T) {
 	// The rejected plan is consumed: re-submitting the same plan_id must
 	// not be treated as "still pending", see ApplyRetentionPlan's own
 	// "Single-use" doc.
-	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"}); !errors.Is(err, ErrRetentionPlanNotFound) {
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"}); !errors.Is(err, ErrRetentionPlanNotFound) {
 		t.Errorf("re-applying the same (already-resolved) plan_id: error = %v, want errors.Is(err, ErrRetentionPlanNotFound)", err)
 	}
 }
@@ -230,7 +231,7 @@ func TestApplyRetentionPlan_ValidPlanAppliesExactly(t *testing.T) {
 		t.Fatalf("PreviewRetention: %v", err)
 	}
 
-	result, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"})
+	result, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
 	if err != nil {
 		t.Fatalf("ApplyRetentionPlan: %v", err)
 	}
@@ -261,7 +262,7 @@ func TestApplyRetentionPlan_ValidPlanAppliesExactly(t *testing.T) {
 
 	// Single-use: re-applying the same plan_id after a successful apply
 	// must not re-run anything.
-	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"}); !errors.Is(err, ErrRetentionPlanNotFound) {
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"}); !errors.Is(err, ErrRetentionPlanNotFound) {
 		t.Errorf("re-applying an already-applied plan_id: error = %v, want errors.Is(err, ErrRetentionPlanNotFound)", err)
 	}
 }
@@ -271,7 +272,7 @@ func TestApplyRetentionPlan_ValidPlanAppliesExactly(t *testing.T) {
 // ErrRetentionPlanStale (which implies a plan that WAS once valid).
 func TestApplyRetentionPlan_UnknownPlanIDReturnsNotFound(t *testing.T) {
 	svc := newTestService(t)
-	_, err := svc.ApplyRetentionPlan(context.Background(), ApplyRetentionRequest{PlanID: "retplan_does-not-exist", Actor: "alice"})
+	_, err := svc.ApplyRetentionPlan(context.Background(), ApplyRetentionRequest{PlanID: "retplan_does-not-exist", Source: "production", Set: "postgres-primary", Actor: "alice"})
 	if !errors.Is(err, ErrRetentionPlanNotFound) {
 		t.Fatalf("ApplyRetentionPlan error = %v, want errors.Is(err, ErrRetentionPlanNotFound)", err)
 	}
@@ -282,7 +283,7 @@ func TestApplyRetentionPlan_UnknownPlanIDReturnsNotFound(t *testing.T) {
 // plan_id is unknown" or "this plan_id is stale").
 func TestApplyRetentionPlan_MissingPlanIDIsInvalidRequest(t *testing.T) {
 	svc := newTestService(t)
-	_, err := svc.ApplyRetentionPlan(context.Background(), ApplyRetentionRequest{Actor: "alice"})
+	_, err := svc.ApplyRetentionPlan(context.Background(), ApplyRetentionRequest{Source: "production", Set: "postgres-primary", Actor: "alice"})
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("ApplyRetentionPlan error = %v, want errors.Is(err, ErrInvalidRequest)", err)
 	}
@@ -315,7 +316,7 @@ func TestApplyRetentionPlan_ExpiredPlanIsStaleWithZeroDeletions(t *testing.T) {
 
 	time.Sleep(5 * time.Millisecond)
 
-	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"})
+	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
 	if !errors.Is(err, ErrRetentionPlanStale) {
 		t.Fatalf("ApplyRetentionPlan error = %v, want errors.Is(err, ErrRetentionPlanStale)", err)
 	}
@@ -457,7 +458,7 @@ func TestPreviewThenApply_MixedGFSTiersAndLastKnownGood(t *testing.T) {
 	}
 
 	// WHEN this exact plan is applied (nothing has changed since preview).
-	applied, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Actor: "alice"})
+	applied, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
 	if err != nil {
 		t.Fatalf("ApplyRetentionPlan: %v", err)
 	}
@@ -475,5 +476,534 @@ func TestPreviewThenApply_MixedGFSTiersAndLastKnownGood(t *testing.T) {
 		if _, statErr := os.Lstat(filepath.Join(bs.LocalPath, name)); statErr != nil {
 			t.Errorf("Lstat(%s) after apply: %v, want the kept artifact still present", name, statErr)
 		}
+	}
+}
+
+// pinClock replaces this package's own clock (service.go's `now`) with one
+// this test moves by hand, and restores it afterward. Everything a
+// retention plan's freshness depends on reads through it: the preview's
+// own decision instant, expires_at, and the instant ApplyRetentionPlan
+// re-derives the verdicts at.
+func pinClock(t *testing.T, at time.Time) func(time.Time) {
+	t.Helper()
+	old := now
+	current := at
+	var mu sync.Mutex
+	now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return current
+	}
+	t.Cleanup(func() { now = old })
+	return func(to time.Time) {
+		mu.Lock()
+		defer mu.Unlock()
+		current = to
+	}
+}
+
+// retentionDailyOnly is a one-day GFS daily tier and nothing else: an
+// artifact is kept only while the civil day it was discovered on is still
+// "today", which is what makes a civil-day boundary flip its verdict from
+// KEEP to DELETE with no other input changing at all.
+func retentionDailyOnly() config.Retention {
+	off := false
+	return config.Retention{Timezone: "UTC", WeekStartsOn: "monday", DailyDays: 1, ProtectLastKnownGood: &off}
+}
+
+// TestApplyRetentionPlan_CivilDayBoundaryBetweenPreviewAndApplyIsStale is
+// the sharpest facet of this issue's own review (mandatory finding M1),
+// and it needs no concurrency: a retention verdict is a function of the
+// clock as well as of the journal and the configuration, so a plan
+// previewed at 23:58 and applied at 00:01 has an identical inventory
+// revision and an identical config revision while describing a genuinely
+// different deletion set.
+//
+// GIVEN plan P shows artifact A as KEEP
+// AND the civil day rolls over before apply
+// WHEN P is applied
+// THEN zero files are deleted AND ErrRetentionPlanStale is returned.
+func TestApplyRetentionPlan_CivilDayBoundaryBetweenPreviewAndApplyIsStale(t *testing.T) {
+	setClock := pinClock(t, time.Date(2026, 8, 1, 23, 58, 0, 0, time.UTC))
+
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 20, 0, 0, 0, time.UTC), "payload-a")
+	aPath := filepath.Join(bs.LocalPath, "a.dump")
+
+	svc := New(retentionTestConfig(bs, retentionDailyOnly()), journal, nil, nil)
+
+	// GIVEN the operator reviews a plan that deletes nothing: A is today's
+	// daily backup, held by the daily tier.
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+	if plan.DeleteCount != 0 || plan.KeepCount != 1 {
+		t.Fatalf("precondition failed: plan = %+v, want KeepCount=1, DeleteCount=0 (the operator must be reviewing a KEEP)", plan)
+	}
+
+	// AND the civil day rolls over while the confirmation is on screen:
+	// nothing about the journal or the configuration moves, only the date
+	// the GFS daily span is anchored on.
+	setClock(time.Date(2026, 8, 2, 0, 1, 0, 0, time.UTC))
+
+	// WHEN P is applied.
+	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
+
+	// THEN it is refused, and A, which the operator saw as KEEP, is still
+	// exactly where it was.
+	if !errors.Is(err, ErrRetentionPlanStale) {
+		t.Fatalf("ApplyRetentionPlan error = %v, want errors.Is(err, ErrRetentionPlanStale)", err)
+	}
+	if _, statErr := os.Lstat(aPath); statErr != nil {
+		t.Fatalf("A was deleted across a civil-day boundary despite being reviewed as KEEP: Lstat(%s): %v", aPath, statErr)
+	}
+
+	// Positive control for the refusal above: at this later instant the
+	// verdict really has flipped to DELETE and the deletion path really
+	// does run, so the surviving file proves the reviewed-plan comparison
+	// refused it, not that nothing would have happened anyway.
+	fresh, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention (control): %v", err)
+	}
+	if fresh.DeleteCount != 1 {
+		t.Fatalf("control failed: a plan previewed after midnight has DeleteCount = %d, want 1 (the verdict must genuinely have flipped)", fresh.DeleteCount)
+	}
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: fresh.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"}); err != nil {
+		t.Fatalf("ApplyRetentionPlan (control): %v", err)
+	}
+	if _, statErr := os.Lstat(aPath); !os.IsNotExist(statErr) {
+		t.Errorf("control failed: Lstat(%s) after applying the freshly reviewed plan: err=%v, want a not-exist error", aPath, statErr)
+	}
+}
+
+// TestApplyRetentionPlan_RefusedWhileACycleIsRunningAndConsumesNothing is
+// the other half of mandatory finding M1: a cycle writes the very journal
+// rows the staleness comparison is computed over, and ApplyRetentionPlan
+// used to take no lock against one at all. runOnce is held here exactly as
+// scheduler_test.go holds it, which is what an in-flight RunCycle (a
+// scheduled tick or a submitted operation) does for its whole duration.
+func TestApplyRetentionPlan_RefusedWhileACycleIsRunningAndConsumesNothing(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
+	aPath := filepath.Join(bs.LocalPath, "a.dump")
+
+	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	if !svc.runOnce.TryLock() {
+		t.Fatal("runOnce.TryLock() failed on a fresh BackupService")
+	}
+
+	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
+	if !errors.Is(err, ErrRetentionApplyBusy) {
+		svc.runOnce.Unlock()
+		t.Fatalf("ApplyRetentionPlan during a cycle: error = %v, want errors.Is(err, ErrRetentionApplyBusy)", err)
+	}
+	if _, statErr := os.Lstat(aPath); statErr != nil {
+		svc.runOnce.Unlock()
+		t.Fatalf("A was deleted by an apply that ran concurrently with a cycle: Lstat(%s): %v", aPath, statErr)
+	}
+
+	svc.runOnce.Unlock()
+
+	// Positive control, and the reason busy is its own sentinel: the plan
+	// was not consumed by the refusal, so the identical request succeeds
+	// the moment the cycle finishes. A refusal that had burnt the plan
+	// would fail here with ErrRetentionPlanNotFound.
+	applied, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
+	if err != nil {
+		t.Fatalf("ApplyRetentionPlan after the cycle finished: %v", err)
+	}
+	if applied.DeleteCount != 1 {
+		t.Errorf("applied = %+v, want DeleteCount=1", applied)
+	}
+	if _, statErr := os.Lstat(aPath); !os.IsNotExist(statErr) {
+		t.Errorf("Lstat(%s) after the apply that did run: err=%v, want a not-exist error", aPath, statErr)
+	}
+}
+
+// TestClaimRetentionPlan_ConcurrentClaimsOfOnePlanIDOnlyOneWins is
+// mandatory finding M4 at the exact line it lives on: the lookup and the
+// removal happen in one critical section, so of N concurrent callers
+// naming one plan_id exactly one is handed the record and can go on to
+// delete anything. This drives the claim directly rather than through
+// ApplyRetentionPlan, because the runOnce serialisation added for M1 would
+// otherwise mask which guard is doing the work.
+func TestClaimRetentionPlan_ConcurrentClaimsOfOnePlanIDOnlyOneWins(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
+	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	const claimers = 16
+	var wg sync.WaitGroup
+	results := make([]error, claimers)
+	start := make(chan struct{})
+	for i := range claimers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := svc.claimRetentionPlan(plan.PlanID, bs.ID)
+			results[i] = err
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	won := 0
+	for i, err := range results {
+		switch {
+		case err == nil:
+			won++
+		case errors.Is(err, ErrRetentionPlanNotFound):
+		default:
+			t.Errorf("claimer %d: error = %v, want nil or ErrRetentionPlanNotFound", i, err)
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d of %d concurrent claimers were handed the plan, want exactly 1", won, claimers)
+	}
+}
+
+// TestApplyRetentionPlan_ConcurrentAppliesDeleteExactlyOnce is the same
+// guarantee at the public boundary: whichever refusal each loser gets
+// (busy, because one applier holds runOnce, or not-found, because one
+// applier claimed the plan), exactly one apply may report success and the
+// artifact may only be deleted once.
+func TestApplyRetentionPlan_ConcurrentAppliesDeleteExactlyOnce(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
+	aPath := filepath.Join(bs.LocalPath, "a.dump")
+	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	const appliers = 8
+	var wg sync.WaitGroup
+	deleted := make([]int, appliers)
+	errs := make([]error, appliers)
+	start := make(chan struct{})
+	for i := range appliers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
+			errs[i], deleted[i] = err, result.DeleteCount
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	succeeded, totalDeleted := 0, 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+			totalDeleted += deleted[i]
+		case errors.Is(err, ErrRetentionPlanNotFound), errors.Is(err, ErrRetentionApplyBusy):
+		default:
+			t.Errorf("applier %d: error = %v, want nil, ErrRetentionPlanNotFound or ErrRetentionApplyBusy", i, err)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("%d of %d concurrent applies succeeded, want exactly 1", succeeded, appliers)
+	}
+	if totalDeleted != 1 {
+		t.Errorf("successful applies reported %d deletions in total, want 1", totalDeleted)
+	}
+	if _, statErr := os.Lstat(aPath); !os.IsNotExist(statErr) {
+		t.Errorf("Lstat(%s) after the one successful apply: err=%v, want a not-exist error", aPath, statErr)
+	}
+}
+
+// TestApplyRetentionPlan_PlanIDSubmittedForAnotherBackupSetIsRefused is
+// mandatory finding M5 (and the server-side half of M3): the {source}/
+// {set} the request names is cross-checked against the backup set the plan
+// was actually issued for, so a client bug or stale component state
+// submitting the right-looking plan id for the wrong set is refused rather
+// than silently deleting from a backup set the operator was not looking
+// at.
+func TestApplyRetentionPlan_PlanIDSubmittedForAnotherBackupSetIsRefused(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
+	aPath := filepath.Join(bs.LocalPath, "a.dump")
+	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: "some-other-set", Actor: "alice"})
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("ApplyRetentionPlan with a mismatched set: error = %v, want errors.Is(err, ErrInvalidRequest)", err)
+	}
+	if _, statErr := os.Lstat(aPath); statErr != nil {
+		t.Errorf("A was deleted by an apply routed at a different backup set: Lstat(%s): %v", aPath, statErr)
+	}
+
+	// Positive control: the refusal is the cross-check firing, not the
+	// plan being unusable, and it consumed nothing — the same plan applied
+	// at its own backup set still works.
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"}); err != nil {
+		t.Fatalf("ApplyRetentionPlan at the plan's own backup set: %v", err)
+	}
+	if _, statErr := os.Lstat(aPath); !os.IsNotExist(statErr) {
+		t.Errorf("Lstat(%s) after the correctly routed apply: err=%v, want a not-exist error", aPath, statErr)
+	}
+}
+
+// TestApplyRetentionPlan_SuccessInvalidatesThisSetsOtherPlans is mandatory
+// finding M6's stopgap. A successful apply writes nothing to the journal
+// about the files it deleted, so an older plan's inventory fingerprint
+// still matches afterward and it would stay applyable against a backup set
+// it no longer describes. Single-use has to be per effect, not only per
+// plan_id.
+func TestApplyRetentionPlan_SuccessInvalidatesThisSetsOtherPlans(t *testing.T) {
+	first := retentionTestBackupSet(t, t.TempDir())
+	second, err := model.NewBackupSetID("production", "billing")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	otherSet := config.BackupSet{Name: "billing", ID: second, LocalPath: t.TempDir()}
+
+	journal := openTestJournal(t)
+	ctx := context.Background()
+	discoveredAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	seedCompleteArtifact(t, ctx, journal, first, "a.dump", discoveredAt, "payload-a")
+	seedCompleteArtifact(t, ctx, journal, otherSet, "b.dump", discoveredAt, "payload-b")
+
+	cfg := &config.Config{
+		Sources:   []config.Source{{Name: "production", BackupSets: []config.BackupSet{first, otherSet}}},
+		Retention: retentionAllTiersDisabled(),
+	}
+	svc := New(cfg, journal, nil, nil)
+
+	superseded, err := svc.PreviewRetention(ctx, first.ID.Source, first.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention (superseded): %v", err)
+	}
+	untouched, err := svc.PreviewRetention(ctx, second.Source, second.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention (other set): %v", err)
+	}
+	confirmed, err := svc.PreviewRetention(ctx, first.ID.Source, first.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention (confirmed): %v", err)
+	}
+
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: confirmed.PlanID, Source: first.ID.Source, Set: first.ID.Set, Actor: "alice"}); err != nil {
+		t.Fatalf("ApplyRetentionPlan: %v", err)
+	}
+
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: superseded.PlanID, Source: first.ID.Source, Set: first.ID.Set, Actor: "alice"}); !errors.Is(err, ErrRetentionPlanNotFound) {
+		t.Errorf("applying a plan superseded by a successful apply: error = %v, want errors.Is(err, ErrRetentionPlanNotFound)", err)
+	}
+
+	// Positive control: the invalidation is scoped to the backup set that
+	// actually changed. Another set's outstanding plan is untouched, which
+	// also proves the assertion above is not just "every plan is gone".
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: untouched.PlanID, Source: second.Source, Set: second.Set, Actor: "alice"}); err != nil {
+		t.Errorf("applying another backup set's outstanding plan: error = %v, want nil (it must not have been invalidated)", err)
+	}
+}
+
+// TestPreviewRetention_SweepsExpiredPlansAndCapsTheStore is mandatory
+// finding M8: previews that are never applied are the normal case, and
+// only an apply ever removed a record, so the store grew for the life of
+// the process inside the daemon that also runs the backups.
+func TestPreviewRetention_SweepsExpiredPlansAndCapsTheStore(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
+	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+
+	setClock := pinClock(t, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+
+	if _, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set); err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+	svc.retentionMu.Lock()
+	held := len(svc.retentionPlans)
+	svc.retentionMu.Unlock()
+	if held != 1 {
+		t.Fatalf("after one preview the store holds %d plans, want 1", held)
+	}
+
+	// Past that plan's expiry, the next preview sweeps it: an expired plan
+	// is unapplyable, so keeping it is pure growth.
+	setClock(time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC).Add(retentionPlanTTL).Add(time.Minute))
+	if _, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set); err != nil {
+		t.Fatalf("PreviewRetention (after expiry): %v", err)
+	}
+	svc.retentionMu.Lock()
+	held = len(svc.retentionPlans)
+	svc.retentionMu.Unlock()
+	if held != 1 {
+		t.Fatalf("after the expired plan should have been swept the store holds %d plans, want 1", held)
+	}
+
+	// And the cap holds even when nothing has expired at all: every plan
+	// below is live, and the store still never exceeds its ceiling.
+	for i := range maxRetentionPlans + 8 {
+		if _, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set); err != nil {
+			t.Fatalf("PreviewRetention (#%d): %v", i, err)
+		}
+	}
+	svc.retentionMu.Lock()
+	held = len(svc.retentionPlans)
+	svc.retentionMu.Unlock()
+	if held > maxRetentionPlans {
+		t.Errorf("the store holds %d plans after %d live previews, want at most %d", held, maxRetentionPlans+8, maxRetentionPlans)
+	}
+	if held == 0 {
+		t.Error("the store holds no plans at all: eviction must make room, not empty the store")
+	}
+}
+
+// writeRetentionConfigFile is writeTestConfigFile (open_test.go) with an
+// explicit retention policy that makes a completed artifact a genuine
+// delete candidate, so a file-backed service (the only kind that can
+// hot-reload its configuration) has something real at stake in the test
+// below.
+func writeRetentionConfigFile(t *testing.T) (configPath, localDir string) {
+	t.Helper()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	localDir = filepath.Join(dir, "local")
+	for _, d := range []string{remoteDir, localDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", d, err)
+		}
+	}
+
+	configPath = filepath.Join(dir, "config.yaml")
+	content := "poll_interval: 15m\n" +
+		"state:\n" +
+		"  database: " + filepath.Join(dir, "state.db") + "\n" +
+		"sources:\n" +
+		"  - id: production\n" +
+		"    backup_sets:\n" +
+		"      - id: postgres-primary\n" +
+		"        remote:\n" +
+		"          type: local\n" +
+		"        remote_path: " + remoteDir + "\n" +
+		"        local_path: " + localDir + "\n" +
+		"        include:\n" +
+		"          - \"*.dump\"\n" +
+		"        completion:\n" +
+		"          strategy: rename\n" +
+		"        stale_after: 24h\n" +
+		"retention:\n" +
+		"  timezone: UTC\n" +
+		"  week_starts_on: monday\n" +
+		"  protect_last_known_good: false\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return configPath, localDir
+}
+
+// TestApplyRetentionPlan_ConfigurationChangedBetweenPreviewAndApplyIsStale
+// is mandatory finding M10: the staleness gate has two arms, and until now
+// only the inventory one had ever been observed returning true. The
+// configuration arm guards the case where the applied deletion set can
+// diverge from the reviewed one most sharply (a tier disabled between
+// preview and apply turns KEEP verdicts into DELETE verdicts), so it is
+// driven here through the real hot-reload path — CreateBackupSet writing
+// the config file and swapping this service's configState — rather than by
+// reaching into b.state.
+func TestApplyRetentionPlan_ConfigurationChangedBetweenPreviewAndApplyIsStale(t *testing.T) {
+	// A file-backed configuration cannot disable the GFS tiers (0 means
+	// "use the default" — config/validate.go), so the artifact below is
+	// dated far outside every tier's span instead, which is what makes it
+	// a genuine delete candidate under the real, defaulted policy.
+	pinClock(t, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+
+	configPath, localDir := writeRetentionConfigFile(t)
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	ctx := context.Background()
+	setID, err := model.NewBackupSetID("production", "postgres-primary")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	bs := config.BackupSet{Name: "postgres-primary", ID: setID, LocalPath: localDir}
+	seedCompleteArtifact(t, ctx, svc.journal, bs, "a.dump", time.Date(2020, 1, 15, 12, 0, 0, 0, time.UTC), "payload-a")
+	aPath := filepath.Join(localDir, "a.dump")
+
+	plan, err := svc.PreviewRetention(ctx, setID.Source, setID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+	if plan.DeleteCount != 1 {
+		t.Fatalf("precondition failed: plan.DeleteCount = %d, want 1 (verdicts=%+v)", plan.DeleteCount, plan.Verdicts)
+	}
+
+	// The configuration changes between preview and apply, through the one
+	// path that actually recomputes this service's config revision.
+	revisionBefore := svc.ConfigRevision()
+	if _, err := svc.CreateBackupSet(ctx, validCreateReq(t, svc, "added-mid-review")); err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+	if svc.ConfigRevision() == revisionBefore {
+		t.Fatal("precondition failed: ConfigRevision did not move, so this test would prove nothing")
+	}
+
+	_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: setID.Source, Set: setID.Set, Actor: "alice"})
+	if !errors.Is(err, ErrRetentionPlanStale) {
+		t.Fatalf("ApplyRetentionPlan after a configuration change: error = %v, want errors.Is(err, ErrRetentionPlanStale)", err)
+	}
+	if _, statErr := os.Lstat(aPath); statErr != nil {
+		t.Fatalf("A was deleted despite the configuration having changed since the plan was reviewed: Lstat(%s): %v", aPath, statErr)
+	}
+
+	// Positive control: re-previewing under the new configuration and
+	// applying that plan does delete the file, so the refusal above was
+	// the configuration arm firing and not an inert deletion path.
+	fresh, err := svc.PreviewRetention(ctx, setID.Source, setID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention (control): %v", err)
+	}
+	if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: fresh.PlanID, Source: setID.Source, Set: setID.Set, Actor: "alice"}); err != nil {
+		t.Fatalf("ApplyRetentionPlan (control): %v", err)
+	}
+	if _, statErr := os.Lstat(aPath); !os.IsNotExist(statErr) {
+		t.Errorf("control failed: Lstat(%s) after applying the re-previewed plan: err=%v, want a not-exist error", aPath, statErr)
 	}
 }

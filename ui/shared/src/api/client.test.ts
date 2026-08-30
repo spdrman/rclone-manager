@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { httpApi } from "./client";
-import { BackupManagerError } from "./contracts";
+import { BackupManagerError, toApiErrorCode } from "./contracts";
 import type { ApiErrorCode } from "./contracts";
 
 /** Sets document.cookie the way a browser would after the server issued
@@ -537,5 +537,80 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
     const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("/api/v1/backup-sets/test-connection");
     expect(result).toEqual({ ok: true });
+  });
+});
+
+describe("ApiErrorCode covers every code apps/common/webhost actually emits", () => {
+  // The literal strings passed to writeError across apps/common/webhost's
+  // handlers (handlers_retention.go, handlers_operations.go,
+  // handlers_backupsets.go, handlers_ssh.go, errors.go, router.go's own
+  // middleware) - kept here by hand, since nothing generates this list
+  // from the Go source. Not one of them was in the union before issue
+  // #96's review: the retention dialog's stale branch, the only place in
+  // this frontend that reads a code at all, compared against a kebab-case
+  // value no Go source has ever written.
+  const webhostErrorCodes: ApiErrorCode[] = [
+    "RETENTION_PLAN_STALE",
+    "RETENTION_PLAN_NOT_FOUND",
+    "RETENTION_APPLY_BUSY",
+    "BACKUP_SET_NOT_FOUND",
+    "OPERATION_NOT_FOUND",
+    "OPERATION_ALREADY_RUNNING",
+    "IDEMPOTENCY_KEY_CONFLICT",
+    "CONFIG_REVISION_STALE",
+    "SSH_KEY_NOT_FOUND",
+    "HOST_KEY_PROBE_FAILED",
+    "DESTRUCTIVE_OPERATIONS_DISABLED",
+    "INVALID_REQUEST",
+    "UNAUTHENTICATED",
+    "CSRF_TOKEN_MISSING",
+    "CSRF_TOKEN_MISMATCH",
+    "INTERNAL"
+  ];
+
+  it("lists every code webhost can return (this test would pass vacuously on an empty array)", () => {
+    expect(webhostErrorCodes.length).toBeGreaterThan(0);
+    expect(new Set(webhostErrorCodes).size).toBe(webhostErrorCodes.length);
+  });
+
+  it("carries a webhost error code through the nested envelope verbatim, so a caller can branch on it", async () => {
+    // Byte-for-byte the body apps/common/webhost/errors.go writes and
+    // handlers_retention_test.go asserts for a stale plan: a nested
+    // error object, the code in UPPER_SNAKE_CASE, and the correlation id
+    // in a header rather than the body.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 409,
+        headers: new Headers({ "x-correlation-id": "cid_stale_1" }),
+        json: async () => ({
+          error: {
+            code: "RETENTION_PLAN_STALE",
+            message: "service: retention plan is stale: backup set production/postgres-primary changed"
+          }
+        })
+      })
+    );
+
+    await expect(
+      httpApi.applyRetention("production", "postgres-primary", "retplan_abc")
+    ).rejects.toMatchObject({
+      api: { code: "RETENTION_PLAN_STALE", correlationId: "cid_stale_1" }
+    });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("degrades a code it does not know to \"unknown\" instead of asserting it into the union", () => {
+    // The `as ApiErrorCode` this replaces had no runtime check at all, so
+    // an unrecognised code became an ApiErrorCode that silently matched
+    // no branch anywhere.
+    expect(toApiErrorCode("SOMETHING_NEW")).toBe("unknown");
+    expect(toApiErrorCode(undefined)).toBe("unknown");
+    expect(toApiErrorCode(42)).toBe("unknown");
+    // Positive control: a real code is passed through, so the assertions
+    // above are not just "this function always returns unknown".
+    expect(toApiErrorCode("RETENTION_PLAN_STALE")).toBe("RETENTION_PLAN_STALE");
   });
 });

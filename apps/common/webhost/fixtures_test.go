@@ -174,6 +174,15 @@ func (f *syncFakeBackend) ApplyRetentionPlan(_ context.Context, req service.Appl
 	if !ok {
 		return service.RetentionPlan{}, fmt.Errorf("%w: %s", service.ErrRetentionPlanNotFound, req.PlanID)
 	}
+	// The real service cross-checks the {source}/{set} the request was
+	// routed by against the backup set the plan was issued for, and
+	// consumes nothing when they disagree (see
+	// service.ApplyRetentionRequest.Source's own doc). This fake enforces
+	// the same thing, so a handler that dropped the URL parameters on the
+	// floor could not pass handlers_retention_test.go.
+	if plan.BackupSetID != req.Source+"/"+req.Set {
+		return service.RetentionPlan{}, fmt.Errorf("%w: plan %s was not issued for backup set %s/%s", service.ErrInvalidRequest, req.PlanID, req.Source, req.Set)
+	}
 	delete(f.plans, req.PlanID)
 	plan.OperationID = "op_test_retention_apply"
 	return plan, nil

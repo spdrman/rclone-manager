@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
@@ -47,11 +48,30 @@ type PrunePlan struct {
 // tracked separately from this issue (#96/B3.1), which only needed an
 // API-facing preview/apply, not a CLI one.
 func (s *Service) PrunePreview(ctx context.Context, set model.BackupSetID) (PrunePlan, error) {
+	return s.PrunePreviewAt(ctx, set, s.now())
+}
+
+// PrunePreviewAt is PrunePreview against a caller-supplied instant rather
+// than this Service's own clock.
+//
+// The instant is an input to the verdict set, not an implementation
+// detail: internal/retention/gfs.go anchors every GFS tier span on the
+// civil date `at` falls in, so the same journal snapshot and the same
+// configuration produce a different, entirely correct verdict set either
+// side of a civil-day boundary (or a DST transition). core/service's
+// preview/apply envelope has to decide "was the plan the administrator
+// confirmed still the plan that would run" across a window of up to its
+// own plan TTL, and it cannot answer that if each of its two derivations
+// silently reads a different clock — so it pins one instant and passes it
+// to both this method and PruneApplySnapshot below. See core/service/
+// retention.go's ApplyRetentionPlan for the comparison that pinning makes
+// possible.
+func (s *Service) PrunePreviewAt(ctx context.Context, set model.BackupSetID, at time.Time) (PrunePlan, error) {
 	records, bs, err := s.pruneInputsFor(ctx, set)
 	if err != nil {
 		return PrunePlan{}, err
 	}
-	verdicts, err := retention.PruneDecide(s.now(), s.Config.Retention, bs, records)
+	verdicts, err := retention.PruneDecide(at, s.Config.Retention, bs, records)
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune preview: %s: %w", set, err)
 	}
@@ -72,11 +92,32 @@ func (s *Service) PrunePreview(ctx context.Context, set model.BackupSetID) (Prun
 // SubmitRunCycle's own internal/app.Service.RunCycle call is of an
 // Idempotency-Key header.
 func (s *Service) PruneApply(ctx context.Context, set model.BackupSetID) (PrunePlan, error) {
-	records, bs, err := s.pruneInputsFor(ctx, set)
+	records, _, err := s.pruneInputsFor(ctx, set)
 	if err != nil {
 		return PrunePlan{}, err
 	}
-	verdicts, err := retention.PruneApply(s.now(), s.Config.Retention, bs, records)
+	return s.PruneApplySnapshot(ctx, set, s.now(), records)
+}
+
+// PruneApplySnapshot deletes the local file behind every PruneDelete
+// verdict derived from exactly the records snapshot and the instant the
+// caller hands over, instead of re-reading the journal and re-reading the
+// clock for itself.
+//
+// This is what lets core/service apply the verdict set it actually
+// compared against the one the administrator confirmed, rather than a
+// second set derived from a journal snapshot and a clock reading nobody
+// ever reviewed. internal/retention.PruneApply's own immediately-before-
+// delete safety re-check (path containment, symlinks, last-known-good,
+// against the real current disk state) still runs on every artifact, so
+// pinning the decision does not pin the safety check to stale evidence:
+// the decision is the reviewed one, the disk check is fresh.
+func (s *Service) PruneApplySnapshot(ctx context.Context, set model.BackupSetID, at time.Time, records []state.Record) (PrunePlan, error) {
+	_, bs, ok := s.backupSetConfigFor(set)
+	if !ok {
+		return PrunePlan{}, &NotFoundError{Kind: "backup set", Name: set.String()}
+	}
+	verdicts, err := retention.PruneApply(at, s.Config.Retention, bs, records)
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune apply: %s: %w", set, err)
 	}

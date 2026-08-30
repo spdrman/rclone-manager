@@ -8,12 +8,18 @@ import { resetGraphForTests } from "@shared/state/graph";
 import { commitRetentionRevisions } from "@shared/state/appNodes";
 import type { RetentionPlan } from "@shared/types/backup";
 
+/** A live plan: expires_at is ten minutes out from whenever this suite
+ *  runs, not a frozen literal that quietly falls into the past and turns
+ *  every apply here into an expiry refusal (the dialog now enforces
+ *  expiry — see handleApply). The expired case gets its own fixture. */
+const EXPIRES_AT = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
 const PLAN: RetentionPlan = {
   planId: "retplan_test_1",
   backupSetId: "production/postgres-primary",
   inventoryRevision: "inv_1",
   configRevision: "cfg_1",
-  expiresAt: "2026-08-29T06:09:48+02:00",
+  expiresAt: EXPIRES_AT,
   keepCount: 1,
   deleteCount: 1,
   reclaimBytes: 2048,
@@ -133,7 +139,14 @@ describe("RetentionPreviewDialog", () => {
     const applyRetention = vi.fn(() =>
       Promise.reject(
         new BackupManagerError({
-          code: "retention-plan-stale",
+          // The literal code apps/common/webhost/handlers_retention.go
+          // writes and handlers_retention_test.go asserts on
+          // (TestApplyRetention_StalePlanReturns409WithItsOwnCode), not a
+          // spelling that exists only in this frontend: the dialog's stale
+          // branch is the one place in the whole UI that reads an error
+          // code, and it used to compare against a value no backend has
+          // ever sent (issue #96's review, mandatory finding M2).
+          code: "RETENTION_PLAN_STALE",
           message: "The backup inventory changed after this preview was created.",
           remediation: "No files were deleted. Review the updated retention plan before continuing.",
           correlationId: "cid_test_stale"
@@ -159,5 +172,94 @@ describe("RetentionPreviewDialog", () => {
     // reviewed — never left showing a now-rejected plan as if still live.
     expect(screen.queryByText("a.dump")).toBeNull();
     expect(screen.getByRole("button", { name: "Continue…" })).toBeDisabled();
+  });
+
+  it("renders no plan, and never applies one, while the resource still holds another backup set's plan", async () => {
+    const applyRetention = vi.fn(() => Promise.reject(new Error("must not be called")));
+    // The dialog is mounted for `billing`, but the shared retention
+    // resource node still holds the plan previewed for `postgres-primary`
+    // — exactly what a preview of one set followed by opening retention
+    // for another leaves behind while the second request is in flight.
+    const api = apiWith({ applyRetention, previewRetention: () => Promise.resolve(PLAN) });
+
+    render(
+      <ApiProvider api={api}>
+        <RetentionPreviewDialog source="production" set="billing" open onClose={() => {}} />
+      </ApiProvider>
+    );
+
+    expect(await screen.findByText(/Requesting plan/)).toBeTruthy();
+    // None of the other set's detail is on screen under this set's identity.
+    expect(screen.queryByText(/Plan retplan_test_1/)).toBeNull();
+    expect(screen.queryByText("a.dump")).toBeNull();
+    expect(screen.queryByText("b.dump")).toBeNull();
+    expect(screen.getByRole("button", { name: "Continue…" })).toBeDisabled();
+    expect(applyRetention).not.toHaveBeenCalled();
+  });
+
+  it("renders and enables the same plan once it does name this backup set (positive control)", async () => {
+    const api = apiWith({
+      previewRetention: () => Promise.resolve({ ...PLAN, backupSetId: "production/billing" })
+    });
+
+    render(
+      <ApiProvider api={api}>
+        <RetentionPreviewDialog source="production" set="billing" open onClose={() => {}} />
+      </ApiProvider>
+    );
+
+    await screen.findByText(/Plan retplan_test_1/);
+    expect(screen.getByText("b.dump")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Continue…" })).toBeEnabled();
+  });
+
+  it("does not apply when the graph learns of a change while the confirmation is already open", async () => {
+    const applyRetention = vi.fn(() => Promise.resolve(PLAN));
+    const api = apiWith({ applyRetention });
+
+    render(
+      <ApiProvider api={api}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+
+    await screen.findByText(/Plan retplan_test_1/);
+    // The confirmation opens while the plan is still fresh, which is what
+    // makes this the window the Continue-button gate does not cover.
+    fireEvent.click(screen.getByRole("button", { name: "Continue…" }));
+    act(() => {
+      commitRetentionRevisions({ inventoryRevision: "inv_2", configRevision: PLAN.configRevision });
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Delete \d+ backups$/ }));
+    });
+
+    expect(applyRetention).not.toHaveBeenCalled();
+    expect(await screen.findByText(/No files were deleted/)).toBeTruthy();
+  });
+
+  it("does not apply a plan that expired while the confirmation was open", async () => {
+    const applyRetention = vi.fn(() => Promise.resolve(PLAN));
+    const api = apiWith({
+      applyRetention,
+      previewRetention: () =>
+        Promise.resolve({ ...PLAN, expiresAt: new Date(Date.now() - 1000).toISOString() })
+    });
+
+    render(
+      <ApiProvider api={api}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+
+    await screen.findByText(/Plan retplan_test_1/);
+    fireEvent.click(screen.getByRole("button", { name: "Continue…" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Delete \d+ backups$/ }));
+    });
+
+    expect(applyRetention).not.toHaveBeenCalled();
+    expect(await screen.findByText(/No files were deleted/)).toBeTruthy();
   });
 });

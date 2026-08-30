@@ -187,3 +187,67 @@ func TestApplyRetention_MissingCSRFCookieReturns403(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
+
+// TestApplyRetention_PlanIDFromAnotherBackupSetIsRefused proves this route
+// actually reads the {source}/{set} it is routed by and passes it down to
+// be cross-checked, rather than acting on plan_id alone (this issue's own
+// review, mandatory finding M5): a valid plan id submitted under a
+// different backup set's path is refused, and the artifact behind it is
+// never deleted.
+func TestApplyRetention_PlanIDFromAnotherBackupSetIsRefused(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+
+	preview := previewRetention(t, tr.router, "production", "postgres-primary")
+	if preview.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, want %d, body: %s", preview.Code, http.StatusOK, preview.Body.String())
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(preview.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	planID, _ := plan["plan_id"].(string)
+
+	rec := applyRetention(t, tr.router, "production", "billing", `{"plan_id":"`+planID+`"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "INVALID_REQUEST" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "INVALID_REQUEST")
+	}
+
+	// Positive control: the same plan id under its own backup set's path
+	// succeeds, so the refusal above is the cross-check firing and not a
+	// plan id this route could never have applied at all.
+	ok := applyRetention(t, tr.router, "production", "postgres-primary", `{"plan_id":"`+planID+`"}`)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("control: status = %d, want %d, body: %s", ok.Code, http.StatusOK, ok.Body.String())
+	}
+}
+
+// TestApplyRetention_BusyServiceGetsItsOwnCode proves a refusal caused by
+// a concurrently executing backup cycle is not reported to the client as a
+// stale plan: the plan is intact and the client should retry the same
+// plan_id, which is a different instruction from "re-preview and
+// re-confirm" (see service.ErrRetentionApplyBusy's own doc).
+func TestApplyRetention_BusyServiceGetsItsOwnCode(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	tr.backend.errOnApply = service.ErrRetentionApplyBusy
+
+	rec := applyRetention(t, tr.router, "production", "postgres-primary", `{"plan_id":"retplan_test_1"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "RETENTION_APPLY_BUSY" {
+		t.Errorf("error.code = %v, want %q", errObj["code"], "RETENTION_APPLY_BUSY")
+	}
+}

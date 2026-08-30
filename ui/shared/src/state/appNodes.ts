@@ -69,11 +69,26 @@ export interface RetentionRevisions {
  *
  * Seeded to match a freshly-read plan's own revisions the moment that plan
  * is committed (a plan is never stale the instant it is read — see
- * commitRetentionRevisions's call site, RetentionPreviewDialog.tsx), and
- * moved forward independently of retentionPlanNode by anything else that
- * later learns the true revisions changed — a re-preview via "Review new
- * plan", or (future wiring) a live poll/push. That gap between the two is
- * exactly what retentionPlanStaleNode below asserts on.
+ * commitRetentionRevisions's call site, RetentionPreviewDialog.tsx).
+ *
+ * # This node has no producer yet, so the gate below cannot fire
+ *
+ * That seed is currently the ONLY non-test caller of
+ * commitRetentionRevisions: nothing polls the revisions, nothing pushes
+ * them, and no other page moves this node. The two values are therefore
+ * identical by construction, and retentionPlanStaleNode below is a
+ * constant false outside tests. Stated plainly because the mechanism reads
+ * like a live guard and is not one (issue #96's review, mandatory finding
+ * M9): today the server's own 409 RETENTION_PLAN_STALE, re-checked in
+ * RetentionPreviewDialog's handleApply, is the only staleness detection
+ * that can actually refuse a real apply. The derived node landed ahead of
+ * its producer, deliberately and with its own tests, which drive it by
+ * committing here directly.
+ *
+ * Anything wiring a real producer (a poll, a push, GET /system/version's
+ * own config_revision) has one prerequisite: this is a single global, not
+ * keyed by backup set, so revisions left over from one set would read as
+ * staleness against another set's plan. Key it before feeding it.
  */
 export const retentionRevisionsNode = registerInput<RetentionRevisions | null>(
   "retention.revisions",
@@ -102,6 +117,12 @@ export function commitRetentionRevisions(revisions: RetentionRevisions): void {
  * (simulating the graph learning of a real inventory change) flips this to
  * true, and the dialog's apply button disables from that alone — before
  * any apply request ever reaches the API.
+ *
+ * That case is a test committing the change by hand, standing in for a
+ * producer that does not exist yet: see retentionRevisionsNode's own doc
+ * above. In a running app this node is always false, so treat it as the
+ * mechanism for a staleness signal rather than as a staleness signal that
+ * is currently arriving.
  */
 export const retentionPlanStaleNode = graph.derived<boolean>("retention.planStale", (get) => {
   const plan = get(retentionPlanNode).data;

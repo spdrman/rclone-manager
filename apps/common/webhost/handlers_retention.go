@@ -97,13 +97,19 @@ func (h *handlers) previewRetention(w http.ResponseWriter, r *http.Request) {
 
 // applyRetentionRequest is POST .../retention/apply's request body
 // (docs/EPIC-B-multi-nas.md §15.6: "MUST require the plan_id the
-// administrator actually reviewed"). The {source}/{set} the URL names is
-// not consulted here at all: plan_id alone is what ApplyRetentionPlan
-// looks the plan up by (an opaque, per-preview token — see
-// service.RetentionPlan's own doc), which is also what makes the exact
-// backup set this actually acts on impossible to spoof by editing the URL
-// without also holding a plan_id that backup set's own PreviewRetention
-// call issued.
+// administrator actually reviewed").
+//
+// plan_id is what ApplyRetentionPlan looks the plan up by (an opaque,
+// per-preview token — see service.RetentionPlan's own doc), which is what
+// makes the backup set this actually acts on impossible to spoof by
+// editing the URL without also holding a plan_id that backup set's own
+// PreviewRetention call issued. The {source}/{set} the URL names is passed
+// down alongside it all the same, and the service refuses when the two
+// disagree: it costs four lines, it keeps this route acting on the
+// resource its path names like every other route in this package, and it
+// catches the far likelier failure the URL check is actually for — a
+// client bug or stale component state submitting the wrong plan id (see
+// service.ApplyRetentionRequest.Source's own doc).
 type applyRetentionRequest struct {
 	PlanID string `json:"plan_id"`
 }
@@ -131,6 +137,8 @@ func (h *handlers) applyRetention(w http.ResponseWriter, r *http.Request) {
 
 	plan, err := h.backend.ApplyRetentionPlan(r.Context(), service.ApplyRetentionRequest{
 		PlanID: body.PlanID,
+		Source: chi.URLParam(r, "source"),
+		Set:    chi.URLParam(r, "set"),
 		Actor:  actorFromContext(r.Context()),
 	})
 	if err != nil {
@@ -157,6 +165,12 @@ func writeRetentionServiceError(w http.ResponseWriter, err error, fallbackMessag
 	switch {
 	case errors.Is(err, service.ErrRetentionPlanStale):
 		writeError(w, http.StatusConflict, "RETENTION_PLAN_STALE", err.Error())
+	case errors.Is(err, service.ErrRetentionApplyBusy):
+		// Its own code, not RETENTION_PLAN_STALE: the plan is fine and was
+		// not consumed, the server is busy, and the client should retry
+		// the same plan_id rather than tell the operator to re-preview
+		// (see that sentinel's own doc, core/service/retention.go).
+		writeError(w, http.StatusConflict, "RETENTION_APPLY_BUSY", err.Error())
 	case errors.Is(err, service.ErrRetentionPlanNotFound):
 		writeError(w, http.StatusNotFound, "RETENTION_PLAN_NOT_FOUND", err.Error())
 	case errors.Is(err, service.ErrBackupSetNotFound):

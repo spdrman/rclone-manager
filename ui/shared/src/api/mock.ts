@@ -247,7 +247,12 @@ function retentionPlan(source: string, set: string, tick: number): RetentionPlan
     backupSetId: source + "/" + set,
     inventoryRevision: "inv_" + tick,
     configRevision: "cfg_9f2a41",
-    expiresAt: "2026-08-29T06:09:48+02:00",
+    // Ten minutes out from whenever this fixture is read, matching
+    // core/service's own retentionPlanTTL. A frozen literal here would
+    // sooner or later be a plan that is already expired the moment it is
+    // issued, which the dialog now refuses to apply (RetentionPreviewDialog's
+    // handleApply) — a dev fixture that cannot be confirmed at all.
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     keepCount: 4,
     deleteCount: 3,
     reclaimBytes: 55620000000,
@@ -424,7 +429,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       const current = retentionPlan(source, set, retentionTick);
       if (planId !== current.planId)
         return Promise.reject(new BackupManagerError({
-          code: "retention-plan-stale",
+          // The literal code apps/common/webhost/handlers_retention.go
+          // writes for this refusal, not a fixture-only spelling: a mock
+          // that invents its own vocabulary lets every test pass against
+          // a wire contract the real backend never speaks (issue #96's
+          // review, mandatory finding M2).
+          code: "RETENTION_PLAN_STALE",
           message: "The backup inventory changed after this preview was created.",
           remediation: "No files were deleted. Review the updated retention plan before continuing.",
           correlationId: "cid_stale991"

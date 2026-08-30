@@ -73,7 +73,22 @@ export function RetentionPreviewDialog({
   // retentionPlanStaleNode's own doc (state/appNodes.ts).
   const stale = useCausl(retentionPlanStaleNode);
 
-  const planId = plan.data?.planId;
+  // retentionPlanNode is one process-wide node, and fetchResource
+  // deliberately keeps the previous `data` visible while a new fetch is in
+  // flight (state/resource.ts). Both are right for a list that should not
+  // flicker, and both are wrong for a destructive confirmation: previewing
+  // set A and then opening retention for set B would otherwise render A's
+  // plan id, A's counts and A's verdicts under B's identity, with Continue
+  // live for the whole round trip. So a plan is this dialog's plan only
+  // while nothing is in flight AND it names this dialog's own backup set
+  // — the plan carries backupSetId, so the evidence to refuse is in hand
+  // (issue #96's review, mandatory finding M3). The cost is that the
+  // dialog shows its empty state on every open instead of stale content,
+  // which is the right trade here.
+  const settled = plan.loading ? null : plan.data;
+  const planForThisSet = settled && settled.backupSetId === source + "/" + set ? settled : null;
+
+  const planId = planForThisSet?.planId;
   useEffect(() => {
     // A freshly read plan is, by definition, not stale against itself: seed
     // the graph's own "current revisions" baseline to match it — syncing
@@ -81,10 +96,10 @@ export function RetentionPreviewDialog({
     // an effect is for. Anything that later moves retentionRevisionsNode
     // away from this baseline (a re-preview, or — future wiring — a live
     // poll/push) is what retentionPlanStaleNode actually asserts on.
-    if (plan.data) {
+    if (planForThisSet) {
       commitRetentionRevisions({
-        inventoryRevision: plan.data.inventoryRevision,
-        configRevision: plan.data.configRevision
+        inventoryRevision: planForThisSet.inventoryRevision,
+        configRevision: planForThisSet.configRevision
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,7 +122,7 @@ export function RetentionPreviewDialog({
   // While an apply attempt was refused, the plan detail is hidden until the
   // operator reviews a fresh one — the canvas's State 4. Continue is
   // disabled by `!p` alone; no separate flag needed.
-  const p: RetentionPlan | null = applyError ? null : plan.data;
+  const p: RetentionPlan | null = applyError ? null : planForThisSet;
 
   const keepVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "KEEP") ?? [];
   const refuseVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "REFUSE") ?? [];
@@ -115,9 +130,28 @@ export function RetentionPreviewDialog({
   const lastKnownGood = keepVerdicts.find((v) => v.tiers.includes("LAST_KNOWN_GOOD"));
 
   function handleApply() {
-    if (!plan.data) return;
+    // The gate above only ever disabled the Continue button. Once the
+    // confirmation is open, this handler is the last thing between the
+    // operator and a deletion, and it is exactly the window where the
+    // evidence is most likely to move under it — so both refusals are
+    // re-checked here rather than trusted from render time (issue #96's
+    // review, mandatory finding M7). The server refuses both cases too;
+    // this is what turns that refusal into a sentence the operator can act
+    // on instead of a request that should never have been sent.
+    if (!p) return;
+    if (stale || Date.parse(p.expiresAt) <= Date.now()) {
+      setConfirming(false);
+      setApplyError({
+        code: "RETENTION_PLAN_STALE",
+        message: "This retention plan is no longer current.",
+        remediation:
+          "No files were deleted. Review the updated retention plan before continuing.",
+        correlationId: "unavailable"
+      });
+      return;
+    }
     api
-      .applyRetention(source, set, plan.data.planId)
+      .applyRetention(source, set, p.planId)
       .then(() => {
         setConfirming(false);
         onClose();
@@ -154,12 +188,12 @@ export function RetentionPreviewDialog({
               <WarningBanner
                 tone="danger"
                 title={
-                  applyError.code === "retention-plan-stale"
+                  applyError.code === "RETENTION_PLAN_STALE"
                     ? "Retention plan rejected — nothing was deleted"
                     : "Could not apply retention"
                 }
                 actions={
-                  applyError.code === "retention-plan-stale" ? (
+                  applyError.code === "RETENTION_PLAN_STALE" ? (
                     <button
                       className="btn btn--sm"
                       onClick={() => {

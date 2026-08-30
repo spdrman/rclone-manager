@@ -1,7 +1,6 @@
-import { BackupManagerError } from "./contracts";
+import { BackupManagerError, toApiErrorCode } from "./contracts";
 import type {
   ApiError,
-  ApiErrorCode,
   BackupManagerApi,
   ConnectionTestOutcome,
   ConnectionTestParams,
@@ -97,13 +96,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       if (nested && typeof nested === "object") {
         const err = nested as Record<string, unknown>;
         api = {
-          code: err.code as ApiErrorCode,
+          code: toApiErrorCode(err.code),
           message: err.message as string,
           correlationId: headerCorrelationId ?? "unavailable"
         };
       } else {
         api = {
-          code: body.code as ApiErrorCode,
+          code: toApiErrorCode(body.code),
           message: body.message as string,
           correlationId: (body.correlationId as string) ?? headerCorrelationId ?? "unavailable"
         };
