@@ -85,6 +85,15 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
 		r.Get("/operations/{id}", h.getOperation)
+
+		// Preview is read-only (docs/EPIC-B-multi-nas.md §50 lists "preview
+		// retention" under Read-only/low risk) so it carries neither
+		// requireCSRF nor requireDestructiveGate, exactly like GET
+		// /operations/{id} above. Apply is the one route in this whole
+		// package that can delete local restore points, so it carries
+		// both, exactly like POST /operations.
+		r.Get("/backup-sets/{source}/{set}/retention/preview", h.previewRetention)
+		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/backup-sets/{source}/{set}/retention/apply", h.applyRetention)
 	})
 
 	return r

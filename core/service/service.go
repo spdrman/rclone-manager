@@ -101,6 +101,17 @@ type BackupService struct {
 	// method's own doc for why a second submission while this is held is
 	// rejected rather than queued.
 	runOnce sync.Mutex
+
+	// retentionMu guards retentionPlans (retention.go): every previewed
+	// retention plan this BackupService currently holds, keyed by its own
+	// plan_id, until ApplyRetentionPlan consumes it (applied, found stale,
+	// or expired) or it is simply never applied at all. This is
+	// deliberately an in-memory, non-durable store, unlike the operations
+	// table: a preview carries its own expires_at precisely so nothing
+	// needs to survive a restart — see retention.go's own doc for what IS
+	// durable (the apply itself, once confirmed).
+	retentionMu    sync.Mutex
+	retentionPlans map[string]retentionPlanRecord
 }
 
 // New builds a BackupService from already-constructed dependencies. This
@@ -125,13 +136,14 @@ type BackupService struct {
 func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, logger *obs.Logger) *BackupService {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &BackupService{
-		inner:        app.New(cfg, journal, tr, logger),
-		journal:      journal,
-		revision:     computeConfigRevision(cfg),
-		logger:       logger,
-		pollInterval: cfg.PollInterval.Duration(),
-		ctx:          ctx,
-		cancel:       cancel,
+		inner:          app.New(cfg, journal, tr, logger),
+		journal:        journal,
+		revision:       computeConfigRevision(cfg),
+		logger:         logger,
+		pollInterval:   cfg.PollInterval.Duration(),
+		ctx:            ctx,
+		cancel:         cancel,
+		retentionPlans: make(map[string]retentionPlanRecord),
 	}
 
 	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {

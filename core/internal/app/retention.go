@@ -23,22 +23,21 @@ type RetentionSetReport struct {
 // via internal/retention.DecideKeep, against a freshly-loaded snapshot of
 // the journal.
 //
-// # This is a preview, on purpose, for both `retention` and `retention --dry-run`
+// # A preview of classification, not of deletion safety
 //
-// FR-20, "Local Deletion Safety" (the actual, positively-identified,
-// symlink-and-traversal-safe local file removal FR-18/FR-19's verdicts
-// would drive), is issue #21, open and being worked at the time this
-// package was written. internal/retention itself contains no delete
-// function at all yet: GFSDecide, LastKnownGoodDecide and DecideKeep only
-// ever classify, they never touch a filesystem. So RetentionPreview is,
-// today, the whole of what `backup-manager retention` and `backup-manager
-// retention --dry-run` can honestly do: report what GFS ∪ last-known-good
-// would keep or not keep, identically under either flag, with no actual
-// deletion happening in either case. cmd/backup-manager's retention command
-// says this explicitly rather than let the absence of `--dry-run` imply a
-// destructive action this package does not, and must not, perform on its
-// own (see this package's introducing PR description for the precise
-// wiring FR-20 will need once issue #21 lands).
+// This method reports GFS ∪ last-known-good only: the same DecideKeep this
+// package's own doc says it deliberately never went further than. FR-20,
+// "Local Deletion Safety" (the actual, positively-identified, symlink-
+// and-traversal-safe local file removal FR-18/FR-19's verdicts would
+// drive) landed in internal/retention/prune.go under issue #21, and this
+// package's own PrunePreview/PruneApply (prune.go, issue #96/B3.1) are
+// what actually call into it — see that file's own doc for why it exists
+// as a sibling to this method rather than a replacement for it:
+// RetentionPreview's classification-only report is still what
+// cmd/backup-manager's `retention`/`retention --dry-run` commands render
+// today (see that command's own note on the CLI still not calling
+// PruneApply for a real, non-dry-run invocation, a separate, narrower gap
+// than this doc comment's own past staleness was).
 func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (RetentionSetReport, error) {
 	records, err := s.Journal.ListByBackupSet(ctx, set)
 	if err != nil {
