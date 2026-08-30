@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -339,5 +340,204 @@ func TestEvaluateAlerts_UnreadableJournalDoesNotResetDeduplication(t *testing.T)
 
 	if got := sink.countOf(alert.StaleBackup); got != 1 {
 		t.Fatalf("stale alerts = %d, want still exactly 1: a pass that could not read the journal must not reset de-duplication", got)
+	}
+}
+
+// TestEvaluateAlerts_UnreadableFreeSpaceDoesNotResolveTheStorageAlert is
+// the storage half of "a pass that could not look is not a pass that
+// looked and saw nothing". BuildHealthReport leaves FreeBytes nil exactly
+// when capacity.StatPath failed, which is what an unmounted volume or a
+// bind mount that disappeared looks like: the one incident an operator
+// most needs telling about must not silently resolve the disk-full alert
+// and re-fire it when the mount comes back.
+func TestEvaluateAlerts_UnreadableFreeSpaceDoesNotResolveTheStorageAlert(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+
+	svc := New(alertingConfig(t, testSource("production", bs)), openJournal(t), newFakeTransport(), nil)
+	svc.Now = fixedNow(epoch)
+	svc.Capacity = capacity.Thresholds{
+		WarningFreeBytes:  1 << 62,
+		CriticalFreeBytes: 1 << 62,
+	}
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	svc.AlertTick(context.Background())
+	if got := sink.countOf(alert.CriticalStoragePressure); got != 1 {
+		t.Fatalf("critical-storage alerts = %d after the first pass, want 1", got)
+	}
+
+	// The volume goes away, so statfs fails and this pass knows nothing
+	// about that backup set's free space.
+	if err := os.RemoveAll(localDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	svc.AlertTick(context.Background())
+
+	// And it comes back, still critically low.
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	svc.AlertTick(context.Background())
+
+	if got := sink.countOf(alert.CriticalStoragePressure); got != 1 {
+		t.Fatalf("critical-storage alerts = %d, want still exactly 1: a pass that could not read the disk must not resolve the condition", got)
+	}
+
+	// Positive control for that 1. The same service, sink and condition
+	// DO produce a second alert once a pass that COULD look reports the
+	// pressure gone and it later returns, so "still 1" above is the
+	// de-duplication holding, not alerting having quietly stopped.
+	svc.Capacity = capacity.Thresholds{}
+	svc.AlertTick(context.Background())
+	svc.Capacity = capacity.Thresholds{WarningFreeBytes: 1 << 62, CriticalFreeBytes: 1 << 62}
+	svc.AlertTick(context.Background())
+
+	if got := sink.countOf(alert.CriticalStoragePressure); got != 2 {
+		t.Fatalf("critical-storage alerts = %d, want 2: a genuinely resolved condition that recurs is a fresh alert", got)
+	}
+}
+
+// TestRunCycle_HostKeyAlertSurvivesAPassThatCouldNotCheckIt is the
+// host-key half of the same principle, and it is stricter than the
+// others: §77 invariant #5 says re-trusting a changed key takes an
+// explicit administrator action, so this condition never resolves on its
+// own. A cycle where the set failed for an unrelated reason, or never ran
+// at all, is not evidence the key verifies again.
+func TestRunCycle_HostKeyAlertSurvivesAPassThatCouldNotCheckIt(t *testing.T) {
+	bs := testBackupSet(t, t.TempDir())
+
+	refusal := transport.NewError(transport.HostVerification, "list",
+		errors.New("knownhosts: key mismatch"))
+	tr := newFakeTransport()
+	tr.failForSourceID = bs.ID.String()
+	tr.failErr = refusal
+
+	svc := New(alertingConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	svc.RunCycle(context.Background())
+	if got := sink.countOf(alert.HostKeyChanged); got != 1 {
+		t.Fatalf("host-key alerts = %d after the refusal, want 1", got)
+	}
+
+	// A cycle that fails for an unrelated reason says nothing about the
+	// host key: it never got far enough to check one. Neither does a pass
+	// with no cycle behind it at all.
+	tr.failErr = transport.NewError(transport.PermissionDenied, "list", errors.New("permission denied"))
+	svc.RunCycle(context.Background())
+	svc.AlertTick(context.Background())
+
+	// The mismatch is still there, and still the same unresolved one: if
+	// either pass above had been read as the key verifying again, this is
+	// where the second alert would land.
+	tr.failErr = refusal
+	svc.RunCycle(context.Background())
+
+	if got := sink.countOf(alert.HostKeyChanged); got != 1 {
+		t.Fatalf("host-key alerts = %d, want still exactly 1: absence of the refusal is not evidence the key was re-trusted", got)
+	}
+
+	// Positive control: a cycle that completes IS that evidence, so the
+	// condition resolves, and a later mismatch is a fresh alert.
+	tr.failForSourceID = ""
+	tr.failErr = nil
+	svc.RunCycle(context.Background())
+
+	tr.failForSourceID = bs.ID.String()
+	tr.failErr = refusal
+	svc.RunCycle(context.Background())
+
+	if got := sink.countOf(alert.HostKeyChanged); got != 2 {
+		t.Fatalf("host-key alerts = %d, want 2: a key that verified and then changed again is a fresh alert", got)
+	}
+}
+
+// TestRunCycle_ShippedCapacityDefaultsFireNoStorageAlert pins what a
+// production deployment actually does today. Service.Capacity is not
+// configurable yet (there is no warning_free_bytes / critical_free_bytes
+// key in internal/config, FR-21's threshold wiring is still open), so
+// every shipped binary runs the zero value, and with all-zero thresholds
+// capacity.AssessCurrent reaches Critical only when the filesystem
+// reports no available bytes at all. This is that fact under test rather
+// than assumed, so nobody reads the storage alert's own test as evidence
+// it can fire in production.
+func TestRunCycle_ShippedCapacityDefaultsFireNoStorageAlert(t *testing.T) {
+	bs := testBackupSet(t, t.TempDir())
+
+	svc := New(alertingConfig(t, testSource("production", bs)), openJournal(t), newFakeTransport(), nil)
+	svc.Now = fixedNow(epoch)
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	svc.RunCycle(context.Background())
+	svc.RunCycle(context.Background())
+
+	if got := sink.countOf(alert.CriticalStoragePressure); got != 0 {
+		t.Fatalf("critical-storage alerts = %d on an ordinary filesystem with the shipped thresholds, want 0", got)
+	}
+
+	// Positive control: the same service and sink DO alert once the
+	// thresholds are set to something no filesystem can satisfy, so the
+	// zero above is the thresholds, not a broken harness.
+	svc.Capacity = capacity.Thresholds{WarningFreeBytes: 1 << 62, CriticalFreeBytes: 1 << 62}
+	svc.RunCycle(context.Background())
+
+	if got := sink.countOf(alert.CriticalStoragePressure); got != 1 {
+		t.Fatalf("critical-storage alerts = %d with thresholds no filesystem can satisfy, want 1", got)
+	}
+}
+
+// TestAlertTick_FiresWithoutACycle is the mechanism behind §76 invariant
+// 11, "process liveness is not evidence of backup freshness": the stale
+// alert exists for a daemon that is up and not producing backups, so it
+// cannot be reachable only from the end of a cycle that completed.
+func TestAlertTick_FiresWithoutACycle(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.StaleAfter = mustParseDuration(t, "1h")
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload", epoch.Unix())
+
+	svc := New(alertingConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	sink := &recordingSink{}
+	if !svc.EnableAlerts(sink) {
+		t.Fatal("EnableAlerts returned false for a config that opted in")
+	}
+
+	// One good cycle, so the set has history to go stale from, and then
+	// no cycle ever completes again.
+	svc.RunCycle(context.Background())
+	svc.Now = fixedNow(epoch.Add(48 * time.Hour))
+
+	svc.AlertTick(context.Background())
+
+	if got := sink.countOf(alert.StaleBackup); got != 1 {
+		t.Fatalf("stale alerts = %d from an out-of-cycle pass, want 1 (all: %v)", got, sink.kinds())
+	}
+
+	// And it is still one mechanism: the out-of-cycle pass de-duplicates
+	// against the in-cycle one rather than alerting twice about the same
+	// unresolved condition.
+	svc.RunCycle(context.Background())
+	svc.AlertTick(context.Background())
+
+	if got := sink.countOf(alert.StaleBackup); got != 1 {
+		t.Fatalf("stale alerts = %d, want still exactly 1 across an in-cycle and an out-of-cycle pass", got)
 	}
 }

@@ -49,9 +49,15 @@ type Alert struct {
 // other side of this boundary.
 //
 // A sink must return an error rather than silently dropping a
-// notification it could not deliver. The dispatcher logs that failure and
-// does not retry it, so a swallowed error would leave nobody, operator or
-// log, any the wiser.
+// notification it could not deliver. That error is the only thing
+// standing between a notification channel that is down and permanent
+// silence: the dispatcher logs it and retries the condition on a later
+// pass, rate-limited, so a swallowed error would instead mark the
+// condition delivered and leave nobody, operator or log, any the wiser.
+//
+// A sink does not need a timeout of its own. The dispatcher gives every
+// delivery a deadline and calls it holding no lock, so a slow notifier
+// costs one slow alerting pass rather than a stalled backup cycle.
 type AlertSink interface {
 	DeliverAlert(ctx context.Context, a Alert) error
 }
@@ -68,11 +74,27 @@ type AlertSink interface {
 // configPath is set after New in Open: the sink comes from the provider
 // app's platform adapter, which core/ cannot name, so only a caller above
 // this package can supply one, and most callers (every core/ test, the
-// CLI) have none at all.
+// CLI) have none at all. It is not safe to call once cycles are running:
+// it writes the wrapped Service's dispatcher, which a running cycle's
+// alerting pass reads.
+//
+// The sink is remembered even when this returns false for a
+// configuration that has not opted in. That is deliberate rather than
+// sloppy: CreateBackupSet re-reads the config file, so an operator who
+// sets alerts.enabled: true and then adds a backup set gets alerting on
+// from that moment, and it can only be turned on from a sink that was
+// kept. "Off" here means no dispatcher exists, never that the mechanism
+// was thrown away.
 func (b *BackupService) EnableAlerts(sink AlertSink) bool {
 	if sink == nil {
 		return false
 	}
+
+	// configMu, because CreateBackupSet reads b.alertSink under it while
+	// deciding what the hot-reloaded Service's alerting should be.
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
 	b.alertSink = sink
 	return b.state.Load().inner.EnableAlerts(sinkAdapter{sink: sink})
 }

@@ -129,11 +129,14 @@ type BackupService struct {
 	configPath string
 
 	// alertSink is the proactive-alert delivery mechanism a provider app
-	// installed through EnableAlerts (alerts.go), or nil when alerting
-	// was never turned on. It is kept here, not only on the wrapped
-	// internal/app.Service, so CreateBackupSet's hot reload can carry
-	// alerting across the swap; it is written once during wiring, before
-	// any goroutine that reads it exists.
+	// installed through EnableAlerts (alerts.go), or nil when none was
+	// ever installed. It is kept here, not only on the wrapped
+	// internal/app.Service, because CreateBackupSet's hot reload re-reads
+	// alerts.enabled from disk and has to be able to turn alerting ON, in
+	// a process that started with it off, without a restart: that needs
+	// the mechanism itself, which the wrapped Service does not hold when
+	// alerting is off. It is written under configMu, which is also the
+	// lock CreateBackupSet reads it under.
 	alertSink AlertSink
 
 	// configMu serializes every call that reads-modifies-writes this

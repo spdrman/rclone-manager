@@ -334,13 +334,25 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// so this read cannot itself race the swap below.
 	prevInner := b.state.Load().inner
 	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	// Carry the already-wired alert dispatcher across the swap rather
-	// than building a fresh one from b.alertSink: the dispatcher holds
+	// Alerting is re-decided from the config file this method just
+	// re-read, then carried across the swap. This is the one moment an
+	// edited alerts.enabled can take effect in a running process, so it
+	// is the one moment it must not be ignored: an administrator who set
+	// alerts.enabled: false and then added a backup set kept getting
+	// notified until the next restart, and one who turned it on stayed
+	// silent, while repeated_failure_threshold from the same block did
+	// hot-reload. AdoptAlerts re-reads the opt-in and carries the
+	// dispatcher only if it is still on, because the dispatcher holds
 	// which conditions are currently firing (internal/alert's
-	// de-duplication state), and rebuilding it would re-alert every
+	// de-duplication state) and rebuilding it would re-alert every
 	// still-unresolved condition the next time a cycle ran, purely
-	// because somebody added a backup set.
-	newInner.Alerts = prevInner.Alerts
+	// because somebody added a backup set. When it declines (alerting was
+	// off before this reload, or has just been turned off), the question
+	// is settled from b.alertSink instead, which is what makes turning
+	// alerting ON take effect here too.
+	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
+		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
+	}
 	newRevision := computeConfigRevision(cfg)
 	b.state.Store(&configState{inner: newInner, revision: newRevision})
 

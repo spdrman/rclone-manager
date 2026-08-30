@@ -43,6 +43,31 @@ order. If the answer is no, the assumption fails and the fallback is
 §71's second option, one explicit opt-in generic mechanism, which is a
 separate work package.
 
+## What this procedure cannot decide yet
+
+Two of the four conditions are not reachable on anything this repository
+ships today, and pretending otherwise would produce a false reject of the
+notification mechanism itself:
+
+- **Every condition, on the generic image.** `apps/generic`'s adapter
+  declares no capability at all, so `notify.NewPlatformSink` refuses it
+  and `backup-manager-web serve` prints "proactive alerting is off" on
+  every start. The §37 headless Docker distribution therefore has no
+  proactive alerting for any of the four conditions, and §71's second
+  option (one explicit opt-in generic mechanism) has not been built. This
+  procedure needs precondition 2, a real UGOS adapter, before any of it
+  can run at all.
+- **Critical storage pressure specifically.** `Service.Capacity` has no
+  configuration wiring: `internal/config` has no `warning_free_bytes`,
+  `critical_free_bytes` or `safety_margin_bytes` key, so every shipped
+  binary runs the zero-value thresholds. With those,
+  `capacity.AssessCurrent` reaches `Critical` only when the filesystem
+  reports no available bytes at all, which is after the point where a
+  warning would have helped. Step 4 below is blocked on FR-21's threshold
+  configuration (see #157) and must not be executed, or marked failed,
+  before it lands. `core/internal/app/alerts_test.go` pins that shipped
+  default so it is a recorded fact rather than a surprise on the day.
+
 ## Preconditions
 
 1. An authorized UGOS Pro NAS. Never someone else's production NAS, and
@@ -103,8 +128,15 @@ notification actually appeared, where, and for whom.
 
 ### 4. Critical storage pressure
 
+> **Blocked, do not execute yet.** There is no `critical_free_bytes` to
+> fill down to: FR-21's thresholds are not configurable, so the shipped
+> value is zero and this condition fires only at literally zero available
+> bytes. Executing the steps below as written produces a false reject of
+> the whole notification mechanism. Run this section once the threshold
+> configuration lands (#157), with step 1 reading the configured value.
+
 1. Fill the destination filesystem (a large sparse file outside the
-   managed backup root) until free space is at or below
+   managed backup root) until free space is at or below the configured
    `critical_free_bytes`.
 2. Wait one poll interval.
 3. Expect: exactly one notification, kind `CRITICAL_STORAGE_PRESSURE`.

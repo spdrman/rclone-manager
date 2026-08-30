@@ -29,6 +29,12 @@ func (s *recordingSink) Deliver(_ context.Context, a alert.Alert) error {
 	return s.err
 }
 
+func (s *recordingSink) setErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
 func (s *recordingSink) count() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,7 +59,7 @@ func TestObserve_StaleTransitionFiresExactlyOneAlert(t *testing.T) {
 	sink := &recordingSink{}
 	d := alert.NewDispatcher(sink, nil)
 
-	fired := d.Observe(context.Background(), []alert.Condition{staleCondition("production/postgres-primary")}, epoch)
+	fired := d.Observe(context.Background(), []alert.Condition{staleCondition("production/postgres-primary")}, nil, epoch)
 	if len(fired) != 1 {
 		t.Fatalf("first pass fired %d alerts, want exactly 1", len(fired))
 	}
@@ -76,7 +82,7 @@ func TestObserve_StaleTransitionFiresExactlyOneAlert(t *testing.T) {
 
 	// Three more passes with the condition still unresolved.
 	for pass := 2; pass <= 4; pass++ {
-		if fired := d.Observe(context.Background(), []alert.Condition{staleCondition("production/postgres-primary")}, epoch.Add(time.Duration(pass)*time.Hour)); len(fired) != 0 {
+		if fired := d.Observe(context.Background(), []alert.Condition{staleCondition("production/postgres-primary")}, nil, epoch.Add(time.Duration(pass)*time.Hour)); len(fired) != 0 {
 			t.Fatalf("pass %d fired %d alerts, want 0: an unresolved condition must not re-alert on every poll", pass, len(fired))
 		}
 	}
@@ -93,9 +99,9 @@ func TestObserve_ResolvedConditionAlertsAgainWhenItRecurs(t *testing.T) {
 	sink := &recordingSink{}
 	d := alert.NewDispatcher(sink, nil)
 
-	d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, epoch)
-	d.Observe(context.Background(), nil, epoch.Add(time.Hour))
-	d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, epoch.Add(2*time.Hour))
+	d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, nil, epoch)
+	d.Observe(context.Background(), nil, nil, epoch.Add(time.Hour))
+	d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, nil, epoch.Add(2*time.Hour))
 
 	if sink.count() != 2 {
 		t.Fatalf("sink received %d alerts, want 2 (fired, resolved, fired again)", sink.count())
@@ -112,7 +118,7 @@ func TestObserve_ScopeIsPartOfTheDeduplicationKey(t *testing.T) {
 	fired := d.Observe(context.Background(), []alert.Condition{
 		staleCondition("production/pg"),
 		staleCondition("production/mysql"),
-	}, epoch)
+	}, nil, epoch)
 
 	if len(fired) != 2 {
 		t.Fatalf("fired %d alerts, want 2: two different backup sets are two different conditions", len(fired))
@@ -128,7 +134,7 @@ func TestObserve_DuplicateConditionsInOnePassFireOnce(t *testing.T) {
 	fired := d.Observe(context.Background(), []alert.Condition{
 		staleCondition("production/pg"),
 		staleCondition("production/pg"),
-	}, epoch)
+	}, nil, epoch)
 
 	if len(fired) != 1 {
 		t.Fatalf("fired %d alerts, want 1", len(fired))
@@ -136,18 +142,213 @@ func TestObserve_DuplicateConditionsInOnePassFireOnce(t *testing.T) {
 }
 
 // TestObserve_DeliveryFailureDoesNotStormOnEveryPass proves a sink that
-// fails (a platform with no notification capability, say) cannot turn one
-// unresolved condition into one delivery attempt per poll.
+// fails (a notification daemon that is down, say) cannot turn one
+// unresolved condition into one delivery attempt per poll: the retry in
+// TestObserve_RetriesAConditionItCouldNotDeliver is rate-limited, not one
+// attempt per pass. Five passes inside the first backoff window is one
+// attempt.
 func TestObserve_DeliveryFailureDoesNotStormOnEveryPass(t *testing.T) {
 	sink := &recordingSink{err: errors.New("capability not supported by this platform adapter")}
 	d := alert.NewDispatcher(sink, nil)
 
 	for pass := 0; pass < 5; pass++ {
-		d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, epoch.Add(time.Duration(pass)*time.Hour))
+		d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, nil, epoch.Add(time.Duration(pass)*time.Second))
 	}
 
 	if sink.count() != 1 {
-		t.Fatalf("sink saw %d delivery attempts, want exactly 1 even though delivery failed", sink.count())
+		t.Fatalf("sink saw %d delivery attempts, want exactly 1: retries are rate limited, not one per poll", sink.count())
+	}
+}
+
+// TestObserve_RetriesAConditionItCouldNotDeliver is M2's contract: a
+// condition is silenced by having been DELIVERED, never by having been
+// seen. A notification daemon that happens to be restarting when a backup
+// set goes stale must not mean nobody is ever told, for as long as the
+// condition lasts.
+func TestObserve_RetriesAConditionItCouldNotDeliver(t *testing.T) {
+	sink := &recordingSink{err: errors.New("notification daemon is restarting")}
+	d := alert.NewDispatcher(sink, nil)
+
+	cond := []alert.Condition{staleCondition("production/pg")}
+
+	if fired := d.Observe(context.Background(), cond, nil, epoch); len(fired) != 0 {
+		t.Fatalf("Observe returned %d alerts, want 0: the return value is what was delivered, and delivery failed", len(fired))
+	}
+	if sink.count() != 1 {
+		t.Fatalf("sink saw %d attempts on the first pass, want 1", sink.count())
+	}
+
+	// The condition is still unresolved, and now the channel is back.
+	sink.setErr(nil)
+	fired := d.Observe(context.Background(), cond, nil, epoch.Add(time.Hour))
+	if len(fired) != 1 {
+		t.Fatalf("Observe returned %d alerts on the retry, want 1: an observed but undelivered condition must be retried", len(fired))
+	}
+	if sink.count() != 2 {
+		t.Fatalf("sink saw %d attempts, want 2", sink.count())
+	}
+
+	// Delivered is delivered: no further attempts while it stays true.
+	d.Observe(context.Background(), cond, nil, epoch.Add(2*time.Hour))
+	d.Observe(context.Background(), cond, nil, epoch.Add(3*time.Hour))
+	if sink.count() != 2 {
+		t.Fatalf("sink saw %d attempts, want still 2 once the alert was delivered", sink.count())
+	}
+}
+
+// TestObserve_UnevaluatedConditionIsNeitherResolvedNorReAlerted is M3's
+// contract at this package's own boundary: a pass that could not evaluate
+// a condition says so, and that is a third answer, not a quiet "it is
+// fine now".
+func TestObserve_UnevaluatedConditionIsNeitherResolvedNorReAlerted(t *testing.T) {
+	sink := &recordingSink{}
+	d := alert.NewDispatcher(sink, nil)
+
+	cond := staleCondition("production/pg")
+	d.Observe(context.Background(), []alert.Condition{cond}, nil, epoch)
+	if sink.count() != 1 {
+		t.Fatalf("sink saw %d alerts on the first pass, want 1", sink.count())
+	}
+
+	// Two passes that could not look at this condition at all.
+	unknown := []alert.Subject{cond.Subject()}
+	d.Observe(context.Background(), nil, unknown, epoch.Add(time.Hour))
+	d.Observe(context.Background(), nil, unknown, epoch.Add(2*time.Hour))
+
+	// And then it can look again, and it is still true.
+	d.Observe(context.Background(), []alert.Condition{cond}, nil, epoch.Add(3*time.Hour))
+	if sink.count() != 1 {
+		t.Fatalf("sink saw %d alerts, want still 1: a pass that could not look must not resolve a condition", sink.count())
+	}
+
+	// Positive control for that 1: the same dispatcher, sink and condition
+	// DO produce a second alert when a pass that COULD look reports the
+	// condition gone and it later comes back. Without this, "still 1"
+	// would also be what a dispatcher that had stopped alerting entirely
+	// would print.
+	d.Observe(context.Background(), nil, nil, epoch.Add(4*time.Hour))
+	d.Observe(context.Background(), []alert.Condition{cond}, nil, epoch.Add(5*time.Hour))
+	if sink.count() != 2 {
+		t.Fatalf("sink saw %d alerts, want 2: a genuinely resolved condition that recurs is a fresh alert", sink.count())
+	}
+}
+
+// blockingSink hangs on the one scope it was told to hang on, and
+// delivers everything else immediately, so a test can watch what the
+// dispatcher does for OTHER conditions while one notification is stuck.
+type blockingSink struct {
+	blockScope string
+	entered    chan struct{}
+	release    chan struct{}
+	deadline   chan time.Time
+}
+
+func newBlockingSink(blockScope string) *blockingSink {
+	return &blockingSink{
+		blockScope: blockScope,
+		entered:    make(chan struct{}, 8),
+		release:    make(chan struct{}),
+		deadline:   make(chan time.Time, 8),
+	}
+}
+
+func (s *blockingSink) Deliver(ctx context.Context, a alert.Alert) error {
+	deadline, _ := ctx.Deadline()
+	s.deadline <- deadline
+
+	if a.Scope != s.blockScope {
+		return nil
+	}
+	s.entered <- struct{}{}
+	<-s.release
+	return nil
+}
+
+// TestObserve_DoesNotHoldItsLockWhileASinkRuns is M4's contract. The
+// alerting pass is the last step of a backup cycle, so a notifier that
+// hangs under the dispatcher's own lock stops the daemon making backup
+// progress. A second pass must be able to complete while the first one's
+// delivery is still in flight.
+func TestObserve_DoesNotHoldItsLockWhileASinkRuns(t *testing.T) {
+	sink := newBlockingSink("production/pg")
+	d := alert.NewDispatcher(sink, nil)
+
+	go d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, nil, epoch)
+
+	select {
+	case <-sink.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sink was never called")
+	}
+
+	// The sink is now hung inside Deliver. A second, unrelated pass must
+	// still complete.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.Observe(context.Background(), []alert.Condition{staleCondition("production/mysql")}, nil, epoch)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second Observe blocked behind a hung sink: the dispatcher is holding its lock across delivery")
+	}
+
+	close(sink.release)
+}
+
+// TestObserve_BoundsEveryDeliveryWithADeadline proves the dispatcher
+// supplies the bound the Sink contract does not ask for. Without it,
+// "does not hold the lock" only moves the stall from the dispatcher to
+// the cycle: a sink with no timeout of its own hangs the pass either way.
+func TestObserve_BoundsEveryDeliveryWithADeadline(t *testing.T) {
+	sink := newBlockingSink("production/pg")
+	d := alert.NewDispatcher(sink, nil)
+
+	go d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, nil, epoch)
+
+	var deadline time.Time
+	select {
+	case deadline = <-sink.deadline:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sink was never called")
+	}
+	close(sink.release)
+
+	if deadline.IsZero() {
+		t.Fatal("the context handed to the sink has no deadline: a hung notifier would stall the pass forever")
+	}
+	if remaining := time.Until(deadline); remaining > 2*time.Minute {
+		t.Fatalf("the delivery deadline is %s away, want a bound short against a poll interval", remaining)
+	}
+}
+
+// TestObserve_ConcurrentPassesOverTheSameConditionFireOnce asserts the
+// mutual exclusion this type documents, which nothing exercised before:
+// two passes racing over overlapping conditions must still produce
+// exactly one alert per condition, not one per pass.
+func TestObserve_ConcurrentPassesOverTheSameConditionFireOnce(t *testing.T) {
+	sink := &recordingSink{}
+	d := alert.NewDispatcher(sink, nil)
+
+	conditions := []alert.Condition{
+		staleCondition("production/pg"),
+		staleCondition("production/mysql"),
+	}
+
+	var wg sync.WaitGroup
+	for pass := 0; pass < 8; pass++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.Observe(context.Background(), conditions, nil, epoch)
+		}()
+	}
+	wg.Wait()
+
+	if sink.count() != 2 {
+		t.Fatalf("sink saw %d alerts across 8 concurrent passes, want exactly 2 (one per condition)", sink.count())
 	}
 }
 
@@ -160,7 +361,7 @@ func TestNewDispatcher_WithoutASinkIsInertRatherThanPanicking(t *testing.T) {
 	if d != nil {
 		t.Fatalf("NewDispatcher(nil, nil) = %v, want nil: there is no mechanism to deliver through", d)
 	}
-	if fired := d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, epoch); fired != nil {
+	if fired := d.Observe(context.Background(), []alert.Condition{staleCondition("production/pg")}, nil, epoch); fired != nil {
 		t.Fatalf("(*Dispatcher)(nil).Observe fired %v, want nothing", fired)
 	}
 }

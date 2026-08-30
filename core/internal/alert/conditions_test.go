@@ -208,7 +208,7 @@ func TestAlertsCarryNoTimestampOfTheirOwn(t *testing.T) {
 	d := alert.NewDispatcher(sink, nil)
 	at := time.Date(2031, 1, 2, 3, 4, 5, 0, time.UTC)
 
-	d.Observe(context.Background(), alert.StorageConditions("production/pg", capacity.Assessment{Level: capacity.Critical}), at)
+	d.Observe(context.Background(), alert.StorageConditions("production/pg", capacity.Assessment{Level: capacity.Critical}), nil, at)
 
 	if sink.count() != 1 {
 		t.Fatalf("sink received %d alerts, want 1", sink.count())

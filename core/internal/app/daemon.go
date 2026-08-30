@@ -50,6 +50,20 @@ func (s *Service) Daemon(ctx context.Context, interval time.Duration) error {
 	s.logger().Event(ctx, obs.LevelInfo, "daemon_start", "daemon starting",
 		slog.Duration("poll_interval", interval))
 
+	// Work Package 3.5's alerting pass also runs on its own timer, beside
+	// the cycle loop rather than inside it (see AlertTick). A cycle that
+	// wedges on one slow transfer never reaches the pass at its end, and
+	// "the daemon is up but producing nothing" is the exact situation the
+	// stale alert exists to report, so it cannot be the situation that
+	// silences it. This goroutine stops when ctx does, and the deferred
+	// receive below keeps Daemon from returning while it is still running.
+	alertsStopped := make(chan struct{})
+	go func() {
+		defer close(alertsStopped)
+		s.runAlertTicks(ctx, interval)
+	}()
+	defer func() { <-alertsStopped }()
+
 	for {
 		s.RunCycle(ctx)
 
