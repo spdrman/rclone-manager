@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -239,6 +240,61 @@ func TestRebuildCatalog_ReportsManifestErrorsWithoutAbortingOthers(t *testing.T)
 	}
 	if len(report.Errors) != 1 || report.Errors[0].Path != corruptPath {
 		t.Fatalf("Errors = %+v, want exactly one for %s", report.Errors, corruptPath)
+	}
+}
+
+// TestRebuildCatalog_ManifestFromWrongBackupSet_ReportsErrorWithoutWritingRow
+// exercises catalog.go's FR-7 backup-set isolation guard: a sidecar
+// manifest sitting inside one backup set's LocalPath but declaring a
+// different backup set's identity, the shape a manifest hand-placed or
+// copied there by operator error or a bad restore/migration would take,
+// must be rejected into report.Errors rather than silently reconstructed
+// into the wrong backup set's catalog, and must leave no journal row
+// behind for it.
+func TestRebuildCatalog_ManifestFromWrongBackupSet_ReportsErrorWithoutWritingRow(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	cfg := testConfig(t, testSource("production", bs))
+
+	journal := openJournal(t)
+	svc := New(cfg, journal, nil, nil)
+
+	wrongSet := mustSetID(t, "production", "other-set")
+	m := recovery.Manifest{
+		FormatVersion:      recovery.CurrentFormatVersion,
+		Source:             wrongSet.Source,
+		BackupSet:          wrongSet.Set,
+		ArtifactName:       "misplaced.dump",
+		RemotePath:         "/backups/misplaced.dump",
+		ReceivedTimestamp:  epoch,
+		RetentionTimestamp: epoch,
+		SizeBytes:          123,
+	}
+	if err := recovery.WriteManifest(localDir, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	ctx := context.Background()
+	report, err := svc.RebuildCatalog(ctx, bs.ID, false)
+	if err != nil {
+		t.Fatalf("RebuildCatalog: %v", err)
+	}
+	if len(report.Findings) != 0 {
+		t.Fatalf("Findings = %+v, want none (a wrong-set manifest must never be reconstructed)", report.Findings)
+	}
+
+	wantPath := recovery.ManifestPath(localDir, "misplaced.dump")
+	wantErr := fmt.Sprintf("recovery: manifest declares backup set %s, expected %s", wrongSet, bs.ID)
+	if len(report.Errors) != 1 || report.Errors[0].Path != wantPath || report.Errors[0].Err.Error() != wantErr {
+		t.Fatalf("Errors = %+v, want exactly one {Path: %s, Err: %q}", report.Errors, wantPath, wantErr)
+	}
+
+	misplaced, err := model.NewArtifactID(wrongSet, "misplaced.dump")
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	if _, err := journal.Get(ctx, misplaced); !errors.Is(err, state.ErrArtifactNotFound) {
+		t.Errorf("journal row for misplaced artifact after FR-7 rejection: err=%v, want ErrArtifactNotFound (no row must be written)", err)
 	}
 }
 
