@@ -140,23 +140,45 @@ export function DashboardPage({
         <div className="card__header">
           <h2 className="eyebrow">Active operations</h2>
           <span style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
-            {(operations.data?.length ?? 0) + " running"}
+            {operations.data ? operations.data.length + " running" : "…"}
           </span>
         </div>
-        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 20 }}>
-          {operations.data?.length
-            ? operations.data.map((op, i) => (
-                <div
-                  key={op.id}
-                  style={{
-                    paddingTop: i === 0 ? 0 : 18,
-                    borderTop: i === 0 ? undefined : "1px solid var(--border)"
-                  }}
-                >
-                  <OperationProgress operation={op} />
+        <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* operations.data is null until the first fetch resolves — that is
+              "not known yet", not "zero", so it must not fall into the
+              "Nothing running right now." branch below (mandatory review,
+              PR #143). A failed fetch gets its own small inline notice
+              rather than the page's full-page ErrorState, since operations
+              is a secondary resource here (health owns that treatment via
+              the early return above) and a stale-but-known operations list
+              should stay visible under the notice rather than being
+              replaced by it. */}
+          {operations.error ? (
+            <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+              Live operation status is unavailable ({operations.error.message}).
+            </div>
+          ) : null}
+          {operations.data === null
+            ? (operations.error
+                ? null
+                : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking for active operations…</p>)
+            : operations.data.length
+              ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                  {operations.data.map((op, i) => (
+                    <div
+                      key={op.id}
+                      style={{
+                        paddingTop: i === 0 ? 0 : 18,
+                        borderTop: i === 0 ? undefined : "1px solid var(--border)"
+                      }}
+                    >
+                      <OperationProgress operation={op} />
+                    </div>
+                  ))}
                 </div>
-              ))
-            : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Nothing running right now.</p>}
+              )
+              : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Nothing running right now.</p>}
         </div>
       </section>
 

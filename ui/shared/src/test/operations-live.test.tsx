@@ -116,8 +116,16 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
     await act(async () => {});
 
     const region = screen.getByRole("region", { name: "Active operations" });
-    expect(within(region).getByText("0 running")).toBeTruthy();
-    expect(within(region).getByText("Nothing running right now.")).toBeTruthy();
+    // operationsNode has never been fetched here (App.tsx owns that fetch,
+    // and this test never renders App), so it is genuinely still in its
+    // initial {data: null, loading: true} state — "not known yet", not
+    // "zero". Mandatory review, PR #143: this must render as a loading
+    // placeholder, never as a confident "0 running" / "Nothing running
+    // right now." (which is what the pre-fix code rendered here, and what
+    // this test used to assert as if it were correct).
+    expect(within(region).queryByText("0 running")).toBeNull();
+    expect(within(region).queryByText("Nothing running right now.")).toBeNull();
+    expect(within(region).getByText("Checking for active operations…")).toBeTruthy();
 
     act(() => {
       graph.commit("test/seed-operation", (tx) =>
@@ -168,5 +176,63 @@ describe("operationsNode: live progress without a per-page re-fetch", () => {
     // BackupSetCard renders currentOperation as `${label.toLowerCase()} ${percent}%`.
     expect(screen.getByText("transferring backup 42%")).toBeTruthy();
     expect(listOperations).not.toHaveBeenCalled();
+  });
+
+  /** Mandatory-review item-1's other half: operations.error must not be
+   *  silently swallowed. Before this fix, DashboardPage and BackupSetsPage
+   *  only ever destructured `.data` off operationsNode, so a failed
+   *  App.tsx fetch left both pages showing the exact same "nothing
+   *  running" / "idle" copy a genuinely healthy zero-operations state
+   *  shows — indistinguishable from "we don't actually know". */
+  it("surfaces an operationsNode fetch failure as an inline notice, on both pages, instead of a confident empty state", async () => {
+    const api = { ...createMockApi(), listActivity: () => Promise.resolve([]) };
+    const opsError = {
+      code: "unknown" as const,
+      message: "Backup Manager could not complete that request.",
+      correlationId: "test-correlation-id"
+    };
+
+    act(() => {
+      graph.commit("test/seed-operations-error", (tx) =>
+        tx.set(operationsNode, { data: null, error: opsError, loading: false })
+      );
+    });
+
+    render(
+      <MemoryRouter>
+        <ApiProvider api={api}>
+          <DashboardPage health={healthState()} sets={setsState()} readOnly={false} />
+          <BackupSetsPage sets={setsState()} readOnly={false} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
+    const dashboardOps = screen.getByRole("region", { name: "Active operations" });
+    expect(within(dashboardOps).getByText(/Live operation status is unavailable/)).toBeTruthy();
+    expect(within(dashboardOps).queryByText("Nothing running right now.")).toBeNull();
+    expect(within(dashboardOps).queryByText("Checking for active operations…")).toBeNull();
+
+    // Same failure, surfaced on BackupSetsPage too — not just Dashboard.
+    expect(screen.getAllByText(/Live operation status is unavailable/).length).toBeGreaterThan(0);
+  });
+
+  it("BackupSetsPage marks a set's current-operation badge as still checking, not idle, while operationsNode has never resolved", async () => {
+    // operationsNode is left at its untouched initial state
+    // ({data: null, error: null, loading: true}) — exactly what a fresh
+    // mount looks like before App.tsx's first fetch has resolved.
+    const api = { ...createMockApi(), listActivity: () => Promise.resolve([]) };
+
+    render(
+      <MemoryRouter>
+        <ApiProvider api={api}>
+          <BackupSetsPage sets={setsState()} readOnly={false} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
+    expect(screen.getByText("checking…")).toBeTruthy();
+    expect(screen.queryByText("idle")).toBeNull();
   });
 });
