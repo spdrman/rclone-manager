@@ -155,4 +155,31 @@ test.describe("add backup set wizard", () => {
     await page.getByRole("button", { name: /Cancel and return to backup sets/ }).click();
     await expect(bm.heading("Backup sets")).toBeVisible();
   });
+
+  test("a hostname typed in step 1 shows up in the review step, not the built-in example", async ({ page }) => {
+    const host = page.getByLabel("Server hostname");
+    await host.fill("warehouse-nas.internal");
+
+    await page.getByRole("button", { name: "Review" }).click();
+    await expect(page.getByText("warehouse-nas.internal")).toBeVisible();
+    await expect(page.getByText("prod-db-01.internal")).toHaveCount(0);
+  });
+
+  test("importing a key never leaves the pasted material on screen", async ({ page }) => {
+    await page.getByRole("button", { name: "Authentication" }).click();
+    await page.getByRole("radio", { name: /Import key/ }).click();
+
+    // Synthetic fixture only — never a real key.
+    const fixtureKey = "FAKE-TEST-KEY-MATERIAL-not-a-real-key-0123456789";
+    const textarea = page.getByLabel(/private key/i);
+    await textarea.fill(fixtureKey);
+
+    const importBtn = page.getByRole("button", { name: "Import key" });
+    await expect(importBtn).toBeEnabled();
+    await importBtn.click();
+
+    await expect(page.getByText(/key imported/i)).toBeVisible();
+    await expect(page.getByLabel(/private key/i)).toHaveCount(0);
+    expect(await page.locator("body").innerText()).not.toContain(fixtureKey);
+  });
 });
