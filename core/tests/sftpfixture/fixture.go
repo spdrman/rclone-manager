@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
+	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
 
 // User is the fixed username created inside the container.
@@ -121,12 +122,17 @@ func Start(t *testing.T) *Fixture {
 	// separation above: a quiet run has nothing to accidentally mix into the
 	// container ID even if some future docker version starts writing
 	// something else to stdout during "run".
+	// Reclaim anything a previously KILLED run left behind (#150) before
+	// adding one more. Once per test binary, best effort, never fatal.
+	dockerlease.Sweep()
+
 	if _, err := dockerCapture(t, "pull", "atmoz/sftp:alpine"); err != nil {
 		t.Fatalf("sftpfixture: docker pull atmoz/sftp:alpine: %v", err)
 	}
 
 	args := []string{
 		"run", "-d", "--name", name,
+		dockerlease.LabelFlag, dockerlease.LabelSpec,
 		"-p", "127.0.0.1::22",
 		"-v", hostKeyEd25519 + ":/etc/ssh/ssh_host_ed25519_key:ro",
 		"-v", hostKeyEd25519 + ".pub:/etc/ssh/ssh_host_ed25519_key.pub:ro",

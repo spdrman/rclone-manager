@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -537,12 +539,15 @@ func containerNameFor(t *testing.T, label string) string {
 // fully release its port.
 func startFixtureContainer(t *testing.T, image string, hostPort int, label string) (containerID, hostKeyLine string) {
 	t.Helper()
+	// Reclaim anything a previously KILLED run left behind (#150).
+	dockerlease.Sweep()
 	name := containerNameFor(t, label)
 
 	var out []byte
 	var err error
 	for attempt := 0; attempt < 10; attempt++ {
 		cmd := exec.Command("docker", "run", "-d", "--name", name,
+			dockerlease.LabelFlag, dockerlease.LabelSpec,
 			"-p", fmt.Sprintf("127.0.0.1:%d:22", hostPort), image)
 		out, err = cmd.CombinedOutput()
 		if err == nil {
