@@ -89,10 +89,16 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 // inline, at the top level) plus, only when the request's
 // RunImmediately was set and honoured, the run_cycle Operation it kicked
 // off — the same shape POST /api/v1/operations already returns for one,
-// so a client parses it identically either way.
+// so a client parses it identically either way. RunError is the mandatory
+// review's M6 fix (PR #155): set only when the backup set itself was
+// created successfully but its requested immediate run failed to start —
+// still a 201 (the resource this route creates DOES exist now), never
+// alongside Operation (at most one of the two is ever non-empty, mirroring
+// service.Operation's own Result/Error convention).
 type createBackupSetResponse struct {
 	backupSetResponse
 	Operation *operationResponse `json:"operation,omitempty"`
+	RunError  string             `json:"run_error,omitempty"`
 }
 
 // listBackupSetsResponse is GET /api/v1/backup-sets' body: an object
@@ -108,15 +114,35 @@ type listBackupSetsResponse struct {
 // create-backup-set endpoint, the write path the wizard's three Save
 // buttons call. State-changing but non-destructive
 // (docs/EPIC-B-multi-nas.md §50: "create/edit backup set"), so it is
-// CSRF-protected (router.go) but not gated behind the destructive-ops
-// gate (gate.go) — creating a backup set never touches, let alone
-// deletes, remote or local backup data by itself.
+// CSRF-protected (router.go) but not unconditionally gated behind the
+// destructive-ops gate (gate.go) — creating a backup set never touches,
+// let alone deletes, remote or local backup data by itself.
+//
+// # run_immediately IS gated (mandatory review finding M3, PR #155)
+//
+// body.RunImmediately turns this same call into "also start a
+// run_cycle", the exact action requireDestructiveGate exists to block
+// (handlers_operations.go's submitOperation, the ONLY route
+// router.go wraps in that middleware, exists to run that action too) —
+// so this branch is checked against h.gate directly, below, before the
+// backend is ever called. This is deliberately NOT route-level
+// middleware: a caller that only wants to persist (RunImmediately false,
+// the common case, and "Save disabled") must stay unaffected by whether
+// #92's gate has been verified yet, matching
+// destructiveGateExemptRoutes' own justification
+// (router_test.go) for why this route is structurally exempt from
+// requireDestructiveGate in the first place.
 func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
 
 	var body backupSetRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDecodeError(w, err, maxCreateBackupSetBodyBytes)
+		return
+	}
+
+	if body.RunImmediately && !destructiveGatePassed(h.gate) {
+		writeDestructiveGateDenied(w)
 		return
 	}
 
@@ -141,7 +167,29 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.backend.CreateBackupSet(r.Context(), req)
 	if err != nil {
-		writeBackupSetError(w, err)
+		if result.Set.ID == "" {
+			// Creation itself never happened — nothing was persisted, so
+			// the ordinary error mapping (400/409/500, per the failure
+			// kind) is the whole story.
+			writeBackupSetError(w, err)
+			return
+		}
+		// Mandatory review finding M6 (PR #155): the backup set IS
+		// already durably persisted and hot-reloaded at this point (see
+		// service.CreateBackupSet's own doc) — only the immediate
+		// run_cycle it also requested failed to start. Collapsing this
+		// to a bare 500, as if creation itself had failed, is actively
+		// misleading: a caller that retries the whole create next hits
+		// config.Validate's duplicate-id rejection instead, with no way
+		// to tell "already exists because your last attempt actually
+		// worked" apart from "your request was wrong from the start".
+		// 201, not 500: the resource this route creates was, in fact,
+		// created.
+		resp := createBackupSetResponse{
+			backupSetResponse: toBackupSetResponse(result.Set),
+			RunError:          runStartErrorMessage(err),
+		}
+		writeJSON(w, http.StatusCreated, resp)
 		return
 	}
 
@@ -151,6 +199,26 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		resp.Operation = &op
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// runStartErrorMessage turns the error CreateBackupSet returns when the
+// backup set was persisted but its requested immediate run_cycle failed
+// to start into a message safe to put on the wire, using the same
+// sentinel-to-safe-string classification submitOperation
+// (handlers_operations.go) already applies to the identical
+// SubmitRunCycle error vocabulary — err here always wraps one of those
+// same sentinels (see service.CreateBackupSetRequest.RunImmediately's
+// doc), so nothing from a deeper, unclassified layer can reach this far.
+func runStartErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, service.ErrConfigRevisionStale),
+		errors.Is(err, service.ErrIdempotencyKeyConflict),
+		errors.Is(err, service.ErrOperationAlreadyRunning),
+		errors.Is(err, service.ErrInvalidRequest):
+		return err.Error()
+	default:
+		return "the backup set was created, but starting the requested run failed"
+	}
 }
 
 // listBackupSets is GET /api/v1/backup-sets: read-only (§50), no CSRF, no

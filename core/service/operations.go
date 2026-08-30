@@ -192,8 +192,14 @@ func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest)
 	if req.ConfigRevision == "" {
 		return Operation{}, fmt.Errorf("%w: run_cycle request requires a configuration revision", ErrInvalidRequest)
 	}
-	if req.ConfigRevision != b.revision {
-		return Operation{}, fmt.Errorf("%w: request carries %q, current is %q", ErrConfigRevisionStale, req.ConfigRevision, b.revision)
+	// One atomic read up front: st.revision is what this whole call
+	// checks against and records, so it must be the exact same value
+	// throughout, not re-read (and possibly changed by a concurrent
+	// CreateBackupSet) between the comparison and the journal write below
+	// (see BackupService.state's own doc).
+	st := b.state.Load()
+	if req.ConfigRevision != st.revision {
+		return Operation{}, fmt.Errorf("%w: request carries %q, current is %q", ErrConfigRevisionStale, req.ConfigRevision, st.revision)
 	}
 
 	outcome, err := b.journal.CreateOperation(ctx, state.OperationRequest{
@@ -201,7 +207,7 @@ func (b *BackupService) SubmitRunCycle(ctx context.Context, req RunCycleRequest)
 		IdempotencyKey: req.IdempotencyKey,
 		Actor:          req.Actor,
 		BackupSet:      "",
-		ConfigRevision: b.revision,
+		ConfigRevision: st.revision,
 		Action:         ActionRunCycle,
 		Parameters:     "{}",
 		CreatedAt:      now(),
@@ -308,7 +314,7 @@ func (b *BackupService) executeRunCycle(operationID string) {
 		return
 	}
 
-	report := runCycle(b.inner, b.ctx)
+	report := runCycle(b.state.Load().inner, b.ctx)
 
 	var failed string
 	for _, set := range report.Sets {

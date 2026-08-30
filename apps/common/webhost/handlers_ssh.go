@@ -92,10 +92,12 @@ type hostKeyProbeResponse struct {
 }
 
 // probeHostKey is POST /api/v1/ssh/host-key-probe: issue #146's
-// host-key-probe endpoint. Read-only (§50 lists "probe host key" under
-// read-only/low-risk actions) — it never trusts or persists anything —
-// so, unlike createBackupSet/importSSHKey above, this route carries no
-// CSRF requirement (router.go).
+// host-key-probe endpoint. Read-only in the destructive-gate sense (§50
+// lists "probe host key" under read-only/low-risk actions) — it never
+// trusts or persists anything — but it DOES open a real outbound SSH
+// connection to a caller-supplied host:port, which is exactly the side
+// effect CSRF protection exists for; this route carries requireCSRF
+// (router.go) for that reason (mandatory review finding M5, PR #155).
 func (h *handlers) probeHostKey(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxHostKeyProbeBodyBytes)
 
@@ -151,10 +153,12 @@ type testConnectionResponse struct {
 }
 
 // testConnection is POST /api/v1/backup-sets/test-connection: issue
-// #146's connection-test endpoint. Read-only in effect (§50: "test
-// SSH") — it lists a remote path over a real transport but writes
-// nothing anywhere — so, like probeHostKey above, it carries no CSRF
-// requirement.
+// #146's connection-test endpoint. Read-only in the destructive-gate
+// sense (§50: "test SSH") — it writes nothing anywhere — but it lists a
+// remote path over a real SFTP session against a caller-supplied
+// host:port, the same real-outbound-connection side effect probeHostKey
+// above has; it carries requireCSRF (router.go) for the same reason
+// (mandatory review finding M5, PR #155).
 func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxTestConnectionBodyBytes)
 

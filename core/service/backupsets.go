@@ -187,11 +187,13 @@ type CreateBackupSetResult struct {
 // (internal/app), this is a pure read of the currently-loaded Config: no
 // journal, no remote.
 func (b *BackupService) ListBackupSets(_ context.Context) ([]BackupSet, error) {
-	b.configMu.Lock()
-	defer b.configMu.Unlock()
+	// b.state.Load() is a single atomic read of the current {inner,
+	// revision} pair — safe with no lock, even while CreateBackupSet is
+	// concurrently hot-reloading it (see BackupService.state's own doc).
+	st := b.state.Load()
 
 	var out []BackupSet
-	for _, src := range b.inner.Config.Sources {
+	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
 			out = append(out, toServiceBackupSet(src.Name, bs))
 		}
@@ -202,10 +204,9 @@ func (b *BackupService) ListBackupSets(_ context.Context) ([]BackupSet, error) {
 // GetBackupSet returns one backup set by its "source/name" id, or
 // ErrBackupSetNotFound.
 func (b *BackupService) GetBackupSet(_ context.Context, id string) (BackupSet, error) {
-	b.configMu.Lock()
-	defer b.configMu.Unlock()
+	st := b.state.Load()
 
-	for _, src := range b.inner.Config.Sources {
+	for _, src := range st.inner.Config.Sources {
 		for _, bs := range src.BackupSets {
 			if src.Name+"/"+bs.Name == id {
 				return toServiceBackupSet(src.Name, bs), nil
@@ -240,7 +241,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	b.configMu.Lock()
 	defer b.configMu.Unlock()
 
-	// Re-read from disk, not b.inner.Config: this is the same "always
+	// Re-read from disk, not b.state.Load().inner.Config: this is the same "always
 	// read fresh" discipline `backup-manager sources` already uses
 	// (core/cmd/backup-manager/sources.go), and it is what makes this
 	// method safe even if configPath was edited by hand (or by a second
@@ -322,8 +323,19 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, fmt.Errorf("service: persisting configuration: %w", err)
 	}
 
-	b.inner = app.New(cfg, b.journal, b.inner.Transport, b.logger)
-	b.revision = computeConfigRevision(cfg)
+	// b.state.Store below is the one atomic swap that makes this new
+	// config take effect: every concurrent reader (ListBackupSets,
+	// ConfigRevision, SubmitRunCycle, the scheduler's tick, ...) either
+	// still sees the PREVIOUS {inner, revision} pair or the new one in
+	// full, never a mix of old inner with new revision or vice versa
+	// (see BackupService.state's own doc). prevInner is read once, before
+	// the swap, purely to carry the already-wired Transport forward —
+	// this method is the only writer of b.state while configMu is held,
+	// so this read cannot itself race the swap below.
+	prevInner := b.state.Load().inner
+	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
+	newRevision := computeConfigRevision(cfg)
+	b.state.Store(&configState{inner: newInner, revision: newRevision})
 
 	created := toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name))
 	result := CreateBackupSetResult{Set: created}
@@ -332,7 +344,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		op, err := b.SubmitRunCycle(ctx, RunCycleRequest{
 			IdempotencyKey: "create:" + created.ID + ":" + uuid.NewString(),
 			Actor:          req.Actor,
-			ConfigRevision: b.revision,
+			ConfigRevision: newRevision,
 		})
 		if err != nil {
 			// The backup set is already durably created and live at this
@@ -356,22 +368,73 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 // operator maintains by hand). One file per backup set, not one shared
 // file for every API-created set, so trusting (or later, rotating) one
 // set's host key can never collide with another's.
+//
+// # Path safety (mandatory review finding M2, PR #155)
+//
+// sourceName/name are concatenated into ONE filename token
+// (sourceName+"_"+name+"_known_hosts"), then filepath.Join'd onto dir.
+// filepath.Join calls Clean, so an embedded "/" or ".." in either value
+// resolves as a real path, not a literal character in a filename —
+// verified empirically before this fix: dir=".../known_hosts.d",
+// name="../../../../tmp/evil" produced a path outside both the
+// known_hosts sandbox and the config directory. validateCreateRequest
+// (below) is CreateBackupSet's very first call and already refuses any
+// such Name/SourceName before this method is ever reached (its own
+// validPathSegment check), so this is defense in depth, not the primary
+// guard: even if some future caller reached this method with a value
+// validateCreateRequest never saw, the filepath.Rel check below refuses
+// to write outside dir regardless of what already let sourceName/name
+// through.
 func (b *BackupService) writeKnownHosts(sourceName, name, line string) (string, error) {
 	dir := filepath.Join(filepath.Dir(b.configPath), "known_hosts.d")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, sourceName+"_"+name+"_known_hosts")
+	if rel, err := filepath.Rel(dir, path); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: source_name/name must not resolve outside the known_hosts directory", ErrInvalidRequest)
+	}
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
+// validPathSegment reports whether v is safe to fold into one path
+// segment/filename token on this process's own filesystem: no path
+// separator (which would let a later filepath.Join resolve v as more
+// than one segment), no bare "." or ".." directory reference, no control
+// character, and no leading/trailing whitespace. writeKnownHosts (above)
+// is what actually needs this — sourceName and name both become part of
+// one filename it writes — but the check lives in validateCreateRequest
+// (below), CreateBackupSet's very first call, so a path-unsafe value is
+// refused before ANY filesystem write happens, not discovered by
+// whichever write site happens to be reached first.
+func validPathSegment(what, v string) error {
+	switch {
+	case v == "":
+		return fmt.Errorf("%s must not be empty", what)
+	case strings.ContainsAny(v, "/\\\x00\n\r"):
+		return fmt.Errorf("%s %q must not contain a path separator or control character", what, v)
+	case v == "." || v == "..":
+		return fmt.Errorf("%s %q must not be a directory reference", what, v)
+	case strings.TrimSpace(v) != v:
+		return fmt.Errorf("%s %q must not have leading or trailing whitespace", what, v)
+	}
+	return nil
+}
+
 func validateCreateRequest(req CreateBackupSetRequest) error {
 	var problems []string
 	if req.Name == "" {
 		problems = append(problems, "name is required")
+	} else if err := validPathSegment("name", req.Name); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if req.SourceName != "" {
+		if err := validPathSegment("source_name", req.SourceName); err != nil {
+			problems = append(problems, err.Error())
+		}
 	}
 	if req.Host == "" {
 		problems = append(problems, "host is required")
@@ -679,7 +742,7 @@ func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRe
 		Root:       root,
 	}
 
-	if _, err := b.inner.Transport.List(testCtx, src); err != nil {
+	if _, err := b.state.Load().inner.Transport.List(testCtx, src); err != nil {
 		// Not %w-wrapped, and not returned as a Go error at all: a failed
 		// connection test is an expected, ordinary OUTCOME (a typo'd
 		// hostname, a not-yet-authorized key), not a service failure, so

@@ -93,10 +93,13 @@ func TestImportSSHKey_RequiresAuthentication(t *testing.T) {
 	}
 }
 
-func postHostKeyProbe(t *testing.T, router http.Handler, body string) *httptest.ResponseRecorder {
+func postHostKeyProbe(t *testing.T, router http.Handler, body string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ssh/host-key-probe", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if csrf {
+		attachValidCSRF(req)
+	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
@@ -108,7 +111,7 @@ func postHostKeyProbe(t *testing.T, router http.Handler, body string) *httptest.
 // it will later carry into CreateBackupSet.
 func TestProbeHostKey_Success_ReturnsFingerprintAndKnownHostsLine(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
-	rec := postHostKeyProbe(t, tr.router, `{"host":"prod-db-01.internal","port":22}`)
+	rec := postHostKeyProbe(t, tr.router, `{"host":"prod-db-01.internal","port":22}`, true)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -127,7 +130,7 @@ func TestProbeHostKey_Success_ReturnsFingerprintAndKnownHostsLine(t *testing.T) 
 
 func TestProbeHostKey_MissingHostReturns400(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
-	rec := postHostKeyProbe(t, tr.router, `{"port":22}`)
+	rec := postHostKeyProbe(t, tr.router, `{"port":22}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
@@ -140,7 +143,7 @@ func TestProbeHostKey_MissingHostReturns400(t *testing.T) {
 func TestProbeHostKey_ProbeFailureReturns400WithItsOwnCode(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
 	tr.backend.errOnProbe = errBoom
-	rec := postHostKeyProbe(t, tr.router, `{"host":"unreachable.invalid","port":22}`)
+	rec := postHostKeyProbe(t, tr.router, `{"host":"unreachable.invalid","port":22}`, true)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
@@ -153,15 +156,17 @@ func TestProbeHostKey_ProbeFailureReturns400WithItsOwnCode(t *testing.T) {
 	}
 }
 
-// TestProbeHostKey_DoesNotRequireCSRF proves this route is deliberately
-// exempt (docs/EPIC-B-multi-nas.md §50: "probe host key" is read-only) —
-// unlike createBackupSet/importSSHKey, no CSRF cookie is attached here at
-// all, and the request must still succeed.
-func TestProbeHostKey_DoesNotRequireCSRF(t *testing.T) {
+// TestProbeHostKey_MissingCSRFCookieReturns403 is the mandatory review's
+// M5 finding (PR #155): probeHostKey opens a real outbound SSH
+// connection to a caller-supplied host:port, exactly the side effect
+// CSRF protection exists for, regardless of this route's read-only
+// destructive-gate tier — it now requires the same double-submit token
+// createBackupSet/importSSHKey already do.
+func TestProbeHostKey_MissingCSRFCookieReturns403(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
-	rec := postHostKeyProbe(t, tr.router, `{"host":"prod-db-01.internal","port":22}`)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (read-only per §50, no CSRF token attached), body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	rec := postHostKeyProbe(t, tr.router, `{"host":"prod-db-01.internal","port":22}`, false)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
@@ -174,16 +179,19 @@ func TestProbeHostKey_RequiresAuthentication(t *testing.T) {
 		BinaryVersion: "test",
 		Commit:        "test",
 	})
-	rec := postHostKeyProbe(t, router, `{"host":"prod-db-01.internal","port":22}`)
+	rec := postHostKeyProbe(t, router, `{"host":"prod-db-01.internal","port":22}`, true)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}
 }
 
-func postTestConnection(t *testing.T, router http.Handler, body string) *httptest.ResponseRecorder {
+func postTestConnection(t *testing.T, router http.Handler, body string, csrf bool) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/backup-sets/test-connection", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	if csrf {
+		attachValidCSRF(req)
+	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
@@ -200,7 +208,7 @@ const validTestConnectionBody = `{
 
 func TestTestConnection_Success_ReturnsOKTrue(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
-	rec := postTestConnection(t, tr.router, validTestConnectionBody)
+	rec := postTestConnection(t, tr.router, validTestConnectionBody, true)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -222,7 +230,7 @@ func TestTestConnection_Success_ReturnsOKTrue(t *testing.T) {
 func TestTestConnection_Failure_ReturnsOKFalseNotAnHTTPError(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
 	tr.backend.connectionResult = service.ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}
-	rec := postTestConnection(t, tr.router, validTestConnectionBody)
+	rec := postTestConnection(t, tr.router, validTestConnectionBody, true)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -242,17 +250,22 @@ func TestTestConnection_Failure_ReturnsOKFalseNotAnHTTPError(t *testing.T) {
 func TestTestConnection_SSHKeyNotFoundReturns400(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
 	tr.backend.errOnConnect = service.ErrSSHKeyNotFound
-	rec := postTestConnection(t, tr.router, validTestConnectionBody)
+	rec := postTestConnection(t, tr.router, validTestConnectionBody, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
 }
 
-func TestTestConnection_DoesNotRequireCSRF(t *testing.T) {
+// TestTestConnection_MissingCSRFCookieReturns403 is the mandatory
+// review's M5 finding (PR #155): testConnection opens a real outbound
+// SFTP session against a caller-supplied host:port, exactly the side
+// effect CSRF protection exists for, regardless of this route's
+// read-only destructive-gate tier.
+func TestTestConnection_MissingCSRFCookieReturns403(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
-	rec := postTestConnection(t, tr.router, validTestConnectionBody)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d (read-only per §50, no CSRF token attached), body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	rec := postTestConnection(t, tr.router, validTestConnectionBody, false)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
@@ -265,7 +278,7 @@ func TestTestConnection_RequiresAuthentication(t *testing.T) {
 		BinaryVersion: "test",
 		Commit:        "test",
 	})
-	rec := postTestConnection(t, router, validTestConnectionBody)
+	rec := postTestConnection(t, router, validTestConnectionBody, true)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnauthorized, rec.Body.String())
 	}

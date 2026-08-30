@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -277,6 +279,59 @@ func TestCreateBackupSet_RejectsSSHKeyIDPathTraversal(t *testing.T) {
 	}
 }
 
+// TestCreateBackupSet_RejectsNameContainingAPathTraversal is the M2
+// mandatory review finding (PR #155): a Name containing a path separator
+// or ".." must never reach writeKnownHosts, which folds Name into one
+// filename token (sourceName+"_"+name+"_known_hosts") and would
+// otherwise let filepath.Join resolve an embedded "../" as a real
+// parent-directory escape — verified against the pre-fix code:
+// dir=".../known_hosts.d", name="../../../../tmp/evil" wrote a file
+// outside both the known_hosts sandbox and the config directory. Proven
+// two ways here: the call itself is refused, AND no known_hosts.d
+// directory (which writeKnownHosts always creates before it ever writes
+// a file) exists afterward at all — proof nothing was written anywhere,
+// not merely that this one crafted path happened to be caught.
+func TestCreateBackupSet_RejectsNameContainingAPathTraversal(t *testing.T) {
+	svc, configPath := openTestService(t)
+	req := validCreateReq(t, svc, "traversal")
+	req.Name = "../../../../tmp/evil"
+
+	_, err := svc.CreateBackupSet(context.Background(), req)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+
+	knownHostsDir := filepath.Join(filepath.Dir(configPath), "known_hosts.d")
+	if _, statErr := os.Stat(knownHostsDir); !os.IsNotExist(statErr) {
+		t.Errorf("known_hosts.d exists after a rejected traversal attempt (stat err = %v); writeKnownHosts must never run before validation", statErr)
+	}
+}
+
+// TestCreateBackupSet_RejectsSourceNameContainingAPathTraversal is the
+// same M2 finding applied to SourceName, the other half writeKnownHosts
+// folds into its filename token. Pre-fix, a malicious SourceName was
+// still eventually rejected — but only by the deeper config.Validate
+// pass, which runs AFTER writeKnownHosts has already written a file
+// wherever SourceName pointed it (this test's own known_hosts.d
+// assertion is what actually catches that: the error alone is not
+// enough to distinguish "rejected before any write" from "written, then
+// rejected").
+func TestCreateBackupSet_RejectsSourceNameContainingAPathTraversal(t *testing.T) {
+	svc, configPath := openTestService(t)
+	req := validCreateReq(t, svc, "traversal-source")
+	req.SourceName = "../../../../tmp"
+
+	_, err := svc.CreateBackupSet(context.Background(), req)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+
+	knownHostsDir := filepath.Join(filepath.Dir(configPath), "known_hosts.d")
+	if _, statErr := os.Stat(knownHostsDir); !os.IsNotExist(statErr) {
+		t.Errorf("known_hosts.d exists after a rejected traversal attempt (stat err = %v); writeKnownHosts must never run before validation", statErr)
+	}
+}
+
 // TestCreateBackupSet_WithoutAConfigFileReturnsErrConfigNotFileBacked
 // covers a BackupService built with New directly (every other test in
 // this package): CreateBackupSet has nothing to persist to and must say
@@ -288,6 +343,70 @@ func TestCreateBackupSet_WithoutAConfigFileReturnsErrConfigNotFileBacked(t *test
 	if !errors.Is(err, ErrConfigNotFileBacked) {
 		t.Fatalf("err = %v, want ErrConfigNotFileBacked", err)
 	}
+}
+
+// TestCreateBackupSet_ConcurrentWithReadersDoesNotRace is the mandatory
+// review's M1 regression test (PR #155): CreateBackupSet's hot-reload of
+// this BackupService's {inner, revision} state must be safe to race
+// against every other reader of that same state, since that is exactly
+// the concurrency shape a real deployment has — net/http runs each
+// request on its own goroutine, and the scheduler ticks independently of
+// both, so an operator creating a backup set while a run_cycle or a
+// scheduled tick is in flight is normal operation, not an edge case.
+//
+// This test's own assertions are deliberately loose (no panic, no
+// unexpected error): what actually proves the fix is running this test
+// with `go test -race`, which fails on the old two-separately-locked-
+// on-write, never-locked-on-read fields (a real, reachable data race
+// under the Go memory model) and passes cleanly once state is one
+// atomic.Pointer. Mirrors the 200-racer pattern
+// TestSessionManager_ConcurrentRotateSessionNeverLeavesZeroLiveSessions
+// (apps/common/auth/local/session_test.go) already established for the
+// #128 password-rotation race.
+func TestCreateBackupSet_ConcurrentWithReadersDoesNotRace(t *testing.T) {
+	svc, _ := openTestService(t)
+	req := validCreateReq(t, svc, "race-set")
+	ctx := context.Background()
+
+	const readers = 50
+	var wg sync.WaitGroup
+	wg.Add(1 + readers*3)
+
+	go func() {
+		defer wg.Done()
+		if _, err := svc.CreateBackupSet(ctx, req); err != nil {
+			t.Errorf("CreateBackupSet: %v", err)
+		}
+	}()
+
+	for i := 0; i < readers; i++ {
+		go func() {
+			defer wg.Done()
+			_ = svc.ConfigRevision()
+		}()
+		go func() {
+			defer wg.Done()
+			// runScheduledCycle (scheduler.go) is this package's own
+			// caller of the scheduler's read of {inner, revision} — the
+			// same method a real background tick calls, exercised
+			// directly here rather than waiting out a real timer.
+			svc.runScheduledCycle(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			// ConfigRevision may legitimately read either the pre- or
+			// post-create revision depending on scheduling, so a
+			// resulting ErrConfigRevisionStale/ErrOperationAlreadyRunning
+			// here is an expected outcome, not a test failure — only a
+			// panic or a data race (caught by -race) would be.
+			_, _ = svc.SubmitRunCycle(ctx, RunCycleRequest{
+				IdempotencyKey: "race:" + uuid.NewString(),
+				ConfigRevision: svc.ConfigRevision(),
+			})
+		}()
+	}
+
+	wg.Wait()
 }
 
 func TestImportSSHKey_Success_PersistsFileAndReportsFingerprint(t *testing.T) {
