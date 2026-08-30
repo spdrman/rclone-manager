@@ -50,6 +50,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
 
 // dockerCLIImage is the tag every test in this file builds once and
@@ -207,10 +209,13 @@ func degradedConfig(t *testing.T) (dir string) {
 // outcome, and returns the container name.
 func runDaemonContainer(t *testing.T, image, dir string) string {
 	t.Helper()
+	// Reclaim anything a previously KILLED run left behind (#150).
+	dockerlease.Sweep()
 	name := "backup-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
 
 	args := []string{
 		"run", "-d", "--name", name,
+		dockerlease.LabelFlag, dockerlease.LabelSpec,
 		"-v", filepath.Join(dir, "config.yaml") + ":/etc/backup-manager/config.yaml:ro",
 		"-v", filepath.Join(dir, "state") + ":/data/state",
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
@@ -353,10 +358,13 @@ func TestDaemonStaysRunningWithValidConfig(t *testing.T) {
 func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 	image := buildImage(t)
 	dir := degradedConfig(t)
+	// Reclaim anything a previously KILLED run left behind (#150).
+	dockerlease.Sweep()
 	name := "backup-manager-dockercli-" + t.Name() + "-" + time.Now().Format("150405.000000")
 
 	args := []string{
 		"run", "-d", "--name", name,
+		dockerlease.LabelFlag, dockerlease.LabelSpec,
 		"-p", "0:8080", // publish --listen's :8080 to an ephemeral host port
 		"-v", filepath.Join(dir, "config.yaml") + ":/etc/backup-manager/config.yaml:ro",
 		"-v", filepath.Join(dir, "state") + ":/data/state",
@@ -426,7 +434,6 @@ func publishedPort(t *testing.T, container, containerPort string) string {
 	}
 	return line[idx+1:]
 }
-
 
 // composeFile is just enough of container/compose.yaml's shape to check
 // which services publish ports - not a general compose-file model.
