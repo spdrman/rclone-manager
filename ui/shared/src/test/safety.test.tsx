@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { HealthSummary } from "@shared/components/HealthSummary";
 import { LifecycleTimeline, buildPhases } from "@shared/components/LifecycleTimeline";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
+import { StorageGauge } from "@shared/components/StorageGauge";
 import { createMockApi } from "@shared/api/mock";
 import type { SystemHealth } from "@shared/types/operation";
 import type { BackupArtifact } from "@shared/types/backup";
@@ -115,5 +116,55 @@ describe("private key handling", () => {
     const api = createMockApi();
     const set = await api.getSet("set_pg_prod");
     expect(JSON.stringify(set)).not.toMatch(/privateKey|BEGIN OPENSSH PRIVATE KEY/i);
+  });
+});
+
+/**
+ * Issue #104 (B3.4), spec §56. The backend's internal/capacity refuses a
+ * transfer that will not fit and contains no deletion path of any kind,
+ * precisely so a full disk can never be "solved" by silently violating
+ * retention. These tests are the frontend half of that promise: the UI
+ * surfaces the refusal as a refusal, and never grows the "auto delete
+ * anything until enough space" affordance §56 forbids in v1.
+ */
+describe("storage pressure (\u00a756)", () => {
+  it("offers no operation anywhere in the API surface that frees space by deleting", () => {
+    // createMockApi implements the whole BackupManagerApi interface, which
+    // is the same contract the real client (api/client.ts) satisfies, so
+    // enumerating it enumerates everything this frontend can ask the
+    // backend to do.
+    const api = createMockApi("storage-critical");
+    const operations = Object.keys(api);
+    // A zero here would make the assertion below vacuous, so the scan
+    // proves it actually looked at a populated surface first.
+    expect(operations.length).toBeGreaterThan(10);
+
+    const freesSpaceByDeleting = /free.*space|autoDelete|deleteUntil|makeRoom|reclaim|purge|prune|evict|sweep/i;
+    expect(operations.filter((name) => freesSpaceByDeleting.test(name))).toEqual([]);
+  });
+
+  it("has exactly one deletion path, and it needs an operator-reviewed plan", () => {
+    const api = createMockApi("storage-critical");
+    const deletes = Object.keys(api).filter((name) => /delete|remove/i.test(name));
+    expect(deletes).toEqual([]);
+    // applyRetention is the one call that removes anything, and it takes a
+    // planId: there is no way to ask for "delete enough to fit", only to
+    // apply a specific, server-computed plan the operator has seen.
+    expect(api.applyRetention.length).toBe(1);
+  });
+
+  it("states the refusal instead of implying the UI could reclaim the space", async () => {
+    const api = createMockApi("storage-critical");
+    const critical = await api.getHealth();
+    expect(critical.storageState).toBe("critical");
+    expect(critical.backupHealthReason).toMatch(/paused to protect existing backups/i);
+    expect(critical.backupHealthReason).not.toMatch(/delet/i);
+  });
+
+  it("renders a critical storage reading with no action attached to it", () => {
+    render(<StorageGauge freeBytes={2_000_000_000} totalBytes={6_200_000_000_000} state="critical" />);
+    expect(screen.getByRole("meter")).toBeTruthy();
+    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(screen.queryAllByRole("link")).toEqual([]);
   });
 });

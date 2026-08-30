@@ -98,7 +98,7 @@ func TestOpenConfigAndJournal_ConcurrentStartup_SecondCallRefused(t *testing.T) 
 	// Stand in for "another process's OpenConfigAndJournal call is
 	// currently inside its own startup sequence" by holding the exact
 	// lock file OpenConfigAndJournal itself acquires.
-	held, err := acquireStartupLock(dbPath + ".startup-lock")
+	held, err := acquireStartupLock(dbPath + startupLockSuffix)
 	if err != nil {
 		t.Fatalf("acquireStartupLock: %v", err)
 	}
@@ -206,5 +206,79 @@ func seedFutureSchemaVersion(t *testing.T, dbPath string) {
 		999999, "from-the-future", "deadbeef", "2099-01-01T00:00:00Z",
 	); err != nil {
 		t.Fatalf("seeding future schema_migrations row: %v", err)
+	}
+}
+
+// TestOpen_FailedStartupSequence_ConstructsNoBackupService is this
+// issue's REGRESSION claim at the level the Given/When/Then actually
+// states it: not merely "OpenConfigAndJournal returns an error", but
+// "BackupService and the daemon/API never start". Open is the one
+// production constructor a web host has (apps/generic/cmd/
+// backup-manager-web/main.go calls it, and returns a non-zero exit
+// without ever reaching serve.RunEngine if it fails), so a nil
+// *BackupService out of Open is exactly "no scheduler tick, no cycle, no
+// transfer, no delete" — there is no object left for any of those to be
+// called on.
+//
+// Both §46.1 failure modes are covered: a state directory this process
+// cannot use at all, and an on-disk schema newer than this binary's
+// migrations (internal/state's own ErrUnknownSchemaVersion, which this
+// package propagates rather than working around).
+func TestOpen_FailedStartupSequence_ConstructsNoBackupService(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root: permission bits do not block root, the unwritable-directory case is meaningless here")
+	}
+
+	tests := []struct {
+		name string
+		// setup returns the config path to open, having arranged for the
+		// startup sequence to fail in this case's own way.
+		setup func(t *testing.T) string
+	}{
+		{
+			name: "state directory is a plain file, not a directory",
+			setup: func(t *testing.T) string {
+				dir := t.TempDir()
+				notADir := filepath.Join(dir, "not-a-dir")
+				if err := os.WriteFile(notADir, []byte("this is a file"), 0o600); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+				return writeConfigFileFor(t, dir, filepath.Join(notADir, "state.db"))
+			},
+		},
+		{
+			name: "on-disk schema is newer than this binary's migrations",
+			setup: func(t *testing.T) string {
+				dir := t.TempDir()
+				dbPath := filepath.Join(dir, "state.db")
+				journal, err := state.Open(context.Background(), dbPath)
+				if err != nil {
+					t.Fatalf("state.Open (seed): %v", err)
+				}
+				if err := journal.Close(); err != nil {
+					t.Fatalf("close seed journal: %v", err)
+				}
+				seedFutureSchemaVersion(t, dbPath)
+				return writeConfigFileFor(t, dir, dbPath)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, cleanup, err := Open(context.Background(), tc.setup(t))
+			if err == nil {
+				if cleanup != nil {
+					_ = cleanup()
+				}
+				t.Fatal("Open against a failed startup sequence: error = nil, want an error")
+			}
+			if svc != nil {
+				t.Error("Open returned a non-nil *BackupService alongside an error — a failed startup sequence must never hand back something a scheduler, cycle, transfer or delete could be driven from")
+			}
+			if cleanup != nil {
+				t.Error("Open returned a non-nil cleanup func alongside an error — there is nothing to clean up, and a caller deferring it would be closing a journal that was never opened")
+			}
+		})
 	}
 }

@@ -23,8 +23,8 @@ import (
 var ErrStartupLocked = errors.New("service: another process is already running this journal's startup sequence")
 
 // startupLock is an OS-level advisory lock, held only for the duration of
-// one OpenConfigAndJournal call (see that function's own doc for exactly
-// when it is acquired and released).
+// one startup sequence (runStartupSequence, startup.go, which is where
+// exactly when it is acquired and released is spelled out).
 type startupLock struct {
 	f *os.File
 }

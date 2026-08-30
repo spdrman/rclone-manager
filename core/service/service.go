@@ -203,70 +203,26 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // description for why that duplication existed in the first place and
 // this issue's own review for why it stopped being acceptable.
 //
-// # Section 46.1's startup sequence
-//
-// Every caller of this function — the web host's `serve` command and
-// every core/cmd/backup-manager subcommand alike — goes through
-// docs/EPIC-B-multi-nas.md §46.1's ordered sequence here, not just the
-// "run transactional migrations" step internal/state.Open already
-// implements on its own:
-//
-//	load version         (the caller's own concern: BuildVersion below)
-//	lock init            -> acquireStartupLock
-//	validate state dir   -> validateStateDir
-//	backup/prepare SQLite -> snapshotSQLite
-//	run migrations       -> state.Open (unchanged, still owns migrate())
-//
-// The startup lock is held only for this function's own duration, not
-// for the caller's whole process lifetime: its job is serialising two
-// concurrent attempts to snapshot-then-migrate the SAME journal (a
-// container restart racing an old process's shutdown against a new one's
-// start, for example), not preventing an operator's `backup-manager
-// status` from running alongside an already-running `serve` — those two
-// coexisting is normal, expected use of this codebase's CLI, and by the
-// time `status` calls this function, `serve`'s own call has long since
-// released the lock (see startupLock.release, called via defer below,
-// unconditionally on every return path).
-//
-// If ANYTHING in this sequence fails — the state directory is unusable,
-// the lock is already held, or state.Open (migration) itself fails, for
-// any reason including internal/state.ErrUnknownSchemaVersion (an
-// unsupported downgrade, refused by internal/state itself; this function
-// never bypasses or retries around that refusal) — this function restores
-// dbPath's pre-migration snapshot before returning, so the previous data
-// is preserved unchanged regardless of what a failed attempt left
-// on disk, and returns a non-nil error with no *state.Journal: every
-// caller (Open below, cmd/backup-manager's openService) already treats a
-// non-nil error here as fatal and constructs no BackupService — see
-// Open's own doc for exactly what that guarantees.
+// Everything between loading the config and having a usable journal is
+// docs/EPIC-B-multi-nas.md §46.1's startup sequence, and it lives in
+// runStartupSequence (startup.go), not here: read that function's own doc
+// for the ordered steps, why the state directory is validated before the
+// lock is taken, and exactly what each failure between them does to the
+// data already on disk. What matters at THIS level is the contract it
+// gives every caller: a failure returns a non-nil error and a nil
+// *state.Journal, which Open (below) and cmd/backup-manager's openService
+// both already treat as fatal, so a failed migration means no
+// BackupService is ever constructed and no daemon, API, scheduler tick or
+// transfer ever starts.
 func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, error) {
 	cfg, err := config.LoadAndValidate(configPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("service: load config: %w", err)
 	}
 
-	if err := validateStateDir(cfg.State.Database); err != nil {
-		return nil, nil, err
-	}
-
-	lock, err := acquireStartupLock(cfg.State.Database + ".startup-lock")
+	journal, err := runStartupSequence(ctx, cfg.State.Database)
 	if err != nil {
 		return nil, nil, err
-	}
-	defer func() { _ = lock.release() }()
-
-	snap, err := snapshotSQLite(cfg.State.Database)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	journal, err := state.Open(ctx, cfg.State.Database)
-	if err != nil {
-		openErr := fmt.Errorf("service: open state: %w", err)
-		if restoreErr := snap.restore(); restoreErr != nil {
-			return nil, nil, fmt.Errorf("%w (restoring the pre-migration snapshot also failed, previous data may be at risk: %v)", openErr, restoreErr)
-		}
-		return nil, nil, openErr
 	}
 
 	return cfg, journal, nil

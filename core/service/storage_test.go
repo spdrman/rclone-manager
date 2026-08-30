@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -119,31 +120,25 @@ func TestListStorageStatus_LevelMatchesWhatAdmitWouldDecide(t *testing.T) {
 	}
 
 	assessment, err := capacity.CheckBeforeTransfer(localDir, 0, impossible)
+	// errors.As, not a type assertion: this is exactly how pipeline.go's
+	// own admitCapacity classifies the same error, and matching it is the
+	// point — a refusal this test recognises but the real gate would not
+	// (or the reverse) would make the whole comparison meaningless.
 	var insufficient *capacity.InsufficientCapacityError
-	if err == nil {
-		t.Fatal("capacity.CheckBeforeTransfer against impossible thresholds: error = nil, want InsufficientCapacityError")
-	}
-	if !isInsufficientCapacityError(err, &insufficient) {
-		t.Fatalf("capacity.CheckBeforeTransfer error = %v, want *InsufficientCapacityError", err)
+	if !errors.As(err, &insufficient) {
+		t.Fatalf("capacity.CheckBeforeTransfer against impossible thresholds: error = %v, want *InsufficientCapacityError", err)
 	}
 	if assessment.Level != capacity.Critical {
 		t.Fatalf("direct CheckBeforeTransfer Level = %v, want Critical", assessment.Level)
 	}
 }
 
-func isInsufficientCapacityError(err error, target **capacity.InsufficientCapacityError) bool {
-	ic, ok := err.(*capacity.InsufficientCapacityError)
-	if ok {
-		*target = ic
-	}
-	return ok
-}
-
-// TestListStorageStatus_UsesTheSharedLocalDirectoryFromTestConfig is a
-// regression guard: New(...) built with no explicit os.MkdirAll for the
-// backup set's LocalPath must not panic or error the whole call — the
-// package doc's own promise that one uninitialised set never hides the
-// assessment for every other configured one.
+// TestListStorageStatus_MultipleBackupSetsAreAllReported is a regression
+// guard for storage.go's own promise that one uninitialised backup set
+// never hides the assessment for every other configured one: a set whose
+// LocalPath nothing has created yet must come back as its own
+// Available: false entry, not as an error that takes the whole call, and
+// with it every healthy set's reading, down with it.
 func TestListStorageStatus_MultipleBackupSetsAreAllReported(t *testing.T) {
 	dirA := t.TempDir()
 	dirB := filepath.Join(t.TempDir(), "not-created")
