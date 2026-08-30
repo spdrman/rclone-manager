@@ -491,6 +491,12 @@ sources:
         completion:
           strategy: stable
           stable_for: 10m
+          # Only read when strategy is "stable". FR-15's remote-delete gate
+          # additionally waits this long after an artifact last reached a
+          # confirmed-good state before it treats a size/mtime heuristic as
+          # equivalent to a producer rename/marker signal. Omit it and it
+          # defaults to 1h; a negative value is refused.
+          delete_safety_delay: 60m
 
         stale_after: 30h
 

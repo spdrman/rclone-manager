@@ -263,12 +263,31 @@ func (v *validator) validateCompletion(path string, c *Completion) {
 			v.addf("%s: stable_for must be set to a positive duration when strategy is \"stable\"", path)
 		}
 		// WP3.2: "stable" is a heuristic, not a producer completion
-		// signal, so an extra deletion-safety delay is mandatory, not
-		// optional, exactly like stable_for itself above. See
-		// Completion.DeleteSafetyDelay's own doc for why this is a
-		// distinct field from stable_for rather than a second use of it.
-		if c.DeleteSafetyDelay.Duration() <= 0 {
-			v.addf("%s: delete_safety_delay must be set to a positive duration when strategy is \"stable\" (WP3.2: stable-size completion alone must not be treated as producer-confirmed)", path)
+		// signal, so FR-15's remote-delete gate needs an extra
+		// deletion-safety delay before it treats a stable artifact as
+		// producer-confirmed. See Completion.DeleteSafetyDelay's own doc
+		// for why this is a distinct field from stable_for rather than a
+		// second use of it.
+		//
+		// Unlike stable_for just above, an omitted or zero value is
+		// resolved to DefaultDeleteSafetyDelay rather than refused. The
+		// key is new in WP3.2, so every config file written against an
+		// earlier release omits it; refusing those would stop the daemon
+		// loading a config that was valid the day before an upgrade, and
+		// would reject every stable-strategy backup set the API layer
+		// builds (service.CreateBackupSet has no field for this key), for
+		// a value the project has a documented safe default for. Reading
+		// the omission literally as "no delay required" is the other
+		// wrong answer: it would silently disable the gate on exactly the
+		// deployments that never had the chance to opt in. Only a
+		// negative duration, which can only ever be something the
+		// operator typed on purpose and which would make the gate a
+		// no-op, is refused.
+		switch {
+		case c.DeleteSafetyDelay.Duration() < 0:
+			v.addf("%s: delete_safety_delay must not be negative (got %s); omit it to use the default of %s", path, c.DeleteSafetyDelay, DefaultDeleteSafetyDelay)
+		case c.DeleteSafetyDelay.Duration() == 0:
+			c.DeleteSafetyDelay = Duration(DefaultDeleteSafetyDelay)
 		}
 	case "rename", "marker":
 		if c.StableFor.Duration() != 0 {

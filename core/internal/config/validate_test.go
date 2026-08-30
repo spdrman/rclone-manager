@@ -701,16 +701,57 @@ func TestCompletionStrategyValidation(t *testing.T) {
 			t.Fatal("strategy stable with no stable_for was accepted")
 		}
 	})
-	// WP3.2: "stable" alone (stable_for set, delete_safety_delay not) must
-	// be rejected the same way a missing stable_for is: stable-size
-	// completion must never be able to silently masquerade as
-	// producer-confirmed completion by simply omitting the extra safety
-	// delay this issue adds.
-	t.Run("stable requires delete_safety_delay", func(t *testing.T) {
+	// WP3.2: "stable" with no delete_safety_delay must load, and must come
+	// back carrying the documented default rather than a literal zero.
+	//
+	// Both halves matter and they fail in opposite directions. Refusing
+	// the config would stop the daemon loading a file that was valid
+	// before the key existed, and would reject every stable-strategy
+	// backup set service.CreateBackupSet builds, since that request type
+	// has no field for this key. Reading the zero literally would leave
+	// the gate in internal/lifecycle/remotedelete.go comparing against a
+	// zero delay, which is the same thing as not having the gate.
+	t.Run("stable defaults delete_safety_delay", func(t *testing.T) {
 		cfg := validConfig()
 		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "stable", StableFor: Duration(10 * time.Minute)}
-		if err := cfg.Validate(); err == nil {
-			t.Fatal("strategy stable with no delete_safety_delay was accepted")
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("strategy stable with no delete_safety_delay was rejected: %v", err)
+		}
+		if got := cfg.Sources[0].BackupSets[0].Completion.DeleteSafetyDelay.Duration(); got != DefaultDeleteSafetyDelay {
+			t.Fatalf("delete_safety_delay resolved to %s, want the default %s", got, DefaultDeleteSafetyDelay)
+		}
+	})
+	// An explicit value is the operator's, and stays theirs: defaulting
+	// must only ever fill a hole, never overwrite an answer.
+	t.Run("stable keeps an explicit delete_safety_delay", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{
+			Strategy:          "stable",
+			StableFor:         Duration(10 * time.Minute),
+			DeleteSafetyDelay: Duration(90 * time.Minute),
+		}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("valid stable completion was rejected: %v", err)
+		}
+		if got, want := cfg.Sources[0].BackupSets[0].Completion.DeleteSafetyDelay.Duration(), 90*time.Minute; got != want {
+			t.Fatalf("delete_safety_delay = %s, want the operator's %s", got, want)
+		}
+	})
+	// A negative delay is the one value that can only have been typed on
+	// purpose and that would make the gate a no-op, so it is still refused.
+	t.Run("stable rejects a negative delete_safety_delay", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{
+			Strategy:          "stable",
+			StableFor:         Duration(10 * time.Minute),
+			DeleteSafetyDelay: Duration(-time.Minute),
+		}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("strategy stable with a negative delete_safety_delay was accepted")
+		}
+		if !strings.Contains(err.Error(), "delete_safety_delay") {
+			t.Fatalf("error does not name the offending field: %v", err)
 		}
 	})
 	for _, strategy := range []string{"rename", "marker"} {
