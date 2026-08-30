@@ -19,7 +19,24 @@ export type ApiErrorCode =
   | "retention-plan-stale"
   | "version-mismatch"
   | "operation-conflict"
-  | "unknown";
+  | "unknown"
+  // apps/common/auth/local's own error codes (handler.go/csrf.go),
+  // returned directly by every /api/v1/auth/* route. A different naming
+  // convention (UPPER_SNAKE_CASE) from the values above, matching that
+  // package's own vocabulary rather than being translated to this
+  // union's existing kebab-case style - nothing in this frontend yet
+  // renders these distinctly from a generic fallback message (see
+  // LoginPage.tsx/EnrollmentPage.tsx), so only their PRESENCE here
+  // matters for now, so client.ts's `as ApiError` assertion is honest
+  // about what the backend can actually send (issue #119's review).
+  | "UNAUTHENTICATED"
+  | "RATE_LIMITED"
+  | "INVALID_REQUEST"
+  | "ENROLLMENT_CLOSED"
+  | "BOOTSTRAP_TOKEN_INVALID"
+  | "INTERNAL_ERROR"
+  | "CSRF_TOKEN_MISSING"
+  | "CSRF_TOKEN_MISMATCH";
 
 export interface ApiError {
   code: ApiErrorCode;

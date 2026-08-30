@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { httpApi } from "./client";
+import type { ApiErrorCode } from "./contracts";
 
 /** Sets document.cookie the way a browser would after the server issued
  *  a Set-Cookie header for bm_csrf — jsdom's document.cookie setter
@@ -96,5 +97,32 @@ describe("httpApi CSRF/bootstrap-token wiring", () => {
     expect(headers["X-Bootstrap-Token"]).toBeUndefined();
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("ApiErrorCode covers every code apps/common/auth/local actually emits", () => {
+  // Mirrors the literal strings passed to writeAuthError across
+  // apps/common/auth/local/handler.go and csrf.go - kept here by hand,
+  // since nothing generates this list automatically from the Go source.
+  // The type annotation below is what actually enforces "subset of the
+  // declared union": a code emitted there but missing from ApiErrorCode
+  // fails typecheck here, not just silently passes at runtime (issue
+  // #119's review, finding 9 - client.ts's own `as ApiError` assertion
+  // has no runtime check, so this is the only thing that would catch a
+  // future drift between the two).
+  const localAuthErrorCodes: ApiErrorCode[] = [
+    "UNAUTHENTICATED",
+    "RATE_LIMITED",
+    "INVALID_REQUEST",
+    "ENROLLMENT_CLOSED",
+    "BOOTSTRAP_TOKEN_INVALID",
+    "INTERNAL_ERROR",
+    "CSRF_TOKEN_MISSING",
+    "CSRF_TOKEN_MISMATCH"
+  ];
+
+  it("lists every code this frontend's own backend can actually return (this test would pass vacuously on an empty array)", () => {
+    expect(localAuthErrorCodes.length).toBeGreaterThan(0);
+    expect(new Set(localAuthErrorCodes).size).toBe(localAuthErrorCodes.length);
   });
 });
