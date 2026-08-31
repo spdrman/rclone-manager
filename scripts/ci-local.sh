@@ -225,6 +225,15 @@ if [ "$FAST" != "1" ]; then
   gate_step "release-manifest generator guards (#174)"
   bash scripts/tests/record-release-hashes-guards.test.sh
 
+  # The publish script is the one step in this repository that does
+  # something irreversible, and it runs once, on the day it matters. Its
+  # six refusals get the same treatment #174's five got: driven against
+  # the real script in throwaway repositories, asserting the distinct
+  # message rather than only the exit code, through a seam that stops
+  # before the first Docker command (#88).
+  gate_step "image-publish guards (#88)"
+  bash scripts/tests/publish-image-guards.test.sh
+
   # The self-test runs this very script against synthetic checkouts, so
   # without a marker the recursion terminates only by whatever the fixture
   # happens to lack. CI_LOCAL_SELFTEST makes that an enforced invariant

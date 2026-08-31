@@ -1,0 +1,159 @@
+name: Release
+
+# Issue #88 (B5.2), docs/EPIC-B-multi-nas.md §61 and §62.
+#
+# The release pipeline: regenerate the compliance artifacts inside the
+# build, prove they are what is committed, build and push the canonical
+# multi-architecture image, sign it keylessly and attest its SBOM.
+#
+# NOT auto-triggered, and not only for the reason every other workflow in
+# this repository is not. GitHub Actions no longer auto-triggers here at
+# all (scripts/ci-local.sh is the gate; see its header), and on top of that
+# this one publishes: it puts a semantic version in a public registry,
+# which is not a thing that is taken back cleanly. It takes a typed
+# confirmation, and `publish: false` is the default so that a dispatch made
+# to check the pipeline does not push anything.
+#
+# There is no signing key here and none should ever be added. The signature
+# is keyless: the job's own OIDC token is exchanged for a short-lived
+# Fulcio certificate bound to this workflow's identity, which is what
+# provenance/release-provenance.json records under signing.identity, and
+# what a verifier pins. id-token: write is the whole credential story.
+# docs/compliance/release-provenance.md has the design and the fallback for
+# a release signed by hand.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push to the registry. Leave false to run the whole pipeline without publishing."
+        type: boolean
+        default: false
+      confirm:
+        description: "Type the image tag being published (for example 1.0.0) to confirm. Ignored when publish is false."
+        type: string
+        default: ""
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  compliance-artifacts:
+    name: compliance artifacts are what this tree generates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The provenance bundle pairs itself with the release manifest's
+          # commit, and the manifest's own ancestry check is unanswerable
+          # in a shallow clone: git exits 128 and the check correctly
+          # reports that it could not decide (#174).
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/common/go.mod
+
+      # This is what makes drift structurally impossible rather than
+      # merely loud, which is the half #174 left open. The release
+      # regenerates the compliance record from the tree it is about to
+      # build, and refuses to continue if the result differs from what is
+      # committed. A release cannot ship an SBOM describing a different
+      # dependency graph, because the release is what produced the SBOM.
+      - name: Regenerate
+        working-directory: apps/common
+        env:
+          GOWORK: "off"
+        run: go run ./cmd/provenance -write
+
+      - name: Refuse a release whose committed artifacts are not what it generates
+        run: |
+          if ! git diff --exit-code -- NOTICE provenance/; then
+            echo "::error::the committed compliance artifacts are not what this tree generates. Run (cd apps/common && go run ./cmd/provenance -write) and commit the result."
+            exit 1
+          fi
+
+      - name: Verify the checksum manifest against the tree
+        run: sha256sum -c provenance/checksums.txt
+
+      - name: Supply-chain and compliance suite
+        working-directory: apps/common
+        env:
+          GOWORK: "off"
+        run: go test ./packaging/ -count=1
+
+      - name: Upload the release's compliance bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: compliance-bundle
+          path: |
+            LICENSE
+            NOTICE
+            provenance/
+            container/release-manifest.json
+          if-no-files-found: error
+
+  publish:
+    name: build, push, sign and attest
+    needs: compliance-artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # The entire signing credential. No key, no secret, nothing stored.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # After the checkout, because it reads canonical.json. A publish
+      # that types the wrong tag is stopped here rather than by the
+      # script's own guards, which check a different thing: those ask
+      # whether this tree may be published at all, this asks whether the
+      # person dispatching meant to publish this version.
+      - name: Refuse an unconfirmed publish
+        if: inputs.publish
+        run: |
+          tag="$(sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' apps/common/packaging/canonical.json | head -n1)"
+          if [ "${{ inputs.confirm }}" != "$tag" ]; then
+            echo "::error::publish is true and confirm is '${{ inputs.confirm }}', which is not the tag canonical.json declares ('${tag}'). Type the tag to confirm."
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install cosign
+        if: inputs.publish
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to ghcr.io
+        if: inputs.publish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download the compliance bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: compliance-bundle
+
+      # DRY_RUN=1 runs every guard and stops before the push, so a
+      # dispatch with publish left false still exercises the refusals
+      # against the real tree rather than only against fixtures.
+      - name: Publish
+        env:
+          DRY_RUN: ${{ inputs.publish && '0' || '1' }}
+        run: bash scripts/release/publish-image.sh
