@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
 // TestSnapshotSQLite_RestoreRecoversExactPreSnapshotBytes is the RED
@@ -209,9 +211,7 @@ func TestSnapshotSQLite_RestoreRemovesTheShmInsteadOfWritingAStaleOneBack(t *tes
 // the failure came from the missing fsync rather than from the write
 // itself being broken.
 func TestWriteFileAtomically_PersistsTheRenameByFsyncingTheDirectory(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root: permission bits do not block root, this check is meaningless here")
-	}
+	testenv.RequirePermissionBitsApply(t)
 
 	unreadableDir := filepath.Join(t.TempDir(), "no-read")
 	if err := os.Mkdir(unreadableDir, 0o700); err != nil {

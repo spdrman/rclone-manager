@@ -18,6 +18,8 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/spdrman/rclone-manager/core/internal/state"
+
+	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
 // TestOpenConfigAndJournal_UnreadableDatabaseFile_NeverReturnsAJournal is
@@ -30,9 +32,7 @@ import (
 // not construct a BackupService", which is exactly "BackupService...
 // never start" from the issue's own Given/When/Then.
 func TestOpenConfigAndJournal_UnreadableDatabaseFile_NeverReturnsAJournal(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root: permission bits do not block root, this check is meaningless here")
-	}
+	testenv.RequirePermissionBitsApply(t)
 
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "state.db")
@@ -242,9 +242,7 @@ func seedFutureSchemaVersion(t *testing.T, dbPath string) {
 // migrations (internal/state's own ErrUnknownSchemaVersion, which this
 // package propagates rather than working around).
 func TestOpen_FailedStartupSequence_ConstructsNoBackupService(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root: permission bits do not block root, the unwritable-directory case is meaningless here")
-	}
+	testenv.RequirePermissionBitsApply(t)
 
 	tests := []struct {
 		name string

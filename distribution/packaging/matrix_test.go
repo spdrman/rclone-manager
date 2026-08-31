@@ -65,9 +65,17 @@ type providerUnderTest struct {
 	id        string
 	spec      Provider
 	canonical Canonical
+	// bridge overrides where this provider's platform.ts is read from.
+	// It is only ever set by a control that plants a synthetic bridge,
+	// so a rule's ability to fire stops depending on a file some other
+	// epic owns and may legitimately change. Empty means the real one.
+	bridge string
 }
 
 func (p providerUnderTest) bridgePath() string {
+	if p.bridge != "" {
+		return p.bridge
+	}
 	return Path(filepath.Join("apps", p.id, "frontend", "platform.ts"))
 }
 

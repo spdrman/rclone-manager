@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
 // This file is issue #196's missing test, and the reason it was missing is
@@ -139,6 +140,15 @@ func newConfigMountFixture(t *testing.T, shape configMountShape) configMountFixt
 	}
 
 	if shape.readOnly {
+		// Settle the environment question BEFORE sealing anything. Under
+		// euid 0 the chmods below are accepted and then ignored, so the
+		// shape this fixture exists to reproduce cannot be produced at
+		// all, and the eight tests in this repository that used to answer
+		// that with a t.Skip answered it invisibly: `go test` prints
+		// nothing for a skip without -v, and scripts/ci-local.sh passes
+		// no -v anywhere.
+		testenv.RequirePermissionBitsApply(t)
+
 		// The file itself AND every directory around it, because that is
 		// what the mount produced: :ro on the bind, and the image's
 		// read-only rootfs underneath it. ssh_keys/ and known_hosts.d/
@@ -175,9 +185,16 @@ func newConfigMountFixture(t *testing.T, shape configMountShape) configMountFixt
 // bits mean nothing to a process running as root, and a suite running as
 // root would otherwise report the read-only shape as "writes succeed",
 // which reads as this whole issue being imaginary. So the shape is
-// verified against the filesystem before anything is concluded from it,
-// and a run that cannot produce the shape says so and skips rather than
-// quietly passing.
+// verified against the filesystem before anything is concluded from it.
+//
+// A successful probe is a FAILURE here and not a skip. The environment
+// question is already settled by then: newConfigMountFixture calls
+// testenv.RequirePermissionBitsApply before it seals anything, so by the
+// time this runs the process is one whose writes permission bits do stop.
+// A probe that still succeeds therefore means the fixture is not the shape
+// it says it is, which is the one conclusion that must never be reported
+// as "nothing to see here" — this is the single test carrying the claim
+// that #196 made #140, #146 and #195 inert in every packaged container.
 func requireDirectoryIsActuallySealed(t *testing.T, dir string) {
 	t.Helper()
 	probe := filepath.Join(dir, ".write-probe")
@@ -185,7 +202,7 @@ func requireDirectoryIsActuallySealed(t *testing.T, dir string) {
 	if err == nil {
 		_ = f.Close()
 		_ = os.Remove(probe)
-		t.Skipf("this environment ignores directory permission bits (euid %d), so the read-only single-file mount shape cannot be reproduced here; #196's failure is not observable in this run", os.Geteuid())
+		t.Fatalf("creating a file in %s succeeded at euid %d after it was sealed at 0555, so the read-only single-file mount shape was never reproduced and every assertion drawn from it is meaningless", dir, os.Geteuid())
 	}
 	if !errors.Is(err, fs.ErrPermission) {
 		t.Fatalf("sealing %s produced %v, want a permission error; the fixture is not the mount shape this test claims to exercise", dir, err)
@@ -234,6 +251,51 @@ func assertWriteOutcome(t *testing.T, shape configMountShape, f configMountFixtu
 	}
 }
 
+// configWritePath is one of the three merged features #196 made inert,
+// reduced to the call that lands in the configuration directory.
+//
+// They are a list rather than three inline subtests so the mutation
+// control below drives EXACTLY the same calls as the table above it. A
+// control that drives its own copy of the write paths is a control over a
+// copy, and the copy is the thing that stays correct.
+type configWritePath struct {
+	name string
+	run  func(t *testing.T, svc *BackupService, f configMountFixture) error
+}
+
+func configWritePaths() []configWritePath {
+	return []configWritePath{
+		{"settings write (#140)", func(t *testing.T, svc *BackupService, f configMountFixture) error {
+			_, err := svc.UpdateSettings(context.Background(), UpdateSettingsRequest{
+				Retention: &RetentionUpdate{Tiers: []RetentionTier{
+					{Name: "daily", Granularity: GranularityDay, Keep: 7},
+					{Name: "annual", Granularity: GranularityYear, Keep: 5},
+				}},
+			})
+			return err
+		}},
+		{"create backup set (#146)", func(t *testing.T, svc *BackupService, f configMountFixture) error {
+			_, err := svc.CreateBackupSet(context.Background(), CreateBackupSetRequest{
+				Name:               "mount-shape-set",
+				Host:               "example.internal",
+				Port:               22,
+				User:               "backup-agent",
+				SSHKeyID:           f.keyID,
+				KnownHostsLine:     "example.internal ssh-ed25519 AAAAtestfixtureline",
+				RemotePath:         "/backups/mount-shape-set",
+				LocalPath:          filepath.Join(t.TempDir(), "mount-shape-set"),
+				Include:            []string{"*.dump"},
+				CompletionStrategy: "marker",
+			})
+			return err
+		}},
+		{"import ssh key", func(t *testing.T, svc *BackupService, f configMountFixture) error {
+			_, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+			return err
+		}},
+	}
+}
+
 // TestTheConfigMountShapeDecidesWhetherEveryConfigWritePathWorks is #196's
 // acceptance criterion: a test at the read-only-file mount shape that
 // shows the failure it produces, with the writable-directory shape as its
@@ -244,37 +306,66 @@ func TestTheConfigMountShapeDecidesWhetherEveryConfigWritePathWorks(t *testing.T
 			f := newConfigMountFixture(t, shape)
 			svc := openServiceOnFixture(t, f)
 
-			t.Run("settings write (#140)", func(t *testing.T) {
-				_, err := svc.UpdateSettings(context.Background(), UpdateSettingsRequest{
-					Retention: &RetentionUpdate{Tiers: []RetentionTier{
-						{Name: "daily", Granularity: GranularityDay, Keep: 7},
-						{Name: "annual", Granularity: GranularityYear, Keep: 5},
-					}},
+			for _, w := range configWritePaths() {
+				t.Run(w.name, func(t *testing.T) {
+					assertWriteOutcome(t, shape, f, strings.SplitN(w.name, " (", 2)[0], w.run(t, svc, f))
 				})
-				assertWriteOutcome(t, shape, f, "UpdateSettings", err)
-			})
-
-			t.Run("create backup set (#146)", func(t *testing.T) {
-				_, err := svc.CreateBackupSet(context.Background(), CreateBackupSetRequest{
-					Name:               "mount-shape-set",
-					Host:               "example.internal",
-					Port:               22,
-					User:               "backup-agent",
-					SSHKeyID:           f.keyID,
-					KnownHostsLine:     "example.internal ssh-ed25519 AAAAtestfixtureline",
-					RemotePath:         "/backups/mount-shape-set",
-					LocalPath:          filepath.Join(t.TempDir(), "mount-shape-set"),
-					Include:            []string{"*.dump"},
-					CompletionStrategy: "marker",
-				})
-				assertWriteOutcome(t, shape, f, "CreateBackupSet", err)
-			})
-
-			t.Run("import ssh key", func(t *testing.T) {
-				_, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
-				assertWriteOutcome(t, shape, f, "ImportSSHKey", err)
-			})
+			}
 		})
+	}
+}
+
+// TestUnsealingOnlyTheConfigurationMountMakesEveryWritePathWorkAgain is the
+// mutation control the read-only arm above never had, and the reason it is
+// needed is worth stating plainly: this file's RED commit did not compile.
+// It referenced config.DefaultFileName and config.ResolvePath, which the
+// GREEN commit adds, so the recorded RED is a build failure and not one
+// assertion in this file has been observed failing for its own reason.
+//
+// Reordering the stack would fix the record and nothing else. This fixes
+// the evidence, which is the part that has to keep working: it takes the
+// sealed fixture, changes ONE thing (the permission bits on the
+// configuration mount, and nothing else anywhere), and requires all three
+// write paths to go from failing to succeeding.
+//
+// Without it, "every write failed" on the sealed shape is compatible with
+// the writes failing for a reason that has nothing to do with the mount —
+// a fixture whose state database is unreachable, a validation refusal
+// before the write is reached, a service that never opened properly. The
+// assertion would still be green and #196's claim would still be unproven.
+// With it, the configuration mount is the only variable in the experiment.
+func TestUnsealingOnlyTheConfigurationMountMakesEveryWritePathWorkAgain(t *testing.T) {
+	sealed := configMountShape{name: "read-only single-file mount (pre-#196 packaging)", readOnly: true, wantWritesToFail: true}
+	f := newConfigMountFixture(t, sealed)
+	svc := openServiceOnFixture(t, f)
+
+	// First half: the failure, on exactly the calls the table drives.
+	for _, w := range configWritePaths() {
+		if err := w.run(t, svc, f); err == nil {
+			t.Fatalf("%s succeeded against the sealed configuration mount, so there is no failure for this control to remove", w.name)
+		} else if !errors.Is(err, fs.ErrPermission) {
+			t.Fatalf("%s failed with %v, not a permission error; this control can only attribute a permission failure to the mount", w.name, err)
+		}
+	}
+
+	// The mutation, and it is the only one: the configuration mount stops
+	// being read-only. Nothing else about the fixture, the service or the
+	// requests changes.
+	for _, d := range []string{f.configDir, filepath.Join(f.configDir, "ssh_keys"), filepath.Join(f.configDir, "known_hosts.d")} {
+		if err := os.Chmod(d, 0o755); err != nil {
+			t.Fatalf("Chmod %s: %v", d, err)
+		}
+	}
+	if err := os.Chmod(f.configPath, 0o644); err != nil {
+		t.Fatalf("Chmod %s: %v", f.configPath, err)
+	}
+
+	// Second half: every one of them now works, against the same service,
+	// with the same arguments.
+	for _, w := range configWritePaths() {
+		if err := w.run(t, svc, f); err != nil {
+			t.Errorf("%s still failed after the configuration mount was made writable: %v. Either the failure above was not caused by the mount, or making the mount writable is not enough to fix it, and #196's fix rests on it being both", w.name, err)
+		}
 	}
 }
 

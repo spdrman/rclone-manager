@@ -14,6 +14,8 @@ import (
 	rclonefs "github.com/rclone/rclone/fs"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
+
+	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
 // ---------------------------------------------------------------------------
@@ -78,9 +80,7 @@ func TestClassify_NotFound_RealLocalError(t *testing.T) {
 // directories), so this has to actually open and read the file, which is
 // what RemoteHash does for the local backend.
 func TestClassify_PermissionDenied_RealLocalError(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root: permission checks are not enforced")
-	}
+	testenv.RequirePermissionBitsApply(t)
 
 	ctx := context.Background()
 	root := t.TempDir()
