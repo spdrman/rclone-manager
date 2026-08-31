@@ -74,10 +74,19 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             {/* A run cycle is deployment-wide: core walks every enabled
                 backup set in one pass, and there is no per-set run
                 operation to call. The label says so rather than implying
-                this button touches only the set on screen (#211). */}
+                this button touches only the set on screen (#211).
+
+                It is not gated on this set's own halt state either, and
+                that is the same point from the other side: refusing a
+                pass over every OTHER enabled set because the one on
+                screen is halted is the per-set reading of a
+                deployment-wide control all over again. A set whose host
+                key changed is refused by the transport layer on every
+                cycle (FR-6), which is core's job and not a reason to
+                take the fleet's run away from the operator (#231). */}
             <button
               className="btn btn--primary"
-              disabled={readOnly || s.halted}
+              disabled={readOnly}
               title="Runs one pass over every enabled backup set, not only this one."
               onClick={() => api.runCycle(version.data?.configRevision ?? "").then(set.reload)}
             >

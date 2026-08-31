@@ -44,4 +44,39 @@ describe("backup sets page", () => {
     expect(screen.getAllByRole("button", { name: "Add backup set" })).toHaveLength(1);
     expect(screen.queryByText("No backup sets yet")).toBeNull();
   });
+
+  // Regression for #231. Every card carried its own "Run now" button, and
+  // its handler was api.runCycle(): one pass over EVERY enabled backup
+  // set. So the button named for one set started all of them, and a list
+  // of four sets rendered four copies of the same deployment-wide action.
+  // #214 had already renamed that button in both page headers that carry
+  // it and given it a tooltip saying how wide it reaches; the card is
+  // where the rename did not follow the rewire.
+  //
+  // The fix is not a third rename. A control inside a card reads as the
+  // card's whatever it is labelled, so the run control moved out of the
+  // card and into the page header, where there is one of it.
+  it("offers the run control once, in the page header, and never on a card", async () => {
+    const data = await createMockApi().listSets();
+    expect(data.length).toBeGreaterThan(1);
+    renderSets({ data, error: null, loading: false, reload: noop });
+
+    expect(screen.queryAllByRole("button", { name: "Run now" })).toHaveLength(0);
+
+    const run = screen.getAllByRole("button", { name: "Run all due sets" });
+    expect(run).toHaveLength(1);
+    // The label alone cannot say how far the action reaches, so the
+    // sentence that does is asserted with it. Without this, a later
+    // rewire could pass under the new name the way it passed under the
+    // old one.
+    expect(run[0].getAttribute("title")).toMatch(
+      /every enabled backup set, not only this one/
+    );
+
+    // The control for the zero and the one above: the same query shape,
+    // on a button that IS on every card, finds one per set. Without it a
+    // page that rendered no cards at all would satisfy the assertions
+    // above just as well.
+    expect(screen.getAllByRole("button", { name: "Open" })).toHaveLength(data.length);
+  });
 });

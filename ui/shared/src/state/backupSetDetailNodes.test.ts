@@ -29,7 +29,7 @@ const SET_V1: BackupSet = {
   validations: ["transfer", "checksum"],
   state: "healthy",
   stateNote: "Verified nightly dump.",
-  enabled: true, halted: false,
+  enabled: true,
   newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
   lastRunAt: "2026-08-29T02:01:01+02:00",
   lastValidation: "passed", expectedIntervalHours: 24,

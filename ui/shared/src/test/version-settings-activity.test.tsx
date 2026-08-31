@@ -42,7 +42,6 @@ const SET: BackupSet = {
   state: "healthy",
   stateNote: "Verified nightly dump.",
   enabled: true,
-  halted: false,
   newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
   lastRunAt: "2026-08-29T02:01:01+02:00",
   lastValidation: "passed",

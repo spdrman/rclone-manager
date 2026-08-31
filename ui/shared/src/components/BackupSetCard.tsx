@@ -2,18 +2,35 @@ import type { BackupSet } from "@shared/types/backup";
 import { HealthBadge, HEALTH_PRESENTATION } from "./StatusBadge";
 import { bytes, relativeAge } from "@shared/utilities/format";
 
+/**
+ * One backup set, as a card.
+ *
+ * # There is no run control here, deliberately (#231)
+ *
+ * This card carried a "Run now" button whose handler was
+ * `api.runCycle(configRevision)`: a DEPLOYMENT-WIDE pass over every
+ * enabled backup set, not a run of the set on the card. #214 rewired the
+ * handler (core has no per-set run and never has) and renamed the button
+ * everywhere it appears in a page header, but not here, so one card's
+ * button silently started all of them.
+ *
+ * Renaming it would have been half a fix. Placement carries scope on its
+ * own: a control inside a card reads as acting on that card whatever its
+ * label says, and a list of twelve sets would have rendered twelve
+ * identical copies of one deployment-wide action. So the button is gone
+ * from the card and lives once in the page header, beside the equivalent
+ * controls DashboardPage and BackupSetDetailPage already put there.
+ */
 export function BackupSetCard({
   set,
   currentOperation,
   onOpen,
-  onRun,
   onTest,
   actionsDisabled = false
 }: {
   set: BackupSet;
   currentOperation?: string;
   onOpen(): void;
-  onRun(): void;
   onTest(): void;
   actionsDisabled?: boolean;
 }) {
@@ -87,15 +104,21 @@ export function BackupSetCard({
         style={{ display: "flex", alignItems: "center", gap: 8 }}
       >
         <button className="btn btn--sm" onClick={onOpen}>Open</button>
-        <button className="btn btn--sm" onClick={onRun} disabled={actionsDisabled || set.halted}>
-          Run now
-        </button>
         <button className="btn btn--sm btn--quiet" onClick={onTest} disabled={actionsDisabled}>
           Test connection
         </button>
         <div style={{ flex: 1 }} />
+        {/* What is running for this set right now, and nothing more. The
+            fallback used to be `set.halted ? "halted" : "idle"`, and
+            `halted` was a field nothing ever computed: the HTTP client
+            filled it with a literal `false` on every set, so the branch
+            could not fire against a real service and a set the manager
+            had refused to connect to read as "idle". The word now says
+            only what operationsNode actually reports (#231). Why the set
+            is not running, when the manager knows, is stateNote's job and
+            the detail page's host-key banner's. */}
         <span className="mono" style={{ fontSize: "var(--text-xs)", color: "var(--text-3)" }}>
-          {currentOperation ?? (set.halted ? "halted" : "idle")}
+          {currentOperation ?? "idle"}
         </span>
       </div>
     </article>
