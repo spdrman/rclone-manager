@@ -9,9 +9,12 @@
 # entry, no RPC service and no Debian package. §4A defers all of that, and
 # apps/common/packaging fails the build if any of it appears here.
 #
-# Every host path comes from backup-manager.env, so the one substitution
-# an operator has to make (their real /srv/dev-disk-by-uuid-<UUID>/ path)
-# happens in one file rather than five places in this one.
+# Every host path below is ${DISK}/..., so the one substitution an
+# operator has to make (their real /srv/dev-disk-by-uuid-<UUID>/ path)
+# happens once, in backup-manager.env, and this file needs no editing at
+# all. Retained artifacts land in a directory of the app's own inside
+# ${DISK}/backups rather than in that directory itself, so installing and
+# removing this profile only ever touches paths it created.
 #
 # This is the same two-container shape container/compose.yaml already
 # ships for the generic Docker app, using the exact same canonical image.
@@ -45,12 +48,19 @@ services:
       # proxy. Never set this on the Web UI container, which is the edge.
       TRUST_FORWARDED_HEADERS: "true"
 
+    # Every host path derives from DISK, and DISK is written in the
+    # fail-closed ${VAR:?message} form on purpose: an unset or misspelled
+    # DISK stops the deployment instead of landing five bind mounts
+    # somewhere plausible. Docker creates a missing bind-mount source, so
+    # a fallback default here would put the backup root on the OS disk and
+    # the config file would be created as a directory, which is the one
+    # failure this profile exists to make impossible.
     volumes:
-      - ${STATE_DIR:-/srv/dev-disk-by-uuid/appdata/backup-manager/state}:/data/state
-      - ${BACKUP_DIR:-/srv/dev-disk-by-uuid/backups}:/data/backups
-      - ${CONFIG_FILE:-/srv/dev-disk-by-uuid/appdata/backup-manager/config/config.yaml}:/etc/backup-manager/config.yaml:ro
-      - ${KEY_FILE:-/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/id_ed25519}:/etc/backup-manager/id_ed25519:ro
-      - ${KNOWN_HOSTS_FILE:-/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/known_hosts}:/etc/backup-manager/known_hosts:ro
+      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/state:/data/state
+      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/backups/backup-manager:/data/backups
+      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/config/config.yaml:/etc/backup-manager/config.yaml:ro
+      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
+      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
 
     restart: unless-stopped
     networks:

@@ -79,7 +79,7 @@ and the Unraid frontend bridge already declare:
 
 ```bash
 mkdir -p /mnt/user/appdata/backup-manager/{state,config,secrets}
-mkdir -p /mnt/user/backups
+mkdir -p /mnt/user/backups/backup-manager
 chmod 700 /mnt/user/appdata/backup-manager/secrets
 ```
 
@@ -88,8 +88,15 @@ directory inside appdata. Appdata holds the catalog database; the share holds
 retained backup data. §19.2 makes those two separate security domains, and the
 whole removal criterion below depends on them being separate.
 
+The backup root is `backup-manager` **inside** that share, not the share itself.
+`backups` is one of the likeliest names for a share you already use for something
+else, and this procedure creates directories, owns them and later checks nothing
+outside them changed. Keeping the app inside a directory of its own means every
+one of those steps only ever touches paths this procedure created.
+
 - [ ] `appdata/backup-manager/{state,config,secrets}` exist
 - [ ] A `backups` user share exists and is writable
+- [ ] `backups/backup-manager` exists and was created by this step
 
 ### 0.4 Own them by the uid/gid the app runs as
 
@@ -99,11 +106,19 @@ nothing inside the container can chown these for you at startup.
 Unraid's conventional account is `99:100` (`nobody:users`):
 
 ```bash
-chown -R 99:100 /mnt/user/appdata/backup-manager /mnt/user/backups
+chown -R 99:100 /mnt/user/appdata/backup-manager
+chown 99:100 /mnt/user/backups/backup-manager
 ```
 
+Only paths this procedure created, and the backup root non-recursively. A
+`chown -R` across `/mnt/user/backups` would rewrite the ownership of everything
+any other tool has ever put in that share, is not reversible without an ownership
+record nobody took, and crawls the `/mnt/user` FUSE layer for as long as that
+takes. On a reinstall the same command would rewrite the retained backup store.
+
 - [ ] `PUID`/`PGID` chosen and recorded
-- [ ] Both trees owned by that uid/gid
+- [ ] appdata tree and `backups/backup-manager` owned by that uid/gid
+- [ ] Nothing else in the `backups` share had its ownership changed
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
 
@@ -218,18 +233,39 @@ generic Web host provides (§13A).
 Run one backup cycle to completion, then:
 
 ```bash
-ls -la /mnt/user/backups
+ls -la /mnt/user/backups/backup-manager
 ls -la /mnt/user/appdata/backup-manager/state
-grep -rIl 'PRIVATE KEY' /mnt/user/backups || echo "clean"
+grep -rIl 'PRIVATE KEY' /mnt/user/backups/backup-manager || echo "clean"
 ```
 
-- [ ] At least one completed artifact is under `/mnt/user/backups`
-- [ ] `state.db` and `local-auth.json` are under appdata, **not** under
-      `/mnt/user/backups`
+Then record a baseline for the removal check at the end of this procedure. The
+removal criterion is that the backup root is untouched, and a criterion with
+nothing to compare against is one an operator ticks off a directory listing: a
+partial deletion, a truncated artifact or a silently rewritten file would all
+pass it. So write a canary of known content into the backup root, and record its
+hash and a full file listing **outside** the backup root, where whatever might
+damage that tree cannot reach the evidence:
+
+```bash
+mkdir -p /root/backup-manager-acceptance
+head -c 8M /dev/urandom > /mnt/user/backups/backup-manager/canary.bin
+sha256sum /mnt/user/backups/backup-manager/canary.bin | tee /root/backup-manager-acceptance/canary.sha256
+find /mnt/user/backups/backup-manager -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.before
+```
+
+Keep `/root/backup-manager-acceptance` off the repository: the listing names your own backup
+sets. Record only that it was taken, and the canary's hash, in the evidence table.
+
+- [ ] At least one completed artifact is under `/mnt/user/backups/backup-manager`
+- [ ] `state.db` and `local-auth.json` are under appdata, **not** under the
+      backup root
 - [ ] No private key, `known_hosts`, or auth state anywhere under
-      `/mnt/user/backups` (§19.2)
+      `/mnt/user/backups/backup-manager` (§19.2)
+- [ ] Nothing was written anywhere else in the `backups` share
 - [ ] A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
+- [ ] `canary.bin` written into the backup root and its hash recorded outside it
+- [ ] A full `find` listing of the backup root recorded outside it
 
 ---
 
@@ -277,10 +313,22 @@ Re-add both from the same user templates, changing nothing.
 2. Repeat for `backup-manager-ui`.
 
 - [ ] Both containers are gone
-- [ ] `/mnt/user/backups` is untouched, byte for byte, and every artifact is
-      still readable
+
+Check the backup root against the baseline recorded in the storage step, before
+looking at anything else:
+
+```bash
+sha256sum -c /root/backup-manager-acceptance/canary.sha256
+find /mnt/user/backups/backup-manager -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.after
+diff /root/backup-manager-acceptance/backup-root.before /root/backup-manager-acceptance/backup-root.after
+```
+
+- [ ] `sha256sum -c` reports the canary `OK`
+- [ ] The `diff` against the recorded listing is empty, so the backup root is
+      untouched, byte for byte, and every artifact is still readable
 - [ ] `/mnt/user/appdata/backup-manager` is untouched (Unraid does not delete
       appdata on container removal, and the package must not either)
+- [ ] Nothing elsewhere in the `backups` share changed
 - [ ] Nothing outside the declared host paths was touched
 - [ ] Reinstalling with the same paths adopts the existing catalog rather than
       starting empty

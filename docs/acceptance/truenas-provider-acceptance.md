@@ -83,7 +83,24 @@ zfs create -p POOL/backup-manager/config
 zfs create -p POOL/backup-manager/secrets
 ```
 
+Then confirm all four are actually mounted before you install anything:
+
+```bash
+zfs list -o name,mountpoint -r POOL/backup-manager
+for d in state backups config secrets; do
+  mountpoint -q "/mnt/POOL/backup-manager/$d" || echo "NOT MOUNTED: $d"
+done
+```
+
+This is the check the compose profiles get for free from `${VAR:?message}` and
+this one cannot: the catalog and the paste-in compose both carry literal host
+paths, so there is no unset variable to refuse. An unmounted dataset is not an
+error either, because Docker creates a missing bind-mount source, so the app
+would start and write the retained artifacts onto the pool's root filesystem
+instead of into the dataset that is snapshotted and quota'd.
+
 - [ ] Four datasets exist
+- [ ] All four are mounted, checked immediately before install
 
 ### 0.3 Own them by the uid/gid the app runs as
 
@@ -95,12 +112,20 @@ Pick the uid/gid the app will run as and set it now. TrueNAS's own `apps` accoun
 is `568:568` and is the conventional choice:
 
 ```bash
-chown -R 568:568 /mnt/POOL/backup-manager
+chown 568:568 /mnt/POOL/backup-manager \
+  /mnt/POOL/backup-manager/{state,backups,config,secrets}
 chmod 700 /mnt/POOL/backup-manager/secrets
 ```
 
+The mountpoints are chowned, not the trees beneath them. On a first install that
+is the same thing, because the datasets are empty. On a reinstall it is not: by
+then `backups` is the retained backup store, and a recursive chown would rewrite
+the ownership of every artifact in it with no record of what the ownership was.
+Nothing in this app needs that, so nothing here does it.
+
 - [ ] `PUID`/`PGID` chosen and recorded
 - [ ] All four dataset mountpoints owned by that uid/gid
+- [ ] No recursive ownership change was made to the backups dataset
 
 ### 0.4 Create the SSH key, the pinned known_hosts, and the config
 
@@ -215,6 +240,24 @@ ls -la /mnt/POOL/backup-manager/state
 grep -rIl 'PRIVATE KEY' /mnt/POOL/backup-manager/backups || echo "clean"
 ```
 
+Then record a baseline for the removal check at the end of this procedure. The
+removal criterion is that the backup root is untouched, and a criterion with
+nothing to compare against is one an operator ticks off a directory listing: a
+partial deletion, a truncated artifact or a silently rewritten file would all
+pass it. So write a canary of known content into the backup root, and record its
+hash and a full file listing **outside** the backup root, where whatever might
+damage that tree cannot reach the evidence:
+
+```bash
+mkdir -p /root/backup-manager-acceptance
+head -c 8M /dev/urandom > /mnt/POOL/backup-manager/backups/canary.bin
+sha256sum /mnt/POOL/backup-manager/backups/canary.bin | tee /root/backup-manager-acceptance/canary.sha256
+find /mnt/POOL/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.before
+```
+
+Keep `/root/backup-manager-acceptance` off the repository: the listing names your own backup
+sets. Record only that it was taken, and the canary's hash, in the evidence table.
+
 - [ ] At least one completed artifact is under the backups dataset
 - [ ] `state.db` (and its `-wal`/`-shm` siblings) are under the state dataset,
       **not** under the backups dataset
@@ -223,6 +266,8 @@ grep -rIl 'PRIVATE KEY' /mnt/POOL/backup-manager/backups || echo "clean"
       dataset (§19.2)
 - [ ] A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
+- [ ] `canary.bin` written into the backup root and its hash recorded outside it
+- [ ] A full `find` listing of the backup root recorded outside it
 
 ---
 
@@ -271,8 +316,19 @@ Then let TrueNAS restart the app (or **Stop** then **Start** it in the UI).
 2. When TrueNAS asks, do **not** tick anything that deletes the app's datasets.
 
 - [ ] Both containers are gone
-- [ ] The backups dataset is untouched, byte for byte, and every artifact is
-      still readable
+
+Check the backup root against the baseline recorded in the storage step, before
+looking at anything else:
+
+```bash
+sha256sum -c /root/backup-manager-acceptance/canary.sha256
+find /mnt/POOL/backup-manager/backups -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.after
+diff /root/backup-manager-acceptance/backup-root.before /root/backup-manager-acceptance/backup-root.after
+```
+
+- [ ] `sha256sum -c` reports the canary `OK`
+- [ ] The `diff` against the recorded listing is empty, so the backup root is
+      untouched, byte for byte, and every artifact is still readable
 - [ ] The state dataset is either untouched or removed exactly as the dialog
       said it would be, with no surprise
 - [ ] Reinstalling with the same host paths adopts the existing catalog rather

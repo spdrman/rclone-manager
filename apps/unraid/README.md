@@ -51,12 +51,16 @@ Docker, Add Container.
 | Role | Host default | In the container | Mode |
 | --- | --- | --- | --- |
 | State | `/mnt/user/appdata/backup-manager/state` | `/data/state` | rw |
-| Backups | `/mnt/user/backups` | `/data/backups` | rw |
+| Backups | `/mnt/user/backups/backup-manager` | `/data/backups` | rw |
 | Config | `/mnt/user/appdata/backup-manager/config/config.yaml` | `/etc/backup-manager/config.yaml` | ro |
 | SSH key | `/mnt/user/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
 | Known hosts | `/mnt/user/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
 
-Appdata holds private state; the backups user share holds retained artifacts. That
+Appdata holds private state; a directory of the app's own inside the backups user
+share holds retained artifacts. The backup root is deliberately a child of the
+share rather than the share itself, because `backups` is one of the likeliest
+names for a share you already use, and every step that creates, owns or later
+inspects the backup root should only ever touch paths this package created. That
 split is a rule rather than a preference: §19.2 makes them separate security
 domains, and the backup root must never contain SSH private keys or authentication
 state. `apps/common/packaging` checks the containment in both directions on every
@@ -79,8 +83,14 @@ through `<ExtraParams>`:
 ```
 
 The compose profiles express the same settings as first-class keys.
-`apps/common/packaging` checks both against one another, so the two cannot drift
-apart quietly.
+`apps/common/packaging` parses this string into flags and checks both against one
+another, in both directions: the five hardening flags have to be present, and
+nothing on the same line may undo them. `--privileged`, `--cap-add`,
+`--pid=host`, `--network=host`, `--device`, `--userns=host`, a
+`seccomp=unconfined` security option and a `--user 0:0` are all red tests. That
+matters more here than it looks: the template scanner reads the `<Privileged>`
+element, so before the flags were parsed a `--privileged` appended to this line
+was caught by nothing at all, and `--user` was satisfied by `--userns=host`.
 
 `<PostArgs>` carries the container command. That is unusual for an Unraid template
 and it is load-bearing here: the canonical image ships no `ENTRYPOINT` and no `CMD`
@@ -109,6 +119,36 @@ cookie, CSRF protection and per-IP rate limiting.
 Unraid's root password cannot log into Backup Manager and Backup Manager's
 administrator cannot log into Unraid. Nothing in this directory ships a credential,
 and `apps/common/packaging` scans for one on every commit.
+
+### The one place this profile is weaker than the compose ones
+
+The engine here does **not** set `TRUST_FORWARDED_HEADERS`, and the compose
+profiles do.
+
+The flag decides whether the engine believes `X-Forwarded-For` and
+`X-Forwarded-Proto`. `apps/common/auth/local` allows it only where the Web UI
+container is the engine's sole possible direct TCP peer "by network topology, not
+merely by convention". A compose project network is created, named and destroyed
+with the deployment, and nothing else joins it. The `backup-manager` network
+these two templates share is not that: you create it by hand, it outlives both
+containers, it has a very reusable name, and every container on a user-defined
+bridge reaches every port of every other container on it regardless of what is
+published. Anything attached to it later, deliberately or by an unrelated app
+reusing the name, would be a direct peer of the engine on 8080 and could rotate
+`X-Forwarded-For` per request to defeat the login, enrollment and password rate
+limiters, and assert `X-Forwarded-Proto: https` over plaintext.
+
+The cost of leaving it off is real and worth stating: every client is then
+counted against one rate-limit bucket, the Web UI container's own address, so a
+brute-force attempt from one machine can lock out the rest. That is
+over-limiting rather than not limiting, which is the fail-safe direction, and it
+is the same call the Synology package makes.
+
+`canonical.json` records the decision per platform in `trustForwardedHeaders`
+with the reason beside it, and the conformance suite pins each profile to that
+record in both directions: an engine that starts trusting the header here, or
+stops trusting it under compose, is a red test. No profile may ever set it on the
+Web UI container, which is the internet-facing edge.
 
 ## config.yaml
 

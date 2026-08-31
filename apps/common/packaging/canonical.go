@@ -81,13 +81,50 @@ type Platform struct {
 	// Tier is the §4A support tier: "B" for a provider package/catalog
 	// wrapper, "C" for a supported deployment profile.
 	Tier string `json:"tier"`
-	// StorageMount must equal what this platform's own frontend bridge
-	// declares in apps/<platform>/frontend/platform.ts. That file and
-	// this one are written by different work packages and read by
-	// different audiences, so the test suite pins them together.
+	// StorageMount is the backup root: the one host directory retained
+	// artifacts land in, and nothing else. It is not the app root, and it
+	// is not a container path.
+	//
+	// The field had drifted into meaning all three at once, which is how
+	// the §19.2 containment check became satisfiable two ways: read as an
+	// app root it permits the backup root to sit anywhere beneath it,
+	// including next to the SSH private key. One meaning, pinned to
+	// HostPaths.Backups, is what makes that check bite. It is also what
+	// the operator sees, because the shared UI shows this string and the
+	// backup-set wizard seeds a destination from it, so a value that
+	// includes the secrets directory proposes writing backups beside the
+	// key material.
+	//
+	// It must equal what this platform's own frontend bridge declares in
+	// apps/<platform>/frontend/platform.ts. That file and this one are
+	// written by different work packages and read by different audiences,
+	// so the test suite pins them together.
 	StorageMount string    `json:"storageMount"`
 	HostPaths    HostPaths `json:"hostPaths"`
 	HostPathNote string    `json:"hostPathNote"`
+	// TrustForwardedHeaders records whether this platform's engine
+	// container may set TRUST_FORWARDED_HEADERS=true.
+	//
+	// apps/common/auth/local's contract is that the flag is safe only
+	// where the Web UI container is the sole possible direct TCP peer "by
+	// network topology, not merely by convention". A compose project
+	// network satisfies that: it is created, named and torn down with the
+	// deployment, and nothing else joins it. An operator-created,
+	// durable, host-wide user-defined bridge does not, because every
+	// container on it reaches every port of every other container on it,
+	// so anything attached later, deliberately or by an unrelated app
+	// reusing the name, becomes a direct peer of the engine and can
+	// rotate X-Forwarded-For per request to defeat the login, enrollment
+	// and password rate limiters.
+	//
+	// Where this is false the engine keys its rate limiters on the
+	// container-network peer address, so every client shares one bucket.
+	// That is over-limiting rather than no limiting, which is the
+	// fail-safe direction and the same call the Synology package makes.
+	TrustForwardedHeaders bool `json:"trustForwardedHeaders"`
+	// TrustForwardedHeadersNote records why, in the file an operator or a
+	// reviewer reads rather than in a commit message.
+	TrustForwardedHeadersNote string `json:"trustForwardedHeadersNote"`
 }
 
 // Commands are the argv forms the canonical image supports. A provider

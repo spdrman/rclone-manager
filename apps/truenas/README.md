@@ -18,7 +18,7 @@ to change that.
 | `catalog/app.yaml` | Catalog entry metadata: title, version, categories, icon, sources, run-as context. |
 | `catalog/questions.yaml` | The install wizard: image reference, five storage paths, the published port, and the uid/gid. |
 | `catalog/ix_values.yaml` | A default for every question. |
-| `catalog/templates/docker-compose.yaml` | What the catalog renders. The same two containers as `compose/backup-manager.yaml`, with the answers substituted. |
+| `catalog/templates/docker-compose.yaml` | What the catalog renders. The same two containers as `compose/backup-manager.yaml`, with the answers substituted. `apps/common/packaging` renders it against `ix_values.yaml` on every commit and puts the result through every rule the paste-in compose file gets: the canonical image, the five storage roles and their host paths, read-only mounts, the single published port, the commands, and the full hardening set. The template stays loop-free and conditional-free so that stays possible. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only, no lifecycle behaviour. |
 
 There is deliberately no fourth thing. No Go, no shell, no install hook, no

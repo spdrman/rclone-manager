@@ -3,6 +3,7 @@ package packaging
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -355,6 +356,13 @@ func TestExpandCompose(t *testing.T) {
 		{"${IMAGE:-ghcr.io/x:1.0.0}", map[string]string{"IMAGE": "local:dev"}, "local:dev", 0},
 		{"${IMAGE}", nil, "${IMAGE}", 1},
 		{"${DISK:-/srv/d}/backups", nil, "/srv/d/backups", 0},
+		// The fail-closed form. container/compose.yaml uses it for every
+		// host path so an unset variable stops the deployment, and a
+		// parser that does not recognise it leaves the whole literal in
+		// place to be compared against a real path.
+		{"${DISK:?set DISK}/backups", nil, "${DISK:?set DISK}/backups", 1},
+		{"${DISK:?set DISK}/backups", map[string]string{"DISK": "/srv/d"}, "/srv/d/backups", 0},
+		{"${DISK:?set DISK}/backups", map[string]string{"DISK": ""}, "${DISK:?set DISK}/backups", 1},
 	}
 	for _, tc := range tests {
 		got, unresolved := ExpandCompose(tc.in, tc.env)
@@ -552,4 +560,316 @@ func hasString(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestVarRefsTellsTheThreeFormsApart is what the fail-closed storage rule
+// stands on. All three forms expand to something; only one of them refuses
+// to expand to a plausible wrong path when nobody set the variable.
+func TestVarRefsTellsTheThreeFormsApart(t *testing.T) {
+	refs := VarRefs("${A}:${B:-/default}:${C:?set C}")
+	if len(refs) != 3 {
+		t.Fatalf("got %d refs, want 3: %+v", len(refs), refs)
+	}
+	if refs[0].HasDefault || refs[0].FailClosed {
+		t.Errorf("${A} read as %+v, want a bare reference", refs[0])
+	}
+	if !refs[1].HasDefault || refs[1].Default != "/default" || refs[1].FailClosed {
+		t.Errorf("${B:-/default} read as %+v", refs[1])
+	}
+	if !refs[2].FailClosed || refs[2].HasDefault {
+		t.Errorf("${C:?set C} read as %+v, want fail-closed", refs[2])
+	}
+}
+
+// TestAStoragePathWithADefaultIsVisibleAsSuch is the positive control for
+// TestEveryStoragePathFailsClosed. The rule is a negative claim about every
+// mount in every profile, so it has to be shown failing against a mount
+// that silently defaults and passing against the fail-closed form. It also
+// pins the volume splitter: ${STATE_DIR:?set it} is one field with two
+// colons in it, and splitting on every colon turns one volume into rubble.
+func TestAStoragePathWithADefaultIsVisibleAsSuch(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "compose.yml")
+	mustWrite(t, path, `services:
+  engine:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    volumes:
+      - ${STATE_DIR:-/srv/fallback/state}:/data/state
+      - ${BACKUP_DIR:?set BACKUP_DIR}:/data/backups
+`)
+	svcs, err := ReadCompose(path, map[string]string{"BACKUP_DIR": "/srv/backups"})
+	if err != nil {
+		t.Fatalf("ReadCompose: %v", err)
+	}
+	if len(svcs) != 1 || len(svcs[0].Mounts) != 2 {
+		t.Fatalf("got %+v, want one service with two mounts", svcs)
+	}
+
+	state, backups := svcs[0].Mounts[0], svcs[0].Mounts[1]
+	if state.ContainerPath != "/data/state" || backups.ContainerPath != "/data/backups" {
+		t.Fatalf("volume split wrong: %q and %q", state.ContainerPath, backups.ContainerPath)
+	}
+	if backups.HostPath != "/srv/backups" {
+		t.Errorf("fail-closed host path expanded to %q, want /srv/backups", backups.HostPath)
+	}
+
+	failClosed := func(m Mount) bool {
+		for _, ref := range VarRefs(m.HostPathRaw) {
+			if !ref.FailClosed {
+				return false
+			}
+		}
+		return true
+	}
+	if failClosed(state) {
+		t.Error("a ${STATE_DIR:-/srv/fallback/state} mount was not reported as silently defaulting, so the rule cannot fail")
+	}
+	if !failClosed(backups) {
+		t.Error("a ${BACKUP_DIR:?...} mount was reported as silently defaulting, so the rule fires on correct profiles")
+	}
+}
+
+const cleanExtraParams = "--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m --user 99:100"
+
+func TestCheckExtraParamsHardeningAcceptsTheShippedTemplates(t *testing.T) {
+	if v := CheckExtraParamsHardening("clean.xml", cleanExtraParams); len(v) > 0 {
+		t.Errorf("a correct ExtraParams string was reported as unhardened:\n%s", format(v))
+	}
+}
+
+// TestCheckExtraParamsHardeningCatchesFlagsThatUndoIt is the positive
+// control for the Unraid half of the hardening rule. Every case here passed
+// the previous substring version of the check, which asked only whether
+// five strings appeared somewhere in the line.
+func TestCheckExtraParamsHardeningCatchesFlagsThatUndoIt(t *testing.T) {
+	tests := []struct {
+		name        string
+		extraParams string
+		wantRule    string
+	}{
+		{"privileged", cleanExtraParams + " --privileged", RuleUnsafeRunFlag},
+		{"capability added back", cleanExtraParams + " --cap-add=SYS_ADMIN", RuleUnsafeRunFlag},
+		{"seccomp unconfined", cleanExtraParams + " --security-opt=seccomp=unconfined", RuleUnsafeRunFlag},
+		{"host pid namespace", cleanExtraParams + " --pid=host", RuleUnsafeRunFlag},
+		{"host network", cleanExtraParams + " --network=host", RuleUnsafeRunFlag},
+		{"device passthrough", cleanExtraParams + " --device=/dev/sda", RuleUnsafeRunFlag},
+		{"host userns", cleanExtraParams + " --userns=host", RuleUnsafeRunFlag},
+		{"root user", "--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m --user 0:0", RuleUnsafeRunFlag},
+		// --userns=host contains the substring "--user", which is
+		// exactly how the presence-only check was satisfied by a flag
+		// that pins no user at all.
+		{"userns is not a user", "--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m --userns=host", RuleMissingHardening},
+		{"no read-only rootfs", "--cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m --user 99:100", RuleMissingHardening},
+		{"capabilities not dropped", "--read-only --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m --user 99:100", RuleMissingHardening},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := CheckExtraParamsHardening("template.xml", tc.extraParams)
+			if !hasRule(v, tc.wantRule) {
+				t.Errorf("no %s reported for %q; got:\n%s", tc.wantRule, tc.extraParams, format(v))
+			}
+		})
+	}
+}
+
+// TestCheckForwardedHeaderTrustFailsInBothDirections is the positive
+// control for the rule that did not exist at all: grepping this package for
+// TRUST_FORWARDED_HEADERS used to return nothing, while docs/deployment.md
+// makes it the one variable with an explicit never-set-it-here rule.
+func TestCheckForwardedHeaderTrustFailsInBothDirections(t *testing.T) {
+	engineTrusting := Service{Name: "backup-manager", Source: "compose.yml", Environment: map[string]string{"TRUST_FORWARDED_HEADERS": "true"}}
+	engineSilent := Service{Name: "backup-manager", Source: "template.xml", Environment: map[string]string{}}
+	uiTrusting := Service{Name: "backup-manager-ui", Source: "compose.yml", Environment: map[string]string{"TRUST_FORWARDED_HEADERS": "true"}}
+	uiSilent := Service{Name: "backup-manager-ui", Source: "compose.yml", Environment: map[string]string{}}
+
+	tests := []struct {
+		name     string
+		svc      Service
+		edge     bool
+		mayTrust bool
+		wantFail bool
+	}{
+		{"engine trusts where the topology allows it", engineTrusting, false, true, false},
+		{"engine stops trusting where the profile says it does", engineSilent, false, true, true},
+		{"engine trusts on a shared host-wide network", engineTrusting, false, false, true},
+		{"engine stays silent where it must", engineSilent, false, false, false},
+		{"the edge trusts a forwarded header", uiTrusting, true, true, true},
+		{"the edge stays silent", uiSilent, true, true, false},
+		{"the edge trusts even where the engine may", uiTrusting, true, false, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := CheckForwardedHeaderTrust(tc.svc, tc.edge, tc.mayTrust)
+			if got := len(v) > 0; got != tc.wantFail {
+				t.Errorf("reported %d violations, want failure=%v:\n%s", len(v), tc.wantFail, format(v))
+			}
+		})
+	}
+}
+
+// cleanProcedure is an acceptance procedure that does everything the two
+// rules ask for. Each control below removes exactly one thing from it, so a
+// control that fires proves the rule caught what it removed.
+const cleanProcedure = `
+# Example procedure
+
+	mkdir -p /mnt/user/backups/backup-manager
+	chown -R 99:100 /mnt/user/appdata/backup-manager
+	chown 99:100 /mnt/user/backups/backup-manager
+
+	head -c 8M /dev/urandom > /mnt/user/backups/backup-manager/canary.bin
+	sha256sum /mnt/user/backups/backup-manager/canary.bin | tee /root/evidence/canary.sha256
+	find /mnt/user/backups/backup-manager -type f | sort > /root/evidence/before
+
+	sha256sum -c /root/evidence/canary.sha256
+	diff /root/evidence/before /root/evidence/after
+
+- [ ] the backup root is untouched, byte for byte
+`
+
+func TestCheckAcceptanceProcedureAcceptsASafeVerifiableProcedure(t *testing.T) {
+	if v := CheckAcceptanceProcedure(cleanProcedure, "/mnt/user/backups/backup-manager", nil); len(v) > 0 {
+		t.Errorf("a safe, baseline-recording procedure was reported as unsafe:\n%s", format(v))
+	}
+}
+
+func TestCheckAcceptanceProcedureCatchesDestructiveAndUnverifiableSteps(t *testing.T) {
+	tests := []struct {
+		name     string
+		mutate   func(string) string
+		subs     map[string]string
+		wantRule string
+	}{
+		{
+			name:     "recursive chown across the share holding the backup root",
+			mutate:   func(s string) string { return s + "\n\tchown -R 99:100 /mnt/user/backups\n" },
+			wantRule: RuleRecursiveChown,
+		},
+		{
+			name:     "recursive chown on the backup root itself",
+			mutate:   func(s string) string { return s + "\n\tchown -R 99:100 /mnt/user/backups/backup-manager\n" },
+			wantRule: RuleRecursiveChown,
+		},
+		{
+			name:     "recursive chown hidden behind a placeholder",
+			mutate:   func(s string) string { return s + "\n\tchown -R 1000:100 \"$SHARE\"\n" },
+			subs:     map[string]string{"$SHARE": "/mnt/user/backups"},
+			wantRule: RuleRecursiveChown,
+		},
+		{
+			name:     "no canary written",
+			mutate:   func(s string) string { return strings.ReplaceAll(s, "/dev/urandom", "/dev/zero") },
+			wantRule: RuleUnverifiableClaim,
+		},
+		{
+			name:     "hash recorded but never verified",
+			mutate:   func(s string) string { return strings.ReplaceAll(s, "sha256sum -c", "ls -la") },
+			wantRule: RuleUnverifiableClaim,
+		},
+		{
+			name:     "listing recorded but never compared",
+			mutate:   func(s string) string { return strings.ReplaceAll(s, "diff ", "cat ") },
+			wantRule: RuleUnverifiableClaim,
+		},
+		{
+			name: "baseline recorded inside the tree it vouches for",
+			mutate: func(s string) string {
+				return strings.ReplaceAll(s, "/root/evidence/canary.sha256", "/mnt/user/backups/backup-manager/canary.sha256")
+			},
+			wantRule: RuleBaselineInsideBackupRoot,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := CheckAcceptanceProcedure(tc.mutate(cleanProcedure), "/mnt/user/backups/backup-manager", tc.subs)
+			if !hasRule(v, tc.wantRule) {
+				t.Errorf("no %s reported; got:\n%s", tc.wantRule, format(v))
+			}
+		})
+	}
+}
+
+// TestRenderedCatalogCarriesTheDefaultsItWasRenderedWith is the positive
+// control for the TrueNAS catalog coverage. The catalog entry is the
+// app-store deliverable, and until it was rendered here nothing compared
+// its image, host paths, ports or hardening to anything. Pointing
+// ix_values.yaml somewhere else has to change what the rules see, otherwise
+// the new coverage is decorative.
+func TestRenderedCatalogCarriesTheDefaultsItWasRenderedWith(t *testing.T) {
+	c := MustLoad()
+	catalog := filepath.Join(PlatformDir("truenas"), "catalog")
+	template := filepath.Join(catalog, "templates", "docker-compose.yaml")
+
+	real, err := RenderTrueNASCatalogTemplate(template, filepath.Join(catalog, "ix_values.yaml"))
+	if err != nil {
+		t.Fatalf("render with the shipped defaults: %v", err)
+	}
+	svcs, err := ParseCompose([]byte(real), "rendered", nil)
+	if err != nil {
+		t.Fatalf("parse rendered catalog: %v", err)
+	}
+	if len(svcs) == 0 {
+		t.Fatal("rendered catalog has no services")
+	}
+	for _, svc := range svcs {
+		if svc.Image != c.Image.Reference {
+			t.Fatalf("baseline render already disagrees with canonical: %q", svc.Image)
+		}
+	}
+
+	// Now the mutation: the same template, rendered against defaults that
+	// point somewhere else.
+	mutated := filepath.Join(t.TempDir(), "ix_values.yaml")
+	mustWrite(t, mutated, `image:
+  reference: "docker.io/somebody/else:latest"
+storage:
+  state:
+    hostPath: "/mnt/tank/backup-manager/state"
+  backups:
+    hostPath: "/mnt/tank/backup-manager/secrets"
+  config:
+    hostPath: "/mnt/tank/backup-manager/config/config.yaml"
+  sshKey:
+    hostPath: "/mnt/tank/backup-manager/secrets/id_ed25519"
+  knownHosts:
+    hostPath: "/mnt/tank/backup-manager/secrets/known_hosts"
+network:
+  webPort: 9999
+runtime:
+  puid: 568
+  pgid: 568
+`)
+	bad, err := RenderTrueNASCatalogTemplate(template, mutated)
+	if err != nil {
+		t.Fatalf("render with mutated defaults: %v", err)
+	}
+	badSvcs, err := ParseCompose([]byte(bad), "rendered", nil)
+	if err != nil {
+		t.Fatalf("parse mutated render: %v", err)
+	}
+	sawImage, sawPath := false, false
+	for _, svc := range badSvcs {
+		if svc.Image != c.Image.Reference {
+			sawImage = true
+		}
+		for _, m := range svc.Mounts {
+			if want, _ := c.Platforms["truenas"].HostPaths.ByRole(m.Role); m.Role != "" && m.HostPath != want {
+				sawPath = true
+			}
+		}
+	}
+	if !sawImage {
+		t.Error("a catalog rendered against a foreign image reference still looked canonical, so the image rule cannot fail on the catalog")
+	}
+	if !sawPath {
+		t.Error("a catalog rendered with the backup root pointed at the secrets directory still looked canonical, so the storage rule cannot fail on the catalog")
+	}
+
+	// A question with no default must be an error, not a template
+	// expression smuggled through into the rendered YAML.
+	empty := filepath.Join(t.TempDir(), "ix_values.yaml")
+	mustWrite(t, empty, "image:\n  reference: \"x\"\n")
+	if _, err := RenderTrueNASCatalogTemplate(template, empty); err == nil {
+		t.Error("rendering with missing defaults returned no error; the renderer would fail open")
+	}
 }

@@ -10,8 +10,11 @@ export const unraidBridge: PlatformBridge = {
 
   deployment: {
     label: "Community Applications",
-    storageMount: "/mnt/user/backups",
-    adapterVersion: "unraid 1.1.0"
+    // A dedicated directory inside the backups share, not the share
+    // itself: the share is very likely one the operator already uses.
+    // Pinned to apps/common/packaging/canonical.json.
+    storageMount: "/mnt/user/backups/backup-manager",
+    adapterVersion: "unraid 1.2.0"
   },
 
   capabilities: () => capabilities({}),

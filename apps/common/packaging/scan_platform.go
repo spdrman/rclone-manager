@@ -256,3 +256,93 @@ func LookupYAMLPath(path, dotted string) (bool, error) {
 	}
 	return true, nil
 }
+
+// YAMLValue resolves a dotted path inside a YAML document and returns the
+// scalar it holds. LookupYAMLPath can only answer "a key exists there",
+// which is enough to prove a question has some default and not enough to
+// prove the default is the canonical one.
+func YAMLValue(path, dotted string) (string, bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	var doc any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return "", false, fmt.Errorf("%s: %w", path, err)
+	}
+	v, ok := lookupYAMLValue(doc, dotted)
+	if !ok {
+		return "", false, nil
+	}
+	switch v.(type) {
+	case map[string]any, []any, nil:
+		return "", false, fmt.Errorf("%s: %s is not a scalar", path, dotted)
+	}
+	return fmt.Sprintf("%v", v), true, nil
+}
+
+func lookupYAMLValue(doc any, dotted string) (any, bool) {
+	cur := doc
+	for _, part := range strings.Split(dotted, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = m[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+var truenasTemplateExprRe = regexp.MustCompile(`\{\{\s*\.Values\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)\s*\}\}`)
+
+// RenderTrueNASCatalogTemplate substitutes a catalog template's
+// `.Values.<path>` expressions with the defaults in ix_values.yaml, which
+// is what a TrueNAS install renders when the operator changes no answer.
+//
+// This is a literal substitution and nothing more, which is exactly as
+// much as the template allows: its own header states it is loop-free and
+// conditional-free on purpose, so that the artifact an app-store install
+// gets is the artifact the packaging rules can read. Without this, the
+// catalog entry, which is the deliverable, is checked for existence and
+// for question/template agreement and for nothing else: not its image, not
+// its host paths, not its ports, not its hardening.
+func RenderTrueNASCatalogTemplate(templatePath, valuesPath string) (string, error) {
+	tpl, err := os.ReadFile(templatePath)
+	if err != nil {
+		return "", err
+	}
+	values, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return "", err
+	}
+	var doc any
+	if err := yaml.Unmarshal(values, &doc); err != nil {
+		return "", fmt.Errorf("%s: %w", valuesPath, err)
+	}
+
+	var missing []string
+	out := truenasTemplateExprRe.ReplaceAllStringFunc(string(tpl), func(m string) string {
+		dotted := truenasTemplateExprRe.FindStringSubmatch(m)[1]
+		v, ok := lookupYAMLValue(doc, dotted)
+		if !ok {
+			missing = append(missing, dotted)
+			return m
+		}
+		switch v.(type) {
+		case map[string]any, []any, nil:
+			missing = append(missing, dotted)
+			return m
+		}
+		return fmt.Sprintf("%v", v)
+	})
+	if len(missing) > 0 {
+		return "", fmt.Errorf("%s: no scalar default in %s for %s", templatePath, valuesPath, strings.Join(missing, ", "))
+	}
+	if strings.Contains(out, "{{") {
+		return "", fmt.Errorf("%s: still holds a template expression after rendering; this renderer only understands `{{ .Values.<path> }}`, and the template is required to stay that simple", templatePath)
+	}
+	return out, nil
+}

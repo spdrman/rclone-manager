@@ -20,7 +20,10 @@
   rootfs, dropped capabilities, no-new-privileges, the tmpfs a read-only
   rootfs needs, and the non-root uid/gid) goes through ExtraParams. The
   compose profiles express the same settings as first-class keys, and
-  apps/common/packaging checks both against one another on every commit.
+  apps/common/packaging parses this string into flags and checks both
+  directions: the hardening flags have to be present, and nothing on the
+  same line may undo them. A privileged flag or an added capability here
+  is a red test, not a review catch.
 
   PostArgs is Unraid's only seam for a container command, and the
   canonical image ships no ENTRYPOINT and no CMD on purpose, so it is
@@ -40,7 +43,9 @@
 
     This is the engine container: the API, the scheduler and local authentication. It deliberately publishes no port. Install backup-manager-ui alongside it for the web interface.
 
-    Before installing: run `docker network create backup-manager`, create the appdata and backups paths, own them by the uid/gid below, and write config.yaml, the SSH key and the pinned known_hosts. The engine validates its config before it opens a listener, so a missing config file stops it starting.
+    Before installing: run `docker network create backup-manager`, create the appdata path and the backup-manager directory inside your backups share, own them by the uid/gid below, and write config.yaml, the SSH key and the pinned known_hosts. The engine validates its config before it opens a listener, so a missing config file stops it starting.
+
+    This container does not trust X-Forwarded-For or X-Forwarded-Proto, so its login, enrollment and password rate limiters count every request against the Web UI container's address: one shared bucket rather than one per client. That is deliberate. The network these two containers share is created by hand and lives on the host, so anything attached to it later becomes a direct peer of this container and could otherwise forge those headers to defeat the limiter. The compose profiles use a project-scoped network and can trust the headers; this profile is the one place that guarantee is weaker.
   </Overview>
   <Category>Backup: Tools: Utilities:</Category>
   <WebUI/>
@@ -52,12 +57,11 @@
   <DonateText/>
   <DonateLink/>
   <Config Name="Application state" Target="/data/state" Default="/mnt/user/appdata/backup-manager/state" Mode="rw" Description="Holds the SQLite catalog and the local-authentication administrator record. Must exist and be owned by the uid/gid in ExtraParams before first start." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/state</Config>
-  <Config Name="Backup root" Target="/data/backups" Default="/mnt/user/backups" Mode="rw" Description="Where retained artifacts land. Point this at a real user share, never at a directory inside appdata: no key material or authentication state may ever live inside the backup root." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups</Config>
+  <Config Name="Backup root" Target="/data/backups" Default="/mnt/user/backups/backup-manager" Mode="rw" Description="Where retained artifacts land: a directory of this app's own inside a real user share, never a directory inside appdata and never the share itself. Keeping it a dedicated child means installing, reinstalling and removing this app only ever touches paths it created, even when the share already holds data from something else. No key material or authentication state may ever live inside the backup root." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups/backup-manager</Config>
   <Config Name="Configuration file" Target="/etc/backup-manager/config.yaml" Default="/mnt/user/appdata/backup-manager/config/config.yaml" Mode="ro" Description="Mounted read-only. The engine loads and validates this before it opens a listener, so it must exist and be valid before first start." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/config/config.yaml</Config>
   <Config Name="SFTP private key" Target="/etc/backup-manager/id_ed25519" Default="/mnt/user/appdata/backup-manager/secrets/id_ed25519" Mode="ro" Description="Mounted read-only. Keep it at mode 0600 on the host. It is never baked into the image." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/secrets/id_ed25519</Config>
   <Config Name="Pinned known_hosts" Target="/etc/backup-manager/known_hosts" Default="/mnt/user/appdata/backup-manager/secrets/known_hosts" Mode="ro" Description="Mounted read-only. Verify the remote's host-key fingerprint out of band before trusting this file." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/secrets/known_hosts</Config>
   <Config Name="TMPDIR" Target="TMPDIR" Default="/tmp" Mode="" Description="Go's temp directory. The rootfs is read-only, so this has to point at the tmpfs in ExtraParams." Type="Variable" Display="advanced" Required="true" Mask="false">/tmp</Config>
   <Config Name="Listen address" Target="LISTEN_ADDR" Default=":8080" Mode="" Description="The engine's own listen address inside the container. Never published to the LAN." Type="Variable" Display="advanced" Required="true" Mask="false">:8080</Config>
   <Config Name="Public base URL" Target="PUBLIC_BASE_URL" Default="http://tower.local:8080" Mode="" Description="What the Web UI container's published port looks like from outside this server. The engine prints its one-time enrollment link against this, because its own listen address is never reachable. Set your server's real hostname and the port you gave backup-manager-ui." Type="Variable" Display="always" Required="true" Mask="false">http://tower.local:8080</Config>
-  <Config Name="Trust forwarded headers" Target="TRUST_FORWARDED_HEADERS" Default="true" Mode="" Description="Safe only because this container joins the private backup-manager network, whose only other member is the Web UI container, so a forwarded header can only have come from that proxy. Never set this on the Web UI container itself." Type="Variable" Display="advanced" Required="true" Mask="false">true</Config>
 </Container>

@@ -30,17 +30,34 @@ the parts of the Phase 4 TDD Gate that are decidable from the repository alone:
 
 | Phase 4 gate item | Where it is checked |
 | --- | --- |
-| core version/hash parity | `apps/common/packaging` (canonical image reference is identical across all three platforms, and the architecture set matches `container/release-manifest.json`) |
+| core version parity | `apps/common/packaging` (one canonical image reference, identical across every platform and across the TrueNAS catalog as an install renders it) |
+| core binary hash parity | **not claimed**. Nothing in `apps/common/packaging` derives a hash from any artifact. It checks only that `container/release-manifest.json` records a non-empty SHA-256 per binary per architecture, which cannot detect a stale or wrong hash, and #174 records that the manifest currently pins a commit that is not an ancestor of `main`. The only place binary hashes are verified against real bytes is `spkctl verify` against a built `.spk` in `apps/synology`. |
 | provider package metadata | `apps/common/packaging` (every metadata file parses, and carries the keys its platform requires) |
-| architecture | `apps/common/packaging` |
-| backup-root containment | `apps/common/packaging` (§19.2: private state, config and key material are never inside the backup root) |
+| architecture | `apps/common/packaging` (the claimed set equals what `container/release-manifest.json` records as built) |
+| backup-root containment | `apps/common/packaging` (§19.2: private state, config and key material are never inside the backup root, and the declared storage mount IS the backup root, so the rule has one reading rather than three) |
 | auth mode | `apps/common/packaging` (every platform declares `local-account`, none ships its own auth) |
 | no bundled secrets | `apps/common/packaging` |
 | no provider-specific lifecycle implementation | `apps/common/packaging` |
 | state persistence | **here**, on hardware |
 | install/update/remove semantics | **here**, on hardware |
 
-The last two rows are the reason this directory exists.
+The last two rows are the reason this directory exists. The second row is the
+reason the first one is worded so narrowly: a gate item marked as covered by a
+check that cannot fail for the reason the item names is worse than an openly
+unclaimed gap, because it stops anyone looking.
+
+## What these procedures prove about your data
+
+Every procedure ends by asking whether the backup root survived removal
+untouched. That question is only answerable against a baseline, so each one
+writes an 8 MiB canary of known content into the backup root during the storage
+step and records its SHA-256 and a full file listing **outside** the backup root,
+then verifies both immediately after removal, before anything else is inspected.
+A procedure that claims the backup root is untouched byte for byte without
+recording that baseline is a red test in `apps/common/packaging`, as is any
+`chown -R` that reaches the backup root or a parent of it: step 0 is what an
+operator re-runs on a reinstall, by which point that tree is the retained backup
+store.
 
 ## Procedures
 

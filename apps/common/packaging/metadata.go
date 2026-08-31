@@ -25,8 +25,12 @@ type Mount struct {
 	// CONTAINER path, which is fixed by the binaries themselves. Empty
 	// when the container path is not one the canonical image knows about,
 	// which is itself a finding.
-	Role          string
-	HostPath      string
+	Role     string
+	HostPath string
+	// HostPathRaw is the host side before variable expansion, so a rule
+	// can ask how a path would behave when the operator has not set the
+	// variable, not merely what it expanded to on this machine.
+	HostPathRaw   string
 	ContainerPath string
 	ReadOnly      bool
 	Source        string
@@ -90,21 +94,61 @@ type rawService struct {
 	} `yaml:"healthcheck"`
 }
 
-var composeVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
+var composeVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([-?])([^}]*))?\}`)
 
-// ExpandCompose resolves compose's ${VAR} and ${VAR:-default} forms. env
-// wins over the inline default; a reference with neither is returned
-// unchanged and reported through the second result.
+// VarRef is one ${VAR} reference in a compose file, in whichever of the
+// three forms compose allows. The distinction matters to the packaging
+// rules rather than to the expansion: a storage path written
+// ${STATE_DIR:-/some/path} lands somewhere plausible when the variable is
+// unset, and a profile that lands somewhere plausible instead of refusing
+// to start is how a backup root ends up on the OS disk.
+type VarRef struct {
+	Name string
+	// Default is the text after `:-`, meaningful only when HasDefault.
+	Default    string
+	HasDefault bool
+	// FailClosed records the ${VAR:?message} form, which stops the
+	// deployment rather than substituting anything.
+	FailClosed bool
+}
+
+// VarRefs returns every variable reference in s, in order.
+func VarRefs(s string) []VarRef {
+	var out []VarRef
+	for _, m := range composeVarRe.FindAllStringSubmatch(s, -1) {
+		ref := VarRef{Name: m[1]}
+		switch m[2] {
+		case "-":
+			ref.HasDefault = true
+			ref.Default = m[3]
+		case "?":
+			ref.FailClosed = true
+		}
+		out = append(out, ref)
+	}
+	return out
+}
+
+// ExpandCompose resolves compose's ${VAR}, ${VAR:-default} and
+// ${VAR:?message} forms. env wins over an inline default; a reference with
+// no usable value is returned unchanged and reported through the second
+// result, which covers both the bare form and the fail-closed form.
+//
+// The fail-closed form is not a curiosity: container/compose.yaml uses it
+// for every host path precisely so that an unset STATE_DIR stops the
+// deployment rather than silently landing somewhere. This parser has to
+// understand it, otherwise a profile that adopts it has the literal
+// ${STATE_DIR:?...} compared against canonical.json's host path.
 func ExpandCompose(s string, env map[string]string) (string, []string) {
 	var unresolved []string
 	out := composeVarRe.ReplaceAllStringFunc(s, func(m string) string {
 		groups := composeVarRe.FindStringSubmatch(m)
-		name, def := groups[1], groups[2]
+		name, form, value := groups[1], groups[2], groups[3]
 		if v, ok := env[name]; ok && v != "" {
 			return v
 		}
-		if strings.Contains(m, ":-") {
-			return def
+		if form == "-" {
+			return value
 		}
 		unresolved = append(unresolved, name)
 		return m
@@ -148,13 +192,22 @@ func ReadCompose(path string, env map[string]string) ([]Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseCompose(data, filepath.Base(path), env)
+}
+
+// ParseCompose is ReadCompose over bytes that never had to be a file on
+// disk. The TrueNAS catalog's compose is a template rendered from
+// ix_values.yaml, and the whole point of M2's rule is to check the
+// rendered artifact an app-store install actually gets rather than the
+// paste-in compose file sitting next to it.
+func ParseCompose(data []byte, source string, env map[string]string) ([]Service, error) {
 	var raw rawCompose
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", source, err)
 	}
 
 	canonical := MustLoad()
-	rel := filepath.Base(path)
+	rel := source
 
 	names := make([]string, 0, len(raw.Services))
 	for name := range raw.Services {
@@ -196,7 +249,7 @@ func ReadCompose(path string, env map[string]string) ([]Service, error) {
 			svc.HealthcheckDisabled = rs.Healthcheck.Disable
 		}
 		for _, vol := range rs.Volumes {
-			m, err := parseComposeVolume(expand(vol), rel, canonical)
+			m, err := parseComposeVolume(vol, expand(vol), rel, canonical)
 			if err != nil {
 				return nil, err
 			}
@@ -209,13 +262,15 @@ func ReadCompose(path string, env map[string]string) ([]Service, error) {
 	return out, nil
 }
 
-func parseComposeVolume(spec, source string, canonical Canonical) (Mount, error) {
-	parts := strings.Split(spec, ":")
+func parseComposeVolume(raw, spec, source string, canonical Canonical) (Mount, error) {
+	parts := splitVolumeSpec(spec)
 	if len(parts) < 2 {
 		return Mount{}, fmt.Errorf("%s: %q is not host:container[:mode]", source, spec)
 	}
+	rawParts := splitVolumeSpec(raw)
 	m := Mount{
 		HostPath:      parts[0],
+		HostPathRaw:   rawParts[0],
 		ContainerPath: parts[1],
 		Source:        source,
 	}
@@ -224,6 +279,29 @@ func parseComposeVolume(spec, source string, canonical Canonical) (Mount, error)
 	}
 	m.Role = roleForContainerPath(canonical, m.ContainerPath)
 	return m, nil
+}
+
+// splitVolumeSpec splits host:container[:mode] on the separators only.
+// A plain strings.Split cannot be used: ${STATE_DIR:?set STATE_DIR} is one
+// field containing two colons, and an unresolved reference survives
+// expansion intact, so the naive split turns one volume into four
+// meaningless parts.
+func splitVolumeSpec(spec string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(spec); i++ {
+		switch {
+		case strings.HasPrefix(spec[i:], "${"):
+			depth++
+			i++
+		case spec[i] == '}' && depth > 0:
+			depth--
+		case spec[i] == ':' && depth == 0:
+			parts = append(parts, spec[start:i])
+			start = i + 1
+		}
+	}
+	return append(parts, spec[start:])
 }
 
 func roleForContainerPath(canonical Canonical, containerPath string) string {

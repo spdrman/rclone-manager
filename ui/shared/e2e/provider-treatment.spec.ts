@@ -15,9 +15,9 @@ const EXPECTED: Record<
   generic: { name: "Generic Docker / Linux", integration: "Standalone web app", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/data/backups" },
   ugos: { name: "UGREEN UGOS Pro", integration: "Native app", nativeAuth: true, nativeNotify: true, picker: true, chrome: true, mount: "/volume1/backup-manager" },
   synology: { name: "Synology DSM", integration: "Embedded web app", nativeAuth: false, nativeNotify: false, picker: false, chrome: true, mount: "/volume1/backup-manager" },
-  truenas: { name: "TrueNAS", integration: "Container app", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/mnt/tank/backup-manager" },
-  unraid: { name: "Unraid", integration: "Container app", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/mnt/user/backups" },
-  openmediavault: { name: "OpenMediaVault", integration: "Compose plugin container", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/srv/dev-disk-by-uuid/backups" },
+  truenas: { name: "TrueNAS", integration: "Container app", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/mnt/tank/backup-manager/backups" },
+  unraid: { name: "Unraid", integration: "Container app", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/mnt/user/backups/backup-manager" },
+  openmediavault: { name: "OpenMediaVault", integration: "Compose plugin container", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/srv/dev-disk-by-uuid/backups/backup-manager" },
   proxmox: { name: "Proxmox VE", integration: "Standalone web app", nativeAuth: false, nativeNotify: false, picker: false, chrome: false, mount: "/mnt/backup-manager" }
 };
 

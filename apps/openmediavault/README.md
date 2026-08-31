@@ -84,18 +84,31 @@ working perfectly.
 
 ## Storage
 
-| Role | Env variable | Host default | In the container | Mode |
-| --- | --- | --- | --- | --- |
-| State | `STATE_DIR` | `$DISK/appdata/backup-manager/state` | `/data/state` | rw |
-| Backups | `BACKUP_DIR` | `$DISK/backups` | `/data/backups` | rw |
-| Config | `CONFIG_FILE` | `$DISK/appdata/backup-manager/config/config.yaml` | `/etc/backup-manager/config.yaml` | ro |
-| SSH key | `KEY_FILE` | `$DISK/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
-| Known hosts | `KNOWN_HOSTS_FILE` | `$DISK/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
+| Role | Host path | In the container | Mode |
+| --- | --- | --- | --- |
+| State | `$DISK/appdata/backup-manager/state` | `/data/state` | rw |
+| Backups | `$DISK/backups/backup-manager` | `/data/backups` | rw |
+| Config | `$DISK/appdata/backup-manager/config/config.yaml` | `/etc/backup-manager/config.yaml` | ro |
+| SSH key | `$DISK/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
+| Known hosts | `$DISK/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
 
-Appdata holds private state; `$DISK/backups` holds retained artifacts. That split
-is a rule rather than a preference: §19.2 makes them separate security domains, and
-the backup root must never contain SSH private keys or authentication state.
-`apps/common/packaging` checks the containment in both directions on every commit.
+`DISK` is the only variable in any of these, and it is the only line of
+`backup-manager.env` you have to change. The compose file writes every host path
+as `${DISK:?...}/...`, so an unset or misspelled `DISK` stops the deployment
+rather than creating five directories somewhere plausible. There is deliberately
+no per-path variable: five knobs whose values all repeated the same placeholder
+is how the UUID ended up needing five substitutions while the documentation
+promised one.
+
+Appdata holds private state; `$DISK/backups/backup-manager` holds retained
+artifacts. That split is a rule rather than a preference: §19.2 makes them
+separate security domains, and the backup root must never contain SSH private
+keys or authentication state. `apps/common/packaging` checks the containment in
+both directions on every commit.
+
+The backup root is a directory of the app's own inside `$DISK/backups`, not that
+directory itself, so installing and removing this profile only ever touches paths
+it created, even when you already keep other things there.
 
 Every persistent path is a bind mount to a host path you chose, never a named
 volume, which is precisely why `docker compose down -v` cannot reach your backups.

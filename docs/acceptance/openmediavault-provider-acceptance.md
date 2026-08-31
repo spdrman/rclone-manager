@@ -91,19 +91,29 @@ Find yours:
 ls -d /srv/dev-disk-by-uuid-*
 ```
 
-Substitute it in `backup-manager.env` only. Every host path in the compose file
-derives from variables in that one file, so the UUID appears exactly once.
+Set `DISK` in `backup-manager.env` and change nothing else. Every host path in
+the compose file is written `${DISK}/...`, so the UUID appears exactly once, and
+the compose file itself needs no editing. `DISK` is referenced in the
+fail-closed `${DISK:?...}` form, so leaving it unset or misspelling it stops the
+deployment instead of creating five directories in the wrong place.
 
 ```bash
 DISK=/srv/dev-disk-by-uuid-<your-uuid>
 mkdir -p "$DISK/appdata/backup-manager"/{state,config,secrets}
-mkdir -p "$DISK/backups"
+mkdir -p "$DISK/backups/backup-manager"
 chmod 700 "$DISK/appdata/backup-manager/secrets"
 ```
 
+The backup root is `backup-manager` **inside** `$DISK/backups`, not that
+directory itself, which is very likely one you already use. Every step below
+creates, owns and later inspects only paths this procedure created.
+
 - [ ] Real `dev-disk-by-uuid-<UUID>` path recorded
-- [ ] `appdata/backup-manager/{state,config,secrets}` and `backups` exist
-- [ ] The UUID appears in exactly one file on the NAS, the env file
+- [ ] `appdata/backup-manager/{state,config,secrets}` and
+      `backups/backup-manager` exist
+- [ ] The UUID appears in exactly one place on the NAS, the env file's `DISK`
+- [ ] Starting the stack with `DISK` unset fails loudly rather than creating
+      paths (try it once, on purpose)
 
 ### 0.4 Own them by the uid/gid the app runs as
 
@@ -114,11 +124,18 @@ OMV's conventional service account is `uid 1000` for the first admin account;
 check yours with `id <your-admin-user>`.
 
 ```bash
-chown -R 1000:100 "$DISK/appdata/backup-manager" "$DISK/backups"
+chown -R 1000:100 "$DISK/appdata/backup-manager"
+chown 1000:100 "$DISK/backups/backup-manager"
 ```
 
+Only paths this procedure created, and the backup root non-recursively. A
+`chown -R` across `$DISK/backups` would rewrite the ownership of everything
+already in it, fights the Workbench's own shared-folder ACL management, and on a
+reinstall would rewrite the retained backup store.
+
 - [ ] `PUID`/`PGID` chosen, recorded, and set in the env file
-- [ ] Both trees owned by that uid/gid
+- [ ] appdata tree and `backups/backup-manager` owned by that uid/gid
+- [ ] Nothing else under `$DISK/backups` had its ownership changed
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
 
@@ -224,18 +241,39 @@ Web host provides (§13A).
 Run one backup cycle to completion, then:
 
 ```bash
-ls -la "$DISK/backups"
+ls -la "$DISK/backups/backup-manager"
 ls -la "$DISK/appdata/backup-manager/state"
-grep -rIl 'PRIVATE KEY' "$DISK/backups" || echo "clean"
+grep -rIl 'PRIVATE KEY' "$DISK/backups/backup-manager" || echo "clean"
 ```
 
-- [ ] At least one completed artifact is under `$DISK/backups`
-- [ ] `state.db` and `local-auth.json` are under appdata, **not** under
-      `$DISK/backups`
-- [ ] No private key, `known_hosts`, or auth state anywhere under `$DISK/backups`
-      (§19.2)
+Then record a baseline for the removal check at the end of this procedure. The
+removal criterion is that the backup root is untouched, and a criterion with
+nothing to compare against is one an operator ticks off a directory listing: a
+partial deletion, a truncated artifact or a silently rewritten file would all
+pass it. So write a canary of known content into the backup root, and record its
+hash and a full file listing **outside** the backup root, where whatever might
+damage that tree cannot reach the evidence:
+
+```bash
+mkdir -p /root/backup-manager-acceptance
+head -c 8M /dev/urandom > "$DISK/backups/backup-manager"/canary.bin
+sha256sum "$DISK/backups/backup-manager"/canary.bin | tee /root/backup-manager-acceptance/canary.sha256
+find "$DISK/backups/backup-manager" -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.before
+```
+
+Keep `/root/backup-manager-acceptance` off the repository: the listing names your own backup
+sets. Record only that it was taken, and the canary's hash, in the evidence table.
+
+- [ ] At least one completed artifact is under `$DISK/backups/backup-manager`
+- [ ] `state.db` and `local-auth.json` are under appdata, **not** under the
+      backup root
+- [ ] No private key, `known_hosts`, or auth state anywhere under
+      `$DISK/backups/backup-manager` (§19.2)
+- [ ] Nothing was written anywhere else under `$DISK/backups`
 - [ ] A sidecar recovery manifest sits next to the artifact and contains no
       secret material (§19.3)
+- [ ] `canary.bin` written into the backup root and its hash recorded outside it
+- [ ] A full `find` listing of the backup root recorded outside it
 
 ---
 
@@ -276,9 +314,21 @@ docker compose -p backup-manager up -d
 2. Then **Delete** the file entry.
 
 - [ ] Both containers are gone
-- [ ] `$DISK/backups` is untouched, byte for byte, and every artifact is still
-      readable
+
+Check the backup root against the baseline recorded in the storage step, before
+looking at anything else:
+
+```bash
+sha256sum -c /root/backup-manager-acceptance/canary.sha256
+find "$DISK/backups/backup-manager" -type f -printf '%p %s\n' | sort > /root/backup-manager-acceptance/backup-root.after
+diff /root/backup-manager-acceptance/backup-root.before /root/backup-manager-acceptance/backup-root.after
+```
+
+- [ ] `sha256sum -c` reports the canary `OK`
+- [ ] The `diff` against the recorded listing is empty, so the backup root is
+      untouched, byte for byte, and every artifact is still readable
 - [ ] `$DISK/appdata/backup-manager` is untouched
+- [ ] Nothing elsewhere under `$DISK/backups` changed
 - [ ] Nothing outside the declared host paths was touched, and no OMV
       configuration was modified
 - [ ] Re-adding the same compose file with the same paths adopts the existing
@@ -289,7 +339,7 @@ confirm no named volume ever held retained backup data (every persistent path in
 this profile is a bind mount to a host path you chose, precisely so that `-v`
 cannot reach it).
 
-- [ ] `down -v` removes nothing under `$DISK/backups`
+- [ ] `down -v` removes nothing under `$DISK/backups/backup-manager`
 
 ---
 
