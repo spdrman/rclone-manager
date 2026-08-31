@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -322,6 +323,20 @@ func TestREADMEBacktickedPathsResolve(t *testing.T) {
 	if bare := missingBacktickedPaths(control, Path("."), nil); len(bare) != 2 {
 		t.Errorf("positive control: with no declared-absent list the same text should report 2 missing paths, got %v", bare)
 	}
+
+	// The suppression has to expire on its own. missingBacktickedPaths
+	// returns before its os.Stat for anything in this map, so once a
+	// declared-absent path lands the README keeps describing it as
+	// missing and nothing fires, and the entry is precisely what stops
+	// anyone noticing. Two of the three name paths that are actively
+	// expected to appear, and #122 is open against the UPK proof right
+	// now. This cannot produce a false positive: the map is this file's
+	// own declaration, so a red here means the declaration is stale.
+	for tok, reason := range declaredAbsentPaths {
+		if _, err := os.Stat(Path(strings.TrimSuffix(tok, "/"))); err == nil {
+			t.Errorf("`%s` now exists, but readme_claims_test.go still declares it absent: %q. The README's claim of absence needs re-deriving against what actually landed, and this entry needs removing, or the path stays exempt from the check for as long as the entry survives.", tok, reason)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -428,10 +443,54 @@ func TestREADMEInventoryMatchesCoreInternal(t *testing.T) {
 // ---------------------------------------------------------------------
 
 const (
-	clientVersionCall  = `getVersion: () => request("/version")`
-	serverVersionRoute = `r.Get("/system/version", h.systemVersion)`
-	readmeVersionClaim = "`/api/v1/version`"
+	clientVersionCall     = `getVersion: () => request("/version")`
+	clientVersionRepaired = `getVersion: () => request("/system/version")`
+	clientVersionAnchor   = "getVersion:"
+	serverVersionRoute    = `r.Get("/system/version", h.systemVersion)`
+	readmeVersionClaim    = "`/api/v1/version`"
 )
+
+// versionClaimComplaints decides, from the three documents themselves,
+// whether README.md still describes the /api/v1/version mismatch the way
+// it actually is, and returns one complaint per problem.
+//
+// It takes file contents rather than reading them so the positive
+// control below can drive this function, this switch and these exact
+// needles over planted text. The control it replaces re-implemented the
+// decision inline and compared it against a hand-written truth table, so
+// it passed unchanged when either arm of the switch was deleted and
+// could not notice an extractor that had gone blind.
+//
+// The first two complaints are that liveness oracle. An exact-string
+// needle that stops matching is indistinguishable from a repair unless
+// something else says the code is still there: prettier reformatting
+// client.ts, or a refactor of router.go's route registration, pins the
+// mismatch at false, which reads as "the drift is gone", and the natural
+// repair is to delete the README sentence, after which the check sits at
+// false/false and can never fire again.
+func versionClaimComplaints(clientSrc, routerSrc, readme string) []string {
+	var out []string
+	callsBareVersion := strings.Contains(clientSrc, clientVersionCall)
+	callsSystemVersion := strings.Contains(clientSrc, clientVersionRepaired)
+	servesSystemVersion := strings.Contains(routerSrc, serverVersionRoute)
+	claimed := strings.Contains(readme, readmeVersionClaim)
+
+	if strings.Contains(clientSrc, clientVersionAnchor) && !callsBareVersion && !callsSystemVersion {
+		out = append(out, fmt.Sprintf("the browser client still declares %s, but in neither form this check knows (%s or %s), so the needle has stopped matching and every answer below it is guesswork rather than a repair", clientVersionAnchor, clientVersionCall, clientVersionRepaired))
+	}
+	if !servesSystemVersion {
+		out = append(out, fmt.Sprintf("the router no longer registers %s, so this check can no longer tell a repaired client from an unrecognised one; re-derive the needle before trusting anything it says", serverVersionRoute))
+	}
+
+	mismatch := callsBareVersion && servesSystemVersion
+	switch {
+	case mismatch && !claimed:
+		out = append(out, fmt.Sprintf("the browser client still calls %s while the router only serves %s, and README.md no longer says so", clientVersionCall, serverVersionRoute))
+	case !mismatch && claimed:
+		out = append(out, fmt.Sprintf("README.md still describes the /api/v1/version mismatch, but the client (calls the bare path: %v) or the router (serves the system path: %v) has moved; re-derive the claim rather than leaving it", callsBareVersion, servesSystemVersion))
+	}
+	return out
+}
 
 func TestREADMEVersionRouteMismatchIsStillReal(t *testing.T) {
 	client, err := os.ReadFile(Path(filepath.Join("ui", "shared", "src", "api", "client.ts")))
@@ -443,33 +502,44 @@ func TestREADMEVersionRouteMismatchIsStillReal(t *testing.T) {
 		t.Fatalf("read router.go: %v", err)
 	}
 
-	callsBareVersion := strings.Contains(string(client), clientVersionCall)
-	servesSystemVersion := strings.Contains(string(router), serverVersionRoute)
-	mismatch := callsBareVersion && servesSystemVersion
-	readmeSaysMismatch := strings.Contains(readREADME(t), readmeVersionClaim)
-
-	switch {
-	case mismatch && !readmeSaysMismatch:
-		t.Errorf("the browser client still calls %s while the router only serves %s, and README.md no longer says so", clientVersionCall, serverVersionRoute)
-	case !mismatch && readmeSaysMismatch:
-		t.Errorf("README.md still describes the /api/v1/version mismatch, but the client (%v) or the router (%v) has moved; re-derive the claim rather than leaving it", callsBareVersion, servesSystemVersion)
+	if complaints := versionClaimComplaints(string(client), string(router), readREADME(t)); len(complaints) > 0 {
+		t.Errorf("README.md's /api/v1/version claim:\n  %s", strings.Join(complaints, "\n  "))
 	}
 
-	// Positive control: both directions of that switch fire on the
-	// inputs that should trip them.
+	// Positive control: the same function, over planted client, router
+	// and README text. Every row drives the real needles and the real
+	// switch, so deleting either arm above, or breaking either
+	// extractor, reds a row here.
+	const (
+		bare     = "export const api = {\n  " + clientVersionCall + ",\n};\n"
+		repaired = "export const api = {\n  " + clientVersionRepaired + ",\n};\n"
+		renamed  = "export const api = {\n  getVersion: () => request(\"/v2/version\"),\n};\n"
+		serves   = "func routes(r chi.Router) {\n\t" + serverVersionRoute + "\n}\n"
+		moved    = "func routes(r chi.Router) {\n\tr.Get(systemVersionPath, h.systemVersion)\n}\n"
+		says     = "The browser client asks for " + readmeVersionClaim + " and nothing serves it.\n"
+		silent   = "The browser client and the web host agree on every route.\n"
+	)
 	for _, tc := range []struct {
-		name              string
-		mismatch, claimed bool
-		wantComplaint     bool
+		name                   string
+		client, router, readme string
+		want                   []string
 	}{
-		{"drift hidden", true, false, true},
-		{"claim outlived the drift", false, true, true},
-		{"honest, drift present", true, true, false},
-		{"honest, drift gone", false, false, false},
+		{"drift hidden", bare, serves, silent, []string{"no longer says so"}},
+		{"claim outlived the drift", repaired, serves, says, []string{"has moved"}},
+		{"honest, drift present", bare, serves, says, nil},
+		{"honest, drift gone", repaired, serves, silent, nil},
+		{"the client needle went blind", renamed, serves, says, []string{"stopped matching", "has moved"}},
+		{"the router needle went blind", bare, moved, says, []string{"no longer registers", "has moved"}},
 	} {
-		got := (tc.mismatch && !tc.claimed) || (!tc.mismatch && tc.claimed)
-		if got != tc.wantComplaint {
-			t.Errorf("positive control %q: complaint=%v, want %v", tc.name, got, tc.wantComplaint)
+		got := versionClaimComplaints(tc.client, tc.router, tc.readme)
+		if len(got) != len(tc.want) {
+			t.Errorf("positive control %q: got %d complaint(s), want %d: %v", tc.name, len(got), len(tc.want), got)
+			continue
+		}
+		for i, want := range tc.want {
+			if !strings.Contains(got[i], want) {
+				t.Errorf("positive control %q: complaint %d reads %q, want it to say %q", tc.name, i, got[i], want)
+			}
 		}
 	}
 }
@@ -481,37 +551,91 @@ func TestREADMEVersionRouteMismatchIsStillReal(t *testing.T) {
 
 const uncertifiedPhrase = "build-supported and uncertified"
 
+// pendingOperatorTotal matches the PENDING_OPERATOR row of the matrix's
+// Totals table and captures its count.
+//
+// The count is the whole point. matrix.go renders a Totals row for every
+// outcome unconditionally, zero counts included, so a fully certified
+// matrix still renders `| PENDING_OPERATOR | 0 |`, and a check that
+// looked for the label alone answered "pending" no matter what the
+// matrix said. That made the claim one-sided: the branch for a repaired
+// matrix could never execute, and the README could have kept describing
+// an uncertified build long after certification. The body table
+// abbreviates the cell as OPERATOR, so this row is the only place in the
+// document that can decide the question.
+var pendingOperatorTotal = regexp.MustCompile(`\|\s*PENDING_OPERATOR\s*\|\s*(\d+)\s*\|`)
+
+// certificationComplaints decides, from the matrix and the README
+// themselves, whether the README's certification claim still tracks the
+// generated matrix. A missing Totals row is its own failure with its own
+// message: it means this check has stopped seeing the table, which is
+// not the same as a count of zero and must not be read as one.
+func certificationComplaints(matrix, readme string) []string {
+	m := pendingOperatorTotal.FindStringSubmatch(matrix)
+	if m == nil {
+		return []string{"the conformance matrix has no `| PENDING_OPERATOR | <n> |` row in its Totals table; matrix.go renders that row for every outcome unconditionally, so its absence means this check has stopped seeing the table rather than that nothing is pending"}
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return []string{fmt.Sprintf("the matrix's PENDING_OPERATOR total reads %q, which is not a count this check can compare: %v", m[1], err)}
+	}
+	pending := n > 0
+	stated := strings.Contains(readme, uncertifiedPhrase)
+	switch {
+	case pending && !stated:
+		return []string{fmt.Sprintf("the conformance matrix still reports %d PENDING_OPERATOR cell(s), so no platform here has been certified on hardware, but README.md no longer says %q", n, uncertifiedPhrase)}
+	case !pending && stated:
+		return []string{fmt.Sprintf("the conformance matrix reports no PENDING_OPERATOR cell any more, so README.md's %q claim needs re-deriving from whatever the acceptance runs actually found", uncertifiedPhrase)}
+	}
+	return nil
+}
+
 func TestREADMECertificationClaimTracksTheMatrix(t *testing.T) {
 	matrix, err := os.ReadFile(Path(filepath.Join("docs", "conformance", "phase-4-matrix.md")))
 	if err != nil {
 		t.Fatalf("read phase-4-matrix.md: %v", err)
 	}
-	pending := strings.Contains(string(matrix), "| PENDING_OPERATOR |")
-	stated := strings.Contains(readREADME(t), uncertifiedPhrase)
-
-	if pending && !stated {
-		t.Errorf("the conformance matrix still reports PENDING_OPERATOR cells, so no platform here has been certified on hardware, but README.md no longer says %q", uncertifiedPhrase)
-	}
-	if !pending && stated {
-		t.Errorf("the conformance matrix reports no PENDING_OPERATOR cell any more, so README.md's %q claim needs re-deriving from whatever the acceptance runs actually found", uncertifiedPhrase)
+	if complaints := certificationComplaints(string(matrix), readREADME(t)); len(complaints) > 0 {
+		t.Errorf("README.md's certification claim:\n  %s", strings.Join(complaints, "\n  "))
 	}
 
-	// Positive control: the assertion is a real biconditional, not a
-	// one-sided check that a green matrix would quietly satisfy.
-	for _, tc := range []struct{ pending, stated, want bool }{
-		{true, false, true},
-		{false, true, true},
-		{true, true, false},
-		{false, false, false},
+	// Positive control: the same function over planted Totals tables,
+	// including the zero-count table the old substring test read as
+	// pending. Both arms of the biconditional fire, and a table this
+	// check can no longer read says so in its own words.
+	const (
+		twenty = "### Totals\n\n| Outcome | Cells |\n|---|---|\n| PASS | 73 |\n| PENDING_OPERATOR | 20 |\n| FAIL | 0 |\n"
+		zero   = "### Totals\n\n| Outcome | Cells |\n|---|---|\n| PASS | 93 |\n| PENDING_OPERATOR | 0 |\n| FAIL | 0 |\n"
+		gone   = "### Totals\n\n| Outcome | Cells |\n|---|---|\n| PASS | 93 |\n| FAIL | 0 |\n"
+		says   = "Every provider here is " + uncertifiedPhrase + " until an operator runs the procedure.\n"
+		quiet  = "Every provider here has been certified on real hardware.\n"
+	)
+	for _, tc := range []struct {
+		name            string
+		matrix, readme  string
+		wantOneMentions string
+		wantComplaint   bool
+	}{
+		{"pending, and the README stopped saying so", twenty, quiet, "no longer says", true},
+		{"certified, and the README still says uncertified", zero, says, "needs re-deriving", true},
+		{"pending and stated", twenty, says, "", false},
+		{"certified and silent", zero, quiet, "", false},
+		{"the Totals row went missing", gone, says, "stopped seeing the table", true},
 	} {
-		if got := (tc.pending && !tc.stated) || (!tc.pending && tc.stated); got != tc.want {
-			t.Errorf("positive control (pending=%v stated=%v): complaint=%v, want %v", tc.pending, tc.stated, got, tc.want)
+		got := certificationComplaints(tc.matrix, tc.readme)
+		if tc.wantComplaint != (len(got) > 0) {
+			t.Errorf("positive control %q: complaints %v, want a complaint: %v", tc.name, got, tc.wantComplaint)
+			continue
+		}
+		if tc.wantComplaint && !strings.Contains(got[0], tc.wantOneMentions) {
+			t.Errorf("positive control %q: complaint reads %q, want it to say %q", tc.name, got[0], tc.wantOneMentions)
 		}
 	}
 }
 
 // ---------------------------------------------------------------------
-// 6. The README's per-platform support tiers come from canonical.json
+// 6. The README's per-platform support tiers come from the files that
+//    declare them, in both directions
 // ---------------------------------------------------------------------
 
 var tierRow = regexp.MustCompile(`(?m)^\|\s*([A-Za-z][A-Za-z ]*[A-Za-z])\s*\|\s*Tier ([ABC])\s*\|`)
@@ -524,31 +648,128 @@ func tiersFromTable(regionText string) map[string]string {
 	return out
 }
 
-func TestREADMESupportTiersMatchCanonicalJSON(t *testing.T) {
-	documented := tiersFromTable(region(t, readREADME(t), "SUPPORT-MODEL"))
-	canonical := MustLoad()
+// readmeTierRowName is the name the README's support table gives a
+// declared platform where that differs from the display name the JSON
+// carries. The README writes the vendor name out in the two rows the
+// JSON abbreviates, so matching on displayName alone would report those
+// two as undocumented and the README's own rows as invented.
+var readmeTierRowName = map[string]string{
+	"generic": "Generic Docker and Linux",
+	"ugos":    "UGREEN UGOS Pro",
+}
 
+func tierRowName(id, displayName string) string {
+	if n, ok := readmeTierRowName[id]; ok {
+		return n
+	}
+	return displayName
+}
+
+// declaredTiers is every platform this repository declares a §4A tier
+// for, keyed by the name the README's table uses, plus any disagreement
+// between the two files that declare them.
+//
+// It reads both files because canonical.json declares four platforms and
+// the README's table carries seven rows: checking canonical.json alone
+// left Generic Docker and Linux, Synology DSM and UGREEN UGOS Pro
+// covered by nothing at all. conformance.json declares all seven with
+// their tiers, and the README's own prose says the tiers come from more
+// than one place, so the check reads both and reports it when they
+// disagree rather than silently preferring one.
+func declaredTiers(canonical Canonical, conf Conformance) (map[string]string, []string) {
+	out := map[string]string{}
+	for id, p := range conf.Providers {
+		out[tierRowName(id, p.DisplayName)] = p.Tier
+	}
+	var conflicts []string
 	for id, p := range canonical.Platforms {
-		got, ok := documented[p.DisplayName]
-		if !ok {
-			t.Errorf("README.md's support table has no row for %q (canonical.json platform %q)", p.DisplayName, id)
+		name := tierRowName(id, p.DisplayName)
+		if got, ok := out[name]; ok && got != p.Tier {
+			conflicts = append(conflicts, fmt.Sprintf("canonical.json puts %s at Tier %s and conformance.json puts it at Tier %s; the README cannot agree with both, so fix the declaration before reading the table", name, p.Tier, got))
 			continue
 		}
-		if got != p.Tier {
-			t.Errorf("README.md puts %s at Tier %s; canonical.json says Tier %s", p.DisplayName, got, p.Tier)
+		out[name] = p.Tier
+	}
+	sort.Strings(conflicts)
+	return out, conflicts
+}
+
+// tierComplaints compares the README's table against the declared tiers
+// in BOTH directions: a declared platform the table omits or misstates,
+// and a row the table carries that nothing in this repository declares.
+// The reverse direction is the half that was missing, and it is the half
+// three of the seven rows needed.
+func tierComplaints(documented, declared map[string]string) []string {
+	var out []string
+	for name, tier := range declared {
+		got, ok := documented[name]
+		if !ok {
+			out = append(out, fmt.Sprintf("README.md's support table has no row for %q, which this repository declares at Tier %s", name, tier))
+			continue
+		}
+		if got != tier {
+			out = append(out, fmt.Sprintf("README.md puts %s at Tier %s; this repository declares Tier %s", name, got, tier))
 		}
 	}
+	for name := range documented {
+		if _, ok := declared[name]; !ok {
+			out = append(out, fmt.Sprintf("README.md's support table has a row for %q, which neither canonical.json nor conformance.json declares; a support tier with nothing behind it is a claim this repository cannot keep", name))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
-	// Positive control: a table row carrying the wrong tier is caught,
-	// and a missing row is caught.
-	control := tiersFromTable("| TrueNAS | Tier C | wrong |\n")
-	if control["TrueNAS"] != "C" {
-		t.Fatalf("positive control: the extractor did not read the control row: %v", control)
+func TestREADMESupportTiersMatchTheDeclaredPlatforms(t *testing.T) {
+	declared, conflicts := declaredTiers(MustLoad(), MustLoadConformance())
+	if len(conflicts) > 0 {
+		t.Errorf("the two files that declare support tiers disagree:\n  %s", strings.Join(conflicts, "\n  "))
 	}
-	if control["TrueNAS"] == canonical.Platforms["truenas"].Tier {
-		t.Error("positive control: the control row was supposed to disagree with canonical.json and does not, so this comparison proves nothing")
+	documented := tiersFromTable(region(t, readREADME(t), "SUPPORT-MODEL"))
+	if len(documented) == 0 {
+		t.Fatal("read no rows out of README.md's SUPPORT-MODEL region; the comparison below would pass vacuously")
 	}
-	if _, ok := control["Unraid"]; ok {
-		t.Error("positive control: the extractor invented a row that is not in the control text")
+	if complaints := tierComplaints(documented, declared); len(complaints) > 0 {
+		t.Errorf("README.md's support table:\n  %s", strings.Join(complaints, "\n  "))
+	}
+
+	// Positive control: the real extractor and the real comparison, over
+	// a table that carries one wrong tier and one platform nothing
+	// declares, and over one that drops a declared platform entirely.
+	// The old control read a row and stopped, so it exercised neither
+	// direction of the comparison and could not have noticed that one of
+	// them was missing.
+	declaredControl := map[string]string{"TrueNAS": "B", "Unraid": "B"}
+	for _, tc := range []struct {
+		name  string
+		table string
+		want  []string
+	}{
+		{
+			"one wrong tier and one invented row",
+			"| TrueNAS | Tier C | wrong |\n| Unraid | Tier B | right |\n| Nutanix AHV | Tier A | nothing declares this |\n",
+			[]string{"puts TrueNAS at Tier C", "has a row for \"Nutanix AHV\""},
+		},
+		{
+			"a declared platform the table dropped",
+			"| TrueNAS | Tier B | right |\n",
+			[]string{"has no row for \"Unraid\""},
+		},
+		{
+			"a table that agrees",
+			"| TrueNAS | Tier B | right |\n| Unraid | Tier B | right |\n",
+			nil,
+		},
+	} {
+		got := tierComplaints(tiersFromTable(tc.table), declaredControl)
+		if len(got) != len(tc.want) {
+			t.Errorf("positive control %q: got %d complaint(s), want %d: %v", tc.name, len(got), len(tc.want), got)
+			continue
+		}
+		for i, want := range tc.want {
+			if !strings.Contains(got[i], want) {
+				t.Errorf("positive control %q: complaint %d reads %q, want it to say %q", tc.name, i, got[i], want)
+			}
+		}
 	}
 }
