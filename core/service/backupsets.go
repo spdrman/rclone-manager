@@ -617,7 +617,17 @@ func writeConfigAtomically(path string, cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("encoding configuration: %w", err)
 	}
+	return writeConfigBytesAtomically(path, b)
+}
 
+// writeConfigBytesAtomically is writeConfigAtomically's second half, for a
+// caller that has to choose WHICH encoding of the config lands on disk
+// rather than encoding whatever struct it happens to be holding.
+// UpdateSettings (settings.go) is that caller: it encodes before
+// config.Validate resolves its defaults in place, so the operator's file
+// keeps its own omissions instead of gaining a frozen copy of today's
+// defaults, while the running process still uses the validated struct.
+func writeConfigBytesAtomically(path string, b []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("creating temporary file: %w", err)

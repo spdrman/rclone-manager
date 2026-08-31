@@ -31,6 +31,8 @@ import (
 	"context"
 	"fmt"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
@@ -160,10 +162,25 @@ type RetentionUpdate struct {
 	ProtectLastKnownGood *bool
 }
 
+// namesNothing reports a retention section that carries no field at all,
+// which UpdateSettings refuses exactly as it refuses an absent section.
+// An explicitly empty Tiers is NOT "nothing named": it is a request with a
+// meaning, and a refusal of its own that says what emptying the chain
+// would actually do.
+func (u RetentionUpdate) namesNothing() bool {
+	return u.Timezone == nil &&
+		u.WeekStartsOn == nil &&
+		u.Tiers == nil &&
+		u.ProtectLastKnownGood == nil
+}
+
 // UpdateSettingsRequest is one settings write. One optional pointer per
 // section: a nil section is untouched, and a request that names no
-// section at all is refused rather than treated as a no-op write, so a
-// caller never gets a 200 for a request that did nothing.
+// setting at all is refused rather than treated as a no-op write, so a
+// caller never gets a 200 for a request that did nothing. "Names no
+// setting" is structural, not per-section: a section that is present but
+// entirely empty asks for nothing just as surely as an absent one, and is
+// refused the same way (see RetentionUpdate.namesNothing).
 type UpdateSettingsRequest struct {
 	Retention *RetentionUpdate
 }
@@ -213,17 +230,32 @@ func (b *BackupService) Settings(_ context.Context) (Settings, error) {
 
 // UpdateSettings validates req against the config file's current content,
 // persists the result atomically, and hot-reloads this BackupService so
-// the new policy is immediately in effect — the same sequence, and the
-// same reasoning, as CreateBackupSet (backupsets.go's package doc).
+// the new policy is immediately in effect — the same sequence, in the same
+// order, and for the same reasons as CreateBackupSet (backupsets.go's
+// package doc), validator-catalog resolution included.
 //
-// It returns the settings that are now running, so a caller renders what
-// was actually persisted (defaults resolved, timezone canonicalised)
-// rather than echoing back its own request.
+// It returns the settings that are now IN EFFECT, so a caller renders the
+// policy this process is actually deciding with (defaults resolved,
+// timezone canonicalised) rather than echoing back its own request. That
+// is deliberately not the same thing as "what the file now says": the file
+// keeps the operator's own omissions, and a default they never wrote is
+// resolved in memory on every load rather than frozen into their YAML (see
+// the encode step below).
 func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequest) (Settings, error) {
 	if b.configPath == "" {
 		return Settings{}, ErrConfigNotFileBacked
 	}
-	if req.Retention == nil {
+	// A section that is present but carries no field at all is refused
+	// exactly like an absent one. The guard is structural (every field of
+	// every named section nil) rather than per-section, because
+	// "{\"retention\":{}}" satisfies a per-section check while asking for
+	// nothing: it would re-marshal and rewrite the operator's config file,
+	// move ConfigRevision (invalidating every outstanding retention
+	// preview), swap the running app.Service and answer 200, all for a
+	// request with no content. UpdateSettingsRequest's own doc promises a
+	// caller never gets a 200 for a request that did nothing, and only the
+	// structural form of the check keeps that promise.
+	if req.Retention == nil || req.Retention.namesNothing() {
 		return Settings{}, fmt.Errorf("%w: a settings write must name at least one setting to change", ErrInvalidRequest)
 	}
 	if req.Retention.Tiers != nil && len(req.Retention.Tiers) == 0 {
@@ -249,6 +281,28 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 
 	applyRetentionUpdate(&cfg.Retention, *req.Retention)
 
+	// Encode what will be written BEFORE cfg.Validate, and write these
+	// bytes rather than re-encoding the validated struct.
+	//
+	// config.Validate resolves defaults IN PLACE (its own doc), so
+	// marshalling afterwards persists every one of them: a file that never
+	// mentioned alerts.repeated_failure_threshold or
+	// completion.delete_safety_delay gains both, and a file using neither
+	// retention spelling gains a literal daily_days/weekly_months/
+	// monthly_months 7/3/12. delete_safety_delay is a deletion-safety knob
+	// (config.DefaultDeleteSafetyDelay's own doc explains why its zero
+	// value is not read literally), so freezing this release's value into
+	// the operator's file as a side effect of an unrelated retention edit
+	// would silently opt that deployment out of every future change to it.
+	// The three legacy retention scalars carry omitempty for exactly this
+	// round trip. The running process still uses the validated struct
+	// below, so nothing about what this service DOES changes; only what is
+	// left in the file does. settings_test.go pins both halves.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return Settings{}, fmt.Errorf("service: encoding configuration: %w", err)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		// Safe to echo back to an API caller, for exactly the reason
 		// CreateBackupSet gives for the identical line: a
@@ -258,9 +312,38 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 		return Settings{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
-	if err := writeConfigAtomically(b.configPath, cfg); err != nil {
+	// Validator resolution, on the same terms and in the same order
+	// CreateBackupSet uses it (backupsets.go's own comment carries the
+	// full reasoning): every fallible part runs BEFORE the write, and the
+	// pure in-memory assignment runs after it.
+	//
+	// This is not optional bookkeeping. config.Load never resolves a
+	// backup set's Validation.ValidatorID into the Validation.Command
+	// internal/lifecycle/verify.go runs -- the file only ever carries the
+	// id -- so hot-reloading a config that skipped this step swaps in an
+	// app.Service where every registered-validator backup set holds an id
+	// and a nil command, which config.Validation.ResolvedCommand refuses
+	// with ErrValidatorNotResolved and verify.go turns into a failed
+	// verification for every artifact. That is fail-closed, but it halts a
+	// live deployment's backups because somebody saved a timezone. It also
+	// keeps computeConfigRevision below computing over the SAME resolved
+	// config Open and CreateBackupSet compute over, so one file cannot
+	// yield two different revisions depending on which path last reloaded
+	// it.
+	applyValidators, err := planValidatorCatalog(cfg)
+	if err != nil {
+		return Settings{}, err
+	}
+
+	if err := writeConfigBytesAtomically(b.configPath, encoded); err != nil {
 		return Settings{}, fmt.Errorf("service: persisting configuration: %w", err)
 	}
+
+	// Now, and only now that the file on disk holds the id, put the
+	// resolved commands into this process's in-memory copy. cfg is never
+	// written back out from here (the bytes above were captured before
+	// this ran), so the resolved path stays out of config.yaml.
+	applyValidators()
 
 	// The one atomic swap that makes the new policy take effect, with the
 	// same {inner, revision} non-torn guarantee CreateBackupSet's own

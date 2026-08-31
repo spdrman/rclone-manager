@@ -300,7 +300,13 @@ func TestPatchSettings_ErrorMapping(t *testing.T) {
 // own must not have called into core at all, so a malformed body can
 // never be half-applied by a backend that saw a partially decoded struct.
 func TestPatchSettings_ARefusedRequestNeverReachesTheBackend(t *testing.T) {
-	for _, body := range []string{`{"retention":`, `{}`, `{"retenton":{"timezone":"UTC"}}`} {
+	// `{"retention":{}}` is mandatory review finding M3: a present but
+	// entirely empty section passed the old per-section guard, so a
+	// zero-content body rewrote the operator's config file, moved
+	// ConfigRevision (invalidating every outstanding retention preview) and
+	// answered 200. It is also the cheapest way to reach the hot reload,
+	// which is why it is refused here rather than only in core/service.
+	for _, body := range []string{`{"retention":`, `{}`, `{"retention":{}}`, `{"retenton":{"timezone":"UTC"}}`} {
 		t.Run(body, func(t *testing.T) {
 			tr := newSettingsTestRouter(t)
 			if rec := tr.patch(t, body); rec.Code != http.StatusBadRequest {

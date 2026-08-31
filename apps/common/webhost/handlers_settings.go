@@ -66,6 +66,27 @@ type retentionUpdateRequest struct {
 	ProtectLastKnownGood *bool `json:"protect_last_known_good"`
 }
 
+// namesNothing reports a retention object that was sent but carries no
+// field at all, which this route refuses exactly as it refuses an absent
+// one. The check is structural rather than "is the section present",
+// because `{"retention":{}}` passes the presence test while asking for
+// nothing: honouring it would rewrite the operator's config file, move
+// ConfigRevision (invalidating every outstanding retention preview) and
+// answer 200 for a request with no content. core/service applies the
+// identical guard (service.UpdateSettingsRequest's own doc), so a caller
+// that reached it around this layer is refused too; this one exists so a
+// refused request never reaches the backend at all.
+//
+// `"tiers": []` is deliberately NOT "nothing named": it is a request with
+// a meaning, and core/service refuses it with a message that explains what
+// emptying the chain would actually do.
+func (r retentionUpdateRequest) namesNothing() bool {
+	return r.Timezone == nil &&
+		r.WeekStartsOn == nil &&
+		r.Tiers == nil &&
+		r.ProtectLastKnownGood == nil
+}
+
 // retentionTierBody is one link in the chain, on the wire. Shared by the
 // request and the response so a client round-trips the identical shape it
 // was served, rather than reading one spelling and having to write
@@ -198,7 +219,7 @@ func (h *handlers) updateSettings(w http.ResponseWriter, r *http.Request) {
 // core/service, which is the only layer that knows an empty chain
 // reinstates the default policy and therefore has to refuse it.
 func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsRequest, error) {
-	if body.Retention == nil {
+	if body.Retention == nil || body.Retention.namesNothing() {
 		return service.UpdateSettingsRequest{}, errors.New("a settings write must name at least one setting to change")
 	}
 

@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
@@ -500,11 +504,75 @@ func TestUpdateSettings_RereadsTheFileSoAnOutOfBandEditIsNotClobbered(t *testing
 	}
 }
 
+// TestUpdateSettings_RefusesARequestThatNamesNothing covers both spellings
+// of "nothing". The second is mandatory review finding M3: a present but
+// entirely empty retention section passed the old per-section guard, so a
+// zero-content request re-marshalled and rewrote the operator's config
+// file, moved ConfigRevision (invalidating every outstanding retention
+// preview for every backup set) and answered success. The refusal has to be
+// structural, and the file has to be untouched by it.
 func TestUpdateSettings_RefusesARequestThatNamesNothing(t *testing.T) {
-	svc, _ := openTestService(t)
+	tests := []struct {
+		name string
+		req  UpdateSettingsRequest
+	}{
+		{name: "no section at all", req: UpdateSettingsRequest{}},
+		{name: "a retention section naming no field", req: UpdateSettingsRequest{Retention: &RetentionUpdate{}}},
+	}
 
-	if _, err := svc.UpdateSettings(context.Background(), UpdateSettingsRequest{}); !errors.Is(err, ErrInvalidRequest) {
-		t.Fatalf("UpdateSettings error = %v, want ErrInvalidRequest", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, configPath := openTestService(t)
+			before, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			revisionBefore := svc.ConfigRevision()
+
+			if _, err := svc.UpdateSettings(context.Background(), tt.req); !errors.Is(err, ErrInvalidRequest) {
+				t.Fatalf("UpdateSettings error = %v, want ErrInvalidRequest", err)
+			}
+
+			after, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			if string(after) != string(before) {
+				t.Errorf("a refused request rewrote the configuration file:\n--- before ---\n%s\n--- after ---\n%s", before, after)
+			}
+			if svc.ConfigRevision() != revisionBefore {
+				t.Errorf("a refused request moved ConfigRevision from %q to %q, invalidating every outstanding retention preview", revisionBefore, svc.ConfigRevision())
+			}
+		})
+	}
+}
+
+// TestUpdateSettings_PositiveControlForTheNamesNothingRefusal proves the
+// table above measures something: the identical fixture, with one field
+// actually named, does rewrite the file and does move ConfigRevision.
+func TestUpdateSettings_PositiveControlForTheNamesNothingRefusal(t *testing.T) {
+	svc, configPath := openTestService(t)
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	revisionBefore := svc.ConfigRevision()
+
+	if _, err := svc.UpdateSettings(context.Background(), UpdateSettingsRequest{
+		Retention: &RetentionUpdate{Timezone: ptrString("Europe/Berlin")},
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(after) == string(before) {
+		t.Error("control failed: a request that DOES name a setting left the file unchanged, so the refusal assertions above prove nothing")
+	}
+	if svc.ConfigRevision() == revisionBefore {
+		t.Error("control failed: a request that DOES name a setting left ConfigRevision unchanged")
 	}
 }
 
@@ -586,5 +654,250 @@ func assertTiersEqual(t *testing.T, got, want []RetentionTier) {
 		if got[i] != want[i] {
 			t.Errorf("tiers[%d] = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// TestUpdateSettings_HotReloadStillResolvesEveryRegisteredValidator is
+// mandatory review finding M1 on PR #171. UpdateSettings is the third
+// config-loading, state-swapping path in this package, and it was the only
+// one that skipped validator resolution: config.Load reads
+// validation.validator_id and never turns it into the
+// validation.Command internal/lifecycle/verify.go runs, so hot-reloading
+// without planValidatorCatalog swapped in an app.Service where every
+// registered-validator backup set held an id and a nil command. That
+// combination is exactly what config.Validation.ResolvedCommand refuses
+// with ErrValidatorNotResolved, so every artifact in the deployment failed
+// verification until the process was restarted, triggered by a settings
+// write that did not mention validators at all.
+//
+// The retention field this test PATCHes is deliberately unrelated to
+// validation, because the report is that an unrelated edit breaks it.
+func TestUpdateSettings_HotReloadStillResolvesEveryRegisteredValidator(t *testing.T) {
+	configPath, _, _ := writeValidatorConfigFile(t, string(ValidatorTrailerMarker), []byte("payload"))
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	ctx := context.Background()
+
+	// Positive control. Without this the assertion after the PATCH could
+	// pass against a fixture whose validator was never resolved in the
+	// first place, which is the one way a test of "resolution survives X"
+	// proves nothing at all.
+	before := findBackupSet(svc.state.Load().inner.Config, "production", "postgres-primary")
+	beforeCmd, err := before.Validation.ResolvedCommand()
+	if err != nil {
+		t.Fatalf("precondition failed: the freshly opened service has not resolved its validator: %v", err)
+	}
+	if beforeCmd == nil {
+		t.Fatal("precondition failed: the fixture's backup set names no validator, so this test would prove nothing")
+	}
+
+	if _, err := svc.UpdateSettings(ctx, UpdateSettingsRequest{
+		Retention: &RetentionUpdate{Timezone: ptrString("Europe/Berlin")},
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	after := findBackupSet(svc.state.Load().inner.Config, "production", "postgres-primary")
+	afterCmd, err := after.Validation.ResolvedCommand()
+	if err != nil {
+		t.Fatalf("after a settings write the running config no longer resolves its validator: %v; every artifact in this backup set would now fail verification until a restart", err)
+	}
+	if afterCmd == nil {
+		t.Fatal("after a settings write the running config reports NO validator for a backup set that configures one")
+	}
+	if afterCmd.Executable != beforeCmd.Executable {
+		t.Errorf("resolved Executable = %q, want %q (unchanged by an unrelated settings write)", afterCmd.Executable, beforeCmd.Executable)
+	}
+	if _, statErr := os.Stat(afterCmd.Executable); statErr != nil {
+		t.Errorf("the resolved validator script is not on disk after the settings write: %v", statErr)
+	}
+
+	// The other half of the same invariant: what is PERSISTED is still an
+	// id and never the resolved path, so the settings write did not leak
+	// this process's own filesystem layout into the operator's file.
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), "validator_id: "+string(ValidatorTrailerMarker)) {
+		t.Errorf("the written config no longer names validator_id %q:\n%s", ValidatorTrailerMarker, raw)
+	}
+	if strings.Contains(string(raw), afterCmd.Executable) {
+		t.Errorf("the written config leaked the resolved validator path %q:\n%s", afterCmd.Executable, raw)
+	}
+}
+
+// TestUpdateSettings_ConfigRevisionMatchesWhatAFreshOpenComputes is M1's
+// secondary effect. computeConfigRevision is the staleness token both
+// ApplyRetentionPlan and POST /operations compare against, and Open
+// computes it over the validated, validator-RESOLVED config. Skipping
+// resolution here made one file yield two different revisions depending on
+// which path last reloaded it, so a client holding a revision from before a
+// settings write and one holding it from after a restart disagreed about
+// the same bytes on disk.
+func TestUpdateSettings_ConfigRevisionMatchesWhatAFreshOpenComputes(t *testing.T) {
+	configPath, _, _ := writeValidatorConfigFile(t, string(ValidatorTrailerMarker), []byte("payload"))
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, err := svc.UpdateSettings(ctx, UpdateSettingsRequest{
+		Retention: &RetentionUpdate{Timezone: ptrString("Europe/Berlin")},
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	afterWrite := svc.ConfigRevision()
+	if err := cleanup(); err != nil {
+		t.Fatalf("closing the service: %v", err)
+	}
+
+	// A restart reading the very file the write just produced.
+	restarted, cleanup2, err := Open(ctx, configPath)
+	if err != nil {
+		t.Fatalf("Open (restart): %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup2() })
+
+	if restarted.ConfigRevision() != afterWrite {
+		t.Errorf("ConfigRevision after the write = %q, after a restart on the same file = %q; one file must not yield two revisions", afterWrite, restarted.ConfigRevision())
+	}
+}
+
+// writeStableStrategyConfigFile writes a loadable config whose backup set
+// uses the "stable" completion strategy and does NOT spell
+// delete_safety_delay, alerts, or any retention chain: exactly the shape a
+// hand-authored or pre-WP3.2 file has, and therefore the shape whose
+// resolved defaults a settings write must not freeze into it.
+func writeStableStrategyConfigFile(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	localDir := filepath.Join(dir, "local")
+	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "config.yaml")
+	content := "poll_interval: 15m\n" +
+		"state:\n" +
+		"  database: " + filepath.Join(dir, "state.db") + "\n" +
+		"sources:\n" +
+		"  - id: production\n" +
+		"    backup_sets:\n" +
+		"      - id: postgres-primary\n" +
+		"        remote:\n" +
+		"          type: local\n" +
+		"        remote_path: " + remoteDir + "\n" +
+		"        local_path: " + localDir + "\n" +
+		"        include:\n" +
+		"          - \"*.dump\"\n" +
+		"        completion:\n" +
+		"          strategy: stable\n" +
+		"          stable_for: 5m\n" +
+		"        stale_after: 24h\n" +
+		"retention:\n" +
+		"  timezone: UTC\n" +
+		"  week_starts_on: monday\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return configPath
+}
+
+// TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile is
+// mandatory review finding M4. config.Validate fills in defaults IN PLACE,
+// so marshalling the validated struct persisted every one of them: a file
+// that never mentioned completion.delete_safety_delay gained this
+// release's value for it, permanently opting that deployment out of any
+// future change to a DELETION-safety knob, as a side effect of an
+// unrelated retention edit nobody connected to it. Same for
+// alerts.repeated_failure_threshold and for the 7/3/12 legacy scalars,
+// which pin a file that would otherwise track the default chain.
+//
+// The write must therefore persist the folded PRE-validate config: the
+// operator's own omissions survive, and every default is resolved in
+// memory on load exactly as it always was.
+func TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile(t *testing.T) {
+	configPath := writeStableStrategyConfigFile(t)
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	if _, err := svc.UpdateSettings(context.Background(), UpdateSettingsRequest{
+		Retention: &RetentionUpdate{Timezone: ptrString("Europe/Berlin")},
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	written := string(raw)
+
+	// The write did happen: without this the three absences below would be
+	// satisfied by a no-op.
+	if !strings.Contains(written, "Europe/Berlin") {
+		t.Fatalf("precondition failed: the settings write did not reach the file:\n%s", written)
+	}
+
+	// Every spelling below is a resolved default. yaml.Marshal emits most
+	// of these keys either way (only the three legacy retention scalars
+	// carry omitempty), so what matters is the VALUE: a zero, or a null,
+	// is "the operator did not choose, resolve it on load", while the
+	// resolved number is that choice frozen into their file forever.
+	frozen := []string{
+		"delete_safety_delay: " + config.DefaultDeleteSafetyDelay.String(),
+		"repeated_failure_threshold: " + strconv.Itoa(config.DefaultRepeatedFailureThreshold),
+		"daily_days:",
+		"weekly_months:",
+		"monthly_months:",
+		"protect_last_known_good: true",
+	}
+	for _, spelling := range frozen {
+		if strings.Contains(written, spelling) {
+			t.Errorf("the settings write froze the resolved default %q into a file that never chose it:\n%s", spelling, written)
+		}
+	}
+
+	// The opposite half, so the assertions above cannot be satisfied by a
+	// write that simply dropped the keys: the omissions are still there,
+	// spelled as the "not chosen" values config.Validate resolves on load.
+	for _, kept := range []string{"delete_safety_delay: 0s", "protect_last_known_good: null"} {
+		if !strings.Contains(written, kept) {
+			t.Errorf("the written config no longer carries %q, so the operator's omission was not preserved:\n%s", kept, written)
+		}
+	}
+
+	// Positive control: every frozen spelling IS produced by encoding the
+	// VALIDATED config, which is what this write path used to do. If this
+	// control ever stops finding them, the assertions above have become
+	// vacuous and prove nothing.
+	validated, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	encoded, err := yaml.Marshal(validated)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, spelling := range frozen {
+		if !strings.Contains(string(encoded), spelling) {
+			t.Errorf("control failed: encoding the validated config does not produce %q, so asserting its absence from the file proves nothing", spelling)
+		}
+	}
+
+	// And the deployment still RUNS with every default resolved: not
+	// persisting them changes what is in the file, never what is decided.
+	live := findBackupSet(svc.state.Load().inner.Config, "production", "postgres-primary")
+	if live.Completion.DeleteSafetyDelay.Duration() != config.DefaultDeleteSafetyDelay {
+		t.Errorf("running delete_safety_delay = %s, want the resolved default %s", live.Completion.DeleteSafetyDelay, config.DefaultDeleteSafetyDelay)
 	}
 }

@@ -202,7 +202,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// and already re-reads the policy at plan time. So the gate still
 		// stands between this deployment and every deletion; putting a
 		// second copy of it here would move nothing except the settings
-		// form, which would be permanently inert until #92 lands. The
+		// form, which would be permanently inert until #92 lands.
+		//
+		// That argument is a chain, not a claim, so it is pinned by tests
+		// rather than by this comment: core/service's
+		// TestApplyRetentionPlan_ASettingsWriteBetweenPreviewAndApplyIsStale
+		// drives a settings write in between a preview and its apply and
+		// asserts the apply is refused with ErrRetentionPlanStale and
+		// nothing is deleted, with a control proving the same plan applies
+		// when no settings write intervenes. If a later change made this
+		// route reuse the previous config revision, or made plan staleness
+		// tolerant of a config move, that test fails rather than this
+		// route quietly becoming an ungated way to widen an
+		// already-approved deletion. The
 		// operator-facing confirmation that #140 requires before that
 		// particular change takes effect lives in the UI, in front of the
 		// human who can answer it (ui/shared/src/pages/SettingsPage.tsx).

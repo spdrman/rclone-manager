@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -910,6 +911,15 @@ func TestPreviewRetention_SweepsExpiredPlansAndCapsTheStore(t *testing.T) {
 // below.
 func writeRetentionConfigFile(t *testing.T) (configPath, localDir string) {
 	t.Helper()
+	return writeRetentionConfigFileProtecting(t, false)
+}
+
+// writeRetentionConfigFileProtecting is writeRetentionConfigFile with
+// FR-19's last-known-good protection spelled explicitly, so a test can
+// start from a policy that protects the newest restore point and then
+// watch what turning that off would widen.
+func writeRetentionConfigFileProtecting(t *testing.T, protect bool) (configPath, localDir string) {
+	t.Helper()
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote")
 	localDir = filepath.Join(dir, "local")
@@ -939,7 +949,7 @@ func writeRetentionConfigFile(t *testing.T) (configPath, localDir string) {
 		"retention:\n" +
 		"  timezone: UTC\n" +
 		"  week_starts_on: monday\n" +
-		"  protect_last_known_good: false\n"
+		"  protect_last_known_good: " + strconv.FormatBool(protect) + "\n"
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -1177,4 +1187,115 @@ func TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual(t *testing.T
 			t.Errorf("%s was deleted despite a KEEP verdict: %v", name, statErr)
 		}
 	}
+}
+
+// TestApplyRetentionPlan_ASettingsWriteBetweenPreviewAndApplyIsStale is
+// mandatory review finding M2 on PR #171. PATCH /api/v1/settings is
+// deliberately NOT behind the destructive gate, and the whole argument for
+// that exemption is a chain nothing measured end to end: a settings write
+// moves ConfigRevision, and ApplyRetentionPlan refuses any plan whose
+// captured revision no longer matches. Until now the only test driving the
+// configuration arm of that gate went through CreateBackupSet, and the
+// only test about the settings route proved the gate is not wired to it,
+// which is the conclusion rather than the premise.
+//
+// The settings change here is the exact one the exemption is argued about:
+// turning FR-19's last-known-good protection off, which widens what a
+// later apply may delete. So the reviewed plan (one delete, the newest
+// restore point protected) and the plan the new policy implies (two
+// deletes) genuinely differ, and applying the reviewed one would destroy
+// something the human who approved it was told would be kept.
+func TestApplyRetentionPlan_ASettingsWriteBetweenPreviewAndApplyIsStale(t *testing.T) {
+	// Both artifacts are dated far outside every tier's span, so under the
+	// real defaulted policy the only thing keeping either of them is FR-19.
+	seed := func(t *testing.T, protect bool) (svc *BackupService, setID model.BackupSetID, older, newer string) {
+		t.Helper()
+		pinClock(t, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
+
+		configPath, localDir := writeRetentionConfigFileProtecting(t, protect)
+		svc, cleanup, err := Open(context.Background(), configPath)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(func() { _ = cleanup() })
+
+		setID, err = model.NewBackupSetID("production", "postgres-primary")
+		if err != nil {
+			t.Fatalf("NewBackupSetID: %v", err)
+		}
+		bs := config.BackupSet{Name: "postgres-primary", ID: setID, LocalPath: localDir}
+		seedCompleteArtifact(t, context.Background(), svc.journal, bs, "older.dump", time.Date(2020, 1, 15, 12, 0, 0, 0, time.UTC), "payload-older")
+		seedCompleteArtifact(t, context.Background(), svc.journal, bs, "newer.dump", time.Date(2020, 2, 15, 12, 0, 0, 0, time.UTC), "payload-newer")
+		return svc, setID, filepath.Join(localDir, "older.dump"), filepath.Join(localDir, "newer.dump")
+	}
+
+	t.Run("a settings write between preview and apply refuses the plan", func(t *testing.T) {
+		svc, setID, older, newer := seed(t, true)
+		ctx := context.Background()
+
+		plan, err := svc.PreviewRetention(ctx, setID.Source, setID.Set)
+		if err != nil {
+			t.Fatalf("PreviewRetention: %v", err)
+		}
+		if plan.DeleteCount != 1 {
+			t.Fatalf("precondition failed: plan.DeleteCount = %d, want 1 (the newest restore point is protected, the older one is not): %+v", plan.DeleteCount, plan.Verdicts)
+		}
+
+		revisionBefore := svc.ConfigRevision()
+		if _, err := svc.UpdateSettings(ctx, UpdateSettingsRequest{
+			Retention: &RetentionUpdate{ProtectLastKnownGood: ptrBool(false)},
+		}); err != nil {
+			t.Fatalf("UpdateSettings: %v", err)
+		}
+		if svc.ConfigRevision() == revisionBefore {
+			t.Fatal("precondition failed: a settings write left ConfigRevision unchanged, so nothing downstream could notice the policy moved")
+		}
+
+		// The reviewed plan is now genuinely narrower than the running
+		// policy: this is what applying it would have widened.
+		wider, err := svc.PreviewRetention(ctx, setID.Source, setID.Set)
+		if err != nil {
+			t.Fatalf("PreviewRetention (after the write): %v", err)
+		}
+		if wider.DeleteCount != 2 {
+			t.Fatalf("precondition failed: after disabling protection DeleteCount = %d, want 2; the two policies do not differ so this test would prove nothing", wider.DeleteCount)
+		}
+
+		_, err = svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: setID.Source, Set: setID.Set, Actor: "alice"})
+		if !errors.Is(err, ErrRetentionPlanStale) {
+			t.Fatalf("ApplyRetentionPlan after a settings write: error = %v, want errors.Is(err, ErrRetentionPlanStale)", err)
+		}
+		for _, path := range []string{older, newer} {
+			if _, statErr := os.Lstat(path); statErr != nil {
+				t.Errorf("a refused apply deleted %s anyway: Lstat: %v", path, statErr)
+			}
+		}
+	})
+
+	// Positive control. The identical fixture and the identical plan, with
+	// no settings write in between, applies and deletes: so the refusal
+	// above is the configuration arm firing on the settings write, not an
+	// apply path that never deletes anything.
+	t.Run("control: the same plan applies when no settings write intervenes", func(t *testing.T) {
+		svc, setID, older, newer := seed(t, true)
+		ctx := context.Background()
+
+		plan, err := svc.PreviewRetention(ctx, setID.Source, setID.Set)
+		if err != nil {
+			t.Fatalf("PreviewRetention: %v", err)
+		}
+		if plan.DeleteCount != 1 {
+			t.Fatalf("precondition failed: plan.DeleteCount = %d, want 1: %+v", plan.DeleteCount, plan.Verdicts)
+		}
+
+		if _, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: setID.Source, Set: setID.Set, Actor: "alice"}); err != nil {
+			t.Fatalf("ApplyRetentionPlan (control): %v", err)
+		}
+		if _, statErr := os.Lstat(older); !os.IsNotExist(statErr) {
+			t.Errorf("control failed: Lstat(%s) after a successful apply: err=%v, want a not-exist error", older, statErr)
+		}
+		if _, statErr := os.Lstat(newer); statErr != nil {
+			t.Errorf("the protected newest restore point was deleted: Lstat(%s): %v", newer, statErr)
+		}
+	})
 }
