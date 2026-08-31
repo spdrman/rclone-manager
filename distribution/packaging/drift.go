@@ -61,6 +61,17 @@ import (
 // the canonical one (a TCP probe, a `true`) reports healthy through the
 // exact failure the check exists to catch. Both are silent, which is why
 // this is a gate rather than a review note.
+//
+// The canonical command is required as a PREFIX, not as the whole argv.
+// Issue #167 made container/compose.yaml the authoritative runtime
+// definition and its contract requires the engine's start gate to be a
+// liveness question, so that service runs the canonical healthcheck
+// against an explicit `--url .../health/live` rather than its default.
+// Neither of the two failures above is what a flag on the canonical
+// subcommand produces: it is the command the image ships, and asking it
+// a narrower question than "is any backup stale" is the point. Anything
+// that does not begin with the canonical argv still fails, which is what
+// the drift-health-check control plants.
 func CheckHealthCheck(svc Service, c Canonical) []Violation {
 	source := svc.Source
 	if source == "" {
@@ -86,8 +97,8 @@ func CheckHealthCheck(svc Service, c Canonical) []Violation {
 
 	want := append([]string{"CMD"}, c.Commands.Healthcheck...)
 	got := svc.HealthcheckTest
-	if !equalStrings(got, want) {
-		add(fmt.Sprintf("service %s declares healthcheck %v, and the canonical contract's is %v; a health command the canonical image does not ship reports unhealthy forever, and one weaker than the canonical command reports healthy through the failure it exists to catch",
+	if !startsWithStrings(got, want) {
+		add(fmt.Sprintf("service %s declares healthcheck %v, and the canonical contract's is %v (extra arguments to that command are allowed, a different command is not); a health command the canonical image does not ship reports unhealthy forever, and one weaker than the canonical command reports healthy through the failure it exists to catch",
 			backquote(svc.Name), got, want))
 	}
 	return out
@@ -102,12 +113,19 @@ func mountsRole(svc Service, role string) bool {
 	return false
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
+// startsWithStrings reports whether got begins with the whole of want.
+// Equality was what this used to ask, and #167's authoritative runtime
+// definition is why it no longer can: the engine's health check is the
+// canonical command with `--url .../health/live` appended. A prefix keeps
+// the two failures CheckHealthCheck names decidable (a different binary,
+// a different subcommand, a `true`) while letting the canonical command
+// be pointed at a specific endpoint.
+func startsWithStrings(got, want []string) bool {
+	if len(got) < len(want) {
 		return false
 	}
-	for i := range a {
-		if a[i] != b[i] {
+	for i := range want {
+		if got[i] != want[i] {
 			return false
 		}
 	}
