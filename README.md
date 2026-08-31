@@ -524,9 +524,13 @@ provider's frontend bridge at once (the provider-conformance matrix, §63A), kep
 pages, components, the `PlatformBridge` contract (`ui/shared/src/platform/`,
 `ui/shared/src/types/platform.ts`), and the single causl-ts state graph
 (`ui/shared/src/state/graph.ts`). A provider app under `apps/<provider>/frontend/`
-supplies a `PlatformBridge` implementation and, for the seven that exist today
-(`generic`, `ugos`, `synology`, `truenas`, `unraid`, `openmediavault`, `proxmox`), nothing
-else — `ui/shared` never imports a provider, only the reverse.
+supplies a `PlatformBridge` implementation and, for five of the seven that exist today
+(`ugos`, `truenas`, `unraid`, `openmediavault`, `proxmox`), nothing else — `ui/shared`
+never imports a provider, only the reverse. Two carry more: `apps/generic/` is the
+generic Web host's own Go module (#82/B4.1), and `apps/synology/` is the DSM `.spk`
+packaging and conformance module (#85/B4.4), which ships no product binary of its own —
+it wraps the release binaries unchanged and checks their digest against
+`container/release-manifest.json`.
 
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
@@ -539,4 +543,6 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/recovery.md`](docs/recovery.md) – recovery and the restore procedure, in full
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`docs/deployment.md`](docs/deployment.md) – UGREEN container packaging (issue #27; check it exists yet)
+- [`apps/synology/README.md`](apps/synology/README.md) – the Synology DSM `.spk`: supported architectures/models, how to build and verify one, and what is still uncertified
+- [`docs/acceptance/synology-dsm-package-lifecycle.md`](docs/acceptance/synology-dsm-package-lifecycle.md) – the DSM install/update/uninstall acceptance procedure, to be executed on real hardware
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged
