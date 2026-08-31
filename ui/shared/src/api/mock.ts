@@ -263,10 +263,13 @@ function retentionPlan(source: string, set: string, tick: number): RetentionPlan
     deleteCount: 3,
     reclaimBytes: 55620000000,
     verdicts: [
-      { artifact: "backup-20260828.dump.zst", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY", "LAST_KNOWN_GOOD"] },
-      { artifact: "backup-20260827.dump.zst", action: "KEEP", reason: "GFS weekly tier", tiers: ["WEEKLY"] },
-      { artifact: "backup-20260801.dump.zst", action: "KEEP", reason: "GFS monthly tier", tiers: ["MONTHLY"] },
-      { artifact: "backup-20260701.dump.zst", action: "KEEP", reason: "GFS monthly tier", tiers: ["MONTHLY"] },
+      { artifact: "backup-20260828.dump.zst", action: "KEEP", reason: "kept by the DAILY(both), LAST_KNOWN_GOOD tiers", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }, { tier: "LAST_KNOWN_GOOD", selectedBy: "PROTECTION" }] },
+      { artifact: "backup-20260827.dump.zst", action: "KEEP", reason: "kept by the WEEKLY(discovery) tier", tiers: [{ tier: "WEEKLY", selectedBy: "DISCOVERY" }] },
+      // An ingested backlog's own shape: this one is inside the monthly
+      // window only by the producer's own timestamp, which is exactly the
+      // case FR-8 wants an operator to be able to see (issue #218).
+      { artifact: "backup-20260801.dump.zst", action: "KEEP", reason: "kept by the MONTHLY(producer) tier", tiers: [{ tier: "MONTHLY", selectedBy: "PRODUCER" }] },
+      { artifact: "backup-20260701.dump.zst", action: "KEEP", reason: "kept by the MONTHLY(both) tier", tiers: [{ tier: "MONTHLY", selectedBy: "BOTH" }] },
       { artifact: "backup-20260813.dump.zst", action: "REFUSE", reason: "sibling-prefix directory found at the computed path; refusing to delete", tiers: [] },
       { artifact: "backup-20260806.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },
       { artifact: "backup-20260723.dump.zst", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] },

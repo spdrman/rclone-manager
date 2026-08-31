@@ -364,9 +364,9 @@ func retentionOn(dailyDays, weeklyMonths, monthlyMonths int) config.Retention {
 // hasTier reports whether tiers contains want, tolerating internal/
 // retention.GFSTier's own string type without this file importing that
 // package just to spell the comparison.
-func hasTier(tiers []string, want string) bool {
+func hasTier(tiers []RetentionTierSelection, want string) bool {
 	for _, t := range tiers {
-		if t == want {
+		if t.Tier == want {
 			return true
 		}
 	}
@@ -1104,7 +1104,7 @@ func TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual(t *testing.T
 		t.Fatalf("PreviewRetention: %v", err)
 	}
 
-	tiersByArtifact := map[string][]string{}
+	tiersByArtifact := map[string][]RetentionTierSelection{}
 	actionByArtifact := map[string]string{}
 	for _, v := range plan.Verdicts {
 		tiersByArtifact[v.Artifact] = v.Tiers
@@ -1125,7 +1125,7 @@ func TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual(t *testing.T
 	if hasTier(tiersByArtifact["prev-half.dump"], "DAILY") {
 		t.Errorf("prev-half.dump tiers = %v, want no DAILY: it is far outside the three-day window", tiersByArtifact["prev-half.dump"])
 	}
-	if got := tiersByArtifact["gap-winner.dump"]; len(got) != 1 || got[0] != "ANNUAL" {
+	if got := tiersByArtifact["gap-winner.dump"]; len(got) != 1 || got[0].Tier != "ANNUAL" {
 		t.Errorf("gap-winner.dump tiers = %v, want exactly [ANNUAL]", got)
 	}
 

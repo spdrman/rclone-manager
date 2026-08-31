@@ -178,10 +178,11 @@ type PruneVerdict struct {
 	Path string
 
 	// Tiers lists every GFS tier, and/or TierLastKnownGood, that kept this
-	// artifact. Populated only when Action is PruneKeep; nil otherwise.
-	// This is copied from the composed DecideKeep verdict, never
-	// recomputed, so it can never disagree with it.
-	Tiers []GFSTier
+	// artifact, each paired with which of FR-18's two placements selected
+	// it there (issue #218). Populated only when Action is PruneKeep; nil
+	// otherwise. This is copied from the composed DecideKeep verdict,
+	// never recomputed, so it can never disagree with it.
+	Tiers []GFSTierSelection
 
 	// Reason is a one-sentence, human-readable explanation: which tier
 	// kept it, or a plain statement that nothing did and every safety
@@ -334,7 +335,7 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 			Artifact: rec.Artifact,
 			Action:   PruneKeep,
 			Path:     path,
-			Tiers:    append([]GFSTier(nil), keepVerdict.Tiers...),
+			Tiers:    append([]GFSTierSelection(nil), keepVerdict.Tiers...),
 			Reason:   pruneKeepReason(keepVerdict.Tiers),
 		}
 	}
@@ -386,7 +387,14 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 // sentence PruneVerdict.Reason carries for a PruneKeep verdict: FR-20
 // asks that the reason "name the tier that kept it," not just report a
 // bare KEEP.
-func pruneKeepReason(tiers []GFSTier) string {
+//
+// Each tier is rendered with the placement that selected it (issue #218),
+// because naming the tier alone leaves an operator unable to tell a KEEP
+// this manager's own clock produced from one that rests on a timestamp
+// FR-8 says to distrust. GFSTierSelection.String is what spells it, so
+// this sentence and the CLI's own per-artifact line cannot come to
+// disagree about how a placement is written.
+func pruneKeepReason(tiers []GFSTierSelection) string {
 	if len(tiers) == 0 {
 		// Cannot happen: DecideKeep never returns Keep == true with an
 		// empty Tiers slice. Guarded anyway rather than let a reason
@@ -395,7 +403,7 @@ func pruneKeepReason(tiers []GFSTier) string {
 	}
 	names := make([]string, len(tiers))
 	for i, t := range tiers {
-		names[i] = string(t)
+		names[i] = t.String()
 	}
 	word := "tier"
 	if len(names) > 1 {

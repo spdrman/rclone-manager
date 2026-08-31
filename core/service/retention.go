@@ -106,8 +106,32 @@ type RetentionArtifactVerdict struct {
 	Reason string
 
 	// Tiers lists which GFS tier(s) (and/or "LAST_KNOWN_GOOD") kept this
-	// artifact; empty for a DELETE or REFUSE verdict.
-	Tiers []string
+	// artifact, each paired with which of FR-18's two placements selected
+	// it there; empty for a DELETE or REFUSE verdict.
+	Tiers []RetentionTierSelection
+}
+
+// RetentionTierSelection is one tier's claim on an artifact within a
+// RetentionArtifactVerdict: internal/retention.GFSTierSelection, as two
+// plain strings (see service.go's package doc — nothing from that
+// package's own vocabulary is exposed directly past this boundary).
+//
+// The pair travels together rather than as a tier list beside a placement
+// list, and rather than as one placement per verdict, because one
+// artifact can be selected by DAILY through one placement and by MONTHLY
+// through the other (issue #218). A per-verdict attribution would be
+// wrong in exactly that case, which is the case an operator is reading
+// the preview to understand.
+type RetentionTierSelection struct {
+	// Tier is internal/retention.GFSTier's own value: a configured tier
+	// name upper-cased, or the reserved "LAST_KNOWN_GOOD". The set is
+	// open, because FR-18's chain is operator-defined.
+	Tier string
+
+	// SelectedBy is internal/retention.GFSSelectedBy's own value:
+	// "DISCOVERY", "PRODUCER", "BOTH", or "PROTECTION" for FR-19's term,
+	// which is not a placement at all.
+	SelectedBy string
 }
 
 // RetentionPlan is docs/EPIC-B-multi-nas.md §15.6's own preview/apply
@@ -567,9 +591,9 @@ func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, co
 			}
 		}
 
-		tiers := make([]string, len(v.Tiers))
+		tiers := make([]RetentionTierSelection, len(v.Tiers))
 		for j, t := range v.Tiers {
-			tiers[j] = string(t)
+			tiers[j] = RetentionTierSelection{Tier: string(t.Tier), SelectedBy: string(t.By)}
 		}
 		verdicts[i] = RetentionArtifactVerdict{
 			Artifact: v.Artifact.Name,

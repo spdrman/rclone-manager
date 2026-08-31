@@ -24,7 +24,7 @@ const PLAN: RetentionPlan = {
   deleteCount: 1,
   reclaimBytes: 2048,
   verdicts: [
-    { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY", "LAST_KNOWN_GOOD"] },
+    { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }, { tier: "LAST_KNOWN_GOOD", selectedBy: "PROTECTION" }] },
     { artifact: "refused.dump", action: "REFUSE", reason: "sibling-prefix directory at computed path", tiers: [] },
     { artifact: "b.dump", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
   ]
@@ -41,7 +41,7 @@ const OPEN_TIER_PLAN: RetentionPlan = {
   deleteCount: 0,
   reclaimBytes: 0,
   verdicts: [
-    { artifact: "half-year.dump", action: "KEEP", reason: "GFS semi-annual tier", tiers: ["SEMI_ANNUAL"] },
+    { artifact: "half-year.dump", action: "KEEP", reason: "GFS semi-annual tier", tiers: [{ tier: "SEMI_ANNUAL", selectedBy: "DISCOVERY" }] },
     { artifact: "no-tier.dump", action: "KEEP", reason: "", tiers: [] }
   ]
 };
@@ -129,7 +129,7 @@ describe("RetentionPreviewDialog", () => {
     // rendering it here would tell the operator the opposite of what the
     // backend decided — on the screen whose next button deletes files.
     const kept = screen.getByText("half-year.dump").closest("li");
-    expect(kept?.textContent).toContain("Semi Annual");
+    expect(kept?.textContent).toContain("Semi Annual (discovery)");
     expect(kept?.textContent).not.toContain("unclassified");
 
     // The control: a verdict with a genuinely empty tier list still says

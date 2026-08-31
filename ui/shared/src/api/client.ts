@@ -335,7 +335,14 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
       artifact: v.artifact,
       action: v.action as RetentionVerdictAction,
       reason: v.reason,
-      tiers: v.tiers ?? []
+      // tier_selections, not tiers: the two carry the same tiers in the
+      // same order and this UI needs the placement on every one of them
+      // (issue #218), so reading the bare list as well would be a second
+      // copy that could disagree with the one actually rendered.
+      tiers: (v.tier_selections ?? []).map((sel) => ({
+        tier: sel.tier,
+        selectedBy: sel.selected_by
+      }))
     }))
   };
 }

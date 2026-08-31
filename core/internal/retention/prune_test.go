@@ -205,7 +205,7 @@ func TestPruneDecideKeepsArtifactSelectedByGFSTier(t *testing.T) {
 	if v.Action != PruneKeep {
 		t.Fatalf("Action = %s, want %s", v.Action, PruneKeep)
 	}
-	if len(v.Tiers) != 1 || v.Tiers[0] != GFSDaily {
+	if len(v.Tiers) != 1 || v.Tiers[0].Tier != GFSDaily {
 		t.Errorf("Tiers = %v, want [%s]", v.Tiers, GFSDaily)
 	}
 	if !strings.Contains(v.Reason, string(GFSDaily)) {
@@ -237,7 +237,7 @@ func TestPruneDecideKeepsLastKnownGoodArtifact(t *testing.T) {
 	if v.Action != PruneKeep {
 		t.Fatalf("Action = %s, want %s (reason: %s)", v.Action, PruneKeep, v.Reason)
 	}
-	if len(v.Tiers) != 1 || v.Tiers[0] != TierLastKnownGood {
+	if len(v.Tiers) != 1 || v.Tiers[0].Tier != TierLastKnownGood {
 		t.Errorf("Tiers = %v, want [%s]", v.Tiers, TierLastKnownGood)
 	}
 	if !strings.Contains(v.Reason, string(TierLastKnownGood)) {

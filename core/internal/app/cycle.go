@@ -189,7 +189,12 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 				if v.Keep {
 					decision = "keep"
 					if len(v.Tiers) > 0 {
-						tier = string(v.Tiers[0])
+						// The tier name alone, deliberately: this field is
+						// a machine-readable label in the FR-23 event
+						// stream, and issue #218's placement attribution
+						// belongs on the preview an operator reads, not
+						// spliced into a log field's value.
+						tier = string(v.Tiers[0].Tier)
 					}
 				}
 				s.logger().Retention(ctx, v.Artifact.String(), bs.ID.String(), tier, decision)

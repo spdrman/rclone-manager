@@ -113,7 +113,7 @@ export function RetentionPreviewDialog({
   const keepVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "KEEP") ?? [];
   const refuseVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "REFUSE") ?? [];
   const deleteVerdicts: RetentionVerdict[] = p?.verdicts.filter((v) => v.action === "DELETE") ?? [];
-  const lastKnownGood = keepVerdicts.find((v) => v.tiers.includes("LAST_KNOWN_GOOD"));
+  const lastKnownGood = keepVerdicts.find((v) => v.tiers.some((t) => t.tier === "LAST_KNOWN_GOOD"));
 
   function handleApply() {
     // The gate above only ever disabled the Continue button. Once the

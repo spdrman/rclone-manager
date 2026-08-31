@@ -126,7 +126,21 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
     vi.restoreAllMocks();
   });
 
-  const WIRE_VERDICT = { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY"] };
+  // The wire carries both `tiers` (names) and `tier_selections` (the same
+  // tiers, each with the placement that selected it). client.ts reads the
+  // second and never the first, so this fixture deliberately makes them
+  // distinguishable: if the mapping ever fell back to `tiers`, the
+  // expectation below could not be satisfied at all.
+  const WIRE_VERDICT = {
+    artifact: "a.dump",
+    action: "KEEP",
+    reason: "GFS daily tier",
+    tiers: ["DAILY", "MONTHLY"],
+    tier_selections: [
+      { tier: "DAILY", selected_by: "DISCOVERY" },
+      { tier: "MONTHLY", selected_by: "PRODUCER" }
+    ]
+  };
 
   it("previewRetention issues a plain GET against the two-segment {source}/{set} route and maps snake_case to camelCase", async () => {
     const fetchMock = mockFetchOk({
@@ -158,8 +172,17 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       reclaimBytes: 4096,
       operationId: undefined,
       verdicts: [
-        { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY"] },
-        // tiers defaults to [] when the wire omits it (DELETE/REFUSE never carry one).
+        {
+          artifact: "a.dump",
+          action: "KEEP",
+          reason: "GFS daily tier",
+          tiers: [
+            { tier: "DAILY", selectedBy: "DISCOVERY" },
+            { tier: "MONTHLY", selectedBy: "PRODUCER" }
+          ]
+        },
+        // tiers defaults to [] when the wire omits tier_selections
+        // (DELETE/REFUSE never carry one).
         { artifact: "b.dump", action: "DELETE", reason: "not selected", tiers: [] }
       ]
     });

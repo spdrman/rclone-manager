@@ -32,6 +32,26 @@ type retentionVerdictResponse struct {
 	Action   string   `json:"action"`
 	Reason   string   `json:"reason"`
 	Tiers    []string `json:"tiers,omitempty"`
+
+	// TierSelections carries the same tiers, in the same order, each
+	// paired with which of FR-18's two placements selected it (issue
+	// #218). It is a second field rather than a richer `tiers` because
+	// the two answer different questions and a client that only wants
+	// the names should not have to walk objects for them; both are
+	// projected from one service-side list in toRetentionPlanResponse,
+	// so they cannot come to disagree.
+	TierSelections []retentionTierSelectionResponse `json:"tier_selections,omitempty"`
+}
+
+// retentionTierSelectionResponse is one (tier, placement) pair. See the
+// contract's own RetentionTierSelection description for why the placement
+// belongs to the tier and not to the verdict: an artifact really can be
+// selected by DAILY through the discovery placement and by MONTHLY
+// through the producer's own timestamp, and this is the dialog that asks
+// an operator to authorise deleting what is not on the list.
+type retentionTierSelectionResponse struct {
+	Tier       string `json:"tier"`
+	SelectedBy string `json:"selected_by"`
 }
 
 // retentionPlanResponse is both GET .../retention/preview's and POST
@@ -56,11 +76,18 @@ type retentionPlanResponse struct {
 func toRetentionPlanResponse(p service.RetentionPlan) retentionPlanResponse {
 	verdicts := make([]retentionVerdictResponse, len(p.Verdicts))
 	for i, v := range p.Verdicts {
+		var tiers []string
+		var selections []retentionTierSelectionResponse
+		for _, sel := range v.Tiers {
+			tiers = append(tiers, sel.Tier)
+			selections = append(selections, retentionTierSelectionResponse{Tier: sel.Tier, SelectedBy: sel.SelectedBy})
+		}
 		verdicts[i] = retentionVerdictResponse{
-			Artifact: v.Artifact,
-			Action:   v.Action,
-			Reason:   v.Reason,
-			Tiers:    v.Tiers,
+			Artifact:       v.Artifact,
+			Action:         v.Action,
+			Reason:         v.Reason,
+			Tiers:          tiers,
+			TierSelections: selections,
 		}
 	}
 	return retentionPlanResponse{

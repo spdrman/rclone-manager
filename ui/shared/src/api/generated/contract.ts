@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "c2d08cc1ac021861bd2b2049af8a6d3d32a57f320def278e4979d6c8e34483f9";
+export const CONTRACT_SHA256 = "e2eb7e658a1a21ae5f51fda9b31434733ff8fd36ab5e5430f527ea30e44052e5";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1152,11 +1152,25 @@ export interface WireRetentionTier {
   window_unit?: string;
 }
 
+/** One tier's claim on an artifact, and which of the two placements
+ *  made it. FR-18 places every artifact twice, once by the timestamp
+ *  this manager discovered it and once by the producer's own
+ *  timestamp on the remote object, and KEEP is the union. FR-8 treats
+ *  the second as untrusted, so which pass selected a tier is a
+ *  different fact with different consequences and travels with the
+ *  tier rather than with the verdict: one artifact can be selected by
+ *  DAILY through one placement and by MONTHLY through the other. */
+export interface WireRetentionTierSelection {
+  selected_by: "DISCOVERY" | "PRODUCER" | "BOTH" | "PROTECTION";
+  tier: string;
+}
+
 /** What the plan decided for one artifact, and why. */
 export interface WireRetentionVerdict {
   action: string;
   artifact: string;
   reason: string;
+  tier_selections?: WireRetentionTierSelection[];
   tiers?: string[];
 }
 

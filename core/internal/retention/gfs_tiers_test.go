@@ -53,7 +53,7 @@ func gfsAssertTiers(t *testing.T, verdicts []GFSVerdict, name string, want []GFS
 		if v.Keep != wantKeep {
 			t.Errorf("%s: Keep = %v, want %v (tiers %v)", name, v.Keep, wantKeep, v.Tiers)
 		}
-		if !reflect.DeepEqual(v.Tiers, want) {
+		if !reflect.DeepEqual(v.TierNames(), want) {
 			t.Errorf("%s: Tiers = %v, want %v", name, v.Tiers, want)
 		}
 		return

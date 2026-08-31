@@ -103,6 +103,87 @@ func gfsTierName(configured string) GFSTier {
 	return GFSTier(strings.ToUpper(configured))
 }
 
+// GFSSelectedBy names which of FR-18's two placements put an artifact in
+// one tier's bucket (issue #218).
+//
+// bucketkey.go's doc has the two placements and why there are two of
+// them. What matters here is that they are not interchangeable evidence:
+// the discovery placement comes from this manager's own clock and nothing
+// outside the manager can move it, while the producer placement is the
+// remote object's own modification time, which FR-8 requires be treated
+// as untrusted. An operator asking "why is this being kept" is asking
+// which of those two answered, and before this type existed the preview
+// could not tell them.
+//
+// It is a string rather than an int for the same reason GFSTier is: these
+// values reach a client through apps/common/webhost, so they are API
+// surface and renaming one would break every reader of it.
+type GFSSelectedBy string
+
+const (
+	// GFSSelectedByDiscovery: the discovery pass selected this artifact
+	// for this tier and the producer pass did not. The selection rests
+	// entirely on this manager's own record of when it first saw the
+	// artifact, so nothing a producer reports can change it.
+	GFSSelectedByDiscovery GFSSelectedBy = "DISCOVERY"
+
+	// GFSSelectedByProducer: the producer pass selected it and the
+	// discovery pass did not. This is the tier attribution that exists
+	// only because FR-18 admits the remote's own timestamp, and therefore
+	// the one an operator auditing an ingested backlog, a wrong clock or a
+	// hostile one actually needs to see. It can only ever have ADDED a
+	// KEEP (see bucketkey.go), never removed one.
+	GFSSelectedByProducer GFSSelectedBy = "PRODUCER"
+
+	// GFSSelectedByBoth: both passes selected it for this tier, which is
+	// the ordinary case for an artifact whose producer timestamp and
+	// discovery timestamp fall on the same calendar date. Reported as its
+	// own value rather than collapsed into either single one, because
+	// "the producer term is not load-bearing here" is a materially
+	// different fact from "the producer term is the only thing keeping
+	// this".
+	GFSSelectedByBoth GFSSelectedBy = "BOTH"
+
+	// GFSSelectedByProtection: not a placement at all. FR-19's
+	// last-known-good term (TierLastKnownGood) is not a bucket selection,
+	// so it has no placement to name, and dressing it as one would tell an
+	// operator this manager had made a calendar decision it never made.
+	// ApplyLastKnownGood is the only thing that ever produces it.
+	GFSSelectedByProtection GFSSelectedBy = "PROTECTION"
+)
+
+// GFSTierSelection is one tier's claim on an artifact, together with which
+// placement made it.
+//
+// The pairing is the whole point of issue #218 and is deliberately not
+// two parallel lists or one attribution per verdict. A single artifact can
+// be selected by DAILY through the discovery placement and by MONTHLY
+// through the producer placement in the same calculation (see
+// TestGFSDecideAttributesEachTierToThePlacementThatSelectedIt), so an
+// attribution that hung off the verdict would be wrong in exactly the
+// cases an operator is looking at the preview to understand.
+type GFSTierSelection struct {
+	Tier GFSTier
+	By   GFSSelectedBy
+}
+
+// String renders one selection the way the CLI's per-artifact line and the
+// web UI's badges both spell it: the tier, and the placement that selected
+// it in parentheses.
+//
+// FR-19's protected term renders bare. It has no placement, and a
+// parenthesised word after it would read as one; the tier name
+// LAST_KNOWN_GOOD already says what kind of thing it is. Anything else
+// carrying an unrecognised placement renders it verbatim rather than
+// silently dropping to bare, so a value this build has never heard of can
+// never be mistaken for FR-19's protection.
+func (s GFSTierSelection) String() string {
+	if s.By == GFSSelectedByProtection {
+		return string(s.Tier)
+	}
+	return string(s.Tier) + "(" + strings.ToLower(string(s.By)) + ")"
+}
+
 // GFSVerdict is one backup set artifact's GFS classification.
 //
 // Keep reflects only this package's daily/weekly/monthly union: see the
@@ -117,14 +198,34 @@ type GFSVerdict struct {
 
 	// Tiers lists every tier that selected this artifact, in the order the
 	// configured chain lists them (never reordered, so two runs over the
-	// same inputs render it identically). Nil when Keep is false.
+	// same inputs render it identically), each paired with the placement
+	// that selected it there. Nil when Keep is false.
 	//
 	// For the default chain that is still Daily, Weekly, Monthly.
 	// TierLastKnownGood (lastknowngood.go) can appear too, but only after
 	// ApplyLastKnownGood composes FR-19's protected term into a GFSDecide
 	// result; it is always appended after any GFS tiers already present,
 	// so the configured chain's own ordering above is unaffected.
-	Tiers []GFSTier
+	//
+	// The placement travels WITH the tier rather than beside it, so there
+	// is no way to render a tier here without saying what selected it.
+	// That is issue #218's actual requirement: see GFSTierSelection.
+	Tiers []GFSTierSelection
+}
+
+// TierNames projects Tiers down to bare tier names, for the callers that
+// genuinely only need the list (FR-20's KEEP sentence, the wire's own
+// `tiers` field). It is a projection of Tiers and never a second stored
+// copy of it, so the two cannot drift.
+func (v GFSVerdict) TierNames() []GFSTier {
+	if len(v.Tiers) == 0 {
+		return nil
+	}
+	out := make([]GFSTier, 0, len(v.Tiers))
+	for _, sel := range v.Tiers {
+		out = append(out, sel.Tier)
+	}
+	return out
 }
 
 // gfsManagedCompleteStates are the lifecycle states FR-18's "managed
@@ -257,16 +358,37 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		// why folding them into one champion map per bucket would let an
 		// untrusted producer timestamp displace an artifact the discovery
 		// pass had kept, which is the one thing this design forbids.
-		selected := gfsSelectRepresentatives(tb, eligible, gfsDiscoveryPlacement)
-		for artifact := range gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement) {
-			selected[artifact] = true
-		}
+		//
+		// The two results are also kept apart here rather than unioned on
+		// the spot, because which of them selected an artifact is the fact
+		// issue #218 is about: it is recorded per tier, below, as the
+		// union is formed.
+		byDiscovery := gfsSelectRepresentatives(tb, eligible, gfsDiscoveryPlacement)
+		byProducer := gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement)
+
 		// A tier is attributed to an artifact exactly once even when both
-		// passes selected it, so a verdict never reads DAILY twice.
-		for artifact := range selected {
-			v := verdicts[artifact]
+		// passes selected it, so a verdict never reads DAILY twice. The
+		// walk is over eligible rather than over either map, because map
+		// iteration order is random and this loop now decides the order
+		// nothing later re-sorts: eligible is the caller's own record
+		// order, and within one tier every artifact appends at most one
+		// entry, so the resulting Tiers list is the chain's order for
+		// every artifact regardless.
+		for _, d := range eligible {
+			inDiscovery, inProducer := byDiscovery[d.artifact], byProducer[d.artifact]
+			if !inDiscovery && !inProducer {
+				continue
+			}
+			by := GFSSelectedByBoth
+			switch {
+			case !inProducer:
+				by = GFSSelectedByDiscovery
+			case !inDiscovery:
+				by = GFSSelectedByProducer
+			}
+			v := verdicts[d.artifact]
 			v.Keep = true
-			v.Tiers = append(v.Tiers, tb.tier)
+			v.Tiers = append(v.Tiers, GFSTierSelection{Tier: tb.tier, By: by})
 		}
 	}
 

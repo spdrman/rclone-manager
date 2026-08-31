@@ -119,7 +119,7 @@ func TestDecideKeepGoldenBaselineForOmittedRetentionBlock(t *testing.T) {
 		if v.Keep != w.keep {
 			t.Errorf("%s: Keep = %v, want %v", v.Artifact.Name, v.Keep, w.keep)
 		}
-		if !reflect.DeepEqual(v.Tiers, w.tiers) {
+		if !reflect.DeepEqual(v.TierNames(), w.tiers) {
 			t.Errorf("%s: Tiers = %v, want %v", v.Artifact.Name, v.Tiers, w.tiers)
 		}
 	}

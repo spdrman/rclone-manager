@@ -124,6 +124,48 @@ export interface QuarantineRecord {
  */
 export type RetentionVerdictAction = "KEEP" | "DELETE" | "REFUSE";
 
+/**
+ * Which of FR-18's two placements selected an artifact for one tier
+ * (internal/retention.GFSSelectedBy, via the wire's `selected_by`).
+ *
+ * FR-18 places every artifact twice, once by the timestamp this manager
+ * discovered it and once by the producer's own timestamp on the remote
+ * object, and KEEP is the union of the two passes. FR-8 requires the
+ * second to be treated as untrusted, so "DISCOVERY" and "PRODUCER" are
+ * materially different answers to "why is this being kept" and the
+ * confirm-before-delete dialog has to be able to tell them apart.
+ *
+ * "PROTECTION" is not a placement: it is FR-19's last-known-good term,
+ * which is not a bucket selection at all and so names neither timestamp.
+ */
+export type RetentionTierPlacement = "DISCOVERY" | "PRODUCER" | "BOTH" | "PROTECTION";
+
+/**
+ * One tier's claim on an artifact, paired with the placement that made it
+ * (internal/retention.GFSTierSelection).
+ *
+ * The pairing is per tier and not per verdict on purpose: a single
+ * artifact can be selected by DAILY through one placement and by MONTHLY
+ * through the other, so a single attribution on the verdict would be
+ * wrong in exactly the case an operator opened this dialog to understand.
+ */
+export interface RetentionTierSelection {
+  /**
+   * The tier's name. The value set is OPEN, not the three legacy names.
+   * FR-18's retention policy is a chain of operator-defined tiers
+   * (core/internal/config's Retention.Tiers), and this is one tier's
+   * configured `name` upper-cased, so "SEMI_ANNUAL", "ANNUAL" or
+   * "FORTNIGHTLY" are all ordinary values, as is "LAST_KNOWN_GOOD"
+   * (internal/retention.TierLastKnownGood) when FR-19's protection is
+   * what kept the artifact. Config constrains a name to ^[a-z][a-z0-9_]*$,
+   * so the string is bounded, but nothing in this UI may treat an
+   * unrecognised tier as "no tier": see RetentionTierBadges, which badges
+   * an unknown tier under its own name rather than dropping it.
+   */
+  tier: string;
+  selectedBy: RetentionTierPlacement;
+}
+
 export interface RetentionVerdict {
   /** The artifact's filename within its backup set, not an opaque id
    *  (service.RetentionArtifactVerdict.Artifact is v.Artifact.Name). */
@@ -131,20 +173,17 @@ export interface RetentionVerdict {
   action: RetentionVerdictAction;
   reason: string;
   /**
-   * Populated only for a KEEP verdict: which retention tier(s) selected it,
-   * and/or "LAST_KNOWN_GOOD" (internal/retention.TierLastKnownGood) if
-   * last-known-good protection is what kept it. Empty for DELETE/REFUSE.
+   * Populated only for a KEEP verdict: which retention tier(s) selected
+   * it, and which placement selected it for each. Empty for
+   * DELETE/REFUSE.
    *
-   * The value set is OPEN, not the three legacy names. FR-18's retention
-   * policy is a chain of operator-defined tiers (core/internal/config's
-   * Retention.Tiers), and each entry here is one tier's configured `name`
-   * upper-cased, so "SEMI_ANNUAL", "ANNUAL" or "FORTNIGHTLY" are all
-   * ordinary values. Config constrains a name to ^[a-z][a-z0-9_]*$, so the
-   * string is bounded, but nothing in this UI may treat an unrecognised
-   * tier as "no tier": see RetentionTierBadges, which badges an unknown
-   * tier under its own name rather than dropping it.
+   * This is the wire's `tier_selections` rather than its `tiers`. The
+   * wire carries both, because a client that only wants the names should
+   * not have to walk objects for them; this UI always wants the
+   * placement, so keeping the bare list too would be a second copy
+   * nothing here reads.
    */
-  tiers: string[];
+  tiers: RetentionTierSelection[];
 }
 
 /**
