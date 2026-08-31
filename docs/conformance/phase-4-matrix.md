@@ -35,12 +35,24 @@ capability by omitting it either, because omission is itself a failure.
 ## What is blocking today
 
 - **#174** — `container/release-manifest.json` pins commit `c51a07f`, which is not
-  an ancestor of `main` after the squash-merge rewrite. Every core binary hash
-  parity cell is `BLOCKED` on it, for all seven providers: the check compares a
-  provider's binaries against that manifest, and a manifest describing a build
-  that is not in the history has nothing on the other side of the comparison.
-  The check is written correctly and starts passing on its own the moment the
-  manifest points at a reachable build.
+  an ancestor of `main` after the squash-merge rewrite, so its hashes describe a
+  build that is not in this history. That is what `release-manifest-integrity`
+  reports, for all seven providers, because it is a repository-wide fact and this
+  table says so rather than dressing it up as seven measurements. The separate
+  per-provider row, `core-binary-hash-parity`, asks a different question: do the
+  binaries THIS provider ships hash to what the manifest recorded? No provider
+  checks a binary into this repository, so that row is `N/A` everywhere except
+  Synology, whose `.spk` really is hashed against the manifest by
+  `TestVerify_BinaryHashParity` in `apps/synology`'s own module, and UGOS, which
+  is meant to ship an artifact and does not yet. Neither row can go green without
+  the comparison it names actually happening.
+- **#180** — `ui/shared/vite.config.ts` picks the frontend shell at build time
+  from `VITE_PLATFORM`, defaulting to `generic`, and `serve-ui` serves one
+  `go:embed`ed bundle. Nothing in the release build selects a provider, so every
+  artifact anyone installs, the canonical image and the `.spk` alike, runs the
+  generic bridge. A capability flag in `apps/<provider>/frontend/platform.ts` is
+  therefore a statement of repository intent, not of deployed behaviour, and
+  every cell resolved from one is `BLOCKED` on this rather than `PASS`.
 - **#83** — work package 4.2's UGOS UPK moved out of this EPIC into EPIC D and is
   still open. `apps/ugos/` holds the frontend bridge and nothing else: no
   `project.yaml`, no Compose, no icon, no architecture image tar. So UGOS is the
@@ -76,35 +88,36 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | Provider identified correctly | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Provider package metadata present | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
 | Uses the exact canonical image | BLOCKED | N/A | PASS | PASS | N/A | PASS | PASS |
-| Core binary hash parity | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
-| Architecture claims match the build | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| Core binary hash parity (this provider's own shipped bytes) | BLOCKED | N/A | N/A | N/A | N/A | N/A | N/A |
+| This provider's own architecture claim matches the build | BLOCKED | PASS | N/A | N/A | N/A | N/A | N/A |
 | State path persists outside the container | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
 | Backup root constrained | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
 | Auth mode explicit and honest | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | No bundled secrets | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | No provider-specific lifecycle implementation | PASS | N/A | PASS | PASS | N/A | PASS | PASS |
-| API reachable only through the intended path | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
+| API reachable only through the intended path | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
 | Provider removal does not alter core | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
 | Host management plane not modified | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Install / update / remove semantics | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
 | UI launches | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
 | Upgrade preserves state | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
 | Removal does not delete retained backups | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
-| Native authentication | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| Native notifications | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| Embedded window | PASS | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| App-store packaging | BLOCKED | PASS | PASS | PASS | UNSUP | UNSUP | UNSUP |
-| Storage picker | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| Native authentication | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| Native notifications | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| Embedded window | BLOCKED | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| App-store packaging | BLOCKED | BLOCKED | BLOCKED | BLOCKED | UNSUP | UNSUP | UNSUP |
+| Storage picker | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
 
 ### Totals
 
 | Outcome | Cells |
 |---|---|
-| PASS | 78 |
+| PASS | 66 |
 | PENDING_OPERATOR | 20 |
 | UNSUPPORTED | 26 |
-| NOT_APPLICABLE | 12 |
-| BLOCKED | 18 |
+| NOT_APPLICABLE | 22 |
+| BLOCKED | 27 |
 | FAIL | 0 |
 
 ### Every cell that is not a plain PASS
@@ -119,40 +132,49 @@ why.
 |---|---|---|
 | Provider package metadata present | BLOCKED | #83 — Work package 4.2's UPK was moved out of this EPIC into EPIC D and is still open as #83. apps/ugos/ contains the frontend bridge and nothing else: no project.yaml, no compose, no icon, no image tar. Until #83 lands, UGOS is the one Phase 4 Exit Gate provider with no package in this repository. |
 | Uses the exact canonical image | BLOCKED | #83 — Nothing in apps/ugos/ references an image yet, so there is no reference to compare. |
-| Core binary hash parity | BLOCKED | #174 — Same unreachable release manifest as every other provider, and #83 on top of it. |
-| Architecture claims match the build | BLOCKED | #83 — The UPK declares the architecture image tars (section 41); no UPK, no claim to check. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | BLOCKED | #83 — The UPK is what would carry the architecture image tars (section 41), and there is no UPK, so there is no shipped byte to hash. Unlike the six providers that consume the OCI image by reference, this one is not not-applicable: UGOS is meant to ship its own artifact, so the cell stays blocked until #83 produces one. |
+| This provider's own architecture claim matches the build | BLOCKED | #83 — The UPK declares the architecture image tars (section 41); no UPK, no claim of its own to check. |
 | State path persists outside the container | BLOCKED | #83 — The UPK's compose declares the storage mapping (section 22); it does not exist yet. |
 | Backup root constrained | BLOCKED | #83 — BACKUP_ROOT comes from the UPK's install parameters (section 20); they do not exist yet. |
 | API reachable only through the intended path | BLOCKED | #83 — The UPK's compose decides which container publishes a port; it does not exist yet. |
 | Install / update / remove semantics | BLOCKED | #83 — docs/acceptance/ugos-local-notification.md covers notifications only. The install/update/disable/uninstall/reinstall procedure is work package 4.2's, and belongs with #83. |
-| UI launches | BLOCKED | #83 — Section 12's embedded provider window is delivered by the UPK. |
+| UI launches | BLOCKED | #83 — The UI an operator would launch is the UPK's, and docs/acceptance/ugos-local-notification.md covers notifications only. Section 12's embedded provider window is delivered by the UPK too, which is why embedded-window below is blocked on the same issue rather than declared supported: both cannot be true at once. |
 | Upgrade preserves state | BLOCKED | #83 — Section 46's upgrade behaviour needs the package that gets upgraded. |
 | Removal does not delete retained backups | BLOCKED | #83 — Section 48's uninstall behaviour needs the package that gets uninstalled. |
+| Native authentication | BLOCKED | #83 — The bridge opts in, but nothing this repository produces loads the UGOS bridge: there is no UPK (#83), and even once there is one, serve-ui embeds a single bundle chosen at build time (#180). A capability flag is a statement of intent until an installed artifact runs it. |
+| Native notifications | BLOCKED | #83 — Same as native-auth: the flag is set in apps/ugos/frontend/platform.ts and no artifact loads that file. |
+| Embedded window | BLOCKED | #83 — Section 12's embedded provider window is delivered by the UPK, which is exactly what ui-launch above says. Declaring this supported while blocking ui-launch on the same sentence was a contradiction: both rows are the same missing package. |
 | App-store packaging | BLOCKED | #83 — The bridge claims it, and section 4A promises it, but no UPK exists in this repository yet. Passing on the bridge flag alone would be exactly the kind of claim the store-artifact half of this check exists to refuse. |
+| Storage picker | BLOCKED | #83 — Same as native-auth: declared in a bridge no shipped artifact loads. |
 
 #### Synology DSM (Tier B)
 
 | Capability | Outcome | Why |
 |---|---|---|
 | Uses the exact canonical image | N/A | Synology is the one Phase 4 provider that cannot consume the OCI image: DSM's Package Center installs a native .spk. Section 3.7 makes the SPK a sibling of the image carrying the same core binary digest, so parity here is binary parity, not image parity. |
-| Core binary hash parity | BLOCKED | #174 — spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json. The manifest pins a commit that is not an ancestor of main, so the comparison has nothing real on the other side. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. apps/common/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here. |
 | State path persists outside the container | N/A | DSM fixes the persistent location: /var/packages/<pkg>/var under the package FHS, not a bind mount this repository declares. |
-| Backup root constrained | N/A | The backup root is a DSM shared folder the operator picks at install time, so there is no checked-in host path pair to compare. The separation itself is proven by the package never placing key material or auth state under it. |
+| Backup root constrained | N/A | The backup root is a DSM shared folder the operator picks at install time: conf/resource's data-share worker declares the share by name and carries no path, so there is no checked-in host path pair for this check to compare. What IS decided in this repository is the other side of the same rule, that the package places no key material or auth state anywhere (no-bundled-secrets) and that its lifecycle scripts delete nothing outside the package footprint. The containment itself is step 5 of the procedure, which puts a canary in the share and diffs a listing across the uninstall. |
 | No provider-specific lifecycle implementation | N/A | DSM's package format MANDATES preinst/postinst/preuninst/postuninst/preupgrade/postupgrade and start-stop-status. Those scripts are the platform's contract, not a lifecycle engine of our own, and apps/synology holds them to wrapper-only behaviour. |
-| API reachable only through the intended path | N/A | There is no two-container split to check: the SPK runs one process behind DSM's own reverse proxy, and the port comes from conf/resource rather than a compose ports list. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
 | UI launches | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
 | Upgrade preserves state | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
 | Removal does not delete retained backups | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
 | Native authentication | UNSUP | Tier B. Section 4A makes DSM SSO a follow-on capability; the initial package uses section 13A local auth. |
 | Native notifications | UNSUP | Tier B. No DSM notification adapter in v1; webhooks instead. |
+| Embedded window | BLOCKED | #180 — apps/synology/frontend/platform.ts opts in, but the .spk serves the same go:embed'ed bundle the canonical image does, and ui/shared/vite.config.ts defaults that bundle to the generic shell. apps/synology/README.md's first known gap says it outright and step 3.6 of the acceptance procedure tells the operator to expect the generic bridge, so recording PASS here contradicted two documents in the same tree. #180 tracks the missing serve-side selection. |
+| App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. The shared folder is chosen once at install time through DSM, not browsed from inside the app. |
 
 #### TrueNAS (Tier B)
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Core binary hash parity | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
+| This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/truenas-provider-acceptance.md, not yet executed |
 | UI launches | OPERATOR | covered by docs/acceptance/truenas-provider-acceptance.md, not yet executed |
 | Upgrade preserves state | OPERATOR | covered by docs/acceptance/truenas-provider-acceptance.md, not yet executed |
@@ -160,13 +182,16 @@ why.
 | Native authentication | UNSUP | Tier B. Section 4A gives TrueNAS the generic local auth; no middleware session adapter in v1. |
 | Native notifications | UNSUP | Tier B. Webhooks instead of TrueNAS alerts. |
 | Embedded window | UNSUP | Tier B. The Apps portal link opens the UI in a normal browser tab. |
+| App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. questions.yaml asks for the dataset paths at install time; the running app does not browse pools. |
 
 #### Unraid (Tier B)
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Core binary hash parity | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
+| This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/unraid-provider-acceptance.md, not yet executed |
 | UI launches | OPERATOR | covered by docs/acceptance/unraid-provider-acceptance.md, not yet executed |
 | Upgrade preserves state | OPERATOR | covered by docs/acceptance/unraid-provider-acceptance.md, not yet executed |
@@ -174,6 +199,7 @@ why.
 | Native authentication | UNSUP | Tier B. Section 4A gives Unraid the generic local auth; no plugin is required for v1. |
 | Native notifications | UNSUP | Tier B. Webhooks instead of Unraid notifications, which would need a plugin. |
 | Embedded window | UNSUP | Tier B. The WebUI link opens a normal browser tab. |
+| App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. Community Applications collects the paths at install time; the app does not browse shares. |
 
 #### Generic Docker (Tier C)
@@ -181,7 +207,9 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Uses the exact canonical image | N/A | container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than pulling a published reference. It is the source of the image the other six profiles consume, so pinning it to its own output would be circular. |
-| Core binary hash parity | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | container/ BUILDS the canonical image from container/Dockerfile rather than consuming a published one, so its binaries are compiled during the build and nothing here is a checked-in artifact to hash. The bytes are decided by the build itself, and apps/generic/tests/dockercli drives the real image the build produces. |
+| This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | No provider-specific lifecycle implementation | N/A | Two reasons, both structural. apps/generic IS the canonical web host (section 37), not a wrapper around it, so there is no wrapper for a second implementation to hide in. And container/compose.yaml carries a build: key, which the scanner treats as a violation everywhere else precisely because a Tier B/C package must reuse the canonical image rather than build one; here it is the file the canonical image is built FROM. |
 | Provider removal does not alter core | N/A | scripts/architecture/verify-ui-shared-without-provider-sdks.sh says it directly: apps/generic is the vendor-neutral baseline the default Vite build targets, so it is not a provider SDK directory and ui/shared's own tests import its bridge on purpose. The rule applies to the six vendor providers. |
 | Install / update / remove semantics | N/A | Automated rather than operator-verified: apps/generic/tests/dockercli drives the real docker CLI against the real image (section 67), so there is no hardware step to write a procedure for. |
@@ -198,7 +226,9 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Core binary hash parity | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
+| This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/openmediavault-provider-acceptance.md, not yet executed |
 | UI launches | OPERATOR | covered by docs/acceptance/openmediavault-provider-acceptance.md, not yet executed |
 | Upgrade preserves state | OPERATOR | covered by docs/acceptance/openmediavault-provider-acceptance.md, not yet executed |
@@ -213,7 +243,9 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Core binary hash parity | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
+| This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/proxmox-ve-deployment.md, not yet executed |
 | UI launches | OPERATOR | covered by docs/acceptance/proxmox-ve-deployment.md, not yet executed |
 | Upgrade preserves state | OPERATOR | covered by docs/acceptance/proxmox-ve-deployment.md, not yet executed |

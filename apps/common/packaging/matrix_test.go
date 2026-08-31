@@ -1,12 +1,14 @@
 package packaging
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -175,6 +177,7 @@ var capabilityChecks = map[string]func(providerUnderTest) (bool, string){
 	"provider-identity":               checkProviderIdentity,
 	"package-metadata":                checkPackageMetadata,
 	"canonical-image-parity":          checkCanonicalImageParity,
+	"release-manifest-integrity":      checkReleaseManifestIntegrity,
 	"core-binary-hash-parity":         checkCoreBinaryHashParity,
 	"architecture-parity":             checkArchitectureParity,
 	"state-persistence":               checkStatePersistence,
@@ -252,80 +255,178 @@ func checkCanonicalImageParity(p providerUnderTest) (bool, string) {
 	return true, fmt.Sprintf("%d service(s) on %s", len(svcs), p.canonical.Image.Reference)
 }
 
-// checkCoreBinaryHashParity is the gate's "core version/hash parity"
-// line, and it is the one check in this file that cannot conclude today.
+// checkReleaseManifestIntegrity is the repository-wide half of the old
+// "core version/hash parity" line: is container/release-manifest.json a
+// description of a build anyone can reach at all?
 //
-// The parity claim is that the binaries a provider ships are the binaries
-// container/release-manifest.json recorded. That is only a claim about
-// anything if the manifest describes a build you can reach: it pins a
-// commit, and comparing against a commit that is not in the history is
-// comparing against nothing. Today that commit is not an ancestor of
-// main (#174), so this reports BLOCKED rather than being loosened into
-// something that passes.
-func checkCoreBinaryHashParity(p providerUnderTest) (bool, string) {
-	data, err := os.ReadFile(Path(filepath.Join("container", "release-manifest.json")))
+// It is deliberately NOT per-provider, and it is named for what it
+// decides rather than for what a reader hopes it decides. It reads no
+// provider metadata, returns the same verdict for all seven columns, and
+// compares no bytes. The per-provider claim, that the binaries a provider
+// SHIPS are the binaries this manifest recorded, is
+// core-binary-hash-parity below, and splitting the two is the whole
+// point: one row that is true repository-wide can no longer stand in for
+// seven answers nobody measured.
+//
+// Today it cannot conclude: the manifest pins a commit that is not an
+// ancestor of main (#174), so its hashes describe a build that is not in
+// this history and there is nothing real on the other side of any
+// comparison.
+func checkReleaseManifestIntegrity(p providerUnderTest) (bool, string) {
+	manifest, err := ReadReleaseManifest()
 	if err != nil {
-		return false, err.Error()
-	}
-	var manifest struct {
-		Commit        string `json:"commit"`
-		Architectures []struct {
-			Architecture string            `json:"architecture"`
-			BinarySHA256 map[string]string `json:"binary_sha256"`
-		} `json:"architectures"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
 		return false, err.Error()
 	}
 	if manifest.Commit == "" {
 		return false, "the release manifest pins no commit"
 	}
-	if err := exec.Command("git", "-C", Path("."), "merge-base", "--is-ancestor", manifest.Commit, "HEAD").Run(); err != nil {
-		return false, fmt.Sprintf("release manifest pins commit %s, which is not an ancestor of HEAD, so its hashes describe a build that is not in this history", manifest.Commit[:7])
-	}
-	for _, a := range manifest.Architectures {
-		for _, binary := range p.canonical.Binaries {
-			if a.BinarySHA256[strings.TrimPrefix(binary, "/")] == "" {
-				return false, fmt.Sprintf("no SHA-256 recorded for %s on %s", binary, a.Architecture)
-			}
+	// Exit status 1 is git answering "no". Anything else is git failing
+	// to answer, which is a different fact and must not be filed under
+	// the blocker for the first one.
+	cmd := exec.Command("git", "-C", Path("."), "merge-base", "--is-ancestor", manifest.Commit, "HEAD")
+	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+			return false, fmt.Sprintf("git could not decide whether %s is an ancestor of HEAD: %v", short(manifest.Commit), err)
 		}
+		return false, fmt.Sprintf("release manifest pins commit %s, which is not an ancestor of HEAD, so its hashes describe a build that is not in this history", short(manifest.Commit))
 	}
-	return true, fmt.Sprintf("manifest commit %s is reachable and records every binary hash", manifest.Commit[:7])
-}
-
-func checkArchitectureParity(p providerUnderTest) (bool, string) {
-	if p.spec.Metadata.Kind == "none" {
-		return false, "this provider ships no package, so it makes no architecture claim to check"
-	}
-	data, err := os.ReadFile(Path(filepath.Join("container", "release-manifest.json")))
-	if err != nil {
-		return false, err.Error()
-	}
-	var manifest struct {
-		Architectures []struct {
-			Architecture string            `json:"architecture"`
-			BinarySHA256 map[string]string `json:"binary_sha256"`
-		} `json:"architectures"`
-	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return false, err.Error()
-	}
-	var built []string
-	for _, a := range manifest.Architectures {
-		built = append(built, a.Architecture)
-		for _, binary := range p.canonical.Binaries {
-			if a.BinarySHA256[strings.TrimPrefix(binary, "/")] == "" {
-				return false, fmt.Sprintf("the manifest records no %s for %s", binary, a.Architecture)
-			}
-		}
+	if ok, detail := manifest.RecordsEveryBinary(p.canonical.Binaries); !ok {
+		return false, detail
 	}
 	claimed := append([]string(nil), p.canonical.Architectures...)
 	sort.Strings(claimed)
-	sort.Strings(built)
-	if strings.Join(claimed, ",") != strings.Join(built, ",") {
-		return false, fmt.Sprintf("canonical.json claims %v, the release manifest records %v", claimed, built)
+	if strings.Join(claimed, ",") != strings.Join(manifest.ArchitectureSet(), ",") {
+		return false, fmt.Sprintf("canonical.json claims %v, the release manifest records %v", claimed, manifest.ArchitectureSet())
 	}
-	return true, fmt.Sprintf("claims and build agree on %v", claimed)
+	return true, fmt.Sprintf("manifest commit %s is reachable and records every binary on %v", short(manifest.Commit), manifest.ArchitectureSet())
+}
+
+func short(commit string) string {
+	if len(commit) > 7 {
+		return commit[:7]
+	}
+	return commit
+}
+
+// checkCoreBinaryHashParity is §3.7's one-binary rule, and it is the one
+// check in this file that is allowed to go green ONLY after a byte
+// comparison has actually happened.
+//
+// The rule is that the binaries a provider ships are the binaries
+// container/release-manifest.json recorded. Deciding that needs two
+// things in the same place: a recorded hash, and a file to hash. Reading
+// the manifest gives you the first; the second has to be a real artifact,
+// and no provider in this repository checks one in. So a provider that
+// declares no binaryArtifacts is refused here rather than passing on the
+// manifest alone, which is what the old single check did for all seven
+// columns without ever opening a packaged file.
+//
+// Synology is the case that proves the shape rather than the exception to
+// it: spkctl verify really does re-derive each binary's SHA-256 out of a
+// finished .spk. It runs in apps/synology's own module, behind the §7.1
+// boundary scripts/architecture/*.sh enforces, so the matrix records that
+// cell against the test that does the work instead of executing it here.
+func checkCoreBinaryHashParity(p providerUnderTest) (bool, string) {
+	manifest, err := ReadReleaseManifest()
+	if err != nil {
+		return false, err.Error()
+	}
+	return coreBinaryHashParity(p, manifest)
+}
+
+func coreBinaryHashParity(p providerUnderTest, manifest ReleaseManifest) (bool, string) {
+	artifacts := p.spec.Metadata.BinaryArtifacts
+	if len(artifacts) == 0 {
+		return false, "this provider checks in no core binary, so there is no second copy of the bytes here to hash against the release manifest"
+	}
+	root := Path(p.spec.Metadata.Root)
+	names := make([]string, 0, len(artifacts))
+	for binary := range artifacts {
+		names = append(names, binary)
+	}
+	sort.Strings(names)
+	for _, binary := range names {
+		file := artifacts[binary]
+		got, err := SHA256File(filepath.Join(root, file))
+		if err != nil {
+			return false, fmt.Sprintf("cannot hash %s: %v", file, err)
+		}
+		recorded := manifest.HashesFor(binary)
+		if len(recorded) == 0 {
+			return false, fmt.Sprintf("the release manifest records no hash for %s at all", binary)
+		}
+		matched := ""
+		for arch, want := range recorded {
+			if want == got {
+				matched = arch
+				break
+			}
+		}
+		if matched == "" {
+			return false, fmt.Sprintf("%s hashes to %s, which the manifest records for no architecture (%v)", file, short(got), sortedKeys(recorded))
+		}
+	}
+	return true, fmt.Sprintf("%d shipped binary/binaries hash to what the manifest recorded", len(artifacts))
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// checkArchitectureParity is §40's "the architectures a package claims are
+// the architectures that were built", decided against THIS provider's own
+// claim.
+//
+// It used to read container/release-manifest.json against canonical.json
+// and return the same answer for six providers, which made a green
+// Synology cell read as "apps/synology/spk/arch.go's DSM architecture
+// table was checked against the release build" when nothing of the kind
+// had happened. The repository-wide half of that comparison now lives in
+// checkReleaseManifestIntegrity; what is left here is per-provider, and a
+// provider that makes no architecture claim of its own says so instead of
+// borrowing one.
+func checkArchitectureParity(p providerUnderTest) (bool, string) {
+	manifest, err := ReadReleaseManifest()
+	if err != nil {
+		return false, err.Error()
+	}
+	return architectureParity(p, manifest)
+}
+
+func architectureParity(p providerUnderTest, manifest ReleaseManifest) (bool, string) {
+	claim := p.spec.Metadata.ArchitectureClaim
+	if claim.Source == "" || len(claim.Architectures) == 0 {
+		return false, "this provider makes no architecture claim of its own: it consumes the multi-arch canonical image by reference, and the repository-wide claim is release-manifest-integrity's"
+	}
+	source, err := os.ReadFile(Path(claim.Source))
+	if err != nil {
+		return false, fmt.Sprintf("the declared architecture claim source %s is unreadable: %v", claim.Source, err)
+	}
+	for _, arch := range claim.Architectures {
+		if !strings.Contains(string(source), arch) {
+			return false, fmt.Sprintf("conformance.json says %s claims %s, and %s does not mention it", claim.Source, arch, claim.Source)
+		}
+	}
+	built := manifest.ArchitectureSet()
+	claimed := append([]string(nil), claim.Architectures...)
+	sort.Strings(claimed)
+	for _, arch := range claimed {
+		if !slices.Contains(built, arch) {
+			return false, fmt.Sprintf("%s claims %s, which the release manifest does not build (%v)", claim.Source, arch, built)
+		}
+		for _, binary := range p.canonical.Binaries {
+			if manifest.HashesFor(binary)[arch] == "" {
+				return false, fmt.Sprintf("the manifest records no %s for %s", binary, arch)
+			}
+		}
+	}
+	return true, fmt.Sprintf("%s claims %v, and the release manifest builds every one of them", claim.Source, claimed)
 }
 
 func checkStatePersistence(p providerUnderTest) (bool, string) {
@@ -390,7 +491,17 @@ func checkBackupRootContainment(p providerUnderTest) (bool, string) {
 }
 
 // roleMounts collapses every service's mounts into one role -> mount map,
-// and refuses when two services disagree about where a role comes from.
+// and refuses when two services disagree about where a role comes from,
+// or when a service mounts something at a container path the canonical
+// image has no role for.
+//
+// That second refusal is the important one, and it used to be a `continue`.
+// Mount.Role's own documentation says an empty role "is itself a
+// finding", and TestOnlyTheWebUIContainerPublishesAPort's sibling in
+// conformance_test.go already treats it as one. Skipping it here made two
+// safety-relevant checks, state persistence and backup-root containment,
+// fail OPEN: a profile that bind-mounts a whole /etc/backup-manager, or a
+// stray /data, was invisible to both.
 func roleMounts(p providerUnderTest) (map[string]Mount, string) {
 	svcs, err := p.services()
 	if err != nil {
@@ -403,7 +514,7 @@ func roleMounts(p providerUnderTest) (map[string]Mount, string) {
 	for _, s := range svcs {
 		for _, m := range s.Mounts {
 			if m.Role == "" {
-				continue
+				return nil, fmt.Sprintf("service %q mounts %s at %s, which is not a container path the canonical image knows about, so no storage rule can be applied to it", s.Name, m.HostPath, m.ContainerPath)
 			}
 			if prev, dup := out[m.Role]; dup && prev.HostPath != m.HostPath {
 				return nil, fmt.Sprintf("role %q is mounted from two different host paths (%s and %s)", m.Role, prev.HostPath, m.HostPath)
@@ -452,6 +563,9 @@ func checkAuthModeExplicit(p providerUnderTest) (bool, string) {
 // profile, and it belongs to the container running the Web UI command,
 // never the engine that holds the state database and the credentials.
 func checkAPIPathIsolation(p providerUnderTest) (bool, string) {
+	if p.spec.Metadata.Kind == "spk" {
+		return checkSPKPortIsolation(p)
+	}
 	svcs, err := p.services()
 	if err != nil {
 		return false, err.Error()
@@ -481,6 +595,68 @@ func checkAPIPathIsolation(p providerUnderTest) (bool, string) {
 			edge.Name, edge.Command, p.canonical.Commands.WebUI)
 	}
 	return true, fmt.Sprintf("only %q publishes a port (%v), running the Web UI command", edge.Name, edge.Ports)
+}
+
+// checkSPKPortIsolation is the same rule for the one provider that has no
+// compose file to read it out of.
+//
+// Synology used to be declared NOT_APPLICABLE here on the grounds that
+// "the SPK runs one process behind DSM's own reverse proxy, and the port
+// comes from conf/resource". Both halves were false: start-stop-status
+// starts two processes, and conf/resource holds a data-share worker with
+// no port in it at all. That mattered more than a wrong sentence, because
+// Synology is the one provider whose engine isolation is enforced by a
+// shell script rather than by a Docker network, so it is the weakest of
+// the seven and it was the one cell the matrix declined to look at.
+//
+// The property is real and it is checkable from the shipped assets: the
+// engine binds loopback, the Web UI binds a different port, and that Web
+// UI port is the only one anything on the LAN can reach.
+func checkSPKPortIsolation(p providerUnderTest) (bool, string) {
+	root := Path(filepath.Join(p.spec.Metadata.Root, "spk", "assets"))
+	common, err := os.ReadFile(filepath.Join(root, "scripts", "common.sh"))
+	if err != nil {
+		return false, fmt.Sprintf("cannot read the package's shared shell definitions: %v", err)
+	}
+	engine := regexp.MustCompile(`ENGINE_ADDR="([^"]+)"`).FindSubmatch(common)
+	if engine == nil {
+		return false, "scripts/common.sh sets no ENGINE_ADDR, so nothing pins where the engine listens"
+	}
+	host, port, ok := strings.Cut(string(engine[1]), ":")
+	if !ok {
+		return false, fmt.Sprintf("ENGINE_ADDR is %q, which names no host and port", engine[1])
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return false, fmt.Sprintf("the engine listens on %q, which is not a loopback address, so the API is on the LAN edge", engine[1])
+	}
+	ui := regexp.MustCompile(`(?m)^UI_PORT=(\d+)`).FindSubmatch(common)
+	if ui == nil {
+		return false, "scripts/common.sh sets no UI_PORT"
+	}
+	if string(ui[1]) == port {
+		return false, fmt.Sprintf("the Web UI and the engine both use port %s", port)
+	}
+	// The engine's port must not be what DSM publishes. INFO's adminport
+	// is what DSM opens; a package that put the engine's port there would
+	// hand the LAN the state database and the credentials.
+	starter, err := os.ReadFile(filepath.Join(root, "scripts", "start-stop-status"))
+	if err != nil {
+		return false, fmt.Sprintf("cannot read start-stop-status: %v", err)
+	}
+	if !regexp.MustCompile(`\$\{?ENGINE_ADDR\}?`).Match(starter) {
+		return false, "start-stop-status does not use ENGINE_ADDR, so the loopback bind above is not what actually starts"
+	}
+	for _, asset := range []string{filepath.Join("conf", "resource"), filepath.Join("ui", "config")} {
+		body, err := os.ReadFile(filepath.Join(root, asset))
+		if err != nil {
+			return false, fmt.Sprintf("cannot read %s: %v", asset, err)
+		}
+		if strings.Contains(string(body), port) {
+			return false, fmt.Sprintf("%s mentions the engine port %s; only the Web UI port may be published", asset, port)
+		}
+	}
+	return true, fmt.Sprintf("the engine binds %s and the Web UI's %s is the only port any shipped asset publishes", engine[1], ui[1])
 }
 
 // checkProviderRemovalPreservesCore is §63A's "provider removal does not
@@ -550,26 +726,65 @@ func checkHostManagementPlane(p providerUnderTest) (bool, string) {
 	return true, detail
 }
 
-// operatorCoverageRules is what a §68 acceptance procedure has to contain
-// for a capability that only a real platform can decide. Matching is
-// against the procedure's headings and checklist boxes rather than its
-// whole text, because "the word update appears in a footnote" is not a
-// step an operator performs.
-var operatorCoverageRules = map[string][]*regexp.Regexp{
-	"install-update-remove": {
+// coverageRule is what a §68 acceptance procedure has to contain for a
+// capability that only a real platform can decide.
+type coverageRule struct {
+	// steps must all match the procedure's headings and checklist boxes
+	// rather than its whole text, because "the word update appears in a
+	// footnote" is not a step an operator performs.
+	steps []*regexp.Regexp
+	// section names the part of the procedure that decides this
+	// capability. Where it is set, the two rules below are applied to
+	// that section's body, commands included.
+	section *regexp.Regexp
+	// capture is a step that records what the state was BEFORE the
+	// destructive operation, and compare is the step that holds the
+	// state afterwards against it. Both, in the same section, or the
+	// procedure cannot detect the failure it claims to rule out: an
+	// operator with nothing to compare against ticks "intact" from a
+	// directory listing.
+	capture *regexp.Regexp
+	compare *regexp.Regexp
+}
+
+// evidenceCaptureRe and evidenceCompareRe are the two halves of a step
+// that could actually notice a deletion.
+var (
+	evidenceCaptureRe = regexp.MustCompile(`(?i)sha256sum |md5sum |canary|\| *tee |find [^\n]*>|ls -[a-zA-Z]* *[^\n]*>`)
+	evidenceCompareRe = regexp.MustCompile(`(?i)sha256sum -c|md5sum -c|\bdiff\b|\bcmp\b`)
+)
+
+var operatorCoverageRules = map[string]coverageRule{
+	"install-update-remove": {steps: []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\binstall`),
 		regexp.MustCompile(`(?i)\bupdate|\bupgrade`),
 		regexp.MustCompile(`(?i)\b(uninstall|remove|removal|destroy)`),
-	},
-	"ui-launch": {
+	}},
+	"ui-launch": {steps: []*regexp.Regexp{
 		regexp.MustCompile(`(?i)web ui|web interface|webui|portal|web app`),
-	},
+	}},
 	"upgrade-preserves-state": {
-		regexp.MustCompile(`(?i)\bupdate|\bupgrade`),
-		regexp.MustCompile(`(?i)surviv|preserv|persist|still there|unchanged`),
+		steps: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)\bupdate|\bupgrade`),
+			regexp.MustCompile(`(?i)surviv|preserv|persist|still there|unchanged`),
+		},
+		section: regexp.MustCompile(`(?i)^#{2,3} .*\b(update|upgrade)`),
+		capture: evidenceCaptureRe,
+		compare: evidenceCompareRe,
 	},
+	// The destructive-safety capability of the phase. One topic-word
+	// regex used to satisfy it, so a document with the heading "Removal
+	// and retained backups" and nothing else reported PENDING_OPERATOR,
+	// which resolve() presents as "the automated half held". That was
+	// measuring whether the procedure mentions the topic, not whether it
+	// could detect the loss of a backup.
 	"remove-preserves-backups": {
-		regexp.MustCompile(`(?i)retained.(backup|artifact)`),
+		steps: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)retained.(backup|artifact)`),
+		},
+		section: regexp.MustCompile(`(?i)^#{2,3} .*\b(remove|removal|uninstall|destroy)`),
+		capture: evidenceCaptureRe,
+		compare: evidenceCompareRe,
 	},
 }
 
@@ -578,6 +793,7 @@ func operatorCoverage(capability string) func(providerUnderTest) (bool, string) 
 		if p.spec.Acceptance == "" {
 			return false, "this provider has no §68 acceptance procedure"
 		}
+		rule := operatorCoverageRules[capability]
 		steps, err := ProcedureSteps(Path(p.spec.Acceptance))
 		if err != nil {
 			return false, err.Error()
@@ -585,9 +801,24 @@ func operatorCoverage(capability string) func(providerUnderTest) (bool, string) 
 		if steps == "" {
 			return false, p.spec.Acceptance + " has no headings or checklist steps"
 		}
-		for _, re := range operatorCoverageRules[capability] {
+		for _, re := range rule.steps {
 			if !re.MatchString(steps) {
 				return false, fmt.Sprintf("%s has no step matching %s", p.spec.Acceptance, re)
+			}
+		}
+		if rule.section != nil {
+			body, err := ProcedureSection(Path(p.spec.Acceptance), rule.section)
+			if err != nil {
+				return false, err.Error()
+			}
+			if body == "" {
+				return false, fmt.Sprintf("%s has no section matching %s, so nothing in it decides this", p.spec.Acceptance, rule.section)
+			}
+			if !rule.capture.MatchString(body) {
+				return false, fmt.Sprintf("%s's %s section records no baseline before the destructive step (a checksum, a canary, or a listing written to a file), so there is nothing to compare against afterwards", p.spec.Acceptance, capability)
+			}
+			if !rule.compare.MatchString(body) {
+				return false, fmt.Sprintf("%s's %s section captures a baseline but never compares against it (no sha256sum -c, diff or cmp), so a loss would be ticked as intact", p.spec.Acceptance, capability)
 			}
 		}
 		return true, "covered by " + p.spec.Acceptance + ", not yet executed"
@@ -604,6 +835,12 @@ func operatorCoverage(capability string) func(providerUnderTest) (bool, string) 
 // deployment". Checking the flag against the artifacts is what caught it,
 // and checking the artifacts against the flag is what stops the reverse:
 // UGOS's bridge claims store packaging today and #83's UPK does not exist.
+//
+// Both halves were still one short. Flipping the flag fixed nothing a user
+// can see, because no artifact loads a provider's bridge at all (#180), so
+// the third condition below is the one that decides these cells today: the
+// store artifacts exist, the flag is set, and the bundle that would honour
+// it is somebody else's.
 func checkAppStorePackaging(p providerUnderTest) (bool, string) {
 	on, err := BridgeDeclaresCapability(p.bridgePath(), "appStorePackaging")
 	if err != nil {
@@ -621,6 +858,9 @@ func checkAppStorePackaging(p providerUnderTest) (bool, string) {
 			return false, fmt.Sprintf("declared store artifact %s is missing: %v", f, err)
 		}
 	}
+	if shipped, detail := bridgeReachesAShippedArtifact(p); !shipped {
+		return false, fmt.Sprintf("%d store artifact(s) are present and the bridge claims store packaging, but %s, so a user who installs from the store is still told this is a container deployment", len(artifacts), detail)
+	}
 	return true, fmt.Sprintf("the bridge claims store packaging and %d catalog artifact(s) back it", len(artifacts))
 }
 
@@ -630,11 +870,38 @@ func bridgeFlag(key string) func(providerUnderTest) (bool, string) {
 		if err != nil {
 			return false, err.Error()
 		}
-		if on {
-			return true, "the bridge opts in to " + key
+		if !on {
+			return false, "the bridge does not opt in to " + key + " (ui/shared's NO_CAPABILITIES default is false, so this is a declared no)"
 		}
-		return false, "the bridge does not opt in to " + key + " (ui/shared's NO_CAPABILITIES default is false, so this is a declared no)"
+		if shipped, detail := bridgeReachesAShippedArtifact(p); !shipped {
+			return false, "the bridge opts in to " + key + ", but " + detail
+		}
+		return true, "the bridge opts in to " + key + ", and it is the bridge a shipped artifact loads"
 	}
+}
+
+// bridgeReachesAShippedArtifact is the question every capability flag
+// turns on and none of them used to ask: does anything a user installs
+// actually load apps/<provider>/frontend/platform.ts?
+//
+// ui/shared/vite.config.ts picks the shell at BUILD time from
+// VITE_PLATFORM, defaulting to generic, and `serve-ui` serves one
+// embedded bundle with no flag to serve another from disk. So the
+// canonical image and the .spk that wraps the same binaries all serve the
+// generic bridge, whose capabilities() is empty and whose deployment
+// label is "Docker Compose". A flag set in a provider's platform.ts is a
+// statement of repository intent until #180 gives serve-ui a way to
+// select a bundle, and a conformance matrix that reports intent as PASS
+// is reporting a capability nobody can reach.
+func bridgeReachesAShippedArtifact(p providerUnderTest) (bool, string) {
+	shipped, source, err := ShippedBridgeProvider()
+	if err != nil {
+		return false, err.Error()
+	}
+	if shipped == p.id {
+		return true, fmt.Sprintf("%s selects the %s bundle", source, shipped)
+	}
+	return false, fmt.Sprintf("no shipped artifact loads it: %s selects the %s bundle and serve-ui serves one go:embed'ed bundle, so an installed package runs the %s bridge (#180)", source, shipped, shipped)
 }
 
 // ---------------------------------------------------------------------
@@ -718,12 +985,15 @@ func TestEveryProviderDeclaresEveryCapability(t *testing.T) {
 					if !regexp.MustCompile(`^#\d+$`).MatchString(cell.Blocker) {
 						t.Errorf("%q is declared blocked with blocker %q, want a tracked issue like #174", id, cell.Blocker)
 					}
+					if strings.TrimSpace(cell.ExpectedDetail) == "" {
+						t.Errorf("%q is declared blocked on %s with no expectedDetail; without one the blocker excuses ANY failure of that check, including one that has nothing to do with it", id, cell.Blocker)
+					}
 				default:
 					t.Errorf("%q is declared %q, which is not one of supported/unsupported/not-applicable/blocked", id, cell.Declared)
 				}
 				if cell.VerifiedBy != "" {
-					if _, err := os.Stat(Path(cell.VerifiedBy)); err != nil {
-						t.Errorf("%q points verifiedBy at %s, which does not exist: %v", id, cell.VerifiedBy, err)
+					if err := VerifiedByReachable(cell.VerifiedBy); err != nil {
+						t.Errorf("%q points verifiedBy at %s, which does not hold up: %v", id, cell.VerifiedBy, err)
 					}
 				}
 			}
@@ -787,8 +1057,13 @@ func TestCrossProviderConformanceMatrix(t *testing.T) {
 func resolve(p providerUnderTest, cap Capability, cell Cell) Result {
 	check := capabilityChecks[cap.ID]
 	satisfied, detail := check(p)
+	return resolveWith(p.id, cap, cell, satisfied, detail)
+}
 
-	r := Result{Provider: p.id, Capability: cap.ID, Detail: detail}
+// resolveWith is resolve with the check already run, so the declaration
+// arithmetic can be tested against a check whose verdict the test chose.
+func resolveWith(provider string, cap Capability, cell Cell, satisfied bool, detail string) Result {
+	r := Result{Provider: provider, Capability: cap.ID, Detail: detail}
 
 	switch cell.Declared {
 	case DeclSupported:
@@ -820,6 +1095,19 @@ func resolve(p providerUnderTest, cap Capability, cell Cell) Result {
 		case DeclNotApplicable:
 			r.Outcome = OutcomeNotApplicable
 		default:
+			// The other half of the staleness guard. A blocked cell used
+			// to report BLOCKED whenever its check failed, for any
+			// reason at all, so "blocked" plus a tracked issue number
+			// silenced every future failure of that check for as long as
+			// the declaration stood. Tying the excuse to the observed
+			// message is brittle if the message changes, and that is the
+			// intended behaviour: a cell that is being excused should
+			// break loudly when the excuse stops being the reason.
+			if !strings.Contains(detail, cell.ExpectedDetail) {
+				r.Outcome = OutcomeFail
+				r.Detail = fmt.Sprintf("declared blocked on %s, which expects a failure containing %q, but the check failed for a different reason: %s", cell.Blocker, cell.ExpectedDetail, detail)
+				return r
+			}
 			r.Outcome = OutcomeBlocked
 		}
 

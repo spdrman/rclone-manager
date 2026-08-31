@@ -52,12 +52,26 @@ services:
       # proxy. Never set this on the Web UI container, which is the edge.
       TRUST_FORWARDED_HEADERS: "true"
 
+    # Every host path below uses the ":?" form, never a ":-" default, exactly as
+    # container/compose.yaml does it. An unset STATE_DIR must stop the
+    # deployment rather than silently land somewhere: with a default,
+    # Docker creates the bind source on the guest's own root disk, the
+    # stack comes up healthy, and the state database and every retained
+    # artifact are written where this profile's whole recovery story
+    # (destroy the guest, rebuild, re-point at the same host path) cannot
+    # find them. backup-manager.env supplies all five, so a correct
+    # deployment never sees these messages.
+    #
+    # ":?" alone does not prove the share is actually mounted, only that
+    # the variable is set. Step 1 of docs/acceptance/proxmox-ve-deployment.md
+    # requires `mountpoint -q /mnt/backup-manager` in the guest before
+    # `up -d`, which is the other half of the same guarantee.
     volumes:
-      - ${STATE_DIR:-/mnt/backup-manager/state}:/data/state
-      - ${BACKUP_DIR:-/mnt/backup-manager/backups}:/data/backups
-      - ${CONFIG_FILE:-/mnt/backup-manager/config/config.yaml}:/etc/backup-manager/config.yaml:ro
-      - ${KEY_FILE:-/mnt/backup-manager/secrets/id_ed25519}:/etc/backup-manager/id_ed25519:ro
-      - ${KNOWN_HOSTS_FILE:-/mnt/backup-manager/secrets/known_hosts}:/etc/backup-manager/known_hosts:ro
+      - ${STATE_DIR:?set STATE_DIR in .env to the guest path for the SQLite state directory, under the shared host directory}:/data/state
+      - ${BACKUP_DIR:?set BACKUP_DIR in .env to the guest path for retained artifacts, under the shared host directory}:/data/backups
+      - ${CONFIG_FILE:?set CONFIG_FILE in .env to the manager's config.yaml}:/etc/backup-manager/config.yaml:ro
+      - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
 
     restart: unless-stopped
     networks:

@@ -264,11 +264,13 @@ this criterion is the one most likely to differ between the two.
 
 ### 4. In-place update, state must persist
 
-1. Before updating, capture the state that has to survive:
+1. Before updating, capture the state that has to survive, into files you
+   can hold the upgrade against afterwards rather than into your memory:
    ```sh
-   sha256sum /var/packages/BackupManager/var/state/backup-manager.db
-   ls -l  /var/packages/BackupManager/var/state/
-   cat    /var/packages/BackupManager/etc/config.yaml | sha256sum
+   sha256sum /var/packages/BackupManager/var/state/backup-manager.db \
+             /var/packages/BackupManager/etc/config.yaml \
+     | tee /tmp/before-upgrade.sha256
+   find /var/packages/BackupManager/var/state -type f | sort > /tmp/before-upgrade.txt
    ```
    and, in the UI, note the logged-in session, the configured backup set,
    and at least one artifact row.
@@ -281,8 +283,14 @@ this criterion is the one most likely to differ between the two.
    installed one.
 4. Expect: DSM recognises it as an upgrade of the existing package rather
    than a conflicting second install.
-5. After the upgrade completes, re-run the three commands from step 1.
-6. Expect: the state database hash and the config hash are unchanged, the
+5. After the upgrade completes, compare against the baseline rather than
+   re-reading it by eye:
+   ```sh
+   sha256sum -c /tmp/before-upgrade.sha256
+   find /var/packages/BackupManager/var/state -type f | sort > /tmp/after-upgrade.txt
+   diff /tmp/before-upgrade.txt /tmp/after-upgrade.txt
+   ```
+6. Expect: every line of `sha256sum -c` says OK, the diff is empty, the
    local-auth record still exists, and the enrolled administrator can
    still log in without re-enrolling. `target/` is documented to be
    replaced on upgrade and `var/`+`etc/` to persist; this step is what

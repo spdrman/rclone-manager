@@ -274,11 +274,24 @@ sets. Record only that it was taken, and the canary's hash, in the evidence tabl
 Unraid updates a container by pulling the tag and recreating it, which is exactly
 the case most likely to lose state.
 
-1. Push or side-load a newer image tag.
-2. **Docker → backup-manager → Force Update** (or edit the tag and Apply). Do the
+1. Capture a baseline first, from the Unraid terminal, so the checks below are a
+   comparison rather than an impression:
+   ```bash
+   sha256sum /mnt/user/appdata/backup-manager/state/state.db | tee /tmp/before-update.sha256
+   find /mnt/user/backups -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
+   ```
+2. Push or side-load a newer image tag.
+3. **Docker → backup-manager → Force Update** (or edit the tag and Apply). Do the
    same for `backup-manager-ui`.
+4. Compare afterwards:
+   ```bash
+   find /mnt/user/backups -type f -printf '%p %s\n' | sort > /tmp/after-update.txt
+   diff /tmp/before-update.txt /tmp/after-update.txt
+   ```
 
 - [ ] Both containers recreate and return to healthy
+- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+      backup data
 - [ ] The administrator account still exists (no re-enrollment prompt)
 - [ ] Logging back in with the same password works
 - [ ] Every backup set is still configured
@@ -309,9 +322,28 @@ Re-add both from the same user templates, changing nothing.
 
 ## Step 8 — Remove
 
-1. **Docker → backup-manager → Remove**, and remove the image too.
-2. Repeat for `backup-manager-ui`.
+This is the destructive-safety step. Capture the evidence before the removal,
+because afterwards there is nothing left to compare against.
 
+1. Put identifiable data in the backup root and record what is there:
+   ```bash
+   dd if=/dev/urandom of=/mnt/user/backups/acceptance-canary.bin bs=1M count=8
+   sha256sum /mnt/user/backups/acceptance-canary.bin | tee /tmp/canary.sha256
+   find /mnt/user/backups /mnt/user/appdata/backup-manager -type f -printf '%p %s\n' \
+     | sort > /tmp/before-remove.txt
+   ```
+2. **Docker → backup-manager → Remove**, and remove the image too.
+3. Repeat for `backup-manager-ui`.
+4. Check the canary FIRST, before anything else:
+   ```bash
+   sha256sum -c /tmp/canary.sha256
+   find /mnt/user/backups /mnt/user/appdata/backup-manager -type f -printf '%p %s\n' \
+     | sort > /tmp/after-remove.txt
+   diff /tmp/before-remove.txt /tmp/after-remove.txt
+   ```
+   Any deletion here is a release blocker, not a finding to triage.
+
+- [ ] `sha256sum -c` verifies the canary and the `diff` is empty
 - [ ] Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before

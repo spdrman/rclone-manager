@@ -279,10 +279,23 @@ sets. Record only that it was taken, and the canary's hash, in the evidence tabl
 
 ## Step 6 — Update
 
-1. Push or side-load a newer image tag and change `IMAGE` in the env file.
-2. **Services → Compose → Files → backup-manager → Pull**, then **Up**.
+1. Capture a baseline first, over SSH to the OMV box, so the checks below are a
+   comparison rather than an impression:
+   ```bash
+   sha256sum $DISK/appdata/backup-manager/state/state.db | tee /tmp/before-update.sha256
+   find $DISK/backups -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
+   ```
+2. Push or side-load a newer image tag and change `IMAGE` in the env file.
+3. **Services → Compose → Files → backup-manager → Pull**, then **Up**.
+4. Compare afterwards:
+   ```bash
+   find $DISK/backups -type f -printf '%p %s\n' | sort > /tmp/after-update.txt
+   diff /tmp/before-update.txt /tmp/after-update.txt
+   ```
 
 - [ ] Pull and Up both complete, and both services return to healthy
+- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+      backup data
 - [ ] The administrator account still exists (no re-enrollment prompt)
 - [ ] Logging back in with the same password works
 - [ ] Every backup set is still configured
@@ -310,9 +323,28 @@ docker compose -p backup-manager up -d
 
 ## Step 8 — Remove
 
-1. **Services → Compose → Files → backup-manager → Down**.
-2. Then **Delete** the file entry.
+This is the destructive-safety step. Capture the evidence before the removal,
+because afterwards there is nothing left to compare against.
 
+1. Put identifiable data in the backup root and record what is there:
+   ```bash
+   dd if=/dev/urandom of=$DISK/backups/acceptance-canary.bin bs=1M count=8
+   sha256sum $DISK/backups/acceptance-canary.bin | tee /tmp/canary.sha256
+   find $DISK/backups $DISK/appdata/backup-manager -type f -printf '%p %s\n' \
+     | sort > /tmp/before-remove.txt
+   ```
+2. **Services → Compose → Files → backup-manager → Down**.
+3. Then **Delete** the file entry.
+4. Check the canary FIRST, before anything else:
+   ```bash
+   sha256sum -c /tmp/canary.sha256
+   find $DISK/backups $DISK/appdata/backup-manager -type f -printf '%p %s\n' \
+     | sort > /tmp/after-remove.txt
+   diff /tmp/before-remove.txt /tmp/after-remove.txt
+   ```
+   Any deletion here is a release blocker, not a finding to triage.
+
+- [ ] `sha256sum -c` verifies the canary and the `diff` is empty
 - [ ] Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before

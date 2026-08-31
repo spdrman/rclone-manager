@@ -1,9 +1,12 @@
 package packaging
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -102,8 +105,17 @@ type Cell struct {
 	Reason string `json:"reason"`
 	// Blocker is mandatory for "blocked": the issue tracking why.
 	Blocker string `json:"blocker"`
+	// ExpectedDetail is mandatory for "blocked": a substring the check's
+	// own failure message must contain for the blocker to be accepted as
+	// the explanation. Without it, "blocked" silences ANY failure of that
+	// check for as long as the declaration stands, which is the one
+	// direction the staleness guard does not cover.
+	ExpectedDetail string `json:"expectedDetail"`
 	// VerifiedBy points at whatever proves the guarantee instead, when
-	// this provider expresses it somewhere other than here.
+	// this provider expresses it somewhere other than here. Either a
+	// path, or "path:TestName" to name the test rather than the file it
+	// lives in. Naming the test is the stronger form: a file keeps
+	// existing long after the assertion inside it is deleted.
 	VerifiedBy string `json:"verifiedBy"`
 }
 
@@ -124,6 +136,31 @@ type Metadata struct {
 	// catalog. Empty for a Tier C deployment profile, which by
 	// definition has no store to appear in.
 	StoreArtifacts []string `json:"storeArtifacts"`
+	// BinaryArtifacts maps a canonical binary path
+	// ("/backup-manager-web") to a checked-in file in this provider's
+	// package that is supposed to BE those bytes. Empty for every
+	// provider that consumes the OCI image by reference, which is all of
+	// them today, and that is the point: core-binary-hash-parity cannot
+	// go green without a file here to hash.
+	BinaryArtifacts map[string]string `json:"binaryArtifacts"`
+	// ArchitectureClaim is this provider's OWN statement about which
+	// architectures its package supports. Empty for a provider that
+	// makes no claim of its own, which is what stops the repository-wide
+	// release manifest standing in for seven per-provider answers.
+	ArchitectureClaim ArchitectureClaim `json:"architectureClaim"`
+}
+
+// ArchitectureClaim is where a provider states which architectures its
+// own package supports, and what it states.
+type ArchitectureClaim struct {
+	// Source is the file making the claim, relative to the repository
+	// root.
+	Source string `json:"source"`
+	// Architectures are the GOARCH values it claims. Every one of them
+	// must appear verbatim in Source, so a claim recorded here that the
+	// package does not actually make is a failure rather than a
+	// decoration.
+	Architectures []string `json:"architectures"`
 }
 
 // Provider is one column of the matrix.
@@ -393,10 +430,255 @@ func ProcedureSteps(path string) (string, error) {
 	return strings.Join(procedureLineRe.FindAllString(string(data), -1), "\n"), nil
 }
 
+// procedureHeadingRe matches a markdown heading and captures its level.
+var procedureHeadingRe = regexp.MustCompile(`(?m)^(#{2,6}) `)
+
+// ProcedureSection returns the body of the first section of an acceptance
+// procedure whose heading matches want, up to the next heading at the
+// same or a higher level. Unlike ProcedureSteps it keeps the commands:
+// deciding whether a step could actually detect a failure means reading
+// what it tells the operator to run, not just what it calls itself.
+func ProcedureSection(path string, want *regexp.Regexp) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(string(data), "\n")
+	level := 0
+	var body []string
+	for _, line := range lines {
+		m := procedureHeadingRe.FindStringSubmatch(line + "\n")
+		if level == 0 {
+			if m != nil && want.MatchString(line) {
+				level = len(m[1])
+			}
+			continue
+		}
+		if m != nil && len(m[1]) <= level {
+			break
+		}
+		body = append(body, line)
+	}
+	if level == 0 {
+		return "", nil
+	}
+	return strings.Join(body, "\n"), nil
+}
+
 // ImportsProviderRe matches a quoted module path that reaches into
 // apps/<provider>/. Quoting is the point: core/service/scheduler_test.go
 // mentions "apps/generic's serve command" in a comment, which is prose
 // about the architecture, not a dependency on it.
 func ImportsProviderRe(provider string) *regexp.Regexp {
 	return regexp.MustCompile(`["'][^"']*apps/` + regexp.QuoteMeta(provider) + `/`)
+}
+
+// ---------------------------------------------------------------------
+// The release manifest
+// ---------------------------------------------------------------------
+
+// ReleaseManifest is the part of container/release-manifest.json the
+// conformance checks read. Parsed here rather than inside a check so a
+// test can feed it a manifest with one hash corrupted and watch the
+// verdict change, which is the acceptance bar a parity claim has to
+// clear.
+type ReleaseManifest struct {
+	Commit        string                `json:"commit"`
+	Architectures []ReleaseArchitecture `json:"architectures"`
+}
+
+// ReleaseArchitecture is one architecture's recorded build.
+type ReleaseArchitecture struct {
+	Architecture string `json:"architecture"`
+	// BinarySHA256 is keyed by the binary's path WITHOUT a leading
+	// slash, which is how the manifest writes it.
+	BinarySHA256 map[string]string `json:"binary_sha256"`
+}
+
+// ParseReleaseManifest reads a release manifest.
+func ParseReleaseManifest(data []byte) (ReleaseManifest, error) {
+	var m ReleaseManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return ReleaseManifest{}, err
+	}
+	return m, nil
+}
+
+// ReadReleaseManifest reads container/release-manifest.json.
+func ReadReleaseManifest() (ReleaseManifest, error) {
+	data, err := os.ReadFile(Path(filepath.Join("container", "release-manifest.json")))
+	if err != nil {
+		return ReleaseManifest{}, err
+	}
+	return ParseReleaseManifest(data)
+}
+
+// ArchitectureSet returns the architectures the manifest records, sorted.
+func (m ReleaseManifest) ArchitectureSet() []string {
+	out := make([]string, 0, len(m.Architectures))
+	for _, a := range m.Architectures {
+		out = append(out, a.Architecture)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// RecordsEveryBinary reports whether every canonical binary has a
+// recorded SHA-256 on every architecture, and says which one does not
+// when the answer is no.
+func (m ReleaseManifest) RecordsEveryBinary(binaries []string) (bool, string) {
+	if len(m.Architectures) == 0 {
+		return false, "the release manifest records no architecture at all"
+	}
+	if len(binaries) == 0 {
+		return false, "no canonical binary list to check the manifest against"
+	}
+	for _, a := range m.Architectures {
+		for _, binary := range binaries {
+			if a.BinarySHA256[strings.TrimPrefix(binary, "/")] == "" {
+				return false, fmt.Sprintf("no SHA-256 recorded for %s on %s", binary, a.Architecture)
+			}
+		}
+	}
+	return true, fmt.Sprintf("every binary hashed on %v", m.ArchitectureSet())
+}
+
+// HashesFor returns architecture -> recorded SHA-256 for one binary.
+func (m ReleaseManifest) HashesFor(binary string) map[string]string {
+	out := map[string]string{}
+	for _, a := range m.Architectures {
+		if h := a.BinarySHA256[strings.TrimPrefix(binary, "/")]; h != "" {
+			out[a.Architecture] = h
+		}
+	}
+	return out
+}
+
+// SHA256File returns the lowercase hex SHA-256 of a file.
+func SHA256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// ---------------------------------------------------------------------
+// verifiedBy
+// ---------------------------------------------------------------------
+
+// ParseVerifiedBy splits a verifiedBy value into its path and, when the
+// declaration names one, the test function inside it. "a/b.go" yields
+// ("a/b.go", ""); "a/b_test.go:TestThing" yields ("a/b_test.go",
+// "TestThing").
+func ParseVerifiedBy(v string) (path, fn string) {
+	i := strings.LastIndex(v, ":")
+	if i < 0 {
+		return v, ""
+	}
+	return v[:i], v[i+1:]
+}
+
+// VerifiedByReachable reports whether a verifiedBy value points at
+// something that is actually there. Naming a function is the whole point
+// of the "path:Name" form: os.Stat on a file is satisfied by a file that
+// has had the assertion deleted out of it, which is exactly the rot this
+// field is supposed to prevent.
+func VerifiedByReachable(v string) error {
+	path, fn := ParseVerifiedBy(v)
+	info, err := os.Stat(Path(path))
+	if err != nil {
+		return err
+	}
+	if fn == "" {
+		return nil
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s is a directory, so it cannot contain func %s", path, fn)
+	}
+	data, err := os.ReadFile(Path(path))
+	if err != nil {
+		return err
+	}
+	if !regexp.MustCompile(`(?m)^func ` + regexp.QuoteMeta(fn) + `\(`).Match(data) {
+		return fmt.Errorf("%s contains no func %s(", path, fn)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// Which bridge a shipped artifact actually loads
+// ---------------------------------------------------------------------
+
+// viteDefaultPlatformRe pulls the fallback out of
+// ui/shared/vite.config.ts's `process.env.VITE_PLATFORM ?? "generic"`.
+var viteDefaultPlatformRe = regexp.MustCompile(`VITE_PLATFORM\s*\?\?\s*"([a-z0-9-]+)"`)
+
+// vitePlatformAssignmentRe matches a build actually selecting a platform.
+var vitePlatformAssignmentRe = regexp.MustCompile(`VITE_PLATFORM[=:]\s*"?([a-z0-9-]+)"?`)
+
+// releaseBuildInputs are the files that decide what the shipped artifacts
+// contain. Deliberately short: ui/shared/scripts/e2e-all-providers.mjs
+// also sets VITE_PLATFORM, per provider, but it drives Playwright rather
+// than producing anything anyone installs.
+var releaseBuildInputs = []string{
+	filepath.Join("container", "Dockerfile"),
+	filepath.Join(".github", "workflows"),
+}
+
+// ShippedBridgeProvider answers the question every bridge-derived
+// capability actually turns on: which provider's
+// apps/<id>/frontend/platform.ts does a bundle anyone installs load?
+//
+// One answer, not seven. ui/shared/vite.config.ts selects the shell at
+// BUILD time from VITE_PLATFORM and `serve-ui` serves a single embedded
+// bundle (one embed directive, no flag to serve another from disk), so
+// the release image and the .spk that wraps the same binaries all serve
+// whichever one the release build picked. Nothing
+// in the release build picks one today, so it is the vite default.
+func ShippedBridgeProvider() (string, string, error) {
+	data, err := os.ReadFile(Path(filepath.Join("ui", "shared", "vite.config.ts")))
+	if err != nil {
+		return "", "", err
+	}
+	m := viteDefaultPlatformRe.FindSubmatch(data)
+	if m == nil {
+		return "", "", fmt.Errorf("packaging: ui/shared/vite.config.ts declares no VITE_PLATFORM default")
+	}
+	shipped := string(m[1])
+	source := "ui/shared/vite.config.ts's VITE_PLATFORM default"
+
+	for _, input := range releaseBuildInputs {
+		root := Path(input)
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			body, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			if hit := vitePlatformAssignmentRe.FindSubmatch(body); hit != nil {
+				rel, _ := filepath.Rel(Path("."), path)
+				shipped = string(hit[1])
+				source = rel
+			}
+			return nil
+		})
+		if err != nil {
+			return "", "", err
+		}
+	}
+	return shipped, source, nil
 }
