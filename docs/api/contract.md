@@ -281,6 +281,51 @@ neither binding generates a type: both represent an error response by its status
 and `x-error-codes`. A named schema using `oneOf` would be dropped from both
 bindings in silence, so the generator now fails on one rather than emitting it.
 
+## Recorded decision: live progress is a nested object that disappears
+
+Issue #221. `Operation` is a durable, crash-safe record: submitted, started,
+finished, plus a result or an error. Live transfer progress is the opposite
+kind of thing, and the contract keeps the two apart rather than growing the
+record a set of counters.
+
+**Where it lives.** `OperationProgress` is held in memory by the process
+executing the cycle, keyed by operation id, and it is never written to the
+operations table. Writing it there would put a tick-rate write path on the one
+record whose durability guarantees exist so the few writes it does take can be
+trusted, and it would leave the last reading on disk for the next process to
+serve as live. FR-9 lists what the journal persists, and a transfer's
+instantaneous byte count is not on it.
+
+**How a client gets it.** As an optional `progress` object on the operation
+representation `GET /operations/{id}` and `GET /operations` already serve.
+EPIC-B §52 settles the transport ("V1 SHALL use authenticated polling against
+durable operation state") and most of the field list, and the UI polls today, so
+a separate endpoint would double a client's request count to assemble one row
+and a stream would be a transport the shipped client cannot consume.
+
+**What a finished or interrupted operation reports.** No `progress` key at all.
+Not `null`, and above all not an object of zeroes: an absent key is the only
+encoding a client can reliably tell apart from a measurement, and a zeroed one
+renders as a transfer that exists and has stalled. That covers three cases at
+once: an operation that has finished, one that is queued, and one that was
+running when the process died (whose reading died with it, and whose row the
+startup sweep moves to failed).
+
+**Why there is no percentage of the operation.** A run cycle is a pass over
+every enabled backup set, and the artifacts it will find are discovered set by
+set as it goes, so no honest denominator for the whole exists at any moment
+before the end. The byte counters describe the ONE artifact being copied, and
+the counters beside them (`backup_sets_done` of `backup_sets_total`,
+`artifacts_done`) say where in the cycle that artifact sits. `backup_sets_total`
+is exact rather than estimated: it is a count of the enabled sets in the
+configuration snapshot the cycle started with. Issue #211 removed nine fields
+the UI displayed that nothing computed, and a cycle-level percentage would have
+been the tenth.
+
+**Why the byte fields are `x-go-pointer`.** Zero is a real reading. A copy that
+has started and moved nothing is a measured zero; `omitempty` on a plain
+`int64` would encode that identically to a field nobody measured.
+
 ## Recorded decision: the two shapes `POST /system/first-run` declares
 
 Issue #176 adds the first-run setup pair, `GET` and `POST /system/first-run`.

@@ -3,6 +3,7 @@ import { useApi } from "@shared/api/ApiContext";
 import type { AsyncState } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
 import { operationsNode, versionNode } from "@shared/state/appNodes";
+import { progressPercent } from "@shared/types/operation";
 import type { BackupSet } from "@shared/types/backup";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
@@ -99,8 +100,13 @@ export function BackupSetsPage({
       >
         {data.map((set) => {
           const op = operations.data?.find((o) => o.setId === set.id);
+          // The percent is the one being copied artifact's, and it is null
+          // when the service could not measure one. Null drops the number
+          // entirely rather than printing "0%", which would read as a
+          // stalled transfer instead of an unmeasured one.
+          const pct = op?.progress ? progressPercent(op.progress) : null;
           const currentOperation = op
-            ? op.label.toLowerCase() + " " + op.percent + "%"
+            ? op.label.toLowerCase() + (pct === null ? "" : " " + pct + "%")
             : operations.data === null
               ? "checking…"
               : undefined;

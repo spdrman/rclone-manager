@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "adfd846d5d4357729d74bd883ec9899db5fff75f194bd1be154d18446c6dfc3b"
+const ContractSHA256 = "3fdd5398e87c582995b050c7160f9f95ac26a75fce0e5971ec186f324c0f9257"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -902,19 +902,55 @@ type ListValidatorsResponse struct {
 }
 
 // Operation is one durable operation record. Timestamp fields are omitted, not
-// zero-valued, until the event they name has happened.
+// zero-valued, until the event they name has happened. progress is
+// the separate, ephemeral thing: see OperationProgress for why it is
+// a nested object that is simply absent rather than a set of fields
+// on this record.
 type Operation struct {
-	Action         string `json:"action,omitempty"`
-	Actor          string `json:"actor,omitempty"`
-	BackupSetID    string `json:"backup_set_id,omitempty"`
-	ConfigRevision string `json:"config_revision,omitempty"`
-	CreatedAt      string `json:"created_at,omitempty"`
-	Error          string `json:"error,omitempty"`
-	FinishedAt     string `json:"finished_at,omitempty"`
-	OperationID    string `json:"operation_id"`
-	Result         string `json:"result,omitempty"`
-	StartedAt      string `json:"started_at,omitempty"`
-	Status         string `json:"status"`
+	Action         string             `json:"action,omitempty"`
+	Actor          string             `json:"actor,omitempty"`
+	BackupSetID    string             `json:"backup_set_id,omitempty"`
+	ConfigRevision string             `json:"config_revision,omitempty"`
+	CreatedAt      string             `json:"created_at,omitempty"`
+	Error          string             `json:"error,omitempty"`
+	FinishedAt     string             `json:"finished_at,omitempty"`
+	OperationID    string             `json:"operation_id"`
+	Progress       *OperationProgress `json:"progress,omitempty"`
+	Result         string             `json:"result,omitempty"`
+	StartedAt      string             `json:"started_at,omitempty"`
+	Status         string             `json:"status"`
+}
+
+// OperationProgress is live progress for an operation that is running in THIS process
+// right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the
+// transfer engine while a run cycle executes and is never written to
+// the operations table: an operation record is durable and
+// crash-safe, and progress is neither, so persisting it would put a
+// tick-rate write path on the one record whose durability guarantees
+// exist to avoid exactly that, and would resurrect a dead cycle's
+// last reading after a restart as though it were live. So this field
+// is present only while the cycle producing it is executing here. A
+// finished operation, and one that was running before a restart,
+// both carry no progress object at all, which is not the same answer
+// as zero and must not be rendered as one. Nothing here is a
+// percentage of the whole operation: a run cycle is a pass over
+// every enabled backup set, and the artifacts it will find are not
+// known when it starts, so no honest denominator for the whole
+// exists. The byte counters describe the ONE artifact being copied
+// at observed_at; the counters beside them say where in the cycle
+// that artifact sits.
+type OperationProgress struct {
+	Artifact         string `json:"artifact,omitempty"`
+	ArtifactsDone    int    `json:"artifacts_done"`
+	BackupSetID      string `json:"backup_set_id,omitempty"`
+	BackupSetsDone   int    `json:"backup_sets_done"`
+	BackupSetsTotal  int    `json:"backup_sets_total"`
+	BytesPerSecond   *int64 `json:"bytes_per_second,omitempty"`
+	BytesTotal       *int64 `json:"bytes_total,omitempty"`
+	BytesTransferred *int64 `json:"bytes_transferred,omitempty"`
+	ObservedAt       string `json:"observed_at"`
+	Sequence         int64  `json:"sequence"`
+	Stage            string `json:"stage"`
 }
 
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
@@ -1122,6 +1158,7 @@ var SchemaTypes = map[string]any{
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
 	"Operation":                   Operation{},
+	"OperationProgress":           OperationProgress{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
 	"RetentionSettings":           RetentionSettings{},

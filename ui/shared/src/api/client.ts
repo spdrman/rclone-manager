@@ -57,8 +57,10 @@ import type {
   ActivityEvent,
   ActivityEventType,
   Operation,
+  OperationStatus,
   Severity,
   SystemHealth,
+  TransferProgress,
   VersionInfo
 } from "@shared/types/operation";
 
@@ -689,27 +691,25 @@ function fromWireActivityEvent(e: WireActivityEvent): ActivityEvent {
 }
 
 /**
- * Maps a durable operation record onto the UI's progress model.
+ * Maps one operation off the wire onto the UI's model.
  *
- * The two are genuinely different things, and the gap is not hidden here.
- * A durable operation records that a run cycle was submitted, started and
- * finished; the UI's Operation models a transfer's on-screen progress
- * (stage, percent, bytes per second, ETA). The backend computes none of
- * the second kind, so percent is 0 while an operation runs and 100 once it
- * has finished, and the byte and item counters are left undefined rather
- * than zeroed: undefined renders as "unknown", a zero renders as "nothing
- * has been transferred", and only one of those is true.
+ * The durable record and the live reading are two different things and
+ * this keeps them apart: the record's own fields (status, action,
+ * timestamps) always map, and `progress` maps only when the service
+ * actually sent one. The service sends one only while the operation is
+ * executing in its process, so a finished operation, a queued one, and one
+ * that was running before a restart all arrive with no progress object,
+ * and all three map to `progress: null` rather than to a percent of zero.
  */
 function fromWireOperation(op: WireOperation): Operation {
-  const finished = op.status === "completed" || op.status === "failed";
   return {
     id: op.operation_id,
     setId: op.backup_set_id ?? "",
     setName: op.backup_set_id ?? "All backup sets",
     kind: "transfer",
-    stage: finished ? "complete" : null,
     label: op.action ? op.action.replace(/_/g, " ") : "operation",
-    percent: finished ? 100 : 0,
+    status: toOperationStatus(op.status),
+    progress: op.progress ? fromWireProgress(op.progress) : null,
     // A run cycle reads from every source and writes only to this
     // deployment's own storage; it releases a remote source only after a
     // durable local copy is committed and verified. It is not a
@@ -717,6 +717,49 @@ function fromWireOperation(op: WireOperation): Operation {
     nonDestructive: false,
     startedAt: op.started_at ?? op.created_at ?? ""
   };
+}
+
+/**
+ * Maps one live reading.
+ *
+ * Every optional field passes through as-is, undefined included: the
+ * service omits a field it did not measure, and this must not helpfully
+ * fill in a zero on the way past. `bytes_transferred: 0` is a copy that
+ * has started and moved nothing; an absent `bytes_transferred` is a copy
+ * nobody is measuring. The renderer needs to be able to tell those apart,
+ * so this preserves the difference rather than flattening it.
+ */
+function fromWireProgress(p: NonNullable<WireOperation["progress"]>): TransferProgress {
+  return {
+    observedAt: p.observed_at,
+    sequence: p.sequence,
+    stage: p.stage,
+    backupSetId: p.backup_set_id,
+    backupSetsDone: p.backup_sets_done,
+    backupSetsTotal: p.backup_sets_total,
+    artifact: p.artifact,
+    artifactsDone: p.artifacts_done,
+    bytesDone: p.bytes_transferred,
+    bytesTotal: p.bytes_total,
+    bytesPerSecond: p.bytes_per_second
+  };
+}
+
+/** The contract types `status` as an open string; these four are what the
+ *  service writes (core/internal/state's operations table). Anything else
+ *  is reported as "running" rather than silently dropped: an operation the
+ *  client cannot classify is still an operation the service knows about,
+ *  and hiding it would be worse than showing it as in flight. */
+function toOperationStatus(status: string): OperationStatus {
+  switch (status) {
+    case "queued":
+    case "running":
+    case "completed":
+    case "failed":
+      return status;
+    default:
+      return "running";
+  }
 }
 
 function fromWireCatalogReport(body: WireCatalogReportResponse): CatalogScanPreview {

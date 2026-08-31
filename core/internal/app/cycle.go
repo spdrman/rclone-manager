@@ -89,6 +89,16 @@ func (s *Service) RunCycle(ctx context.Context) CycleReport {
 	cycleID := start.Format(time.RFC3339Nano)
 	s.logger().CycleStart(ctx, cycleID)
 
+	// Live progress, for a caller that installed an observer (progress.go).
+	// It has to be attached before the loop starts, so the first thing an
+	// observer hears is the cycle beginning rather than the first artifact
+	// it happens to reach, and it carries the one denominator this feed
+	// reports: how many backup sets this cycle will visit, which is known
+	// now because it is a count of the configuration snapshot the cycle
+	// started with. Reassigning ctx keeps cancellation flowing exactly as
+	// before; this only adds a value to it.
+	ctx = beginCycle(ctx, s.enabledBackupSetCount())
+
 	report := CycleReport{StartedAt: start}
 
 sourcesLoop:
@@ -131,6 +141,14 @@ sourcesLoop:
 func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs config.BackupSet) BackupSetCycleResult {
 	result := BackupSetCycleResult{Set: bs.ID}
 	source := sourceFor(src, bs)
+
+	// Deferred, so a set counts as finished however this returns. A set
+	// whose reconcile or discovery failed is still a set this cycle is
+	// done with, and leaving it uncounted would freeze "set 2 of 5" for
+	// the rest of the run.
+	prog := progressFrom(ctx)
+	prog.enterSet(bs.ID.String())
+	defer prog.finishSet()
 
 	if ctx.Err() != nil {
 		result.Err = ctx.Err()
@@ -199,4 +217,22 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 
 	s.recordSuccessfulPoll(bs.ID)
 	return result
+}
+
+// enabledBackupSetCount is how many backup sets RunCycle will actually
+// visit: every configured set except the ones saved disabled, which the
+// loop above skips entirely. It is the denominator live progress reports,
+// and it counts what the cycle will do rather than what the configuration
+// contains, because a count that included a set nothing will process would
+// stop one short of finishing every time.
+func (s *Service) enabledBackupSetCount() int {
+	n := 0
+	for _, src := range s.Config.Sources {
+		for _, bs := range src.BackupSets {
+			if !bs.Disabled {
+				n++
+			}
+		}
+	}
+	return n
 }

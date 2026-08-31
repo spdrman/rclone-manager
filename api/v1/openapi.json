@@ -375,7 +375,7 @@
       },
       "Operation": {
         "type": "object",
-        "description": "One durable operation record. Timestamp fields are omitted, not zero-valued, until the event they name has happened.",
+        "description": "One durable operation record. Timestamp fields are omitted, not zero-valued, until the event they name has happened. progress is the separate, ephemeral thing: see OperationProgress for why it is a nested object that is simply absent rather than a set of fields on this record.",
         "additionalProperties": false,
         "properties": {
           "operation_id": {
@@ -422,11 +422,84 @@
           "error": {
             "type": "string",
             "x-go-omitempty": true
+          },
+          "progress": {
+            "$ref": "#/components/schemas/OperationProgress",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
           }
         },
         "required": [
           "operation_id",
           "status"
+        ]
+      },
+      "OperationProgress": {
+        "type": "object",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "additionalProperties": false,
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "discovering",
+              "transferring",
+              "verifying",
+              "committing",
+              "cleaning-remote"
+            ]
+          },
+          "backup_set_id": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "backup_sets_done": {
+            "type": "integer"
+          },
+          "backup_sets_total": {
+            "type": "integer"
+          },
+          "artifact": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "artifacts_done": {
+            "type": "integer"
+          },
+          "bytes_transferred": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_total": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          }
+        },
+        "required": [
+          "observed_at",
+          "sequence",
+          "stage",
+          "backup_sets_done",
+          "backup_sets_total",
+          "artifacts_done"
         ]
       },
       "RetentionVerdict": {

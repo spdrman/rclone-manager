@@ -69,9 +69,20 @@ const OPERATION: Operation = {
   setId: SET.id,
   setName: SET.name,
   kind: "transfer",
-  stage: "transferring",
   label: "Transferring backup",
-  percent: 42,
+  status: "running",
+  progress: {
+    observedAt: "2026-08-29T00:00:05+02:00",
+    sequence: 7,
+    stage: "transferring",
+    backupSetId: SET.id,
+    backupSetsDone: 0,
+    backupSetsTotal: 1,
+    artifact: "nightly.dump",
+    artifactsDone: 0,
+    bytesDone: 42,
+    bytesTotal: 100
+  },
   nonDestructive: false,
   startedAt: "2026-08-29T00:00:00+02:00"
 };

@@ -138,11 +138,12 @@ export interface CreateBackupSetRequest {
 }
 
 /** What a submitted run_cycle operation looks like from
- *  createBackupSet's own response — deliberately NOT the richer
- *  UI-progress Operation type (types/operation.ts): that type models a
- *  transfer's on-screen progress (stage, percent, bytes/sec, ...), a
- *  different shape from what the backend's run_cycle operation record
- *  itself carries (docs/EPIC-B-multi-nas.md §14). */
+ *  createBackupSet's own response: the two fields that response is read
+ *  for. Deliberately NOT the Operation type (types/operation.ts), which
+ *  also carries the live progress reading a polling client reads (issue
+ *  #221) and which a create response could never hold anyway, since the
+ *  cycle it just submitted has not started
+ *  (docs/EPIC-B-multi-nas.md §14). */
 export interface RunCycleSubmission {
   operationId: string;
   status: string;
