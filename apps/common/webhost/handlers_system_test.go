@@ -218,3 +218,39 @@ func TestReadiness_ReportsFalseWhenTheBackendItselfIsNotReady(t *testing.T) {
 		t.Errorf("/health/ready status = %d for a ready backend, want 200", again.Code)
 	}
 }
+
+// TestHealthLive_AnswersForAnUnconfiguredUnauthenticatedInstance is the
+// behavioural half of the runtime contract's start-gate rule (issue
+// #167's review, M3). container/compose.yaml gates web-ui's startup on
+// the engine reporting healthy, so whatever the engine's healthcheck
+// asks is what stands between an operator and the only LAN-facing
+// listener. This pins the two properties that make /health/live usable
+// as that gate and `backup-manager status` unusable: it answers for a
+// backend whose startup sequence never completed, which is what a fresh
+// unconfigured install looks like, and it answers with no session, which
+// is what a healthcheck subprocess has.
+//
+// The /health/ready assertion is the control. Both probes are on the
+// same router, behind the same backend, and they disagree, so a 200 from
+// /health/live cannot be a router that answers 200 to everything.
+func TestHealthLive_AnswersForAnUnconfiguredUnauthenticatedInstance(t *testing.T) {
+	backend := newSyncFakeBackend()
+	backend.notReady = true
+	router := NewRouter(RouterConfig{
+		Platform:      fakePlatformAdapter{caps: capabilities.PlatformCapabilities{}, auth: fakeAuthenticator{}},
+		Backend:       backend,
+		Gate:          alwaysPassGate{},
+		BinaryVersion: "9.9.9",
+		Commit:        "deadbeef",
+	})
+
+	if live := doGet(t, router, "/health/live"); live.Code != http.StatusOK {
+		t.Errorf("/health/live status = %d, want 200: the start gate has to pass for an instance nobody has configured yet, or a fresh install never brings up its own UI", live.Code)
+	}
+	if ready := doGet(t, router, "/health/ready"); ready.Code != http.StatusServiceUnavailable {
+		t.Errorf("/health/ready status = %d, want 503: without this the 200 above could just be a router that answers 200 to anything", ready.Code)
+	}
+	if api := doGet(t, router, "/api/v1/system/version"); api.Code != http.StatusUnauthorized {
+		t.Errorf("/api/v1/system/version status = %d, want 401: the second half of the same control, since a healthcheck subprocess carries no session and /health/live must not need one", api.Code)
+	}
+}

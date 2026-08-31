@@ -27,12 +27,66 @@ type UIConfig struct {
 	// fs.Sub it down to "dist" (see e.g. apps/generic/webui's own doc).
 	StaticFS fs.FS
 
+	// Identity, when non-nil, is the trust boundary this proxy sanitizes
+	// the platform identity header against before forwarding a request
+	// upstream: the header survives only for a request that arrived from
+	// a configured gateway peer. A gateway profile MUST supply one -
+	// see IdentitySanitizer's own doc for why this hop is the one that
+	// owns the strip.
+	Identity IdentitySanitizer
+
 	// ProxyResponseHeaderTimeout overrides defaultProxyResponseHeaderTimeout
 	// below. Zero means use the default; this only exists so a test can
 	// use a short timeout instead of waiting out a multi-second one for
 	// real.
 	ProxyResponseHeaderTimeout time.Duration
 }
+
+// IdentitySanitizer removes a platform identity header from a request
+// that did not arrive from a trusted gateway peer, and leaves it alone
+// for one that did. *apps/common/platform/profile.CompiledGateway is the
+// implementation; this interface exists so this package depends on the
+// behaviour rather than on the profile table.
+//
+// # Which hop owns the strip
+//
+// This one, and the engine as well. The two are not redundant, they
+// answer for different peers, and the reason the decision is written
+// down here is that it is topology-dependent and getting it wrong in
+// either direction is silent.
+//
+// The engine has no published port: its only peer is this process, over
+// the internal network. So the engine's own trust test can only ever say
+// "this came from web-ui", which is true of a forged header and a
+// genuine one alike. This process is the hop that CAN tell them apart,
+// because it is the one with a published port and therefore the one
+// whose RemoteAddr is the real client's. A client hitting that port with
+// its own X-Ugos-User is outside the gateway range and loses the header
+// here; a request the platform's gateway actually proxied arrives from
+// the gateway's own address and keeps it.
+//
+// Stripping unconditionally instead would be wrong for the deployment
+// this defends: on UGOS the platform gateway sits UPSTREAM of this
+// process, so an unconditional delete removes the legitimate identity
+// and native authentication stops working entirely. That is why this
+// carries the same trust boundary the engine does rather than a bare
+// header name.
+type IdentitySanitizer interface {
+	Sanitize(h http.Header, remoteAddr string)
+}
+
+// StripAll is the IdentitySanitizer for a gateway profile with no
+// declared trust boundary: it removes the named header from every
+// request, whoever sent it. That is the fail-closed reading of "there is
+// no gateway here", and it is deliberately not a refusal to start,
+// because this process's other job is serving the right UI bundle and
+// nothing about a bundle depends on the identity header. Native
+// authentication does not work in that configuration, which is correct:
+// the engine refuses to start on the same profile with no range, so the
+// deployment was never going to authenticate anyone anyway.
+type StripAll string
+
+func (h StripAll) Sanitize(header http.Header, _ string) { header.Del(string(h)) }
 
 // defaultProxyResponseHeaderTimeout bounds how long the reverse proxy
 // below waits for the engine to even START responding (send response
@@ -96,6 +150,15 @@ func NewUI(cfg UIConfig) http.Handler {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(cfg.Upstream)
 			pr.Out.Header.Del("X-Forwarded-For")
+			// Same reasoning as the delete above, one header along: a
+			// client-supplied identity header reaching the engine is
+			// believed there, because the engine trusts this hop. The
+			// trust test runs against pr.In.RemoteAddr, the address of
+			// whoever actually connected to this process, never against
+			// anything the request carried.
+			if cfg.Identity != nil {
+				cfg.Identity.Sanitize(pr.Out.Header, pr.In.RemoteAddr)
+			}
 			pr.SetXForwarded()
 		},
 		Transport: transport,

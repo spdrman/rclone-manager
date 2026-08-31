@@ -661,7 +661,12 @@ func TestEachContainerRunsItsCanonicalCommand(t *testing.T) {
 				default:
 					continue
 				}
-				if strings.Join(svc.Command, " ") != strings.Join(want, " ") {
+				// runsCanonicalCommand, not string equality: since #167
+				// the canonical commands may carry a `--profile=` flag.
+				// The binary and every positional argument still have to
+				// match exactly; see that helper for what it does and
+				// does not allow.
+				if !runsCanonicalCommand(svc.Command, want) {
 					t.Errorf("service %q (%s) runs %v, want %v", svc.Name, svc.Source, svc.Command, want)
 				}
 			}

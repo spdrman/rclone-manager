@@ -1,0 +1,204 @@
+{
+  "_comment": [
+    "The authoritative Compose runtime contract (issue #167, EPIC B #81 Phase 6).",
+    "",
+    "Before this file the canonical compose definition was documentation-shaped:",
+    "its security posture was asserted in a comment, its field set was whatever",
+    "had accumulated, and an adapter agreeing with it was a matter of review. This",
+    "file is the contract-shaped version. It names every field the canonical",
+    "runtime definition must declare, and every host privilege the deployment must",
+    "not need, and distribution/compose's test suite fails the build when either",
+    "list is not satisfied.",
+    "",
+    "Two lists, deliberately asymmetric. `fields` is checked against the CANONICAL",
+    "definition only, because that is the artifact adapters derive from; holding a",
+    "derived artifact to the full field set would make it a second definition",
+    "rather than a derivation. `prohibited` is checked against the canonical",
+    "definition AND every derived artifact, because a prohibition an adapter can",
+    "opt out of is not a prohibition.",
+    "",
+    "Roles, not service names. A service is the engine or the web UI because of",
+    "the command it runs, never because of what it is called: apps/truenas calls",
+    "them backup-manager/backup-manager-ui and the canonical file calls them",
+    "rclone-manager/web-ui, and a check keyed on the name would silently stop",
+    "checking the moment someone renamed one."
+  ],
+
+  "schema": "rclone-manager/runtime-contract/1",
+  "version": "1.0.0",
+
+  "canonical": "container/compose.yaml",
+
+  "_derived_comment": [
+    "Every artifact derived from the canonical definition. distribution/compose's",
+    "completeness guard fails when a compose file exists under apps/*/compose or",
+    "apps/*/catalog that is not listed here, so a new adapter cannot arrive",
+    "outside the prohibition check."
+  ],
+  "derived": [
+    "apps/truenas/compose/backup-manager.yaml",
+    "apps/truenas/catalog/templates/docker-compose.yaml",
+    "apps/openmediavault/compose/backup-manager.yml",
+    "apps/proxmox/compose/backup-manager.yml"
+  ],
+
+  "fields": [
+    {
+      "id": "image-reference",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "image",
+      "why": "one canonical image, named identically by every service, so `command` is the only thing that varies between them."
+    },
+    {
+      "id": "command-and-runtime-profile",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "command",
+      "mustContain": "--profile=",
+      "why": "the contract standardises 'command and runtime profile' as one field. A deployment that does not name its profile is a deployment whose host-dependent behaviour is implicit, which is the thing #167 exists to remove."
+    },
+    {
+      "id": "listen-port",
+      "scope": "service",
+      "roles": ["web-ui"],
+      "key": "ports",
+      "why": "the HTTP listen port, published by exactly one service. The engine deliberately declares none, which is why this field is required of the web UI role only."
+    },
+    {
+      "id": "health-check",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "healthcheck",
+      "why": "declared in the runtime definition rather than inherited from an image instruction and described in a comment. An operator reading this file has to be able to see what healthy means without reading the Dockerfile."
+    },
+    {
+      "id": "start-gate-liveness",
+      "scope": "service-healthcheck",
+      "roles": ["engine"],
+      "key": "test",
+      "mustContain": "/health/live",
+      "why": "the start gate has to be a liveness question, not a backup-freshness one. web-ui declares depends_on: rclone-manager: service_healthy, so whatever the engine's healthcheck asks is what stands between an operator and the only LAN-facing listener. `backup-manager status` exits non-zero on any DEGRADED, STALE or FAILING set and on an instance with no configuration at all, so gating on it means a stale backup set, or a fresh install, keeps the UI from starting. /health/live needs no configuration and is deliberately outside /api/v1. Backup freshness stays the operator and alerting surface it was built to be."
+    },
+    {
+      "id": "graceful-shutdown-period",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "stop_grace_period",
+      "why": "the declared grace period the runtime shuts down inside. Without it the value is Docker's own 10s default, which is a default rather than a contract, and nothing anywhere records what the application actually needs."
+    },
+    {
+      "id": "restart-policy",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "restart",
+      "why": "survive a crash and a NAS reboot, stay down when an operator stopped it on purpose."
+    },
+    {
+      "id": "ownership",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "user",
+      "why": "explicit UID/GID rather than the image's build-time default, because the state directory's ownership is the host's business and not the image's."
+    },
+    {
+      "id": "explicit-writable-paths",
+      "scope": "service",
+      "roles": ["engine", "web-ui"],
+      "key": "read_only",
+      "why": "a read-only root filesystem is what makes the writable paths explicit rather than implied."
+    },
+    {
+      "id": "timezone",
+      "scope": "service-env",
+      "roles": ["engine"],
+      "key": "TZ",
+      "why": "retention is evaluated in a timezone. Leaving it to the image's UTC default means the calendar boundaries an operator reasons about and the ones the engine applies are silently different."
+    },
+    {
+      "id": "private-state-mount",
+      "scope": "service-mount",
+      "roles": ["engine"],
+      "containerPath": "/data/state",
+      "why": "the private application state: the lifecycle journal and the local-auth record. Separate from backup data, always."
+    },
+    {
+      "id": "backup-data-mount",
+      "scope": "service-mount",
+      "roles": ["engine"],
+      "containerPath": "/data/backups",
+      "why": "the backup destination. Never the same mount as private state, and never a parent of it."
+    },
+    {
+      "id": "configuration-mount",
+      "scope": "service-mount",
+      "roles": ["engine"],
+      "containerPath": "/etc/backup-manager/config.yaml",
+      "readOnly": true,
+      "why": "configuration comes from the host, read-only, never baked into the image."
+    },
+    {
+      "id": "secret-file-mount",
+      "scope": "service-mount",
+      "roles": ["engine"],
+      "containerPath": "/etc/backup-manager/id_ed25519",
+      "readOnly": true,
+      "why": "credential material is a read-only file mount and nothing else. No credential belongs in this file or in the environment."
+    },
+    {
+      "id": "resource-expectations",
+      "scope": "document",
+      "key": "x-canonical-runtime.resources",
+      "why": "documented resource expectations, in the runtime definition rather than in prose that drifts from it."
+    },
+    {
+      "id": "supported-architectures",
+      "scope": "document",
+      "key": "x-canonical-runtime.architectures",
+      "why": "the architectures this release claims. A deployment definition that does not say which architectures its image exists for cannot be checked against the release metadata."
+    },
+    {
+      "id": "digest-policy",
+      "scope": "document",
+      "key": "x-canonical-runtime.digest_policy",
+      "why": "how an operator pins a release. A tag is mutable; the contract has to say what the immutable reference is and where it is recorded."
+    },
+    {
+      "id": "contract-version",
+      "scope": "document",
+      "key": "x-canonical-runtime.contract",
+      "why": "the version of this contract the definition was written against, so a contract change is a visible edit rather than a silent divergence."
+    },
+    {
+      "id": "runtime-profiles",
+      "scope": "document",
+      "key": "x-canonical-runtime.profiles",
+      "why": "the profiles this runtime definition supports selecting, so `--profile=` above has a declared range rather than an open one."
+    }
+  ],
+
+  "_prohibited_comment": [
+    "EPIC B #81 and issue #167's prohibition list. An absent setting and an",
+    "unnecessary setting are different claims, so these rules are only half the",
+    "evidence. The other half is a deployment that does real work without any of",
+    "them, and that already exists: apps/generic/tests/dockercli runs the real",
+    "built image with none of these settings, reaches health, and completes real",
+    "work. The static rules here prove the settings are absent; that suite proves",
+    "they are unnecessary.",
+    "",
+    "Each rule below has its own positive control in contract_test.go: the real",
+    "definition is mutated to require the setting, and the rule has to fire AND",
+    "name the service and the value. Three preflight rules in this repository have",
+    "already failed open, so a rule nobody has watched fail is a comment."
+  ],
+  "prohibited": [
+    { "id": "privileged", "kind": "key-value", "key": "privileged", "value": "true", "why": "privileged mode disables the container boundary entirely." },
+    { "id": "host-network", "kind": "key-value", "key": "network_mode", "value": "host", "why": "host networking puts the engine on every host interface, which is exactly the isolation the two-service topology exists to provide." },
+    { "id": "host-pid", "kind": "key-value", "key": "pid", "value": "host", "why": "the host PID namespace lets the container see and signal host processes." },
+    { "id": "host-ipc", "kind": "key-value", "key": "ipc", "value": "host", "why": "the host IPC namespace is shared memory with the host." },
+    { "id": "docker-socket", "kind": "mount-host-path", "paths": ["/var/run/docker.sock", "/run/docker.sock"], "why": "the Docker socket is root on the host with extra steps." },
+    { "id": "unbounded-host-filesystem", "kind": "mount-host-path", "paths": ["/", "/etc", "/usr", "/var", "/boot", "/proc", "/sys", "/root", "/home"], "why": "mounting a host system directory is unbounded host filesystem access; every path this runtime needs is a named mount." },
+    { "id": "added-capability", "kind": "key-present", "key": "cap_add", "why": "least-privilege capabilities. Nothing this runtime does needs a capability a plain non-root process does not already have." },
+    { "id": "unconfined-security-profile", "kind": "list-value-prefix", "key": "security_opt", "prefixes": ["seccomp:unconfined", "apparmor:unconfined", "label:disable"], "why": "turning off the host's own confinement is the same class of exception as privileged mode." }
+  ]
+}

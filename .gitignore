@@ -52,6 +52,10 @@ node_modules/
 # Vite/tsc build output. ui/shared/dist is what gets embedded into the Go
 # binary at release time, so it is generated, never committed.
 /ui/shared/dist/
+# The per-provider bundle tree scripts/build-bundles.mjs writes (issue
+# #180). Generated the same way dist/ is, one directory per provider, and
+# consumed by a package's --ui-dir / --ui-root rather than committed.
+/ui/shared/dist-bundles/
 /ui/shared/.vite/
 *.tsbuildinfo
 
