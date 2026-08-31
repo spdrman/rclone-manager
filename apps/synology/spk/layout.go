@@ -85,6 +85,15 @@ const (
 	PkgVarPath = "/var/packages/${SYNOPKG_PKGNAME}/var"
 	PkgEtcPath = "/var/packages/${SYNOPKG_PKGNAME}/etc"
 
+	// PkgTargetPath, PkgTmpPath and PkgHomePath are the rest of the
+	// documented per-package FHS tree. target/ is replaced on upgrade and
+	// removed on uninstall and tmp/ is scratch, so both are deletable;
+	// home/ persists like var/ and etc/ and is not. lifecycle.go splits
+	// the two sets on exactly that line.
+	PkgTargetPath = "/var/packages/${SYNOPKG_PKGNAME}/target"
+	PkgTmpPath    = "/var/packages/${SYNOPKG_PKGNAME}/tmp"
+	PkgHomePath   = "/var/packages/${SYNOPKG_PKGNAME}/home"
+
 	// DataShareName is the DSM shared folder the package asks the
 	// data-share resource worker to create. Synology documents that such
 	// a share "will not be removed after package uninstallation, since it

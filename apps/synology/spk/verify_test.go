@@ -2,6 +2,9 @@ package spk
 
 import (
 	"debug/elf"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -381,4 +384,154 @@ func TestVerify_RejectsDangerousFileModes(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	requireFail(t, rep, CheckFileModes, "backup-manager")
+}
+
+// TestVerify_ScansShellAnywhereInThePackage covers the two holes in the
+// lifecycle scan's scope.
+//
+// It used to walk only members whose name began with scripts/ in the
+// outer archive, so anything inside package.tgz - share/, ui/ - was
+// never read, and assetFiles will ship a script dropped into
+// assets/share as readily as one in assets/scripts. And it resolved
+// every path against the EMBEDDED common.sh while claiming to read the
+// scripts "out of the built archive rather than out of the embedded
+// assets, so a build that packaged something else is caught": for the
+// one file that defines every path the other scripts delete, that claim
+// did not hold.
+func TestVerify_ScansShellAnywhereInThePackage(t *testing.T) {
+	path, manifest := buildFixture(t, "amd64")
+
+	// Baseline: the package as built passes, so every case below is a
+	// measured difference rather than a verifier that rejects anything.
+	rep, err := Verify(path, manifest)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	requirePass(t, rep, CheckLifecycle)
+
+	sharedName := ScriptsDir + "/" + SharedScriptName
+	shipped, err := SharedScript()
+	if err != nil {
+		t.Fatalf("SharedScript: %v", err)
+	}
+	substituted := strings.Replace(shipped,
+		`RUN_DIR="${PKG_VAR}/run"`,
+		`RUN_DIR="/volume1/backup-manager"`, 1)
+	if substituted == shipped {
+		t.Fatal("could not substitute RUN_DIR in common.sh, so the case below proves nothing")
+	}
+
+	for _, tc := range []struct {
+		name   string
+		inner  bool
+		mutate func([]tarEntry) []tarEntry
+		detail string
+	}{
+		{
+			name:  "a helper script dropped into the payload's share directory",
+			inner: true,
+			mutate: func(entries []tarEntry) []tarEntry {
+				return addEntry(entries, PayloadShareDir+"/cleanup.sh",
+					[]byte("#!/bin/sh\nrm -rf /volume1/backup-manager\n"))
+			},
+			detail: "cleanup.sh",
+		},
+		{
+			name:  "an extensionless shell script under the payload's UI directory",
+			inner: true,
+			mutate: func(entries []tarEntry) []tarEntry {
+				return addEntry(entries, DSMUIDir+"/refresh",
+					[]byte("#!/bin/sh\nfind /volume1/backup-manager -type f | xargs rm -f\n"))
+			},
+			detail: "refresh",
+		},
+		{
+			name: "a common.sh that points the package's run directory at a share",
+			mutate: func(entries []tarEntry) []tarEntry {
+				return replaceBody(entries, sharedName, []byte(substituted))
+			},
+			// start-stop-status' own `rm -f "${ENGINE_PID}"` now
+			// resolves into the share, which is the whole point: the
+			// stage did not change, the file defining its paths did.
+			detail: "start-stop-status",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mutate := mutateSPK
+			if tc.inner {
+				mutate = mutateInnerPayload
+			}
+			bad := mutate(t, path, tc.mutate)
+			rep, err := Verify(bad, manifest)
+			if err != nil {
+				t.Fatalf("Verify: %v", err)
+			}
+			requireFail(t, rep, CheckLifecycle, tc.detail)
+		})
+	}
+}
+
+// TestVerify_ReportNamesTheManifestItUsed: `spkctl verify --manifest`
+// accepts any path, and against a manifest generated from the very
+// binaries being packaged the parity check degrades to an internal
+// consistency check with the same name and the same green output.
+// Refusing an unreachable manifest is #174's job; naming the one that
+// was used is this one's, because a gate whose evidence does not name
+// its own input cannot be audited.
+func TestVerify_ReportNamesTheManifestItUsed(t *testing.T) {
+	path, manifest := buildFixture(t, "amd64")
+	manifest.Commit = "1111111111111111111111111111111111111111"
+	first := writeManifest(t, manifest)
+
+	loaded, err := LoadReleaseManifest(first)
+	if err != nil {
+		t.Fatalf("LoadReleaseManifest: %v", err)
+	}
+	rep, err := Verify(path, loaded)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	for _, want := range []string{first, loaded.Version, loaded.Commit} {
+		if !strings.Contains(rep.String(), want) {
+			t.Fatalf("the report never names %q:\n%s", want, rep)
+		}
+	}
+
+	// The control: a report that hardcoded any of those, or printed the
+	// first manifest it ever saw, would pass everything above.
+	other := manifest
+	other.Version = "9.9.9-9"
+	other.Commit = "2222222222222222222222222222222222222222"
+	second, err := LoadReleaseManifest(writeManifest(t, other))
+	if err != nil {
+		t.Fatalf("LoadReleaseManifest: %v", err)
+	}
+	rep, err = Verify(path, second)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if strings.Contains(rep.String(), first) || strings.Contains(rep.String(), loaded.Commit) {
+		t.Fatalf("the report names a manifest it was not given:\n%s", rep)
+	}
+	for _, want := range []string{second.SourcePath, other.Version, other.Commit} {
+		if !strings.Contains(rep.String(), want) {
+			t.Fatalf("the report never names %q:\n%s", want, rep)
+		}
+	}
+}
+
+// writeManifest serialises a manifest to a fresh file and returns its
+// path, so a test can exercise the load-then-verify path a release
+// engineer actually runs rather than handing Verify a struct.
+func writeManifest(t *testing.T, m ReleaseManifest) string {
+	t.Helper()
+	raw, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "release-manifest.json")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return path
 }

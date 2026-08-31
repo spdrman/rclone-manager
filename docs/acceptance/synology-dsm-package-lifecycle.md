@@ -51,9 +51,17 @@ narrow, and so nobody executes it expecting it to prove more than it does.
 - The SPK's outer layout matches the toolkit's documented structure, and
   is an uncompressed tar exactly as `pkg_make_spk` produces
   (`apps/synology/spk/verify_test.go`).
-- The binaries inside `package.tgz` hash to the release manifest's
-  per-architecture SHA-256 (§3.7), and a one-byte difference is caught
-  (`TestVerify_BinaryHashParity`, with its deliberate-mismatch control).
+- The packer and the verifier agree about binary-hash parity (§3.7): a
+  package built from a set of binaries verifies against a manifest of
+  those same binaries, and a one-byte rebuild, a wrong-architecture entry
+  and a post-build tamper are each caught (`TestVerify_BinaryHashParity`,
+  four controls against a passing baseline).
+  **This is proven against synthetic fixtures only.** No test anywhere
+  runs the parity check against a real release artifact: nothing
+  cross-compiles the release binaries or builds a `.spk` in CI, which is
+  blocked on #174. Step 1.6 below is where a real package's binaries are
+  compared against `container/release-manifest.json`, by hand, and it is
+  the only place that comparison happens at all.
 - The INFO file carries every field Synology documents as necessary, and
   its `arch` is one of the two claimed families.
 - No file anywhere in the package looks like a credential
@@ -134,7 +142,21 @@ A result on one architecture says nothing about the other.
    release core binary hash" checked on the installed system rather than
    in the build, and it is the one step that would catch a package
    assembled from a rebuild.
-7. Now upload the OTHER architecture's `.spk` to this same unit.
+7. Record who owns the directories the package just created.
+   `conf/privilege` declares `run-as: package` and the package contains
+   no `chown` anywhere, so this is the one assumption nothing in the
+   repository can check for itself:
+   ```sh
+   ls -ln /var/packages/BackupManager/var \
+          /var/packages/BackupManager/var/state \
+          /var/packages/BackupManager/var/log \
+          /var/packages/BackupManager/var/run
+   grep "Created package directories as uid" /var/log/packages/BackupManager.log
+   ```
+   Record the owning uid and the mode of each. Whether that uid is the
+   one the daemons run as is settled in step 2.7, and the two answers
+   together decide whether `postinst` needs a `chown`.
+8. Now upload the OTHER architecture's `.spk` to this same unit.
    Expect: Package Center refuses it, naming an architecture mismatch.
    This is the positive control for step 1: an install path that accepts
    anything is not evidence that it accepted the right thing. Record the
@@ -178,8 +200,42 @@ worker, and it is the difference between "the resource spec is wrong" and
    Expect: refused or timed out. The engine binds loopback only; only the
    UI host has a LAN-facing port. If this returns JSON, stop: that is a
    security finding, not a step to pass.
+8. Record the uid the daemons actually run as, and whether they could
+   write at all:
+   ```sh
+   ps -eo user,pid,args | grep backup-manager-web
+   ls -ln /var/packages/BackupManager/var/log/engine.log \
+          /var/packages/BackupManager/var/run/engine.pid
+   ```
+   Expect: both files exist and are owned by the uid in the `ps` output.
+   If the engine "exited immediately" and `engine.log` does not exist,
+   the cause is the directory ownership from step 1.7 and not the
+   unconfigured sources list `start-stop-status` names in its message.
+   Record which it was, because that message points at the wrong cause.
+9. Power-cycle the unit, then press Stop in Package Center.
+   ```sh
+   sudo reboot
+   # after it comes back, before touching anything else:
+   cat /var/packages/BackupManager/var/run/engine.pid
+   ps -eo pid,args | grep backup-manager-web
+   ```
+   `var/` survives a reboot, so the pid file that comes back names the
+   pid space that existed before it. Expect: Package Center shows the
+   right state, and Stop neither hangs nor reports success against a
+   package that is not running. This is the only step that exercises a
+   stale pid file, and the pid it names after a reboot may well belong to
+   an unrelated DSM process, which is what makes it worth doing on
+   hardware rather than reasoning about.
 
 ### 3. DSM desktop launcher opens the shared Web UI
+
+Run this step **twice**: once from a plain-HTTP DSM session (port 5000)
+and once from an HTTPS one (port 5001, which is DSM 7's own hardened
+default), and record both. The launcher navigates to `http://<nas>:8477/`
+unconditionally, because nothing in this package terminates TLS, so from
+an HTTPS session it is a top-level https-to-http navigation. Which scheme
+the tester reached DSM with is otherwise invisible in the result, and
+this criterion is the one most likely to differ between the two.
 
 1. Log in to DSM as the administrator. Open the Main Menu.
 2. Expect: a "Backup Manager" entry with the package icon.
@@ -301,6 +357,10 @@ This is the destructive-safety step. Read it fully before starting.
   visible.
 - `/var/log/packages/BackupManager.log` for every lifecycle operation.
 - `/var/packages/BackupManager/var/log/engine.log` and `ui.log`.
+- The `ls -ln` output from steps 1.7 and 2.8, and the `ps` line showing
+  the daemons' uid.
+- Step 3 run from both an HTTP and an HTTPS DSM session, recorded
+  separately.
 - The `sha256sum` output from steps 1.6, 4.1, 4.5, 4.8 and 5.1/5.5.
 - `diff /tmp/before-uninstall.txt /tmp/after-uninstall.txt`, empty.
 - The `spkctl verify` output for the exact `.spk` files installed.
@@ -315,7 +375,7 @@ store any credential, token, key or the enrollment token alongside it.
 
 **Accept** an architecture when, on a representative DSM 7.x model of
 that architecture: step 1 installed and the on-disk binaries matched the
-release manifest, step 1.7 refused the wrong architecture, step 3 opened
+release manifest, step 1.8 refused the wrong architecture, step 3 opened
 the shared Web UI from the DSM desktop launcher and authenticated through
 local-auth, step 4 preserved state and the manifest hashes across an
 in-place update, and step 5 left the canary and the whole share list

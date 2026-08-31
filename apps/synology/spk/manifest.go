@@ -20,6 +20,12 @@ type ReleaseManifest struct {
 	Version       string      `json:"version"`
 	Commit        string      `json:"commit"`
 	Architectures []ArchEntry `json:"architectures"`
+
+	// SourcePath is where this manifest was read from. It is not a
+	// manifest field - LoadReleaseManifest fills it in - and it exists so
+	// a Report can name the input its parity verdict was decided against
+	// rather than printing a green line about a file nobody can identify.
+	SourcePath string `json:"-"`
 }
 
 // ArchEntry is one architecture's recorded binary hashes.
@@ -60,6 +66,7 @@ func LoadReleaseManifest(path string) (ReleaseManifest, error) {
 			}
 		}
 	}
+	m.SourcePath = path
 	return m, nil
 }
 

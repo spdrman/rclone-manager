@@ -115,6 +115,21 @@ here is not attributable to one verified peer.
 | `/var/packages/BackupManager/var` | SQLite journal, `local-auth.json`, logs, pid files | kept | kept |
 | `/volume?/backup-manager` | backup data (a DSM shared folder) | kept | kept |
 
+Both daemons' logs live under `var/log`, on the DSM system volume, and
+`var/` survives every upgrade and reboot. `common.sh` caps each at
+`LOG_MAX_BYTES` (8 MiB) and keeps exactly one older generation, enforced
+on start and on every `status` poll DSM makes. The cap is a copy followed
+by a truncation rather than a rename, because the daemons hold their log
+open and would keep filling a renamed file.
+
+`conf/privilege` sets `run-as: package`, and the package contains **no
+`chown`**. `postinst` creates `var/{state,log,run}` and records the uid it
+created them as in the install log. Whether that uid is the one the
+daemons run as is a hardware question: steps 1.7 and 2.8 of the acceptance
+procedure record it, and a `chown` belongs after that answer, not before
+it. Under `set -e` a `chown` to a wrongly derived user name would turn a
+possible start failure into a certain install failure.
+
 The last row is a `data-share` resource worker, chosen specifically
 because Synology documents that such a shared folder "will not be removed
 after package uninstallation, since it might delete the user's personal
@@ -153,9 +168,20 @@ scan reads every file in both archives on every build.
    convenience, and a wrong resource-worker spec fails an install in a way
    nothing here can test, so it is left out until an operator with
    hardware can add it against a real Package Center.
-3. **The package is unsigned** (see Installing).
-4. **Native DSM SSO is not implemented** and is deliberately out of scope.
-5. **Every hardware-dependent acceptance criterion is open.** See the
+3. **The DSM desktop launcher opens the UI over plain HTTP.** INFO
+   declares `adminprotocol=http` and nothing in this package terminates
+   TLS, so `ui/index.html` navigates to `http://<nas>:8477/` literally
+   rather than mirroring the DSM session's scheme. From an HTTPS DSM
+   session (DSM 7's default on 5001) that is a top-level https-to-http
+   navigation, which browsers permit outside HTTPS-Only mode, and it is
+   one plaintext hop on the LAN. Mirroring the scheme instead would send
+   the browser into a TLS handshake against a plain HTTP listener, which
+   fails every time. Closing this properly means terminating TLS in the
+   UI host, which is a change to the shared Web host rather than to this
+   package.
+4. **The package is unsigned** (see Installing).
+5. **Native DSM SSO is not implemented** and is deliberately out of scope.
+6. **Every hardware-dependent acceptance criterion is open.** See the
    acceptance procedure for exactly which, and what executing them needs.
 
 ## Layout

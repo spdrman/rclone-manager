@@ -160,10 +160,21 @@ jobs:
         working-directory: apps/synology
         run: go vet ./...
 
-      # This is where the SPK conformance suite runs: the binary-hash
-      # parity check against container/release-manifest.json (§3.7), the
-      # documented-layout check, the bundled-secret scan, and the
-      # unsafe-delete scan over the shipped lifecycle scripts.
+      # This is where the SPK conformance suite runs: the
+      # documented-layout check, the INFO field check, the bundled-secret
+      # scan, the unsafe-delete scan over the shipped lifecycle scripts,
+      # and the binary-hash parity check (§3.7) exercised against
+      # synthetic fixtures.
+      #
+      # Synthetic, and worth being exact about: nothing in this job
+      # cross-compiles the release binaries, builds a .spk, or runs
+      # `spkctl verify` against container/release-manifest.json. Every
+      # test packs binaries it synthesised itself and checks them against
+      # a manifest hashed from those same files, so what is proven here is
+      # that the packer and the verifier agree, not that any package
+      # carries the release digest. Parity against a real artifact is
+      # blocked on #174 and is checked by hand in
+      # docs/acceptance/synology-dsm-package-lifecycle.md step 1.6.
       - name: Test
         working-directory: apps/synology
         run: go test ./...

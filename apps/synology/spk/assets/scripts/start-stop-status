@@ -25,19 +25,24 @@ else
     exit 1
 fi
 
+# Starts one daemon in the background and leaves its pid in _started_pid.
+#
+# It deliberately does NOT write the pid file itself, for the same reason
+# stop_daemon does not remove one: the caller names that path literally,
+# so every write and every deletion in this package resolves to a path a
+# reader - and ScanForUnsafeDeletes - can follow back to the package's own
+# var directory instead of to "$1".
 start_daemon() {
-    _pidfile="$1"
-    _log="$2"
-    shift 2
+    _log="$1"
+    shift
     "$@" >> "${_log}" 2>&1 &
-    echo $! > "${_pidfile}"
+    _started_pid=$!
 }
 
-# Signals the process a pid file names and waits for it to go. It
-# deliberately does NOT remove the pid file itself: the caller does that,
-# naming the path literally, so that every deletion in this package
-# resolves to a path a reader (and ScanForUnsafeDeletes) can follow back
-# to the package's own var directory instead of to "$1".
+# Signals the process a pid file names and waits for it to go. pid_alive
+# checks that the pid is still this package's own process, so a stale pid
+# file left by an unclean shutdown cannot make this kill something the
+# kernel handed that number to since.
 stop_daemon() {
     _pidfile="$1"
     _name="$2"
@@ -54,7 +59,7 @@ stop_daemon() {
             _waited=$((_waited + 1))
         done
         if kill -0 "${_pid}" 2>/dev/null; then
-            say "${_name} did not exit within 30s of SIGTERM; sending SIGKILL."
+            say "${_name} did not exit within 30s of SIGTERM. Sending SIGKILL."
             kill -9 "${_pid}" 2>/dev/null
         fi
     fi
@@ -63,6 +68,14 @@ stop_daemon() {
 case "$1" in
 start)
     mkdir -p "${STATE_DIR}" "${LOG_DIR}" "${RUN_DIR}"
+
+    # A pid file outlives the pid space that wrote it, because var/
+    # survives reboots and upgrades. Clear both before anything writes or
+    # reads one, naming each literally.
+    rm -f "${ENGINE_PID}"
+    rm -f "${UI_PID}"
+
+    bound_logs
 
     if [ ! -f "${CONFIG_FILE}" ]; then
         say "No configuration at ${CONFIG_FILE}. Reinstall the package, or write one there."
@@ -74,12 +87,13 @@ start)
     # on a private network only the UI container joins, but a loopback
     # bind on a NAS is reachable by any local process, so the forwarded
     # headers here are not attributable to one verified peer.
-    start_daemon "${ENGINE_PID}" "${ENGINE_LOG}" \
+    start_daemon "${ENGINE_LOG}" \
         "${PKG_BIN}/backup-manager-web" serve \
         --config "${CONFIG_FILE}" \
         --listen "${ENGINE_ADDR}" \
         --auth-store "${STATE_DIR}/local-auth.json" \
         --public-base-url "http://$(hostname):${UI_PORT}"
+    echo "${_started_pid}" > "${ENGINE_PID}"
 
     # Give the engine a moment to fail on a configuration it cannot
     # validate. Without this, an unconfigured package reports "started"
@@ -96,10 +110,11 @@ start)
 
     # The UI host: the only LAN-facing listener, reverse-proxying to the
     # engine over loopback.
-    start_daemon "${UI_PID}" "${UI_LOG}" \
+    start_daemon "${UI_LOG}" \
         "${PKG_BIN}/backup-manager-web" serve-ui \
         --listen ":${UI_PORT}" \
         --upstream "http://${ENGINE_ADDR}"
+    echo "${_started_pid}" > "${UI_PID}"
 
     sleep 1
     if ! pid_alive "${UI_PID}"; then
@@ -124,6 +139,10 @@ stop)
     ;;
 
 status)
+    # DSM polls this every few seconds, which is the only continuous hook
+    # the package has, so it is where the log ceiling is enforced within a
+    # long-running session as well as across restarts.
+    bound_logs
     if pid_alive "${ENGINE_PID}" && pid_alive "${UI_PID}"; then
         exit 0
     fi
@@ -136,7 +155,7 @@ log)
     ;;
 
 *)
-    echo "usage: $0 {start|stop|status|log}" >&2
+    echo "usage: $0 start, stop, status or log" >&2
     exit 1
     ;;
 esac

@@ -41,6 +41,10 @@ func TestLifecycleScripts_DeleteNothingOutsideThePackageFootprint(t *testing.T) 
 // TestScanForUnsafeDeletes is the positive control for the scan above: a
 // scanner that finds nothing in a clean tree proves nothing until it is
 // shown finding something in a dirty one.
+//
+// Every "caught" case below is a shape that a destructive-verb denylist
+// let through, which is why the scan is an allowlist of commands a
+// shipped lifecycle script may run instead.
 func TestScanForUnsafeDeletes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -48,14 +52,49 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 		wantFind bool
 	}{
 		{
-			name:     "removing the package's own run directory is fine",
-			body:     "#!/bin/sh\nrm -f \"${SYNOPKG_PKGVAR}/run/engine.pid\"\n",
+			name:     "removing the package's own pid file is fine",
+			body:     "#!/bin/sh\nrm -f \"${ENGINE_PID}\"\n",
 			wantFind: false,
 		},
 		{
-			name:     "removing a staged temp dir under the package is fine",
-			body:     "#!/bin/sh\nrm -rf \"${SYNOPKG_PKGDEST}/tmp\"\n",
+			name:     "removing under the documented var/log path is fine",
+			body:     "#!/bin/sh\nrm -f \"/var/packages/${SYNOPKG_PKGNAME}/var/log/engine.log.1\"\n",
 			wantFind: false,
+		},
+		{
+			name:     "a fail-fast reference to the target directory is fine",
+			body:     "#!/bin/sh\nrm -rf \"${SYNOPKG_PKGDEST:?unset}/tmp\"\n",
+			wantFind: false,
+		},
+		{
+			name:     "the same target directory without the fail-fast form is caught",
+			body:     "#!/bin/sh\nrm -rf \"${SYNOPKG_PKGDEST}/tmp\"\n",
+			wantFind: true,
+		},
+		{
+			name:     "the undocumented PKGVAR variable is caught even under run",
+			body:     "#!/bin/sh\nrm -rf \"${SYNOPKG_PKGVAR}/run\"\n",
+			wantFind: true,
+		},
+		{
+			name:     "the undocumented PKGVAR variable is caught over state",
+			body:     "#!/bin/sh\nrm -rf \"${SYNOPKG_PKGVAR}/state\"\n",
+			wantFind: true,
+		},
+		{
+			name:     "the undocumented PKGETC variable is caught over the config",
+			body:     "#!/bin/sh\nrm -f \"${SYNOPKG_PKGETC}/config.yaml\"\n",
+			wantFind: true,
+		},
+		{
+			name:     "deleting the state directory by its documented path is caught",
+			body:     "#!/bin/sh\nrm -rf \"${STATE_DIR}\"\n",
+			wantFind: true,
+		},
+		{
+			name:     "deleting the configuration by its documented path is caught",
+			body:     "#!/bin/sh\nrm -f \"${CONFIG_FILE}\"\n",
+			wantFind: true,
 		},
 		{
 			name:     "wiping the backup share is caught",
@@ -68,8 +107,63 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 			wantFind: true,
 		},
 		{
+			name:     "find piped into xargs rm is caught",
+			body:     "#!/bin/sh\nfind /volume1/backup-manager -type f | xargs rm -f\n",
+			wantFind: true,
+		},
+		{
 			name:     "find -delete outside the footprint is caught",
 			body:     "#!/bin/sh\nfind /volume1/backup-manager -type f -delete\n",
+			wantFind: true,
+		},
+		{
+			name:     "a deletion behind sh -c is caught",
+			body:     "#!/bin/sh\nsh -c 'rm -rf /volume1/backup-manager'\n",
+			wantFind: true,
+		},
+		{
+			name:     "a truncating redirection is caught",
+			body:     "#!/bin/sh\n: > /volume1/backup-manager/index.db\n",
+			wantFind: true,
+		},
+		{
+			name:     "cat /dev/null into a file is caught",
+			body:     "#!/bin/sh\ncat /dev/null > /volume1/backup-manager/index.db\n",
+			wantFind: true,
+		},
+		{
+			name:     "cp /dev/null over a file is caught",
+			body:     "#!/bin/sh\ncp /dev/null /volume1/backup-manager/index.db\n",
+			wantFind: true,
+		},
+		{
+			name:     "truncate is caught",
+			body:     "#!/bin/sh\ntruncate -s 0 /volume1/backup-manager/index.db\n",
+			wantFind: true,
+		},
+		{
+			name:     "dd over a file is caught",
+			body:     "#!/bin/sh\ndd if=/dev/zero of=/volume1/backup-manager/index.db\n",
+			wantFind: true,
+		},
+		{
+			name:     "moving the backup share away is caught",
+			body:     "#!/bin/sh\nmv /volume1/backup-manager /tmp/\n",
+			wantFind: true,
+		},
+		{
+			name:     "removing the DSM share with synoshare is caught",
+			body:     "#!/bin/sh\nsynoshare --del backup-manager\n",
+			wantFind: true,
+		},
+		{
+			name:     "a backgrounded deletion after another command is caught",
+			body:     "#!/bin/sh\nsleep 1 & rm -rf /volume1/backup-manager &\n",
+			wantFind: true,
+		},
+		{
+			name:     "a recursive chown of the share is caught",
+			body:     "#!/bin/sh\nchown -R nobody /volume1/backup-manager\n",
 			wantFind: true,
 		},
 		{
@@ -87,6 +181,16 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 			body:     "#!/bin/sh\n# deliberately does not rm -rf /volume1/backup-manager\nexit 0\n",
 			wantFind: false,
 		},
+		{
+			name:     "appending to a log is not a truncation",
+			body:     "#!/bin/sh\necho hello >> \"${ENGINE_LOG}\"\n",
+			wantFind: false,
+		},
+		{
+			name:     "seeding the config from the payload is not a deletion",
+			body:     "#!/bin/sh\ncp \"${SYNOPKG_PKGDEST}/share/config.yaml.seed\" \"${CONFIG_FILE}\"\n",
+			wantFind: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -99,6 +203,69 @@ func TestScanForUnsafeDeletes(t *testing.T) {
 				t.Fatalf("scanner flagged a safe script: %v\n%s", got, tc.body)
 			}
 		})
+	}
+}
+
+// TestScanForUnsafeDeletes_ResolutionIsDeterministic pins the step that
+// decides whether a deletion is inside the footprint.
+//
+// expandShellVars used to iterate the variable map and substitute $NAME
+// as a plain string replacement, so with one name a prefix of another
+// the resolved path depended on which key Go's randomised map iteration
+// reached first. start-stop-status assigns both _pid and _pidfile, so
+// the colliding pair is already in the map. A safety gate whose verdict
+// changes between runs is worse than one that is consistently wrong,
+// because it passes in CI and may not elsewhere.
+func TestScanForUnsafeDeletes_ResolutionIsDeterministic(t *testing.T) {
+	vars := map[string]string{
+		"_pid":     "/volume1/backup-manager/short",
+		"_pidfile": "/volume1/backup-manager/long",
+	}
+	// Both spellings, both names: a resolver that expanded nothing at
+	// all would also be deterministic, so each case pins a value.
+	for _, tc := range []struct{ in, want string }{
+		{"${_pidfile}", "/volume1/backup-manager/long"},
+		{"$_pidfile", "/volume1/backup-manager/long"},
+		{"${_pid}", "/volume1/backup-manager/short"},
+		{"$_pid", "/volume1/backup-manager/short"},
+	} {
+		for range 200 {
+			if got := expandShellVars(tc.in, vars); got != tc.want {
+				t.Fatalf("expandShellVars(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		}
+	}
+}
+
+// TestScanShippedScript_ReadsTheArchivesOwnCommonSh is the control for
+// verify.go's claim that the scan reads the scripts out of the built
+// archive "so a build that packaged something else is caught".
+//
+// common.sh defines every path the other scripts delete, so resolving a
+// stage against the pristine embedded copy while verifying a package
+// that shipped a different one reports the substitution as clean, which
+// is the one case the sentence exists to cover.
+func TestScanShippedScript_ReadsTheArchivesOwnCommonSh(t *testing.T) {
+	stage := "#!/bin/sh\nrm -rf \"${RUN_DIR}\"\n"
+
+	pristine, err := SharedScript()
+	if err != nil {
+		t.Fatalf("SharedScript: %v", err)
+	}
+	// The baseline: against the shipped common.sh, RUN_DIR is under the
+	// package's own var directory and the deletion is safe.
+	if findings := ScanShippedScript("scripts/stage", stage, pristine); len(findings) != 0 {
+		t.Fatalf("the shipped common.sh should resolve RUN_DIR into the footprint, got %v", findings)
+	}
+
+	substituted := strings.Replace(pristine,
+		`RUN_DIR="${PKG_VAR}/run"`,
+		`RUN_DIR="/volume1/backup-manager"`, 1)
+	if substituted == pristine {
+		t.Fatal("could not substitute RUN_DIR in common.sh, so this test proves nothing")
+	}
+	if findings := ScanShippedScript("scripts/stage", stage, substituted); len(findings) == 0 {
+		t.Fatal("a package whose common.sh points RUN_DIR at a share was reported clean")
 	}
 }
 

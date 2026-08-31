@@ -40,7 +40,23 @@ type Report struct {
 	SPKPath string
 	Arch    string
 	Version string
-	Checks  []Check
+
+	// ManifestPath, ManifestVersion and ManifestCommit name the input
+	// the parity check was decided against.
+	//
+	// A green report that does not say what it compared the package to
+	// cannot be audited: `spkctl verify --manifest` accepts any path, so
+	// against a manifest generated from the very binaries being packaged
+	// the parity check degrades to an internal consistency check with
+	// the same name and the same output. Naming the manifest, its
+	// version and the commit it records does not close that (refusing an
+	// unreachable commit is issue #174's job), but it does put the
+	// evidence's own input in the evidence.
+	ManifestPath    string
+	ManifestVersion string
+	ManifestCommit  string
+
+	Checks []Check
 }
 
 // OK reports whether every check passed.
@@ -73,6 +89,10 @@ func (r *Report) String() string {
 	if r.Arch != "" || r.Version != "" {
 		fmt.Fprintf(&b, "  arch=%s version=%s\n", r.Arch, r.Version)
 	}
+	fmt.Fprintf(&b, "  manifest=%s manifest-version=%s manifest-commit=%s\n",
+		orElse(r.ManifestPath, "(no file: built in memory)"),
+		orElse(r.ManifestVersion, "(none recorded)"),
+		orElse(r.ManifestCommit, "(none recorded)"))
 	for _, c := range r.Checks {
 		status := "ok  "
 		if !c.OK {
@@ -111,7 +131,12 @@ func Verify(spkPath string, manifest ReleaseManifest) (*Report, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", spkPath, err)
 	}
-	rep := &Report{SPKPath: spkPath}
+	rep := &Report{
+		SPKPath:         spkPath,
+		ManifestPath:    manifest.SourcePath,
+		ManifestVersion: manifest.Version,
+		ManifestCommit:  manifest.Commit,
+	}
 
 	// 1. The outer container. pkgscripts-ng's pkg_make_spk runs `tar cf`,
 	// uncompressed, and DSM reads it that way.
@@ -158,7 +183,7 @@ func Verify(spkPath string, manifest ReleaseManifest) (*Report, error) {
 	verifyBinaries(rep, payload, payloadErr, arch, archErr, manifest)
 	verifyLauncher(rep, info, payload, payloadErr)
 	verifySecretsAndModes(rep, outer, payload)
-	verifyLifecycleScripts(rep, outer)
+	verifyLifecycleScripts(rep, outer, payload)
 
 	return rep, nil
 }
@@ -281,20 +306,65 @@ func verifySecretsAndModes(rep *Report, outer, payload map[string]archiveEntry) 
 	rep.record(CheckFileModes, modes)
 }
 
-// verifyLifecycleScripts runs the unsafe-delete scan over every script
-// the package actually ships, read out of the built archive rather than
-// out of the embedded assets, so a build that packaged something else is
-// caught.
-func verifyLifecycleScripts(rep *Report, outer map[string]archiveEntry) {
-	var findings []string
-	for _, name := range sortedKeys(outer) {
-		e := outer[name]
-		if e.Dir || !strings.HasPrefix(name, ScriptsDir+"/") {
-			continue
-		}
-		findings = append(findings, ScanForUnsafeDeletes(name, string(e.Body))...)
+// verifyLifecycleScripts runs the unsafe-delete scan over every shell
+// script the package actually ships, read out of the built archive
+// rather than out of the embedded assets, so a build that packaged
+// something else is caught.
+//
+// Both archives, not just scripts/ in the outer one: assetFiles will
+// ship a script dropped into assets/share or assets/ui exactly as
+// readily as one in assets/scripts, and postinst already reads a file
+// out of share/ at install time.
+//
+// common.sh comes out of the archive too, for the same reason. It
+// defines every path the other scripts delete, so resolving them against
+// the pristine embedded copy would report a package whose common.sh
+// redefined RUN_DIR to a share path as clean, which is precisely the
+// substitution the sentence above claims to catch.
+func verifyLifecycleScripts(rep *Report, outer, payload map[string]archiveEntry) {
+	shared := ""
+	if e, ok := outer[ScriptsDir+"/"+SharedScriptName]; ok {
+		shared = string(e.Body)
 	}
+	var findings []string
+	scan := func(where string, entries map[string]archiveEntry) {
+		for _, name := range sortedKeys(entries) {
+			e := entries[name]
+			if e.Dir || !isShellScript(name, e.Body) {
+				continue
+			}
+			findings = append(findings, ScanShippedScript(where+name, string(e.Body), shared)...)
+		}
+	}
+	scan("", outer)
+	scan(PayloadName+":", payload)
 	rep.record(CheckLifecycle, findings)
+}
+
+// isShellScript reports whether an archive member is shell this scanner
+// has to read: anything under scripts/, anything named *.sh, and any
+// text file whose first line is a #! naming a shell.
+func isShellScript(name string, body []byte) bool {
+	if strings.HasPrefix(name, ScriptsDir+"/") || strings.HasSuffix(name, ".sh") {
+		return true
+	}
+	if !looksLikeText(body) {
+		return false
+	}
+	first, _, _ := strings.Cut(string(body), "\n")
+	if !strings.HasPrefix(first, "#!") {
+		return false
+	}
+	return strings.Contains(first, "sh") || strings.Contains(first, "bash")
+}
+
+// orElse is the report's stand-in for a value nobody supplied, so a
+// report never prints an empty field a reader has to interpret.
+func orElse(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func unsafeMode(mode int64) string {
