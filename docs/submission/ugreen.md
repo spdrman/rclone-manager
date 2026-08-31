@@ -28,7 +28,7 @@ the same mechanism decides this column with no change to any rule.
 | materials-permission-rationale | `docs/submission/permission-rationale.md` | ready |
 | materials-support-source-license | support and source written, licence not chosen | blocked #88 |
 
-This table is not decoration. `apps/common/packaging` reads it on every commit, fails when
+This table is not decoration. `distribution/packaging` reads it on every commit, fails when
 a row is missing, fails when a `ready` row names a path that is not in the tree, and fails
 when a `blocked` row does not name the issue that owns it.
 
@@ -57,7 +57,7 @@ privileged mode, and no mandatory telemetry. The current result for this target 
 
 ### How to read the State column
 
-Four values, and only four. `apps/common/packaging` parses this table on every commit and
+Four values, and only four. `distribution/packaging` parses this table on every commit and
 fails the build on a fifth.
 
 - `ready` — the material is in the tree at the path in the middle column, and that path is

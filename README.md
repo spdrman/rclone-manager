@@ -155,7 +155,7 @@ metadata is well-formed and mutually consistent, and it proves nothing whatsoeve
 any of these platforms behaves.
 
 The image itself has never been published either. `ghcr.io/spdrman/backup-manager` is the
-settled target and `apps/common/packaging/canonical.json` records `published: false`, so
+settled target and `distribution/packaging/canonical.json` records `published: false`, so
 that reference resolves to nothing today and every acceptance procedure opens with a step 0
 covering how to make it resolvable in the meantime.
 
@@ -215,7 +215,7 @@ that directory carries the key that can read and delete the source. The backup r
 platform below is a dedicated child directory rather than a share you already use, for the
 same reason.
 
-`apps/common/packaging/canonical.json` is the single source of truth for these paths, and
+`distribution/packaging/canonical.json` is the single source of truth for these paths, and
 this repository's own test suite fails the build if any platform's metadata disagrees with
 it.
 
@@ -758,7 +758,7 @@ The previous version of this README described a binary with one subcommand, elev
 subcommands after that stopped being true. It listed eleven packages under `core/internal`
 when there were seventeen. Both survived because prose does not fail a build, so the claims in here
 that a machine can decide are now decided on every run, by
-`apps/common/packaging/readme_claims_test.go`:
+`distribution/packaging/readme_claims_test.go`:
 
 - every markdown link and every backticked repository path in this file resolves, with the
   handful of paths this document names *because* they are absent kept in an explicit list
@@ -773,7 +773,7 @@ that a machine can decide are now decided on every run, by
   when the drift does;
 - the "build-supported and uncertified" statement holds for exactly as long as the generated
   conformance matrix still reports an unexecuted operator cell, in both directions;
-- the support tiers in the table above come from `apps/common/packaging/canonical.json`.
+- the support tiers in the table above come from `distribution/packaging/canonical.json`.
 
 Each of those carries its own positive control, because a check that cannot fail is
 decoration. What is deliberately *not* checked, and why, is written at the top of that test
@@ -782,6 +782,16 @@ concatenation, and #166 is building the contract that makes it decidable properl
 needing real hardware, and the measured binary size.
 
 ## Layout
+
+Since #165 (Phase 6) the repository has **three product layers**, declared once in
+`scripts/architecture/layers.conf` and enforced rather than described: a
+provider-neutral **core** (plus the application services, the `/api/v1` host and the
+shared UI), a **runtime platform** layer of per-host profiles, and a **distribution**
+layer of packaging, metadata, templates and store presentation.
+[`docs/architecture/layers.md`](docs/architecture/layers.md) is the full account: what each
+layer owns, the dependency direction, which check proves which claim, how each of those
+checks was shown to be able to fail, and the map from the old layout for rebasing an
+in-flight branch. The rest of this section describes the same tree from the inside.
 
 `core/` is its own Go module (`core/go.mod`), separate from the repository root, drawn
 that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
@@ -849,7 +859,7 @@ Docker templates), `apps/openmediavault/` (a Compose deployment profile) and
 `apps/proxmox/` (the same Compose profile again, for a dedicated container-host guest,
 because Proxmox VE has no application store to package into at all). All four are metadata
 and templates only, wrapping the exact canonical OCI image with no lifecycle code of their
-own, and `apps/common/packaging/` holds them to that on every commit: one shared source of
+own, and `distribution/packaging/` holds them to that on every commit: one shared source of
 truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are decidable from
 the repository alone.
 
@@ -888,6 +898,9 @@ lives here instead; nothing in the design depended on the location.
 - [`apps/proxmox/README.md`](apps/proxmox/README.md) – the Proxmox VE deployment profile: the one supported model, what the PVE host contributes, and what is deliberately absent
 - [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) – the cross-provider conformance matrix (§63A), per provider and per capability, including what is blocked and on what
 - [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written and not yet executed
+- [`docs/architecture/layers.md`](docs/architecture/layers.md) – the three layers (core, runtime platform, distribution), what each owns, the dependency direction, and the checks that enforce it
+- [`docs/perf/README.md`](docs/perf/README.md) – the Phase 6 performance baselines, the benchmark host and workload, and the concrete regression thresholds
+- [`distribution/README.md`](distribution/README.md) – the distribution layer: what makes an adapter an adapter, and where the rest of that layer still lives
 - [`docs/compliance/release-provenance.md`](docs/compliance/release-provenance.md) – what a release records, how the SBOM and checksums are produced, and how an image is signed without this project ever holding a key
 - [`docs/compliance/`](docs/compliance/) – the store-facing compliance materials: privacy policy, support, and the written offer of source
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged
@@ -911,5 +924,5 @@ copyleft component fails the build.
 All four are generated, never hand-edited:
 
 ```
-cd apps/common && go run ./cmd/provenance -write
+cd distribution && go run ./cmd/provenance -write
 ```

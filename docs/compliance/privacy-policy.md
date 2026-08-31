@@ -2,7 +2,7 @@
 
 Backup Manager, `com.iasbuilt.backupmanager`. This is the privacy disclosure
 §73 Work Package 5.2 and §45.5 require, and it is the content the `privacy`
-link in `apps/common/packaging/compliance.json` resolves to.
+link in `distribution/packaging/compliance.json` resolves to.
 
 Written as statements about what the shipped code does, so that each one can be
 checked against the tree rather than taken on trust. Where a claim is checkable
@@ -33,7 +33,7 @@ destination of its own.
 ## What the app stores, and where
 
 Everything stays on the machine the app runs on, under paths the operator
-chooses at install time. `apps/common/packaging/canonical.json` declares them
+chooses at install time. `distribution/packaging/canonical.json` declares them
 per platform, and every acceptance procedure in `docs/acceptance/` walks
 through creating them.
 

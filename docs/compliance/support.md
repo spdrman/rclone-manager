@@ -2,7 +2,7 @@
 
 Backup Manager, `com.iasbuilt.backupmanager`. This is the support material
 §73 Work Package 5.2 requires, and it is what the `support` link in
-`apps/common/packaging/compliance.json` resolves to.
+`distribution/packaging/compliance.json` resolves to.
 
 ## Where to get help
 

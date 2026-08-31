@@ -11,7 +11,7 @@ Required evidence per §68: a **current OMV 8.x Debian-based test system**. Reco
 the exact release in the evidence table.
 
 Everything the repository itself can decide is already checked by
-`apps/common/packaging` on every commit. This procedure covers only what a laptop
+`distribution/packaging` on every commit. This procedure covers only what a laptop
 cannot reach.
 
 ---
@@ -26,7 +26,7 @@ deployment profile), one tier below TrueNAS and Unraid.
 Concretely that means: no entry in OMV's own navigation tree, no Workbench form,
 no RPC service, no `salt` state, and no `openmediavault-backupmanager` Debian
 package. If any of those appear in `apps/openmediavault/`, the package has
-overrun its scope and `apps/common/packaging` will fail the build before anyone
+overrun its scope and `distribution/packaging` will fail the build before anyone
 gets here.
 
 The Web UI is reached by its own published port, and step 3 covers documenting
@@ -78,7 +78,7 @@ one file, never an edit scattered through the compose YAML.
 
 ### 0.3 Resolve the real filesystem paths
 
-The host-path defaults in `apps/common/packaging/canonical.json`
+The host-path defaults in `distribution/packaging/canonical.json`
 (`platforms.openmediavault.hostPaths`) use `/srv/dev-disk-by-uuid/...`, which is a
 **placeholder**, deliberately matching what the OMV frontend bridge already
 declares. A real OMV system mounts data filesystems at

@@ -1,4 +1,4 @@
-# Defaults for every question in questions.yaml. apps/common/packaging
+# Defaults for every question in questions.yaml. distribution/packaging
 # fails the build if a question has no default here, or if this file
 # declares a value no question asks for.
 image:

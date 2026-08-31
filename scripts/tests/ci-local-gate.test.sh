@@ -179,6 +179,11 @@ make_full_tree() {
   add_go_module "$tree" core/internal/stub stubcoreinternal
   rm -f "$tree/core/internal/stub/go.mod"
   add_go_module "$tree" apps/common stubcommon
+  # The distribution layer became its own Go module in #165, and ci-local.sh
+  # builds, vets, tests and lints it like every other module. Without it here
+  # the gate dies on `cd distribution` in every full-tree case, which is the
+  # same shape of miss the two comments further down record.
+  add_go_module "$tree" distribution stubdistribution
 
   add_workspace "$tree" ui/shared installed
   add_workspace "$tree" apps/common/tests installed
@@ -202,10 +207,23 @@ make_full_tree() {
   mkdir -p "$tree/.husky"
   cp "$REPO_ROOT/.husky/pre-commit" "$tree/.husky/pre-commit"
 
+  # The three-layer checks and their mutation self-test (#165) join the four
+  # structure proofs here: static ones run even under CI_LOCAL_FAST, so every
+  # tree that gets as far as them needs all of them present.
   mkdir -p "$tree/scripts/architecture"
-  for arch in check-core-dependency-rule verify-core-without-apps \
+  for arch in check-layer-manifest check-core-dependency-rule \
+              check-layer-ownership check-ui-shared-provider-imports \
+              selftest verify-core-without-apps verify-core-without-distribution \
               verify-ui-shared-without-provider-sdks verify-ugos-removable; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/architecture/$arch.sh"
+  done
+
+  # The performance baseline gate and its own self-test (#165), stubbed for
+  # the same reason: this fixture measures which steps the gate chooses to
+  # run, and the real ones read a baseline record captured on one host.
+  mkdir -p "$tree/scripts/perf"
+  for perf in check-baseline selftest; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/perf/$perf.sh"
   done
 
   # Stubs for the release-script guard suites the gate runs, for the same

@@ -18,11 +18,11 @@ to change that.
 | `catalog/app.yaml` | Catalog entry metadata: title, version, categories, icon, sources, run-as context. |
 | `catalog/questions.yaml` | The install wizard: image reference, five storage paths, the published port, and the uid/gid. |
 | `catalog/ix_values.yaml` | A default for every question. |
-| `catalog/templates/docker-compose.yaml` | What the catalog renders. The same two containers as `compose/backup-manager.yaml`, with the answers substituted. `apps/common/packaging` renders it against `ix_values.yaml` on every commit and puts the result through every rule the paste-in compose file gets: the canonical image, the five storage roles and their host paths, read-only mounts, the single published port, the commands, and the full hardening set. The template stays loop-free and conditional-free so that stays possible. |
+| `catalog/templates/docker-compose.yaml` | What the catalog renders. The same two containers as `compose/backup-manager.yaml`, with the answers substituted. `distribution/packaging` renders it against `ix_values.yaml` on every commit and puts the result through every rule the paste-in compose file gets: the canonical image, the five storage roles and their host paths, read-only mounts, the single published port, the commands, and the full hardening set. The template stays loop-free and conditional-free so that stays possible. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only, no lifecycle behaviour. |
 
 There is deliberately no fourth thing. No Go, no shell, no install hook, no
-TrueNAS-specific service. `apps/common/packaging` fails the build if any appears.
+TrueNAS-specific service. `distribution/packaging` fails the build if any appears.
 
 ## Two containers, one image
 
@@ -58,7 +58,7 @@ working perfectly.
 The state, config and secrets paths sit outside the backup root, and that is a
 rule rather than a preference: §19.2 makes private application state and the user
 backup root separate security domains, and the backup root must never contain SSH
-private keys or authentication state. `apps/common/packaging` checks the
+private keys or authentication state. `distribution/packaging` checks the
 containment in both directions on every commit.
 
 Create all five paths, and own them by the uid/gid you install with, before first
@@ -74,7 +74,7 @@ cookie, CSRF protection and per-IP rate limiting.
 
 TrueNAS accounts cannot log into Backup Manager and Backup Manager accounts cannot
 log into TrueNAS. Nothing in this directory ships a credential, and
-`apps/common/packaging` scans for one on every commit.
+`distribution/packaging` scans for one on every commit.
 
 ## config.yaml
 
@@ -117,7 +117,7 @@ shape; this is the same thing with TrueNAS's paths.
 
 No registry is configured for this repository yet, so
 `ghcr.io/spdrman/backup-manager:1.0.0` is the intended publish target rather than
-something that resolves today. `apps/common/packaging/canonical.json` records that
+something that resolves today. `distribution/packaging/canonical.json` records that
 honestly, and step 0 of the acceptance procedure covers pushing to your own
 registry or side-loading a saved image in the meantime. The reference is one
 question in the wizard and one line in the compose file, so substituting it is a

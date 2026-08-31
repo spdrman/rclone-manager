@@ -1,11 +1,11 @@
 # Phase 4 cross-provider conformance matrix
 
 Generated. Do not edit the region between the markers by hand: it is the output
-of a real run of `apps/common/packaging`'s conformance suite, and the suite fails
+of a real run of `distribution/packaging`'s conformance suite, and the suite fails
 if what is checked in differs from what a fresh run produces. To regenerate:
 
 ```bash
-cd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix
+cd distribution && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix
 ```
 
 `-count=1` is not decoration. The checks read files all over the tree and the test
@@ -31,7 +31,7 @@ reported". Section 63A is the reason it exists in this shape:
 | `OPERATOR` | Supported, and decidable only on the real platform (section 68). The automated half held: the prewritten acceptance procedure exists and covers this capability. The hardware run has not happened. |
 
 `UNSUP`, `N/A` and `BLOCKED` are declarations in
-`apps/common/packaging/conformance.json`, and the suite checks them rather than
+`distribution/packaging/conformance.json`, and the suite checks them rather than
 trusting them: every one of them still has its check run, and a declaration the
 repository has outgrown fails the build. A provider cannot quietly drop a
 capability by omitting it either, because omission is itself a failure.
@@ -206,7 +206,7 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Uses the exact canonical image | N/A | Synology is the one Phase 4 provider that cannot consume the OCI image: DSM's Package Center installs a native .spk. Section 3.7 makes the SPK a sibling of the image carrying the same core binary digest, so parity here is binary parity, not image parity. |
-| Core binary hash parity (this provider's own shipped bytes) | N/A | The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. apps/common/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. distribution/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here. |
 | State path persists outside the container | N/A | DSM fixes the persistent location: /var/packages/<pkg>/var under the package FHS, not a bind mount this repository declares. |
 | Backup root constrained | N/A | The backup root is a DSM shared folder the operator picks at install time: conf/resource's data-share worker declares the share by name and carries no path, so there is no checked-in host path pair for this check to compare. What IS decided in this repository is the other side of the same rule, that the package places no key material or auth state anywhere (no-bundled-secrets) and that its lifecycle scripts delete nothing outside the package footprint. The containment itself is step 5 of the procedure, which puts a canary in the share and diffs a listing across the uninstall. |
 | No provider-specific lifecycle implementation | N/A | DSM's package format MANDATES preinst/postinst/preuninst/postuninst/preupgrade/postupgrade and start-stop-status. Those scripts are the platform's contract, not a lifecycle engine of our own, and apps/synology holds them to wrapper-only behaviour. |

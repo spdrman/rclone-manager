@@ -1,7 +1,7 @@
 # Rendered by the TrueNAS Apps catalog from questions.yaml/ix_values.yaml.
 #
 # Every template expression is quoted so this file stays parseable YAML
-# with no rendering step, which is what lets apps/common/packaging read it
+# with no rendering step, which is what lets distribution/packaging read it
 # on every commit rather than only after a TrueNAS install. It is also a
 # straight-line render on purpose: no conditionals, no loops, nothing that
 # would make the rendered shape depend on an answer. What comes out of

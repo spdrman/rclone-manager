@@ -19,7 +19,7 @@ being recorded against a commit nobody can check out.
 `provenance/release-provenance.json` records everything derivable without a
 build: the semantic version, the digest of every distributed artifact, the
 licence, the notices, the inventory, the SBOM, the link verdict, the signing
-record and the performance evidence. `apps/common/cmd/provenance` writes it,
+record and the performance evidence. `distribution/cmd/provenance` writes it,
 along with `NOTICE`, `provenance/third-party-licenses.json`,
 `provenance/sbom.spdx.json` and `provenance/checksums.txt`.
 
@@ -34,7 +34,7 @@ own SHA-256, recorded in the bundle. Regenerate one without the other and
 ## Generating the compliance artifacts
 
 ```
-cd apps/common
+cd distribution
 go run ./cmd/provenance          # check: exits 1 and names every stale file
 go run ./cmd/provenance -write   # regenerate
 ```
@@ -123,7 +123,7 @@ not hold where the script runs.
 ## Publishing
 
 Nothing has been pushed to `ghcr.io/spdrman/backup-manager` yet.
-`apps/common/packaging/canonical.json` records that as `image.published: false`,
+`distribution/packaging/canonical.json` records that as `image.published: false`,
 and the release manifest records the same fact from the other side as a
 `registry_digest` of `null` on every architecture. The two are held together by
 `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag`, so neither can
@@ -162,11 +162,11 @@ correction is worse than no attestation at all.
 
 Two edits, in this order:
 
-1. `apps/common/packaging/canonical.json`: `image.published` false to true.
+1. `distribution/packaging/canonical.json`: `image.published` false to true.
 2. `container/release-manifest.json`: each architecture's `registry_digest`
    null to the digest read back out of the registry.
 
-Then regenerate the bundle (`(cd apps/common && go run ./cmd/provenance -write)`)
+Then regenerate the bundle (`(cd distribution && go run ./cmd/provenance -write)`)
 and run the gate. Doing one edit and not the other fails, which is the point:
 a published flag with no digest and a digest with no published flag are both
 half-truths.

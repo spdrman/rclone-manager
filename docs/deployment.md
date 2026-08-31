@@ -479,10 +479,10 @@ non-FAST `scripts/ci-local.sh`.
 hard to commit the result: the output path defaults to
 `container/.generated/release-manifest.local.json` (already gitignored) instead of the
 tracked manifest, and what it writes carries `"unsafe_local_build": true`, which
-`apps/common/packaging` refuses outright. Overwriting the tracked manifest with a waived
+`distribution/packaging` refuses outright. Overwriting the tracked manifest with a waived
 run takes an explicit `OUT=`, and the checked-in file would then fail the build.
 
-`apps/common/packaging`'s `TestReleaseManifestPinsACommitThisHistoryCanReach` and the
+`distribution/packaging`'s `TestReleaseManifestPinsACommitThisHistoryCanReach` and the
 `release-manifest-integrity` conformance row both re-ask the ancestry question on every
 run, against the strongest ref the checkout has (`origin/main`, else `main`, else
 `HEAD`), so a manifest that drifts out of the history fails the build rather than being
@@ -492,7 +492,7 @@ The manifest checked in today was produced this way at `8ad3100`, and a second r
 the same clean checkout reproduced its binary hashes exactly.
 
 **What this doesn't record**: a registry digest. The registry is settled,
-`ghcr.io/spdrman/backup-manager` (`apps/common/packaging/canonical.json` is the single
+`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the single
 source of truth for the reference), so the gap is no longer that no registry exists. It
 is that nothing has been pushed to it, which `canonical.json` records as
 `image.published: false`. The manifest carries an explicit `registry_digest` slot per

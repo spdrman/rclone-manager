@@ -5,12 +5,12 @@ EPIC B distributes, plus EPIC B Phase 6's adapter conformance drift gate. Issue 
 Package 5.4, `docs/EPIC-B-multi-nas.md` §73), with the drift gate from #81.
 
 **Everything below the marker is generated.** It is produced by a real run of
-`TestProviderStoreSubmissionPreflight` in `apps/common/packaging` and compared against this
+`TestProviderStoreSubmissionPreflight` in `distribution/packaging` and compared against this
 file on every commit, so it is a record of what a run actually decided rather than of what
 somebody believed when they wrote it. Regenerate it with:
 
 ```
-cd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestProviderStoreSubmissionPreflight
+cd distribution && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestProviderStoreSubmissionPreflight
 ```
 
 ## What this is, and what it is not
@@ -18,7 +18,7 @@ cd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 
 This is not a second conformance suite. `docs/conformance/phase-4-matrix.md` answers "does
 this target's package hold together"; this answers "is that package fit to submit", which
 is a different question with a different audience. A target registers once, in
-`apps/common/packaging/conformance.json`, and is registered with this preflight by that
+`distribution/packaging/conformance.json`, and is registered with this preflight by that
 same act: `submission.json` adds only the store it goes to, the files its package carries,
 and its own declarations.
 
@@ -167,7 +167,7 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| Drift gate: image reference | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: Synology is the one target that cannot consume the OCI image; its package embeds the canonical binaries instead, which is why it is the one target with a real hash-parity check of its own. See apps/common/packaging/conformance.json. |
+| Drift gate: image reference | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: Synology is the one target that cannot consume the OCI image; its package embeds the canonical binaries instead, which is why it is the one target with a real hash-parity check of its own. See distribution/packaging/conformance.json. |
 | Drift gate: required mounts | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
 | Drift gate: health check | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
 | Drift gate: runtime profile | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
@@ -180,7 +180,7 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's TrueNAS section covers "screenshot"; the hardware run has not happened |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's TrueNAS section exercises all four; the hardware run has not happened |
 
@@ -188,7 +188,7 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's Unraid section covers "screenshot"; the hardware run has not happened |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Unraid section exercises all four; the hardware run has not happened |
 
@@ -196,8 +196,8 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| Drift gate: image reference | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than consuming it by reference, so there is no reference to compare. See apps/common/packaging/conformance.json. |
-| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
+| Drift gate: image reference | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than consuming it by reference, so there is no reference to compare. See distribution/packaging/conformance.json. |
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
 | Store description | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it. |
 | Store icon | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it. |
 | Store screenshots | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it. |
@@ -211,7 +211,7 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
 | Store description | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it. |
 | Store icon | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it. |
 | Store screenshots | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it. |
@@ -225,7 +225,7 @@ below, with why.
 
 | Rule | Outcome | Why |
 |---|---|---|
-| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
 | Store description | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it. |
 | Store icon | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it. |
 | Store screenshots | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it. |

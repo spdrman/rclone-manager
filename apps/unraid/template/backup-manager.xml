@@ -20,7 +20,7 @@
   rootfs, dropped capabilities, no-new-privileges, the tmpfs a read-only
   rootfs needs, and the non-root uid/gid) goes through ExtraParams. The
   compose profiles express the same settings as first-class keys, and
-  apps/common/packaging parses this string into flags and checks both
+  distribution/packaging parses this string into flags and checks both
   directions: the hardening flags have to be present, and nothing on the
   same line may undo them. A privileged flag or an added capability here
   is a red test, not a review catch.

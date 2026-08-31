@@ -165,7 +165,7 @@
         "release-manifest-integrity": { "declared": "supported" },
         "core-binary-hash-parity": {
           "declared": "not-applicable",
-          "reason": "The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. apps/common/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here.",
+          "reason": "The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. distribution/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here.",
           "verifiedBy": "apps/synology/spk/verify_test.go:TestVerify_BinaryHashParity"
         },
         "architecture-parity": { "declared": "supported", "reason": "The one provider that makes an architecture claim of its own: apps/synology/spk/arch.go maps each DSM arch family to the GOARCH the release builds for it, and this row holds that list against what container/release-manifest.json actually built." },

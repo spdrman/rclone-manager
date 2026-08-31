@@ -18,7 +18,7 @@
   "imageReference": "ghcr.io/spdrman/backup-manager:1.0.0",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "f4041d20828aa47e0a59589cd0cf6d183472ed07aa9fba137f926b7bba1584aa",
+    "sha256": "d79bd808228e7919c557986ee271bd6eb74e7e93c2dba617115380bc2be5ada5",
     "commit": "8ad310014b5be92e75789c8cff4167942d0c8e42",
     "recordedBuildVersion": "8ad3100",
     "architectures": [
@@ -56,54 +56,54 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "e533bdd3abdd5d6f0a986d85a83e98909e36cd6d909368e1a2d29e6c6a1871d3",
+    "sha256": "f9a2667f539e086b4a2b6f98990b1e274f6f5dd070057c8a6537f63ff0a98216",
     "format": "sha256sum"
   },
   "artifacts": [
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.env",
-      "sha256": "f42c182f35aedb56d8a8ad2fbb8080f2b153c7638dd6176916d4f2dcaf5abc60"
+      "sha256": "11d5b2fee9e3d866f9eb8ca7ccabcc4294dd96d8ba04e26609166bb645b441cb"
     },
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.yml",
-      "sha256": "cceb520657ebf7ad54819a66a90b057116ca4ca568e35075c42f87e8484c8cb2"
+      "sha256": "d21496a30101fcc701005eebc9e8edfcb6d4997c59a72129a84649119422d739"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.env",
-      "sha256": "5771a276bbe5c451000871416626b86430784a6a926c6b0bc82b01a65397b2ff"
+      "sha256": "cb9f779dfaa296aa6ddd082f46164abb5ef51f9f791604421aa2b5dcc5741b90"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.yml",
-      "sha256": "857638aad5ff6970d3c4e22bd45ec6e089dbcc85a0e1e57ed7338548365b01a4"
+      "sha256": "dc38340aba5dff35feb278acf605e644f83ba76d2c47a5d88f85ab5816024b66"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/app.yaml",
-      "sha256": "d50719f63d10a774e53eb065be03dbe0df8992f8eaecffb526a3391a75f03767"
+      "sha256": "f90c5a1afea41cfa51481af531fdd3faf9b9c585acf93b9369a5107c6e88c485"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/ix_values.yaml",
-      "sha256": "bd9c777d4551208a318e4ba0ef52942d425792768b130fd17ac7cdd22d460494"
+      "sha256": "cf2a96b9ba32f3043237d9fe8fbba5cdf3eb7870309571390ae62b293e19f216"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/questions.yaml",
-      "sha256": "c411b7be64065e60747e82e0741f07fa8a78b637b5a81f06fda83f893977ad2b"
+      "sha256": "9b190c3dae29061a944790cc0aa15fcb98fd5be880b33afd1726bab9c0b89e04"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/templates/docker-compose.yaml",
-      "sha256": "004464c73ed184164a3dce22db4eaca90d413e3981fc59db6775d50175fa23cf"
+      "sha256": "c3705e9025e307fe903250ee87662d93d0ba3d2b9d4ce73b5eddd57d685c7b79"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "8bc88de2a85124eb192255ef63fd037db48adce623cf767d50d34cb9056f60cf"
+      "sha256": "a89e22e7575478cbbe165bbee6d48576f3fb8fb60b18651042e0fd5b0b1a5072"
     },
     {
       "target": "unraid",
@@ -113,7 +113,7 @@
     {
       "target": "unraid",
       "path": "apps/unraid/template/backup-manager.xml",
-      "sha256": "e884a2b00dcd521bfd0ae61b37990623d07285055e7011588637ce8abfd5a9a2"
+      "sha256": "27d5d6945ef2f28d5db8a32e8dfa5b16bad7f8f60b1d56db6df97fb2de20c690"
     },
     {
       "target": "generic",

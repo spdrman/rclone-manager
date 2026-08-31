@@ -11,7 +11,7 @@ import type { AuthContext, PlatformBridge } from "@shared/types/platform";
  *  dataset at /mnt/backup-manager; `storageMount` is its `backups` child, the
  *  backup root the wizard seeds a destination from, which is deliberately not
  *  the share root that also holds state, config and key material.
- *  apps/common/packaging pins it to canonical.json. */
+ *  distribution/packaging pins it to canonical.json. */
 export const proxmoxBridge: PlatformBridge = {
   id: "proxmox",
   name: "Proxmox VE",

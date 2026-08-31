@@ -16,7 +16,7 @@ Required evidence per §68: a **current PVE release test host or VM environment*
 Record the exact release in the evidence table.
 
 Everything the repository itself can decide is already checked by
-`apps/common/packaging` on every commit, including the per-capability conformance
+`distribution/packaging` on every commit, including the per-capability conformance
 matrix in `docs/conformance/phase-4-matrix.md`. This procedure covers only what a
 laptop cannot reach.
 
@@ -159,7 +159,7 @@ ssh admin@<guest> 'docker --version && docker compose version'
 ### 0.5 Make the canonical image resolvable
 
 No registry is configured for this repository yet
-(`apps/common/packaging/canonical.json` records `published: false`), so the
+(`distribution/packaging/canonical.json` records `published: false`), so the
 reference in the compose file resolves to nothing until you point it somewhere.
 Either push to your own registry:
 
@@ -220,7 +220,7 @@ across either rewrites the ownership of all of it with nothing to restore it fro
 So the two private trees are chowned recursively and the share root and the backup
 root get their own mountpoint chowned, nothing beneath it. This is the same split
 the TrueNAS, Unraid and OpenMediaVault procedures use, and
-`apps/common/packaging` fails the build if any of the four recurses over the
+`distribution/packaging` fails the build if any of the four recurses over the
 backup root or a parent of it.
 
 ```bash
@@ -442,13 +442,13 @@ destructive-safety expectations against it specifically:
 ## Step 11 — Cross-check against the automated matrix
 
 ```bash
-cd apps/common && go test ./packaging/ -run TestCrossProviderConformance -v
+cd distribution && go test ./packaging/ -run TestCrossProviderConformance -v
 ```
 
 - [ ] Every Proxmox row the matrix reports as `PASS` still holds on the real host
 - [ ] Every row it reports as `PENDING_OPERATOR` is now decided by this procedure
 - [ ] No row the matrix reports as `UNSUPPORTED` turned out to be supported here
-      (if one did, `apps/common/packaging/conformance.json` is stale and must be corrected)
+      (if one did, `distribution/packaging/conformance.json` is stale and must be corrected)
 
 ---
 

@@ -5,4 +5,5 @@ use (
 	./apps/generic
 	./apps/synology
 	./core
+	./distribution
 )

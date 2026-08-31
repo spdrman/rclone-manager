@@ -42,7 +42,7 @@ export interface PlatformDeploymentInfo {
    *  a value that also holds private state, config or key material both
    *  misinforms the operator and proposes writing backups next to a private
    *  key (§19.2). The container-packaged platforms are pinned to
-   *  apps/common/packaging/canonical.json, which is where their value is
+   *  distribution/packaging/canonical.json, which is where their value is
    *  changed; bridges that file does not cover are not yet pinned to it. */
   storageMount: string;
   adapterVersion: string;

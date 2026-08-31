@@ -1,0 +1,259 @@
+{
+  "schema": "rclone-manager/perf-baseline/1",
+  "workload": "phase6-baseline-v1",
+  "host_id": "darwin-arm64-mac17-2",
+  "host": {
+    "os": "Darwin",
+    "os_version": "26.6.2",
+    "arch": "arm64",
+    "model": "Mac17,2",
+    "cpu": "Apple M5",
+    "cores": 10,
+    "memory_bytes": 34359738368
+  },
+  "commit": "8ad310014b5be92e75789c8cff4167942d0c8e42",
+  "working_tree_dirty": true,
+  "captured_at": "2026-08-31T06:56:25Z",
+  "runtime_captures": 5,
+  "backup_sets": 15,
+  "metrics": {
+    "startup_to_healthy_ms": {
+      "median": 19.652,
+      "min": 19.391,
+      "max": 53.488,
+      "spread_percent_of_median": 173.504
+    },
+    "idle_rss_bytes": {
+      "median": 98861056,
+      "min": 98435072,
+      "max": 99090432,
+      "spread_percent_of_median": 0.663
+    },
+    "idle_cpu_percent": {
+      "median": 0,
+      "min": 0,
+      "max": 0,
+      "spread_percent_of_median": null
+    },
+    "idle_cpu_seconds_total": {
+      "median": 0.12,
+      "min": 0.12,
+      "max": 0.23,
+      "spread_percent_of_median": 91.667
+    },
+    "api_read_p95_ms": {
+      "median": 0.13,
+      "min": 0.092,
+      "max": 0.169,
+      "spread_percent_of_median": 59.231
+    },
+    "api_read_p50_ms": {
+      "median": 0.085,
+      "min": 0.066,
+      "max": 0.101,
+      "spread_percent_of_median": 41.176
+    },
+    "config_write_p95_ms": {
+      "median": 11.357,
+      "min": 10.107,
+      "max": 13.432,
+      "spread_percent_of_median": 29.277
+    },
+    "config_write_p50_ms": {
+      "median": 9.754,
+      "min": 9.194,
+      "max": 10.114,
+      "spread_percent_of_median": 9.432
+    },
+    "transfer_mb_per_second": {
+      "median": 537.702,
+      "min": 519.773,
+      "max": 645.273,
+      "spread_percent_of_median": 23.34
+    },
+    "image_size_bytes": {
+      "value": 43008762,
+      "architecture": "arm64",
+      "platform": "linux/arm64"
+    }
+  },
+  "detail": {
+    "idle_cpu_floor_percent": 0.033,
+    "idle_cpu_window_seconds": 30.01,
+    "api_read_endpoint": "GET /api/v1/backup-sets",
+    "api_read_response_bytes": 6318,
+    "api_read_samples_per_capture": 400,
+    "config_write_endpoint": "PATCH /api/v1/settings",
+    "config_write_samples_per_capture": 60,
+    "transfer_backend": "rclone local backend, disk to disk, warm page cache",
+    "transfer_artifact_bytes": 268435456,
+    "transfer_repetitions": 5
+  },
+  "runtime_raw": [
+    {
+      "workload": "phase6-baseline-v1",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "num_cpu": 10,
+      "backup_sets": 15,
+      "startup_to_healthy_ms": 53.488,
+      "idle_rss_bytes": 98828288,
+      "idle_cpu_percent": 0,
+      "idle_cpu_window_seconds": 30.01,
+      "idle_cpu_floor_percent": 0.033,
+      "idle_cpu_seconds_total": 0.23,
+      "api_read_latency_ms": {
+        "endpoint": "GET /api/v1/backup-sets",
+        "samples": 400,
+        "response_bytes": 6318,
+        "min_ms": 0.062,
+        "p50_ms": 0.101,
+        "p95_ms": 0.169,
+        "p99_ms": 0.24,
+        "max_ms": 0.429
+      },
+      "config_write_latency_ms": {
+        "endpoint": "PATCH /api/v1/settings",
+        "samples": 60,
+        "response_bytes": 738,
+        "min_ms": 8.689,
+        "p50_ms": 10.114,
+        "p95_ms": 13.432,
+        "p99_ms": 13.921,
+        "max_ms": 14.02
+      }
+    },
+    {
+      "workload": "phase6-baseline-v1",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "num_cpu": 10,
+      "backup_sets": 15,
+      "startup_to_healthy_ms": 19.652,
+      "idle_rss_bytes": 99090432,
+      "idle_cpu_percent": 0,
+      "idle_cpu_window_seconds": 30.006,
+      "idle_cpu_floor_percent": 0.033,
+      "idle_cpu_seconds_total": 0.12,
+      "api_read_latency_ms": {
+        "endpoint": "GET /api/v1/backup-sets",
+        "samples": 400,
+        "response_bytes": 6318,
+        "min_ms": 0.048,
+        "p50_ms": 0.085,
+        "p95_ms": 0.13,
+        "p99_ms": 0.181,
+        "max_ms": 0.417
+      },
+      "config_write_latency_ms": {
+        "endpoint": "PATCH /api/v1/settings",
+        "samples": 60,
+        "response_bytes": 738,
+        "min_ms": 8.753,
+        "p50_ms": 9.416,
+        "p95_ms": 11.955,
+        "p99_ms": 13.417,
+        "max_ms": 13.891
+      }
+    },
+    {
+      "workload": "phase6-baseline-v1",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "num_cpu": 10,
+      "backup_sets": 15,
+      "startup_to_healthy_ms": 19.761,
+      "idle_rss_bytes": 98861056,
+      "idle_cpu_percent": 0,
+      "idle_cpu_window_seconds": 30.004,
+      "idle_cpu_floor_percent": 0.033,
+      "idle_cpu_seconds_total": 0.12,
+      "api_read_latency_ms": {
+        "endpoint": "GET /api/v1/backup-sets",
+        "samples": 400,
+        "response_bytes": 6288,
+        "min_ms": 0.047,
+        "p50_ms": 0.066,
+        "p95_ms": 0.092,
+        "p99_ms": 0.123,
+        "max_ms": 0.208
+      },
+      "config_write_latency_ms": {
+        "endpoint": "PATCH /api/v1/settings",
+        "samples": 60,
+        "response_bytes": 738,
+        "min_ms": 8.869,
+        "p50_ms": 9.892,
+        "p95_ms": 10.624,
+        "p99_ms": 10.828,
+        "max_ms": 11.995
+      }
+    },
+    {
+      "workload": "phase6-baseline-v1",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "num_cpu": 10,
+      "backup_sets": 15,
+      "startup_to_healthy_ms": 19.391,
+      "idle_rss_bytes": 98435072,
+      "idle_cpu_percent": 0,
+      "idle_cpu_window_seconds": 30.004,
+      "idle_cpu_floor_percent": 0.033,
+      "idle_cpu_seconds_total": 0.12,
+      "api_read_latency_ms": {
+        "endpoint": "GET /api/v1/backup-sets",
+        "samples": 400,
+        "response_bytes": 6318,
+        "min_ms": 0.05,
+        "p50_ms": 0.068,
+        "p95_ms": 0.098,
+        "p99_ms": 0.169,
+        "max_ms": 0.314
+      },
+      "config_write_latency_ms": {
+        "endpoint": "PATCH /api/v1/settings",
+        "samples": 60,
+        "response_bytes": 738,
+        "min_ms": 8.568,
+        "p50_ms": 9.754,
+        "p95_ms": 11.357,
+        "p99_ms": 12.022,
+        "max_ms": 14.161
+      }
+    },
+    {
+      "workload": "phase6-baseline-v1",
+      "goos": "darwin",
+      "goarch": "arm64",
+      "num_cpu": 10,
+      "backup_sets": 15,
+      "startup_to_healthy_ms": 19.558,
+      "idle_rss_bytes": 99074048,
+      "idle_cpu_percent": 0,
+      "idle_cpu_window_seconds": 30.008,
+      "idle_cpu_floor_percent": 0.033,
+      "idle_cpu_seconds_total": 0.12,
+      "api_read_latency_ms": {
+        "endpoint": "GET /api/v1/backup-sets",
+        "samples": 400,
+        "response_bytes": 6318,
+        "min_ms": 0.053,
+        "p50_ms": 0.092,
+        "p95_ms": 0.155,
+        "p99_ms": 0.236,
+        "max_ms": 0.319
+      },
+      "config_write_latency_ms": {
+        "endpoint": "PATCH /api/v1/settings",
+        "samples": 60,
+        "response_bytes": 738,
+        "min_ms": 8.55,
+        "p50_ms": 9.194,
+        "p95_ms": 10.107,
+        "p99_ms": 10.339,
+        "max_ms": 10.981
+      }
+    }
+  ]
+}

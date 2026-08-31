@@ -1,7 +1,7 @@
 # Hardware acceptance: provider store and catalog submission preflight
 
 The §82 procedure for the half of Work Package 5.4 that no checkout can decide. Everything
-else in that work package is automated in `apps/common/packaging` and reported in
+else in that work package is automated in `distribution/packaging` and reported in
 `docs/conformance/submission-preflight.md`: the four hard rules, the eight-element adapter
 drift gate, the submission materials, and the recorded readiness verdict per target. What
 is left is what needs the real platform, and it is the same two things on every target.
@@ -28,7 +28,7 @@ submission ready; a reviewer decides the rest.
 ## Preconditions, on every target
 
 - The target installed from the package or profile this repository ships, at the version
-  `apps/common/packaging/canonical.json` pins, not a hand-assembled deployment.
+  `distribution/packaging/canonical.json` pins, not a hand-assembled deployment.
 - A real SFTP source with a real backup set, configured through the interface, with at
   least one successful run behind it. A set that has never succeeded cannot go stale.
 - `alerts.enabled: true` in the configuration, and the engine restarted since.

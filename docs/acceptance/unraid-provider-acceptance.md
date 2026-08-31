@@ -11,7 +11,7 @@ Required evidence per §68: a **current supported Unraid release VM or hardware*
 Record the exact release in the evidence table.
 
 Everything the repository itself can decide is already checked by
-`apps/common/packaging` on every commit. This procedure covers only what a laptop
+`distribution/packaging` on every commit. This procedure covers only what a laptop
 cannot reach.
 
 ---
@@ -73,7 +73,7 @@ docker network inspect backup-manager --format '{{.Driver}} {{.Name}}'
 
 ### 0.3 Create the appdata and backup shares
 
-Host-path defaults come from `apps/common/packaging/canonical.json`
+Host-path defaults come from `distribution/packaging/canonical.json`
 (`platforms.unraid.hostPaths`) and match what `apps/unraid/frontend/webui.json`
 and the Unraid frontend bridge already declare:
 

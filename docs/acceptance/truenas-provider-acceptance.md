@@ -15,7 +15,7 @@ table.
 
 Everything the repository itself can decide (metadata well-formedness, image
 reference parity, backup-root containment, absence of lifecycle code, absence of
-bundled secrets) is already checked by `apps/common/packaging` on every commit.
+bundled secrets) is already checked by `distribution/packaging` on every commit.
 Do not re-check those by hand. This procedure covers only what a laptop cannot
 reach.
 
@@ -28,7 +28,7 @@ reach.
 | `POOL` | The ZFS pool you install into. The package's defaults assume `tank`; substitute yours everywhere. |
 | Engine container | `/backup-manager-web serve`: API, scheduler, local authentication. No published port. |
 | Web UI container | `/backup-manager-web serve-ui`: static UI plus reverse proxy. The only published port. |
-| Canonical image | The single OCI reference in `apps/common/packaging/canonical.json`. |
+| Canonical image | The single OCI reference in `distribution/packaging/canonical.json`. |
 
 ---
 
@@ -37,7 +37,7 @@ reach.
 ### 0.1 Make the canonical image resolvable
 
 The registry is settled and nothing has been pushed to it yet. The reference is
-`ghcr.io/spdrman/backup-manager` (`apps/common/packaging/canonical.json` is the single
+`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the single
 source of truth for it), and that file records `image.published: false`;
 `container/release-manifest.json` records the same fact as a `registry_digest` of
 `null` on every architecture. So the reference resolves to nothing today, not because
@@ -76,7 +76,7 @@ architecture.
 
 ### 0.2 Create the datasets
 
-The package's host-path defaults come from `apps/common/packaging/canonical.json`
+The package's host-path defaults come from `distribution/packaging/canonical.json`
 (`platforms.truenas.hostPaths`) and are the same values the TrueNAS frontend bridge
 declares. Create them as datasets, not directories, so snapshots and quotas work:
 

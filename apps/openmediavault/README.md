@@ -18,7 +18,7 @@ v1. Concretely that means no entry in OMV's navigation tree, no Workbench form, 
 RPC service, no salt state and no `openmediavault-backupmanager` Debian package.
 
 A deferral that nothing enforces quietly stops holding, so
-`apps/common/packaging` scans this directory for plugin material (a `debian/`
+`distribution/packaging` scans this directory for plugin material (a `debian/`
 tree, a `salt/` tree, a `workbench/` or `rpc/` directory, an `omv-mkconf` hook) and
 fails the build if any turns up. The frontend bridge's own comment says the same
 thing from the other side: a future native OMV shell replaces
@@ -52,7 +52,7 @@ apt-get install openmediavault-compose
 A real OMV system mounts data filesystems at `/srv/dev-disk-by-uuid-<UUID>/`, with
 the UUID differing per machine, so no checked-in default can be literally correct.
 It matches what `frontend/platform.ts` already declares, so the two stay
-consistent, and `apps/common/packaging` pins them together.
+consistent, and `distribution/packaging` pins them together.
 
 Find yours:
 
@@ -103,7 +103,7 @@ promised one.
 Appdata holds private state; `$DISK/backups/backup-manager` holds retained
 artifacts. That split is a rule rather than a preference: §19.2 makes them
 separate security domains, and the backup root must never contain SSH private
-keys or authentication state. `apps/common/packaging` checks the containment in
+keys or authentication state. `distribution/packaging` checks the containment in
 both directions on every commit.
 
 The backup root is a directory of the app's own inside `$DISK/backups`, not that
@@ -139,7 +139,7 @@ cookie, CSRF protection and per-IP rate limiting.
 
 The OMV Workbench login cannot log into Backup Manager and Backup Manager's
 administrator cannot log into the Workbench. Nothing in this directory ships a
-credential, and `apps/common/packaging` scans for one on every commit.
+credential, and `distribution/packaging` scans for one on every commit.
 
 ## config.yaml
 
@@ -153,7 +153,7 @@ are fixed by this profile and must not be changed.
 
 No registry is configured for this repository yet, so
 `ghcr.io/spdrman/backup-manager:1.0.0` is the intended publish target rather than
-something that resolves today. `apps/common/packaging/canonical.json` records that
+something that resolves today. `distribution/packaging/canonical.json` records that
 honestly, and step 0.2 of the acceptance procedure covers pushing to your own
 registry or side-loading a saved image in the meantime. It is the `IMAGE` variable
 in the env file, and nothing else.

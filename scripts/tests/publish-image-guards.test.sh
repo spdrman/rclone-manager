@@ -87,11 +87,11 @@ new_repo() {
   # ignored files. Every future guard is exercised against the shipped
   # exclusions because of this line.
   cp "${REPO_ROOT}/.gitignore" "$dir/.gitignore"
-  mkdir -p "$dir/core" "$dir/apps/common/packaging" "$dir/ui" "$dir/container" "$dir/provenance"
+  mkdir -p "$dir/core" "$dir/distribution/packaging" "$dir/ui" "$dir/container" "$dir/provenance"
   printf 'package main\n' >"$dir/core/main.go"
   printf 'ui\n' >"$dir/ui/marker"
   printf 'FROM scratch\n' >"$dir/container/Dockerfile"
-  cat >"$dir/apps/common/packaging/canonical.json" <<'JSON'
+  cat >"$dir/distribution/packaging/canonical.json" <<'JSON'
 { "image": { "reference": "ghcr.io/spdrman/backup-manager:1.0.0", "published": false } }
 JSON
   printf '{ "version": "test", "commit": "0000000000000000000000000000000000000000" }\n' \
@@ -185,15 +185,15 @@ expect "$rc" "$out" 0 "Would publish ghcr.io/spdrman/backup-manager:1.0.0"
 current="canonical.json missing"
 repo="$(new_repo)"
 pin_manifest_to_head "$repo"
-rm "$repo/apps/common/packaging/canonical.json"
+rm "$repo/distribution/packaging/canonical.json"
 r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
 rc="$(split_rc "$r")"; out="$(split_out "$r")"
-expect "$rc" "$out" 2 "apps/common/packaging/canonical.json is not readable"
+expect "$rc" "$out" 2 "distribution/packaging/canonical.json is not readable"
 
 current="canonical.json present but carrying no reference"
 repo="$(new_repo)"
 pin_manifest_to_head "$repo"
-printf '{ "image": { "published": false } }\n' >"$repo/apps/common/packaging/canonical.json"
+printf '{ "image": { "published": false } }\n' >"$repo/distribution/packaging/canonical.json"
 r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
 rc="$(split_rc "$r")"; out="$(split_out "$r")"
 expect "$rc" "$out" 2 "no image reference in"

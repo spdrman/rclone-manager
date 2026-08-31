@@ -1,0 +1,85 @@
+{
+  "_comment": [
+    "The Phase 6 performance gate (issue #165, EPIC B #81's performance contract).",
+    "",
+    "#81 says API p95 and transfer throughput should stay within 'approximately",
+    "10%' of baseline. 'Approximately 10%' is not a gate, so #165 owns turning it",
+    "into numbers a later run can pass or fail without argument: one benchmark",
+    "host, one workload, and one threshold per gated metric.",
+    "",
+    "Every number here is derived from measurement, not chosen. Two independent",
+    "five-capture baselines were taken on the host below and compared against each",
+    "other; the observed capture-to-capture movement of each median is what sets",
+    "whether a metric is gated on a ratio alone, on a ratio plus an absolute noise",
+    "floor, or reported without a gate. docs/perf/README.md shows that comparison",
+    "and the reasoning for each line."
+  ],
+
+  "benchmark_host_id": "darwin-arm64-mac17-2",
+  "workload": "phase6-baseline-v1",
+
+  "_required_metrics_comment": [
+    "The seven metrics EPIC B #81's performance contract names. A baseline record",
+    "missing any one of them is incomplete and check-baseline.sh refuses it, so a",
+    "--skip-image capture can never be mistaken for a real baseline."
+  ],
+  "required_metrics": [
+    "idle_rss_bytes",
+    "startup_to_healthy_ms",
+    "api_read_p95_ms",
+    "config_write_p95_ms",
+    "transfer_mb_per_second",
+    "image_size_bytes",
+    "idle_cpu_seconds_total"
+  ],
+
+  "_thresholds_comment": [
+    "Gated metrics. direction=lower_is_better uses max_ratio, higher_is_better uses",
+    "min_ratio. noise_floor_abs, where present, is a second condition that must",
+    "ALSO be exceeded before the metric fails: it exists only for metrics whose",
+    "absolute value is small enough that a 10% budget is inside measured machine",
+    "noise, and its value is set from that measurement rather than picked.",
+    "",
+    "Read a floor as the binding condition rather than as a rounding allowance.",
+    "Two conditions that must both hold means the WIDER one is what is enforced,",
+    "and on a sub-millisecond metric the floor is normally the wider one. The",
+    "metric's own \"why\" says which condition binds and what the budget therefore",
+    "is in practice.",
+    "",
+    "Metrics deliberately NOT gated: startup_to_healthy_ms (12.0% median-to-median",
+    "movement between two identical captures, so a 10% gate would fail against an",
+    "unchanged tree), idle_cpu_percent and idle_cpu_seconds_total (the process is",
+    "below the measurement floor at idle), and the two p50s (recorded as context",
+    "for their p95s). Those are recorded, reported and reviewed, not gated;",
+    "claiming to gate a number that cannot hold still would be worse than saying",
+    "plainly that it is a review signal."
+  ],
+  "thresholds": {
+    "api_read_p95_ms": {
+      "direction": "lower_is_better",
+      "max_ratio": 1.10,
+      "noise_floor_abs": 0.05,
+      "why": "the API p95 EPIC B #81 names. Measured median-to-median movement between two identical five-capture baselines was 0.019 ms (14.6%), so the ratio alone is inside noise at this magnitude, and the 0.05 ms floor is 2.6x that movement. Both conditions must hold before this metric fails, so what is enforced is the wider of the two, not the 1.10: against the 0.130 ms baseline the ratio allows 0.143 ms and the floor allows 0.180 ms, so the floor always binds and the effective budget is +38.5%. That is wider than the regression this floor was sized against. An added loopback proxy hop was later measured at 0.047 ms at p95 on this host, which is just under the floor, so this gate cannot catch that hop. Closing that needs a quieter measurement before the floor can come down, not a smaller number written over the same noise. docs/perf/README.md carries the arithmetic, and scripts/perf/selftest.sh pins which condition binds with one control either side of the floor."
+    },
+    "transfer_mb_per_second": {
+      "direction": "higher_is_better",
+      "min_ratio": 0.90,
+      "why": "the transfer throughput EPIC B #81 names. Measured median-to-median movement was 0.93%, so a 10% budget is roughly eleven times the noise and the ratio alone is a real gate."
+    },
+    "idle_rss_bytes": {
+      "direction": "lower_is_better",
+      "max_ratio": 1.10,
+      "why": "EPIC B #81 requires material idle-memory growth attributable solely to the refactor to be explained and approved. Measured median-to-median movement was 0.22%, so a 10% budget is roughly forty-five times the noise."
+    },
+    "config_write_p95_ms": {
+      "direction": "lower_is_better",
+      "max_ratio": 1.10,
+      "why": "the configuration write path. Measured median-to-median movement was 4.8%, so the 10% budget has only about two times headroom: the tightest of the gated metrics, and the one most likely to need a re-measurement rather than a fix if it trips."
+    },
+    "image_size_bytes": {
+      "direction": "lower_is_better",
+      "max_ratio": 1.05,
+      "why": "two independent builds of the same commit produced byte-identical image sizes, so there is no noise to allow for. 5% is a real gate, and it is far below the cost of the specific regression #81 forbids, adding a production Node server to host the web UI."
+    }
+  }
+}

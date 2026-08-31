@@ -176,9 +176,13 @@ func MustLoad() Canonical {
 
 // RepoRoot is the repository root relative to this package's own
 // directory, which is where `go test` runs. The checkers read metadata out
-// of sibling apps/<platform>/ directories and out of container/, neither
-// of which is importable Go.
-const RepoRoot = "../../.."
+// of apps/<platform>/ directories and out of container/, neither of which
+// is importable Go.
+//
+// Two levels, not three: this package moved from apps/common/packaging to
+// distribution/packaging in #165, when the distribution layer became its
+// own module rather than a subdirectory of the shared application one.
+const RepoRoot = "../.."
 
 // PlatformDir is apps/<name>/ relative to this package's directory.
 func PlatformDir(name string) string {

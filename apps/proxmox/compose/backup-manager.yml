@@ -18,7 +18,7 @@
 # §4A defers any Web UI plugin, so there is deliberately no PVE menu
 # entry, nothing written into the cluster configuration filesystem, no
 # hook script and no host package.
-# apps/common/packaging fails the build if any of that appears here.
+# distribution/packaging fails the build if any of that appears here.
 #
 # This is the same two-container shape container/compose.yaml already
 # ships for the generic Docker app, using the exact same canonical image.

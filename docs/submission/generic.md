@@ -20,7 +20,7 @@ The packaging metadata this workflow deploys is under `container/`.
 | recovery | `docs/recovery-without-a-terminal.md` | ready |
 | support | `docs/submission/support-source-license.md` | ready |
 
-`apps/common/packaging` reads this table on every commit and fails when a row is missing or
+`distribution/packaging` reads this table on every commit and fails when a row is missing or
 names a path that is not in the tree. The five rows are the five things an administrator
 needs and the five things a listing would have had to state if there were a listing.
 
@@ -40,7 +40,7 @@ eight-element adapter drift gate. The current result is in
 
 ### How to read the State column
 
-Four values, and only four. `apps/common/packaging` parses this table on every commit and
+Four values, and only four. `distribution/packaging` parses this table on every commit and
 fails the build on a fifth.
 
 - `ready` — the material is in the tree at the path in the middle column, and that path is

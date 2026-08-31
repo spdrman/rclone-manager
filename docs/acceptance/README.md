@@ -25,19 +25,19 @@ note, or README that says otherwise is wrong.
 
 ## What CI can and cannot prove
 
-`apps/common/packaging` is the automated half. It runs on every commit and checks
+`distribution/packaging` is the automated half. It runs on every commit and checks
 the parts of the Phase 4 TDD Gate that are decidable from the repository alone:
 
 | Phase 4 gate item | Where it is checked |
 | --- | --- |
-| core version parity | `apps/common/packaging` (one canonical image reference, identical across every platform and across the TrueNAS catalog as an install renders it) |
-| core binary hash parity | **not claimed**. Nothing in `apps/common/packaging` derives a hash from any artifact. It checks only that `container/release-manifest.json` records a non-empty SHA-256 per binary per architecture, which cannot detect a stale or wrong hash. #174 closed the worse half of that gap: the manifest no longer pins a commit that has left `main`'s history, and `release-manifest-integrity` passes for every provider. A reachable manifest is still not a byte comparison, so this row stays unclaimed. The only place binary hashes are verified against real bytes is `spkctl verify` against a built `.spk` in `apps/synology`. |
-| provider package metadata | `apps/common/packaging` (every metadata file parses, and carries the keys its platform requires) |
-| architecture | `apps/common/packaging` (the claimed set equals what `container/release-manifest.json` records as built) |
-| backup-root containment | `apps/common/packaging` (§19.2: private state, config and key material are never inside the backup root, and the declared storage mount IS the backup root, so the rule has one reading rather than three) |
-| auth mode | `apps/common/packaging` (every platform declares `local-account`, none ships its own auth) |
-| no bundled secrets | `apps/common/packaging` |
-| no provider-specific lifecycle implementation | `apps/common/packaging` |
+| core version parity | `distribution/packaging` (one canonical image reference, identical across every platform and across the TrueNAS catalog as an install renders it) |
+| core binary hash parity | **not claimed**. Nothing in `distribution/packaging` derives a hash from any artifact. It checks only that `container/release-manifest.json` records a non-empty SHA-256 per binary per architecture, which cannot detect a stale or wrong hash. #174 closed the worse half of that gap: the manifest no longer pins a commit that has left `main`'s history, and `release-manifest-integrity` passes for every provider. A reachable manifest is still not a byte comparison, so this row stays unclaimed. The only place binary hashes are verified against real bytes is `spkctl verify` against a built `.spk` in `apps/synology`. |
+| provider package metadata | `distribution/packaging` (every metadata file parses, and carries the keys its platform requires) |
+| architecture | `distribution/packaging` (the claimed set equals what `container/release-manifest.json` records as built) |
+| backup-root containment | `distribution/packaging` (§19.2: private state, config and key material are never inside the backup root, and the declared storage mount IS the backup root, so the rule has one reading rather than three) |
+| auth mode | `distribution/packaging` (every platform declares `local-account`, none ships its own auth) |
+| no bundled secrets | `distribution/packaging` |
+| no provider-specific lifecycle implementation | `distribution/packaging` |
 | state persistence | **here**, on hardware |
 | install/update/remove semantics | **here**, on hardware |
 
@@ -54,7 +54,7 @@ writes an 8 MiB canary of known content into the backup root during the storage
 step and records its SHA-256 and a full file listing **outside** the backup root,
 then verifies both immediately after removal, before anything else is inspected.
 A procedure that claims the backup root is untouched byte for byte without
-recording that baseline is a red test in `apps/common/packaging`, as is any
+recording that baseline is a red test in `distribution/packaging`, as is any
 `chown -R` that reaches the backup root or a parent of it: step 0 is what an
 operator re-runs on a reinstall, by which point that tree is the retained backup
 store.

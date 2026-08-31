@@ -1,7 +1,7 @@
 # Release notes
 
 Version 1.0.0, the reference every provider package carries. It is pinned in one place,
-`apps/common/packaging/canonical.json`, and every target's metadata is checked against it
+`distribution/packaging/canonical.json`, and every target's metadata is checked against it
 on every commit, so a release note describing 1.0.0 beside a package deploying something
 else is a failing build rather than a review catch.
 
