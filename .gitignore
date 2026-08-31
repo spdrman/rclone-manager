@@ -58,3 +58,9 @@ __pycache__/
 # key paths - generated locally, never committed, matching container/.env's
 # own gitignore entry above.
 /container/.generated/
+
+# scripts/tests/ci-local-gate.test.sh sandbox: synthetic checkouts it builds,
+# runs the gate against, and deletes again. Inside the repo rather than
+# $TMPDIR so a test never creates or removes anything outside the checkout it
+# belongs to.
+/.ci-local-gate-test/

@@ -7,10 +7,25 @@
 // verification and real chroot/permission semantics, for the cost of a
 // disposable container. All key material is generated fresh per test run
 // under tests/.run and removed on cleanup; nothing here is a real credential.
+//
+// What this suite costs, written down here rather than left as folklore for
+// the next person to rediscover through a 25-minute hang (issue #161). Every
+// fixture is a real sshd in its own container, and one scripts/ci-local.sh
+// run starts the suite three times over: once directly, and again inside the
+// throwaway worktrees of verify-core-without-apps.sh and
+// verify-ugos-removable.sh. The Docker VM on the machine this was written on
+// has 4 CPUs and roughly 4 GB, which is comfortable for one gate at a time
+// and demonstrably not comfortable for several at once: under concurrent
+// gate runs, containers get evicted mid-test. If a machine has to run gates
+// in parallel, either that VM needs more than 4 GB, or the two architecture
+// checks need to stop re-running a container-backed suite to prove a
+// dependency boundary that no container is involved in.
 package sftpfixture
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -18,8 +33,10 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +50,82 @@ import (
 const User = "backupuser"
 
 const containerUID = "1001"
+
+// Every subprocess this fixture starts gets a timeout, because the
+// deadline-bounded retry loops further down only re-read their deadline
+// BETWEEN attempts. One `docker` that never returns outruns all of them,
+// and that is the shape of the 25-minute hang in #161: whichever test
+// happened to be talking to a wedged daemon is the one that hangs, which
+// is why the victim was different on every run.
+const (
+	// dockerInfoTimeout bounds the capability probe. It is generous
+	// because answering it is the daemon's first job after a cold start.
+	dockerInfoTimeout = 60 * time.Second
+	// dockerPullTimeout is generous for the same reason a cold machine
+	// really does have to download the image.
+	dockerPullTimeout = 5 * time.Minute
+	// dockerRunTimeout covers creating and starting the container.
+	dockerRunTimeout = 90 * time.Second
+	// dockerProbeTimeout bounds the small, frequent calls (port, inspect,
+	// logs). It is short on purpose: they run inside retry loops whose own
+	// deadlines are 15 and 20 seconds.
+	dockerProbeTimeout = 10 * time.Second
+	// dockerRemoveTimeout bounds teardown, which must not be the reason a
+	// suite hangs either.
+	dockerRemoveTimeout = 60 * time.Second
+	// keygenTimeout bounds one ssh-keygen, keyscanTimeout one ssh-keyscan
+	// attempt inside its retry loop.
+	keygenTimeout  = 60 * time.Second
+	keyscanTimeout = 10 * time.Second
+	// sshDialTimeout and sshHandshakeTimeout bound the two halves of one
+	// readiness probe separately, because ssh.ClientConfig.Timeout covers
+	// only the first of them.
+	sshDialTimeout      = 2 * time.Second
+	sshHandshakeTimeout = 5 * time.Second
+)
+
+// The mid-test watchdog. Setup was never the gap: the gap is that once
+// setup succeeds, nothing notices the server has gone, and the operation
+// under test keeps retrying against a corpse until `go test` kills the
+// package.
+const (
+	// defaultTestBudget is how long one test may run against a fixture
+	// before the fixture stops it and says why. The whole SFTP suite takes
+	// 94 to 98 seconds on a quiet machine, roughly ten seconds a test, so
+	// four minutes is more than twenty times the usual and still a small
+	// fraction of the package's 25-minute go test timeout. A stuck test
+	// should name itself while the run is still worth watching.
+	defaultTestBudget = 4 * time.Minute
+	// defaultGrace is how long the fixture waits, after cancelling its
+	// context, for the test to unwind on its own before stopping the
+	// process outright. A test that takes Context() unwinds well inside
+	// it; one that ignores it gets stopped anyway.
+	defaultGrace = 20 * time.Second
+	// budgetEnv and graceEnv override the two above, as Go durations.
+	// The fixture's own tests use them to keep a deliberate hang short.
+	budgetEnv = "RCLONE_MANAGER_SFTP_TEST_BUDGET"
+	graceEnv  = "RCLONE_MANAGER_SFTP_DEATH_GRACE"
+	// probeInterval is how often the watchdog asks docker whether the
+	// container is still there.
+	probeInterval = 500 * time.Millisecond
+	// probesBeforeDeclaringDeath is why a single hiccup from the daemon
+	// cannot fail a healthy test: the container has to be missing or
+	// stopped on two consecutive probes before the fixture says it died.
+	probesBeforeDeclaringDeath = 2
+)
+
+var (
+	// errNoSuchContainer means docker itself no longer knows the
+	// container, which is a death, not an inconclusive answer.
+	errNoSuchContainer = errors.New("docker no longer knows this container")
+	// errDockerTimedOut means the docker CLI did not come back at all.
+	// That is a statement about the daemon, never about the container, so
+	// the watchdog treats it as no evidence either way.
+	errDockerTimedOut = errors.New("docker did not answer in time")
+	// errTestFinished is the context cause for the ordinary path: the
+	// test that owns the fixture ended.
+	errTestFinished = errors.New("the test that owns this fixture has finished")
+)
 
 // Fixture is a running SFTP server plus everything a test needs to point the
 // real rclone adapter at it.
@@ -58,8 +151,27 @@ type Fixture struct {
 	// and observe remote deletes by checking what disappears here.
 	UploadDir string
 
-	containerID string
-	runDir      string
+	containerID   string
+	containerName string
+	runDir        string
+
+	// ctx is what Context() hands out, cancelled with a cause the moment
+	// the fixture knows something is wrong.
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+
+	// done is closed when the owning test finishes, which is the
+	// watchdog's signal to stand down. Everything below it is shared with
+	// that watchdog goroutine.
+	mu          sync.Mutex
+	done        chan struct{}
+	finished    bool
+	expectDeath bool
+	// stage is what Start is currently doing. It is the whole reason a
+	// hang during setup can name the step it is stuck on.
+	stage string
+
+	teardownOnce sync.Once
 }
 
 // Start launches a disposable SFTP server for the duration of the calling
@@ -69,23 +181,44 @@ type Fixture struct {
 func Start(t *testing.T) *Fixture {
 	t.Helper()
 
+	// The fixture exists, its cleanup is registered and its watchdog is
+	// running before anything can block. Every step below shells out to
+	// something, and the point of #161 is that none of them may be able to
+	// hang the package silently, setup included.
+	f := &Fixture{
+		Host: "127.0.0.1",
+		User: User,
+		done: make(chan struct{}),
+	}
+	f.ctx, f.cancel = context.WithCancelCause(context.Background())
+	f.setStage("looking for docker, ssh-keygen and ssh-keyscan")
+	t.Cleanup(f.finish)
+	f.watch(t)
+
 	for _, tool := range []string{"docker", "ssh-keygen", "ssh-keyscan"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("sftpfixture: SKIPPING (missing capability: %q not found on PATH): %v", tool, err)
 		}
 	}
-	if out, err := exec.Command("docker", "info").CombinedOutput(); err != nil {
-		t.Skipf("sftpfixture: SKIPPING (missing capability: docker daemon not reachable, Docker itself appears absent or not running here): %v\n%s", err, out)
+	f.setStage("docker info")
+	if _, errOut, err := dockerRun(dockerInfoTimeout, "info"); err != nil {
+		// A daemon that is absent is a capability this machine does not
+		// have, and skipping is honest. A daemon that is present but not
+		// answering is not: skipping there would quietly delete the whole
+		// SFTP suite from the gate, which is the failure mode #160 is
+		// about. So the two get different verdicts.
+		if errors.Is(err, errDockerTimedOut) {
+			t.Fatalf("sftpfixture: `docker info` did not answer within %s. The daemon is there but wedged, and skipping would silently remove this suite from the gate, so this is a failure: %v\n%s", dockerInfoTimeout, err, errOut)
+		}
+		t.Skipf("sftpfixture: SKIPPING (missing capability: docker daemon not reachable, Docker itself appears absent or not running here): %v\n%s", err, errOut)
 	}
 
+	f.setStage("creating the run directory")
 	runDir := filepath.Join(testsRoot(t), ".run", fmt.Sprintf("%s-%d", sanitize(t.Name()), time.Now().UnixNano()))
 	must(t, os.MkdirAll(runDir, 0o700), "create run dir")
-
-	f := &Fixture{
-		Host:   "127.0.0.1",
-		User:   User,
-		runDir: runDir,
-	}
+	f.mu.Lock()
+	f.runDir = runDir
+	f.mu.Unlock()
 
 	// Two host keys are mounted deliberately, not just one. golang.org/x/crypto/ssh
 	// negotiates a host-key algorithm using ITS OWN preference order (RSA-family
@@ -96,6 +229,7 @@ func Start(t *testing.T) *Fixture {
 	// that was configured exactly the way FR-6 asks for. Pinning both, the way a
 	// real known_hosts populated by a plain `ssh-keyscan host` would, is what makes
 	// this an honest test of "host-key verification works".
+	f.setStage("generating host and client keys")
 	hostKeyEd25519 := filepath.Join(runDir, "ssh_host_ed25519_key")
 	keygenType(t, hostKeyEd25519, "ed25519", "")
 	hostKeyRSA := filepath.Join(runDir, "ssh_host_rsa_key")
@@ -114,8 +248,6 @@ func Start(t *testing.T) *Fixture {
 	must(t, os.Chmod(uploadDir, 0o777), "chmod upload dir")
 	f.UploadDir = uploadDir
 
-	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
-
 	// Pull explicitly, before "docker run -d", so the run step itself is
 	// quiet regardless of whether the image was already cached on this
 	// machine. Belt and braces alongside dockerCapture's stdout/stderr
@@ -124,11 +256,18 @@ func Start(t *testing.T) *Fixture {
 	// something else to stdout during "run".
 	// Reclaim anything a previously KILLED run left behind (#150) before
 	// adding one more. Once per test binary, best effort, never fatal.
+	f.setStage("dockerlease.Sweep (reclaiming containers a killed run left behind)")
 	dockerlease.Sweep()
 
-	if _, err := dockerCapture(t, "pull", "atmoz/sftp:alpine"); err != nil {
+	f.setStage("docker pull atmoz/sftp:alpine")
+	if _, err := dockerCapture(t, dockerPullTimeout, "pull", "atmoz/sftp:alpine"); err != nil {
 		t.Fatalf("sftpfixture: docker pull atmoz/sftp:alpine: %v", err)
 	}
+
+	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
+	f.mu.Lock()
+	f.containerName = name
+	f.mu.Unlock()
 
 	args := []string{
 		"run", "-d", "--name", name,
@@ -143,20 +282,22 @@ func Start(t *testing.T) *Fixture {
 		"atmoz/sftp:alpine",
 		User + "::" + containerUID + ":" + containerUID + ":upload",
 	}
-	containerID, err := dockerCapture(t, args...)
+	f.setStage("docker run atmoz/sftp:alpine")
+	containerID, err := dockerCapture(t, dockerRunTimeout, args...)
 	if err != nil {
-		os.RemoveAll(runDir)
 		t.Fatalf("sftpfixture: docker run: %v", err)
 	}
+	// Publishing the id is what arms the watchdog: from here on a
+	// container that dies is noticed within a second, and the cleanup
+	// registered above has something to remove on every exit path.
+	f.mu.Lock()
 	f.containerID = containerID
+	f.mu.Unlock()
 
-	t.Cleanup(func() {
-		_ = exec.Command("docker", "rm", "-f", f.containerID).Run()
-		_ = os.RemoveAll(f.runDir)
-	})
+	f.setStage("waiting for the container to publish its ssh port")
+	f.Port = waitForPublishedPort(t, containerID)
 
-	f.Port = waitForPublishedPort(t, f.containerID)
-
+	f.setStage("ssh-keyscan for the container host keys")
 	f.KnownHostsFile = filepath.Join(runDir, "known_hosts")
 	keyscan(t, f.Port, f.KnownHostsFile)
 
@@ -165,9 +306,322 @@ func Start(t *testing.T) *Fixture {
 	f.BadKnownHostsFile = filepath.Join(runDir, "known_hosts_bad")
 	writeSubstituteKnownHosts(t, f.BadKnownHostsFile, f.Port, decoyKey+".pub")
 
+	f.setStage("waiting for sshd to accept a real session")
 	waitForSSHReady(t, f)
 
+	f.setStage("running the test body")
 	return f
+}
+
+// ContainerID is the id of the docker container backing this fixture. Tests
+// that need to act on the container itself (the fail-fast tests in #161 kill
+// it deliberately) address it by this id, never by a `docker ps` scan: this
+// machine runs many worktrees against one docker daemon, so an assertion
+// that matched on a name pattern could be answered by somebody else's
+// container instead of this fixture's.
+func (f *Fixture) ContainerID() string { return f.containerID }
+
+// Context returns the context every operation a test runs against this
+// fixture should use, instead of context.Background().
+//
+// It is the fail-fast channel for #161: when the fixture notices its
+// container has died, or that the test has outrun its budget, it cancels
+// this context with a cause that says which of the two happened. An
+// operation that takes it therefore unwinds in seconds with a legible
+// reason, rather than retrying against a corpse until the package's
+// 25-minute go test timeout kills everything.
+func (f *Fixture) Context() context.Context { return f.ctx }
+
+// ExpectContainerDeath tells the fixture that this test kills the container
+// on purpose, so the death is evidence rather than a failure. The context
+// is still cancelled with the same cause; the fixture just stops reporting
+// the death as a test failure and stops stopping the process over it.
+//
+// Only the tests that prove the fail-fast mechanism itself should call it.
+func (f *Fixture) ExpectContainerDeath() {
+	f.mu.Lock()
+	f.expectDeath = true
+	f.mu.Unlock()
+}
+
+// ContainerDiedError is the cause Context() carries once the fixture's
+// container has gone. Tests distinguish it from every other failure with
+// errors.As, which is the distinction #161 asks for: a dead fixture
+// container and a genuine deadlock in the transport used to look identical
+// from the outside, and both cost 25 minutes.
+type ContainerDiedError struct {
+	// Name and ID identify the container that died.
+	Name string
+	ID   string
+	// Removed is true when the container was gone from docker entirely,
+	// rather than present but exited.
+	Removed bool
+	// ExitCode and OOMKilled are docker's account of how it ended, and are
+	// only meaningful when Removed is false. OOMKilled is the one worth
+	// looking for first: this suite runs a real sshd per fixture inside a
+	// Docker VM provisioned at roughly 4 GB.
+	ExitCode  int
+	OOMKilled bool
+	// Status is docker's own word for the state ("exited", "dead").
+	Status string
+	// Logs is the tail of the container's output, when it could still be
+	// read.
+	Logs string
+}
+
+func (e *ContainerDiedError) Error() string {
+	if e.Removed {
+		return fmt.Sprintf("the fixture container %s (%s) died mid-test: it was removed from docker out from under the running test", e.Name, e.ID)
+	}
+	oom := ""
+	if e.OOMKilled {
+		oom = ", OOM-killed"
+	}
+	logs := ""
+	if e.Logs != "" {
+		logs = "\ncontainer logs (tail):\n" + e.Logs
+	}
+	return fmt.Sprintf("the fixture container %s (%s) died mid-test: docker status %q, exit code %d%s%s", e.Name, e.ID, e.Status, e.ExitCode, oom, logs)
+}
+
+// --- the mid-test watchdog ------------------------------------------------
+
+func (f *Fixture) setStage(stage string) {
+	f.mu.Lock()
+	f.stage = stage
+	f.mu.Unlock()
+}
+
+func (f *Fixture) current() (id, name, stage string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.containerID, f.containerName, f.stage
+}
+
+// finish is the fixture's single cleanup. It is registered before anything
+// can fail, so it covers every exit path Start has, not just a clean
+// return.
+func (f *Fixture) finish() {
+	f.mu.Lock()
+	if !f.finished {
+		f.finished = true
+		close(f.done)
+	}
+	f.mu.Unlock()
+	f.cancel(errTestFinished)
+	f.teardown()
+}
+
+// teardown removes the container and the run directory, at most once. It is
+// called from cleanup on the ordinary paths, and directly from the watchdog
+// before it stops the process, because a panic raised in a goroutine other
+// than the test's own never runs t.Cleanup at all. That is the leak half of
+// #161: orphans found still running after 4 and 11 hours compete with the
+// next run for a Docker VM that has roughly 4 GB to give, and each leak
+// makes the next collapse likelier.
+func (f *Fixture) teardown() {
+	f.teardownOnce.Do(func() {
+		f.mu.Lock()
+		id, dir := f.containerID, f.runDir
+		f.mu.Unlock()
+		if id != "" {
+			_, _, _ = dockerRun(dockerRemoveTimeout, "rm", "-f", id)
+		}
+		if dir != "" {
+			_ = os.RemoveAll(dir)
+		}
+	})
+}
+
+// watch runs for the life of the test and answers the one question the
+// suite could not answer before: when this test stops making progress, is
+// its fixture container dead, or is the code under test genuinely stuck?
+// Those two looked identical from outside and both cost 25 minutes.
+func (f *Fixture) watch(t *testing.T) {
+	testName := t.Name()
+	budget := durationFromEnv(budgetEnv, defaultTestBudget)
+	grace := durationFromEnv(graceEnv, defaultGrace)
+	deadline := time.Now().Add(budget)
+
+	go func() {
+		ticker := time.NewTicker(probeInterval)
+		defer ticker.Stop()
+		missing := 0
+		for {
+			select {
+			case <-f.done:
+				return
+			case <-ticker.C:
+			}
+
+			if id, _, _ := f.current(); id != "" {
+				st, err := inspectContainer(id)
+				removed := errors.Is(err, errNoSuchContainer)
+				switch {
+				case err == nil && st.Running:
+					missing = 0
+				case err == nil, removed:
+					missing++
+				default:
+					// Docker itself did not answer. That says nothing
+					// about the container, and guessing here would fail
+					// healthy tests, so it counts for neither side.
+				}
+				if missing >= probesBeforeDeclaringDeath {
+					f.containerDied(t, testName, id, st, removed, grace)
+					return
+				}
+			}
+
+			if !time.Now().Before(deadline) {
+				f.budgetExceeded(t, testName, budget, grace)
+				return
+			}
+		}
+	}()
+}
+
+func (f *Fixture) containerDied(t *testing.T, testName, id string, st containerState, removed bool, grace time.Duration) {
+	_, name, _ := f.current()
+	cause := &ContainerDiedError{
+		Name:      name,
+		ID:        id,
+		Removed:   removed,
+		ExitCode:  st.ExitCode,
+		OOMKilled: st.OOMKilled,
+		Status:    st.Status,
+	}
+	if !removed {
+		cause.Logs = containerLogTail(id)
+	}
+	report := fmt.Sprintf("sftpfixture: %s\n\n%s failed because its fixture container died, not because of anything the code under test did. "+
+		"The Docker VM on this machine has roughly 4 GB and 4 CPUs, and one ci-local.sh run starts this suite three times over, "+
+		"so an eviction or an OOM under concurrent load is the first thing to check.", cause.Error(), testName)
+
+	f.mu.Lock()
+	if f.finished {
+		f.mu.Unlock()
+		return
+	}
+	expected := f.expectDeath
+	if expected {
+		t.Logf("sftpfixture: %s (this test killed it on purpose)", cause.Error())
+	} else {
+		t.Errorf("%s", report)
+	}
+	f.mu.Unlock()
+
+	// Cancelling with the cause is the graceful half: an operation running
+	// on Context() unwinds in about a second, and errors.As tells its
+	// caller exactly which of the two possible stories this was.
+	f.cancel(cause)
+	if expected {
+		return
+	}
+
+	select {
+	case <-f.done:
+	case <-time.After(grace):
+		f.hardStop(report + fmt.Sprintf("\n\nThe test did not unwind within %s of its container dying, so this process is stopping now "+
+			"rather than retrying against a corpse until the package's go test timeout.", grace))
+	}
+}
+
+func (f *Fixture) budgetExceeded(t *testing.T, testName string, budget, grace time.Duration) {
+	id, name, stage := f.current()
+	verdict := fmt.Sprintf("It never reached a running container: the fixture was still at %q. That points at docker or at this host, not at the code under test.", stage)
+	if id != "" {
+		verdict = fmt.Sprintf("Its fixture container %s (%s) is still running, which rules out the container death in #161: "+
+			"this is a genuine hang in the code under test, in the transport, the adapter or the lifecycle.", name, id)
+	}
+	report := fmt.Sprintf("sftpfixture: %s ran past its %s budget. %s\n\nAll goroutine stacks follow; the one worth reading is this test's own.", testName, budget, verdict)
+
+	f.mu.Lock()
+	if f.finished {
+		f.mu.Unlock()
+		return
+	}
+	t.Errorf("%s", report)
+	f.mu.Unlock()
+
+	f.cancel(errors.New(report))
+	select {
+	case <-f.done:
+	case <-time.After(grace):
+		f.hardStop(report)
+	}
+}
+
+// hardStop is the last resort, for a test that ignores Context() entirely.
+// It removes the container FIRST, because the panic below is raised on the
+// watchdog's goroutine and t.Cleanup will never run.
+func (f *Fixture) hardStop(report string) {
+	// The grace timer and the test finishing can land together. Stopping a
+	// process whose test has already passed would be a worse flake than the
+	// one this fixture exists to remove, so the last word is the flag, not
+	// the timer.
+	f.mu.Lock()
+	over := f.finished
+	f.mu.Unlock()
+	if over {
+		return
+	}
+	f.teardown()
+	debug.SetTraceback("all")
+	panic(report)
+}
+
+func durationFromEnv(key string, fallback time.Duration) time.Duration {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
+}
+
+// containerState is as much of docker's account of a container as the
+// watchdog needs to say something useful about how it ended.
+type containerState struct {
+	Running   bool
+	ExitCode  int
+	OOMKilled bool
+	Status    string
+}
+
+func inspectContainer(id string) (containerState, error) {
+	out, errOut, err := dockerRun(dockerProbeTimeout, "inspect", "--format",
+		"{{.State.Running}} {{.State.ExitCode}} {{.State.OOMKilled}} {{.State.Status}}", id)
+	if err != nil {
+		if strings.Contains(strings.ToLower(errOut), "no such") {
+			return containerState{Status: "removed"}, errNoSuchContainer
+		}
+		return containerState{}, err
+	}
+	fields := strings.Fields(out)
+	if len(fields) < 4 {
+		return containerState{}, fmt.Errorf("unparseable docker inspect output: %q", out)
+	}
+	code, _ := strconv.Atoi(fields[1])
+	return containerState{
+		Running:   fields[0] == "true",
+		ExitCode:  code,
+		OOMKilled: fields[2] == "true",
+		Status:    fields[3],
+	}, nil
+}
+
+// containerLogTail is best effort: a container that has already been
+// removed has no logs left to read, and that is not worth an error.
+func containerLogTail(id string) string {
+	out, errOut, err := dockerRun(dockerProbeTimeout, "logs", "--tail", "40", id)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out + "\n" + errOut)
 }
 
 // Source builds the transport.Source a real Adapter needs to reach this
@@ -263,18 +717,41 @@ func must(t *testing.T, err error, what string) {
 // response from daemon: page not found", exactly the failure a cold CI
 // runner hits and a machine with the image already pulled never does). Only
 // stdout is ever meaningful output here, so only stdout is what gets parsed.
-func dockerCapture(t *testing.T, args ...string) (stdout string, err error) {
+func dockerCapture(t *testing.T, timeout time.Duration, args ...string) (stdout string, err error) {
 	t.Helper()
-	cmd := exec.Command("docker", args...)
+	stdout, _, err = dockerRun(timeout, args...)
+	return stdout, err
+}
+
+// dockerRun is the only place this package shells out to docker, and every
+// call through it is bounded. Before #161 each one was a plain
+// exec.Command with no timeout, which is why the retry loops below could
+// not do what their deadlines promised: they only re-read the deadline
+// between attempts, so a single call that never returned outran all of
+// them and took the whole package to its go test timeout.
+//
+// A timeout and a non-zero exit are told apart, because they mean
+// completely different things: one is a statement about the daemon, the
+// other about the container.
+func dockerRun(timeout time.Duration, args ...string) (stdout, stderr string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	err = cmd.Run()
+	runErr := cmd.Run()
 	stdout = strings.TrimSpace(outBuf.String())
-	if err != nil {
-		return stdout, fmt.Errorf("%w: %s", err, strings.TrimSpace(errBuf.String()))
+	stderr = strings.TrimSpace(errBuf.String())
+
+	switch {
+	case ctx.Err() != nil:
+		return stdout, stderr, fmt.Errorf("%w: `docker %s` was still running after %s", errDockerTimedOut, args[0], timeout)
+	case runErr != nil:
+		return stdout, stderr, fmt.Errorf("%w: %s", runErr, stderr)
 	}
-	return stdout, nil
+	return stdout, stderr, nil
 }
 
 func keygen(t *testing.T, path string) {
@@ -288,7 +765,9 @@ func keygenType(t *testing.T, path, keyType, bits string) {
 	if bits != "" {
 		args = append(args, "-b", bits)
 	}
-	out, err := exec.Command("ssh-keygen", args...).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), keygenTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ssh-keygen", args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("sftpfixture: ssh-keygen %s (%s): %v\n%s", path, keyType, err, out)
 	}
@@ -309,7 +788,7 @@ func waitForPublishedPort(t *testing.T, containerID string) int {
 	deadline := time.Now().Add(15 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		out, err := dockerCapture(t, "port", containerID, "22/tcp")
+		out, err := dockerCapture(t, dockerProbeTimeout, "port", containerID, "22/tcp")
 		if err == nil {
 			line := strings.TrimSpace(strings.Split(out, "\n")[0])
 			idx := strings.LastIndex(line, ":")
@@ -347,9 +826,11 @@ func keyscan(t *testing.T, port int, outPath string) {
 	var lastErr error
 	for time.Now().Before(deadline) {
 		var buf bytes.Buffer
-		cmd := exec.Command("ssh-keyscan", "-p", strconv.Itoa(port), "-t", "rsa,ed25519", "127.0.0.1")
+		attempt, cancelAttempt := context.WithTimeout(context.Background(), keyscanTimeout)
+		cmd := exec.CommandContext(attempt, "ssh-keyscan", "-p", strconv.Itoa(port), "-t", "rsa,ed25519", "127.0.0.1")
 		cmd.Stdout = &buf
 		lastErr = cmd.Run()
+		cancelAttempt()
 		lastOut = buf.Bytes()
 		if lastErr == nil && bytes.Contains(lastOut, []byte("ssh-ed25519")) && bytes.Contains(lastOut, []byte("ssh-rsa")) {
 			must(t, os.WriteFile(outPath, lastOut, 0o644), "write known_hosts")
@@ -394,16 +875,15 @@ func waitForSSHReady(t *testing.T, f *Fixture) {
 		User:            f.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         2 * time.Second,
+		Timeout:         sshDialTimeout,
 	}
 
 	deadline := time.Now().Add(20 * time.Second)
 	var lastErr error
 	addr := net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
 	for time.Now().Before(deadline) {
-		client, err := ssh.Dial("tcp", addr, cfg)
+		err := trySSHHandshake(addr, cfg)
 		if err == nil {
-			_ = client.Close()
 			return
 		}
 		lastErr = err
@@ -413,8 +893,42 @@ func waitForSSHReady(t *testing.T, f *Fixture) {
 	t.Fatalf("sftpfixture: sftp server never became ready at %s: %v", addr, lastErr)
 }
 
+// trySSHHandshake bounds the handshake as well as the dial, which ssh.Dial
+// does not. ssh.ClientConfig.Timeout is documented as "the maximum amount of
+// time for the TCP connection to establish", and that is all it is used for:
+// the version exchange and key exchange that follow in NewClientConn have no
+// deadline at all.
+//
+// That gap is reachable on every fixture start. A published docker port
+// accepts TCP the moment the mapping exists, which is before sshd inside the
+// container is necessarily answering, so a peer that accepts and then says
+// nothing is this fixture's ordinary startup window rather than an exotic
+// case, and on a loaded host it stretches. One such attempt outlives the
+// 20-second loop above, because that deadline is only re-read between
+// attempts. It is the same shape as the unbounded docker calls in #161, in
+// the one place left that does not shell out.
+func trySSHHandshake(addr string, cfg *ssh.ClientConfig) error {
+	conn, err := net.DialTimeout("tcp", addr, sshDialTimeout)
+	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(time.Now().Add(sshHandshakeTimeout)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	// Clear the deadline before handing the connection on, so the close
+	// below is not racing one that has already passed.
+	_ = conn.SetDeadline(time.Time{})
+	_ = ssh.NewClient(c, chans, reqs).Close()
+	return nil
+}
+
 func dumpContainerLogs(t *testing.T, containerID string) {
 	t.Helper()
-	out, _ := exec.Command("docker", "logs", containerID).CombinedOutput()
-	t.Logf("sftpfixture: container logs:\n%s", out)
+	t.Logf("sftpfixture: container logs:\n%s", containerLogTail(containerID))
 }

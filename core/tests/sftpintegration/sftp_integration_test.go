@@ -31,7 +31,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +92,7 @@ func mustSetID(t *testing.T, source, set string) model.BackupSetID {
 func TestSFTPContractSuite(t *testing.T) {
 	f := sftpfixture.Start(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 
 	newSource := func(t *testing.T, root string) transport.Source {
 		t.Helper()
@@ -298,7 +300,7 @@ func TestSFTPContractSuite(t *testing.T) {
 func TestSFTPHashCapability(t *testing.T) {
 	f := sftpfixture.Start(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 	if err := os.MkdirAll(filepath.Join(f.UploadDir, "hash-capability-probe"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -405,7 +407,7 @@ func TestSFTPHashCapability(t *testing.T) {
 func TestSFTPMultipleSources(t *testing.T) {
 	f := sftpfixture.Start(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 	journal := openJournal(t)
 
 	type site struct {
@@ -521,7 +523,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 
 	set := mustSetID(t, "cancel-lifecycle-source", "set")
 	bs := config.BackupSet{Name: "set", ID: set, Completion: config.Completion{Strategy: "rename"}}
-	res, err := discovery.Discover(context.Background(), discovery.Deps{Transport: adapter, Journal: journal}, source, bs)
+	res, err := discovery.Discover(f.Context(), discovery.Deps{Transport: adapter, Journal: journal}, source, bs)
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
@@ -535,7 +537,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 	// gate_test.go's MidTransferCancellation already established for this
 	// exact fixture.
 	const bwLimit = 128 * 1024
-	bwCtx, ci := fs.AddConfig(context.Background())
+	bwCtx, ci := fs.AddConfig(f.Context())
 	if err := (&ci.BwLimit).Set(fmt.Sprintf("%d", bwLimit)); err != nil {
 		t.Fatalf("set bwlimit: %v", err)
 	}
@@ -567,7 +569,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 
 	// Resume with the same AttemptKey, unthrottled: must converge to a
 	// correct, complete TRANSFERRED.
-	if _, err := lifecycle.Transfer(context.Background(), deps, lifecycle.TransferParams{
+	if _, err := lifecycle.Transfer(f.Context(), deps, lifecycle.TransferParams{
 		Artifact: artifact, Source: source, LocalDir: localDir, AttemptKey: "attempt-1",
 	}); err != nil {
 		t.Fatalf("resumed Transfer: %v", err)
@@ -599,7 +601,7 @@ func TestSFTPTransferCancellation_ThroughLifecycle(t *testing.T) {
 func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 	f := sftpfixture.Start(t)
 	adapter := rclone.New()
-	ctx := context.Background()
+	ctx := f.Context()
 	source := f.Source("replacement", "")
 	journal := openJournal(t)
 	localDir := t.TempDir()
@@ -685,4 +687,87 @@ func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 	if rec.RemoteDeleteError == "" {
 		t.Fatal("the refusal was not persisted into remote_delete_error, so an operator inspecting the journal directly would not see it")
 	}
+}
+
+// --- a fixture container that dies mid-test -------------------------------
+
+// TestSFTPOperationFailsFastWhenTheFixtureContainerDies is issue #161's
+// contract at the level that costs the time: a test whose fixture container
+// vanishes underneath it must find out within a second, and must be able to
+// say that the container's death is what happened, rather than leaving a
+// reader to guess between that and a deadlock in the transport.
+//
+// The bar on the fixture is a second; the bar on the operation is only that
+// it comes back at all, and that is deliberate. Measured here while writing
+// this: rclone's sftp backend ignores context cancellation completely on its
+// connect path. An adapter.List against a removed container takes 11.1s to
+// give up with a bare "connection refused", and it takes exactly the same
+// 11.1s when handed a context that was ALREADY cancelled before the call.
+// So cancellation is not a lever on that path, and pretending otherwise
+// would be a test that passes on a coincidence. What the fixture can
+// honestly promise is the diagnosis: the cause on Context() is a
+// *ContainerDiedError, carrying docker's own account of how it ended
+// (status, exit code, OOM-killed or not), which is the thing nobody could
+// see before.
+//
+// It kills the container by the exact id this fixture created. Several
+// worktrees on this machine share one docker daemon, so anything matched by
+// name pattern or counted out of `docker ps` could be another agent's
+// container and would prove nothing about this one.
+func TestSFTPOperationFailsFastWhenTheFixtureContainerDies(t *testing.T) {
+	f := sftpfixture.Start(t)
+	adapter := rclone.New()
+	source := f.Source("container-death", "")
+	if err := os.WriteFile(filepath.Join(f.UploadDir, "present.txt"), []byte("present"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Two positive controls, because both assertions below are about
+	// something NOT being the case until it is. First: the same call,
+	// through the same context, works while the container is alive.
+	if _, err := adapter.List(f.Context(), source); err != nil {
+		t.Fatalf("List against a healthy fixture failed (%v), so a failure after the kill would prove nothing about the kill", err)
+	}
+	// Second: the context is open while the container is healthy. Without
+	// this, a watchdog that simply cancelled on a timer would satisfy
+	// everything that follows.
+	select {
+	case <-f.Context().Done():
+		t.Fatalf("the fixture context was already cancelled while its container was running and serving: %v", context.Cause(f.Context()))
+	case <-time.After(2 * time.Second):
+	}
+
+	f.ExpectContainerDeath()
+	killedAt := time.Now()
+	if out, err := exec.Command("docker", "rm", "-f", f.ContainerID()).CombinedOutput(); err != nil {
+		t.Fatalf("docker rm -f %s: %v\n%s", f.ContainerID(), err, out)
+	}
+
+	select {
+	case <-f.Context().Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fixture still had not noticed its container was gone 5s after it was removed; nothing running against it can fail for the right reason if the fixture itself does not know")
+	}
+	t.Logf("the fixture noticed its container was gone %s after the kill", time.Since(killedAt))
+
+	var died *sftpfixture.ContainerDiedError
+	if !errors.As(context.Cause(f.Context()), &died) {
+		t.Fatalf("the cause on the fixture context is %v, not a *ContainerDiedError; without it a reader cannot tell a dead fixture container from a genuine deadlock in the transport, and both used to cost 25 minutes", context.Cause(f.Context()))
+	}
+	if !strings.Contains(died.Error(), "died") {
+		t.Fatalf("the cause does not say the container died: %q", died.Error())
+	}
+
+	// And the operation itself still comes back, bounded by the client's
+	// own retry budget rather than running until the package timeout.
+	start := time.Now()
+	_, err := adapter.List(f.Context(), source)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("List succeeded against a container that no longer exists")
+	}
+	if elapsed > 30*time.Second {
+		t.Fatalf("List took %s to give up after its container died, which is no longer a bounded failure", elapsed)
+	}
+	t.Logf("List gave up after %s (%v), with the fixture already naming the real cause: %v", elapsed, err, died)
 }

@@ -37,6 +37,7 @@ package dockercli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -44,8 +45,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,11 +56,6 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
-
-// dockerCLIImage is the tag every test in this file builds once and
-// shares; RunMain builds it before any test runs so a build failure is
-// reported once, clearly, rather than once per test.
-const dockerCLIImage = "backup-manager:dockercli-test"
 
 // repoRoot is this file's own directory, four levels up
 // (apps/generic/tests/dockercli -> apps/generic/tests -> apps/generic ->
@@ -96,35 +94,155 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-var imageBuilt bool
+// errBuildNotFinished is what an abandoned build reports.
+//
+// sync.Once records itself done in a defer, so a runtime.Goexit out of
+// the closure (which is exactly what t.Fatalf does) still completes the
+// Once. With the error left at its zero value that reads as a successful
+// build, and every later caller then takes the fast path and is handed
+// imageReference() for an image that was never built. The downstream
+// symptom is a cascade of confusing "image not found" failures instead of
+// the one clear build failure buildErr and buildLog exist to produce.
+var errBuildNotFinished = errors.New("the one-shot image build exited before recording an outcome, so nothing was built")
+
+// imageBuilder runs one docker build for the whole test process and
+// hands every caller the same outcome.
+//
+// A type rather than three package variables and a bare sync.Once so
+// that the guard above is drivable: see
+// TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure.
+type imageBuilder struct {
+	once sync.Once
+	// err and log carry the one build attempt's outcome to every test
+	// that asks for the image, not just to whichever test happened to
+	// ask first. The previous flag could only record success, so a
+	// failed build left the flag false and every following test paid for
+	// the same doomed build again to print the same message again.
+	err error
+	log string
+	// built records that an image now exists at this run's reference, so
+	// TestMain knows whether it has anything to remove.
+	built bool
+}
+
+// build runs fn at most once and returns its log and error to every
+// caller. Any exit from fn that does not reach the assignment, a
+// t.Fatalf included, leaves errBuildNotFinished in place.
+func (b *imageBuilder) build(fn func() (log string, err error)) (string, error) {
+	b.once.Do(func() {
+		b.err = errBuildNotFinished
+		b.log, b.err = fn()
+		b.built = b.err == nil
+	})
+	return b.log, b.err
+}
+
+var builder imageBuilder
 
 // buildImage builds container/Dockerfile once per test process (subsequent
 // calls are a cheap no-op thanks to Docker's own layer cache, but this
 // still avoids paying even that cost more than once per `go test` run)
-// and returns its tag. A single amd64/arm64-native load (not a multi-arch
-// buildx invocation) is enough here: architecture parity is CI's
-// ugreen-cross-compile job's job, not this suite's.
+// and returns the reference it built. A single amd64/arm64-native load
+// (not a multi-arch buildx invocation) is enough here: architecture
+// parity is CI's ugreen-cross-compile job's job, not this suite's.
+//
+// The reference is imageReference(), unique to this test process (#185).
+// It used to be one fixed string shared by every checkout on the machine,
+// which meant a second worktree building at the same time took the name
+// over and this run carried on testing that worktree's image. See
+// imageref_test.go's own header for the full account.
+//
+// The three labels are what make the image traceable and reclaimable
+// rather than merely uniquely named: runLabelKey answers "whose build is
+// this?" from the daemon, and imageLabelKey plus bornLabelKey are what
+// sweepImages needs to reclaim an image whose run was killed before it
+// could remove its own. bornLabelKey is stamped here, as the command is
+// assembled, so it records the build's START; imageStaleAfter's comment
+// is written against that reading.
 func buildImage(t *testing.T) string {
 	t.Helper()
 	requireDocker(t)
 
-	if !imageBuilt {
-		root := repoRoot(t)
+	// Hoisted out of the one-shot deliberately. repoRoot calls t.Fatalf,
+	// and a t.Fatalf inside the closure would leave the Once done with
+	// nothing built. It is pure and cheap, so calling it on every
+	// buildImage rather than once costs nothing.
+	root := repoRoot(t)
+
+	log, err := builder.build(func() (string, error) {
+		sweepImages()
+
 		cmd := exec.Command("docker", "build",
 			"-f", filepath.Join(root, "container", "Dockerfile"),
-			"-t", dockerCLIImage,
+			"-t", imageReference(),
+			"--label", imageLabelKey+"="+imageLabelValue,
+			"--label", runLabelKey+"="+runID,
+			"--label", bornLabelKey+"="+strconv.FormatInt(time.Now().UnixNano(), 10),
 			"--load",
 			root,
 		)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("docker build failed: %v\n%s", err, out.String())
-		}
-		imageBuilt = true
+		return out.String(), cmd.Run()
+	})
+	if err != nil {
+		t.Fatalf("docker build failed: %v\n%s", err, log)
 	}
-	return dockerCLIImage
+	return imageReference()
+}
+
+// TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure is the
+// control for errBuildNotFinished. Against the shape this replaced (an
+// error left at its zero value until the build assigned to it) the
+// abandoned half below reports success, and every test in the package
+// then runs against an image that does not exist.
+func TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure(t *testing.T) {
+	// The positive control first: the ordinary path still builds exactly
+	// once and reports success to both callers.
+	var finished imageBuilder
+	runs := 0
+	if log, err := finished.build(func() (string, error) { runs++; return "build log", nil }); err != nil || log != "build log" {
+		t.Fatalf("a build that succeeded reported log %q, err %v; want the log and no error", log, err)
+	}
+	if _, err := finished.build(func() (string, error) { runs++; return "", errors.New("a second build was run") }); err != nil {
+		t.Fatalf("the second caller got %v, want the first call's success", err)
+	}
+	if runs != 1 {
+		t.Fatalf("the build ran %d times, want 1", runs)
+	}
+	if !finished.built {
+		t.Errorf("a successful build did not record that it built anything, so TestMain would leave this run's image on the daemon")
+	}
+
+	// And the hazard: an exit out of the closure that never reaches the
+	// assignment. runtime.Goexit is what t.Fatalf does, and repoRoot used
+	// to be called from inside here.
+	var abandoned imageBuilder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = abandoned.build(func() (string, error) {
+			runtime.Goexit()
+			return "", nil
+		})
+	}()
+	<-done
+
+	rebuilt := false
+	_, err := abandoned.build(func() (string, error) { rebuilt = true; return "", nil })
+	if rebuilt {
+		t.Fatalf("the second caller re-ran the build, so sync.Once did not mark the abandoned call done and this test is no longer exercising the hazard it is named for")
+	}
+	if err == nil {
+		t.Fatalf("a build abandoned before it finished reported success; every later caller is then handed %s for an image that was never built, and the suite fails with image-not-found instead of with the build failure", imageReference())
+	}
+	if !errors.Is(err, errBuildNotFinished) {
+		t.Errorf("an abandoned build reported %v, want errBuildNotFinished", err)
+	}
+	if abandoned.built {
+		t.Errorf("an abandoned build recorded that it built an image, so TestMain would try to remove one that does not exist")
+	}
 }
 
 // degradedConfig writes a config whose one backup set has never had an
@@ -435,11 +553,13 @@ func publishedPort(t *testing.T, container, containerPort string) string {
 	return line[idx+1:]
 }
 
-// composeFile is just enough of container/compose.yaml's shape to check
-// which services publish ports - not a general compose-file model.
+// composeFile is just enough of container/compose.yaml's shape for the
+// two static checks in this package, which services publish ports and
+// which image each one resolves to, not a general compose-file model.
 type composeFile struct {
 	Services map[string]struct {
-		Ports []any `yaml:"ports"`
+		Image string `yaml:"image"`
+		Ports []any  `yaml:"ports"`
 	} `yaml:"services"`
 }
 
@@ -582,6 +702,24 @@ func startComposeStack(t *testing.T, image string, listenPort int) *composeProje
 
 	composeFilePath := filepath.Join(root, "container", "compose.yaml")
 
+	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
+	// VERSION, so VERSION has to be exactly the tag half of the image
+	// buildImage produced for `--no-build` to find it rather than trying
+	// (and failing, with no `build:` context error) to build a fresh one
+	// under a name nothing already built.
+	//
+	// Derived from the image, never hard-coded. This used to read
+	// `strings.HasSuffix(image, ":dockercli-test")`, a perfectly good
+	// guard while there was one fixed tag and no guard at all once there
+	// is one tag per run (#185). composeVersion checks the half compose
+	// actually fixes, the repository name, and
+	// TestComposeImageResolvesToTheReferenceThisRunBuilt checks the same
+	// coupling against the real compose.yaml without needing a stack.
+	version, err := composeVersion(image)
+	if err != nil {
+		t.Fatalf("startComposeStack cannot point compose at %q: %v", image, err)
+	}
+
 	// Pin both services to the already-built image (see buildImage) so
 	// this test proves compose.yaml's OWN topology/network/healthcheck
 	// wiring, not a second build of the same Dockerfile compose would
@@ -593,15 +731,7 @@ func startComposeStack(t *testing.T, image string, listenPort int) *composeProje
 		"up", "-d",
 		"--no-build",
 	)
-	up.Env = append(os.Environ(), "VERSION=dockercli-test")
-	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
-	// VERSION; buildImage's own tag is "backup-manager:dockercli-test",
-	// so VERSION has to match that tag exactly for `--no-build` to find
-	// it rather than trying (and failing, with no `build:` context error)
-	// to build a fresh one under a name nothing already built.
-	if !strings.HasSuffix(image, ":dockercli-test") {
-		t.Fatalf("startComposeStack assumes buildImage's own tag ends in \":dockercli-test\", got %q", image)
-	}
+	up.Env = append(os.Environ(), "VERSION="+version)
 
 	var out bytes.Buffer
 	up.Stdout = &out
@@ -665,17 +795,16 @@ func (p *composeProject) publishedPort(t *testing.T, service, containerPort stri
 // succeeds, and confirms the engine itself has no port reachable
 // directly from the host at all.
 func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
+	// No retag onto a second name here any more. buildImage already
+	// tagged this run's own image as `backup-manager:<per-run tag>`, and
+	// startComposeStack passes that tag straight to compose as VERSION,
+	// so compose resolves `image: backup-manager:${VERSION:-dev}` to the
+	// exact image this run built. The retag that used to sit here pointed
+	// a globally shared name at it instead, which is the whole of #185:
+	// the next worktree to run this test moved that name onto its own
+	// build, and both stacks then came up on whichever image had been
+	// tagged last.
 	image := buildImage(t)
-	// buildImage's own tag doesn't carry a "dockercli-test" VERSION build
-	// stamp the way compose's `image:` resolution needs; retag it so
-	// compose's `image: backup-manager:${VERSION:-dev}` (VERSION=
-	// dockercli-test, set in startComposeStack) resolves to the exact
-	// image buildImage already built, instead of compose trying to build
-	// a second one under a tag nothing produced.
-	retag := exec.Command("docker", "tag", image, "backup-manager:dockercli-test")
-	if out, err := retag.CombinedOutput(); err != nil {
-		t.Fatalf("docker tag: %v\n%s", err, out)
-	}
 
 	project := startComposeStack(t, image, 0)
 
@@ -691,9 +820,42 @@ func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
 	// Seed the CSRF cookie exactly as a browser's first page load would -
 	// served entirely by web-ui's own static handler, never touching the
 	// engine.
-	seedResp, err := client.Get(base + "/")
-	if err != nil {
-		t.Fatalf("GET %s/: %v", base, err)
+	//
+	// Retried, because `docker compose up -d` returns once web-ui's
+	// container has STARTED, not once the process inside it is accepting
+	// HTTP, while Docker's published-port proxy accepts the TCP
+	// connection from the moment the port is published and then resets it
+	// because nothing is listening behind it yet. The result is a
+	// `read: connection reset by peer` on this one request. Not a
+	// mysterious flake: it reproduces on origin/main with none of this
+	// change on it, once in five runs, at this exact line, and
+	// TestServeCommandExposesTheEngineAPIOnly above already retries its
+	// own first request against the identical race.
+	//
+	// Only the transport error is retried, never a response. Whatever
+	// finally answers still has to answer 200 below, so a web-ui that is
+	// genuinely serving the wrong thing fails here exactly as before
+	// rather than being retried into passing.
+	seedDeadline := time.Now().Add(15 * time.Second)
+	var seedResp *http.Response
+	attempts := 0
+	for {
+		attempts++
+		seedResp, err = client.Get(base + "/")
+		if err == nil {
+			break
+		}
+		if time.Now().After(seedDeadline) {
+			logs, _ := exec.Command("docker", "logs", project.containerID(t, "web-ui")).CombinedOutput()
+			t.Fatalf("GET %s/ never succeeded after %d attempts: %v; web-ui logs:\n%s", base, attempts, err, logs)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if attempts > 1 {
+		// Logged so the retry can be seen doing something rather than
+		// merely believed to: a run that prints this is a run that would
+		// have failed at this line before.
+		t.Logf("web-ui was not accepting HTTP when `docker compose up -d` returned; GET / succeeded on attempt %d", attempts)
 	}
 	seedResp.Body.Close()
 	if seedResp.StatusCode != http.StatusOK {

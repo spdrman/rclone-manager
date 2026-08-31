@@ -37,3 +37,21 @@ npm run e2e:all-providers       # provider treatment across all seven
   there, not inline in specs.
 - Provider specs assert *capability honesty* — that the UI never presents an
   unsupported capability as available — not visual difference.
+- Wait on a real signal (an element, a settled fetch, a control leaving its
+  disabled state), never on `waitForTimeout`. See #142, and see the
+  `toBeEnabled()` gate in `wizard.spec.ts`'s validator picklist assertion.
+- The suite starts its own Vite server, on a port derived from this checkout
+  (5200 to 6999, printed once at startup), and never adopts one it did not
+  start. A `npm run dev` you already have open on 5173 is left alone and can
+  never be what the suite tests, and two worktrees of this repo can run the
+  suite at the same time without either of them reporting on the other's
+  build (#172). `E2E_PORT` still pins a port explicitly; it has to be a whole
+  number from 1 to 65535, and a value that is not one stops the run instead
+  of being coerced to 0 or NaN. See `port.ts` for why the default moved off a
+  fixed 5273.
+- `e2e:all-providers` runs the seven providers one after another, each
+  starting and tearing down its own server on that same port. No provider run
+  gets a retry: nothing in this suite does any more, since a retry is what
+  turns a deterministic red into something that reads as a flake (#172). If a
+  run is killed and leaves a Vite child behind, the next provider fails to
+  bind on a port it names, which is a stale child to kill, not a new flake.

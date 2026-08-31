@@ -109,7 +109,38 @@ test.describe("add backup set wizard", () => {
     await page.getByRole("button", { name: "Storage & retention" }).click();
     await expect(page.getByRole("checkbox", { name: /Transfer verification/ })).toBeChecked();
     await expect(page.getByRole("checkbox", { name: /Checksum verification/ })).toBeChecked();
-    await expect(page.getByRole("checkbox", { name: /Application validation/ })).not.toBeChecked();
+
+    // The third layer stopped being a checkbox in #164, which replaced the
+    // decorative "Application validation" toggle with a real picklist over
+    // the backend's registered catalog (GET /api/v1/validators). It is a
+    // combobox now, so the old getByRole("checkbox") matched nothing and
+    // this assertion could only ever time out.
+    const validator = page.getByRole("combobox", { name: /Application validation/ });
+    // Enabled is the real signal that the catalog fetch settled:
+    // BackupSetWizardPage disables the picklist while validatorCatalog is
+    // null and leaves it disabled if the fetch failed. Waiting on that
+    // instead of a sleep also means a catalog that never loads fails here
+    // rather than passing on an empty list.
+    await expect(validator).toBeEnabled();
+    // Off by default, same contract the removed toggle carried: transfer and
+    // checksum verification are on, application validation is opt-in.
+    await expect(validator).toHaveValue("");
+    const options = validator.getByRole("option");
+    await expect(options.first()).toHaveText("None (transfer and checksum verification only)");
+    // ...and the choices below it are the backend's catalog rather than a
+    // hardcoded list. A count alone cannot show that: two literal <option>
+    // elements satisfy `> 1` identically, which is exactly the shape #164
+    // removed, and with one entry in the mock catalog it also sat on its
+    // own boundary. So the count stays only as a lower bound, and an id the
+    // fixture actually serves has to be among the choices. Containment
+    // rather than equality, so adding a validator to the mock does not turn
+    // this red; renaming trailer-marker does, which is the point.
+    expect(await options.count()).toBeGreaterThan(1);
+    // The option labels are the ids themselves (BackupSetWizardPage renders
+    // v.id, since the id is what gets saved). Safe to read without a manual
+    // wait: toBeEnabled() above already proved the fetch settled, and this
+    // is a retrying assertion regardless.
+    await expect(validator.getByRole("option", { name: "trailer-marker", exact: true })).toHaveCount(1);
   });
 
   test("step 6 summarises source, destination, retention and validation", async ({ page }) => {
