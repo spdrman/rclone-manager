@@ -368,6 +368,19 @@ bound_logs
 	if _, err := os.Stat(small + ".1"); err == nil {
 		t.Fatal("ui.log was rotated even though it was under the ceiling")
 	}
+
+	// A fresh install has no log files at all and start calls bound_logs
+	// before either daemon has written one, so this has to be silent: an
+	// error in the install log that means nothing is exactly the shape of
+	// misdirection the rest of this change is removing.
+	absent := filepath.Join(t.TempDir(), "never-written.log")
+	out, code = runSh(t, probe, []string{
+		"SYNOPKG_PKGNAME=" + PackageName,
+		"SYNOPKG_PKGDEST=" + t.TempDir(),
+	}, absent, absent+"2")
+	if code != 0 || strings.TrimSpace(out) != "" {
+		t.Fatalf("bound_logs on logs that do not exist yet exited %d and said:\n%s", code, out)
+	}
 }
 
 func sizeOf(info os.FileInfo) any {

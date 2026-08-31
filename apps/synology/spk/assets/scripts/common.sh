@@ -101,7 +101,15 @@ pid_alive() {
 }
 
 # Is a log file over the ceiling?
+#
+# The -f test is not redundant with the redirection below: a failed input
+# redirection is reported by the shell itself, on the shell's own stderr,
+# where the 2>/dev/null cannot reach it. A fresh install has no log files
+# at all and start calls this before either daemon has written one, so
+# without the test every first start prints two errors into the install
+# log that mean nothing.
 log_oversize() {
+    [ -f "$1" ] || return 1
     _sz=$(wc -c < "$1" 2>/dev/null || echo 0)
     [ "${_sz:-0}" -gt "${LOG_MAX_BYTES}" ]
 }
