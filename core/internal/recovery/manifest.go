@@ -99,12 +99,18 @@ type Manifest struct {
 	ReceivedTimestamp time.Time `json:"received_timestamp"`
 
 	// RetentionTimestamp is "retention-relevant timestamp": the exact
-	// value internal/retention's GFS and last-known-good calculations read
-	// as state.Record.DiscoveredAt (see internal/retention/gfs.go and
-	// lastknowngood.go, both of which key every decision off
-	// rec.DiscoveredAt). A rebuilt row's DiscoveredAt is set to exactly
-	// this value, so a rebuilt catalog reaches the identical retention
-	// verdicts the lost journal would have.
+	// value internal/retention reads as state.Record.DiscoveredAt, which
+	// that package calls the artifact's received timestamp. A rebuilt
+	// row's DiscoveredAt is set to exactly this value.
+	//
+	// It is not on its own what places an artifact in a retention bucket.
+	// FR-18 places every artifact twice, by its received timestamp and by
+	// the producer's own timestamp where one is admissible, and unions the
+	// two selections (see internal/retention/bucketkey.go). The producer
+	// half of that pair is ProducerTimestamp above, which is why both
+	// fields have to round-trip through this manifest for a rebuilt
+	// catalog to reach the identical retention verdicts the lost journal
+	// would have, and not just this one.
 	RetentionTimestamp time.Time `json:"retention_timestamp"`
 
 	// SizeBytes is "size": the artifact's size in bytes.

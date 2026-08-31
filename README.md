@@ -578,6 +578,36 @@ This package defers to whatever config supplies rather than hardcoding the EPIC'
 so the honest current default is UTC; set `retention.timezone` explicitly if you want
 something else.
 
+### Which timestamp puts a backup in a bucket
+
+Two of them, and `KEEP` is the union. Each tier runs its selection twice over the same
+artifacts: once placing each one by the **discovery timestamp** (when this manager
+first saw it on the remote), once by the **producer timestamp** (the remote object's own
+modification time, captured at discovery). Both passes use the same windows and the same
+"newest in the bucket" rule.
+
+That matters the moment you point a new backup set at a directory that already holds a
+year of dumps, or bring a manager back up after a week down. Every one of those artifacts
+arrives in the same cycle, so by discovery timestamp alone they all land in one daily
+bucket, one weekly bucket and one monthly bucket, each tier keeps one, and everything else
+is a delete candidate on the first pass. Reading the producer timestamp as well puts them
+in the buckets their own backup dates belong to, and the chain keeps the shape you
+configured it to keep.
+
+The producer timestamp is untrusted input (FR-8), so it is admitted only where being
+wrong is survivable. It has to exist, be non-zero, and not be later than the discovery
+timestamp (a completed artifact cannot have been produced after this manager first saw
+it; such a timestamp is refused, not clamped). And because the two passes are unioned
+rather than merged, a producer timestamp can only ever move an artifact from DELETE to
+KEEP. A NAS whose clock says 1990 makes retention keep more than you asked for; it can
+never make it delete something it would otherwise have kept. There is no setting for
+this, deliberately: distrusting a remote's clock is a capacity question, not a safety one.
+
+Two consequences worth knowing. A chain can retain up to twice its nominal bucket count,
+since one bucket can contribute one artifact from each pass. And an artifact older than
+your longest configured window is still a delete candidate, however it arrived, so extend
+the chain if you want it kept.
+
 `GFSDecide` only classifies. A verdict of `Keep: false` is a delete *candidate*, and
 `core/internal/retention/prune.go` is what turns candidates into deletions. That is a change
 from the previous version of this document, which said no code path deleted a local file:
@@ -592,6 +622,14 @@ retention age, and `core/internal/retention/lastknowngood.go` is that rule.
 `config.Retention.ProtectLastKnownGood` defaults to `true` when the key is omitted, and
 turning it explicitly off is reported by name as "a materially more dangerous
 configuration" rather than accepted quietly.
+
+"Newest" means newest by the backup's own date, resolved the same way the producer pass
+above resolves it, not the most recently ingested artifact. The preview line names the
+resolved date and says which of the two timestamps produced it, so you can tell at a
+glance whether a remote reported a usable modification time or the manager fell back to
+when it first saw the file. (Note that the recovery sidecar's own `received_timestamp`
+is a different instant: that one is when the artifact finished committing locally. The
+field matching the discovery timestamp is `retention_timestamp`.)
 
 Two ways to see what a policy would do before it does it:
 `backup-manager retention --dry-run`, which also takes per-run overrides for the timezone,
