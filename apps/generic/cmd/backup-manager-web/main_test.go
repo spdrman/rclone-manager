@@ -1,10 +1,46 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/service"
 )
+
+// invalidConfigArgs is the "serve refuses and exits" fixture every test
+// below that drives cmdServe needs, and it changed shape with issue #176.
+//
+// It used to be a path that did not exist. That is now the FIRST-RUN
+// state: serve starts anyway, listens, and offers the setup flow, so a
+// test built on a missing path no longer exits at all — it binds a port
+// and blocks until the process is signalled, which is exactly how this
+// helper came to exist. A configuration that EXISTS and does not validate
+// is the refusal that remains, and it is what these tests want.
+//
+// --auth-store is redirected into the same temp directory on purpose. The
+// local-auth store is opened BEFORE the configuration now (main.go's own
+// comment on why enrollment has to come first), so leaving it at the
+// container default would make a failure here ambiguous: the exit code
+// would be the same whether serve refused the config or could not open a
+// store under /data. Pointing it somewhere writable keeps the assertion
+// about the config and nothing else.
+func invalidConfigArgs(t *testing.T, extra ...string) []string {
+	t.Helper()
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	// Parses as YAML, fails config.Validate: no sources, no state
+	// database, a non-positive poll interval.
+	if err := os.WriteFile(configPath, []byte("poll_interval: 0s\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	args := []string{"serve", "--config", configPath, "--auth-store", filepath.Join(dir, "local-auth.json")}
+	return append(args, extra...)
+}
 
 func TestRun_NoArgsPrintsUsageAndFails(t *testing.T) {
 	if got := run(nil); got != 2 {
@@ -24,9 +60,50 @@ func TestCmdServe_RejectsAnUnsupportedAuthMode(t *testing.T) {
 	}
 }
 
-func TestCmdServe_FailsFastOnAMissingConfigFile(t *testing.T) {
-	if got := run([]string{"serve", "--config", "/does/not/exist/config.yaml"}); got == 0 {
-		t.Error("run([\"serve\"]) against a missing config file = 0, want a non-zero exit code")
+// TestCmdServe_FailsFastOnAnInvalidConfigFile is the half of the old
+// "fails fast on a missing config" contract that issue #176 kept. A
+// configuration that exists and does not validate is still a hard startup
+// failure, deliberately: it is an operator's declared intent, and running
+// degraded against it, or offering to replace it in a setup flow, is
+// worse than refusing.
+//
+// The other half of that old contract is gone on purpose, and
+// TestCmdServe_ServesTheFirstRunFlowRatherThanExitingOnAMissingConfig
+// below is what replaced it.
+func TestCmdServe_FailsFastOnAnInvalidConfigFile(t *testing.T) {
+	if got := run(invalidConfigArgs(t)); got == 0 {
+		t.Error("run(serve) against an invalid config file = 0, want a non-zero exit code")
+	}
+}
+
+// TestCmdServe_ServesTheFirstRunFlowRatherThanExitingOnAMissingConfig is
+// issue #176's contract at this binary's own boundary: a config path that
+// does not exist is a fresh install, not a misconfiguration, and cmdServe
+// has to build a first-run engine rather than return.
+//
+// It cannot simply call run(): that blocks in ListenAndServe until the
+// process is signalled, which is the whole point. So it asserts the same
+// thing one step in, on the branch cmdServe takes — core/service.Open
+// reports ErrConfigAbsent for a missing file and does not for a broken
+// one — with the invalid case right beside it as the control that proves
+// this is a real distinction and not a constant.
+func TestCmdServe_ServesTheFirstRunFlowRatherThanExitingOnAMissingConfig(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "config.yaml")
+	_, _, err := service.Open(context.Background(), missing)
+	if !errors.Is(err, service.ErrConfigAbsent) {
+		t.Fatalf("service.Open against a missing config = %v, want an error matching ErrConfigAbsent; cmdServe would exit instead of serving the setup flow", err)
+	}
+
+	invalid := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(invalid, []byte("poll_interval: 0s\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	_, _, err = service.Open(context.Background(), invalid)
+	if err == nil {
+		t.Fatal("service.Open accepted an invalid config")
+	}
+	if errors.Is(err, service.ErrConfigAbsent) {
+		t.Errorf("service.Open reported an invalid config as absent (%v); cmdServe would offer to overwrite a real deployment's configuration", err)
 	}
 }
 
@@ -84,22 +161,25 @@ func TestEnvBoolOrDefault(t *testing.T) {
 // cmdServe and cmdServeUI build their *http.Server through (issue #129).
 
 // TestCmdServe_AcceptsTrustForwardedHeadersAndPublicBaseURLFlags proves
-// both new flags are actually registered on serve's own flag set: the
-// command still fails fast on the missing config file (exit 1, from
-// fail()), never flag.ContinueOnError's own exit 2 for an unrecognized
-// flag - if either flag weren't wired up, this would fail with 2 instead.
+// both flags are actually registered on serve's own flag set: the command
+// still fails fast on the invalid config file (exit 1, from fail()),
+// never flag.ContinueOnError's own exit 2 for an unrecognized flag - if
+// either flag weren't wired up, this would fail with 2 instead.
+//
+// --state-database (issue #176) is checked here too, for the same reason
+// and in the same way: it is a serve flag, and a flag nothing registers
+// is indistinguishable from one nothing reads until a run exits 2.
 func TestCmdServe_AcceptsTrustForwardedHeadersAndPublicBaseURLFlags(t *testing.T) {
-	got := run([]string{
-		"serve",
-		"--config", "/does/not/exist/config.yaml",
+	got := run(invalidConfigArgs(t,
 		"--trust-forwarded-headers",
 		"--public-base-url", "http://example.test:8080",
-	})
+		"--state-database", "/data/state/state.db",
+	))
 	if got == 0 {
-		t.Error("run with a missing config file = 0, want non-zero")
+		t.Error("run with an invalid config file = 0, want non-zero")
 	}
 	if got == 2 {
-		t.Error("run = 2 (flag-parsing failure), want a config-open failure - one of the new flags may not be registered")
+		t.Error("run = 2 (flag-parsing failure), want a config-open failure - one of the flags may not be registered")
 	}
 }
 

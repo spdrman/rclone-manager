@@ -385,6 +385,19 @@ export const httpApi: BackupManagerApi = {
   getVersion: () => request("/version"),
   getHealth: () => request("/health"),
 
+  getFirstRunStatus: () =>
+    request<{ configured: boolean }>("/system/first-run").then((r) => ({
+      configured: r.configured
+    })),
+  completeFirstRun: (req) =>
+    request<{ backup_set: WireCreatedBackupSet; restart_required: boolean }>("/system/first-run", {
+      method: "POST",
+      body: JSON.stringify(wireCreateBackupSetRequest(req))
+    }).then((r) => ({
+      backupSet: fromWireCreatedBackupSet(r.backup_set),
+      restartRequired: r.restart_required
+    })),
+
   listSets: () =>
     request<WireListBackupSetsResponse>("/backup-sets").then((r) => r.backup_sets.map(fromWireBackupSet)),
   getSet: (id) => request<WireBackupSet>("/backup-sets/" + id).then(fromWireBackupSet),
