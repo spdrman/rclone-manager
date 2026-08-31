@@ -58,16 +58,67 @@ if [ -z "$adapters" ]; then
 fi
 
 echo "==> deleting the distribution adapter tree in a throwaway worktree"
+
+# The operand of the only rm -rf this stack adds comes out of an editable
+# text file, so it gets checked twice before anything is removed: once on its
+# shape (arch::manifest_path_problem, shared with check-layer-manifest.sh so
+# a contributor sees the refusal before committing), and once on its outcome,
+# by resolving the path and requiring the result to still be inside the
+# throwaway worktree. The shape test alone would trust the input; symlinks
+# mean the input is not the whole story. "${wt:?}" guarded the variable that
+# cannot realistically be empty and nothing guarded the one a typo controls.
+wt_real=$(cd "$wt" && pwd -P)
+
 count=0
+skipped=0
 while IFS= read -r path; do
   [ -n "$path" ] || continue
+
+  if problem=$(arch::manifest_path_problem "$path"); then
+    echo "FAIL: $(arch::manifest) marks \"$path\" as a distribution adapter, but that entry $problem." >&2
+    echo "  This check deletes every adapter path, so it refuses to run against a manifest entry it cannot vouch for." >&2
+    exit 1
+  fi
+
+  target="$wt_real/$path"
+  if [ ! -e "$target" ]; then
+    # check-layer-manifest.sh is what reports a stale entry, against the
+    # working tree, where a contributor can act on it. Here the entry is
+    # simply not present at HEAD, so there is nothing to delete and nothing
+    # this check can usefully say about it.
+    echo "    (not present at HEAD, nothing to delete: $path)"
+    skipped=$((skipped + 1))
+    continue
+  fi
+
+  parent=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P) || parent=""
+  if [ -z "$parent" ]; then
+    echo "FAIL: cannot resolve the parent directory of adapter path \"$path\" inside the throwaway worktree." >&2
+    exit 1
+  fi
+  resolved="$parent/$(basename "$target")"
+  case "$resolved" in
+    "$wt_real"/*) ;;
+    *)
+      echo "FAIL: adapter path \"$path\" resolves to $resolved, which is outside the throwaway worktree $wt_real." >&2
+      echo "  Refusing to delete it. A manifest entry may only name something inside the repository." >&2
+      exit 1
+      ;;
+  esac
+
   echo "    rm -rf $path"
-  rm -rf "${wt:?}/${path}"
+  rm -rf -- "$resolved"
   count=$((count + 1))
 done <<EOF
 $adapters
 EOF
-echo "    ($count adapter path(s) deleted)"
+echo "    ($count adapter path(s) deleted, $skipped not present at HEAD)"
+
+if [ "$count" -eq 0 ]; then
+  echo "FAIL: no adapter path was actually deleted, so this check proved nothing." >&2
+  echo "  Every path $(arch::manifest) marks \"distribution adapter\" is missing at HEAD." >&2
+  exit 1
+fi
 
 # GOWORK=off throughout: the repo-root go.work lists sibling modules for
 # local development convenience, and apps/synology's go.mod is one of the

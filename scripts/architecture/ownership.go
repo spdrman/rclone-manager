@@ -19,8 +19,11 @@
 // commented, and those comments name retention, lifecycle and the catalog
 // constantly, entirely legitimately. A regex over file text would either
 // fire on all of them or be watered down until it fired on nothing. Parsing
-// and walking only top-level declarations gives a rule that means what it
-// says: comments and string literals are invisible to it for free.
+// and walking the declarations gives a rule that means what it says:
+// comments and string literals are invisible to it for free. The walk covers
+// struct fields, interface members and function-local declarations as well as
+// top-level ones, because a field on a metadata struct is the cheapest way
+// for an adapter to acquire a second opinion about retention.
 //
 // TypeScript has no parser here, so the .ts/.tsx side matches declaration
 // keywords (`interface`, `type`, `class`, `function`, `const`) followed by a
@@ -240,10 +243,21 @@ func main() {
 // dirEntryFor adapts an os.FileInfo for the single-file branch above.
 func dirEntryFor(info os.FileInfo) fs.DirEntry { return fs.FileInfoToDirEntry(info) }
 
-// scanGo reports prohibited top-level declarations. Only top-level:
-// a local variable named retentionPolicy inside an adapter's own helper is
-// not the adapter owning retention, and flagging it would make the rule
-// noise a contributor learns to route around.
+// scanGo reports prohibited declarations anywhere in a Go file.
+//
+// It used to walk file.Decls alone, which meant a top-level func, type or
+// var and nothing else. That is narrower than the rule it advertises, and
+// narrower in exactly the direction an adapter would drift: the natural way
+// to acquire a second opinion about retention is not a top-level
+// `type RetentionPolicy`, it is a field on a metadata struct the adapter
+// already owns, or a method on an interface it already declares. So the walk
+// is now an ast.Inspect that also records struct field names, interface
+// method names, and types and vars declared inside a function body.
+//
+// Still not recorded: a short variable declaration (`retentionPolicy := ...`)
+// and a function parameter. Those are the shapes where the identifier is a
+// local convenience rather than a claim of ownership, and flagging them
+// would make the rule noise a contributor learns to route around.
 func scanGo(path, rel string) ([]violation, error) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
@@ -266,27 +280,48 @@ func scanGo(path, rel string) ([]violation, error) {
 		}
 	}
 
-	for _, decl := range file.Decls {
-		switch d := decl.(type) {
+	// recordFields handles the named members of a struct or an interface.
+	// A field with no Names is an embedded type, and its identifier is
+	// already recorded wherever that type is declared.
+	recordFields := func(fields *ast.FieldList, kind string) {
+		if fields == nil {
+			return
+		}
+		for _, f := range fields.List {
+			for _, n := range f.Names {
+				record(n.Pos(), kind, n.Name)
+			}
+		}
+	}
+
+	// One switch over every node, so each identifier is recorded exactly
+	// once: ast.Inspect visits a FuncDecl, a TypeSpec, a ValueSpec and a
+	// StructType each on their own, whether they sit at the top level or
+	// inside a function body. Fields are reached through their enclosing
+	// StructType or InterfaceType rather than as *ast.Field, because an
+	// *ast.Field is also how a FuncType spells its parameters and results,
+	// and a parameter is not a declaration of ownership.
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch d := n.(type) {
 		case *ast.FuncDecl:
 			kind := "func"
 			if d.Recv != nil {
 				kind = "method"
 			}
 			record(d.Pos(), kind, d.Name.Name)
-		case *ast.GenDecl:
-			for _, spec := range d.Specs {
-				switch s := spec.(type) {
-				case *ast.TypeSpec:
-					record(s.Pos(), "type", s.Name.Name)
-				case *ast.ValueSpec:
-					for _, n := range s.Names {
-						record(n.Pos(), "value", n.Name)
-					}
-				}
+		case *ast.TypeSpec:
+			record(d.Pos(), "type", d.Name.Name)
+		case *ast.ValueSpec:
+			for _, name := range d.Names {
+				record(name.Pos(), "value", name.Name)
 			}
+		case *ast.StructType:
+			recordFields(d.Fields, "field")
+		case *ast.InterfaceType:
+			recordFields(d.Methods, "interface member")
 		}
-	}
+		return true
+	})
 	return out, nil
 }
 

@@ -99,3 +99,32 @@ arch::classify() {
     END { if (best_len > 0) { print best; exit 0 } exit 1 }
   '
 }
+
+# arch::manifest_path_problem <path>
+# Prints why a manifest path is unsafe and returns 0; prints nothing and
+# returns 1 when the path is fine.
+#
+# Every reader of the manifest joins an entry onto a directory and hands the
+# result to a real filesystem operation, and one of them,
+# verify-core-without-distribution.sh, hands the "distribution adapter" ones
+# to rm -rf. Nothing else in this file notices a path that leaves the
+# repository: arch::classify only ever asks whether a tracked file sits under
+# an entry, so an entry like apps/../../elsewhere matches no file and is
+# invisible to the completeness guard, and the existence check is satisfied by
+# anything that happens to be there. So the shape is rejected here, once,
+# where every reader sees it, rather than at the one call site that currently
+# deletes.
+arch::manifest_path_problem() {
+  local path=$1
+  case "$path" in
+    "")
+      printf '%s' 'is empty'; return 0 ;;
+    /*)
+      printf '%s' 'is absolute, and manifest paths are relative to the repository root'; return 0 ;;
+    .|..)
+      printf '%s' "is \"$path\", which names the repository or its parent rather than something in it"; return 0 ;;
+    ../*|*/../*|*/..)
+      printf '%s' 'contains a ".." segment, which escapes the repository'; return 0 ;;
+  esac
+  return 1
+}

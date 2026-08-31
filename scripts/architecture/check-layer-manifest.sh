@@ -10,7 +10,8 @@
 #
 # It fails when:
 #   - any tracked file is not classified by some manifest entry;
-#   - any manifest entry names a path that does not exist;
+#   - any manifest entry names a path that does not exist, or one whose shape
+#     leaves the repository (absolute, or carrying a ".." segment);
 #   - any entry uses a layer or kind outside the declared vocabulary;
 #   - a kind is set on a non-distribution layer, or missing on a
 #     distribution one;
@@ -51,6 +52,17 @@ while read -r layer kind path; do
     if [ "$kind" != "-" ]; then
       note "FAIL: $layer entry $path has kind \"$kind\"; kind is meaningful only on the distribution layer, so it must be \"-\" here."
     fi
+  fi
+
+  # Shape before existence. An entry that escapes the repository can satisfy
+  # the existence test below by pointing at something real outside the tree,
+  # and it is invisible to the completeness guard further down because
+  # arch::classify only ever matches entries against tracked files. It is not
+  # invisible to verify-core-without-distribution.sh, which deletes every
+  # entry marked "distribution adapter".
+  if problem=$(arch::manifest_path_problem "$path"); then
+    note "FAIL: manifest entry \"$path\" $problem. Every check here joins a manifest path onto a directory, and verify-core-without-distribution.sh hands the adapter ones to rm -rf, so an entry that leaves the repository is a delete nobody reviewed."
+    continue
   fi
 
   if [ ! -e "$path" ]; then

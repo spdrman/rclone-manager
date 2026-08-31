@@ -109,7 +109,7 @@ in one file rather than four scripts drifting apart.
 |---|---|---|
 | `check-layer-manifest.sh` | every tracked file is classified, every entry exists, no layer is empty | static, over `git ls-files` |
 | `check-core-dependency-rule.sh` | the dependency direction, for every Go module in the repository | `go list -deps`, per module, `GOWORK=off` |
-| `check-layer-ownership.sh` | nothing outside core declares a core-owned concept | `ownership.go` parses Go and walks top-level declarations |
+| `check-layer-ownership.sh` | nothing outside core declares a core-owned concept | `ownership.go` parses Go and walks every declaration in the file, including struct fields and interface members |
 | `check-ui-shared-provider-imports.sh` | the shared UI imports no provider directory or SDK, across all ten platforms | module specifiers only, never whole lines |
 | `verify-core-without-apps.sh` | `core/` stands with all of `apps/` deleted | actual deletion in a throwaway worktree |
 | `verify-core-without-distribution.sh` | core, `apps/common` and `apps/generic` stand with the distribution **adapter** tree deleted | actual deletion in a throwaway worktree |
@@ -128,8 +128,27 @@ The thing being detected is a *declaration*, and grep cannot tell one from a
 comment or a string. Every Go file here is heavily commented, and those comments
 name retention, lifecycle and the catalog constantly and legitimately. A regex
 over file text would either fire on all of them or be watered down until it
-fired on nothing. Parsing and walking only top-level declarations gives a rule
-that means what it says.
+fired on nothing. Parsing gives a rule that means what it says, because comments
+and string literals are invisible to it for free.
+
+The walk covers **every** declaration in a file, not only the top-level ones. It
+used to walk `file.Decls` alone, which meant a top-level `func`, `type` or `var`
+and nothing else, and that is narrower than the rule it advertises in exactly
+the direction an adapter would drift. The natural way for an adapter to acquire
+a second opinion about retention is not a top-level `type RetentionPolicy`; it
+is a field on a metadata struct it already owns, or a method on an interface it
+already declares. Both of those passed cleanly. So the walk is now an
+`ast.Inspect` that also records struct field names, interface member names, and
+types and vars declared inside a function body. It still stops short of short
+variable declarations and function parameters, where the identifier is a local
+convenience rather than a claim of ownership, and flagging those would make the
+rule noise a contributor learns to route around.
+
+The TypeScript half is unchanged and still matches a declaration keyword at the
+start of a line, so a class method or an interface member in a bridge is not yet
+covered. Widening a heuristic raises false positives on precisely the bridge
+files that legitimately mention platform concepts, which is how a check gets
+switched off; that half waits for a dry run over the existing bridges.
 
 The identifier matching is deliberately **substring, case-insensitive, not word
 boundary**. Go identifiers are camel-cased, so `\b` never fires between `Apply`

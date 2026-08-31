@@ -10,10 +10,16 @@ they mean, and exactly what a later Phase 6 change has to beat.
 
 On host `darwin-arm64-mac17-2` under workload `phase6-baseline-v1`, a later
 Phase 6 change fails the performance gate if the median of five captures shows
-**`GET /api/v1/backup-sets` p95 above 0.143 ms** (and more than 0.05 ms above
-baseline), or **transfer throughput below 483.9 MB/s**. Three more metrics are
-gated alongside them, two are recorded but not gated, and every number below is
-derived from measurement rather than chosen.
+**`GET /api/v1/backup-sets` p95 above 0.180 ms**, or **transfer throughput below
+483.9 MB/s**. That p95 number carries two conditions and both have to hold, so
+the 0.05 ms absolute floor is what binds rather than the 10% ratio; the section
+below works the arithmetic through. Three more metrics are gated alongside them,
+two are recorded but not gated, and every number below is derived from
+measurement rather than chosen.
+
+Nothing runs the comparison automatically. `--compare` is a manual step on the
+benchmark host, and what CI enforces is that a complete baseline exists and that
+the gate can still fail. See "Running it" at the bottom.
 
 ## What is here
 
@@ -102,11 +108,27 @@ So:
   on a ratio alone. Their noise is 11x, 45x and infinitely below the budget
   respectively, so the ratio is a real gate.
 - **`api_read_p95_ms`** is gated on a ratio **and** a measured absolute floor
-  of 0.05 ms, both of which must be exceeded before it fails. 0.05 ms is 2.6x
-  the observed 0.019 ms movement, and below the cost of the cheapest structural
-  regression this gate exists to catch: an added loopback hop in the data path.
-  Sub-millisecond latencies do not support a percentage-only gate, and
-  pretending otherwise would be the kind of number nobody can act on.
+  of 0.05 ms, and **both** must be exceeded before it fails. Two conditions that
+  must both hold means the wider one is what is enforced: against the 0.130 ms
+  baseline the ratio allows 0.143 ms and the floor allows 0.180 ms, so the floor
+  always binds and the budget this metric really carries is **+38.5%**, not
+  +10%. The floor is there because 0.05 ms is 2.6x the observed 0.019 ms
+  movement, and sub-millisecond latencies do not support a percentage-only gate;
+  a gate that goes red on an unchanged tree teaches everyone to ignore it.
+
+  The thing that floor was sized against was the cheapest structural regression
+  this gate exists to catch, an added loopback hop in the data path. That hop
+  was **later measured at 0.047 ms** at p95 on this same host, which is just
+  under the floor. So the honest statement is that **this gate would not catch
+  that hop**, and the earlier claim that the floor sat below its cost is wrong.
+  Closing the gap means lowering the floor, which means reducing measurement
+  noise first (more timed samples per capture, or more captures per baseline)
+  until the median's own movement is below the new floor. Writing a smaller
+  number over the same noise would only produce a gate that fails against an
+  unchanged tree. `scripts/perf/selftest.sh` pins which condition binds, with
+  one control just under the floor that must pass and one just over it that
+  must fail, so the band between 0.143 ms and 0.180 ms is exercised rather than
+  assumed.
 - **`config_write_p95_ms`** is gated on a ratio, with about two times headroom
   over its noise. It is the tightest of the gated metrics and the one most
   likely to need re-measurement rather than a fix if it trips.
@@ -125,13 +147,18 @@ a `--skip-image` capture can never be mistaken for a real baseline.
 
 Derived from `gate.json` and `baselines/darwin-arm64-mac17-2.json`:
 
-| metric | baseline | fails when |
-|---|---|---|
-| `api_read_p95_ms` | 0.130 ms | above 0.143 ms **and** more than 0.05 ms above baseline |
-| `transfer_mb_per_second` | 537.702 MB/s | below 483.932 MB/s |
-| `idle_rss_bytes` | 98,861,056 | above 108,747,162 |
-| `config_write_p95_ms` | 11.357 ms | above 12.493 ms |
-| `image_size_bytes` | 43,008,762 | above 45,159,200 |
+| metric | baseline | fails when | effective threshold |
+|---|---|---|---|
+| `api_read_p95_ms` | 0.130 ms | above 0.143 ms **and** more than 0.05 ms above baseline | **0.180 ms (+38.5%)** |
+| `transfer_mb_per_second` | 537.702 MB/s | below 483.932 MB/s | 483.932 MB/s (-10%) |
+| `idle_rss_bytes` | 98,861,056 | above 108,747,162 | 108,747,162 (+10%) |
+| `config_write_p95_ms` | 11.357 ms | above 12.493 ms | 12.493 ms (+10%) |
+| `image_size_bytes` | 43,008,762 | above 45,159,200 | 45,159,200 (+5%) |
+
+`api_read_p95_ms` is the only row with two conditions, and because both have to
+hold, the wider of the two is what is enforced. Here that is the floor, so read
+the last column rather than the ratio: 0.180 ms, not 0.143 ms. Every other row
+has a single condition and the two columns agree.
 
 ## About `working_tree_dirty: true` in the checked-in record
 
@@ -165,6 +192,15 @@ they are safe in ordinary CI. Compare mode is not wired into ordinary CI on
 purpose: #81 allows the measurements to run on a dedicated stable benchmark
 environment rather than blocking ordinary CI on noisy numbers, and a shared
 runner is not that environment.
+
+Plainly, so nobody reads "gated" as "enforced on every change": **no gate
+anywhere runs `--compare`.** `scripts/ci-local.sh` and
+`.github/workflows/ci.yml` wire presence mode and the mutation self-test, and
+nothing else. Every regression number in a Phase 6 pull request is therefore an
+author self-report taken by hand on the host named above, and a reviewer who
+wants to reproduce one has to capture on that host. What CI does enforce is that
+a complete baseline for the designated host exists and that the gate is still
+capable of failing, which is what the self-test proves.
 
 ## Nothing here writes a credential to disk
 

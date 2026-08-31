@@ -52,6 +52,16 @@ mutant() {
   printf '%s' "$dir"
 }
 
+# commit_mutant <dir> <message>
+# The deletion proofs build a throwaway worktree of HEAD, so a mutation they
+# are meant to see has to be committed inside the copy first. The static
+# checks read the working tree and do not need this.
+commit_mutant() {
+  local dir=$1 msg=$2
+  git -C "$dir" add -A
+  git -C "$dir" -c user.email=selftest@example.invalid -c user.name=selftest commit -q -m "$msg"
+}
+
 # expect_check_fails <label> <dir> <expected-substring> <script> [args...]
 #
 # The expected substring is not decoration. Without it a mutation "passes"
@@ -118,6 +128,60 @@ d=$(mutant manifest-noadapters)
 sed -i.bak 's|^distribution    adapter |distribution    canonical |' "$d/scripts/architecture/layers.conf"
 rm -f "$d/scripts/architecture/layers.conf.bak"
 expect_check_fails "a manifest with no adapter paths at all, which would make the deletion proof vacuous" "$d" "would delete nothing and pass vacuously" ./scripts/architecture/check-layer-manifest.sh
+
+echo
+echo "==> manifest paths that leave the repository"
+
+# verify-core-without-distribution.sh deletes every path the manifest marks
+# "distribution adapter", so the manifest is an input to an rm -rf. A path
+# with a ".." segment in the middle of it resolves and deletes normally, and
+# before these controls nothing looked at the shape of an entry at all: it
+# matches no tracked file, so the completeness guard never mentions it, and
+# the existence test is satisfied by whatever is really out there.
+#
+# The planted target name is deliberately one that does not exist, so a
+# regression here fails these controls rather than deleting something.
+traversal_entry='apps/../../rclone-manager-selftest-traversal-target'
+
+d=$(mutant manifest-traversal)
+printf '\ndistribution    adapter     %s\n' "$traversal_entry" >> "$d/scripts/architecture/layers.conf"
+expect_check_fails "a manifest entry with a \"..\" segment in the middle of it" "$d" \
+  "escapes the repository" ./scripts/architecture/check-layer-manifest.sh
+
+d=$(mutant manifest-absolute)
+printf '\ndistribution    adapter     /rclone-manager-selftest-absolute-target\n' >> "$d/scripts/architecture/layers.conf"
+expect_check_fails "a manifest entry naming an absolute path" "$d" \
+  "is absolute" ./scripts/architecture/check-layer-manifest.sh
+
+# And the same entry against the check that would actually delete it. This
+# runs the deletion proof, but it never reaches a build: the refusal happens
+# in the delete loop, before any go build.
+d=$(mutant delete-traversal)
+printf '\ndistribution    adapter     %s\n' "$traversal_entry" >> "$d/scripts/architecture/layers.conf"
+commit_mutant "$d" "plant a traversal entry in the layer manifest"
+expect_check_fails "the adapter-deletion proof handed a manifest entry that escapes the repository" "$d" \
+  "refuses to run against a manifest entry it cannot vouch for" \
+  ./scripts/architecture/verify-core-without-distribution.sh
+
+# The control for the containment assertion specifically, which is the half
+# that does not trust the input: this entry has a clean shape, and it still
+# resolves outside the worktree because a directory on the way is a symlink.
+# Nothing but resolving the path and looking at the answer catches it.
+d=$(mutant delete-symlink-escape)
+mkdir -p "$tmp/selftest-escape-target/adapter"
+ln -s "$tmp/selftest-escape-target" "$d/apps/selftest-escape"
+printf '\ndistribution    adapter     apps/selftest-escape/adapter\n' >> "$d/scripts/architecture/layers.conf"
+commit_mutant "$d" "plant a symlinked adapter path in the layer manifest"
+expect_check_fails "the adapter-deletion proof handed a path that resolves outside the worktree through a symlink" "$d" \
+  "which is outside the throwaway worktree" \
+  ./scripts/architecture/verify-core-without-distribution.sh
+if [ ! -d "$tmp/selftest-escape-target/adapter" ]; then
+  echo "SELFTEST FAIL: the adapter-deletion proof deleted through the symlink anyway." >&2
+  fail=$((fail + 1))
+else
+  echo "  ok (intact):  the symlink's target survived the refusal"
+  pass=$((pass + 1))
+fi
 
 echo
 echo "==> dependency direction"
@@ -235,6 +299,54 @@ plant_ownership "backup-policy declared in a runtime profile" 'violates rule "ba
   "apps/generic/platform/selftest_owns.go" "platform" \
   "// BackupPolicy is planted by the self-test.
 type BackupPolicy struct{}"
+
+# The declaration shapes the Go scan used to walk straight past. It looked at
+# file.Decls only, so a top-level type, func or var was the whole population
+# it could ever see, and every mutation above is one of those. The three
+# below are the ones an adapter would actually drift into: a field on a
+# metadata struct it already owns, a method on an interface it already
+# declares, and a type declared inside a function body.
+plant_ownership "retention-policy declared as a struct field in a distribution package" 'violates rule "retention-policy"' \
+  "distribution/packaging/selftest_owns.go" "packaging" \
+  "// Config is planted by the self-test: the prohibited concept arrives as a
+// field on a struct the adapter legitimately owns, not as a declaration of
+// its own.
+type Config struct {
+	Name           string
+	RetentionTiers []string
+}"
+
+plant_ownership "catalog-truth declared as an interface method in a runtime profile" 'violates rule "catalog-truth"' \
+  "apps/generic/platform/selftest_owns.go" "platform" \
+  "// Bridge is planted by the self-test.
+type Bridge interface {
+	RebuildCatalog() error
+}"
+
+plant_ownership "lifecycle-state declared inside a function body in a runtime profile" 'violates rule "lifecycle-state"' \
+  "apps/generic/platform/selftest_owns.go" "platform" \
+  "// selftestLocal is planted by the self-test.
+func selftestLocal() {
+	type LifecycleState int
+	_ = LifecycleState(0)
+}"
+
+# The control the widening most needs: it deliberately stops short of short
+# variable declarations and function parameters, where the identifier is a
+# local convenience rather than a claim of ownership. Neither may fire, or
+# the rule becomes noise a contributor learns to route around.
+d=$(mutant own-go-local-noise)
+cat > "$d/apps/generic/platform/selftest_owns.go" <<'GOEOF'
+package platform
+
+// selftestNoise is planted by the self-test.
+func selftestNoise(retentionPolicy int) int {
+	validatorCatalog := retentionPolicy
+	return validatorCatalog
+}
+GOEOF
+expect_check_passes "a prohibited name as a function parameter and a short variable (must NOT fire)" "$d" \
+  ./scripts/architecture/check-layer-ownership.sh
 
 # TypeScript side: the bridges are where a runtime profile would most
 # plausibly grow a second opinion about retention.

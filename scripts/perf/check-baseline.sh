@@ -28,15 +28,25 @@ cd "$(git rev-parse --show-toplevel)"
 
 GATE=docs/perf/gate.json
 COMPARE=""
+# Where a baseline record for a host is looked up. Overridable so
+# scripts/perf/selftest.sh can point a deliberately mutated record somewhere
+# harmless: it used to write one into docs/perf/baselines/ and delete it
+# afterwards, which meant an interrupted run left a falsified baseline, one
+# required metric nulled, sitting in the directory whose entire purpose is to
+# be authoritative.
+BASELINES_DIR=docs/perf/baselines
 
 usage() {
   cat >&2 <<'EOF'
 usage: scripts/perf/check-baseline.sh [--compare PATH] [--gate PATH]
+                                      [--baselines-dir PATH]
 
-  --compare PATH   compare this freshly captured record against the
-                   checked-in baseline for the designated host
-  --gate PATH      read the gate definition from here instead of
-                   docs/perf/gate.json
+  --compare PATH        compare this freshly captured record against the
+                        checked-in baseline for the designated host
+  --gate PATH           read the gate definition from here instead of
+                        docs/perf/gate.json
+  --baselines-dir PATH  look the designated host's record up here instead of
+                        docs/perf/baselines
 EOF
 }
 
@@ -44,6 +54,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --compare) COMPARE="$2"; shift 2 ;;
     --gate) GATE="$2"; shift 2 ;;
+    --baselines-dir) BASELINES_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "check-baseline: unknown option $1" >&2; usage; exit 2 ;;
   esac
@@ -58,7 +69,7 @@ fi
 
 host_id=$(jq -r '.benchmark_host_id' "$GATE")
 workload=$(jq -r '.workload' "$GATE")
-record="docs/perf/baselines/${host_id}.json"
+record="${BASELINES_DIR}/${host_id}.json"
 
 if [ "$host_id" = "null" ] || [ -z "$host_id" ]; then
   echo "FAIL: $GATE names no benchmark_host_id." >&2
