@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "e2eb7e658a1a21ae5f51fda9b31434733ff8fd36ab5e5430f527ea30e44052e5";
+export const CONTRACT_SHA256 = "370e221519baeb4e700cbe68b6b4ebe3a46b54d5ff26fb85665c0e3bd9a12b12";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -45,6 +45,7 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_NOT_FOUND",
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
+  "REINSTATEMENT_REFUSED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -102,6 +103,7 @@ export const API_ERROR_CODES = [
   "ARTIFACT_NOT_FOUND",
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
+  "REINSTATEMENT_REFUSED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -111,7 +113,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -545,6 +547,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "reinstateArtifact",
+    method: "POST",
+    path: "/quarantine/{id}/reinstate",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ArtifactReinstateResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["ARTIFACT_NOT_FOUND"],
+      409: ["ARTIFACT_NOT_QUARANTINED", "REINSTATEMENT_REFUSED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "retryArtifactIngestion",
     method: "POST",
     path: "/quarantine/{id}/retry",
@@ -837,6 +859,22 @@ export interface WireArtifactCheckResponse {
   reason?: string;
 }
 
+/** POST /quarantine/{id}/reinstate. Re-checks one quarantined
+ *  backup's durable local copy and, when what it finds is enough,
+ *  returns it to the state it already held so it counts as a restore
+ *  point again. `reinstated` and `passed` are separate: `passed` is
+ *  the verdict of the checks, `reinstated` is whether the backup
+ *  actually moved. A backup reinstated this way NEVER authorises
+ *  deleting its remote source again; that forfeiture is permanent and
+ *  is what makes the action safe to offer. */
+export interface WireArtifactReinstateResponse {
+  checked: boolean;
+  passed: boolean;
+  reason?: string;
+  reinstated: boolean;
+  state?: string;
+}
+
 /** The FLAT error body the /auth operations return, with the
  *  correlation id in the body as well as the header. Deliberately
  *  recorded as a second shape rather than pretended away:
@@ -1090,7 +1128,10 @@ export interface WireListValidatorsResponse {
 }
 
 /** One durable operation record. Timestamp fields are omitted, not
- *  zero-valued, until the event they name has happened. */
+ *  zero-valued, until the event they name has happened. progress is
+ *  the separate, ephemeral thing: see OperationProgress for why it is
+ *  a nested object that is simply absent rather than a set of fields
+ *  on this record. */
 export interface WireOperation {
   action?: string;
   actor?: string;
@@ -1100,9 +1141,42 @@ export interface WireOperation {
   error?: string;
   finished_at?: string;
   operation_id: string;
+  progress?: WireOperationProgress;
   result?: string;
   started_at?: string;
   status: string;
+}
+
+/** Live progress for an operation that is running in THIS process
+ *  right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the
+ *  transfer engine while a run cycle executes and is never written to
+ *  the operations table: an operation record is durable and
+ *  crash-safe, and progress is neither, so persisting it would put a
+ *  tick-rate write path on the one record whose durability guarantees
+ *  exist to avoid exactly that, and would resurrect a dead cycle's
+ *  last reading after a restart as though it were live. So this field
+ *  is present only while the cycle producing it is executing here. A
+ *  finished operation, and one that was running before a restart,
+ *  both carry no progress object at all, which is not the same answer
+ *  as zero and must not be rendered as one. Nothing here is a
+ *  percentage of the whole operation: a run cycle is a pass over
+ *  every enabled backup set, and the artifacts it will find are not
+ *  known when it starts, so no honest denominator for the whole
+ *  exists. The byte counters describe the ONE artifact being copied
+ *  at observed_at; the counters beside them say where in the cycle
+ *  that artifact sits. */
+export interface WireOperationProgress {
+  artifact?: string;
+  artifacts_done: number;
+  backup_set_id?: string;
+  backup_sets_done: number;
+  backup_sets_total: number;
+  bytes_per_second?: number;
+  bytes_total?: number;
+  bytes_transferred?: number;
+  observed_at: string;
+  sequence: number;
+  stage: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
 }
 
 /** A server-computed retention plan. The client may only apply one by

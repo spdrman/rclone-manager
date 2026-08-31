@@ -358,23 +358,131 @@ func allPlatforms() []platformFixture {
 			scanRoots:        []string{"compose", "frontend"},
 			runtimeArtifacts: composeArtifact("synology", "compose/backup-manager.yml", "compose/backup-manager.env"),
 		},
+		{
+			// Issue #170. Portainer deploys the product as a stack, from
+			// the App Template beside this compose file. New platform
+			// support rather than a conversion: Phase 4 targeted no
+			// container manager, so there is no earlier Portainer
+			// packaging here and nothing this replaces.
+			//
+			// It joins this table by adding a row and no new checker,
+			// which is the third time that has been the evidence: the
+			// deployment target changed and none of the packaging rules
+			// did. What it does bring is a format of its own, and
+			// templates.json is checked by newadapters_test.go rather
+			// than here, because it is a store artifact and not a
+			// runtime definition.
+			name: "portainer",
+			requiredFiles: []string{
+				"README.md",
+				"templates.json",
+				"logo.svg",
+				"compose/backup-manager.yml",
+				"compose/backup-manager.env",
+			},
+			services:      composeServices("portainer", "compose/backup-manager.yml", "compose/backup-manager.env"),
+			engineService: "backup-manager",
+			uiService:     "backup-manager-ui",
+			uiHealthcheck: overrideHealthcheck,
+			hardening:     composeHardening,
+			composeProfiles: []composeProfile{
+				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+			},
+			acceptance:       "portainer-stack-deployment.md",
+			docSubstitutions: map[string]string{},
+			runtimeArtifacts: composeArtifact("portainer", "compose/backup-manager.yml", "compose/backup-manager.env"),
+		},
+		{
+			// Issue #170. CasaOS installs from one compose file carrying
+			// an x-casaos block, and there is deliberately no env file:
+			// a store install deploys the file as it stands with nothing
+			// beside it, so every value in it is literal. New platform
+			// support, with no Phase 4 counterpart.
+			name: "casaos",
+			requiredFiles: []string{
+				"README.md",
+				"icon.svg",
+				"compose/backup-manager.yml",
+			},
+			services:      composeServices("casaos", "compose/backup-manager.yml", ""),
+			engineService: "backup-manager",
+			uiService:     "backup-manager-ui",
+			uiHealthcheck: overrideHealthcheck,
+			hardening:     composeHardening,
+			composeProfiles: []composeProfile{
+				{compose: "compose/backup-manager.yml"},
+			},
+			acceptance:       "casaos-app-store-install.md",
+			docSubstitutions: map[string]string{},
+			runtimeArtifacts: composeArtifact("casaos", "compose/backup-manager.yml", ""),
+		},
+		{
+			// Issue #170. ZimaOS reads the same x-casaos block CasaOS
+			// does. Two store registrations over one runtime, not two
+			// runtimes: the services and the paths are identical on
+			// purpose, and the two are separate rows because they are
+			// separately submitted and separately certified.
+			name: "zimaos",
+			requiredFiles: []string{
+				"README.md",
+				"icon.svg",
+				"compose/backup-manager.yml",
+			},
+			services:      composeServices("zimaos", "compose/backup-manager.yml", ""),
+			engineService: "backup-manager",
+			uiService:     "backup-manager-ui",
+			uiHealthcheck: overrideHealthcheck,
+			hardening:     composeHardening,
+			composeProfiles: []composeProfile{
+				{compose: "compose/backup-manager.yml"},
+			},
+			acceptance:       "zimaos-app-store-install.md",
+			docSubstitutions: map[string]string{},
+			runtimeArtifacts: composeArtifact("zimaos", "compose/backup-manager.yml", ""),
+		},
 	}
 }
 
 // composeArtifact is the runtimeArtifacts function for a platform that
-// ships exactly one compose file plus its env file.
+// ships exactly one compose file. env may be empty, for a store format
+// that deploys the file as it stands with nothing beside it.
 func composeArtifact(platform, compose, env string) func(t *testing.T) []derivationArtifact {
 	return func(t *testing.T) []derivationArtifact {
 		t.Helper()
-		e, err := ReadEnvFile(filepath.Join(PlatformDir(platform), env))
-		if err != nil {
-			t.Fatalf("read %s env file: %v", platform, err)
+		var e map[string]string
+		if env != "" {
+			var err error
+			e, err = ReadEnvFile(filepath.Join(PlatformDir(platform), env))
+			if err != nil {
+				t.Fatalf("read %s env file: %v", platform, err)
+			}
 		}
 		svcs, err := ReadCompose(filepath.Join(PlatformDir(platform), compose), e)
 		if err != nil {
 			t.Fatalf("read %s compose: %v", platform, err)
 		}
 		return []derivationArtifact{{compose, svcs}}
+	}
+}
+
+// composeServices reads one compose file, with its env file when it has
+// one, into the shared Service shape.
+func composeServices(platform, compose, env string) func(t *testing.T) []Service {
+	return func(t *testing.T) []Service {
+		t.Helper()
+		var e map[string]string
+		if env != "" {
+			var err error
+			e, err = ReadEnvFile(filepath.Join(PlatformDir(platform), env))
+			if err != nil {
+				t.Fatalf("read %s env file: %v", platform, err)
+			}
+		}
+		svcs, err := ReadCompose(filepath.Join(PlatformDir(platform), compose), e)
+		if err != nil {
+			t.Fatalf("read %s compose: %v", platform, err)
+		}
+		return svcs
 	}
 }
 
@@ -652,19 +760,29 @@ func TestBackupRootContainment(t *testing.T) {
 // canonical.json to apps/<platform>/frontend/platform.ts. Those two files
 // belong to different work packages and are read by different audiences,
 // which is exactly how they drift.
+//
+// Since issue #170 it is two-sided, because four platforms now ship no
+// bridge at all and "skip the ones without a bridge" would have made
+// declaring none the cheap way out of the pin. A platform that says
+// uiBridge "none" has to have no frontend directory either, and it has to
+// say why. CheckUIBridgeDeclaration's own positive controls in
+// newadapters_test.go point it at fixtures and watch each branch fail.
 func TestEveryPlatformDeclaresTheSameStorageMountAsItsBridge(t *testing.T) {
 	c := MustLoad()
 
+	bridged := 0
 	for name, platform := range c.Platforms {
+		if platform.UIBridge != UIBridgeNone {
+			bridged++
+		}
 		t.Run(name, func(t *testing.T) {
-			got, err := BridgeStorageMount(filepath.Join(PlatformDir(name), "frontend", "platform.ts"))
-			if err != nil {
-				t.Fatalf("read bridge storage mount: %v", err)
-			}
-			if got != platform.StorageMount {
-				t.Errorf("frontend bridge declares storageMount %q, canonical.json declares %q", got, platform.StorageMount)
+			if v := CheckUIBridgeDeclaration(name, platform, PlatformDir(name)); len(v) > 0 {
+				t.Errorf("%s", format(v))
 			}
 		})
+	}
+	if bridged == 0 {
+		t.Fatal("no platform declares a frontend bridge at all, so the storage-mount comparison this test exists for ran against nothing")
 	}
 }
 
@@ -819,15 +937,25 @@ func TestEveryPlatformUsesLocalAuthOnly(t *testing.T) {
 
 	for _, p := range allPlatforms() {
 		t.Run(p.name, func(t *testing.T) {
-			bridge, err := os.ReadFile(filepath.Join(PlatformDir(p.name), "frontend", "platform.ts"))
-			if err != nil {
-				t.Fatalf("read bridge: %v", err)
-			}
-			if !strings.Contains(string(bridge), `mode: "`+c.AuthMode+`"`) {
-				t.Errorf("the frontend bridge does not report auth mode %q", c.AuthMode)
-			}
-			if strings.Contains(string(bridge), "nativeAuth: true") {
-				t.Error("the frontend bridge claims native auth; only UGOS has a native session adapter")
+			// A platform that ships no bridge has no bridge-reported auth
+			// mode to check, and the answer is not to skip it: the half
+			// that matters for security is that the packaging wires no
+			// authentication of its own, and that half applies to every
+			// platform whether or not it has a frontend. So the bridge
+			// assertions run where there is a bridge, the scan runs
+			// everywhere, and "no bridge" is checked against
+			// canonical.json rather than inferred from a missing file.
+			if c.Platforms[p.name].UIBridge != UIBridgeNone {
+				bridge, err := os.ReadFile(filepath.Join(PlatformDir(p.name), "frontend", "platform.ts"))
+				if err != nil {
+					t.Fatalf("read bridge: %v", err)
+				}
+				if !strings.Contains(string(bridge), `mode: "`+c.AuthMode+`"`) {
+					t.Errorf("the frontend bridge does not report auth mode %q", c.AuthMode)
+				}
+				if strings.Contains(string(bridge), "nativeAuth: true") {
+					t.Error("the frontend bridge claims native auth; only UGOS has a native session adapter")
+				}
 			}
 
 			for _, root := range p.scanDirs() {

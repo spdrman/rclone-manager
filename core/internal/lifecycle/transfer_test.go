@@ -71,6 +71,14 @@ func (f *fakeTransferJournal) LastEnteredAt(context.Context, model.ArtifactID, s
 	return time.Time{}, false, nil
 }
 
+// LastTransition is unused by the step under test, and the safety property
+// it exists for (issue #220's reinstatement forfeiture) is proved against a
+// real journal in remotedelete_reinstate_test.go, not here. Reporting "no
+// such edge" is the honest answer for a fake that records no log at all.
+func (f *fakeTransferJournal) LastTransition(context.Context, model.ArtifactID, string, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 func (f *fakeTransferJournal) RecordTransition(_ context.Context, t state.Transition) (state.Outcome, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

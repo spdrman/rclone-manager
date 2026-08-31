@@ -56,6 +56,7 @@
 
   "providers": {
     "generic": {
+      "phase": "4",
       "displayName": "Generic Docker",
       "tier": "C",
       "epic": "B",
@@ -107,6 +108,7 @@
     },
 
     "ugos": {
+      "phase": "1",
       "displayName": "UGOS Pro",
       "tier": "A",
       "epic": "D",
@@ -142,6 +144,7 @@
     },
 
     "synology": {
+      "phase": "4",
       "displayName": "Synology DSM",
       "tier": "B",
       "epic": "B",
@@ -218,6 +221,7 @@
     },
 
     "truenas": {
+      "phase": "4",
       "displayName": "TrueNAS",
       "tier": "B",
       "epic": "B",
@@ -253,6 +257,7 @@
     },
 
     "unraid": {
+      "phase": "4",
       "displayName": "Unraid",
       "tier": "B",
       "epic": "B",
@@ -288,6 +293,7 @@
     },
 
     "openmediavault": {
+      "phase": "4",
       "displayName": "OpenMediaVault",
       "tier": "C",
       "epic": "B",
@@ -323,6 +329,7 @@
     },
 
     "proxmox": {
+      "phase": "4",
       "displayName": "Proxmox VE",
       "tier": "C",
       "epic": "B",
@@ -354,6 +361,444 @@
         "embedded-window": { "declared": "unsupported", "reason": "Tier C. Section 4A defers the PVE Web UI plugin indefinitely, so there is no window to embed in." },
         "app-store-packaging": { "declared": "unsupported", "reason": "Tier C, and structurally so: Proxmox VE has no third-party application store to package into. That is why this provider is a deployment profile at all." },
         "storage-picker": { "declared": "unsupported", "reason": "Tier C. One host directory is shared into the guest and the paths under it are fixed in the env file." }
+      }
+    },
+
+    "portainer": {
+      "phase": "6",
+      "displayName": "Portainer CE",
+      "tier": "B",
+      "epic": "B",
+      "workPackage": "6.6",
+      "metadata": {
+        "kind": "compose",
+        "root": "apps/portainer",
+        "compose": "compose/backup-manager.yml",
+        "env": "compose/backup-manager.env",
+        "files": [
+          "README.md",
+          "templates.json",
+          "logo.svg"
+        ],
+        "storeArtifacts": [
+          "templates.json"
+        ]
+      },
+      "scanRoots": [
+        "apps/portainer"
+      ],
+      "acceptance": "docs/acceptance/portainer-stack-deployment.md",
+      "cells": {
+        "provider-identity": {
+          "declared": "not-applicable",
+          "reason": "This adapter ships no frontend bridge, which canonical.json records as uiBridge \"none\" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestEveryNewAdapterSelectsTheGenericProfileAndServesTheEmbeddedBundle"
+        },
+        "package-metadata": {
+          "declared": "supported"
+        },
+        "canonical-image-parity": {
+          "declared": "supported"
+        },
+        "release-manifest-integrity": {
+          "declared": "supported"
+        },
+        "core-binary-hash-parity": {
+          "declared": "not-applicable",
+          "reason": "This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest."
+        },
+        "architecture-parity": {
+          "declared": "not-applicable",
+          "reason": "This adapter makes no architecture claim of its own: it names one multi-arch canonical image by reference and lets the runtime pick. The repository-wide claim is release-manifest-integrity's."
+        },
+        "state-persistence": {
+          "declared": "supported"
+        },
+        "backup-root-containment": {
+          "declared": "supported"
+        },
+        "auth-mode-explicit": {
+          "declared": "not-applicable",
+          "reason": "The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestNoNewAdapterWiresAuthenticationOfItsOwn"
+        },
+        "no-bundled-secrets": {
+          "declared": "supported"
+        },
+        "no-provider-lifecycle": {
+          "declared": "supported"
+        },
+        "api-path-isolation": {
+          "declared": "supported"
+        },
+        "provider-removal-preserves-core": {
+          "declared": "supported"
+        },
+        "host-management-plane-untouched": {
+          "declared": "supported"
+        },
+        "install-update-remove": {
+          "declared": "supported"
+        },
+        "ui-launch": {
+          "declared": "supported"
+        },
+        "upgrade-preserves-state": {
+          "declared": "supported"
+        },
+        "remove-preserves-backups": {
+          "declared": "supported"
+        },
+        "native-auth": {
+          "declared": "unsupported",
+          "reason": "Portainer has its own users, and this adapter does not borrow them: sign-in is the product's own local account. A provider-native identity bridge is explicitly out of scope for issue #170, and one that trusted a header with no authenticated gateway in front of it would be worse than none."
+        },
+        "native-notifications": {
+          "declared": "unsupported",
+          "reason": "Portainer has no notification surface a third-party stack can post to. Webhooks instead."
+        },
+        "embedded-window": {
+          "declared": "unsupported",
+          "reason": "Portainer's stack view links out to the published port; it hosts no third-party application window."
+        },
+        "app-store-packaging": {
+          "declared": "not-applicable",
+          "reason": "The store artifact exists and is real: templates.json is a Portainer App Template and an operator does install this from Portainer's own catalogue. What this capability actually decides is whether the SHIPPED BUNDLE tells the user so, and it cannot, because this adapter ships no bridge (see provider-identity). Declaring it supported would be a claim about the UI that the UI does not make. The template itself is checked by name.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestThePortainerTemplateIsAStackTemplateAndNotAPlugin"
+        },
+        "storage-picker": {
+          "declared": "unsupported",
+          "reason": "No host volume API a stack can browse. Paths are typed into the App Template's form."
+        }
+      }
+    },
+    "dockge": {
+      "phase": "6",
+      "displayName": "Dockge",
+      "tier": "C",
+      "epic": "B",
+      "workPackage": "6.6",
+      "metadata": {
+        "kind": "canonical-compose",
+        "root": "apps/dockge",
+        "compose": "container/compose.yaml",
+        "env": "container/.env.example",
+        "files": [
+          "README.md"
+        ],
+        "storeArtifacts": []
+      },
+      "scanRoots": [
+        "apps/dockge"
+      ],
+      "acceptance": "docs/acceptance/dockge-stack-import.md",
+      "cells": {
+        "provider-identity": {
+          "declared": "not-applicable",
+          "reason": "This adapter ships no frontend bridge, which canonical.json records as uiBridge \"none\" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestEveryNewAdapterSelectsTheGenericProfileAndServesTheEmbeddedBundle"
+        },
+        "package-metadata": {
+          "declared": "supported"
+        },
+        "canonical-image-parity": {
+          "declared": "not-applicable",
+          "reason": "Dockge deploys container/compose.yaml itself, and that file BUILDS the canonical image from container/Dockerfile rather than pulling a published reference: it is the source of the image, not a consumer of one. Identical to the generic column's answer, and for the identical reason, which is the point of this column reading the canonical stack rather than a copy.",
+          "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go"
+        },
+        "release-manifest-integrity": {
+          "declared": "supported"
+        },
+        "core-binary-hash-parity": {
+          "declared": "not-applicable",
+          "reason": "This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest."
+        },
+        "architecture-parity": {
+          "declared": "not-applicable",
+          "reason": "This adapter makes no architecture claim of its own: it names one multi-arch canonical image by reference and lets the runtime pick. The repository-wide claim is release-manifest-integrity's."
+        },
+        "state-persistence": {
+          "declared": "supported"
+        },
+        "backup-root-containment": {
+          "declared": "supported"
+        },
+        "auth-mode-explicit": {
+          "declared": "not-applicable",
+          "reason": "The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestNoNewAdapterWiresAuthenticationOfItsOwn"
+        },
+        "no-bundled-secrets": {
+          "declared": "supported"
+        },
+        "no-provider-lifecycle": {
+          "declared": "supported"
+        },
+        "api-path-isolation": {
+          "declared": "supported"
+        },
+        "provider-removal-preserves-core": {
+          "declared": "supported"
+        },
+        "host-management-plane-untouched": {
+          "declared": "supported"
+        },
+        "install-update-remove": {
+          "declared": "supported"
+        },
+        "ui-launch": {
+          "declared": "supported"
+        },
+        "upgrade-preserves-state": {
+          "declared": "supported"
+        },
+        "remove-preserves-backups": {
+          "declared": "supported"
+        },
+        "native-auth": {
+          "declared": "unsupported",
+          "reason": "Dockge is a compose manager with a single operator login of its own and no identity to federate. Section 13A local auth is the whole story."
+        },
+        "native-notifications": {
+          "declared": "unsupported",
+          "reason": "Dockge has no notification surface. Webhooks instead."
+        },
+        "embedded-window": {
+          "declared": "unsupported",
+          "reason": "Dockge links out to a stack's published port; it hosts no third-party application window."
+        },
+        "app-store-packaging": {
+          "declared": "unsupported",
+          "reason": "Dockge has no application store or catalogue at all. It manages compose stacks in a directory, which is why this adapter is supported by compatibility and ships no packaging: apps/dockge/ holds documentation and nothing else, and a runtime definition appearing there is a red test."
+        },
+        "storage-picker": {
+          "declared": "unsupported",
+          "reason": "No host volume API. Paths are typed into the stack's .env."
+        }
+      }
+    },
+    "casaos": {
+      "phase": "6",
+      "displayName": "CasaOS",
+      "tier": "B",
+      "epic": "B",
+      "workPackage": "6.6",
+      "metadata": {
+        "kind": "compose",
+        "root": "apps/casaos",
+        "compose": "compose/backup-manager.yml",
+        "files": [
+          "README.md",
+          "icon.svg"
+        ],
+        "storeArtifacts": [
+          "compose/backup-manager.yml"
+        ],
+        "architectureClaim": {
+          "source": "apps/casaos/compose/backup-manager.yml",
+          "architectures": [
+            "amd64",
+            "arm64"
+          ]
+        }
+      },
+      "scanRoots": [
+        "apps/casaos"
+      ],
+      "acceptance": "docs/acceptance/casaos-app-store-install.md",
+      "cells": {
+        "provider-identity": {
+          "declared": "not-applicable",
+          "reason": "This adapter ships no frontend bridge, which canonical.json records as uiBridge \"none\" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestEveryNewAdapterSelectsTheGenericProfileAndServesTheEmbeddedBundle"
+        },
+        "package-metadata": {
+          "declared": "supported"
+        },
+        "canonical-image-parity": {
+          "declared": "supported"
+        },
+        "release-manifest-integrity": {
+          "declared": "supported"
+        },
+        "core-binary-hash-parity": {
+          "declared": "not-applicable",
+          "reason": "This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest."
+        },
+        "architecture-parity": {
+          "declared": "supported"
+        },
+        "state-persistence": {
+          "declared": "supported"
+        },
+        "backup-root-containment": {
+          "declared": "supported"
+        },
+        "auth-mode-explicit": {
+          "declared": "not-applicable",
+          "reason": "The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestNoNewAdapterWiresAuthenticationOfItsOwn"
+        },
+        "no-bundled-secrets": {
+          "declared": "supported"
+        },
+        "no-provider-lifecycle": {
+          "declared": "supported"
+        },
+        "api-path-isolation": {
+          "declared": "supported"
+        },
+        "provider-removal-preserves-core": {
+          "declared": "supported"
+        },
+        "host-management-plane-untouched": {
+          "declared": "supported"
+        },
+        "install-update-remove": {
+          "declared": "supported"
+        },
+        "ui-launch": {
+          "declared": "supported"
+        },
+        "upgrade-preserves-state": {
+          "declared": "supported"
+        },
+        "remove-preserves-backups": {
+          "declared": "supported"
+        },
+        "native-auth": {
+          "declared": "unsupported",
+          "reason": "CasaOS has a user account of its own and this adapter does not borrow it: sign-in is the product's own local account over its own session cookie. A provider-native identity bridge is explicitly out of scope for issue #170."
+        },
+        "native-notifications": {
+          "declared": "unsupported",
+          "reason": "CasaOS exposes no notification API a third-party compose app can post to. Webhooks instead."
+        },
+        "embedded-window": {
+          "declared": "unsupported",
+          "reason": "The app tile opens the published port in a browser tab; CasaOS hosts no third-party application window."
+        },
+        "app-store-packaging": {
+          "declared": "not-applicable",
+          "reason": "The store artifact exists and is real: the compose file carries the x-casaos block CasaOS builds the app tile and the install dialog from. What this capability actually decides is whether the SHIPPED BUNDLE tells the user they installed from a store, and it cannot, because this adapter ships no bridge (see provider-identity). The store metadata itself is checked by name, in both directions against the services beside it.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestCasaOSAndZimaOSStoreMetadataDescribesTheStackBesideIt"
+        },
+        "storage-picker": {
+          "declared": "unsupported",
+          "reason": "No host volume API a compose app can browse. The store install dialog shows the five fixed mounts and nothing selects among them."
+        }
+      }
+    },
+    "zimaos": {
+      "phase": "6",
+      "displayName": "ZimaOS",
+      "tier": "B",
+      "epic": "B",
+      "workPackage": "6.6",
+      "metadata": {
+        "kind": "compose",
+        "root": "apps/zimaos",
+        "compose": "compose/backup-manager.yml",
+        "files": [
+          "README.md",
+          "icon.svg"
+        ],
+        "storeArtifacts": [
+          "compose/backup-manager.yml"
+        ],
+        "architectureClaim": {
+          "source": "apps/zimaos/compose/backup-manager.yml",
+          "architectures": [
+            "amd64",
+            "arm64"
+          ]
+        }
+      },
+      "scanRoots": [
+        "apps/zimaos"
+      ],
+      "acceptance": "docs/acceptance/zimaos-app-store-install.md",
+      "cells": {
+        "provider-identity": {
+          "declared": "not-applicable",
+          "reason": "This adapter ships no frontend bridge, which canonical.json records as uiBridge \"none\" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestEveryNewAdapterSelectsTheGenericProfileAndServesTheEmbeddedBundle"
+        },
+        "package-metadata": {
+          "declared": "supported"
+        },
+        "canonical-image-parity": {
+          "declared": "supported"
+        },
+        "release-manifest-integrity": {
+          "declared": "supported"
+        },
+        "core-binary-hash-parity": {
+          "declared": "not-applicable",
+          "reason": "This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest."
+        },
+        "architecture-parity": {
+          "declared": "supported"
+        },
+        "state-persistence": {
+          "declared": "supported"
+        },
+        "backup-root-containment": {
+          "declared": "supported"
+        },
+        "auth-mode-explicit": {
+          "declared": "not-applicable",
+          "reason": "The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestNoNewAdapterWiresAuthenticationOfItsOwn"
+        },
+        "no-bundled-secrets": {
+          "declared": "supported"
+        },
+        "no-provider-lifecycle": {
+          "declared": "supported"
+        },
+        "api-path-isolation": {
+          "declared": "supported"
+        },
+        "provider-removal-preserves-core": {
+          "declared": "supported"
+        },
+        "host-management-plane-untouched": {
+          "declared": "supported"
+        },
+        "install-update-remove": {
+          "declared": "supported"
+        },
+        "ui-launch": {
+          "declared": "supported"
+        },
+        "upgrade-preserves-state": {
+          "declared": "supported"
+        },
+        "remove-preserves-backups": {
+          "declared": "supported"
+        },
+        "native-auth": {
+          "declared": "unsupported",
+          "reason": "ZimaOS has a user account of its own and this adapter does not borrow it: sign-in is the product's own local account over its own session cookie. A provider-native identity bridge is explicitly out of scope for issue #170."
+        },
+        "native-notifications": {
+          "declared": "unsupported",
+          "reason": "ZimaOS exposes no notification API a third-party compose app can post to. Webhooks instead."
+        },
+        "embedded-window": {
+          "declared": "unsupported",
+          "reason": "The app tile opens the published port in a browser tab; ZimaOS hosts no third-party application window."
+        },
+        "app-store-packaging": {
+          "declared": "not-applicable",
+          "reason": "The store artifact exists and is real: the compose file carries the x-casaos block ZimaOS builds the app tile and the install dialog from. What this capability actually decides is whether the SHIPPED BUNDLE tells the user they installed from a store, and it cannot, because this adapter ships no bridge (see provider-identity). The store metadata itself is checked by name, in both directions against the services beside it.",
+          "verifiedBy": "distribution/packaging/newadapters_test.go:TestCasaOSAndZimaOSStoreMetadataDescribesTheStackBesideIt"
+        },
+        "storage-picker": {
+          "declared": "unsupported",
+          "reason": "No host volume API a compose app can browse. The store install dialog shows the five fixed mounts and nothing selects among them."
+        }
       }
     }
   }

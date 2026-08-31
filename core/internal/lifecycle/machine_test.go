@@ -120,7 +120,7 @@ func TestIllegalTransitionsFail(t *testing.T) {
 		{Quarantined, QuarantinedLost},    // quarantine can't declare loss without going through Complete
 		{Complete, Committed},             // terminal can't rewind
 		{RemoteDeletePending, Discovered}, // can't abandon a delete-pending mid-flight back to the start
-		{QuarantinedLost, Discovered},     // terminal by design, see TestCompleteCannotLivelockThroughQuarantine
+		{QuarantinedLost, Discovered},     // no route back into the pipeline, see TestCompleteCannotLivelockThroughQuarantine
 		{QuarantinedLost, Quarantined},    // no route from the unrecoverable outcome to the recoverable one
 	} {
 		err := Validate(tc.from, tc.to)
@@ -249,20 +249,42 @@ func TestQuarantinedEntryPoints(t *testing.T) {
 		Verifying, Committed, RemoteDeletePending, Failed)
 }
 
+// QUARANTINED has exactly two exits, and they answer two different
+// questions. DISCOVERED re-ingests: throw the local copy away and fetch the
+// artifact again from the remote, which is the right answer when the local
+// copy really is bad. COMMITTED reinstates: keep the local copy and trust
+// it again, which is the right answer when the local copy is provably
+// intact and the remote may be gone (issue #220). Neither is automatic;
+// both are operator decisions, and the reinstatement one additionally
+// requires evidence that could have failed and forfeits the artifact's
+// remote delete permanently (see quarantine.go and remotedelete.go).
 func TestQuarantinedHasExits(t *testing.T) {
 	exits := Successors(Quarantined)
 	if len(exits) == 0 {
 		t.Fatal("QUARANTINED has no declared successors; an artifact that's quarantined would be stuck there forever, which is a leak")
 	}
-	assertStateSet(t, "Successors(Quarantined)", exits, Discovered)
+	assertStateSet(t, "Successors(Quarantined)", exits, Discovered, Committed)
 }
 
 // The hole this whole package exists to close: a quarantined artifact must
-// never be able to silently resume the happy path. Its only way out is
-// DISCOVERED, which forces a full re-run of transfer, verification and
-// commit, never a shortcut straight back to something that looks done.
+// never be able to silently resume the happy path.
+//
+// Issue #220 added one exit that does return an artifact to a state that
+// "looks done", QUARANTINED -> COMMITTED, and it is deliberately not in
+// the list below. What keeps the guarantee intact is that the table alone
+// is no longer the whole proof for that one edge: nothing in this package
+// records it except ReinstateFromQuarantine, which refuses without
+// evidence that could have failed (see quarantine.go), and an artifact
+// that takes it can never reach REMOTE_DELETE_PENDING again, because
+// DeleteRemote refuses every reinstated artifact outright (remotedelete.go,
+// TestDeleteRemoteRefusesAnArtifactReinstatedFromQuarantine).
+//
+// Everything else this test named still holds exactly as it did, including
+// the two that matter most: quarantine cannot re-enter the middle of the
+// pipeline, and it cannot reach REMOTE_DELETE_PENDING or COMPLETE, the two
+// states that stand between an artifact and a destroyed remote source.
 func TestQuarantineCannotShortcutToSuccess(t *testing.T) {
-	for _, target := range []State{Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Complete, QuarantinedLost} {
+	for _, target := range []State{Transferring, Transferred, Verifying, Verified, Committing, RemoteDeletePending, Complete, QuarantinedLost} {
 		if err := Validate(Quarantined, target); err == nil {
 			t.Errorf("Validate(QUARANTINED, %s) = nil, want an error: quarantine must not shortcut back onto the happy path", target)
 		}
@@ -289,43 +311,64 @@ func TestCompleteCannotLivelockThroughQuarantine(t *testing.T) {
 	if err := Validate(Complete, QuarantinedLost); err != nil {
 		t.Fatalf("Validate(COMPLETE, QUARANTINED_LOST) = %v, want nil", err)
 	}
-	// ...and QUARANTINED_LOST must have no way back into the graph at all,
-	// which is what actually breaks the loop: there is nothing left to
-	// retry, so nothing can cycle.
-	if successors := Successors(QuarantinedLost); len(successors) != 0 {
-		t.Fatalf("QUARANTINED_LOST has successors %v, want none: any exit here re-creates the livelock this state exists to prevent", successors)
+	// ...and QUARANTINED_LOST must have no way back into the PIPELINE,
+	// which is what actually breaks the loop. Its one exit (issue #220) is
+	// back to COMPLETE, the state it came from: an operator who can prove
+	// the durable local copy is intact after all gets the restore point
+	// back. That cannot cycle the way a DISCOVERED exit would. Re-entering
+	// COMPLETE re-attempts nothing, since the pipeline stops there and
+	// reconciliation's COMPLETE row only re-reads the local copy, and
+	// getting there at all needs both a passing check and a deliberate
+	// operator action, where the loop this test exists to prevent needed
+	// neither.
+	assertStateSet(t, "Successors(QuarantinedLost)", Successors(QuarantinedLost), Complete)
+	for _, forbidden := range []State{Discovered, Transferring, Transferred, Verifying, Verified, Committing, Committed, RemoteDeletePending, Failed} {
+		if err := Validate(QuarantinedLost, forbidden); err == nil {
+			t.Errorf("Validate(QUARANTINED_LOST, %s) = nil, want an error: the one exit is back to the state it came from, never into the pipeline", forbidden)
+		}
 	}
 }
 
-// --- no state is a dead end, except the one that's terminal on purpose ---
+// --- no state is a dead end, and two move only when an operator says so ---
 
-// terminalByDesign lists states this package deliberately gives no
-// automatic exit. Landing in one of these is not "the artifact is stuck"
-// in the sense the issue calls a design bug; it's a hard stop that
-// surfaces as an operator-visible alarm (FR-24) instead of an automatic
-// retry, because there is genuinely nothing left for an automatic retry to
-// do. QUARANTINED_LOST is the only member: it means the remote source is
-// confirmed gone (only COMPLETE precedes it) and the local copy has also
-// gone bad, so retrying would only rediscover nothing and fail again. See
-// TestCompleteCannotLivelockThroughQuarantine for the loop this avoids.
-var terminalByDesign = map[State]bool{
+// noAutomaticExit lists the states this package deliberately gives no
+// AUTOMATIC exit: every edge out of one of them is recorded by an
+// operator-triggered use case and by nothing else, never by the cycle, the
+// scheduler, or a retry policy. Landing in one is not "the artifact is
+// stuck" in the sense the issue calls a design bug; it is a hard stop that
+// surfaces as an operator-visible alarm (FR-24) and waits for a human.
+//
+// This replaced an earlier "terminalByDesign" map holding QUARANTINED_LOST
+// alone, when that state had no declared successors at all. Issue #220
+// gave it exactly one, back to the COMPLETE it came from, so the property
+// worth pinning is no longer "has no exits" but "has no exit anything
+// automatic can take", which is the property both quarantine states have
+// always actually had. The successor sets themselves are pinned exactly,
+// by TestQuarantinedHasExits and TestCompleteCannotLivelockThroughQuarantine,
+// so this map cannot quietly absorb a new edge.
+var noAutomaticExit = map[State]bool{
+	Quarantined:     true,
 	QuarantinedLost: true,
 }
 
 // "The artifact is stuck" is a design bug per the issue, so prove it can't
-// happen for anything other than the one state that's terminal on purpose,
-// and prove that state really is exactly as terminal as declared.
+// happen: every state has somewhere to go, and the two that only an
+// operator can move are exactly the two that say so.
 func TestNoStateIsALeak(t *testing.T) {
 	for _, s := range AllStates {
 		successors := Successors(s)
-		if terminalByDesign[s] {
-			if len(successors) != 0 {
-				t.Errorf("%q is listed as terminal by design but has successors %v; update terminalByDesign or Transitions, they've drifted apart", s, successors)
-			}
-			continue
-		}
 		if len(successors) == 0 {
-			t.Errorf("%q has no declared successors and is not in terminalByDesign; an artifact reaching it would be stuck there forever with no documented reason", s)
+			t.Errorf("%q has no declared successors; an artifact reaching it would be stuck there forever with no documented reason", s)
+		}
+	}
+	for s := range noAutomaticExit {
+		if !IsQuarantineState(s) {
+			t.Errorf("%q is listed as having no automatic exit but is not a quarantine state; the two lists have drifted apart", s)
+		}
+	}
+	for _, s := range AllStates {
+		if IsQuarantineState(s) && !noAutomaticExit[s] {
+			t.Errorf("%q is a quarantine state but is not listed in noAutomaticExit; every way out of quarantine must be an operator decision", s)
 		}
 	}
 }

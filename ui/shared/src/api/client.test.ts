@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { httpApi } from "./client";
 import { BackupManagerError, toApiErrorCode } from "./contracts";
 import type { ApiErrorCode } from "./contracts";
+import { progressPercent } from "@shared/types/operation";
 
 /** Sets document.cookie the way a browser would after the server issued
  *  a Set-Cookie header for bm_csrf — jsdom's document.cookie setter
@@ -1122,7 +1123,7 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     expect(got[1].severity).toBe("info");
   });
 
-  it("leaves an operation's byte counters undefined rather than reporting zero transferred", async () => {
+  it("reports no progress at all for an operation the service sent none for, running or finished", async () => {
     vi.stubGlobal("fetch", mockFetchOk({
       operations: [
         { operation_id: "op_2", status: "running", action: "run_cycle", created_at: "2026-08-30T09:01:00Z" },
@@ -1133,12 +1134,13 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     const got = await httpApi.listOperations();
 
     expect(got[0].id).toBe("op_2");
-    expect(got[0].percent).toBe(0);
-    expect(got[1].percent).toBe(100);
-    // undefined renders as "unknown"; a zero renders as "nothing has been
-    // transferred", and only one of those is true.
-    expect(got[0].bytesDone).toBeUndefined();
-    expect(got[0].bytesTotal).toBeUndefined();
+    expect(got[0].status).toBe("running");
+    expect(got[1].status).toBe("completed");
+    // The one shape this whole feature exists to keep apart from "0%": a
+    // running operation with no reading (the post-restart case) and a
+    // finished one both report null, never a percent.
+    expect(got[0].progress).toBeNull();
+    expect(got[1].progress).toBeNull();
     expect(got[0].nonDestructive).toBe(false);
   });
 
@@ -1151,5 +1153,121 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     const got = await httpApi.scanCatalog();
 
     expect(got).toEqual({ discovered: 47, valid: 45, requiresReview: 3 });
+  });
+});
+
+/** Issue #221. The durable operation record and the live reading are two
+ *  different things on the wire, and these hold the client to keeping them
+ *  apart on the way in. */
+describe("httpApi live operation progress", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("maps a live reading onto the operation, field for field", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      operations: [
+        {
+          operation_id: "op_live",
+          status: "running",
+          action: "run_cycle",
+          created_at: "2026-08-30T09:00:00Z",
+          started_at: "2026-08-30T09:00:01Z",
+          progress: {
+            observed_at: "2026-08-30T09:15:00Z",
+            sequence: 12,
+            stage: "transferring",
+            backup_set_id: "alpha/nightly",
+            backup_sets_done: 1,
+            backup_sets_total: 3,
+            artifact: "nightly.dump",
+            artifacts_done: 4,
+            bytes_transferred: 512,
+            bytes_total: 2048,
+            bytes_per_second: 128
+          }
+        }
+      ]
+    }));
+
+    const [op] = await httpApi.listOperations();
+
+    expect(op.status).toBe("running");
+    expect(op.progress).toEqual({
+      observedAt: "2026-08-30T09:15:00Z",
+      sequence: 12,
+      stage: "transferring",
+      backupSetId: "alpha/nightly",
+      backupSetsDone: 1,
+      backupSetsTotal: 3,
+      artifact: "nightly.dump",
+      artifactsDone: 4,
+      bytesDone: 512,
+      bytesTotal: 2048,
+      bytesPerSecond: 128
+    });
+    expect(progressPercent(op.progress!)).toBe(25);
+  });
+
+  it("keeps a measured zero as zero and an unmeasured field as undefined", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      operations: [
+        {
+          operation_id: "op_zero",
+          status: "running",
+          action: "run_cycle",
+          created_at: "2026-08-30T09:00:00Z",
+          progress: {
+            observed_at: "2026-08-30T09:15:00Z",
+            sequence: 1,
+            stage: "transferring",
+            backup_sets_done: 0,
+            backup_sets_total: 1,
+            artifacts_done: 0,
+            bytes_transferred: 0,
+            bytes_total: 2048
+          }
+        }
+      ]
+    }));
+
+    const [op] = await httpApi.listOperations();
+
+    // A copy that has started and moved nothing: measured, and zero.
+    expect(op.progress?.bytesDone).toBe(0);
+    // Never measured at all: absent, not zero. Rendering a rate of 0 B/s
+    // for a transfer nobody has timed yet would claim it is stalled.
+    expect(op.progress?.bytesPerSecond).toBeUndefined();
+    expect(progressPercent(op.progress!)).toBe(0);
+  });
+
+  it("reports no percent, rather than zero, when the artifact's size is unknown", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      operations: [
+        {
+          operation_id: "op_sizeless",
+          status: "running",
+          action: "run_cycle",
+          created_at: "2026-08-30T09:00:00Z",
+          progress: {
+            observed_at: "2026-08-30T09:15:00Z",
+            sequence: 3,
+            stage: "transferring",
+            backup_sets_done: 0,
+            backup_sets_total: 1,
+            artifacts_done: 0,
+            bytes_transferred: 900
+          }
+        }
+      ]
+    }));
+
+    const [op] = await httpApi.listOperations();
+
+    expect(op.progress?.bytesDone).toBe(900);
+    expect(op.progress?.bytesTotal).toBeUndefined();
+    // The distinction issue #221 exists for: "we cannot work out a
+    // fraction" is null, and null is not 0.
+    expect(progressPercent(op.progress!)).toBeNull();
   });
 });

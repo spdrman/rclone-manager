@@ -47,6 +47,37 @@ type operationResponse struct {
 	FinishedAt     string `json:"finished_at,omitempty"`
 	Result         string `json:"result,omitempty"`
 	Error          string `json:"error,omitempty"`
+
+	// Progress is present only while the operation is executing in this
+	// process, and is simply absent otherwise (see
+	// core/service.OperationProgress). Absent is a different answer from
+	// zero and a client must be able to tell them apart, which is why
+	// this is a nested object that disappears rather than a set of
+	// flat fields that would each have to carry some sentinel.
+	Progress *operationProgressResponse `json:"progress,omitempty"`
+}
+
+// operationProgressResponse is the wire shape of one live progress
+// reading (docs/EPIC-B-multi-nas.md §52, api/v1/openapi.json's
+// OperationProgress).
+//
+// The three byte fields are pointers, not plain int64s with omitempty,
+// because zero is a real reading here: "the copy has started and nothing
+// has landed yet" and "no copy is being measured" are different facts, and
+// omitempty on a plain int64 would send exactly the same bytes for both.
+type operationProgressResponse struct {
+	ObservedAt      string `json:"observed_at"`
+	Sequence        int64  `json:"sequence"`
+	Stage           string `json:"stage"`
+	BackupSetID     string `json:"backup_set_id,omitempty"`
+	BackupSetsDone  int    `json:"backup_sets_done"`
+	BackupSetsTotal int    `json:"backup_sets_total"`
+	Artifact        string `json:"artifact,omitempty"`
+	ArtifactsDone   int    `json:"artifacts_done"`
+
+	BytesTransferred *int64 `json:"bytes_transferred,omitempty"`
+	BytesTotal       *int64 `json:"bytes_total,omitempty"`
+	BytesPerSecond   *int64 `json:"bytes_per_second,omitempty"`
 }
 
 func toOperationResponse(op service.Operation) operationResponse {
@@ -68,6 +99,22 @@ func toOperationResponse(op service.Operation) operationResponse {
 	}
 	if !op.FinishedAt.IsZero() {
 		resp.FinishedAt = op.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if op.Progress != nil {
+		p := op.Progress
+		resp.Progress = &operationProgressResponse{
+			ObservedAt:       p.ObservedAt.Format(time.RFC3339Nano),
+			Sequence:         p.Sequence,
+			Stage:            p.Stage,
+			BackupSetID:      p.BackupSetID,
+			BackupSetsDone:   p.BackupSetsDone,
+			BackupSetsTotal:  p.BackupSetsTotal,
+			Artifact:         p.Artifact,
+			ArtifactsDone:    p.ArtifactsDone,
+			BytesTransferred: p.BytesTransferred,
+			BytesTotal:       p.BytesTotal,
+			BytesPerSecond:   p.BytesPerSecond,
+		}
 	}
 	return resp
 }

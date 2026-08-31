@@ -83,7 +83,8 @@
           "NOT_CONFIGURED",
           "ARTIFACT_NOT_FOUND",
           "ARTIFACT_NOT_QUARANTINED",
-          "ARTIFACT_IRRECOVERABLE"
+          "ARTIFACT_IRRECOVERABLE",
+          "REINSTATEMENT_REFUSED"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -120,7 +121,8 @@
           "NOT_CONFIGURED": "wire",
           "ARTIFACT_NOT_FOUND": "wire",
           "ARTIFACT_NOT_QUARANTINED": "wire",
-          "ARTIFACT_IRRECOVERABLE": "wire"
+          "ARTIFACT_IRRECOVERABLE": "wire",
+          "REINSTATEMENT_REFUSED": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -146,7 +148,8 @@
             "CONFIG_REVISION_STALE",
             "ALREADY_CONFIGURED",
             "ARTIFACT_NOT_QUARANTINED",
-            "ARTIFACT_IRRECOVERABLE"
+            "ARTIFACT_IRRECOVERABLE",
+            "REINSTATEMENT_REFUSED"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -372,7 +375,7 @@
       },
       "Operation": {
         "type": "object",
-        "description": "One durable operation record. Timestamp fields are omitted, not zero-valued, until the event they name has happened.",
+        "description": "One durable operation record. Timestamp fields are omitted, not zero-valued, until the event they name has happened. progress is the separate, ephemeral thing: see OperationProgress for why it is a nested object that is simply absent rather than a set of fields on this record.",
         "additionalProperties": false,
         "properties": {
           "operation_id": {
@@ -419,11 +422,84 @@
           "error": {
             "type": "string",
             "x-go-omitempty": true
+          },
+          "progress": {
+            "$ref": "#/components/schemas/OperationProgress",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
           }
         },
         "required": [
           "operation_id",
           "status"
+        ]
+      },
+      "OperationProgress": {
+        "type": "object",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "additionalProperties": false,
+        "properties": {
+          "observed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "discovering",
+              "transferring",
+              "verifying",
+              "committing",
+              "cleaning-remote"
+            ]
+          },
+          "backup_set_id": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "backup_sets_done": {
+            "type": "integer"
+          },
+          "backup_sets_total": {
+            "type": "integer"
+          },
+          "artifact": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "artifacts_done": {
+            "type": "integer"
+          },
+          "bytes_transferred": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_total": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "bytes_per_second": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          }
+        },
+        "required": [
+          "observed_at",
+          "sequence",
+          "stage",
+          "backup_sets_done",
+          "backup_sets_total",
+          "artifacts_done"
         ]
       },
       "RetentionTierSelection": {
@@ -1396,6 +1472,40 @@
           }
         },
         "required": [
+          "checked",
+          "passed"
+        ]
+      },
+      "ArtifactReinstateResponse": {
+        "type": "object",
+        "description": "POST /quarantine/{id}/reinstate. Re-checks one quarantined backup's durable local copy and, when what it finds is enough, returns it to the state it already held so it counts as a restore point again. `reinstated` and `passed` are separate: `passed` is the verdict of the checks, `reinstated` is whether the backup actually moved. A backup reinstated this way NEVER authorises deleting its remote source again; that forfeiture is permanent and is what makes the action safe to offer.",
+        "additionalProperties": false,
+        "properties": {
+          "reinstated": {
+            "type": "boolean",
+            "description": "Whether the backup was actually returned to a trusted state."
+          },
+          "checked": {
+            "type": "boolean",
+            "description": "Whether there was anything to check at all. False is never a pass."
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "The combined verdict of the checks that ran. A false here is a fact about the backup, not a failed request, and is reported with 200."
+          },
+          "state": {
+            "type": "string",
+            "description": "The lifecycle state the backup was returned to, \"COMMITTED\" or \"COMPLETE\". Omitted when nothing moved.",
+            "x-go-omitempty": true
+          },
+          "reason": {
+            "type": "string",
+            "description": "What was checked and what it found, suitable for showing an operator.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "reinstated",
           "checked",
           "passed"
         ]
@@ -4260,6 +4370,115 @@
             "x-error-codes": [
               "ARTIFACT_NOT_QUARANTINED",
               "ARTIFACT_IRRECOVERABLE"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/quarantine/{id}/reinstate": {
+      "post": {
+        "operationId": "reinstateArtifact",
+        "summary": "Re-check one quarantined backup and, if the evidence is enough, trust it again. Forfeits its remote delete permanently.",
+        "tags": [
+          "quarantine"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The three-part source/set/name identity."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The verdict, and whether the backup moved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactReinstateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: ARTIFACT_NOT_QUARANTINED, REINSTATEMENT_REFUSED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_QUARANTINED",
+              "REINSTATEMENT_REFUSED"
             ]
           },
           "500": {

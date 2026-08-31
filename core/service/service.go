@@ -130,6 +130,14 @@ type BackupService struct {
 	retentionMu    sync.Mutex
 	retentionPlans map[string]retentionPlanRecord
 
+	// progress is the in-memory registry of live transfer progress for
+	// the operations executing in this process (progress.go). Like
+	// retentionPlans above it is deliberately non-durable, and for a
+	// sharper reason: a retention preview that outlived a restart would
+	// merely be stale, while a transfer progress reading that outlived
+	// one would describe a transfer that no longer exists.
+	progress *liveProgress
+
 	// configPath is the YAML file this BackupService was opened from
 	// (Open), or "" for a BackupService built directly with New (every
 	// core/ test, which constructs its own *config.Config in memory and
@@ -234,6 +242,7 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 		ctx:            ctx,
 		cancel:         cancel,
 		retentionPlans: make(map[string]retentionPlanRecord),
+		progress:       newLiveProgress(),
 	}
 	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 

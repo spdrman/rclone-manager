@@ -53,8 +53,12 @@
 // DISCOVERED) would ask this exact case to rediscover and re-transfer a
 // source that machine.go's own reasoning already established is gone,
 // which fails, lands in FAILED, and FAILED -> DISCOVERED sends it right
-// back around forever. QUARANTINED_LOST has no outgoing edges: reaching it
-// means an operator has to act, not that another automatic retry will.
+// back around forever. QUARANTINED_LOST has no route back into the
+// pipeline and no automatic exit of any kind: reaching it means an operator
+// has to act, not that another automatic retry will. (Since issue #220 an
+// operator who can prove the durable local copy is intact after all can
+// return it to the COMPLETE it came from, which is still not something this
+// package or any other automatic pass ever does.)
 //
 // machine.go admits QUARANTINED_LOST from exactly one place: COMPLETE. So:
 //

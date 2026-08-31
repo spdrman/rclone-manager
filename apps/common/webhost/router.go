@@ -252,13 +252,18 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/activity", h.listActivity)
 		r.Get("/quarantine", h.listQuarantine)
 
-		// The two operator actions a quarantined backup has. Both carry
-		// requireCSRF; neither carries requireDestructiveGate, and their
+		// The three operator actions a quarantined backup has. All carry
+		// requireCSRF; none carries requireDestructiveGate, and their
 		// handlers' own docs record why: revalidate writes nothing at all,
-		// and retry moves a journal row back into the pipeline without
-		// touching a local file or a remote object.
+		// retry moves a journal row back into the pipeline without
+		// touching a local file or a remote object, and reinstate moves a
+		// journal row back to the durable state it already held, which
+		// strictly REDUCES the set of remote objects this manager will
+		// ever delete (issue #220: a reinstated backup is refused by
+		// FR-15's delete gate permanently).
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/revalidate", h.revalidateArtifact)
 		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/retry", h.retryArtifactIngestion)
+		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/reinstate", h.reinstateArtifact)
 
 		// Issue #211: FR-9 catalog recovery, the API expression of
 		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only

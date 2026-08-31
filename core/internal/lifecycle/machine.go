@@ -59,15 +59,57 @@ type Transition struct {
 // something that no longer exists, which fails, lands in FAILED, and
 // FAILED -> DISCOVERED sends it right back around: a livelock, and one that
 // also mislabels an irrecoverable loss as an ordinary retryable failure.
-// QUARANTINED_LOST has no declared successors at all, on purpose (see
-// TestOnlyCompletePrecedesQuarantinedLost and
-// TestCompleteCannotLivelockThroughQuarantine). It is a hard stop that
-// surfaces as an operator alarm (FR-24's quarantined count should count
-// this too), not a state the state machine itself ever tries to route out
-// of. This is FR-10's one addition beyond the states the issue names.
-// FR-17's reconciliation table has no row for "remote absent and local
-// final copy invalid" either, so whoever builds FR-17's reconciliation
-// (issue #18) needs that row added, targeting QUARANTINED_LOST.
+// QUARANTINED_LOST is a hard stop that surfaces as an operator alarm
+// (FR-24's quarantined count should count this too), not a state the state
+// machine itself ever tries to route out of: nothing automatic moves an
+// artifact out of it, and it has no path back into the pipeline at all
+// (see TestOnlyCompletePrecedesQuarantinedLost and
+// TestCompleteCannotLivelockThroughQuarantine). This is FR-10's one
+// addition beyond the states the issue names. FR-17's reconciliation table
+// has no row for "remote absent and local final copy invalid" either, so
+// whoever builds FR-17's reconciliation (issue #18) needs that row added,
+// targeting QUARANTINED_LOST.
+//
+// # Reinstatement: trusting a durable local copy again (issue #220)
+//
+// Both quarantine states also have an operator-only exit that keeps the
+// local copy instead of throwing it away: QUARANTINED -> COMMITTED and
+// QUARANTINED_LOST -> COMPLETE. They exist because re-ingesting is the
+// wrong answer in two cases the product actually meets. The local copy is
+// fine and the quarantine was the mistake (a misconfigured validator, a
+// restore-test hook that failed for an environmental reason, a checksum
+// recorded against the wrong algorithm), so re-transferring gigabytes
+// re-establishes a fact a local re-check has just established. Or the
+// remote source is gone while the local copy is intact, so there is
+// nothing left to re-ingest FROM and the only alternative is to leave a
+// perfectly good restore point quarantined forever, where FR-24 keeps
+// reporting it and FR-19's last-known-good protection keeps skipping it.
+//
+// Each edge returns the artifact to the state it already held, never to a
+// better one: an artifact quarantined out of VERIFYING never committed at
+// all, and ReinstateFromQuarantine proves the artifact previously entered
+// the target state by reading the append-only transition log before it
+// writes anything. That is also why there is deliberately no
+// QUARANTINED -> REMOTE_DELETE_PENDING edge, even though an artifact can
+// be quarantined from there: COMMITTED must remain the only predecessor of
+// REMOTE_DELETE_PENDING (TestOnlyCommittedPrecedesRemoteDeletePending), so
+// an RDP-origin quarantine reinstates one step further back, which is
+// strictly the more conservative of the two.
+//
+// # Why these edges cannot launder a corrupt artifact into a delete
+//
+// COMMITTED is the only state a remote delete can be reached from, so
+// re-entering it is exactly where an edge out of quarantine could turn
+// into a way to destroy the remote copy of an artifact that should never
+// have been trusted. It cannot, because taking either reinstatement edge
+// permanently forfeits the artifact's remote delete: DeleteRemote refuses,
+// before it records anything and before it touches the transport, any
+// artifact whose transition log contains one of these edges (see
+// remotedelete.go and ReinstatementEdges below). The consequence is that a
+// reinstated artifact's remote source is preserved indefinitely and an
+// operator has to release it themselves, which is the safe direction to
+// fail in, and is already the routine outcome of FR-16's identity check
+// against the project's own recommended hardened SFTP posture.
 var Transitions = []Transition{
 	// --- nominal path ---
 	{From: Discovered, To: Transferring},
@@ -116,10 +158,94 @@ var Transitions = []Transition{
 	{From: Failed, To: Quarantined},
 	{From: Quarantined, To: Discovered},
 
-	// QuarantinedLost has no outgoing edges at all: it is terminal by
-	// design. Leaving it means an operator has acted, for example resolving
-	// the loss against a different backup-set generation, which is out of
-	// this state machine's scope, not another automatic move.
+	// --- reinstatement: the two edges that re-trust a durable local copy ---
+	//
+	// Quarantined -> Committed and QuarantinedLost -> Complete each return
+	// an artifact to the exact state it already held before something
+	// distrusted it, and to nothing else. Neither is an automatic move and
+	// neither is reachable from anywhere in this package except
+	// ReinstateFromQuarantine (quarantine.go), which refuses without
+	// evidence that could actually have failed. See the "Reinstatement"
+	// section of this comment above for the whole argument, including why
+	// taking either edge permanently forfeits the artifact's remote delete.
+	{From: Quarantined, To: Committed},
+	{From: QuarantinedLost, To: Complete},
+}
+
+// quarantineStates is the set of states that mean "this artifact's content
+// is suspect and a human has to decide what happens next". Every way out of
+// one of them is an operator decision; nothing automatic moves an artifact
+// out of quarantine.
+var quarantineStates = map[State]bool{
+	Quarantined:     true,
+	QuarantinedLost: true,
+}
+
+// IsQuarantineState reports whether s is one of the two states that hold a
+// suspect artifact for a human.
+func IsQuarantineState(s State) bool { return quarantineStates[s] }
+
+// durableRestorePoints is the set of states in which a durable local final
+// copy exists and the artifact counts as a restore point. It is the same
+// set internal/health's decideState, internal/retention's
+// gfsIsManagedComplete and internal/revalidate's eligibleStates each
+// already keep their own copy of; this one exists so that
+// ReinstatementEdges can be derived from the table rather than
+// hand-listed, and it is stated here, next to the table, because whether a
+// state is a restore point is a property of the graph.
+var durableRestorePoints = map[State]bool{
+	Committed:           true,
+	RemoteDeletePending: true,
+	Complete:            true,
+}
+
+// IsDurableRestorePoint reports whether s is a state in which the artifact
+// has a durable local final copy the rest of the system may treat as a
+// restore point.
+func IsDurableRestorePoint(s State) bool { return durableRestorePoints[s] }
+
+// reinstatementEdges is every declared edge that returns an artifact from a
+// quarantine state directly to a durable restore point, derived from the
+// Transitions table itself rather than hand-listed.
+//
+// Deriving it is the point. FR-15's delete gate refuses any artifact whose
+// transition log contains one of these edges, so a future edge out of
+// quarantine into a trusted state is covered by that refusal the moment it
+// is declared, without anyone having to remember to add it in two places.
+// TestEveryQuarantineExitIntoADurableStateForfeitsRemoteDeletion walks the
+// real table and proves the two lists cannot drift apart.
+var reinstatementEdges = func() []Transition {
+	var out []Transition
+	for _, t := range Transitions {
+		if IsQuarantineState(t.From) && IsDurableRestorePoint(t.To) {
+			out = append(out, t)
+		}
+	}
+	return out
+}()
+
+// ReinstatementEdges returns every edge that re-trusts an artifact out of
+// quarantine, in table order. The returned slice is a copy: a caller
+// cannot reshape the rule the delete gate enforces.
+func ReinstatementEdges() []Transition {
+	return append([]Transition(nil), reinstatementEdges...)
+}
+
+// ReinstatementTarget reports the state a quarantined artifact is returned
+// to when it is reinstated, and whether from is a quarantine state that has
+// such an exit at all.
+//
+// There is exactly one target per quarantine state, and it is always a
+// state the artifact already held: QUARANTINED came from COMMITTED or
+// REMOTE_DELETE_PENDING (reinstating to the earlier of the two, see the
+// Transitions doc), and QUARANTINED_LOST came from COMPLETE.
+func ReinstatementTarget(from State) (State, bool) {
+	for _, t := range reinstatementEdges {
+		if t.From == from {
+			return t.To, true
+		}
+	}
+	return "", false
 }
 
 var transitionSet = func() map[Transition]bool {

@@ -45,9 +45,12 @@
 // right back around: a livelock, and one that also mislabels an
 // irrecoverable loss as an ordinary retryable failure. QUARANTINED_LOST is
 // the state that loss is recorded in instead, reachable only from COMPLETE
-// and terminal by design (see TestOnlyCompletePrecedesQuarantinedLost and
-// TestCompleteCannotLivelockThroughQuarantine). Leaving it requires an
-// operator to act, not another automatic retry.
+// (see TestOnlyCompletePrecedesQuarantinedLost), and it has no path back
+// into the pipeline at all. Leaving it requires an operator to act, not
+// another automatic retry: its one exit is back to the COMPLETE it came
+// from, and only when the operator can prove the durable local copy is
+// intact after all (issue #220, see machine.go's "Reinstatement" section
+// and TestCompleteCannotLivelockThroughQuarantine).
 package lifecycle
 
 // State is one named point in the FR-10 artifact lifecycle.
@@ -104,18 +107,25 @@ const (
 	// needs a human, either because a validator rejected it (FR-13) or
 	// because later reconciliation (FR-17) found the durable local copy had
 	// gone bad after the fact, while a remote copy still exists (or hasn't
-	// been confirmed gone) to recover from. Its one exit, back to
-	// Discovered, is a real recovery path: a fresh attempt can still find
-	// the source. Contrast QuarantinedLost, where that source is gone.
+	// been confirmed gone) to recover from. It has two operator-only exits
+	// and no automatic one: back to Discovered, which throws the local copy
+	// away and re-fetches, and back to Committed, which keeps the local
+	// copy and trusts it again on re-checked evidence (issue #220).
+	// Contrast QuarantinedLost, where the source is confirmed gone and only
+	// the second kind of recovery is available.
 	Quarantined State = "QUARANTINED"
 
 	// QuarantinedLost means an artifact's durable local copy was found
 	// corrupted after Complete, when the remote source is already confirmed
-	// deleted. There is no copy anywhere left to recover from, so unlike
-	// Quarantined this state has no automatic exit: retrying would only
-	// rediscover nothing and fail again. This is FR-10's one addition
-	// beyond the names the issue lists, added to close a gap FR-17's
-	// reconciliation table doesn't cover (see the package doc).
+	// deleted. There is no source left to re-fetch from, so this state has
+	// no automatic exit at all and no route back into the pipeline:
+	// retrying would only rediscover nothing and fail again. What it does
+	// have is an operator-only way back to the Complete it came from, taken
+	// when the local copy turns out to be intact after all and the finding
+	// was the mistake, an unmounted volume being the case that motivated it
+	// (issue #220). This is FR-10's one addition beyond the names the issue
+	// lists, added to close a gap FR-17's reconciliation table doesn't
+	// cover (see the package doc).
 	QuarantinedLost State = "QUARANTINED_LOST"
 )
 

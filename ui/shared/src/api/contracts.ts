@@ -138,11 +138,12 @@ export interface CreateBackupSetRequest {
 }
 
 /** What a submitted run_cycle operation looks like from
- *  createBackupSet's own response — deliberately NOT the richer
- *  UI-progress Operation type (types/operation.ts): that type models a
- *  transfer's on-screen progress (stage, percent, bytes/sec, ...), a
- *  different shape from what the backend's run_cycle operation record
- *  itself carries (docs/EPIC-B-multi-nas.md §14). */
+ *  createBackupSet's own response: the two fields that response is read
+ *  for. Deliberately NOT the Operation type (types/operation.ts), which
+ *  also carries the live progress reading a polling client reads (issue
+ *  #221) and which a create response could never hold anyway, since the
+ *  cycle it just submitted has not started
+ *  (docs/EPIC-B-multi-nas.md §14). */
 export interface RunCycleSubmission {
   operationId: string;
   status: string;
@@ -317,6 +318,20 @@ export interface FirstRunResult {
   restartRequired: boolean;
 }
 
+/** The outcome of {@link BackupManagerApi.reinstate}. */
+export interface ArtifactReinstatement {
+  /** Whether the backup was actually returned to a trusted state. */
+  reinstated: boolean;
+  /** Whether there was anything to check at all. False is never a pass. */
+  checked: boolean;
+  /** The verdict of the checks that ran. */
+  passed: boolean;
+  /** The lifecycle state the backup was returned to, empty when nothing moved. */
+  state: string;
+  /** What was checked and what it found, already a sentence. */
+  reason: string;
+}
+
 export interface BackupManagerApi {
   getVersion(): Promise<VersionInfo>;
   getHealth(): Promise<SystemHealth>;
@@ -398,6 +413,26 @@ export interface BackupManagerApi {
   listQuarantine(): Promise<BackupArtifact[]>;
   revalidate(artifactId: string): Promise<void>;
   retryIngestion(artifactId: string): Promise<void>;
+
+  /**
+   * Re-check a quarantined backup's durable local copy and, when what is
+   * found is enough, trust it again (issue #220).
+   *
+   * `retryIngestion` throws the local copy away and re-fetches from the
+   * remote, which is the wrong answer twice over: when the local copy is
+   * fine and the quarantine was the mistake, and when the remote source is
+   * gone and there is nothing left to fetch. This is the other answer.
+   *
+   * It resolves rather than rejects when the checks do not pass, because
+   * "your backup is bad" is a verdict about the backup and not a failed
+   * request. Read `reinstated` for whether the backup moved and `reason`
+   * for what was found; the two together are what an operator needs, and
+   * either alone is misleading.
+   *
+   * A reinstated backup never releases its remote source afterwards. That
+   * is permanent, and it is what makes the action safe to offer.
+   */
+  reinstate(artifactId: string): Promise<ArtifactReinstatement>;
 
   /**
    * Server computes and owns the plan. The UI may only apply it by id.

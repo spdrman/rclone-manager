@@ -127,6 +127,15 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 	artifact := rec.Artifact
 	base := attemptKey(rec)
 
+	// Live progress (progress.go). Each stage is announced immediately
+	// before the step that performs it, so an observer learns what is
+	// happening while it happens rather than after it has finished, and
+	// the artifact is counted as done however this function returns.
+	// prog is nil for a cycle nobody is observing, and every method on it
+	// is nil-safe.
+	prog := progressFrom(ctx)
+	defer prog.finishArtifact()
+
 	if st := lifecycle.State(rec.State); st == lifecycle.Discovered || st == lifecycle.Transferring {
 		if ctx.Err() != nil {
 			return
@@ -134,6 +143,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		if !s.admitCapacity(ctx, bs, rec) {
 			return
 		}
+		prog.enterStage(StageTransferring, artifact.Name)
 		out, err := s.transferOne(ctx, source, bs, rec, base)
 		if err != nil {
 			s.logger().Error(ctx, "transfer", err)
@@ -167,6 +177,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		if ctx.Err() != nil {
 			return
 		}
+		prog.enterStage(StageVerifying, artifact.Name)
 		out, err := s.verifyOne(ctx, source, bs, rec, base)
 		if err != nil {
 			s.logger().Error(ctx, "verify", err)
@@ -184,6 +195,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		if ctx.Err() != nil {
 			return
 		}
+		prog.enterStage(StageCommitting, artifact.Name)
 		committed, err := s.commitOne(ctx, bs, rec, base)
 		if err != nil {
 			s.logger().Error(ctx, "commit", err)
@@ -224,6 +236,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 	if ctx.Err() != nil {
 		return
 	}
+	prog.enterStage(StageCleaningRemote, artifact.Name)
 	out, err := s.deleteRemoteOne(ctx, source, bs, rec, base)
 	if err != nil {
 		var refusal *lifecycle.RemoteDeleteRefusalError
@@ -243,6 +256,11 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 // eventually surfaces as FAILED, this cycle, rather than retrying forever
 // and starving every other artifact and backup set behind it.
 func (s *Service) transferOne(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record, base string) (state.Outcome, error) {
+	// The one place the transport's own progress reporting is switched
+	// on. It is scoped to the copy, not to the cycle, because that is what
+	// the counters describe: an artifact's bytes belong to the artifact
+	// being copied, and nothing else in the pipeline copies anything.
+	ctx = progressFrom(ctx).reportingCtx(ctx)
 	return lifecycle.Transfer(ctx, s.lifecycleDeps(), lifecycle.TransferParams{
 		Artifact:   rec.Artifact,
 		Source:     source,

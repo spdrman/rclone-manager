@@ -5,7 +5,18 @@ export type OperationKind =
   | "reconciliation"
   | "catalog-rebuild";
 
-/** Ordered. "clean-remote" can never precede "commit". */
+/**
+ * The checklist a run cycle walks, in order. "clean-remote" can never
+ * precede "commit".
+ *
+ * The first five are the stages the service actually reports while a cycle
+ * is executing, and they are exactly api/v1/openapi.json's
+ * OperationProgress.stage enum. "complete" is the sixth entry of the
+ * on-screen checklist and is deliberately NOT one of them: an operation
+ * that has completed reports no progress at all (see TransferProgress), so
+ * there is nothing for the service to put a "complete" stage on. It exists
+ * here so the checklist can show where the work is heading.
+ */
 export const TRANSFER_STAGES = [
   "discovering",
   "transferring",
@@ -17,23 +28,107 @@ export const TRANSFER_STAGES = [
 
 export type TransferStage = (typeof TRANSFER_STAGES)[number];
 
+/**
+ * The stages a RUNNING operation can report: every checklist stage except
+ * "complete", which is where the checklist points rather than anything
+ * the service ever reports (a completed operation reports no progress at
+ * all).
+ *
+ * Derived from TRANSFER_STAGES rather than restated, so the on-screen
+ * order and the reportable set cannot disagree. It is also exactly
+ * api/v1/openapi.json's OperationProgress.stage enum, and client.ts
+ * assigns the generated wire union straight into it with no cast, so the
+ * two drifting apart is a type error rather than a runtime surprise.
+ */
+export type LiveTransferStage = Exclude<TransferStage, "complete">;
+
+/** The durable operation record's own status, straight off the wire. */
+export type OperationStatus = "queued" | "running" | "completed" | "failed";
+
+/**
+ * One live reading of an operation that is executing right now.
+ *
+ * Everything here is measured. There is no field for how far through the
+ * whole operation the service is, because a run cycle is a pass over every
+ * enabled backup set and what it will find is discovered as it goes, so no
+ * honest denominator for the whole exists at any moment before the end.
+ * What does exist is which set out of how many, how many artifacts have
+ * been finished, and how far the one artifact currently being copied has
+ * got.
+ *
+ * Issue #211 removed nine fields the UI displayed that nothing computed.
+ * This type is written so that cannot recur: every optional field here is
+ * `undefined` exactly when the service did not measure it, and the one
+ * derived number (progressPercent below) is null rather than zero when it
+ * cannot be computed.
+ */
+export interface TransferProgress {
+  /** When the service took this reading. */
+  observedAt: string;
+  /** Increments on every reading, so a client can tell a transfer that is
+   *  not moving from a service that has stopped reporting. */
+  sequence: number;
+  stage: LiveTransferStage;
+  /** The set being processed, absent before the first one starts. */
+  backupSetId?: string;
+  backupSetsDone: number;
+  backupSetsTotal: number;
+  /** The artifact being worked on, absent during discovery. */
+  artifact?: string;
+  /** How many artifacts this cycle has finished. There is deliberately no
+   *  total beside it; see this type's own doc. */
+  artifactsDone: number;
+  /** Bytes of the artifact named above, never of the whole cycle. Absent
+   *  means "not being measured right now"; a zero means "measured, and
+   *  nothing has arrived yet". */
+  bytesDone?: number;
+  bytesTotal?: number;
+  bytesPerSecond?: number;
+}
+
 export interface Operation {
   id: string;
   setId: string;
   setName: string;
   kind: OperationKind;
-  stage: TransferStage | null;
   label: string;
-  percent: number;
-  bytesDone?: number;
-  bytesTotal?: number;
-  bytesPerSecond?: number;
-  etaSeconds?: number;
-  itemsDone?: number;
-  itemsTotal?: number;
+  /** The durable record: queued, running, completed or failed. */
+  status: OperationStatus;
+  /**
+   * The live reading, or null when the service has none.
+   *
+   * Null is "no progress is available", which is a different answer from
+   * "nothing has been transferred", and the difference is the whole point
+   * of this field being nullable rather than a percent that defaults to 0.
+   * It is null for an operation that has finished, for one that is still
+   * queued, and for one that was running when the process died and was
+   * swept to failed on the next start: in none of those cases is there a
+   * live transfer to report on, and a 0% bar would claim there is one and
+   * that it is stalled.
+   */
+  progress: TransferProgress | null;
   /** True for read-only passes; the UI says so explicitly. */
   nonDestructive: boolean;
   startedAt: string;
+}
+
+/**
+ * How far through the artifact currently being copied the transfer is, as
+ * a whole percent, or null when that cannot be computed.
+ *
+ * Null, never 0, when the size of the artifact is not known: a bar drawn
+ * at 0% is a claim that nothing has moved, and "we do not know how big
+ * this is" is not that claim. A caller renders null as an indeterminate
+ * state, not as an empty bar.
+ *
+ * It is a percentage of ONE artifact, not of the operation. A caller must
+ * label it as such; see OperationProgress.tsx.
+ */
+export function progressPercent(progress: TransferProgress): number | null {
+  const { bytesDone, bytesTotal } = progress;
+  if (bytesDone === undefined || bytesTotal === undefined || bytesTotal <= 0) return null;
+  const pct = Math.round((bytesDone / bytesTotal) * 100);
+  return Math.max(0, Math.min(100, pct));
 }
 
 export type Severity = "info" | "ok" | "warn" | "error";

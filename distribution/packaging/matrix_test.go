@@ -88,6 +88,17 @@ func (p providerUnderTest) services() ([]Service, error) {
 	root := Path(md.Root)
 
 	switch md.Kind {
+	case "canonical-compose":
+		// This provider ships no runtime definition of its own: it
+		// deploys the canonical stack itself (issue #170's Dockge
+		// shape), so md.Compose and md.Env are repository-root-relative
+		// and Root holds only the documentation.
+		env, err := ReadEnvFile(Path(md.Env))
+		if err != nil {
+			return nil, err
+		}
+		return ReadCompose(Path(md.Compose), env)
+
 	case "compose":
 		var env map[string]string
 		if md.Env != "" {
@@ -224,17 +235,27 @@ func checkProviderIdentity(p providerUnderTest) (bool, string) {
 
 func checkPackageMetadata(p providerUnderTest) (bool, string) {
 	files := p.spec.Metadata.Files
+	// Repository-root-relative, for the provider whose runtime definition
+	// is not under its own root because it does not have one.
+	var absolute []string
 	switch p.spec.Metadata.Kind {
 	case "compose":
 		files = append(append([]string(nil), files...), p.spec.Metadata.Compose)
 	case "unraid-template":
 		files = append(append([]string(nil), files...), p.spec.Metadata.Templates...)
+	case "canonical-compose":
+		absolute = []string{p.spec.Metadata.Compose, p.spec.Metadata.Env}
 	}
 	if len(files) == 0 {
 		return false, "no packaging metadata declared for this provider"
 	}
+	paths := make([]string, 0, len(files)+len(absolute))
 	for _, f := range files {
-		info, err := os.Stat(Path(filepath.Join(p.spec.Metadata.Root, f)))
+		paths = append(paths, filepath.Join(p.spec.Metadata.Root, f))
+	}
+	paths = append(paths, absolute...)
+	for _, f := range paths {
+		info, err := os.Stat(Path(f))
 		if err != nil {
 			return false, fmt.Sprintf("missing %s: %v", f, err)
 		}
@@ -242,7 +263,7 @@ func checkPackageMetadata(p providerUnderTest) (bool, string) {
 			return false, fmt.Sprintf("%s is empty", f)
 		}
 	}
-	return true, fmt.Sprintf("%d metadata file(s) present", len(files))
+	return true, fmt.Sprintf("%d metadata file(s) present", len(paths))
 }
 
 func checkCanonicalImageParity(p providerUnderTest) (bool, string) {
@@ -1054,6 +1075,26 @@ var phaseFourExitGateProviders = []string{
 	"generic", "truenas", "unraid", "openmediavault", "synology", "proxmox",
 }
 
+// phaseSixReleaseMatrixTargets is issue #170's own list, verbatim: "every
+// target this refactor claims, which is generic Docker and Linux,
+// TrueNAS, Unraid, Portainer, CasaOS, ZimaOS, Dockge, Synology,
+// OpenMediaVault and Proxmox. Ten targets."
+//
+// Hard-coded for the same two reasons the Phase 4 list is. A list derived
+// from conformance.json cannot catch a target being dropped out of the
+// file, and since a column also declares which epic and which phase gate
+// consume it, a derived list could not catch a claimed target being
+// quietly re-homed either, which is a cheaper way to make a gate green
+// than fixing the target.
+//
+// UGOS is deliberately not here. #170 is explicit: its row is EPIC D's
+// #83 to produce, it is carried informationally, and its absence is
+// recorded rather than failed.
+var phaseSixReleaseMatrixTargets = []string{
+	"generic", "truenas", "unraid", "portainer", "casaos",
+	"zimaos", "dockge", "synology", "openmediavault", "proxmox",
+}
+
 func TestTheMatrixCoversEveryPhaseFourExitGateProvider(t *testing.T) {
 	c := MustLoadConformance()
 	for _, want := range phaseFourExitGateProviders {
@@ -1065,10 +1106,13 @@ func TestTheMatrixCoversEveryPhaseFourExitGateProvider(t *testing.T) {
 		if p.Epic != PhaseFourEpic {
 			t.Errorf("the Phase 4 Exit Gate names %s and conformance.json declares it to EPIC %s, so the gate would not be computed over it", want, p.Epic)
 		}
+		if p.Phase != PhaseFour {
+			t.Errorf("the Phase 4 Exit Gate names %s and conformance.json declares it to phase %q, so the Phase 4 verdict would not be computed over it", want, p.Phase)
+		}
 	}
-	claimed := c.ProviderIDsFor(PhaseFourEpic)
+	claimed := c.ProviderIDsForPhase(PhaseFourEpic, PhaseFour)
 	if len(claimed) != len(phaseFourExitGateProviders) {
-		t.Errorf("conformance.json declares %d providers to EPIC %s (%v), the exit gate names %d (%v)", len(claimed), PhaseFourEpic, claimed, len(phaseFourExitGateProviders), phaseFourExitGateProviders)
+		t.Errorf("conformance.json declares %d providers to EPIC %s phase %s (%v), the exit gate names %d (%v)", len(claimed), PhaseFourEpic, PhaseFour, claimed, len(phaseFourExitGateProviders), phaseFourExitGateProviders)
 	}
 
 	// A column another epic owns is allowed, and is the point of the
@@ -1080,6 +1124,52 @@ func TestTheMatrixCoversEveryPhaseFourExitGateProvider(t *testing.T) {
 		if !epicRe.MatchString(string(c.Providers[id].Epic)) {
 			t.Errorf("%s declares epic %q, want a single EPIC letter such as %q", id, c.Providers[id].Epic, PhaseFourEpic)
 		}
+	}
+}
+
+// TestTheMatrixCoversEveryTargetThisRefactorClaims is #170's own gate
+// list, the release-qualification half of the issue: ten targets, all of
+// them EPIC B's, every one of them declared and checked here.
+//
+// The Phase 4 list above and this one overlap by six on purpose. They are
+// two gates over one matrix, and the reason both are pinned is that
+// making a gate green by moving a column out of it is cheaper than making
+// the column pass.
+func TestTheMatrixCoversEveryTargetThisRefactorClaims(t *testing.T) {
+	c := MustLoadConformance()
+
+	for _, want := range phaseSixReleaseMatrixTargets {
+		p, ok := c.Providers[want]
+		if !ok {
+			t.Errorf("#170's release matrix names %s and conformance.json declares nothing for it", want)
+			continue
+		}
+		if p.Epic != PhaseFourEpic {
+			t.Errorf("#170's release matrix claims %s and conformance.json declares it to EPIC %s, so this EPIC's gate would not be computed over it", want, p.Epic)
+		}
+		if p.Phase != PhaseFour && p.Phase != PhaseSix {
+			t.Errorf("%s declares phase %q, and every target of this matrix belongs to Phase %s or Phase %s", want, p.Phase, PhaseFour, PhaseSix)
+		}
+	}
+
+	claimed := c.ProviderIDsFor(PhaseFourEpic)
+	if len(claimed) != len(phaseSixReleaseMatrixTargets) {
+		t.Errorf("conformance.json declares %d providers to EPIC %s (%v), #170 names %d (%v)",
+			len(claimed), PhaseFourEpic, claimed, len(phaseSixReleaseMatrixTargets), phaseSixReleaseMatrixTargets)
+	}
+
+	// UGOS is #170's own worked example of a target another EPIC
+	// registers against this same matrix. It has to be here, and it has
+	// to not be ours.
+	ugos, ok := c.Providers["ugos"]
+	if !ok {
+		t.Fatal("the UGOS column is gone; #170 requires this matrix to carry a target registered by another EPIC, and a column that is absent reports nothing rather than reporting a blocker")
+	}
+	if ugos.Epic == PhaseFourEpic {
+		t.Errorf("UGOS is declared to EPIC %s, so an EPIC B gate would wait on a package built on hardware nobody in this repository owns", ugos.Epic)
+	}
+	if contains(phaseSixReleaseMatrixTargets, "ugos") {
+		t.Error("UGOS is in this refactor's claimed-target list; #170 says its row is EPIC D's #83 to produce and that its absence is recorded, not failed")
 	}
 }
 
@@ -1164,6 +1254,12 @@ func auditDeclarations(p Provider, caps []string) []string {
 	if p.Tier != "A" && p.Tier != "B" && p.Tier != "C" {
 		add("declares §4A tier %q, want A, B or C", p.Tier)
 	}
+	// A column with no phase lands in whichever verdict happens to be
+	// computed with AllPhases and in none of the narrower ones, which is
+	// the same silent gap an undeclared capability is.
+	if !regexp.MustCompile(`^[0-9]$`).MatchString(p.Phase) {
+		add("declares phase %q, want the single digit of the phase whose exit gate consumes this column", p.Phase)
+	}
 	sort.Strings(findings)
 	return findings
 }
@@ -1237,19 +1333,29 @@ func TestCrossProviderConformanceMatrix(t *testing.T) {
 		}
 	}
 
-	// The Phase 4 Exit Gate, computed over the columns EPIC B claims and
-	// over nothing else. A claimed target with no recorded result counts
-	// as a failure here rather than as an absence, because an unrun
-	// target reads as a passing one otherwise (#170).
-	v := m.Verdict(PhaseFourEpic)
+	// Two gates over one matrix, computed separately and over different
+	// column sets. A claimed target with no recorded result counts as a
+	// failure in both, rather than as an absence, because an unrun target
+	// reads as a passing one otherwise (#170).
+	release := m.VerdictForPhase(PhaseFourEpic, AllPhases)
+	if len(release.Providers) != len(phaseSixReleaseMatrixTargets) {
+		t.Errorf("the release-qualification verdict was computed over %v, want the %d targets #170 claims", release.Providers, len(phaseSixReleaseMatrixTargets))
+	}
+	for _, r := range release.Failures {
+		t.Errorf("Phase 6 release qualification: %s / %s failed: %s", r.Provider, r.Capability, r.Detail)
+	}
+	t.Logf("Phase 6 release qualification over %v: %d failed, %d blocked, met=%v. Informational columns, gated by another epic: %v",
+		release.Providers, len(release.Failures), len(release.Blocked), release.Met(), release.Informational)
+
+	v := m.VerdictForPhase(PhaseFourEpic, PhaseFour)
 	if len(v.Providers) != len(phaseFourExitGateProviders) {
 		t.Errorf("the Phase 4 verdict was computed over %v, want the %d providers the exit gate names", v.Providers, len(phaseFourExitGateProviders))
 	}
 	for _, r := range v.Failures {
 		t.Errorf("Phase 4 Exit Gate: %s / %s failed: %s", r.Provider, r.Capability, r.Detail)
 	}
-	t.Logf("Phase 4 Exit Gate over %v: %d failed, %d blocked, met=%v. Informational columns, gated by another epic: %v",
-		v.Providers, len(v.Failures), len(v.Blocked), v.Met(), v.Informational)
+	t.Logf("Phase 4 Exit Gate over %v: %d failed, %d blocked, met=%v. Same-epic columns in another phase: %v",
+		v.Providers, len(v.Failures), len(v.Blocked), v.Met(), v.OtherPhase)
 
 	compareOrUpdateReport(t, m)
 }

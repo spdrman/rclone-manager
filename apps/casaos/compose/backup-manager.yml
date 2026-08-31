@@ -1,0 +1,235 @@
+# CasaOS AppStore entry for Backup Manager (issue #170, B6.6).
+#
+# CasaOS installs a third-party application by reading one docker-compose
+# file carrying an `x-casaos` block, so this single file is both the
+# runtime definition and the store submission. See
+# https://github.com/IceWhaleTech/CasaOS-AppStore and
+# https://github.com/IceWhaleTech/CasaOS-AppStore/blob/main/docs/quick-start/overview.md.
+#
+# Two halves, and the split is the whole design. Everything outside
+# `x-casaos` is Compose and container semantics DERIVED from
+# container/compose.yaml at runtime contract 1.2.0, held to it field by
+# field by distribution/packaging/derive.go and service by service by
+# TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack.
+# Everything inside `x-casaos` is store presentation, it reaches no Go
+# package and no shared UI module, and a test fails the build if it ever
+# does.
+#
+# No variables anywhere. A CasaOS store install deploys this file as it
+# stands, with no `.env` beside it, so a `${STATE_DIR}` here would be an
+# unresolved reference at install time rather than a knob. Every path
+# below is literal and every one of them is CasaOS's own layout: private
+# application data under /DATA/AppData, user data under /DATA.
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: backup-manager-ui
+  author: spdrman
+  developer: spdrman
+  category: Backup
+  store_app_id: backup-manager
+  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/casaos/icon.svg
+  scheme: http
+  hostname: ""
+  port_map: "8080"
+  index: /
+  title:
+    en_us: Backup Manager
+  tagline:
+    en_us: Scheduled, verified pull-based backups with retention tiers
+  description:
+    en_us: >-
+      Pulls backups from an SFTP source on a schedule, verifies each artifact,
+      and applies daily, weekly and monthly retention tiers. Two containers run
+      from one image: the engine holds the catalogue and the credentials and
+      publishes no port, and the web UI is the only thing reachable from the
+      network. It signs you in with its own local account, needs no Docker
+      socket, no privileged mode and no host networking.
+  tips:
+    before_install:
+      en_us: >-
+        Create /DATA/AppData/backup-manager/state, /DATA/AppData/backup-manager/config,
+        /DATA/AppData/backup-manager/secrets and /DATA/Backups/backup-manager and give
+        them to uid 1000 / gid 1000 before installing. The runtime image is distroless,
+        so nothing inside the container can create or chown them for you. Put your SFTP
+        private key at /DATA/AppData/backup-manager/secrets/id_ed25519 (mode 0600) and
+        the pinned host key at .../known_hosts. The engine prints a one-time enrollment
+        link on first start; read it in the container log.
+
+services:
+  # The engine: local authentication, the versioned /api/v1 API and the
+  # scheduler in one process. Holds the state database and the
+  # credentials, and publishes no port at all.
+  backup-manager:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    command: ["/backup-manager-web", "serve", "--profile=generic"]
+
+    user: "1000:1000"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1000
+
+    environment:
+      TMPDIR: "/tmp"
+      TZ: "UTC"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "http://localhost:8080"
+      # Safe here specifically because this container joins only the
+      # private network below, created and destroyed with the app, whose
+      # only other member is the web UI container. Never set this on the
+      # web UI container, which is the edge.
+      TRUST_FORWARDED_HEADERS: "true"
+      # Declared, and declared EMPTY. The canonical engine reads this
+      # variable (container/compose.yaml), so leaving it out here would
+      # be a default nobody chose rather than a decision. Empty is the
+      # decision: it is the peer set a gateway runtime profile trusts a
+      # provider-native identity header from, this adapter selects
+      # `--profile=generic`, and generic has no authentication gateway
+      # at all - `serve` exits 2 rather than start if this is set to
+      # anything on a profile with no gateway to trust. Empty and unset
+      # behave identically in the binary, so this costs nothing and says
+      # which of the two it is.
+      TRUSTED_UPSTREAM_CIDRS: ""
+
+    volumes:
+      - /DATA/AppData/backup-manager/state:/data/state
+      - /DATA/Backups/backup-manager:/data/backups
+      # A writable DIRECTORY holding config.yaml (issue #196), not a
+      # read-only single file: the engine replaces that file through a
+      # temp file created beside it, and its ssh_keys/ and known_hosts.d/
+      # stores are siblings of it. It may legitimately be empty on a
+      # fresh install, which a directory can express and a file mount
+      # cannot.
+      - /DATA/AppData/backup-manager/config:/etc/backup-manager/config
+      - /DATA/AppData/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
+      - /DATA/AppData/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+
+    # The start gate, and a liveness question rather than a health
+    # verdict (issue #206). The Web UI below declares
+    # `depends_on: backup-manager: condition: service_healthy`, so
+    # whatever this asks stands between an operator and the only
+    # container with a published port. `/backup-manager status` is
+    # FR-24's backup-freshness verdict and exits non-zero on any
+    # DEGRADED, STALE or FAILING set, and on a fresh install, which has
+    # backed nothing up yet: gating the Web UI on it means an app an
+    # operator just installed from the store never gets a page at all.
+    #
+    # Declared here rather than inherited from the image, because the
+    # image's own HEALTHCHECK is deliberately the freshness verdict: it
+    # is the right default for a plain `docker run` and for the headless
+    # `daemon` command, which serves no HTTP and so has no liveness
+    # endpoint to ask. Backup freshness is not lost - read it with
+    # `docker exec backup-manager /backup-manager status`, or let the
+    # alerts block deliver it.
+    #
+    # Derived from container/compose.yaml, never authored here.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    restart: unless-stopped
+    # The grace period the runtime shuts down inside, declared rather
+    # than left at Docker's own 10s default: the engine finishes the
+    # transfer or the delete it is in the middle of, and a default is not
+    # a contract.
+    stop_grace_period: 30s
+    networks:
+      - internal
+
+    x-casaos:
+      envs:
+        - container: TZ
+          description:
+            en_us: Timezone the retention tiers are evaluated in.
+        - container: PUBLIC_BASE_URL
+          description:
+            en_us: Externally reachable base URL, used for the one-time enrollment link.
+      volumes:
+        - container: /data/state
+          description:
+            en_us: Private application state, the catalogue and the local administrator record.
+        - container: /data/backups
+          description:
+            en_us: The backup root. Retained artifacts land here and nothing else does.
+        - container: /etc/backup-manager/config
+          description:
+            en_us: Writable configuration directory holding config.yaml.
+        - container: /etc/backup-manager/id_ed25519
+          description:
+            en_us: SFTP private key, mounted read-only.
+        - container: /etc/backup-manager/known_hosts
+          description:
+            en_us: Pinned SFTP host key, mounted read-only.
+
+  # The web UI: the shared static bundle plus a reverse proxy to the
+  # engine. The only container with a published port, and the app CasaOS
+  # opens when the tile is clicked.
+  backup-manager-ui:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    command: ["/backup-manager-web", "serve-ui", "--profile=generic"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "1000:1000"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=1000,gid=1000
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+    # Neither UI_DIR nor UI_ROOT, on purpose: this adapter serves the
+    # bundle compiled into the binary. apps/casaos/README.md has the
+    # measurement behind that decision.
+
+    # No volumes at all: this container never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory.
+
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "8080:8080"
+
+    restart: unless-stopped
+    # Shorter than the engine's: this container holds no state and no
+    # transfer to finish, so there is nothing for a long grace period to
+    # protect.
+    stop_grace_period: 15s
+    networks:
+      - internal
+
+    x-casaos:
+      ports:
+        - container: "8080"
+          description:
+            en_us: The web UI. The only port this app publishes.
+      envs:
+        - container: UPSTREAM_ADDR
+          description:
+            en_us: Where the reverse proxy reaches the engine, on the app's private network.
+
+networks:
+  internal:

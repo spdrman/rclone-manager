@@ -135,6 +135,18 @@ type Operation struct {
 	// two is ever non-empty.
 	Result string
 	Error  string
+
+	// Progress is the live, ephemeral reading for an operation executing
+	// in THIS process right now, and nil for every other operation:
+	// finished, queued, or left behind "running" by a process that died.
+	//
+	// Nil means "no progress is available", which is emphatically not
+	// "zero progress". A caller that renders nil as a zero turns "we
+	// cannot see inside this" into "nothing has happened", which for a
+	// transfer that is in fact half done is simply wrong. See
+	// OperationProgress (progress.go) for why this is never persisted
+	// alongside the durable fields above it.
+	Progress *OperationProgress
 }
 
 // SubmitRunCycle persists a new run_cycle operation and starts executing it
@@ -268,7 +280,27 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 		}
 		return Operation{}, fmt.Errorf("service: get operation: %w", err)
 	}
-	return toOperation(rec), nil
+	return b.withLiveProgress(toOperation(rec)), nil
+}
+
+// withLiveProgress attaches the in-memory reading for op, if this process
+// has one.
+//
+// Two conditions, both necessary. The durable status must be "running",
+// which rules out serving a reading for an operation the journal already
+// considers finished; and the registry must actually hold one, which rules
+// out the operation that was running when a previous process died (its
+// reading died with that process, and the startup sweep has moved the row
+// to failed anyway). Anything else keeps Progress nil, which the client
+// renders as "no reading available" rather than as zero.
+func (b *BackupService) withLiveProgress(op Operation) Operation {
+	if op.Status != state.OperationRunning {
+		return op
+	}
+	if p, ok := b.progress.snapshot(op.ID); ok {
+		op.Progress = &p
+	}
+	return op
 }
 
 // executeRunCycle is the asynchronous half of SubmitRunCycle: mark the
@@ -298,6 +330,14 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 // of it that will ever exist.
 func (b *BackupService) executeRunCycle(operationID string) {
 	defer b.wg.Done()
+	// Registered here, second, so it runs LAST but one: defers unwind in
+	// reverse, so this fires after the recover below has had its chance to
+	// write a terminal status. Clearing the live reading before that write
+	// would leave a window where the row still says "running" and there is
+	// nothing to read, which is a correct answer but a needlessly confusing
+	// one to hand a client that is polling every second.
+	live := b.progress.begin(operationID)
+	defer b.progress.end(operationID)
 	defer b.runOnce.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
@@ -330,7 +370,11 @@ func (b *BackupService) executeRunCycle(operationID string) {
 		return
 	}
 
-	report := runCycle(b.state.Load().inner, b.ctx)
+	// b.ctx, not the caller's: see this method's own doc. The observer
+	// rides on it because live progress is scoped to exactly this
+	// operation, and a field on the shared internal/app.Service would be
+	// one cycle's reading in a place a second cycle could overwrite.
+	report := runCycle(b.state.Load().inner, app.WithProgressObserver(b.ctx, live))
 
 	var failed string
 	for _, set := range report.Sets {
@@ -445,7 +489,7 @@ func (b *BackupService) ListOperations(ctx context.Context, limit int) ([]Operat
 
 	out := make([]Operation, 0, len(records))
 	for _, rec := range records {
-		out = append(out, toOperation(rec))
+		out = append(out, b.withLiveProgress(toOperation(rec)))
 	}
 	return out, nil
 }
