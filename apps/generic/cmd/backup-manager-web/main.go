@@ -320,6 +320,26 @@ func cmdServe(args []string) int {
 		}
 	}
 
+	// Take the signal away from the embedded rclone before anything can
+	// reach a remote, so its own handler is never installed at all, and
+	// take on the matching obligation to run its exit handlers on the way
+	// out. service.Open below wires a real rclone transport and this
+	// process drives real backup cycles through it, so `serve` embeds
+	// rclone exactly the way `daemon` does; rclone's lib/atexit ends the
+	// process with 128+signal once a single transfer has armed it, which
+	// made an ordinary `docker stop` of this container exit 143 despite
+	// the handler below and despite compose.yaml's own
+	// stop_grace_period (issue #212, the same defect issue #190 fixed for
+	// the CLI daemon). Docker, Kubernetes and systemd all read a nonzero
+	// exit on stop as a failure, so every routine restart of a container
+	// documented as long-lived looked like a crash: it counted against
+	// restart burst limits and it alerted. A stop an operator asked for,
+	// and that this process performed, is a successful stop. A genuine
+	// failure is untouched: an error out of RunEngine still goes through
+	// fail and still exits 1.
+	service.DisableSignalExit()
+	defer service.RunExitHandlers()
+
 	// The one signal handler in this binary, matching
 	// core/cmd/backup-manager/daemon.go's own convention exactly: this is
 	// what makes ctx the "process shutdown context" §9.3 requires the HTTP
@@ -332,7 +352,22 @@ func cmdServe(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	defer func() { _ = cleanup() }()
+	// The shutdown counterpart of the startup lines this command already
+	// prints, and the other half of what #212 is about: the process used
+	// to leave whenever rclone got there rather than when the shutdown it
+	// was asked to perform had finished, and os.Exit runs no deferred
+	// function, so the scheduler, the HTTP server and the state store were
+	// all cut off at an arbitrary point with nothing saying so. This line
+	// is printed from inside the deferred close, after the store is really
+	// shut, so it is reachable only on the path that actually completed:
+	// "the operator stopped it" rather than "it died" is exactly what a
+	// reader of these logs needs afterwards (FR-23).
+	defer func() {
+		if err := cleanup(); err != nil {
+			fmt.Fprintln(os.Stderr, "backup-manager-web: closing the backup service:", err)
+		}
+		fmt.Fprintln(os.Stderr, "backup-manager-web: shutdown complete, the backup service is closed")
+	}()
 
 	// Local authentication is opened only for a profile that actually
 	// uses it. A gateway profile has no login surface of its own, so
