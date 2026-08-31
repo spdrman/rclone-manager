@@ -723,6 +723,20 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 // clear.
 type ReleaseManifest struct {
 	Commit string `json:"commit"`
+	// Version is the VERSION build argument the recorded binaries were
+	// stamped with, which is what `/backup-manager version` answers. It
+	// is NOT necessarily the semantic version the provider packages
+	// advertise: the generator defaults it to `git describe --tags
+	// --always`, and this repository has no tags, so today it is an
+	// abbreviated commit. VersionParityComplaints is where the two are
+	// held to each other, and it turns the difference into a refusal the
+	// moment canonical.json says the image is published (#88).
+	Version string `json:"version"`
+	// GeneratedAt is when the recording run wrote this file. The
+	// provenance bundle's SBOM takes its SPDX creation timestamp from
+	// here rather than from the clock, so regenerating the SBOM is
+	// byte-stable and "regenerate and diff" can be a real check.
+	GeneratedAt string `json:"generated_at"`
 	// UnsafeLocalBuild is the stamp
 	// scripts/release/record-release-hashes.sh writes when it was run
 	// with UNSAFE_LOCAL_BUILD=1, which waives every guard that makes a

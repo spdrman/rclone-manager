@@ -28,6 +28,12 @@ apps/generic/webui/dist
 # of these from invalidating Docker's layer cache for no reason.
 docs
 container
+
+# Generated release compliance artifacts (SBOM, licence inventory,
+# checksums, provenance bundle). They describe the image; they are not
+# inputs to building it, and none of the Dockerfile's COPY lines names
+# them.
+provenance
 README.md
 *.md
 
