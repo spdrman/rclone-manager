@@ -100,9 +100,21 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// Issue #104 (B3.4): FR-21's existing capacity refusal, surfaced
 		// honestly. Read-only, same as the two routes above.
 		r.Get("/system/storage", h.systemStorage)
+		// Issue #211: FR-24's backup-freshness verdict, authenticated and
+		// inside /api/v1. Deliberately NOT the same thing as /health/live
+		// and /health/ready above, which are unauthenticated probes that
+		// answer "should traffic come here" and say nothing about whether
+		// backups are landing (failure-safety invariant 14). Read-only.
+		r.Get("/system/health", h.systemHealth)
 
 		r.With(requireCSRF, requireDestructiveGate(gate)).Post("/operations", h.submitOperation)
 		r.Get("/operations/{id}", h.getOperation)
+		// Issue #211: the list counterpart of the polling read above. GET
+		// on this path used to be a 405, which is what the shared UI's
+		// live-operations poll had been receiving. Read-only; the POST
+		// beside it is still the gated submit route, because a verb is not
+		// a synonym.
+		r.Get("/operations", h.listOperations)
 
 		// Preview is read-only (docs/EPIC-B-multi-nas.md §50 lists "preview
 		// retention" under Read-only/low risk) so it carries neither
@@ -163,7 +175,45 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.With(requireCSRF).Post("/backup-sets", h.createBackupSet)
 		r.Get("/backup-sets", h.listBackupSets)
 		r.With(requireCSRF).Post("/backup-sets/test-connection", h.testConnection)
+		// Issue #211: enabling and disabling a persisted set. Two named
+		// segments rather than the catch-all below, because this route
+		// needs a literal "/enabled" tail that a catch-all would swallow;
+		// a backup set id is always exactly source/name, so the arity is
+		// fixed. CSRF but no destructive gate: nothing reachable from here
+		// touches backup data (destructiveGateExemptRoutes, router_test.go,
+		// and the handler's own doc).
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/enabled", h.setBackupSetEnabled)
 		r.Get("/backup-sets/*", h.getBackupSet)
+
+		// Issue #211: the backups this deployment actually holds, and the
+		// subset being held for a human. Both read-only (§50).
+		//
+		// getArtifact takes three named segments rather than a catch-all:
+		// an artifact id is exactly source/set/name (model.NewArtifactID
+		// refuses a name containing "/"), so a route that says so lets the
+		// router answer a malformed id with a 404 instead of a handler
+		// having to interpret one.
+		r.Get("/backups", h.listArtifacts)
+		r.Get("/backups/{source}/{set}/{name}", h.getArtifact)
+		r.Get("/activity", h.listActivity)
+		r.Get("/quarantine", h.listQuarantine)
+
+		// The two operator actions a quarantined backup has. Both carry
+		// requireCSRF; neither carries requireDestructiveGate, and their
+		// handlers' own docs record why: revalidate writes nothing at all,
+		// and retry moves a journal row back into the pipeline without
+		// touching a local file or a remote object.
+		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/revalidate", h.revalidateArtifact)
+		r.With(requireCSRF).Post("/quarantine/{source}/{set}/{name}/retry", h.retryArtifactIngestion)
+
+		// Issue #211: FR-9 catalog recovery, the API expression of
+		// `backup-manager catalog rebuild` and its --dry-run. Rebuild only
+		// ever adds records whose recovery manifests are already on disk
+		// and never removes or overwrites one, so it carries CSRF but not
+		// the destructive gate; see handlers_catalog.go for the argument
+		// in full.
+		r.With(requireCSRF).Post("/catalog/scan", h.scanCatalog)
+		r.With(requireCSRF).Post("/catalog/rebuild", h.rebuildCatalog)
 
 		// Issue #162 (B3.2 follow-up): the registered-validator catalog
 		// the wizard's step 5 picklist reads. Read-only (§50), so no

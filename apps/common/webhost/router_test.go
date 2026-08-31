@@ -105,6 +105,33 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// and is NOT on this list. See router.go's own comment on the route
 	// for the full argument.
 	"PATCH /api/v1/settings": true,
+
+	// Issue #211. Each of these is state-changing but non-destructive
+	// under the same §50 reading, and each handler's own doc carries the
+	// argument in full; the short version:
+	//
+	//   - enabled: a disabled backup set is excluded from every run
+	//     cycle, and everything already backed up stays exactly where it
+	//     is. core/service pins that directly
+	//     (TestSetBackupSetEnabled_DisablingDeletesNothing).
+	//   - revalidate: re-reads a quarantined backup's local copy and
+	//     reports a verdict. It writes nothing at all, and cannot: the
+	//     lifecycle graph has no edge out of quarantine except back into
+	//     the pipeline, which is the next route.
+	//   - retry: moves a journal row from QUARANTINED to DISCOVERED. No
+	//     local file and no remote object is touched.
+	//   - catalog scan and rebuild: rebuild only ADDS journal rows whose
+	//     recovery manifests are already on disk and whose rows are
+	//     missing. It never removes or overwrites an existing row, never
+	//     contacts a remote, and is a no-op against a healthy journal.
+	//     Scan is that same pass with nothing written.
+	//
+	// None of them can reach a deletion, which is what this list is for.
+	"POST /api/v1/backup-sets/{source}/{set}/enabled":          true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
+	"POST /api/v1/catalog/scan":                                true,
+	"POST /api/v1/catalog/rebuild":                             true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

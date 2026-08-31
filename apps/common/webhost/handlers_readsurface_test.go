@@ -1,0 +1,741 @@
+package webhost
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/service"
+)
+
+// readSurfaceRouter is issue #211's routes over the plain syncFakeBackend,
+// whose fields a test arranges directly. One helper rather than one per
+// file: every route below is exercised the same way, and a second copy of
+// this boilerplate is a second place for the platform/gate wiring to drift.
+type readSurfaceRouter struct {
+	router  http.Handler
+	backend *syncFakeBackend
+}
+
+func newReadSurfaceRouter(t *testing.T) readSurfaceRouter {
+	t.Helper()
+	backend := newSyncFakeBackend()
+	return readSurfaceRouter{
+		router: NewRouter(RouterConfig{
+			Platform:      allowingPlatform("alice"),
+			Backend:       backend,
+			Gate:          alwaysPassGate{},
+			BinaryVersion: "test",
+			Commit:        "test",
+		}),
+		backend: backend,
+	}
+}
+
+func (r readSurfaceRouter) get(t *testing.T, target string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	r.router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+	return rec
+}
+
+func (r readSurfaceRouter) post(t *testing.T, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	attachValidCSRF(req)
+	rec := httptest.NewRecorder()
+	r.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func decodeInto(t *testing.T, rec *httptest.ResponseRecorder, v any) {
+	t.Helper()
+	if err := json.Unmarshal(rec.Body.Bytes(), v); err != nil {
+		t.Fatalf("decoding %s: %v", rec.Body.String(), err)
+	}
+}
+
+func mustStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if rec.Code != want {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, want, rec.Body.String())
+	}
+}
+
+var testArtifactFixture = service.Artifact{
+	ID:                "production/postgres/backup.dump",
+	BackupSetID:       "production/postgres",
+	SourceName:        "production",
+	SetName:           "postgres",
+	Name:              "backup.dump",
+	RemotePath:        "/backups/backup.dump",
+	LocalPath:         "/data/backups/backup.dump",
+	State:             "COMPLETE",
+	DiscoveredAt:      time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC),
+	UpdatedAt:         time.Date(2026, 8, 30, 9, 5, 0, 0, time.UTC),
+	SizeBytes:         4096,
+	Checksum:          "abc123",
+	ChecksumAlgorithm: "sha256",
+	Validation:        "passed",
+}
+
+var testQuarantinedFixture = service.Artifact{
+	ID:               "production/postgres/bad.dump",
+	BackupSetID:      "production/postgres",
+	SourceName:       "production",
+	SetName:          "postgres",
+	Name:             "bad.dump",
+	State:            "QUARANTINED",
+	DiscoveredAt:     time.Date(2026, 8, 30, 8, 0, 0, 0, time.UTC),
+	UpdatedAt:        time.Date(2026, 8, 30, 8, 1, 0, 0, time.UTC),
+	Validation:       "failed",
+	Quarantined:      true,
+	QuarantineReason: "recomputed hash does not match",
+}
+
+// ------------------------------------------------------------- backups ---
+
+func TestListArtifacts_ReportsEveryFieldOnTheWire(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.artifacts = []service.Artifact{testArtifactFixture}
+
+	rec := rt.get(t, "/api/v1/backups")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body listArtifactsResponse
+	decodeInto(t, rec, &body)
+	if len(body.Artifacts) != 1 {
+		t.Fatalf("len = %d, want 1", len(body.Artifacts))
+	}
+	a := body.Artifacts[0]
+	if a.ID != testArtifactFixture.ID || a.BackupSetID != testArtifactFixture.BackupSetID {
+		t.Errorf("identity = %+v", a)
+	}
+	if a.State != "COMPLETE" || a.Validation != "passed" {
+		t.Errorf("state/validation = %q/%q", a.State, a.Validation)
+	}
+	if a.DiscoveredAt != "2026-08-30T09:00:00Z" {
+		t.Errorf("DiscoveredAt = %q, want RFC3339", a.DiscoveredAt)
+	}
+	if a.SizeBytes != 4096 {
+		t.Errorf("SizeBytes = %d", a.SizeBytes)
+	}
+	// A timestamp for an event that has not happened is OMITTED, never a
+	// zero-valued date: "0001-01-01T00:00:00Z" reaching a screen renders
+	// like a real date, and reads as one.
+	if strings.Contains(rec.Body.String(), "remote_source_removed_at") {
+		t.Errorf("the body carries remote_source_removed_at for a source that is still there: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "0001-01-01") {
+		t.Errorf("a zero time reached the wire: %s", rec.Body.String())
+	}
+}
+
+// TestListArtifacts_PassesTheSetFilterThrough. The unfiltered request is
+// the positive control: without it, a filter that never reached the
+// backend at all would look the same as one that did.
+func TestListArtifacts_PassesTheSetFilterThrough(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.artifacts = []service.Artifact{testArtifactFixture}
+
+	rt.get(t, "/api/v1/backups")
+	if got := rt.backend.lastArtifactFilter; got.BackupSetID != "" || got.QuarantinedOnly {
+		t.Fatalf("an unfiltered request reached the backend as %+v, so the assertion below would prove nothing", got)
+	}
+
+	rt.get(t, "/api/v1/backups?setId=production%2Fpostgres")
+	if got := rt.backend.lastArtifactFilter; got.BackupSetID != "production/postgres" {
+		t.Errorf("filter = %+v, want BackupSetID production/postgres", got)
+	}
+}
+
+// TestListArtifacts_AnUnknownSetFilterIsAnEmptyListNotAnError: this is a
+// filter, and a client whose remembered filter names a backup set that has
+// since been removed should see "no backups here", not an error page.
+func TestListArtifacts_AnUnknownSetFilterIsAnEmptyListNotAnError(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.artifacts = []service.Artifact{testArtifactFixture}
+
+	rec := rt.get(t, "/api/v1/backups?setId=gone/away")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body listArtifactsResponse
+	decodeInto(t, rec, &body)
+	if len(body.Artifacts) != 0 {
+		t.Errorf("len = %d, want 0", len(body.Artifacts))
+	}
+	// An empty list, not a null: a client mapping over the field must not
+	// have to guard against it being absent.
+	if !strings.Contains(rec.Body.String(), `"artifacts":[]`) {
+		t.Errorf("empty result is not an empty array: %s", rec.Body.String())
+	}
+}
+
+func TestListArtifacts_AFailedReadIs500Internal(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnArtifacts = errors.New("journal is unreadable: /var/lib/secret.db")
+
+	rec := rt.get(t, "/api/v1/backups")
+	mustStatus(t, rec, http.StatusInternalServerError)
+	if code := errorCodeOf(t, rec); code != "INTERNAL" {
+		t.Errorf("code = %q, want INTERNAL", code)
+	}
+	// The underlying error names a filesystem path. It must not be echoed.
+	if strings.Contains(rec.Body.String(), "/var/lib") {
+		t.Errorf("the response echoed the underlying error: %s", rec.Body.String())
+	}
+}
+
+func TestGetArtifact_ReadsTheThreePartIdentity(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.artifacts = []service.Artifact{testArtifactFixture}
+
+	rec := rt.get(t, "/api/v1/backups/production/postgres/backup.dump")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body artifactResponse
+	decodeInto(t, rec, &body)
+	if body.ID != testArtifactFixture.ID {
+		t.Errorf("ID = %q, want %q", body.ID, testArtifactFixture.ID)
+	}
+}
+
+func TestGetArtifact_UnknownIDIs404ArtifactNotFound(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.get(t, "/api/v1/backups/production/postgres/missing.dump")
+	mustStatus(t, rec, http.StatusNotFound)
+	if code := errorCodeOf(t, rec); code != "ARTIFACT_NOT_FOUND" {
+		t.Errorf("code = %q, want ARTIFACT_NOT_FOUND", code)
+	}
+}
+
+// ---------------------------------------------------------- quarantine ---
+
+// TestListQuarantine_AsksTheBackendForTheQuarantinedSubset. The plain
+// /backups request is the control: it proves the flag is not simply always
+// set.
+func TestListQuarantine_AsksTheBackendForTheQuarantinedSubset(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.artifacts = []service.Artifact{testArtifactFixture, testQuarantinedFixture}
+
+	all := rt.get(t, "/api/v1/backups")
+	mustStatus(t, all, http.StatusOK)
+	if rt.backend.lastArtifactFilter.QuarantinedOnly {
+		t.Fatal("GET /backups asked for the quarantined subset, so the assertion below would prove nothing")
+	}
+
+	rec := rt.get(t, "/api/v1/quarantine")
+	mustStatus(t, rec, http.StatusOK)
+	if !rt.backend.lastArtifactFilter.QuarantinedOnly {
+		t.Error("GET /quarantine did not ask for the quarantined subset")
+	}
+
+	var body listArtifactsResponse
+	decodeInto(t, rec, &body)
+	if len(body.Artifacts) != 1 || body.Artifacts[0].Name != "bad.dump" {
+		t.Fatalf("body = %+v, want just the quarantined artifact", body.Artifacts)
+	}
+	if !body.Artifacts[0].Quarantined || body.Artifacts[0].QuarantineReason == "" {
+		t.Errorf("a quarantined artifact reached the wire with no reason: %+v", body.Artifacts[0])
+	}
+}
+
+func TestRevalidateArtifact_ReportsTheVerdict(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.revalidateResult = service.ArtifactCheck{Checked: true, Passed: false, Reason: "hash no longer matches"}
+
+	rec := rt.post(t, "/api/v1/quarantine/production/postgres/bad.dump/revalidate", "")
+	mustStatus(t, rec, http.StatusOK)
+
+	if got := rt.backend.lastRevalidated; got != "production/postgres/bad.dump" {
+		t.Errorf("the handler asked about %q, want production/postgres/bad.dump", got)
+	}
+
+	var body artifactCheckResponse
+	decodeInto(t, rec, &body)
+	if !body.Checked || body.Passed || body.Reason != "hash no longer matches" {
+		t.Errorf("body = %+v", body)
+	}
+}
+
+func TestRetryArtifactIngestion_Returns204AndNamesTheArtifact(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/quarantine/production/postgres/bad.dump/retry", "")
+	mustStatus(t, rec, http.StatusNoContent)
+	if got := rt.backend.lastRetried; got != "production/postgres/bad.dump" {
+		t.Errorf("the handler asked about %q", got)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("204 carried a body: %s", rec.Body.String())
+	}
+}
+
+// TestQuarantineActions_MapEveryRefusalToItsDeclaredStatus. Each row is a
+// refusal an operator reaches by clicking a button on a screen that has
+// gone stale, so each must be a typed answer rather than a 500.
+func TestQuarantineActions_MapEveryRefusalToItsDeclaredStatus(t *testing.T) {
+	cases := []struct {
+		name       string
+		target     string
+		arrange    func(*syncFakeBackend)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "revalidating a backup that is not there",
+			target:     "/api/v1/quarantine/production/postgres/gone.dump/revalidate",
+			arrange:    func(b *syncFakeBackend) { b.errOnRevalidate = fmt.Errorf("%w: gone", service.ErrArtifactNotFound) },
+			wantStatus: http.StatusNotFound,
+			wantCode:   "ARTIFACT_NOT_FOUND",
+		},
+		{
+			name:       "revalidating a backup that is not quarantined",
+			target:     "/api/v1/quarantine/production/postgres/backup.dump/revalidate",
+			arrange:    func(b *syncFakeBackend) { b.errOnRevalidate = fmt.Errorf("%w: x", service.ErrArtifactNotQuarantined) },
+			wantStatus: http.StatusConflict,
+			wantCode:   "ARTIFACT_NOT_QUARANTINED",
+		},
+		{
+			name:       "retrying a backup with no source left to re-ingest",
+			target:     "/api/v1/quarantine/production/postgres/lost.dump/retry",
+			arrange:    func(b *syncFakeBackend) { b.errOnRetry = fmt.Errorf("%w: lost", service.ErrArtifactIrrecoverable) },
+			wantStatus: http.StatusConflict,
+			wantCode:   "ARTIFACT_IRRECOVERABLE",
+		},
+		{
+			name:       "retrying a backup that is not quarantined",
+			target:     "/api/v1/quarantine/production/postgres/backup.dump/retry",
+			arrange:    func(b *syncFakeBackend) { b.errOnRetry = fmt.Errorf("%w: x", service.ErrArtifactNotQuarantined) },
+			wantStatus: http.StatusConflict,
+			wantCode:   "ARTIFACT_NOT_QUARANTINED",
+		},
+		{
+			name:       "an unclassified failure",
+			target:     "/api/v1/quarantine/production/postgres/backup.dump/retry",
+			arrange:    func(b *syncFakeBackend) { b.errOnRetry = errors.New("disk error under /var/lib/state.db") },
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := newReadSurfaceRouter(t)
+			tc.arrange(rt.backend)
+
+			rec := rt.post(t, tc.target, "")
+			mustStatus(t, rec, tc.wantStatus)
+			if code := errorCodeOf(t, rec); code != tc.wantCode {
+				t.Errorf("code = %q, want %q", code, tc.wantCode)
+			}
+			if strings.Contains(rec.Body.String(), "/var/lib") {
+				t.Errorf("the response echoed an underlying error: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+// ------------------------------------------------------------ activity ---
+
+func TestListActivity_ReportsTheTransitionLog(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.activity = []service.ActivityEvent{
+		{
+			ArtifactID: "production/postgres/backup.dump", BackupSetID: "production/postgres",
+			SourceName: "production", SetName: "postgres", ArtifactName: "backup.dump",
+			From: "COMMITTED", To: "COMPLETE",
+			OccurredAt: time.Date(2026, 8, 30, 9, 5, 0, 0, time.UTC),
+			Detail:     "remote source released",
+		},
+		{
+			ArtifactID: "production/postgres/backup.dump", BackupSetID: "production/postgres",
+			SourceName: "production", SetName: "postgres", ArtifactName: "backup.dump",
+			From: "", To: "DISCOVERED",
+			OccurredAt: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC),
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/activity")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body listActivityResponse
+	decodeInto(t, rec, &body)
+	if len(body.Events) != 2 {
+		t.Fatalf("len = %d, want 2", len(body.Events))
+	}
+	if body.Events[0].To != "COMPLETE" || body.Events[0].From != "COMMITTED" {
+		t.Errorf("first event = %+v", body.Events[0])
+	}
+	if body.Events[0].OccurredAt != "2026-08-30T09:05:00Z" {
+		t.Errorf("OccurredAt = %q", body.Events[0].OccurredAt)
+	}
+	// The first transition leaves nothing, so "from" is omitted rather
+	// than sent as an empty string a client would have to special-case.
+	second, err := json.Marshal(body.Events[1])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(second), `"from"`) {
+		t.Errorf("the discovery event carries a from: %s", second)
+	}
+}
+
+// TestListActivity_LimitIsAdvisoryInBothDirections: a page that is only
+// trying to render a list must not be failed over a query parameter.
+func TestListActivity_LimitIsAdvisoryInBothDirections(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{"", 0},
+		{"?limit=25", 25},
+		{"?limit=not-a-number", 0},
+		{"?limit=-3", -3},
+	} {
+		t.Run("limit"+tc.query, func(t *testing.T) {
+			rt := newReadSurfaceRouter(t)
+			rec := rt.get(t, "/api/v1/activity"+tc.query)
+			mustStatus(t, rec, http.StatusOK)
+			if got := rt.backend.lastActivityLimit; got != tc.want {
+				t.Errorf("limit reached the backend as %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestListActivity_AFailedReadIs500Internal(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnActivity = errors.New("boom")
+
+	rec := rt.get(t, "/api/v1/activity")
+	mustStatus(t, rec, http.StatusInternalServerError)
+	if code := errorCodeOf(t, rec); code != "INTERNAL" {
+		t.Errorf("code = %q, want INTERNAL", code)
+	}
+}
+
+// ---------------------------------------------------------- operations ---
+
+// TestListOperations_IsNoLongerA405 is the direct regression for what
+// issue #211 measured: the contract declared POST on this path and
+// nothing else, so the shared UI's live-operations poll got a 405 from
+// every real backend.
+func TestListOperations_IsNoLongerA405(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.operationList = []service.Operation{
+		{ID: "op_2", Status: "running", Action: "run_cycle", CreatedAt: time.Date(2026, 8, 30, 9, 1, 0, 0, time.UTC)},
+		{ID: "op_1", Status: "completed", Action: "run_cycle", CreatedAt: time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)},
+	}
+
+	rec := rt.get(t, "/api/v1/operations")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body listOperationsResponse
+	decodeInto(t, rec, &body)
+	if len(body.Operations) != 2 {
+		t.Fatalf("len = %d, want 2", len(body.Operations))
+	}
+	if body.Operations[0].OperationID != "op_2" || body.Operations[0].Status != "running" {
+		t.Errorf("first operation = %+v", body.Operations[0])
+	}
+	if body.Operations[0].CreatedAt != "2026-08-30T09:01:00Z" {
+		t.Errorf("CreatedAt = %q", body.Operations[0].CreatedAt)
+	}
+}
+
+// TestSubmitOperation_StillOwnsPOSTOnTheSamePath: adding GET must not have
+// widened what POST does, and the shared path is exactly where that would
+// go unnoticed.
+func TestSubmitOperation_StillOwnsPOSTOnTheSamePath(t *testing.T) {
+	backend := newSyncFakeBackend()
+	router := NewRouter(RouterConfig{
+		Platform: allowingPlatform("alice"), Backend: backend,
+		Gate: NotYetImplementedGate{}, BinaryVersion: "test", Commit: "test",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/operations",
+		strings.NewReader(`{"action":"run_cycle","config_revision":"rev-1"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", "still-gated")
+	attachValidCSRF(req)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: POST /operations is still behind the destructive gate", rec.Code)
+	}
+	if code := errorCodeOf(t, rec); code != "DESTRUCTIVE_OPERATIONS_DISABLED" {
+		t.Errorf("code = %q, want DESTRUCTIVE_OPERATIONS_DISABLED", code)
+	}
+}
+
+// -------------------------------------------------------------- health ---
+
+func TestSystemHealth_ReportsEveryBackupSetsVerdict(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	free := uint64(500_000_000_000)
+	rt.backend.health = service.HealthReport{
+		GeneratedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+		BackupSets: []service.BackupSetHealth{
+			{
+				BackupSetID: "production/postgres", SourceName: "production", SetName: "postgres",
+				State: "HEALTHY", Reason: "a known-good backup landed 20 minutes ago",
+				NewestGoodBackupAt: time.Date(2026, 8, 30, 9, 40, 0, 0, time.UTC),
+				StaleAfter:         24 * time.Hour,
+				FreeBytes:          free, FreeBytesKnown: true,
+			},
+			{
+				BackupSetID: "production/media", SourceName: "production", SetName: "media",
+				State: "STALE", Reason: "no known-good backup inside the freshness window",
+				StaleAfter: 24 * time.Hour,
+			},
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/system/health")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body healthResponse
+	decodeInto(t, rec, &body)
+	if body.GeneratedAt != "2026-08-30T10:00:00Z" {
+		t.Errorf("GeneratedAt = %q", body.GeneratedAt)
+	}
+	if len(body.BackupSets) != 2 {
+		t.Fatalf("len = %d, want 2", len(body.BackupSets))
+	}
+	if body.BackupSets[0].State != "HEALTHY" || body.BackupSets[0].Reason == "" {
+		t.Errorf("first verdict = %+v", body.BackupSets[0])
+	}
+	if body.BackupSets[0].StaleAfterSeconds != 86400 {
+		t.Errorf("StaleAfterSeconds = %d, want 86400", body.BackupSets[0].StaleAfterSeconds)
+	}
+	if body.BackupSets[0].FreeBytes != free || !body.BackupSets[0].FreeBytesKnown {
+		t.Errorf("free space = %d / known %v", body.BackupSets[0].FreeBytes, body.BackupSets[0].FreeBytesKnown)
+	}
+
+	// The second set has never produced a good backup and its free space
+	// could not be read. Both must be ABSENT rather than zero: a zero
+	// free_bytes reads as "the disk is full", and a zero timestamp renders
+	// as a date in the year 1.
+	second, err := json.Marshal(body.BackupSets[1])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(second), "newest_good_backup_at") {
+		t.Errorf("a set with no good backup carries a timestamp: %s", second)
+	}
+	if strings.Contains(string(second), `"free_bytes":`) {
+		t.Errorf("an unavailable capacity reading reached the wire as a number: %s", second)
+	}
+	if body.BackupSets[1].FreeBytesKnown {
+		t.Error("FreeBytesKnown is true for a reading that was not taken")
+	}
+}
+
+// TestSystemHealth_ReportsNoProcessOrBuildFact. Failure-safety invariant
+// 14: process liveness is not evidence of backup freshness, and the way
+// that gets violated is one endpoint reporting both.
+func TestSystemHealth_ReportsNoProcessOrBuildFact(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.health = service.HealthReport{
+		GeneratedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+		BackupSets: []service.BackupSetHealth{
+			{BackupSetID: "production/postgres", State: "HEALTHY", Reason: "fresh"},
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/system/health")
+	mustStatus(t, rec, http.StatusOK)
+
+	// The router is built with BinaryVersion "test" and Commit "test", and
+	// GET /system/version does report both. This body must not.
+	for _, forbidden := range []string{"version", "commit", "ready", "go_version"} {
+		if strings.Contains(rec.Body.String(), forbidden) {
+			t.Errorf("the health body carries %q, which is /system/version's answer: %s", forbidden, rec.Body.String())
+		}
+	}
+
+	// The positive control for that scan: the endpoint that IS supposed to
+	// carry those really does, so the four assertions above are about
+	// where the fields are and not about the words being unfindable.
+	version := rt.get(t, "/api/v1/system/version")
+	mustStatus(t, version, http.StatusOK)
+	for _, expected := range []string{"core_version", "commit", "ready", "go_version"} {
+		if !strings.Contains(version.Body.String(), expected) {
+			t.Fatalf("GET /system/version does not carry %q, so the scan above proves nothing: %s", expected, version.Body.String())
+		}
+	}
+}
+
+func TestSystemHealth_AFailedComputationIs500Internal(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnHealth = errors.New("statfs: no such file or directory")
+
+	rec := rt.get(t, "/api/v1/system/health")
+	mustStatus(t, rec, http.StatusInternalServerError)
+	if code := errorCodeOf(t, rec); code != "INTERNAL" {
+		t.Errorf("code = %q, want INTERNAL", code)
+	}
+}
+
+// ------------------------------------------------------------- catalog ---
+
+// TestCatalogScanAndRebuild_ShareOneShapeAndDifferOnlyInDryRun.
+func TestCatalogScanAndRebuild_ShareOneShapeAndDifferOnlyInDryRun(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.catalog = service.CatalogReport{
+		Scanned: 47, Reconstructed: 2, AlreadyPresent: 45,
+		Failures: []service.CatalogFailure{
+			{BackupSetID: "production/postgres", Path: "/data/manifests/bad.json", Reason: "unreadable"},
+		},
+	}
+
+	scan := rt.post(t, "/api/v1/catalog/scan", "")
+	mustStatus(t, scan, http.StatusOK)
+	var scanBody catalogReportResponse
+	decodeInto(t, scan, &scanBody)
+	if !scanBody.DryRun {
+		t.Error("a scan reported dry_run false")
+	}
+	if scanBody.Scanned != 47 || scanBody.Reconstructed != 2 || scanBody.AlreadyPresent != 45 {
+		t.Errorf("counts = %+v", scanBody)
+	}
+	if len(scanBody.Failures) != 1 || scanBody.Failures[0].Reason != "unreadable" {
+		t.Errorf("failures = %+v", scanBody.Failures)
+	}
+
+	rebuild := rt.post(t, "/api/v1/catalog/rebuild", "")
+	mustStatus(t, rebuild, http.StatusOK)
+	var rebuildBody catalogReportResponse
+	decodeInto(t, rebuild, &rebuildBody)
+	if rebuildBody.DryRun {
+		t.Error("a rebuild reported dry_run true")
+	}
+	if rebuildBody.Scanned != scanBody.Scanned || rebuildBody.Reconstructed != scanBody.Reconstructed {
+		t.Errorf("the rebuild and its own dry run disagree: %+v vs %+v", rebuildBody, scanBody)
+	}
+}
+
+func TestCatalogRoutes_AFailedPassIs500Internal(t *testing.T) {
+	for _, target := range []string{"/api/v1/catalog/scan", "/api/v1/catalog/rebuild"} {
+		t.Run(target, func(t *testing.T) {
+			rt := newReadSurfaceRouter(t)
+			rt.backend.errOnCatalog = errors.New("boom")
+
+			rec := rt.post(t, target, "")
+			mustStatus(t, rec, http.StatusInternalServerError)
+			if code := errorCodeOf(t, rec); code != "INTERNAL" {
+				t.Errorf("code = %q, want INTERNAL", code)
+			}
+		})
+	}
+}
+
+// --------------------------------------------------- enabling a set ---
+
+func TestSetBackupSetEnabled_PassesTheIdAndFlagThrough(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+			rt := newReadSurfaceRouter(t)
+
+			rec := rt.post(t, "/api/v1/backup-sets/production/postgres/enabled",
+				fmt.Sprintf(`{"enabled":%v}`, enabled))
+			mustStatus(t, rec, http.StatusOK)
+
+			got := rt.backend.lastSetEnabled
+			if got.id != "production/postgres" {
+				t.Errorf("id = %q, want production/postgres", got.id)
+			}
+			if got.enabled != enabled {
+				t.Errorf("enabled = %v, want %v", got.enabled, enabled)
+			}
+
+			var body backupSetResponse
+			decodeInto(t, rec, &body)
+			if body.Disabled == enabled {
+				t.Errorf("the response reports Disabled = %v for enabled = %v", body.Disabled, enabled)
+			}
+		})
+	}
+}
+
+func TestSetBackupSetEnabled_UnknownSetIs404(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnSetEnabled = fmt.Errorf("%w: gone", service.ErrBackupSetNotFound)
+
+	rec := rt.post(t, "/api/v1/backup-sets/production/gone/enabled", `{"enabled":true}`)
+	mustStatus(t, rec, http.StatusNotFound)
+	if code := errorCodeOf(t, rec); code != "BACKUP_SET_NOT_FOUND" {
+		t.Errorf("code = %q, want BACKUP_SET_NOT_FOUND", code)
+	}
+}
+
+func TestSetBackupSetEnabled_AMalformedBodyIs400(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/backup-sets/production/postgres/enabled", `{"enabled":`)
+	mustStatus(t, rec, http.StatusBadRequest)
+	if code := errorCodeOf(t, rec); code != "INVALID_REQUEST" {
+		t.Errorf("code = %q, want INVALID_REQUEST", code)
+	}
+}
+
+// ------------------------------------------- test-connection, two modes ---
+
+// TestTestConnection_ByBackupSetIdUsesThePersistedConfiguration is the
+// rename issue #211 asks for: the shared UI's "Test connection" on an
+// existing set used to POST /backup-sets/{id}/test-connection, which no
+// runtime ever served.
+func TestTestConnection_ByBackupSetIdUsesThePersistedConfiguration(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.persistedConnectionResult = service.ConnectionTestResult{OK: true}
+
+	rec := rt.post(t, "/api/v1/backup-sets/test-connection", `{"backup_set_id":"production/postgres"}`)
+	mustStatus(t, rec, http.StatusOK)
+
+	if got := rt.backend.lastTestedBackupSetID; got != "production/postgres" {
+		t.Errorf("the handler tested %q, want production/postgres", got)
+	}
+
+	var body testConnectionResponse
+	decodeInto(t, rec, &body)
+	if !body.OK {
+		t.Errorf("OK = false: %+v", body)
+	}
+}
+
+// TestTestConnection_RefusesBothModesAtOnce. Silently preferring one mode
+// is how a caller ends up shown a green result for something it did not
+// ask about.
+func TestTestConnection_RefusesBothModesAtOnce(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/backup-sets/test-connection",
+		`{"backup_set_id":"production/postgres","host":"elsewhere.internal","port":22,"user":"u","ssh_key_id":"k","known_hosts_line":"l"}`)
+	mustStatus(t, rec, http.StatusBadRequest)
+	if code := errorCodeOf(t, rec); code != "INVALID_REQUEST" {
+		t.Errorf("code = %q, want INVALID_REQUEST", code)
+	}
+	if rt.backend.lastTestedBackupSetID != "" {
+		t.Error("the refused request still reached the backend")
+	}
+}
+
+func TestTestConnection_UnknownBackupSetIs404(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnTestPersisted = fmt.Errorf("%w: gone", service.ErrBackupSetNotFound)
+
+	rec := rt.post(t, "/api/v1/backup-sets/test-connection", `{"backup_set_id":"production/gone"}`)
+	mustStatus(t, rec, http.StatusNotFound)
+	if code := errorCodeOf(t, rec); code != "BACKUP_SET_NOT_FOUND" {
+		t.Errorf("code = %q, want BACKUP_SET_NOT_FOUND", code)
+	}
+}

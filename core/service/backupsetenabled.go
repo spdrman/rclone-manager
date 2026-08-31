@@ -3,12 +3,19 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
+
+// connectionTestTimeout bounds one reachability check. It is the same
+// ten seconds TestConnection uses for a candidate source: a test that can
+// hang indefinitely is a request an operator cannot cancel.
+const connectionTestTimeout = 10 * time.Second
 
 // SetBackupSetEnabled turns one configured backup set on or off, persists
 // the change to the configuration file this BackupService was opened from,
@@ -108,4 +115,77 @@ func (b *BackupService) SetBackupSetEnabled(_ context.Context, id string, enable
 	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
 
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
+}
+
+// TestBackupSetConnection runs the same non-destructive reachability and
+// authentication check TestConnection performs, against an ALREADY
+// PERSISTED backup set rather than a candidate a caller is still filling
+// in.
+//
+// The two share one route (POST /api/v1/backup-sets/test-connection) and
+// differ only in where the connection details come from: a candidate
+// carries its own, and a persisted set has them in the configuration
+// already. That matters for more than tidiness. A client asking to test
+// set "nas-a/photos" does not know, and must never have to send back, the
+// key reference and known-hosts line that set is configured with; making
+// it echo them would turn a read-only "does this still work" button into
+// a request that could quietly test something else.
+//
+// Everything reachable from here is read-only: it lists the configured
+// remote path over the transport this service already uses and discards
+// the result. Nothing is written locally or remotely, and no trust
+// decision is made or revised.
+func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) (ConnectionTestResult, error) {
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return ConnectionTestResult{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	st := b.state.Load()
+	var found *config.BackupSet
+	for _, src := range st.inner.Config.Sources {
+		if src.Name != sourceName {
+			continue
+		}
+		for i := range src.BackupSets {
+			if src.BackupSets[i].Name == setName {
+				found = &src.BackupSets[i]
+			}
+		}
+	}
+	if found == nil {
+		return ConnectionTestResult{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	root := found.RemotePath
+	if root == "" {
+		root = "/"
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, connectionTestTimeout)
+	defer cancel()
+
+	r := found.Remote
+	src := transport.Source{
+		ID:         "connection-test",
+		Type:       r.Type,
+		Host:       r.Host,
+		Port:       r.Port,
+		User:       r.User,
+		KeyFile:    r.Key.File,
+		KeyEnv:     r.Key.Env,
+		KeyCommand: r.Key.Command,
+		KnownHosts: r.KnownHosts,
+		Root:       root,
+	}
+
+	if _, err := st.inner.Transport.List(testCtx, src); err != nil {
+		// Deliberately not %w-wrapped and deliberately not put in
+		// Message, for exactly the reason TestConnection gives: a failed
+		// connection test is an ordinary outcome, and err's own text can
+		// embed transport internals a caller must not have to treat as
+		// safe to render.
+		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
+	}
+	return ConnectionTestResult{OK: true}, nil
 }

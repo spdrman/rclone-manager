@@ -65,22 +65,44 @@ type contractBinding struct {
 }
 
 var contractBindings = map[string]contractBinding{
-	"getSystemVersion":          {"/api/v1/system/version", nil, versionResponse{}, "/api/v1/system/version"},
-	"getSystemCapabilities":     {"/api/v1/system/capabilities", nil, capabilitiesResponse{}, "/api/v1/system/capabilities"},
-	"listStorageStatus":         {"/api/v1/system/storage", nil, listStorageStatusResponse{}, "/api/v1/system/storage"},
-	"submitOperation":           {"/api/v1/operations", submitOperationRequest{}, operationResponse{}, "/api/v1/operations"},
-	"getOperation":              {"/api/v1/operations/{id}", nil, operationResponse{}, "/api/v1/operations/op_1"},
-	"previewRetention":          {"/api/v1/backup-sets/{source}/{set}/retention/preview", nil, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/preview"},
-	"applyRetention":            {"/api/v1/backup-sets/{source}/{set}/retention/apply", applyRetentionRequest{}, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/apply"},
-	"listBackupSets":            {"/api/v1/backup-sets", nil, listBackupSetsResponse{}, "/api/v1/backup-sets"},
-	"createBackupSet":           {"/api/v1/backup-sets", backupSetRequest{}, createBackupSetResponse{}, "/api/v1/backup-sets"},
-	"testCandidateConnection":   {"/api/v1/backup-sets/test-connection", testConnectionRequest{}, testConnectionResponse{}, "/api/v1/backup-sets/test-connection"},
-	"getBackupSet":              {"/api/v1/backup-sets/*", nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
-	"listValidators":            {"/api/v1/validators", nil, listValidatorsResponse{}, "/api/v1/validators"},
-	"importSSHKey":              {"/api/v1/ssh-keys", importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
-	"probeHostKey":              {"/api/v1/ssh/host-key-probe", hostKeyProbeRequest{}, hostKeyProbeResponse{}, "/api/v1/ssh/host-key-probe"},
-	"getSettings":               {"/api/v1/settings", nil, settingsResponse{}, "/api/v1/settings"},
-	"updateSettings":            {"/api/v1/settings", settingsRequest{}, settingsResponse{}, "/api/v1/settings"},
+	"getSystemVersion":        {"/api/v1/system/version", nil, versionResponse{}, "/api/v1/system/version"},
+	"getSystemCapabilities":   {"/api/v1/system/capabilities", nil, capabilitiesResponse{}, "/api/v1/system/capabilities"},
+	"listStorageStatus":       {"/api/v1/system/storage", nil, listStorageStatusResponse{}, "/api/v1/system/storage"},
+	"submitOperation":         {"/api/v1/operations", submitOperationRequest{}, operationResponse{}, "/api/v1/operations"},
+	"getOperation":            {"/api/v1/operations/{id}", nil, operationResponse{}, "/api/v1/operations/op_1"},
+	"previewRetention":        {"/api/v1/backup-sets/{source}/{set}/retention/preview", nil, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/preview"},
+	"applyRetention":          {"/api/v1/backup-sets/{source}/{set}/retention/apply", applyRetentionRequest{}, retentionPlanResponse{}, "/api/v1/backup-sets/src/set/retention/apply"},
+	"listBackupSets":          {"/api/v1/backup-sets", nil, listBackupSetsResponse{}, "/api/v1/backup-sets"},
+	"createBackupSet":         {"/api/v1/backup-sets", backupSetRequest{}, createBackupSetResponse{}, "/api/v1/backup-sets"},
+	"testCandidateConnection": {"/api/v1/backup-sets/test-connection", testConnectionRequest{}, testConnectionResponse{}, "/api/v1/backup-sets/test-connection"},
+	"getBackupSet":            {"/api/v1/backup-sets/*", nil, backupSetResponse{}, "/api/v1/backup-sets/src/set"},
+	"listValidators":          {"/api/v1/validators", nil, listValidatorsResponse{}, "/api/v1/validators"},
+	"importSSHKey":            {"/api/v1/ssh-keys", importSSHKeyRequest{}, importSSHKeyResponse{}, "/api/v1/ssh-keys"},
+	"probeHostKey":            {"/api/v1/ssh/host-key-probe", hostKeyProbeRequest{}, hostKeyProbeResponse{}, "/api/v1/ssh/host-key-probe"},
+	"getSettings":             {"/api/v1/settings", nil, settingsResponse{}, "/api/v1/settings"},
+	"updateSettings":          {"/api/v1/settings", settingsRequest{}, settingsResponse{}, "/api/v1/settings"},
+
+	// Issue #211. Four of these spell their path parameter as one {id}
+	// that spans segments, the way getBackupSet already does, because
+	// that is what the identity IS: a backup set is "source/name" and an
+	// artifact is "source/set/name". chi matches a parameter per path
+	// segment, so the router registers two or three named segments
+	// instead, and routerPattern is where the two spellings meet. Named
+	// segments rather than getBackupSet's catch-all, because each of
+	// these has a FIXED arity and three of them need a literal tail
+	// ("/enabled", "/revalidate", "/retry") that a catch-all would
+	// swallow.
+	"getSystemHealth":           {"/api/v1/system/health", nil, healthResponse{}, "/api/v1/system/health"},
+	"listOperations":            {"/api/v1/operations", nil, listOperationsResponse{}, "/api/v1/operations"},
+	"listArtifacts":             {"/api/v1/backups", nil, listArtifactsResponse{}, "/api/v1/backups"},
+	"getArtifact":               {"/api/v1/backups/{source}/{set}/{name}", nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
+	"listActivity":              {"/api/v1/activity", nil, listActivityResponse{}, "/api/v1/activity"},
+	"listQuarantine":            {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
+	"revalidateArtifact":        {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
+	"retryArtifactIngestion":    {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
+	"setBackupSetEnabled":       {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
+	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
 	"getRetentionErrorEnvelope": {"", nil, errorResponse{}, ""},
 	"getConfigRevisionStale":    {"", nil, configRevisionStaleResponse{}, ""},
 }
@@ -657,10 +679,14 @@ func TestContract_EveryRefusalTheseRoutesReturnIsDeclaredForThatOperation(t *tes
 	endpoints := contractEndpoints()
 
 	cases := []struct {
-		name       string
-		operation  string
-		method     string
-		target     string
+		name      string
+		operation string
+		method    string
+		target    string
+		// csrf attaches a valid double-submit pair, which every POST here
+		// needs: requireCSRF runs first and refuses with its own 403, so
+		// without this a mutating route's real refusal is never reached.
+		csrf       bool
 		arrange    func(*syncFakeBackend)
 		wantStatus int
 		wantCode   string
@@ -687,6 +713,43 @@ func TestContract_EveryRefusalTheseRoutesReturnIsDeclaredForThatOperation(t *tes
 			wantStatus: http.StatusInternalServerError,
 			wantCode:   "INTERNAL",
 		},
+		// Issue #211's three new refusals. Each is one an operator reaches
+		// by clicking a button on a screen that has gone stale, so each
+		// has to be a code the client was told about for THAT operation,
+		// not merely a code registered somewhere in the document.
+		{
+			name:       "a backup id that names nothing",
+			operation:  "getArtifact",
+			method:     http.MethodGet,
+			target:     "/api/v1/backups/src/set-1/gone.dump",
+			arrange:    func(*syncFakeBackend) {},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "ARTIFACT_NOT_FOUND",
+		},
+		{
+			name:      "retrying a backup with no source left to re-ingest",
+			operation: "retryArtifactIngestion",
+			method:    http.MethodPost,
+			target:    "/api/v1/quarantine/src/set-1/lost.dump/retry",
+			csrf:      true,
+			arrange: func(b *syncFakeBackend) {
+				b.errOnRetry = fmt.Errorf("%w: lost", service.ErrArtifactIrrecoverable)
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "ARTIFACT_IRRECOVERABLE",
+		},
+		{
+			name:      "revalidating a backup that is not quarantined",
+			operation: "revalidateArtifact",
+			method:    http.MethodPost,
+			target:    "/api/v1/quarantine/src/set-1/backup.dump/revalidate",
+			csrf:      true,
+			arrange: func(b *syncFakeBackend) {
+				b.errOnRevalidate = fmt.Errorf("%w: healthy", service.ErrArtifactNotQuarantined)
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "ARTIFACT_NOT_QUARANTINED",
+		},
 	}
 
 	for _, tc := range cases {
@@ -698,6 +761,9 @@ func TestContract_EveryRefusalTheseRoutesReturnIsDeclaredForThatOperation(t *tes
 				BinaryVersion: "test", Commit: "test",
 			})
 			req := httptest.NewRequest(tc.method, tc.target, nil)
+			if tc.csrf {
+				attachValidCSRF(req)
+			}
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 

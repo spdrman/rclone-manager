@@ -475,3 +475,33 @@ func TestSetBackupSetEnabled_RefusesAnUnknownBackupSet(t *testing.T) {
 		}
 	}
 }
+
+// TestTestBackupSetConnection_ChecksThePersistedSetWithoutBeingToldItsSecrets
+// is the persisted half of POST /api/v1/backup-sets/test-connection. The
+// fixture's source is a local one, so a successful list here proves the
+// stored configuration was actually resolved and used: a caller supplied
+// nothing but an id.
+func TestTestBackupSetConnection_ChecksThePersistedSetWithoutBeingToldItsSecrets(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	got, err := svc.TestBackupSetConnection(context.Background(), "production/postgres-primary")
+	if err != nil {
+		t.Fatalf("TestBackupSetConnection: %v", err)
+	}
+	if !got.OK {
+		t.Fatalf("OK = false (%q) against the fixture's own reachable source", got.Message)
+	}
+	if got.Message != "" {
+		t.Errorf("Message = %q, want empty on success", got.Message)
+	}
+}
+
+func TestTestBackupSetConnection_RefusesAnUnknownBackupSet(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	for _, id := range []string{"production/nope", "no-such-source/postgres-primary", "malformed"} {
+		if _, err := svc.TestBackupSetConnection(context.Background(), id); !errors.Is(err, ErrBackupSetNotFound) {
+			t.Errorf("TestBackupSetConnection(%q) error = %v, want ErrBackupSetNotFound", id, err)
+		}
+	}
+}
