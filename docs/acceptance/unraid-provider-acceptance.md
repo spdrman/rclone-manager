@@ -126,6 +126,16 @@ takes. On a reinstall the same command would rewrite the retained backup store.
 listener starts. A missing or invalid `config.yaml` is a hard startup failure, not
 a first-run wizard.
 
+**What still requires this step, precisely (issue #196).** The configuration mount is
+now a writable directory the application owns, so the container can create and replace
+`config.yaml` itself, and an empty directory is a legitimate state rather than a broken
+deployment. Two things nonetheless keep this step here. The directory itself must exist
+and be owned by the app's uid/gid before the first start, because a bind mount does not
+create or chown its source. And `/backup-manager-web serve` still refuses to start
+without a valid config: removing that refusal, and serving a first-run flow instead, is
+#176's work and is not merged. Once it is, everything below except creating and owning
+the directory becomes optional.
+
 ```bash
 ssh-keygen -t ed25519 -N '' -f /mnt/user/appdata/backup-manager/secrets/id_ed25519
 ssh-keyscan -t ed25519 <your-sftp-host> > /mnt/user/appdata/backup-manager/secrets/known_hosts
@@ -141,7 +151,8 @@ in `apps/unraid/README.md`.
 
 - [ ] Key pair generated, mode 0600, owned by `PUID:PGID`
 - [ ] `known_hosts` pinned, fingerprint verified out of band
-- [ ] `config.yaml` written and readable by `PUID:PGID`
+- [ ] `/mnt/user/appdata/backup-manager/config` exists and is **writable** by `PUID:PGID`
+- [ ] `config.yaml` written inside it and readable by `PUID:PGID`
 
 ---
 

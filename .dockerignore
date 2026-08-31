@@ -17,6 +17,7 @@
 # its own `npm ci` and `npm run build` from scratch).
 **/node_modules
 ui/shared/dist
+ui/shared/dist-bundles
 ui/shared/.vite
 ui/shared/coverage
 ui/shared/playwright-report

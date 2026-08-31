@@ -10,6 +10,31 @@ on an Unraid system. Run
 [docs/acceptance/unraid-provider-acceptance.md](../../docs/acceptance/unraid-provider-acceptance.md)
 to change that.
 
+
+## Converted to a thin adapter (issue #169)
+
+Everything here is now **derived** from the one authoritative Compose runtime
+definition rather than authored beside it. `distribution/packaging`'s
+derivation gate holds this platform's image reference, runtime profile,
+mounts, published port, health check and architectures to `canonical.json`,
+and a deliberate mismatch fails the build naming the field that drifted. What
+that means in practice for this directory:
+
+- both services select the `unraid` runtime profile with `--profile=`, so
+  the platform this deployment reports itself as is a selection rather than a
+  build-time constant;
+- the Web UI container sets `UI_ROOT=/ui/bundles`, so it serves this
+  platform's own frontend bridge out of the canonical image rather than the
+  generic one (issue #180). A missing bundle is a hard start failure, never a
+  silent fall back;
+- the configuration mount is a writable **directory** holding `config.yaml`
+  instead of a read-only single file (issue #196).
+
+The upgrade path from the Phase 4 packaging, including the one renamed mount,
+is in
+[docs/runtime-contract.md](../../docs/runtime-contract.md#migrating-a-phase-4-installation).
+No state or backup data moves.
+
 ## Two templates, and why
 
 An Unraid Docker template describes exactly one container. The canonical image
@@ -52,9 +77,17 @@ Docker, Add Container.
 | --- | --- | --- | --- |
 | State | `/mnt/user/appdata/backup-manager/state` | `/data/state` | rw |
 | Backups | `/mnt/user/backups/backup-manager` | `/data/backups` | rw |
-| Config | `/mnt/user/appdata/backup-manager/config/config.yaml` | `/etc/backup-manager/config.yaml` | ro |
+| Config | `/mnt/user/appdata/backup-manager/config` | `/etc/backup-manager/config` | rw |
 | SSH key | `/mnt/user/appdata/backup-manager/secrets/id_ed25519` | `/etc/backup-manager/id_ed25519` | ro |
 | Known hosts | `/mnt/user/appdata/backup-manager/secrets/known_hosts` | `/etc/backup-manager/known_hosts` | ro |
+
+`config` is a writable **directory** holding `config.yaml`, not a read-only single
+file (issue #196). Adding a backup set, saving settings and first-run setup all
+replace that file through a temp file created in its own directory, and the engine
+keeps `ssh_keys/` and `known_hosts.d/` beside it, so a single-file mount silently
+disables all three. It may be empty on a fresh install. The SSH key and
+`known_hosts` stay read-only single files: nothing in the container writes those.
+
 
 Appdata holds private state; a directory of the app's own inside the backups user
 share holds retained artifacts. The backup root is deliberately a child of the

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"debug/elf"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -35,6 +36,17 @@ type BuildOptions struct {
 	// the one thing this package must never do.
 	BinariesDir string
 
+	// UIBundleDir holds the ALREADY BUILT shared UI bundle for this
+	// provider: ui/shared/dist-bundles/synology, produced by `npm run
+	// build:bundles synology`. Required, for the same reason BinariesDir
+	// is: the package carries it, it never builds it.
+	//
+	// Required rather than optional on purpose. An optional bundle would
+	// mean a .spk that installs and runs and shows the generic bridge,
+	// which is precisely the defect issue #180 was filed about, and
+	// nothing about the finished package would say so.
+	UIBundleDir string
+
 	// OutDir is where the `.spk` is written.
 	OutDir string
 }
@@ -61,7 +73,7 @@ func Build(opts BuildOptions) (string, error) {
 		return "", fmt.Errorf("an output directory is required")
 	}
 
-	payload, err := stagePayload(opts.BinariesDir, arch)
+	payload, err := stagePayload(opts.BinariesDir, opts.UIBundleDir, arch)
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +142,7 @@ func Build(opts BuildOptions) (string, error) {
 
 // stagePayload reads the release binaries and the shipped UI/share assets
 // into the members of package.tgz.
-func stagePayload(binariesDir string, arch Arch) ([]archiveMember, error) {
+func stagePayload(binariesDir, uiBundleDir string, arch Arch) ([]archiveMember, error) {
 	if binariesDir == "" {
 		return nil, fmt.Errorf("a directory of release binaries is required: this package wraps them, it never builds them")
 	}
@@ -166,6 +178,12 @@ func stagePayload(binariesDir string, arch Arch) ([]archiveMember, error) {
 		}
 	}
 
+	bundle, err := stageUIBundle(uiBundleDir)
+	if err != nil {
+		return nil, err
+	}
+	members = append(members, bundle...)
+
 	icons, err := renderLauncherIcons()
 	if err != nil {
 		return nil, err
@@ -178,6 +196,72 @@ func stagePayload(binariesDir string, arch Arch) ([]archiveMember, error) {
 		})
 	}
 
+	return members, nil
+}
+
+// stageUIBundle reads the provider's shared UI bundle into package.tgz
+// members, refusing anything that is not one.
+//
+// Three refusals, and each of them is a failure that would otherwise ship
+// silently: no directory at all (a package serving the generic bridge on
+// a Synology NAS, which is #180), no app shell (a bundle directory that
+// is really an empty mount point, which answers every route with 404),
+// and a marker naming another provider (the wrong bridge, which looks
+// exactly like the right one until a capability is used).
+func stageUIBundle(dir string) ([]archiveMember, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("a built UI bundle directory is required (ui/shared/dist-bundles/%s, from `npm run build:bundles %s`): without it this package would serve the generic bridge on a Synology NAS, which is issue #180",
+			UIBundlePlatform, UIBundlePlatform)
+	}
+
+	marker, err := os.ReadFile(filepath.Join(dir, UIBundleMarkerName))
+	if err != nil {
+		return nil, fmt.Errorf("read %s from the UI bundle at %s: %w", UIBundleMarkerName, dir, err)
+	}
+	var m struct {
+		Platform string `json:"platform"`
+	}
+	if err := json.Unmarshal(marker, &m); err != nil {
+		return nil, fmt.Errorf("parse %s from the UI bundle at %s: %w", UIBundleMarkerName, dir, err)
+	}
+	if m.Platform != UIBundlePlatform {
+		return nil, fmt.Errorf("the UI bundle at %s was built for %q, and this package needs %q; a bundle for the wrong provider installs cleanly and shows the wrong bridge",
+			dir, m.Platform, UIBundlePlatform)
+	}
+
+	var members []archiveMember
+	shell := false
+	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, relErr := filepath.Rel(dir, p)
+		if relErr != nil {
+			return relErr
+		}
+		body, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "index.html" {
+			shell = true
+		}
+		members = append(members, archiveMember{
+			Name: PayloadUIBundleDir + "/" + rel,
+			Mode: 0o644,
+			Body: body,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read the UI bundle at %s: %w", dir, err)
+	}
+	if !shell {
+		return nil, fmt.Errorf("the UI bundle at %s has no index.html, so it is not an app shell; serving it would answer every route with 404", dir)
+	}
+
+	sort.Slice(members, func(i, j int) bool { return members[i].Name < members[j].Name })
 	return members, nil
 }
 

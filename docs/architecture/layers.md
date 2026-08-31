@@ -182,21 +182,41 @@ somewhere else:
 | `apps/common/cmd/provenance` | `distribution/cmd/provenance` | #165, done |
 | `cd apps/common && go run ./cmd/provenance -write` | `cd distribution && go run ./cmd/provenance -write` | #165, done |
 | `container/{Dockerfile,compose.yaml,.env.example,release-manifest.json}` | `distribution/compose/` | **#167**, not yet |
-| `apps/truenas/{catalog,compose}` | `distribution/truenas/` | **#169**, not yet |
-| `apps/unraid/{template,frontend/webui.json}` | `distribution/unraid/` | **#169**, not yet |
-| `apps/openmediavault/compose` | `distribution/openmediavault/` | **#169**, not yet |
-| `apps/proxmox/{compose,frontend/deployment.md}` | `distribution/proxmox/` | **#169**, not yet |
-| `apps/synology/{spk,cmd/spkctl}` | `distribution/synology/` | **#169**, not yet |
+| `apps/truenas/{catalog,compose}` | `distribution/truenas/` | not scheduled, see below |
+| `apps/unraid/{template,frontend/webui.json}` | `distribution/unraid/` | not scheduled, see below |
+| `apps/openmediavault/compose` | `distribution/openmediavault/` | not scheduled, see below |
+| `apps/proxmox/{compose,frontend/deployment.md}` | `distribution/proxmox/` | not scheduled, see below |
+| `apps/synology/{spk,cmd/spkctl,compose}` | `distribution/synology/` | not scheduled, see below |
 | `tools/ugcli-install` | `distribution/ugos/` | **EPIC D**, not yet |
 
 Those artifacts are **already classified** as distribution-layer, so every check
 above covers them today and `verify-core-without-distribution.sh` deletes exactly
-them. They are not physically moved yet because #81 says plainly that converting
-the shipped Phase 4 packaging is #169's work and that nobody should reconcile
-Phase 4 into this refactor on their own initiative, and the canonical runtime is
-#167's. Moving them here and converting them there would churn the same files
-twice. When those issues move them, the change to this repository's enforcement
-is one edit in `scripts/architecture/layers.conf`.
+them.
+
+**The five platform rows used to say "#169, not yet", and #169 did not move
+them.** That is a decision rather than an omission, and it is recorded here
+rather than in a commit message so the next person does not read the table as a
+task list.
+
+#169's own acceptance criteria do not ask for the move; its layer requirement is
+that platform metadata sits in the distribution adapter layer #165 created,
+cleanly separated from runtime platform behaviour, and that is what
+`layers.conf` decides. Every one of these paths is classified `distribution
+adapter` today, the dependency rule is enforced against that classification, the
+ownership scan runs over it, and `verify-core-without-distribution.sh` proves the
+core builds and passes with exactly these paths deleted. A rename changes none of
+that.
+
+Against which: the move is thirty-eight referencing files and one Go module
+rename, on a branch three deep in a stack, and it would bury a conversion whose
+whole substance is a derivation gate and a storage-role change under a diff that
+is almost entirely paths. There is also a real cost to doing it halfway, which is
+what it would be: `apps/<platform>/frontend/` is runtime-platform and stays where
+it is, so each platform would end up split across two trees, and every reader
+would have to learn which half lives where.
+
+Whoever decides to do it should do it as its own change, with nothing else in it.
+The enforcement cost is still one edit in `scripts/architecture/layers.conf`.
 
 ## A note on the source specification's paths
 

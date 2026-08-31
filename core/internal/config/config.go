@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -595,6 +596,36 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 	return DefaultTierChain(r.DailyDays, r.WeeklyMonths, r.MonthlyMonths)
 }
 
+// DefaultFileName is the configuration file's name inside the
+// configuration DIRECTORY. Packaging mounts the directory, not the file
+// (distribution/packaging/canonical.json's config role, issue #196),
+// because the engine creates and atomically replaces this file and keeps
+// two on-demand stores beside it, and because a directory is the only
+// shape that can honestly be empty on a fresh install.
+const DefaultFileName = "config.yaml"
+
+// ResolvePath turns a configuration path an operator supplied into the
+// file to read or write. A path naming an existing DIRECTORY resolves to
+// DefaultFileName inside it; anything else is returned unchanged.
+//
+// It exists because #196 made the packaged mount a directory, so
+// `--config /etc/backup-manager/config` is now the natural thing for an
+// operator to type. Without this, that spelling fails with "is a
+// directory" from deep inside the YAML reader, which says nothing about
+// what to do instead.
+//
+// A path that does not exist is returned unchanged rather than guessed
+// at: the caller is about to create it, and turning a not-yet-existing
+// file path into a directory path would create the file in the wrong
+// place.
+func ResolvePath(path string) string {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return path
+	}
+	return filepath.Join(path, DefaultFileName)
+}
+
 // Load reads and parses the YAML file at path. It does not validate the
 // result: call Validate, or use LoadAndValidate, before acting on it.
 //
@@ -602,6 +633,7 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 // "pol_interval" should be reported as exactly that, not surface later as a
 // mysteriously-zero poll_interval.
 func Load(path string) (*Config, error) {
+	path = ResolvePath(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config %q: %w", path, err)

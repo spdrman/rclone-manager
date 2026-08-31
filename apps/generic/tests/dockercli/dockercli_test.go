@@ -313,7 +313,14 @@ func degradedConfig(t *testing.T) (dir string) {
 		"retention:\n" +
 		"  timezone: UTC\n" +
 		"  week_starts_on: monday\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+	// dir/config/config.yaml, not dir/config.yaml: the packaged mount is
+	// the configuration DIRECTORY (issue #196), and a fixture that puts
+	// the file anywhere else is a fixture that cannot see the defect that
+	// issue was filed about.
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config", "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatalf("WriteFile config.yaml: %v", err)
 	}
 	return dir
@@ -334,7 +341,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 	args := []string{
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
-		"-v", filepath.Join(dir, "config.yaml") + ":/etc/backup-manager/config.yaml:ro",
+		"-v", filepath.Join(dir, "config") + ":/etc/backup-manager/config",
 		"-v", filepath.Join(dir, "state") + ":/data/state",
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
 		"-v", filepath.Join(dir, "backups") + ":/data/backups",
@@ -344,7 +351,7 @@ func runDaemonContainer(t *testing.T, image, dir string) string {
 		// ENTRYPOINT can only ever prefix one of them - see that file's
 		// own doc comment), so `command:`/`docker run` args are the whole
 		// argv, exactly as container/compose.yaml's own `command:` does.
-		image, "/backup-manager", "daemon", "--config", "/etc/backup-manager/config.yaml",
+		image, "/backup-manager", "daemon", "--config", "/etc/backup-manager/config",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -484,11 +491,11 @@ func TestServeCommandExposesTheEngineAPIOnly(t *testing.T) {
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
 		"-p", "0:8080", // publish --listen's :8080 to an ephemeral host port
-		"-v", filepath.Join(dir, "config.yaml") + ":/etc/backup-manager/config.yaml:ro",
+		"-v", filepath.Join(dir, "config") + ":/etc/backup-manager/config",
 		"-v", filepath.Join(dir, "state") + ":/data/state",
 		"-v", filepath.Join(dir, "remote") + ":/data/remote:ro",
 		"-v", filepath.Join(dir, "backups") + ":/data/backups",
-		image, "/backup-manager-web", "serve", "--config", "/etc/backup-manager/config.yaml", "--listen", ":8080",
+		image, "/backup-manager-web", "serve", "--config", "/etc/backup-manager/config", "--listen", ":8080",
 	}
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -654,7 +661,14 @@ func workingRemoteConfig(t *testing.T) (dir string) {
 		"retention:\n" +
 		"  timezone: UTC\n" +
 		"  week_starts_on: monday\n"
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(config), 0o644); err != nil {
+	// dir/config/config.yaml, not dir/config.yaml: the packaged mount is
+	// the configuration DIRECTORY (issue #196), and a fixture that puts
+	// the file anywhere else is a fixture that cannot see the defect that
+	// issue was filed about.
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config", "config.yaml"), []byte(config), 0o644); err != nil {
 		t.Fatalf("WriteFile config.yaml: %v", err)
 	}
 	return dir
@@ -665,15 +679,17 @@ func workingRemoteConfig(t *testing.T) (dir string) {
 // and returns its path. SSH_KEY_FILE/KNOWN_HOSTS_FILE point at
 // config.yaml itself - unused by this suite's "local" remote type, but
 // compose.yaml's `${VAR:?...}` guards require SOME readable file to
-// exist at each path regardless of remote type.
+// exist at each path regardless of remote type. CONFIG_DIR is the
+// directory holding it (issue #196), which is what the canonical
+// definition mounts.
 func composeEnvFile(t *testing.T, dir string, listenPort int) string {
 	t.Helper()
 	envPath := filepath.Join(dir, ".env")
 	content := "STATE_DIR=" + filepath.Join(dir, "state") + "\n" +
 		"BACKUP_DIR=" + filepath.Join(dir, "backups") + "\n" +
-		"CONFIG_FILE=" + filepath.Join(dir, "config.yaml") + "\n" +
-		"SSH_KEY_FILE=" + filepath.Join(dir, "config.yaml") + "\n" +
-		"KNOWN_HOSTS_FILE=" + filepath.Join(dir, "config.yaml") + "\n" +
+		"CONFIG_DIR=" + filepath.Join(dir, "config") + "\n" +
+		"SSH_KEY_FILE=" + filepath.Join(dir, "config", "config.yaml") + "\n" +
+		"KNOWN_HOSTS_FILE=" + filepath.Join(dir, "config", "config.yaml") + "\n" +
 		"LISTEN_PORT=" + strconv.Itoa(listenPort) + "\n"
 	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile .env: %v", err)

@@ -69,8 +69,10 @@ var (
 )
 
 // defaultConfigPath matches core/cmd/backup-manager's own default and
-// container/compose.yaml's mount point.
-const defaultConfigPath = "/etc/backup-manager/config.yaml"
+// container/compose.yaml's mount point. The mount is the DIRECTORY
+// /etc/backup-manager/config (issue #196) and config.yaml lives inside
+// it; --config also accepts that directory.
+const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
 
 // defaultAuthStorePath lives inside the SAME already-writable state
 // volume container/compose.yaml already mounts for the SQLite journal
@@ -154,7 +156,7 @@ commands:
 
 serve flags:
   --config PATH               path to the manager's YAML config file
-                               (default /etc/backup-manager/config.yaml)
+                               (default /etc/backup-manager/config/config.yaml)
   --listen ADDR                address to listen on
                                (default $LISTEN_ADDR, or :8080)
   --profile NAME               runtime profile: generic or ugos

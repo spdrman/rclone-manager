@@ -26,7 +26,7 @@ services:
   # from backup-manager-ui over this project's own network.
   backup-manager:
     image: ${IMAGE:-ghcr.io/spdrman/backup-manager:1.0.0}
-    command: ["/backup-manager-web", "serve"]
+    command: ["/backup-manager-web", "serve", "--profile=openmediavault"]
 
     user: "${PUID:-1000}:${PGID:-100}"
     read_only: true
@@ -58,7 +58,10 @@ services:
     volumes:
       - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/state:/data/state
       - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/backups/backup-manager:/data/backups
-      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/config/config.yaml:/etc/backup-manager/config.yaml:ro
+      # A writable directory holding config.yaml (issue #196): the
+      # engine creates and atomically replaces that file, and its
+      # ssh_keys/ and known_hosts.d/ stores are siblings of it.
+      - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/config:/etc/backup-manager/config
       - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
       - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
 
@@ -72,7 +75,7 @@ services:
   # see README.md.
   backup-manager-ui:
     image: ${IMAGE:-ghcr.io/spdrman/backup-manager:1.0.0}
-    command: ["/backup-manager-web", "serve-ui"]
+    command: ["/backup-manager-web", "serve-ui", "--profile=openmediavault"]
 
     depends_on:
       backup-manager:
@@ -92,6 +95,12 @@ services:
       TMPDIR: "/tmp"
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://backup-manager:8080"
+      # The per-provider UI bundles the canonical image carries. With
+      # `--profile=openmediavault` selected above, the bundle served is
+      # /ui/bundles/openmediavault, so an operator who installed through this
+      # platform's own mechanism sees that platform's bridge rather than
+      # being told this is a generic Docker deployment (issue #180).
+      UI_ROOT: "/ui/bundles"
 
     # No volumes at all: this container never reads config.yaml, the SSH
     # key, known_hosts, or either data directory. Every persistent path in

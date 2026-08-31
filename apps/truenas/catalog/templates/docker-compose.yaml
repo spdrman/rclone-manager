@@ -11,7 +11,7 @@
 services:
   backup-manager:
     image: "{{ .Values.image.reference }}"
-    command: ["/backup-manager-web", "serve"]
+    command: ["/backup-manager-web", "serve", "--profile=truenas"]
 
     user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
     read_only: true
@@ -32,7 +32,7 @@ services:
     volumes:
       - "{{ .Values.storage.state.hostPath }}:/data/state"
       - "{{ .Values.storage.backups.hostPath }}:/data/backups"
-      - "{{ .Values.storage.config.hostPath }}:/etc/backup-manager/config.yaml:ro"
+      - "{{ .Values.storage.config.hostPath }}:/etc/backup-manager/config"
       - "{{ .Values.storage.sshKey.hostPath }}:/etc/backup-manager/id_ed25519:ro"
       - "{{ .Values.storage.knownHosts.hostPath }}:/etc/backup-manager/known_hosts:ro"
 
@@ -42,7 +42,7 @@ services:
 
   backup-manager-ui:
     image: "{{ .Values.image.reference }}"
-    command: ["/backup-manager-web", "serve-ui"]
+    command: ["/backup-manager-web", "serve-ui", "--profile=truenas"]
 
     depends_on:
       backup-manager:
@@ -62,6 +62,12 @@ services:
       TMPDIR: "/tmp"
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://backup-manager:8080"
+      # The per-provider UI bundles the canonical image carries. With
+      # `--profile=truenas` selected above, the bundle served is
+      # /ui/bundles/truenas, so an operator who installed through this
+      # platform's own mechanism sees that platform's bridge rather than
+      # being told this is a generic Docker deployment (issue #180).
+      UI_ROOT: "/ui/bundles"
 
     healthcheck:
       test: ["CMD", "/backup-manager-web", "healthcheck"]

@@ -925,27 +925,101 @@ func bridgeFlag(key string) func(providerUnderTest) (bool, string) {
 }
 
 // bridgeReachesAShippedArtifact is the question every capability flag
-// turns on and none of them used to ask: does anything a user installs
-// actually load apps/<provider>/frontend/platform.ts?
+// turns on and none of them used to be able to ask: does anything a user
+// installs actually load apps/<provider>/frontend/platform.ts?
 //
-// ui/shared/vite.config.ts picks the shell at BUILD time from
-// VITE_PLATFORM, defaulting to generic, and `serve-ui` serves one
-// embedded bundle with no flag to serve another from disk. So the
-// canonical image and the .spk that wraps the same binaries all serve the
-// generic bridge, whose capabilities() is empty and whose deployment
-// label is "Docker Compose". A flag set in a provider's platform.ts is a
-// statement of repository intent until #180 gives serve-ui a way to
-// select a bundle, and a conformance matrix that reports intent as PASS
-// is reporting a capability nobody can reach.
+// It used to have one answer for the whole repository, and that answer
+// was "generic". ui/shared/vite.config.ts picks the shell at BUILD time
+// from VITE_PLATFORM, and serve-ui served one go:embed'ed bundle with no
+// way to serve another, so every artifact this repository produces
+// carried the generic bridge, whose capabilities() is empty and whose
+// deployment label is "Docker Compose". That is issue #180, and every
+// bridge-derived cell was BLOCKED against it rather than reporting
+// repository intent as a pass.
+//
+// The answer is now per provider, because the mechanism is. #167 made
+// bundle selection a run-time decision and #169 packaged it: an adapter
+// that is metadata and nothing else selects a bundle the canonical image
+// carries, a package that installs native binaries carries its own, and
+// exactly one provider gets the bundle compiled into the binary. See
+// uibundle.go for why those are the only three shapes.
+//
+// Every branch below is decided from checked-in artifacts. "This
+// provider's bundle ships" is precisely the kind of claim that outlives
+// the line that made it true.
 func bridgeReachesAShippedArtifact(p providerUnderTest) (bool, string) {
-	shipped, source, err := ShippedBridgeProvider()
+	svcs, err := p.services()
 	if err != nil {
 		return false, err.Error()
 	}
-	if shipped == p.id {
-		return true, fmt.Sprintf("%s selects the %s bundle", source, shipped)
+
+	var webUI *Service
+	for i := range svcs {
+		if runsCanonicalCommand(svcs[i].Command, p.canonical.Commands.WebUI) {
+			webUI = &svcs[i]
+			break
+		}
 	}
-	return false, fmt.Sprintf("no shipped artifact loads it: %s selects the %s bundle and serve-ui serves one go:embed'ed bundle, so an installed package runs the %s bridge (#180)", source, shipped, shipped)
+
+	// A native package carries its own bundle. Declared per provider in
+	// conformance.json so a provider that has no such package does not
+	// silently inherit another one's evidence.
+	payload := UIBundleSelection{Mechanism: UIBundleNone, Detail: "this provider ships no native package that could carry a bundle"}
+	if pkg := p.spec.Metadata.PackageUIBundle; pkg.Layout != "" {
+		payload = PackagePayloadUIBundle(pkg.Layout, pkg.StartScript)
+	}
+
+	sel := SelectUIBundle(webUI, payload, p.canonical.Platforms[p.id].Profile)
+
+	switch sel.Mechanism {
+	case UIBundleEmbedded:
+		shipped, source, err := ShippedBridgeProvider()
+		if err != nil {
+			return false, err.Error()
+		}
+		if shipped == p.id {
+			return true, fmt.Sprintf("%s serves the bundle compiled into the binary, and %s selects the %s bridge", sel.Detail, source, shipped)
+		}
+		return false, fmt.Sprintf("%s, and %s selects the %s bridge, so an installed deployment runs somebody else's (#180)", sel.Detail, source, shipped)
+
+	case UIBundleImageRoot:
+		if sel.Provider != p.id {
+			return false, fmt.Sprintf("%s, which is the %s bridge and not this provider's (#180)", sel.Detail, sel.Provider)
+		}
+		root, carried, err := ImageBundleRoot()
+		if err != nil {
+			return false, err.Error()
+		}
+		if !contains(carried, sel.Provider) {
+			return false, fmt.Sprintf("%s, and the canonical image carries bundles for %v only, so serve-ui would refuse to start (#180)", sel.Detail, carried)
+		}
+		if webUI != nil {
+			declared := strings.TrimSpace(webUI.Environment["UI_ROOT"])
+			if declared != "" && strings.TrimSuffix(declared, "/") != root {
+				return false, fmt.Sprintf("%s, and the canonical image carries them at %s instead", sel.Detail, root)
+			}
+		}
+		if ok, why := GenericBundleIsBuiltLast(); !ok {
+			return false, why
+		}
+		return true, fmt.Sprintf("%s, and the canonical image carries %v at %s", sel.Detail, carried, root)
+
+	case UIBundlePackagePayload:
+		if sel.Provider != p.id {
+			return false, fmt.Sprintf("%s, which is the %s bridge and not this provider's (#180)", sel.Detail, sel.Provider)
+		}
+		return true, sel.Detail
+
+	default:
+		if webUI == nil && p.spec.Metadata.PackageUIBundle.Layout == "" {
+			// No compose-shaped artifact and no native package: this
+			// provider ships nothing that could load any bridge, which
+			// is a different finding from "it loads the wrong one" and
+			// is tracked by whatever blocks the packaging itself.
+			return false, "this provider ships no deployable artifact at all, so nothing loads any bridge"
+		}
+		return false, fmt.Sprintf("nothing this repository produces serves this provider's bridge: %s (#180)", sel.Detail)
+	}
 }
 
 // ---------------------------------------------------------------------

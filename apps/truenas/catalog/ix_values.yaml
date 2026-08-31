@@ -10,7 +10,7 @@ storage:
   backups:
     hostPath: "/mnt/tank/backup-manager/backups"
   config:
-    hostPath: "/mnt/tank/backup-manager/config/config.yaml"
+    hostPath: "/mnt/tank/backup-manager/config"
   sshKey:
     hostPath: "/mnt/tank/backup-manager/secrets/id_ed25519"
   knownHosts:

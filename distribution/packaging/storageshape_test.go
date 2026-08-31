@@ -1,6 +1,9 @@
 package packaging
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -130,5 +133,119 @@ func TestKeyMaterialStaysAReadOnlySingleFile(t *testing.T) {
 	}}
 	if v := CheckStorageShapes(writableKey, c); !hasRule(v, RuleWrongWriteMode) {
 		t.Errorf("mounting the SSH private key writable produced %v, want a %q violation", v, RuleWrongWriteMode)
+	}
+}
+
+// TestNoPlatformMountsAProhibitedHostPath is issue #169's privilege check
+// in the one place that covers every format.
+//
+// distribution/compose already runs the whole prohibition list against
+// the canonical definition and every compose artifact derived from it,
+// and that is four of the five adapters. The fifth is an Unraid Docker
+// template, which is XML, so the docker-socket and unbounded-filesystem
+// rules never reached it: the one adapter that is not compose was the one
+// adapter those rules did not cover.
+func TestNoPlatformMountsAProhibitedHostPath(t *testing.T) {
+	for _, p := range allPlatforms() {
+		t.Run(p.name, func(t *testing.T) {
+			if v := CheckMountedHostPaths(p.services(t)); len(v) > 0 {
+				t.Errorf("mounts a host path EPIC B #81 prohibits:\n%s", format(v))
+			}
+		})
+	}
+}
+
+// TestTheHostPathProhibitionFires is its positive control, and the
+// negative half of the pair EPIC B #81 asks for by name: the rules prove
+// the settings are absent, and apps/generic/tests/dockercli proves the
+// deployment does real work without them.
+func TestTheHostPathProhibitionFires(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		host string
+		want bool
+	}{
+		{"the Docker socket", "/var/run/docker.sock", true},
+		{"the Docker socket, the other spelling", "/run/docker.sock", true},
+		{"the host root", "/", true},
+		{"a host system directory", "/etc", true},
+		{"something beneath a host system directory", "/etc/backup-manager", true},
+
+		// The controls that stop this rule from refusing everything. A
+		// prohibition that also fires on the real host paths would be
+		// switched off within a week.
+		{"a TrueNAS dataset", "/mnt/tank/backup-manager/state", false},
+		{"an Unraid appdata path", "/mnt/user/appdata/backup-manager/state", false},
+		{"an OMV data filesystem", "/srv/dev-disk-by-uuid/appdata/backup-manager/state", false},
+		{"a Synology volume", "/volume1/docker/backup-manager/state", false},
+		{"an unexpanded variable, which is the operator's to resolve", "${STATE_DIR:?set STATE_DIR}", false},
+
+		// The near-misses. A prefix comparison that forgot the separator
+		// would fire on all three of these, and a maintainer chasing
+		// that noise would narrow the rule until it fired on nothing.
+		{"a path that merely starts with a prohibited name", "/etcetera/backups", false},
+		{"a path that merely starts with var", "/variable/backups", false},
+		{"a path that merely starts with home", "/homelab/backups", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svcs := []Service{{
+				Name:   "backup-manager",
+				Source: "positive control",
+				Mounts: []Mount{{Role: "state", HostPath: tc.host, ContainerPath: "/data/state"}},
+			}}
+			got := len(CheckMountedHostPaths(svcs)) > 0
+			if got != tc.want {
+				t.Errorf("mounting %s was refused=%v, want %v", tc.host, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheTwoProhibitedHostPathListsAgree pins this package's copy of the
+// prohibited-path list to the contract's own. Two copies that can differ
+// silently are worse than one copy with a hole in it, because the hole at
+// least stays where it was put.
+func TestTheTwoProhibitedHostPathListsAgree(t *testing.T) {
+	raw, err := os.ReadFile(Path(filepath.Join("distribution", "compose", "runtime-contract.json")))
+	if err != nil {
+		t.Fatalf("read the runtime contract: %v", err)
+	}
+	var contract struct {
+		Prohibited []struct {
+			ID    string   `json:"id"`
+			Kind  string   `json:"kind"`
+			Paths []string `json:"paths"`
+		} `json:"prohibited"`
+	}
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		t.Fatalf("parse the runtime contract: %v", err)
+	}
+
+	want := map[string]bool{}
+	for _, rule := range contract.Prohibited {
+		if rule.Kind != "mount-host-path" {
+			continue
+		}
+		for _, p := range rule.Paths {
+			want[p] = true
+		}
+	}
+	if len(want) == 0 {
+		t.Fatal("the runtime contract declares no mount-host-path rule, so this comparison would pass having checked nothing")
+	}
+
+	got := map[string]bool{}
+	for _, p := range prohibitedHostPaths {
+		got[p.path] = true
+	}
+	for p := range want {
+		if !got[p] {
+			t.Errorf("the runtime contract prohibits mounting %s and this package's list does not, so the Unraid template is not held to it", p)
+		}
+	}
+	for p := range got {
+		if !want[p] {
+			t.Errorf("this package prohibits mounting %s and the runtime contract does not; the contract is the source", p)
+		}
 	}
 }

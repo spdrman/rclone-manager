@@ -39,7 +39,8 @@
     "apps/truenas/compose/backup-manager.yaml",
     "apps/truenas/catalog/templates/docker-compose.yaml",
     "apps/openmediavault/compose/backup-manager.yml",
-    "apps/proxmox/compose/backup-manager.yml"
+    "apps/proxmox/compose/backup-manager.yml",
+    "apps/synology/compose/backup-manager.yml"
   ],
 
   "fields": [

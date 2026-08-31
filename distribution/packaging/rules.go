@@ -69,6 +69,7 @@ var deniedRunFlags = []struct {
 	{name: "--privileged", because: "gives the container the host's full capability set, which is every hardening flag on the same line undone"},
 	{name: "--cap-add", because: "adds back a capability the same command line dropped with --cap-drop=ALL"},
 	{name: "--pid", value: "host", because: "shares the host PID namespace, so the container sees and can signal host processes"},
+	{name: "--ipc", value: "host", because: "shares the host IPC namespace, which is shared memory with the host"},
 	{name: "--network", value: "host", because: "puts the container on the host network, which publishes the engine's port on the LAN"},
 	{name: "--net", value: "host", because: "puts the container on the host network, which publishes the engine's port on the LAN"},
 	{name: "--userns", value: "host", because: "opts out of user-namespace remapping"},
@@ -174,4 +175,80 @@ func CheckForwardedHeaderTrust(svc Service, edge, mayTrust bool) []Violation {
 			"the engine sets `" + key + "=true`, but canonical.json records this platform's isolation as a convention rather than a topology, so any container an operator later attaches to the same network can forge the header"}}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------
+// Host paths, across every metadata format
+// ---------------------------------------------------------------------
+
+// RuleProhibitedHostPath is a bind mount that reaches somewhere EPIC B
+// #81's prohibition list rules out: the Docker socket, or a host system
+// directory.
+const RuleProhibitedHostPath = "prohibited-host-path"
+
+// prohibitedHostPaths mirrors distribution/compose's runtime-contract.json
+// `docker-socket` and `unbounded-host-filesystem` rules.
+//
+// Duplicated deliberately, and the duplication is the point rather than
+// an oversight. That package checks the canonical Compose definition and
+// every compose artifact derived from it, and it parses YAML, so an
+// Unraid Docker template is invisible to it: the one adapter whose format
+// is not compose is the one adapter those two rules never reached. This
+// runs over the Service shape every format reduces to, so it covers all
+// five. TestTheTwoProhibitedHostPathListsAgree pins the two lists
+// together, because two copies that can differ are worse than one copy
+// with a hole.
+var prohibitedHostPaths = []struct {
+	path    string
+	because string
+}{
+	{"/var/run/docker.sock", "the Docker socket is root on the host with extra steps"},
+	{"/run/docker.sock", "the Docker socket is root on the host with extra steps"},
+	{"/", "mounting the host root is unbounded host filesystem access"},
+	{"/etc", "mounting a host system directory is unbounded host filesystem access"},
+	{"/usr", "mounting a host system directory is unbounded host filesystem access"},
+	{"/var", "mounting a host system directory is unbounded host filesystem access"},
+	{"/boot", "mounting a host system directory is unbounded host filesystem access"},
+	{"/proc", "mounting a host system directory is unbounded host filesystem access"},
+	{"/sys", "mounting a host system directory is unbounded host filesystem access"},
+	{"/root", "mounting a host system directory is unbounded host filesystem access"},
+	{"/home", "mounting a host system directory is unbounded host filesystem access"},
+}
+
+// CheckMountedHostPaths holds one platform's mounts to the prohibition
+// list, whatever format they were declared in.
+func CheckMountedHostPaths(svcs []Service) []Violation {
+	var out []Violation
+	for _, svc := range svcs {
+		for _, m := range svc.Mounts {
+			for _, p := range prohibitedHostPaths {
+				if !hostPathIsAt(m.HostPath, p.path) {
+					continue
+				}
+				out = append(out, Violation{svc.Source, RuleProhibitedHostPath,
+					fmt.Sprintf("service %q mounts the host path %s (at %s): %s", svc.Name, p.path, m.ContainerPath, p.because)})
+			}
+		}
+	}
+	sortViolations(out)
+	return out
+}
+
+// hostPathIsAt decides whether a declared host path is the prohibited
+// one. "/" matches only itself, because every absolute path starts with
+// it; every other entry matches itself and anything beneath it.
+//
+// An unexpanded ${VAR} reference matches nothing, and that is correct
+// rather than a gap: what it will expand to is the operator's, and
+// TestEveryStoragePathFailsClosed already refuses a profile whose host
+// paths resolve to anything at all without one being set.
+func hostPathIsAt(hostPath, prohibited string) bool {
+	clean := strings.TrimSuffix(hostPath, "/")
+	if clean == "" {
+		clean = "/"
+	}
+	if prohibited == "/" {
+		return clean == "/"
+	}
+	return clean == prohibited || strings.HasPrefix(clean, prohibited+"/")
 }

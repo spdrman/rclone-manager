@@ -133,11 +133,11 @@
         "ui-launch": { "declared": "blocked", "blocker": "#83", "expectedDetail": "has no step matching", "reason": "The UI an operator would launch is the UPK's, and docs/acceptance/ugos-local-notification.md covers notifications only. Section 12's embedded provider window is delivered by the UPK too, which is why embedded-window below is blocked on the same issue rather than declared supported: both cannot be true at once." },
         "upgrade-preserves-state": { "declared": "blocked", "blocker": "#83", "expectedDetail": "has no step matching", "reason": "Section 46's upgrade behaviour needs the package that gets upgraded." },
         "remove-preserves-backups": { "declared": "blocked", "blocker": "#83", "expectedDetail": "has no step matching", "reason": "Section 48's uninstall behaviour needs the package that gets uninstalled." },
-        "native-auth": { "declared": "blocked", "blocker": "#83", "expectedDetail": "no shipped artifact loads it", "reason": "The bridge opts in, but nothing this repository produces loads the UGOS bridge: there is no UPK (#83), and even once there is one, serve-ui embeds a single bundle chosen at build time (#180). A capability flag is a statement of intent until an installed artifact runs it." },
-        "native-notifications": { "declared": "blocked", "blocker": "#83", "expectedDetail": "no shipped artifact loads it", "reason": "Same as native-auth: the flag is set in apps/ugos/frontend/platform.ts and no artifact loads that file." },
-        "embedded-window": { "declared": "blocked", "blocker": "#83", "expectedDetail": "no shipped artifact loads it", "reason": "Section 12's embedded provider window is delivered by the UPK, which is exactly what ui-launch above says. Declaring this supported while blocking ui-launch on the same sentence was a contradiction: both rows are the same missing package." },
+        "native-auth": { "declared": "blocked", "blocker": "#83", "expectedDetail": "ships no deployable artifact at all", "reason": "The bridge opts in, but nothing this repository produces loads the UGOS bridge: there is no UPK (#83), and even once there is one, serve-ui embeds a single bundle chosen at build time (#180). A capability flag is a statement of intent until an installed artifact runs it." },
+        "native-notifications": { "declared": "blocked", "blocker": "#83", "expectedDetail": "ships no deployable artifact at all", "reason": "Same as native-auth: the flag is set in apps/ugos/frontend/platform.ts and no artifact loads that file." },
+        "embedded-window": { "declared": "blocked", "blocker": "#83", "expectedDetail": "ships no deployable artifact at all", "reason": "Section 12's embedded provider window is delivered by the UPK, which is exactly what ui-launch above says. Declaring this supported while blocking ui-launch on the same sentence was a contradiction: both rows are the same missing package." },
         "app-store-packaging": { "declared": "blocked", "blocker": "#83", "expectedDetail": "declares no store or catalog artifact", "reason": "The bridge claims it, and section 4A promises it, but no UPK exists in this repository yet. Passing on the bridge flag alone would be exactly the kind of claim the store-artifact half of this check exists to refuse." },
-        "storage-picker": { "declared": "blocked", "blocker": "#83", "expectedDetail": "no shipped artifact loads it", "reason": "Same as native-auth: declared in a bridge no shipped artifact loads." }
+        "storage-picker": { "declared": "blocked", "blocker": "#83", "expectedDetail": "ships no deployable artifact at all", "reason": "Same as native-auth: declared in a bridge no shipped artifact loads." }
       }
     },
 
@@ -148,10 +148,27 @@
       "workPackage": "4.4",
       "metadata": {
         "kind": "spk", "root": "apps/synology",
-        "files": ["README.md", "spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config", "cmd/spkctl/main.go"],
+        "files": ["README.md", "spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config", "cmd/spkctl/main.go", "compose/backup-manager.yml", "compose/backup-manager.env"],
         "storeArtifacts": ["spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config"],
+        "packageUIBundle": { "layout": "apps/synology/spk/layout.go", "startScript": "apps/synology/spk/assets/scripts/start-stop-status" },
         "architectureClaim": { "source": "apps/synology/spk/arch.go", "architectures": ["amd64", "arm64"] }
       },
+      "_two_packagings_comment": [
+        "Synology ships TWO installable things since issue #169, and this column",
+        "measures the .spk. The Container Manager project #169 adds is checked by",
+        "distribution/packaging's per-platform suite instead (image parity, storage",
+        "roles and their write modes, hardening, port isolation, the derivation gate)",
+        "which is the same suite the four compose platforms go through, and the two",
+        "compose files are listed above so package-metadata fails if either goes",
+        "missing.",
+        "",
+        "Not folded into one column, because the two packagings genuinely differ on",
+        "the cells below: the .spk carries no OCI image, keeps its state under the DSM",
+        "package FHS rather than a bind mount, and MUST implement DSM's lifecycle",
+        "scripts. Re-pointing this column at the compose project would turn every one",
+        "of those honest not-applicables into a pass about a different artifact, and",
+        "the .spk would stop being reported at all."
+      ],
       "scanRoots": ["apps/synology/spk/assets"],
       "acceptance": "docs/acceptance/synology-dsm-package-lifecycle.md",
       "cells": {
@@ -175,9 +192,8 @@
           "verifiedBy": "apps/synology/spk/lifecycle_test.go:TestLifecycleScripts_KeepStateOutsideTarget"
         },
         "backup-root-containment": {
-          "declared": "not-applicable",
-          "reason": "The backup root is a DSM shared folder the operator picks at install time: conf/resource's data-share worker declares the share by name and carries no path, so there is no checked-in host path pair for this check to compare. What IS decided in this repository is the other side of the same rule, that the package places no key material or auth state anywhere (no-bundled-secrets) and that its lifecycle scripts delete nothing outside the package footprint. The containment itself is step 5 of the procedure, which puts a canary in the share and diffs a listing across the uninstall.",
-          "verifiedBy": "docs/acceptance/synology-dsm-package-lifecycle.md"
+          "declared": "supported",
+          "reason": "Decidable from this repository since issue #169, and it was not before. The .spk's backup root is a DSM shared folder the operator picks at install time, so there was no checked-in host path pair to compare and this cell rested on step 5 of the acceptance procedure: a canary in the share, and a listing diffed across the uninstall. The Container Manager project #169 adds declares its paths in canonical.json like every other converted platform, so the containment is now checked here in both directions, and step 5 still runs for the .spk."
         },
         "auth-mode-explicit": { "declared": "supported" },
         "no-bundled-secrets": { "declared": "supported" },
@@ -195,8 +211,8 @@
         "remove-preserves-backups": { "declared": "supported" },
         "native-auth": { "declared": "unsupported", "reason": "Tier B. Section 4A makes DSM SSO a follow-on capability; the initial package uses section 13A local auth." },
         "native-notifications": { "declared": "unsupported", "reason": "Tier B. No DSM notification adapter in v1; webhooks instead." },
-        "embedded-window": { "declared": "blocked", "blocker": "#180", "expectedDetail": "no shipped artifact loads it", "reason": "apps/synology/frontend/platform.ts opts in, but the .spk serves the same go:embed'ed bundle the canonical image does, and ui/shared/vite.config.ts defaults that bundle to the generic shell. apps/synology/README.md's first known gap says it outright and step 3.6 of the acceptance procedure tells the operator to expect the generic bridge, so recording PASS here contradicted two documents in the same tree. #180 tracks the missing serve-side selection." },
-        "app-store-packaging": { "declared": "blocked", "blocker": "#180", "expectedDetail": "no shipped artifact loads it", "reason": "The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle." },
+        "embedded-window": {"declared": "supported", "reason": "Supported since issue #169, and blocked on #180 before it. apps/synology/frontend/platform.ts always opted in, and the .spk always served the same go:embed'ed generic bundle the canonical image did, which apps/synology/README.md's first known gap and step 3.6 of the acceptance procedure both said outright. The .spk now carries this provider's own bundle in its payload and start-stop-status serves it with --ui-dir, so what DSM launches is the Synology bridge. spk.Build refuses a package built without that bundle, or with one built for another provider."},
+        "app-store-packaging": {"declared": "supported", "reason": "Supported since issue #169, and blocked on #180 before it. The store artifacts were always real and the bridge always opted in, but no artifact this repository produced loaded that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui served one go:embed'ed bundle, so a user who installed from the platform's own store was told this was a Docker Compose deployment. #167 made the bundle a run-time choice and #169 packaged it: the .spk carries its own bundle in the package payload and start-stop-status serves it with --ui-dir, which is what a package that installs native binaries and never pulls the image needs. The check decides this per provider now, from the checked-in artifact rather than from the repository-wide vite default."},
         "storage-picker": { "declared": "unsupported", "reason": "Tier B. The shared folder is chosen once at install time through DSM, not browsed from inside the app." }
       }
     },
@@ -231,7 +247,7 @@
         "native-auth": { "declared": "unsupported", "reason": "Tier B. Section 4A gives TrueNAS the generic local auth; no middleware session adapter in v1." },
         "native-notifications": { "declared": "unsupported", "reason": "Tier B. Webhooks instead of TrueNAS alerts." },
         "embedded-window": { "declared": "unsupported", "reason": "Tier B. The Apps portal link opens the UI in a normal browser tab." },
-        "app-store-packaging": { "declared": "blocked", "blocker": "#180", "expectedDetail": "no shipped artifact loads it", "reason": "The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle." },
+        "app-store-packaging": {"declared": "supported", "reason": "Supported since issue #169, and blocked on #180 before it. The store artifacts were always real and the bridge always opted in, but no artifact this repository produced loaded that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui served one go:embed'ed bundle, so a user who installed from the platform's own store was told this was a Docker Compose deployment. #167 made the bundle a run-time choice and #169 packaged it: the canonical image carries a bundle per adapter at /ui/bundles and this platform's own metadata selects it with UI_ROOT plus --profile. The check decides this per provider now, from the checked-in artifact rather than from the repository-wide vite default."},
         "storage-picker": { "declared": "unsupported", "reason": "Tier B. questions.yaml asks for the dataset paths at install time; the running app does not browse pools." }
       }
     },
@@ -266,7 +282,7 @@
         "native-auth": { "declared": "unsupported", "reason": "Tier B. Section 4A gives Unraid the generic local auth; no plugin is required for v1." },
         "native-notifications": { "declared": "unsupported", "reason": "Tier B. Webhooks instead of Unraid notifications, which would need a plugin." },
         "embedded-window": { "declared": "unsupported", "reason": "Tier B. The WebUI link opens a normal browser tab." },
-        "app-store-packaging": { "declared": "blocked", "blocker": "#180", "expectedDetail": "no shipped artifact loads it", "reason": "The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle." },
+        "app-store-packaging": {"declared": "supported", "reason": "Supported since issue #169, and blocked on #180 before it. The store artifacts were always real and the bridge always opted in, but no artifact this repository produced loaded that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui served one go:embed'ed bundle, so a user who installed from the platform's own store was told this was a Docker Compose deployment. #167 made the bundle a run-time choice and #169 packaged it: the canonical image carries a bundle per adapter at /ui/bundles and this platform's own metadata selects it with UI_ROOT plus --profile. The check decides this per provider now, from the checked-in artifact rather than from the repository-wide vite default."},
         "storage-picker": { "declared": "unsupported", "reason": "Tier B. Community Applications collects the paths at install time; the app does not browse shares." }
       }
     },

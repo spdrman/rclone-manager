@@ -216,12 +216,22 @@ is owned by uid 65532 specifically, not by whatever `PUID` you set.
 
 - `/data/state` (writable): the SQLite journal directory, see above.
 - `/data/backups` (writable): the NAS backup volume/share completed artifacts land on.
-- `/etc/backup-manager/config.yaml` (`:ro`): the manager's YAML config (FR-5).
+- `/etc/backup-manager/config` (writable): the DIRECTORY holding the manager's YAML
+  config (FR-5), and the two stores the engine creates beside it, `ssh_keys/` and
+  `known_hosts.d/`.
 - `/etc/backup-manager/id_ed25519` (`:ro`): the SFTP client private key.
 - `/etc/backup-manager/known_hosts` (`:ro`): the pinned host keys (FR-6).
 
+The configuration mount is a writable directory rather than a read-only single file,
+and that is issue #196 rather than a preference. Adding a backup set, saving settings
+and first-run setup all replace `config.yaml` through a temp file created in its own
+directory; on a single-file mount that directory is the image's read-only rootfs, so
+all three failed at the write. A directory can also be empty, which is the only honest
+way for a fresh install to say "not configured yet": a bind mount cannot express that
+about a file, because Docker creates a directory at a source path that does not exist.
+
 All five host paths come from environment variables (`STATE_DIR`, `BACKUP_DIR`,
-`CONFIG_FILE`, `SSH_KEY_FILE`, `KNOWN_HOSTS_FILE`), documented with no real values in
+`CONFIG_DIR`, `SSH_KEY_FILE`, `KNOWN_HOSTS_FILE`), documented with no real values in
 `container/.env.example`. None of them have a fallback default in `compose.yaml` itself:
 they're declared with `${VAR:?...}`, so `docker compose up` fails immediately with a
 clear message if one is missing, rather than silently bind-mounting some made-up default

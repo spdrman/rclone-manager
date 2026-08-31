@@ -36,7 +36,7 @@ prove the check can actually see it go.
 | `timezone` | engine | `TZ`, because retention is evaluated against calendar boundaries |
 | `private-state-mount` | engine | `/data/state` |
 | `backup-data-mount` | engine | `/data/backups` |
-| `configuration-mount` | engine | `/etc/backup-manager/config.yaml`, read-only |
+| `configuration-mount` | engine | `/etc/backup-manager/config`, a writable directory holding `config.yaml` (issue #196) |
 | `secret-file-mount` | engine | `/etc/backup-manager/id_ed25519`, read-only |
 | `resource-expectations` | document | `x-canonical-runtime.resources` |
 | `supported-architectures` | document | `x-canonical-runtime.architectures` |
@@ -97,6 +97,19 @@ backup-manager-web serve    --profile=generic
 backup-manager-web serve    --profile=ugos --trusted-gateway=172.19.0.2/32
 backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 --ui-root=/usr/share/backup-manager/ui
 ```
+
+Seven profiles exist: `generic`, `ugos`, and the five issue #169 added when it
+converted the shipped platform packaging (`truenas`, `unraid`,
+`openmediavault`, `proxmox`, `synology`). Those five declare no capability and
+no gateway, and that is the finding rather than an omission: every one of them
+uses section 13A local authentication, none has a server-side notification
+channel, and the capabilities their frontend bridges declare are browser-host
+capabilities this Go process cannot deliver. What a profile changes for them is
+exactly what legitimately differs, which is the platform the runtime reports
+itself as, how the deployment is described, and which UI bridge the Web UI host
+serves. That is not nothing: before it, a user who installed through the
+TrueNAS catalog was told by the running application that this was a generic
+Docker Compose deployment.
 
 A profile may change exactly four things:
 
@@ -213,28 +226,109 @@ source twice with a provider named in the environment and requires the two
 digests to be identical, with a control proving the comparison can see a real
 change.
 
-**What this does not yet do.** The canonical image still carries only the
-generic bundle, and shipping the rest would break the image-size gate rather
-than squeak past it.
+### Which carrier each adapter uses
 
-Each bundle is about 352 KiB (360,448 bytes). The gate is 1.05x the recorded
-baseline image of 43,008,762 bytes, so the ceiling is 45,159,200, and the
-headroom depends on which image it is measured from, which is why the basis is
-named here rather than implied. Against this change's own measured image of
-43,074,298 (the metrics table below) the headroom is 2,084,902 bytes:
+Issue #169 packaged this, and there are exactly three carriers because there
+are exactly three kinds of thing that can hold a bundle.
 
-| measured from | headroom | six more bundles | all seven |
-|---|---|---|---|
-| the baseline image, 43,008,762 | 2,150,438 | over by 12,250 | over by 372,698 |
-| this change's image, 43,074,298 | 2,084,902 | over by 77,786 | over by 438,234 |
+| Carrier | Who uses it | How the bundle is selected |
+|---|---|---|
+| the binary | generic | nothing configured; the compiled-in bundle |
+| the canonical image, at `/ui/bundles` | TrueNAS, Unraid, OpenMediaVault, Proxmox, Synology's Container Manager project | `UI_ROOT=/ui/bundles` plus the adapter's own `--profile=` |
+| the package's own payload | Synology's `.spk` | `--ui-dir <target>/ui-bundle` |
 
-Six is the number that matters, since the generic bundle is already in the
-image. Every cell says over, and the honest reading of the earlier "inside by
-roughly 12 KB" is that it measured against the baseline rather than against
-the image this change actually produces, and against a bundle count the image
-does not need. Converting each adapter to ship its own bundle, and
-re-measuring the budget against whatever the image weighs by then, is #169's
-work. The blocking constraint is gone; the packaging is #169's to do.
+An adapter that is metadata and nothing else, which is what a catalog entry, a
+Docker template or a compose profile is, has no payload to put a bundle in, so
+the image is its only carrier. A `.spk` installs native binaries and never
+pulls the image at all, so the image is no carrier for it and it carries its
+own; `spk.Build` refuses a package built without one, or with one built for
+another provider, because a package that installs cleanly and shows the wrong
+interface is the failure mode this whole issue is about.
+
+**Five bundles in the image, and not seven.** `generic` is already compiled
+into the binary and duplicating it buys nothing. `ugos` is EPIC D's, and its
+UPK carries its own. The rest is arithmetic against a gated budget: measured
+on `darwin-arm64-mac17-2`, `linux/arm64`, the image goes from 43,008,762 bytes
+to **44,811,244** bytes, which is +1,802,482 (+4.19%) against a ceiling of
+45,159,200 (1.05x). That leaves 347,956 bytes of headroom, which is less than
+one more bundle: this image can carry these five and not a sixth. Shipping all
+seven, as #167 estimated, would have been roughly 2.4 MB and outside the gate.
+
+The end-to-end evidence, against the built image rather than against a
+function:
+
+```
+serve-ui --profile=truenas --ui-root /ui/bundles  ->  deployment: "TrueNAS app (container)"
+serve-ui --profile=generic                        ->  deployment: "Docker Compose"
+serve-ui --profile=ugos    --ui-root /ui/bundles  ->  refuses to start:
+    no usable UI bundle: --ui-root /ui/bundles has no usable bundle for
+    profile "ugos" at /ui/bundles/ugos
+```
+
+The third line is the one worth reading twice. A missing bundle is a hard
+start failure, never a silent fall back to the generic bridge, which is why
+carrying too FEW bundles is a loud failure and not a quiet reappearance of
+#180.
+
+## Deriving an adapter instead of authoring one
+
+Issue #169. Phase 4 shipped five platforms that agree with the canonical
+runtime by review: each states its own image reference, its own mounts, its
+own port and its own health check, and nothing compared those statements to a
+single source. Five independently authored copies of one runtime definition is
+the definition of drift.
+
+`distribution/packaging/derive.go` makes the agreement mechanical. Seven
+fields, one authoritative value each, and a mismatch that names the field:
+
+| Field | Authority |
+|---|---|
+| `contract-version` | each platform's `derivesFrom.contract` against the contract's own version |
+| `image-reference` | `canonical.json`'s `image.reference` |
+| `runtime-profile` | `x-canonical-runtime.profiles`, and the platform's own declared profile |
+| `storage-mounts` | `canonical.json`'s `containerPaths`, all of them, and none besides |
+| `published-port` | `canonical.json`'s `listenPort`, on the Web UI role only |
+| `health-check` | `canonical.json`'s per-role tests |
+| `supported-architectures` | the release, once; an adapter states none of its own |
+
+`contract-version` is the one that keeps the other six honest over time. A
+derivation check that only compares values keeps passing after the contract
+grows a field nobody applied, because there is no value to disagree with yet.
+Repeating the version in each adapter makes a contract change fail every one
+of them until somebody has re-derived it and said so.
+
+Every field has a positive control that breaks it deliberately, run against
+every adapter rather than against one, because the five are read out of four
+different metadata formats and a rule that fires on a compose file and not on
+an Unraid template is a rule Unraid does not have.
+
+## Migrating a Phase 4 installation
+
+The conversion changes declarations, not data. On every platform the state
+directory, the backup root, the SSH key and `known_hosts` keep the host paths
+they already had, so an existing installation keeps its catalog, its retained
+artifacts and its enrolled administrator across the change.
+
+One mount is redeclared, and the host side of it does not move either:
+
+| | Phase 4 | Converted adapter |
+|---|---|---|
+| host path | `<appdata>/config/config.yaml` | `<appdata>/config` |
+| container path | `/etc/backup-manager/config.yaml` | `/etc/backup-manager/config` |
+| mode | `ro` | writable |
+
+The file an operator already has stays exactly where it is; what the adapter
+mounts is its parent directory, writable, which is issue #196. The directory
+has to be writable by the container's uid/gid before the first start, because
+a bind mount does not chown its source, and each platform's acceptance
+procedure step 0 now says so.
+
+Two settings are renamed with it: `CONFIG_FILE` becomes `CONFIG_DIR` in
+`container/.env.example` and in the Proxmox profile's env file, and the
+TrueNAS catalog's `storage.config.hostPath` question now asks for the
+directory rather than the file. Both are fail-closed `${VAR:?}` references, so
+an unconverted env file stops the deployment with a message rather than
+starting it against a path nobody meant.
 
 ## Digest policy
 

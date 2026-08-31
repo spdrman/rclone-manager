@@ -264,6 +264,7 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // BackupService is ever constructed and no daemon, API, scheduler tick or
 // transfer ever starts.
 func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, func() error, error) {
+	configPath = config.ResolvePath(configPath)
 	cfg, err := config.LoadAndValidate(configPath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("service: load config: %w", err)
@@ -344,7 +345,11 @@ func Open(ctx context.Context, configPath string) (*BackupService, func() error,
 	}
 
 	svc := New(cfg, journal, rclone.New(), logger)
-	svc.configPath = configPath
+	// Resolved, not as supplied: --config may name the configuration
+	// DIRECTORY the packaging mounts (issue #196), and every write path
+	// below (CreateBackupSet, UpdateSettings, ImportSSHKey, the
+	// known-hosts store) derives its own path from this field.
+	svc.configPath = config.ResolvePath(configPath)
 	svc.releaseJournal = releaseJournal
 	// ready is set here, and only here: Open is the one constructor that
 	// runs §46.1's startup sequence, so it is the one constructor that can

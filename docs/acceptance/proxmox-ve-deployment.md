@@ -237,7 +237,8 @@ ssh admin@<guest> '
       root and `backups` were chowned as mountpoints, not as trees
 - [ ] The chown ran **after** the key and `known_hosts` were created
 - [ ] `sudo -u '#1000' cat .../secrets/id_ed25519` succeeded, and the key is mode 600
-- [ ] `config/config.yaml` written and valid
+- [ ] `/mnt/backup-manager/config` exists and is **writable** by the app's uid/gid
+- [ ] `config/config.yaml` written inside it and valid
 - [ ] Key material lives only on the guest, redacted everywhere else
 
 ---
@@ -312,8 +313,13 @@ reached at the guest's own address and published port.
 - [ ] Retained artifacts land under the host path mapped to `/mnt/backup-manager/backups`
 - [ ] No SSH private key, `known_hosts`, config file or auth record exists anywhere
       inside the backup root (§19.2)
-- [ ] `config.yaml`, the key and `known_hosts` are mounted read-only, and a write
-      attempt from inside the container fails
+- [ ] The key and `known_hosts` are mounted read-only, and a write attempt from
+      inside the container fails
+- [ ] The configuration directory is mounted **writable**, and a write attempt from
+      inside the container succeeds (issue #196: the engine creates and atomically
+      replaces `config.yaml` there, and keeps `ssh_keys/` and `known_hosts.d/`
+      beside it). These two boxes are each other's control: if both write attempts
+      behave the same way, the mount modes are not being tested at all
 
 ## Step 6 — Engine reachability
 

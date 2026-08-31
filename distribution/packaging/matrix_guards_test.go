@@ -277,27 +277,60 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 		t.Fatalf("%s is the bundle the build selects and must be reachable: %s", shipped, detail)
 	}
 
-	// Synology's bridge opts in to embeddedWindow, and nothing ships it.
+	// Second control, and a different mechanism: Synology's bridge is
+	// reached through the .spk's own payload rather than through the
+	// image, so accepting it proves the check has more than one way to
+	// say yes. It used to be this test's NEGATIVE case, on the grounds
+	// that nothing shipped that bridge, and issue #169 made it false.
 	syn := providerUnderTest{id: "synology", spec: conf.Providers["synology"], canonical: canonical}
-	on, err := BridgeDeclaresCapability(syn.bridgePath(), "embeddedWindow")
+	if on, err := BridgeDeclaresCapability(syn.bridgePath(), "embeddedWindow"); err != nil {
+		t.Fatal(err)
+	} else if on {
+		if ok, detail := bridgeFlag("embeddedWindow")(syn); !ok {
+			t.Errorf("synology embedded-window was refused, and the .spk carries and serves that bridge: %s", detail)
+		}
+	}
+
+	// The negative case is UGOS, and it is the honest one: its bridge
+	// opts in to four capabilities and this repository produces no
+	// artifact of any kind for it, because the UPK is EPIC D's #83. A
+	// flag with no artifact behind it is repository intent, and a matrix
+	// that reports intent as a pass is reporting a capability nobody can
+	// reach.
+	ugos := providerUnderTest{id: "ugos", spec: conf.Providers["ugos"], canonical: canonical}
+	on, err := BridgeDeclaresCapability(ugos.bridgePath(), "embeddedWindow")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !on {
-		t.Skip("apps/synology/frontend/platform.ts no longer opts in to embeddedWindow")
+		t.Skip("apps/ugos/frontend/platform.ts no longer opts in to embeddedWindow")
 	}
-	ok, detail := bridgeFlag("embeddedWindow")(syn)
+	ok, detail := bridgeFlag("embeddedWindow")(ugos)
 	if ok {
-		t.Errorf("synology embedded-window passed on a bridge no shipped artifact loads")
+		t.Errorf("ugos embedded-window passed on a bridge no shipped artifact loads")
 	}
-	if !strings.Contains(detail, "no shipped artifact loads it") || !strings.Contains(detail, "#180") {
-		t.Errorf("the refusal should name the gap and its issue, got: %s", detail)
+	if !strings.Contains(detail, "ships no deployable artifact") {
+		t.Errorf("the refusal should say that nothing is shipped at all, got: %s", detail)
 	}
 
 	// Store artifacts present plus the flag on is still not a pass while
-	// the bundle serving that flag is somebody else's.
-	if ok, detail := checkAppStorePackaging(syn); ok {
-		t.Errorf("synology app-store-packaging passed with an unreachable bridge: %s", detail)
+	// nothing loads the bridge that flag describes.
+	if ok, detail := checkAppStorePackaging(ugos); ok {
+		t.Errorf("ugos app-store-packaging passed with an unreachable bridge: %s", detail)
+	}
+
+	// And the sharp one: an adapter that DOES select a bundle from the
+	// image, but somebody else's. This is the shape a copy-pasted
+	// compose file takes, it produces a container that starts and serves
+	// a working-looking UI, and neither the store artifacts nor the
+	// bridge flag would notice.
+	wrong := SelectUIBundle(&Service{
+		Name:        "backup-manager-ui",
+		Command:     []string{"/backup-manager-web", "serve-ui", "--profile=truenas"},
+		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
+	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
+	if wrong.Provider != "truenas" {
+		t.Errorf("a Web UI selecting --profile=truenas resolved to %q; the selector reads the artifact, not the platform it was found under", wrong.Provider)
 	}
 }
 

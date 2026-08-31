@@ -65,6 +65,31 @@ const (
 	// currently just the starter configuration postinst seeds from.
 	PayloadShareDir = "share"
 
+	// PayloadUIBundleDir is the shared UI bundle for THIS provider,
+	// carried inside package.tgz and served by `serve-ui --ui-dir`
+	// (issue #180, packaged by #169).
+	//
+	// It is in the package rather than in the binary because §3.7
+	// requires this package to carry the exact release binary, byte for
+	// byte, so the bridge cannot be a build-time choice. And it is in the
+	// package rather than pulled from the canonical image because a .spk
+	// installs native binaries on DSM and never touches that image.
+	//
+	// Under target/, which DSM replaces wholesale on upgrade and removes
+	// on uninstall: the bundle is a build artifact of the release, not
+	// state, so it is exactly what belongs there.
+	PayloadUIBundleDir = "ui-bundle"
+
+	// UIBundleMarkerName is the file build-bundles.mjs writes into every
+	// bundle directory naming the provider it was built for. Without it,
+	// "ship the Synology bundle" is a convention nothing can check, and
+	// getting it wrong is silent: the package installs, the UI loads, and
+	// it is another platform's bridge.
+	UIBundleMarkerName = "bundle.json"
+
+	// UIBundlePlatform is the provider this package's bundle must be for.
+	UIBundlePlatform = "synology"
+
 	// DSMUIDir is INFO's `dsmuidir`: the directory inside the target that
 	// DSM exposes at /webman/3rdparty/<name>/ and reads the desktop
 	// launcher's `config` out of.

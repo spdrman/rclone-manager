@@ -156,7 +156,14 @@ func ScanLifecycle(root string) ([]Violation, error) {
 		if relErr != nil {
 			rel = path
 		}
-		inFrontend := isUnderDir(rel, "frontend")
+		// Either the file sits under a frontend/ directory inside the
+		// scanned tree, or the scanned tree IS one. The second case is
+		// not hypothetical: a platform whose directory also holds
+		// something other than container packaging is scanned root by
+		// root (apps/synology, which carries the .spk builder as well),
+		// and without this every bridge under such a root would be
+		// reported as a disallowed file type in packaging metadata.
+		inFrontend := isUnderDir(rel, "frontend") || filepath.Base(root) == "frontend"
 
 		out = append(out, scanFileType(rel, path, d, inFrontend)...)
 

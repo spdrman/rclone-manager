@@ -35,7 +35,7 @@
 // image-size question is worth re-measuring there rather than
 // pre-empting here.
 import { spawnSync } from "node:child_process";
-import { rmSync, mkdirSync, cpSync, existsSync } from "node:fs";
+import { rmSync, mkdirSync, cpSync, existsSync, writeFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -46,6 +46,11 @@ const root = resolve(here, "..");
 // apps/common/platform/capabilities.PlatformID, duplicated here for the
 // same reason e2e-all-providers.mjs duplicates it: no TypeScript loader.
 const PROVIDERS = ["generic", "ugos", "synology", "truenas", "unraid", "openmediavault", "proxmox"];
+
+// The marker file written into every bundle directory. Kept in sync with
+// distribution/packaging's UIBundleMarkerName and with
+// apps/synology/spk's own reader.
+const BUNDLE_MARKER = "bundle.json";
 
 const only = process.argv.slice(2).filter((a) => !a.startsWith("-"));
 const targets = only.length > 0 ? only : PROVIDERS;
@@ -87,9 +92,20 @@ for (const provider of targets) {
     failed.push(provider);
     continue;
   }
-  const out = resolve(outRoot, provider);
-  rmSync(out, { recursive: true, force: true });
-  cpSync(dist, out, { recursive: true });
+  const target = resolve(outRoot, provider);
+  rmSync(target, { recursive: true, force: true });
+  cpSync(dist, target, { recursive: true });
+
+  // A bundle directory has to be able to say which provider it is for.
+  // Without this, "ship the Synology bundle in the .spk" is a build-time
+  // convention nothing can check, and the failure mode is silent: the
+  // package installs, the UI loads, and it is the wrong bridge. The
+  // Synology package builder refuses a bundle whose marker names another
+  // provider, and distribution/packaging reads the same file.
+  writeFileSync(
+    resolve(target, BUNDLE_MARKER),
+    JSON.stringify({ schema: "rclone-manager/ui-bundle/1", platform: provider }, null, 2) + "\n"
+  );
 }
 
 if (failed.length > 0) {

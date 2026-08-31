@@ -63,9 +63,16 @@ type Field struct {
 	// MustContain, for a command field, is a substring the declared
 	// command has to carry.
 	MustContain string `json:"mustContain"`
-	// ContainerPath and ReadOnly describe a mount field.
+	// ContainerPath, ReadOnly and Writable describe a mount field.
+	// ReadOnly and Writable are separate booleans rather than one
+	// tri-state because they are two different claims and a mount may
+	// legitimately make neither: a mount the contract has no opinion
+	// about sets both false, and a field that accidentally sets both is
+	// caught by TestEveryMountFieldDeclaresOneWriteMode rather than
+	// silently resolving to whichever branch runs first.
 	ContainerPath string `json:"containerPath"`
 	ReadOnly      bool   `json:"readOnly"`
+	Writable      bool   `json:"writable"`
 	Why           string `json:"why"`
 }
 
@@ -497,6 +504,9 @@ func (d Document) checkServiceMount(field Field) []Finding {
 		if field.ReadOnly && !found.ReadOnly {
 			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) mounts %s writable; the contract requires it read-only", name, role, field.ContainerPath), Why: field.Why})
 		}
+		if field.Writable && found.ReadOnly {
+			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) mounts %s read-only; the contract requires it writable, because the application creates and atomically replaces what is under it", name, role, field.ContainerPath), Why: field.Why})
+		}
 	}
 	return out
 }
@@ -592,6 +602,51 @@ func (d Document) WithoutField(field Field) (Document, string) {
 		return out, field.Key
 	}
 	return out, ""
+}
+
+// WithWrongWriteMode returns a copy of this document whose mount for
+// field carries the opposite write mode, and a description of what was
+// changed. It is the positive control for the two write-mode branches of
+// checkServiceMount: a rule that only ever runs against a correct
+// document is a rule nobody has watched fail.
+//
+// It returns ok=false for a field that declares no write mode at all,
+// so a caller cannot quietly "control" a rule that does not exist.
+func (d Document) WithWrongWriteMode(field Field) (Document, string, bool) {
+	if field.Scope != "service-mount" || (!field.ReadOnly && !field.Writable) {
+		return d, "", false
+	}
+	out := d.clone()
+	for _, roleName := range field.Roles {
+		name, svc, ok := out.serviceFor(Role(roleName))
+		if !ok {
+			continue
+		}
+		vols := stringList(svc["volumes"])
+		changed := make([]any, 0, len(vols))
+		what := ""
+		for _, raw := range vols {
+			expanded, _ := packaging.ExpandCompose(raw, out.env)
+			parts := strings.Split(expanded, ":")
+			if len(parts) < 2 || parts[1] != field.ContainerPath {
+				changed = append(changed, raw)
+				continue
+			}
+			if field.Writable {
+				changed = append(changed, raw+":ro")
+				what = fmt.Sprintf("%s read-only on service %q", field.ContainerPath, name)
+			} else {
+				changed = append(changed, strings.TrimSuffix(raw, ":ro"))
+				what = fmt.Sprintf("%s writable on service %q", field.ContainerPath, name)
+			}
+		}
+		if what == "" {
+			continue
+		}
+		svc["volumes"] = changed
+		return out, what, true
+	}
+	return out, "", false
 }
 
 func withoutArg(args []string, contains string) []any {

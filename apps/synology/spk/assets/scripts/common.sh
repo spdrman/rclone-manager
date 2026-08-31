@@ -33,6 +33,18 @@ STATE_DIR="${PKG_VAR}/state"
 LOG_DIR="${PKG_VAR}/log"
 RUN_DIR="${PKG_VAR}/run"
 
+# The shared UI bundle this package carries (issue #180). Under target/,
+# which DSM replaces wholesale on upgrade: it is a build artifact of the
+# release, not state. serve-ui is pointed at it explicitly rather than
+# left to the bundle compiled into the binary, because that one is the
+# generic bridge and this is a Synology install.
+UI_BUNDLE_DIR="${SYNOPKG_PKGDEST}/ui-bundle"
+
+# The runtime profile both processes select. It changes the platform this
+# runtime reports itself as and the UI bridge it serves, and nothing about
+# backup lifecycle, retention or validation.
+RUNTIME_PROFILE="synology"
+
 ENGINE_LOG="${LOG_DIR}/engine.log"
 UI_LOG="${LOG_DIR}/ui.log"
 ENGINE_PID="${RUN_DIR}/engine.pid"

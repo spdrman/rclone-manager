@@ -76,20 +76,25 @@ questions:
                   required: true
                   default: "/mnt/tank/backup-manager/backups"
         - variable: config
-          label: Configuration file
+          label: Configuration directory
           schema:
             type: dict
             attrs:
               - variable: hostPath
-                label: config.yaml
+                label: Directory holding config.yaml
                 description: >-
-                  Mounted read-only. The engine loads and validates this
-                  before it opens a listener, so it must exist and be
-                  valid before first start.
+                  Mounted WRITABLE, and it is a directory rather than the
+                  file inside it. config.yaml lives here, and so do the
+                  engine's two on-demand stores, ssh_keys/ and
+                  known_hosts.d/. Adding a backup set, saving settings and
+                  first-run setup all replace config.yaml through a temp
+                  file created in this directory, so a read-only
+                  single-file mount silently disables every one of them.
+                  The directory may be empty on a fresh install.
                 schema:
                   type: hostpath
                   required: true
-                  default: "/mnt/tank/backup-manager/config/config.yaml"
+                  default: "/mnt/tank/backup-manager/config"
         - variable: sshKey
           label: SFTP private key
           schema:

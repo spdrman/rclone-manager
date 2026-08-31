@@ -89,6 +89,7 @@ start)
     # headers here are not attributable to one verified peer.
     start_daemon "${ENGINE_LOG}" \
         "${PKG_BIN}/backup-manager-web" serve \
+        --profile="${RUNTIME_PROFILE}" \
         --config "${CONFIG_FILE}" \
         --listen "${ENGINE_ADDR}" \
         --auth-store "${STATE_DIR}/local-auth.json" \
@@ -110,8 +111,17 @@ start)
 
     # The UI host: the only LAN-facing listener, reverse-proxying to the
     # engine over loopback.
+    # --ui-dir, not the bundle compiled into the binary: section 3.7
+    # requires this package to carry the exact release binary, so the
+    # bridge cannot be a build-time choice, and the compiled-in one is
+    # the generic bridge. Issue #180. An unusable --ui-dir is a hard
+    # start failure rather than a silent fall back, which is why the
+    # check below reports it instead of leaving a package that looks
+    # installed and shows the wrong UI.
     start_daemon "${UI_LOG}" \
         "${PKG_BIN}/backup-manager-web" serve-ui \
+        --profile="${RUNTIME_PROFILE}" \
+        --ui-dir "${UI_BUNDLE_DIR}" \
         --listen ":${UI_PORT}" \
         --upstream "http://${ENGINE_ADDR}"
     echo "${_started_pid}" > "${UI_PID}"
