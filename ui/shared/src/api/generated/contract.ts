@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "c2d08cc1ac021861bd2b2049af8a6d3d32a57f320def278e4979d6c8e34483f9";
+export const CONTRACT_SHA256 = "b52f08ef83307a894a2adb2cbeea48a01c6caf973af1db6fbe5b037a626f6e5a";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1090,7 +1090,10 @@ export interface WireListValidatorsResponse {
 }
 
 /** One durable operation record. Timestamp fields are omitted, not
- *  zero-valued, until the event they name has happened. */
+ *  zero-valued, until the event they name has happened. progress is
+ *  the separate, ephemeral thing: see OperationProgress for why it is
+ *  a nested object that is simply absent rather than a set of fields
+ *  on this record. */
 export interface WireOperation {
   action?: string;
   actor?: string;
@@ -1100,9 +1103,42 @@ export interface WireOperation {
   error?: string;
   finished_at?: string;
   operation_id: string;
+  progress?: WireOperationProgress;
   result?: string;
   started_at?: string;
   status: string;
+}
+
+/** Live progress for an operation that is running in THIS process
+ *  right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the
+ *  transfer engine while a run cycle executes and is never written to
+ *  the operations table: an operation record is durable and
+ *  crash-safe, and progress is neither, so persisting it would put a
+ *  tick-rate write path on the one record whose durability guarantees
+ *  exist to avoid exactly that, and would resurrect a dead cycle's
+ *  last reading after a restart as though it were live. So this field
+ *  is present only while the cycle producing it is executing here. A
+ *  finished operation, and one that was running before a restart,
+ *  both carry no progress object at all, which is not the same answer
+ *  as zero and must not be rendered as one. Nothing here is a
+ *  percentage of the whole operation: a run cycle is a pass over
+ *  every enabled backup set, and the artifacts it will find are not
+ *  known when it starts, so no honest denominator for the whole
+ *  exists. The byte counters describe the ONE artifact being copied
+ *  at observed_at; the counters beside them say where in the cycle
+ *  that artifact sits. */
+export interface WireOperationProgress {
+  artifact?: string;
+  artifacts_done: number;
+  backup_set_id?: string;
+  backup_sets_done: number;
+  backup_sets_total: number;
+  bytes_per_second?: number;
+  bytes_total?: number;
+  bytes_transferred?: number;
+  observed_at: string;
+  sequence: number;
+  stage: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
 }
 
 /** A server-computed retention plan. The client may only apply one by

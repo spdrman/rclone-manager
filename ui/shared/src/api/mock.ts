@@ -185,18 +185,35 @@ const ARTIFACTS: BackupArtifact[] = [
   }
 ];
 
+// Two operations, chosen to exercise both answers the real API can give:
+// one that is executing and reporting a live reading, and one that is
+// running with NO reading available (what a client sees for an operation
+// left behind by a restart). The second is deliberately not a zeroed copy
+// of the first: "no progress available" and "0%" are different answers and
+// the dev server has to be able to show both.
 const OPERATIONS: Operation[] = [
   {
     id: "op_transfer_1", setId: "set_pg_prod", setName: "Production PostgreSQL",
-    kind: "transfer", stage: "transferring", label: "Transferring backup",
-    percent: 59, bytesDone: 9019431321, bytesTotal: 15246903296,
-    bytesPerSecond: 123731968, etaSeconds: 63,
+    kind: "transfer", label: "Transferring backup", status: "running",
+    progress: {
+      observedAt: "2026-08-29T02:01:14+02:00",
+      sequence: 412,
+      stage: "transferring",
+      backupSetId: "set_pg_prod",
+      backupSetsDone: 1,
+      backupSetsTotal: 4,
+      artifact: "postgres-primary-2026-08-29.dump.zst",
+      artifactsDone: 3,
+      bytesDone: 9019431321,
+      bytesTotal: 15246903296,
+      bytesPerSecond: 123731968
+    },
     nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00"
   },
   {
     id: "op_recon_1", setId: "set_media", setName: "Media archive",
-    kind: "reconciliation", stage: null, label: "Reconciling catalog against storage",
-    percent: 38, itemsDone: 1204, itemsTotal: 3190,
+    kind: "reconciliation", label: "Reconciling catalog against storage",
+    status: "running", progress: null,
     nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00"
   }
 ];

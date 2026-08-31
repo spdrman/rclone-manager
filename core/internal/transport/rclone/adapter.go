@@ -221,8 +221,19 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 	}
 	// Copy, never Move. The remote source is deleted later, by the lifecycle
 	// manager, and only after a durable commit (FR-11, FR-15).
-	dst, err := operations.Copy(ctx, dstFs, nil, dstName, o)
-	if err != nil {
+	//
+	// copyWithProgress is a wrapper, not a second code path: with no
+	// transport.ProgressReporter on ctx (the ordinary case, and every
+	// caller before issue #221) it calls the closure and nothing else
+	// happens. o.Size() is the only total that can honestly be reported
+	// for this copy, and it is read here, from the object the copy is
+	// actually about, rather than guessed downstream.
+	var dst fs.Object
+	if err := copyWithProgress(ctx, o.Size(), func(ctx context.Context) error {
+		var copyErr error
+		dst, copyErr = operations.Copy(ctx, dstFs, nil, dstName, o)
+		return copyErr
+	}); err != nil {
 		return transport.TransferResult{}, Wrap("copy_to_local", err)
 	}
 	return transport.TransferResult{BytesTransferred: dst.Size()}, nil

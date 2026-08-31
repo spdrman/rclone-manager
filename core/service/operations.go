@@ -135,6 +135,18 @@ type Operation struct {
 	// two is ever non-empty.
 	Result string
 	Error  string
+
+	// Progress is the live, ephemeral reading for an operation executing
+	// in THIS process right now, and nil for every other operation:
+	// finished, queued, or left behind "running" by a process that died.
+	//
+	// Nil means "no progress is available", which is emphatically not
+	// "zero progress". A caller that renders nil as a zero turns "we
+	// cannot see inside this" into "nothing has happened", which for a
+	// transfer that is in fact half done is simply wrong. See
+	// OperationProgress (progress.go) for why this is never persisted
+	// alongside the durable fields above it.
+	Progress *OperationProgress
 }
 
 // SubmitRunCycle persists a new run_cycle operation and starts executing it
