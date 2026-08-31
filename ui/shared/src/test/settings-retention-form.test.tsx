@@ -78,7 +78,7 @@ async function renderSettings(
   const settings = options.settings ?? settingsFixture();
   const getSettings = vi.fn(() => Promise.resolve(settings));
   const updateSettings = vi.fn(
-    options.updateSettings ?? ((_req: UpdateSettingsRequest) => Promise.resolve(settings))
+    options.updateSettings ?? (() => Promise.resolve(settings))
   );
   const api = { ...createMockApi(), getSettings, updateSettings };
 
