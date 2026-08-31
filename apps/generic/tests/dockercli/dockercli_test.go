@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,11 +54,6 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
-
-// dockerCLIImage is the tag every test in this file builds once and
-// shares; RunMain builds it before any test runs so a build failure is
-// reported once, clearly, rather than once per test.
-const dockerCLIImage = "backup-manager:dockercli-test"
 
 // repoRoot is this file's own directory, four levels up
 // (apps/generic/tests/dockercli -> apps/generic/tests -> apps/generic ->
@@ -96,35 +92,66 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-var imageBuilt bool
+var (
+	buildOnce sync.Once
+	// buildErr and buildLog carry the one build attempt's outcome to
+	// every test that asks for the image, not just to whichever test
+	// happened to ask first. The previous flag could only record success,
+	// so a failed build left the flag false and every following test paid
+	// for the same doomed build again to print the same message again.
+	buildErr error
+	buildLog string
+	// builtImage records that an image now exists at this run's
+	// reference, so TestMain knows whether it has anything to remove.
+	builtImage bool
+)
 
 // buildImage builds container/Dockerfile once per test process (subsequent
 // calls are a cheap no-op thanks to Docker's own layer cache, but this
 // still avoids paying even that cost more than once per `go test` run)
-// and returns its tag. A single amd64/arm64-native load (not a multi-arch
-// buildx invocation) is enough here: architecture parity is CI's
-// ugreen-cross-compile job's job, not this suite's.
+// and returns the reference it built. A single amd64/arm64-native load
+// (not a multi-arch buildx invocation) is enough here: architecture
+// parity is CI's ugreen-cross-compile job's job, not this suite's.
+//
+// The reference is imageReference(), unique to this test process (#185).
+// It used to be one fixed string shared by every checkout on the machine,
+// which meant a second worktree building at the same time took the name
+// over and this run carried on testing that worktree's image. See
+// imageref_test.go's own header for the full account.
+//
+// The three labels are what make the image traceable and reclaimable
+// rather than merely uniquely named: runLabelKey answers "whose build is
+// this?" from the daemon, and imageLabelKey plus bornLabelKey are what
+// sweepImages needs to reclaim an image whose run was killed before it
+// could remove its own.
 func buildImage(t *testing.T) string {
 	t.Helper()
 	requireDocker(t)
 
-	if !imageBuilt {
+	buildOnce.Do(func() {
+		sweepImages()
+
 		root := repoRoot(t)
 		cmd := exec.Command("docker", "build",
 			"-f", filepath.Join(root, "container", "Dockerfile"),
-			"-t", dockerCLIImage,
+			"-t", imageReference(),
+			"--label", imageLabelKey+"="+imageLabelValue,
+			"--label", runLabelKey+"="+runID,
+			"--label", bornLabelKey+"="+strconv.FormatInt(time.Now().UnixNano(), 10),
 			"--load",
 			root,
 		)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		if err := cmd.Run(); err != nil {
-			t.Fatalf("docker build failed: %v\n%s", err, out.String())
-		}
-		imageBuilt = true
+		buildErr = cmd.Run()
+		buildLog = out.String()
+		builtImage = buildErr == nil
+	})
+	if buildErr != nil {
+		t.Fatalf("docker build failed: %v\n%s", buildErr, buildLog)
 	}
-	return dockerCLIImage
+	return imageReference()
 }
 
 // degradedConfig writes a config whose one backup set has never had an
@@ -584,6 +611,24 @@ func startComposeStack(t *testing.T, image string, listenPort int) *composeProje
 
 	composeFilePath := filepath.Join(root, "container", "compose.yaml")
 
+	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
+	// VERSION, so VERSION has to be exactly the tag half of the image
+	// buildImage produced for `--no-build` to find it rather than trying
+	// (and failing, with no `build:` context error) to build a fresh one
+	// under a name nothing already built.
+	//
+	// Derived from the image, never hard-coded. This used to read
+	// `strings.HasSuffix(image, ":dockercli-test")`, a perfectly good
+	// guard while there was one fixed tag and no guard at all once there
+	// is one tag per run (#185). composeVersion checks the half compose
+	// actually fixes, the repository name, and
+	// TestComposeImageResolvesToTheReferenceThisRunBuilt checks the same
+	// coupling against the real compose.yaml without needing a stack.
+	version, err := composeVersion(image)
+	if err != nil {
+		t.Fatalf("startComposeStack cannot point compose at %q: %v", image, err)
+	}
+
 	// Pin both services to the already-built image (see buildImage) so
 	// this test proves compose.yaml's OWN topology/network/healthcheck
 	// wiring, not a second build of the same Dockerfile compose would
@@ -595,15 +640,7 @@ func startComposeStack(t *testing.T, image string, listenPort int) *composeProje
 		"up", "-d",
 		"--no-build",
 	)
-	up.Env = append(os.Environ(), "VERSION=dockercli-test")
-	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
-	// VERSION; buildImage's own tag is "backup-manager:dockercli-test",
-	// so VERSION has to match that tag exactly for `--no-build` to find
-	// it rather than trying (and failing, with no `build:` context error)
-	// to build a fresh one under a name nothing already built.
-	if !strings.HasSuffix(image, ":dockercli-test") {
-		t.Fatalf("startComposeStack assumes buildImage's own tag ends in \":dockercli-test\", got %q", image)
-	}
+	up.Env = append(os.Environ(), "VERSION="+version)
 
 	var out bytes.Buffer
 	up.Stdout = &out
@@ -667,17 +704,16 @@ func (p *composeProject) publishedPort(t *testing.T, service, containerPort stri
 // succeeds, and confirms the engine itself has no port reachable
 // directly from the host at all.
 func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
+	// No retag onto a second name here any more. buildImage already
+	// tagged this run's own image as `backup-manager:<per-run tag>`, and
+	// startComposeStack passes that tag straight to compose as VERSION,
+	// so compose resolves `image: backup-manager:${VERSION:-dev}` to the
+	// exact image this run built. The retag that used to sit here pointed
+	// a globally shared name at it instead, which is the whole of #185:
+	// the next worktree to run this test moved that name onto its own
+	// build, and both stacks then came up on whichever image had been
+	// tagged last.
 	image := buildImage(t)
-	// buildImage's own tag doesn't carry a "dockercli-test" VERSION build
-	// stamp the way compose's `image:` resolution needs; retag it so
-	// compose's `image: backup-manager:${VERSION:-dev}` (VERSION=
-	// dockercli-test, set in startComposeStack) resolves to the exact
-	// image buildImage already built, instead of compose trying to build
-	// a second one under a tag nothing produced.
-	retag := exec.Command("docker", "tag", image, "backup-manager:dockercli-test")
-	if out, err := retag.CombinedOutput(); err != nil {
-		t.Fatalf("docker tag: %v\n%s", err, out)
-	}
 
 	project := startComposeStack(t, image, 0)
 

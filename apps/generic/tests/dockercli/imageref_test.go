@@ -323,11 +323,11 @@ func retag(t *testing.T, ref, name string) {
 	}
 }
 
-// buildMarkerImage builds a layerless image carrying nothing but the
-// labels a test wants to see, and registers its removal. It costs no
-// network and essentially no time or disk, which is what makes it usable
-// as a stand-in for "some other worktree's build" in tests that must not
-// pay for a second real image.
+// buildMarkerImage builds a layerless image standing in for some other
+// worktree's build: it carries the run, sweep-namespace and birth labels
+// a test wants to see and nothing else, and registers its own removal. It
+// costs no network and essentially no time or disk, which is what makes
+// it usable in tests that must not pay for a second real image.
 //
 // born is written as a label rather than left to the daemon because a
 // layerless image has no creation timestamp at all in `docker image
@@ -335,30 +335,48 @@ func retag(t *testing.T, ref, name string) {
 // both sides of a cutoff, which no Docker flag allows.
 func buildMarkerImage(t *testing.T, run, label string, born time.Time) string {
 	t.Helper()
+	return buildLabelledImage(t,
+		imageLabelKey, label,
+		runLabelKey, run,
+		bornLabelKey, strconv.FormatInt(born.UnixNano(), 10),
+	)
+}
+
+// buildLabelledImage builds a layerless image carrying exactly the
+// key/value label pairs given, and returns its full id. Taking the pairs
+// rather than a fixed set is what lets a test build the one case that
+// matters most to sweepImages: an image carrying no sweep label at all,
+// which must survive every sweep.
+func buildLabelledImage(t *testing.T, labels ...string) string {
+	t.Helper()
+	if len(labels)%2 != 0 {
+		t.Fatalf("buildLabelledImage got %d label arguments, want key/value pairs", len(labels))
+	}
+
 	dir := t.TempDir()
 	dockerfile := filepath.Join(dir, "Dockerfile")
 	if err := os.WriteFile(dockerfile, []byte("FROM scratch\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile Dockerfile: %v", err)
 	}
 
-	out, err := exec.Command("docker", "build", "-q",
-		"-f", dockerfile,
-		"--label", imageLabelKey+"="+label,
-		"--label", runLabelKey+"="+run,
-		"--label", bornLabelKey+"="+strconv.FormatInt(born.UnixNano(), 10),
-		dir,
-	).Output()
+	args := []string{"build", "-q", "-f", dockerfile}
+	for i := 0; i < len(labels); i += 2 {
+		args = append(args, "--label", labels[i]+"="+labels[i+1])
+	}
+	args = append(args, dir)
+
+	out, err := exec.Command("docker", args...).Output()
 	if err != nil {
 		var exit *exec.ExitError
 		stderr := ""
 		if errors.As(err, &exit) {
 			stderr = string(exit.Stderr)
 		}
-		t.Fatalf("docker build of the marker image for run %q: %v\n%s", run, err, stderr)
+		t.Fatalf("docker build of a marker image labelled %v: %v\n%s", labels, err, stderr)
 	}
 	id := strings.TrimSpace(string(out))
 	if id == "" {
-		t.Fatalf("docker build -q produced no image id for run %q", run)
+		t.Fatalf("docker build -q produced no image id for a marker image labelled %v", labels)
 	}
 	t.Cleanup(func() { _ = exec.Command("docker", "rmi", "-f", id).Run() })
 	return id
