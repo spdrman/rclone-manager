@@ -75,6 +75,9 @@ func TestDaemon_SIGTERMIsASuccessfulStop(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting the daemon child: %v", err)
 	}
+	// So a t.Fatal below can never leave a daemon running against this
+	// test's temp directory.
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	lines := make(chan string, 128)
 	go func() {

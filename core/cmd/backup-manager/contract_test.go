@@ -132,6 +132,14 @@ func TestRun_ValidateAcceptsFlagsOnEitherSideOfItsOperand(t *testing.T) {
 			wantExit: 0,
 		},
 		{
+			// The one ordering rule that survives: "--" still ends flag
+			// parsing, so an operand that looks like a flag can be written
+			// after it.
+			name:     "an operand written after the -- terminator",
+			args:     []string{"validate", "--config", cfg, "--", id},
+			wantExit: 0,
+		},
+		{
 			name:       "no operand at all is still an arity error",
 			args:       []string{"validate", "--config", cfg},
 			wantExit:   2,
