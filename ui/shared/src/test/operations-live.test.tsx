@@ -46,23 +46,22 @@ const SET: BackupSet = {
 };
 
 const HEALTH: SystemHealth = {
+  generatedAt: "2026-08-29T06:00:00+02:00",
   serviceRunning: true,
-  serviceUptimeHours: 100,
   backupHealth: "healthy",
   backupHealthReason: "All sets current.",
-  lastSuccessfulCycleAt: "2026-08-29T05:52:00+02:00",
+  lastCompletedBackupAt: "2026-08-29T05:52:00+02:00",
   newestVerifiedBackupAt: "2026-08-29T05:18:00+02:00",
   oldestSetFreshnessHours: 2,
   setsHealthy: 1,
+  setsDegraded: 0,
   setsStale: 0,
   setsFailing: 0,
   quarantinedCount: 0,
-  retainedCount: 32,
-  retainedBytes: 421 * 1024 ** 3,
   storageFreeBytes: 1.8e12,
   storageTotalBytes: 6.2e12,
   storageState: "nominal",
-  successRate7d: 0.99
+  storageReadingsUnavailable: 0
 };
 
 const OPERATION: Operation = {

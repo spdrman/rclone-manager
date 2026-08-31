@@ -336,3 +336,49 @@ func writeDecodeError(w http.ResponseWriter, err error, limit int64) {
 func secondsToDuration(s int) time.Duration {
 	return time.Duration(s) * time.Second
 }
+
+// setEnabledRequest is POST /api/v1/backup-sets/{id}/enabled's body.
+type setEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// setBackupSetEnabled is POST /api/v1/backup-sets/{id}/enabled: turn one
+// backup set on or off.
+//
+// It carries requireCSRF and NOT requireDestructiveGate, which puts it in
+// the same tier as createBackupSet and updateSettings
+// (destructiveGateExemptRoutes, router_test.go). Nothing reachable from
+// here touches, moves or deletes a byte of backup data: a disabled set is
+// excluded from every run cycle, and everything already backed up stays
+// exactly where it is, which core/service pins directly
+// (TestSetBackupSetEnabled_DisablingDeletesNothing).
+//
+// The direction that sounds dangerous is turning a set OFF, because new
+// restore points stop being made and freshness decays. That is not hidden:
+// FR-24's health computation reports the set going stale, GET
+// /api/v1/system/health serves it, and the same call turns it back on.
+//
+// The id is read from two named segments rather than a catch-all: unlike
+// an artifact id this one has a fixed arity of two, and this route needs a
+// literal "/enabled" tail after it, which a catch-all would swallow.
+func (h *handlers) setBackupSetEnabled(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
+
+	var body setEnabledRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxCreateBackupSetBodyBytes)
+		return
+	}
+
+	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	updated, err := h.backend.SetBackupSetEnabled(r.Context(), id, body.Enabled)
+	if err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
+		writeBackupSetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
+}

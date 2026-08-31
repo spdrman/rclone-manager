@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "f22e17eda9b4c64363847ab93f21b5141560babdee764f41b943f1b62a1c075d";
+export const CONTRACT_SHA256 = "c2d08cc1ac021861bd2b2049af8a6d3d32a57f320def278e4979d6c8e34483f9";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -42,6 +42,9 @@ export const WIRE_ERROR_CODES = [
   "INTERNAL",
   "ALREADY_CONFIGURED",
   "NOT_CONFIGURED",
+  "ARTIFACT_NOT_FOUND",
+  "ARTIFACT_NOT_QUARANTINED",
+  "ARTIFACT_IRRECOVERABLE",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -96,6 +99,9 @@ export const API_ERROR_CODES = [
   "INTERNAL",
   "ALREADY_CONFIGURED",
   "NOT_CONFIGURED",
+  "ARTIFACT_NOT_FOUND",
+  "ARTIFACT_NOT_QUARANTINED",
+  "ARTIFACT_IRRECOVERABLE",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -105,9 +111,9 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
-  "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND"],
+  "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
   "unavailable": ["NOT_CONFIGURED"],
   "validation": ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND", "HOST_KEY_PROBE_FAILED"],
@@ -145,6 +151,23 @@ export interface ContractOperation {
 }
 
 export const API_OPERATIONS: readonly ContractOperation[] = [
+  {
+    id: "listActivity",
+    method: "GET",
+    path: "/activity",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListActivityResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
   {
     id: "enrollAdministrator",
     method: "POST",
@@ -314,6 +337,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "setBackupSetEnabled",
+    method: "POST",
+    path: "/backup-sets/{source}/{set}/enabled",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "SetEnabledRequest",
+    responseSchema: "BackupSet",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "applyRetention",
     method: "POST",
     path: "/backup-sets/{source}/{set}/retention/apply",
@@ -356,6 +399,95 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "listArtifacts",
+    method: "GET",
+    path: "/backups",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListArtifactsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getArtifact",
+    method: "GET",
+    path: "/backups/{id}",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "Artifact",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["ARTIFACT_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "rebuildCatalog",
+    method: "POST",
+    path: "/catalog/rebuild",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "CatalogReportResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "scanCatalog",
+    method: "POST",
+    path: "/catalog/scan",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "CatalogReportResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "listOperations",
+    method: "GET",
+    path: "/operations",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListOperationsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "submitOperation",
     method: "POST",
     path: "/operations",
@@ -393,6 +525,63 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       404: ["OPERATION_NOT_FOUND"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "listQuarantine",
+    method: "GET",
+    path: "/quarantine",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ListArtifactsResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "retryArtifactIngestion",
+    method: "POST",
+    path: "/quarantine/{id}/retry",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "",
+    successStatus: 204,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["ARTIFACT_NOT_FOUND"],
+      409: ["ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "revalidateArtifact",
+    method: "POST",
+    path: "/quarantine/{id}/revalidate",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ArtifactCheckResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["ARTIFACT_NOT_FOUND"],
+      409: ["ARTIFACT_NOT_QUARANTINED"],
+      500: ["INTERNAL"],
     }
   },
   {
@@ -524,6 +713,23 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "getSystemHealth",
+    method: "GET",
+    path: "/system/health",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "HealthResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "listStorageStatus",
     method: "GET",
     path: "/system/storage",
@@ -576,9 +782,59 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   },
 ];
 
+/** One recorded lifecycle moment: a backup moved from one state to
+ *  another. This is a read of the durable, append-only transition
+ *  record, not a second event stream. */
+export interface WireActivityEvent {
+  artifact_id: string;
+  artifact_name: string;
+  backup_set_id: string;
+  detail?: string;
+  from?: string;
+  occurred_at: string;
+  set_name: string;
+  source_name: string;
+  to: string;
+}
+
 /** POST /backup-sets/{source}/{set}/retention/apply. */
 export interface WireApplyRetentionRequest {
   plan_id: string;
+}
+
+/** One backup this deployment holds, as the API reports it. Nothing
+ *  here names an implementation: the fields describe a backup's
+ *  identity, freshness and trustworthiness, never how it is stored. */
+export interface WireArtifact {
+  backup_set_id: string;
+  checksum?: string;
+  checksum_algorithm?: string;
+  discovered_at: string;
+  id: string;
+  local_path: string;
+  name: string;
+  quarantine_irrecoverable: boolean;
+  quarantine_reason?: string;
+  quarantined: boolean;
+  remote_path: string;
+  remote_source_removed_at?: string;
+  retention_tier?: string;
+  set_name: string;
+  size_bytes: number;
+  source_name: string;
+  state: string;
+  updated_at: string;
+  validation: "passed" | "failed" | "pending";
+  validation_detail?: string;
+}
+
+/** The verdict of re-checking one quarantined backup. Nothing is
+ *  written and the backup is not moved: a pass is evidence for an
+ *  operator deciding whether to retry, not a rehabilitation. */
+export interface WireArtifactCheckResponse {
+  checked: boolean;
+  passed: boolean;
+  reason?: string;
 }
 
 /** The FLAT error body the /auth operations return, with the
@@ -606,6 +862,29 @@ export interface WireBackupSet {
   source_name: string;
   user: string;
   validator_id: string;
+}
+
+/** One backup set's freshness verdict. This is the backup half of
+ *  health, and it deliberately carries no process or build fact: a
+ *  running service is not evidence that backups are landing. */
+export interface WireBackupSetHealth {
+  backup_set_id: string;
+  current_transfers: number;
+  failures: number;
+  free_bytes?: number;
+  free_bytes_known: boolean;
+  last_completed_backup_at?: string;
+  newest_good_backup_at?: string;
+  pending_deletes: number;
+  quarantined_count: number;
+  quarantined_lost_count: number;
+  reason: string;
+  set_name: string;
+  source_name: string;
+  stale_after_seconds: number;
+  state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
+  storage_level?: "OK" | "WARNING" | "CRITICAL";
+  total_bytes?: number;
 }
 
 /** Everything it takes to DESCRIBE one backup set: where it reads
@@ -648,6 +927,25 @@ export interface WireCapabilitiesResponse {
   native_notifications: boolean;
   platform: "generic" | "ugos" | "synology" | "truenas" | "unraid" | "openmediavault" | "proxmox";
   storage_picker: boolean;
+}
+
+/** One recovery manifest a catalog pass could not use. */
+export interface WireCatalogFailure {
+  backup_set_id: string;
+  path?: string;
+  reason: string;
+}
+
+/** POST /catalog/scan and POST /catalog/rebuild. Both return this
+ *  shape, because a scan is the rebuild with nothing written: a
+ *  preview computed by a second implementation would be a preview of
+ *  something else. */
+export interface WireCatalogReportResponse {
+  already_present: number;
+  dry_run: boolean;
+  failures: WireCatalogFailure[];
+  reconstructed: number;
+  scanned: number;
 }
 
 /** POST /system/first-run. The backup set the first configuration was
@@ -719,6 +1017,14 @@ export interface WireFirstRunStatusResponse {
   configured: boolean;
 }
 
+/** GET /system/health. Every configured backup set's freshness
+ *  verdict, computed fresh on every call. Build and process facts are
+ *  GET /system/version's, deliberately not restated here. */
+export interface WireHealthResponse {
+  backup_sets: WireBackupSetHealth[];
+  generated_at: string;
+}
+
 /** POST /ssh/host-key-probe. Opens a real outbound connection, trusts
  *  nothing. */
 export interface WireHostKeyProbeRequest {
@@ -748,10 +1054,28 @@ export interface WireImportSSHKeyResponse {
   id: string;
 }
 
+/** GET /activity, newest first. */
+export interface WireListActivityResponse {
+  events: WireActivityEvent[];
+}
+
+/** GET /backups and GET /quarantine. An object with one array field,
+ *  never a bare top-level array. */
+export interface WireListArtifactsResponse {
+  artifacts: WireArtifact[];
+}
+
 /** GET /backup-sets. An object with one array field, never a bare
  *  top-level array. */
 export interface WireListBackupSetsResponse {
   backup_sets: WireBackupSet[];
+}
+
+/** GET /operations, newest first. The list counterpart of GET
+ *  /operations/{id}, for a client that has no operation id to poll
+ *  with. */
+export interface WireListOperationsResponse {
+  operations: WireOperation[];
 }
 
 /** GET /system/storage. */
@@ -848,6 +1172,13 @@ export interface WireSessionResponse {
   username: string;
 }
 
+/** POST /backup-sets/{id}/enabled. A disabled backup set is excluded
+ *  from every run cycle and nothing already backed up is touched,
+ *  which is why this is state-changing but not destructive. */
+export interface WireSetEnabledRequest {
+  enabled: boolean;
+}
+
 /** GET and PATCH /settings both return this: the settings now in
  *  effect plus the rules they were validated against. */
 export interface WireSettingsResponse {
@@ -881,15 +1212,22 @@ export interface WireSubmitOperationRequest {
   config_revision: string;
 }
 
-/** POST /backup-sets/test-connection. A pre-save reachability and
- *  authentication check, before a backup set has an id. */
+/** POST /backup-sets/test-connection. A reachability and
+ *  authentication check, in one of two modes: name backup_set_id to
+ *  re-check a set that already exists, or supply the connection
+ *  details to check a candidate before it is saved. Exactly one mode
+ *  per request. A client testing a persisted set neither knows nor
+ *  has to echo back that set's key reference and trusted host line,
+ *  which is what keeps a read-only "does this still work" check from
+ *  being able to test something else. */
 export interface WireTestConnectionRequest {
-  host: string;
-  known_hosts_line: string;
-  port: number;
+  backup_set_id?: string;
+  host?: string;
+  known_hosts_line?: string;
+  port?: number;
   remote_path?: string;
-  ssh_key_id: string;
-  user: string;
+  ssh_key_id?: string;
+  user?: string;
 }
 
 /** The outcome of a pre-save connection test. */

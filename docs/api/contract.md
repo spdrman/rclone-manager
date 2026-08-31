@@ -88,7 +88,7 @@ Both carry a `DO NOT EDIT` banner. Editing either one by hand fails CI.
 
 ## What a drift failure means
 
-There are four gates, and each answers a different question. Which one failed
+There are five gates, and each answers a different question. Which one failed
 tells you what to fix.
 
 ### `scripts/api/check-contract-drift.sh` says the Go or TypeScript binding does not match
@@ -114,6 +114,45 @@ what it means rather than what implements it.
 Descriptions are deliberately exempt: a schema is allowed to say "this is not an
 rclone remote", and a check that could not tell a description from an identifier
 would be watered down until it fired on nothing.
+
+### `scripts/api/check-client-paths.sh` says a client path is not a declared operation
+
+`ui/shared/src/api/client.ts` asks for a `(method, path)` that
+`api/v1/openapi.json` does not declare. On a real backend that request is a 404
+or a 405, and the shared UI turns either one into "The backup service returned
+an unexpected response."
+
+This gate exists because the two checks above only cover *generated* files, and
+`client.ts` is not one. It is hand-written on top of the generated module and
+imports nothing from it but types and the error-code registry, so every request
+path it builds is a string literal that the binding comparison cannot see. Issue
+#211 measured what that cost: fourteen such pairs, four of the six shipped pages
+failing outright against a real engine, and every suite in the repository green,
+because the browser tests run against `createMockApi`, which implements whatever
+the client asks for.
+
+The check is static. It reads `client.ts`, strips its comments (they quote paths,
+and a gate a comment can satisfy is not a gate), and reduces each request
+expression back to a pattern: an interpolated value becomes `{}`, so
+`"/backup-sets/" + id` reduces to `/backup-sets/{}` and the contract's
+`/backup-sets/{id}` normalises to the same thing. A conditional yields both of
+its branches rather than one guess, which is how `listArtifacts`' optional query
+string is checked as the two URLs it can really build. No npm install, no
+bundler, no browser.
+
+Three properties are worth knowing before changing it:
+
+- **It fails closed.** A path expression it cannot reduce is a failure, and every
+  method on `httpApi` must produce at least one request. A silent skip here would
+  be indistinguishable from a pass.
+- **It refuses to pass vacuously.** A client with no calls, or a contract with no
+  operations, is a failure rather than an empty comparison.
+- **It has no allowlist, on purpose.** `contract.conformance.test.ts` already
+  pinned these fourteen paths exactly, as recorded debt, and that pin is why the
+  suite stayed green for as long as it did. An allowlist turns a gate into a
+  ledger. Either the contract gains the operation (add it, run
+  `scripts/api/generate.sh`, then implement it in
+  `apps/common/webhost/router.go`), or the client stops calling it.
 
 ### `go test ./webhost/` says the contract hashes to something else
 
@@ -166,17 +205,19 @@ the real chi route table rather than a list somebody maintains.
 
 ### `scripts/api/selftest.sh`
 
-Eighteen mutation controls, each planting one real violation in a copy of the
-real tree and asserting the check fails **with the message that names the
-planted reason**. A gate nobody has watched fail is a gate that might not be
-able to.
+Twenty-seven mutation controls, each planting one real violation in a copy of
+the real tree and asserting the check fails **with the message that names the
+planted reason**, plus two negative controls proving the static gates are clean
+on the unmutated tree. A gate nobody has watched fail is a gate that might not
+be able to.
 
-Two of them plant the removal of a single line from `scripts/ci-local.sh`. That
-script is what `.husky/pre-commit` runs, and GitHub Actions is
+Three of them plant the removal of a single line from `scripts/ci-local.sh`.
+That script is what `.husky/pre-commit` runs, and GitHub Actions is
 `workflow_dispatch`-only on this repository, so a check wired only into
 `.github/workflows/ci.yml` runs on no commit at all: `check-contract-drift.sh`
-therefore also asserts that `ci-local.sh` invokes both it and this self-test.
-A check nothing invokes cannot be told apart from a check that does not exist.
+therefore also asserts that `ci-local.sh` invokes all three of itself,
+`check-client-paths.sh` and this self-test. A check nothing invokes cannot be
+told apart from a check that does not exist.
 
 ## Compatibility and deprecation rules for `/api/v1`
 

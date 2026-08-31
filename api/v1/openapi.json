@@ -80,7 +80,10 @@
           "DESTRUCTIVE_OPERATIONS_DISABLED",
           "INTERNAL",
           "ALREADY_CONFIGURED",
-          "NOT_CONFIGURED"
+          "NOT_CONFIGURED",
+          "ARTIFACT_NOT_FOUND",
+          "ARTIFACT_NOT_QUARANTINED",
+          "ARTIFACT_IRRECOVERABLE"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -114,7 +117,10 @@
           "DESTRUCTIVE_OPERATIONS_DISABLED": "wire",
           "INTERNAL": "wire",
           "ALREADY_CONFIGURED": "wire",
-          "NOT_CONFIGURED": "wire"
+          "NOT_CONFIGURED": "wire",
+          "ARTIFACT_NOT_FOUND": "wire",
+          "ARTIFACT_NOT_QUARANTINED": "wire",
+          "ARTIFACT_IRRECOVERABLE": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -138,12 +144,15 @@
             "OPERATION_ALREADY_RUNNING",
             "IDEMPOTENCY_KEY_CONFLICT",
             "CONFIG_REVISION_STALE",
-            "ALREADY_CONFIGURED"
+            "ALREADY_CONFIGURED",
+            "ARTIFACT_NOT_QUARANTINED",
+            "ARTIFACT_IRRECOVERABLE"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
             "OPERATION_NOT_FOUND",
-            "RETENTION_PLAN_NOT_FOUND"
+            "RETENTION_PLAN_NOT_FOUND",
+            "ARTIFACT_NOT_FOUND"
           ],
           "throttling": [
             "RATE_LIMITED"
@@ -728,9 +737,13 @@
       },
       "TestConnectionRequest": {
         "type": "object",
-        "description": "POST /backup-sets/test-connection. A pre-save reachability and authentication check, before a backup set has an id.",
+        "description": "POST /backup-sets/test-connection. A reachability and authentication check, in one of two modes: name backup_set_id to re-check a set that already exists, or supply the connection details to check a candidate before it is saved. Exactly one mode per request. A client testing a persisted set neither knows nor has to echo back that set's key reference and trusted host line, which is what keeps a read-only \"does this still work\" check from being able to test something else.",
         "additionalProperties": false,
         "properties": {
+          "backup_set_id": {
+            "type": "string",
+            "description": "The two-part \"source/set\" identity of an already-persisted backup set. When present, every other field must be absent: the connection details come from the configuration."
+          },
           "host": {
             "type": "string"
           },
@@ -751,13 +764,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "host",
-          "port",
-          "user",
-          "ssh_key_id",
-          "known_hosts_line"
-        ]
+        "required": []
       },
       "TestConnectionResponse": {
         "type": "object",
@@ -1210,6 +1217,438 @@
           "backup_set",
           "restart_required"
         ]
+      },
+      "Artifact": {
+        "type": "object",
+        "description": "One backup this deployment holds, as the API reports it. Nothing here names an implementation: the fields describe a backup's identity, freshness and trustworthiness, never how it is stored.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The three-part \"source/set/name\" identity."
+          },
+          "backup_set_id": {
+            "type": "string",
+            "description": "The two-part \"source/set\" identity of the backup set this belongs to."
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "set_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "The artifact's own filename within its backup set. Always a basename, never a path."
+          },
+          "remote_path": {
+            "type": "string"
+          },
+          "local_path": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The lifecycle state this backup is currently recorded in, e.g. \"DISCOVERED\", \"COMMITTED\", \"COMPLETE\", \"QUARANTINED\"."
+          },
+          "discovered_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "description": "What the source reported at discovery, or 0 when it reported no size at all.",
+            "format": "int64"
+          },
+          "checksum": {
+            "type": "string",
+            "description": "The hash recorded for the durable local copy at verification. Empty when nothing has been hashed.",
+            "x-go-omitempty": true
+          },
+          "checksum_algorithm": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "validation": {
+            "type": "string",
+            "description": "Whether this backup's content has been validated. Spelled out rather than left as a nullable boolean, so a caller never has to decide what an absent value means.",
+            "enum": [
+              "passed",
+              "failed",
+              "pending"
+            ]
+          },
+          "validation_detail": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "remote_source_removed_at": {
+            "type": "string",
+            "description": "When the source object was released. Absent while it is still there. Releasing a source is a lifecycle fact, never something a client asks for.",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "quarantined": {
+            "type": "boolean",
+            "description": "True when this backup is not trusted and is being held for a human."
+          },
+          "quarantine_irrecoverable": {
+            "type": "boolean",
+            "description": "True when no source remains anywhere to re-ingest from, so retrying cannot help."
+          },
+          "quarantine_reason": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "retention_tier": {
+            "type": "string",
+            "description": "The retention tier that most recently selected this backup to be kept.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "id",
+          "backup_set_id",
+          "source_name",
+          "set_name",
+          "name",
+          "remote_path",
+          "local_path",
+          "state",
+          "discovered_at",
+          "updated_at",
+          "size_bytes",
+          "validation",
+          "quarantined",
+          "quarantine_irrecoverable"
+        ]
+      },
+      "ListArtifactsResponse": {
+        "type": "object",
+        "description": "GET /backups and GET /quarantine. An object with one array field, never a bare top-level array.",
+        "additionalProperties": false,
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            }
+          }
+        },
+        "required": [
+          "artifacts"
+        ]
+      },
+      "ArtifactCheckResponse": {
+        "type": "object",
+        "description": "The verdict of re-checking one quarantined backup. Nothing is written and the backup is not moved: a pass is evidence for an operator deciding whether to retry, not a rehabilitation.",
+        "additionalProperties": false,
+        "properties": {
+          "checked": {
+            "type": "boolean",
+            "description": "False when there was nothing to examine at all, which is still not a pass."
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "description": "What was checked and what it found, already a sentence.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "checked",
+          "passed"
+        ]
+      },
+      "ActivityEvent": {
+        "type": "object",
+        "description": "One recorded lifecycle moment: a backup moved from one state to another. This is a read of the durable, append-only transition record, not a second event stream.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The three-part \"source/set/name\" identity."
+          },
+          "backup_set_id": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "set_name": {
+            "type": "string"
+          },
+          "artifact_name": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string",
+            "description": "The state left. Absent for the first transition, since a backup being discovered leaves nothing.",
+            "x-go-omitempty": true
+          },
+          "to": {
+            "type": "string",
+            "description": "The state entered. Never empty."
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "detail": {
+            "type": "string",
+            "description": "What the writer recorded about this move: a quarantine reason, a validator's verdict, an operator's action.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "artifact_id",
+          "backup_set_id",
+          "source_name",
+          "set_name",
+          "artifact_name",
+          "to",
+          "occurred_at"
+        ]
+      },
+      "ListActivityResponse": {
+        "type": "object",
+        "description": "GET /activity, newest first.",
+        "additionalProperties": false,
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityEvent"
+            }
+          }
+        },
+        "required": [
+          "events"
+        ]
+      },
+      "ListOperationsResponse": {
+        "type": "object",
+        "description": "GET /operations, newest first. The list counterpart of GET /operations/{id}, for a client that has no operation id to poll with.",
+        "additionalProperties": false,
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Operation"
+            }
+          }
+        },
+        "required": [
+          "operations"
+        ]
+      },
+      "BackupSetHealth": {
+        "type": "object",
+        "description": "One backup set's freshness verdict. This is the backup half of health, and it deliberately carries no process or build fact: a running service is not evidence that backups are landing.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "set_name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The verdict. HEALTHY requires positive evidence; silence is never healthy.",
+            "enum": [
+              "HEALTHY",
+              "DEGRADED",
+              "STALE",
+              "FAILING"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "One operator-facing sentence explaining the state. Never empty: a colour is not an explanation."
+          },
+          "newest_good_backup_at": {
+            "type": "string",
+            "description": "The newest trustworthy restore point. Absent when this set has never produced one.",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "last_completed_backup_at": {
+            "type": "string",
+            "description": "The newest backup that finished, trustworthy or not.",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "stale_after_seconds": {
+            "type": "integer",
+            "description": "The freshness window this set is judged against.",
+            "format": "int64"
+          },
+          "current_transfers": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pending_deletes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "quarantined_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "quarantined_lost_count": {
+            "type": "integer",
+            "description": "How many of the quarantined backups have no source left to recover from.",
+            "format": "int32"
+          },
+          "free_bytes": {
+            "type": "integer",
+            "description": "Free space at this set's destination. Absent when the reading could not be taken; a zero would otherwise read as \"full\", which is the one thing it must not be mistaken for.",
+            "format": "uint64",
+            "x-go-omitempty": true
+          },
+          "free_bytes_known": {
+            "type": "boolean"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "description": "Total capacity at this set's destination, for display beside free_bytes. Absent, like free_bytes, when the reading could not be taken.",
+            "format": "uint64",
+            "x-go-omitempty": true
+          },
+          "storage_level": {
+            "type": "string",
+            "description": "The capacity assessment this destination's free space produced. Absent when no reading could be taken, which is a different thing from OK.",
+            "enum": [
+              "OK",
+              "WARNING",
+              "CRITICAL"
+            ],
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "source_name",
+          "set_name",
+          "state",
+          "reason",
+          "stale_after_seconds",
+          "current_transfers",
+          "pending_deletes",
+          "failures",
+          "quarantined_count",
+          "quarantined_lost_count",
+          "free_bytes_known"
+        ]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "description": "GET /system/health. Every configured backup set's freshness verdict, computed fresh on every call. Build and process facts are GET /system/version's, deliberately not restated here.",
+        "additionalProperties": false,
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "backup_sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupSetHealth"
+            }
+          }
+        },
+        "required": [
+          "generated_at",
+          "backup_sets"
+        ]
+      },
+      "CatalogFailure": {
+        "type": "object",
+        "description": "One recovery manifest a catalog pass could not use.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string",
+            "description": "The manifest that failed. Reported because it is the only thing that identifies which one needs attention, and an operator with server access is this failure's only audience.",
+            "x-go-omitempty": true
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "reason"
+        ]
+      },
+      "CatalogReportResponse": {
+        "type": "object",
+        "description": "POST /catalog/scan and POST /catalog/rebuild. Both return this shape, because a scan is the rebuild with nothing written: a preview computed by a second implementation would be a preview of something else.",
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "True for a scan. Nothing was written."
+          },
+          "scanned": {
+            "type": "integer",
+            "description": "Every recovery manifest examined, whatever the verdict.",
+            "format": "int32"
+          },
+          "reconstructed": {
+            "type": "integer",
+            "description": "How many records were, or for a scan would be, rebuilt.",
+            "format": "int32"
+          },
+          "already_present": {
+            "type": "integer",
+            "description": "How many were already known and left untouched.",
+            "format": "int32"
+          },
+          "failures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogFailure"
+            }
+          }
+        },
+        "required": [
+          "dry_run",
+          "scanned",
+          "reconstructed",
+          "already_present",
+          "failures"
+        ]
+      },
+      "SetEnabledRequest": {
+        "type": "object",
+        "description": "POST /backup-sets/{id}/enabled. A disabled backup set is excluded from every run cycle and nothing already backed up is touched, which is why this is state-changing but not destructive.",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ]
       }
     },
     "responses": {}
@@ -1506,6 +1945,61 @@
         "x-idempotency-key": "required",
         "x-optimistic-concurrency": "config_revision",
         "x-csrf-required": true,
+        "x-authenticated": true
+      },
+      "get": {
+        "operationId": "listOperations",
+        "summary": "Recent operations, newest first. A client with no operation id to poll with has no other way to learn that anything is running.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListOperationsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
         "x-authenticated": true
       }
     },
@@ -3177,6 +3671,830 @@
             },
             "x-error-codes": [
               "ALREADY_CONFIGURED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/system/health": {
+      "get": {
+        "operationId": "getSystemHealth",
+        "summary": "Every configured backup set's freshness verdict (the backup half of health, never the process half).",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/backups": {
+      "get": {
+        "operationId": "listArtifacts",
+        "summary": "Every backup this deployment holds, optionally narrowed to one backup set.",
+        "tags": [
+          "backups"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "setId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A two-part \"source/set\" identity. An id that names no configured backup set is refused, not answered with an empty list: an empty list means the set exists and holds no backups yet, and those two call for opposite responses."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListArtifactsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/backups/{id}": {
+      "get": {
+        "operationId": "getArtifact",
+        "summary": "Read one backup. The id is a three-part source/set/name identity, so it spans path segments.",
+        "tags": [
+          "backups"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The three-part identity, e.g. \"nas-a/photos/2026-08-30.tar\". Registered in the router as three parameters for exactly that reason."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Artifact"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/activity": {
+      "get": {
+        "operationId": "listActivity",
+        "summary": "Recent lifecycle events across every backup set, newest first.",
+        "tags": [
+          "activity"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "How many events to return. Omitted or non-positive means the server's default; anything above its maximum is clamped rather than refused."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListActivityResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/quarantine": {
+      "get": {
+        "operationId": "listQuarantine",
+        "summary": "Every backup being held for a human, and why.",
+        "tags": [
+          "quarantine"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListArtifactsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/quarantine/{id}/revalidate": {
+      "post": {
+        "operationId": "revalidateArtifact",
+        "summary": "Re-check one quarantined backup and report the verdict. Writes nothing and moves nothing.",
+        "tags": [
+          "quarantine"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The three-part source/set/name identity."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactCheckResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: ARTIFACT_NOT_QUARANTINED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_QUARANTINED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/quarantine/{id}/retry": {
+      "post": {
+        "operationId": "retryArtifactIngestion",
+        "summary": "Return one quarantined backup to the pipeline so it is attempted again.",
+        "tags": [
+          "quarantine"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The three-part source/set/name identity."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success. No content."
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: ARTIFACT_NOT_QUARANTINED, ARTIFACT_IRRECOVERABLE.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_QUARANTINED",
+              "ARTIFACT_IRRECOVERABLE"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/enabled": {
+      "post": {
+        "operationId": "setBackupSetEnabled",
+        "summary": "Turn one backup set on or off. Nothing already backed up is touched. Keyed by the two halves of the identity, like the retention routes beside it, because a backup set id is a source and a name.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/catalog/scan": {
+      "post": {
+        "operationId": "scanCatalog",
+        "summary": "Report what a catalog rebuild would reconstruct. Writes nothing.",
+        "tags": [
+          "catalog"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogReportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/catalog/rebuild": {
+      "post": {
+        "operationId": "rebuildCatalog",
+        "summary": "Reconstruct missing records from the recovery manifests already on disk. Never removes or overwrites a record that already exists.",
+        "tags": [
+          "catalog"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogReportResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
             ]
           },
           "500": {

@@ -333,9 +333,34 @@ export interface BackupManagerApi {
 
   listSets(): Promise<BackupSet[]>;
   getSet(id: string): Promise<BackupSet>;
-  runSet(id: string): Promise<void>;
-  testConnection(id: string): Promise<{ ok: boolean; fingerprint: string }>;
-  setEnabled(id: string, enabled: boolean): Promise<void>;
+  /**
+   * Submits a run cycle: one pass over every enabled backup set.
+   *
+   * It takes no backup set id, because there is no such operation. A run
+   * cycle is deployment-wide in core (internal/app's RunCycle walks every
+   * enabled set), which is why the durable operation record it produces
+   * carries no backup set id either. The shared UI used to call
+   * `POST /backup-sets/{id}/run`, which no runtime has ever served.
+   *
+   * configRevision is the revision the CALLER is currently displaying,
+   * not one read fresh at submit time. That is the whole point of the
+   * token: a screen that has been open while somebody edited the
+   * configuration is refused (CONFIG_REVISION_STALE) instead of running
+   * against a setup nobody looking at it has seen.
+   */
+  runCycle(configRevision: string): Promise<void>;
+  /** Re-checks an ALREADY persisted backup set's connection, by id. The
+   *  connection details come from the configuration, so nothing about the
+   *  key or the trusted host line travels from here. */
+  testConnection(id: string): Promise<ConnectionTestOutcome>;
+  /**
+   * Turns one backup set on or off.
+   *
+   * `source`/`set` are BackupSet's own two-part identity, the same pair
+   * previewRetention and applyRetention take, because the route keys on
+   * exactly those two path segments rather than on the flat `id`.
+   */
+  setEnabled(source: string, set: string, enabled: boolean): Promise<void>;
 
   /** Issue #146 (B2.7): the wizard's three Save buttons. */
   createBackupSet(req: CreateBackupSetRequest): Promise<CreatedBackupSet>;
@@ -355,6 +380,16 @@ export interface BackupManagerApi {
    *  persisted set. */
   testCandidateConnection(params: ConnectionTestParams): Promise<ConnectionTestOutcome>;
 
+  /**
+   * Every backup this deployment holds, optionally narrowed to one backup
+   * set by its two-part "source/set" id.
+   *
+   * A setId naming no configured backup set REJECTS with
+   * BACKUP_SET_NOT_FOUND rather than resolving to an empty list. An empty
+   * list has to keep meaning "this backup set exists and holds no backups
+   * yet"; if it also meant "there is no such backup set", a bookmarked
+   * filter that outlived a rename would read as "your backups are gone".
+   */
   listArtifacts(setId?: string): Promise<BackupArtifact[]>;
   getArtifact(id: string): Promise<BackupArtifact>;
 

@@ -133,18 +133,40 @@ func (h *handlers) probeHostKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // testConnectionRequest is POST /api/v1/backup-sets/test-connection's
-// request body: a candidate source, checked before anything is
-// persisted. Every field mirrors backupSetRequest's own SSH-facing
-// fields (handlers_backupsets.go) exactly, since this is meant to be
-// called with the same values a subsequent POST /api/v1/backup-sets
+// request body, in one of two modes.
+//
+// Naming BackupSetID re-checks a backup set that already exists, and every
+// other field must then be absent: the connection details come from the
+// configuration. Leaving it empty checks a CANDIDATE before anything is
+// persisted, and every field then mirrors backupSetRequest's own
+// SSH-facing fields (handlers_backupsets.go) exactly, since this is meant
+// to be called with the same values a subsequent POST /api/v1/backup-sets
 // would carry.
+//
+// One route with two modes, rather than a second route keyed by id, is
+// deliberate (issue #211). A client re-checking a persisted set does not
+// know that set's key reference or its trusted host line, and must never
+// have to send them back: making it do so would turn a read-only "does
+// this still work" button into a request that could quietly test something
+// else entirely. The mutual exclusion below is what keeps the two modes
+// from being combined into exactly that.
 type testConnectionRequest struct {
+	BackupSetID    string `json:"backup_set_id"`
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
 	User           string `json:"user"`
 	SSHKeyID       string `json:"ssh_key_id"`
 	KnownHostsLine string `json:"known_hosts_line"`
 	RemotePath     string `json:"remote_path"`
+}
+
+// namesACandidate reports whether body carries any candidate connection
+// detail at all. RemotePath is included: it is optional in candidate mode,
+// but supplying it alongside a backup set id is still a caller asking to
+// test something other than what that set is configured with.
+func (b testConnectionRequest) namesACandidate() bool {
+	return b.Host != "" || b.Port != 0 || b.User != "" ||
+		b.SSHKeyID != "" || b.KnownHostsLine != "" || b.RemotePath != ""
 }
 
 type testConnectionResponse struct {
@@ -168,14 +190,48 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.setup().TestConnection(r.Context(), service.ConnectionTestRequest{
-		Host:           body.Host,
-		Port:           body.Port,
-		User:           body.User,
-		SSHKeyID:       body.SSHKeyID,
-		KnownHostsLine: body.KnownHostsLine,
-		RemotePath:     body.RemotePath,
-	})
+	var (
+		result service.ConnectionTestResult
+		err    error
+	)
+	switch {
+	case body.BackupSetID != "" && body.namesACandidate():
+		// Refused rather than resolved by precedence. A request that
+		// names a persisted set AND carries its own connection details is
+		// ambiguous about which one is being tested, and silently
+		// preferring either one is how a caller ends up shown a green
+		// result for something it did not ask about.
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"name backup_set_id to re-check a persisted backup set, or supply the connection details to check a candidate, but not both")
+		return
+	case body.BackupSetID != "":
+		// h.backend, not h.setup(): re-checking a PERSISTED set needs the
+		// configuration it was persisted into, and an unconfigured
+		// deployment (the first-run surface, where setup() falls back to
+		// a client that can only reach a candidate) has no backup sets at
+		// all. Answering "no such backup set" is the honest reading of a
+		// request that names one there.
+		if h.backend == nil {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
+		result, err = h.backend.TestBackupSetConnection(r.Context(), body.BackupSetID)
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
+	default:
+		// h.setup(), so the add-backup-set wizard's pre-save check still
+		// works before this deployment has a configuration at all.
+		result, err = h.setup().TestConnection(r.Context(), service.ConnectionTestRequest{
+			Host:           body.Host,
+			Port:           body.Port,
+			User:           body.User,
+			SSHKeyID:       body.SSHKeyID,
+			KnownHostsLine: body.KnownHostsLine,
+			RemotePath:     body.RemotePath,
+		})
+	}
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidRequest) {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())

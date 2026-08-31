@@ -16,7 +16,7 @@ export default tseslint.config(
   // for the same reason: linting minified vendor output produces a
   // thousand errors about code nobody in this repository wrote, which is
   // how a lint step stops being run at all.
-  { ignores: ["dist/**", "dist-bundles/**", "coverage/**", "playwright-report/**", "test-results/**"] },
+  { ignores: ["dist/**", "dist-bundles/**", "coverage/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -35,7 +35,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["**/*.test.{ts,tsx}", "e2e/**/*.ts", "src/test/**/*.{ts,tsx}"],
+    files: ["**/*.test.{ts,tsx}", "src/test/**/*.{ts,tsx}"],
     rules: {
       // Test files legitimately export helpers/fixtures alongside
       // components (e.g. src/test/bridges.ts-style fixtures); Fast
@@ -44,19 +44,7 @@ export default tseslint.config(
     },
   },
   {
-    // Playwright specs/fixtures, not React component code. Playwright's
-    // own fixture API has a callback parameter literally named `use`
-    // (test.extend({ bm: async ({ page }, use) => { await use(...) } })),
-    // which collides with the react-hooks plugin's name-based heuristic
-    // for detecting React's use() hook — a false positive, not a real
-    // rules-of-hooks violation, since nothing under e2e/ is a component.
-    files: ["e2e/**/*.ts"],
-    rules: {
-      "react-hooks/rules-of-hooks": "off",
-    },
-  },
-  {
-    // A Node CLI script (scripts/e2e-all-providers.mjs), not browser code —
+    // A Node CLI script (scripts/build-bundles.mjs), not browser code —
     // needs Node's globals, not the DOM ones the rest of this config
     // implicitly assumes.
     files: ["scripts/**/*.mjs"],

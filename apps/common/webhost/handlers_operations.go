@@ -176,3 +176,32 @@ func (h *handlers) getOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, toOperationResponse(op))
 }
+
+// listOperationsResponse is GET /api/v1/operations' body: an object with
+// one array field, matching every other list route in this package.
+type listOperationsResponse struct {
+	Operations []operationResponse `json:"operations"`
+}
+
+// listOperations is GET /api/v1/operations: recent operations, newest
+// first.
+//
+// It is the list counterpart of GET /api/v1/operations/{id}. A client that
+// has just loaded, or has just reconnected, holds no operation id and
+// therefore had no way at all to learn that anything was running: the
+// polling read alone only helps a client that submitted the operation
+// itself and kept the id. Read-only (§50), so no CSRF and no destructive
+// gate, exactly like the single-operation read beside it. POST on the same
+// path is the submit route, which is gated; a verb is not a synonym.
+func (h *handlers) listOperations(w http.ResponseWriter, r *http.Request) {
+	ops, err := h.backend.ListOperations(r.Context(), 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list operations")
+		return
+	}
+	resp := listOperationsResponse{Operations: make([]operationResponse, 0, len(ops))}
+	for _, op := range ops {
+		resp.Operations = append(resp.Operations, toOperationResponse(op))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

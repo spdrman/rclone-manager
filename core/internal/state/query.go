@@ -285,3 +285,81 @@ func scanRecords(rows *sql.Rows) ([]Record, error) {
 	}
 	return out, nil
 }
+
+// ActivityRecord is one row of the append-only state_transitions log,
+// joined back to the artifact it belongs to.
+//
+// This is the durable record of what actually happened, which is a
+// different thing from an artifact's CURRENT state: an artifact that went
+// DISCOVERED -> TRANSFERRING -> ... -> COMPLETE reads as one row in
+// artifacts and six here. FR-23's event catalog (internal/obs) writes the
+// same moments to the process log, but a log line is not queryable after
+// the fact and is not what an operator's "recent activity" list can be
+// built from; this table already is, and RecentActivity below is the read.
+type ActivityRecord struct {
+	Artifact   model.ArtifactID
+	From       string
+	To         string
+	OccurredAt time.Time
+	Detail     string
+}
+
+// RecentActivity returns the most recent limit state transitions across
+// every backup set, newest first.
+//
+// Ordered by the table's own primary key rather than by occurred_at: id is
+// monotonic in insertion order and unique, so it totally orders two
+// transitions recorded within the same clock tick, which occurred_at (an
+// RFC3339 string with whatever resolution the writer had) does not. A
+// caller rendering a feed needs a stable order more than it needs one
+// derived from the timestamps it is also displaying.
+//
+// A limit of zero or less is refused rather than silently treated as
+// "everything": an unbounded read of an append-only table grows without
+// end, and the caller that meant "all of it" should say a number.
+func (j *Journal) RecentActivity(ctx context.Context, limit int) ([]ActivityRecord, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("state: recent activity: limit must be positive, got %d", limit)
+	}
+
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT a.source, a.backup_set, a.artifact_name,
+		        t.from_state, t.to_state, t.occurred_at, t.detail
+		   FROM state_transitions t
+		   JOIN artifacts a ON a.id = t.artifact_id
+		  ORDER BY t.id DESC
+		  LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("state: recent activity: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ActivityRecord
+	for rows.Next() {
+		var (
+			source, backupSet, name string
+			rec                     ActivityRecord
+			occurred                string
+		)
+		if err := rows.Scan(&source, &backupSet, &name, &rec.From, &rec.To, &occurred, &rec.Detail); err != nil {
+			return nil, fmt.Errorf("state: recent activity: %w", err)
+		}
+		set, err := model.NewBackupSetID(source, backupSet)
+		if err != nil {
+			return nil, fmt.Errorf("state: recent activity: stored backup set %q/%q is invalid: %w", source, backupSet, err)
+		}
+		artifact, err := model.NewArtifactID(set, name)
+		if err != nil {
+			return nil, fmt.Errorf("state: recent activity: stored artifact %q is invalid: %w", name, err)
+		}
+		rec.Artifact = artifact
+		if rec.OccurredAt, err = parseTime(occurred); err != nil {
+			return nil, fmt.Errorf("state: recent activity: stored occurred_at %q is invalid: %w", occurred, err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state: recent activity: %w", err)
+	}
+	return out, nil
+}

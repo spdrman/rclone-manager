@@ -122,6 +122,61 @@ type BackupServiceClient interface {
 	// that.
 	Settings(ctx context.Context) (service.Settings, error)
 	UpdateSettings(ctx context.Context, req service.UpdateSettingsRequest) (service.Settings, error)
+
+	// SetBackupSetEnabled backs POST /api/v1/backup-sets/{id}/enabled
+	// (issue #211): the one write that turns a configured backup set on
+	// or off. State-changing but not destructive, per
+	// docs/EPIC-B-multi-nas.md §50 -- see core/service's own doc for what
+	// a disabled set stops doing and, more importantly, for what it does
+	// not touch.
+	SetBackupSetEnabled(ctx context.Context, id string, enabled bool) (service.BackupSet, error)
+
+	// TestBackupSetConnection backs the persisted-set mode of POST
+	// /api/v1/backup-sets/test-connection (issue #211): the same
+	// non-destructive reachability check TestConnection performs, against
+	// a set that already exists, so a client re-checking one never has to
+	// echo back the key reference and trusted host line it is configured
+	// with.
+	TestBackupSetConnection(ctx context.Context, id string) (service.ConnectionTestResult, error)
+
+	// ListArtifacts and GetArtifact back GET /api/v1/backups, GET
+	// /api/v1/backups/{id} and GET /api/v1/quarantine (issue #211):
+	// read-only reads of the FR-9 journal `backup-manager artifacts`
+	// already prints.
+	ListArtifacts(ctx context.Context, filter service.ArtifactFilter) ([]service.Artifact, error)
+	GetArtifact(ctx context.Context, id string) (service.Artifact, error)
+
+	// RevalidateArtifact and RetryArtifactIngestion back the two
+	// quarantine actions. Revalidate reports a verdict and writes
+	// nothing; retry takes the lifecycle graph's one recovery edge out of
+	// quarantine. See core/internal/app for why a passing revalidate may
+	// not rehabilitate an artifact on its own.
+	RevalidateArtifact(ctx context.Context, id string) (service.ArtifactCheck, error)
+	RetryArtifactIngestion(ctx context.Context, id string) error
+
+	// ListActivity backs GET /api/v1/activity: a read of the durable,
+	// append-only lifecycle record, not a second event stream.
+	ListActivity(ctx context.Context, limit int) ([]service.ActivityEvent, error)
+
+	// ListOperations backs GET /api/v1/operations: the list counterpart
+	// of GetOperation, for a client that holds no operation id to poll
+	// with.
+	ListOperations(ctx context.Context, limit int) ([]service.Operation, error)
+
+	// Health backs GET /api/v1/system/health: FR-24's backup-freshness
+	// verdict for every configured backup set, the same computation
+	// `backup-manager status` prints. Deliberately not the same question
+	// as /health/ready, which is about this process rather than about
+	// whether backups are landing.
+	Health(ctx context.Context) (service.HealthReport, error)
+
+	// ScanCatalog and RebuildCatalog back POST /api/v1/catalog/scan and
+	// POST /api/v1/catalog/rebuild: FR-9 journal recovery from the
+	// recovery manifests already on disk. The scan is the rebuild with
+	// nothing written, sharing one implementation so a preview predicts
+	// the real pass exactly.
+	ScanCatalog(ctx context.Context) (service.CatalogReport, error)
+	RebuildCatalog(ctx context.Context) (service.CatalogReport, error)
 }
 
 var _ BackupServiceClient = (*service.BackupService)(nil)

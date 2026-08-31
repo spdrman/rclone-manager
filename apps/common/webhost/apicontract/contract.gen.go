@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "f22e17eda9b4c64363847ab93f21b5141560babdee764f41b943f1b62a1c075d"
+const ContractSHA256 = "c2d08cc1ac021861bd2b2049af8a6d3d32a57f320def278e4979d6c8e34483f9"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -68,6 +68,9 @@ const (
 	ErrorCodeInternal                      ErrorCode = "INTERNAL"
 	ErrorCodeAlreadyConfigured             ErrorCode = "ALREADY_CONFIGURED"
 	ErrorCodeNotConfigured                 ErrorCode = "NOT_CONFIGURED"
+	ErrorCodeArtifactNotFound              ErrorCode = "ARTIFACT_NOT_FOUND"
+	ErrorCodeArtifactNotQuarantined        ErrorCode = "ARTIFACT_NOT_QUARANTINED"
+	ErrorCodeArtifactIrrecoverable         ErrorCode = "ARTIFACT_IRRECOVERABLE"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -94,6 +97,9 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeInternal,
 	ErrorCodeAlreadyConfigured,
 	ErrorCodeNotConfigured,
+	ErrorCodeArtifactNotFound,
+	ErrorCodeArtifactNotQuarantined,
+	ErrorCodeArtifactIrrecoverable,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -144,6 +150,9 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeInternal,
 	ErrorCodeAlreadyConfigured,
 	ErrorCodeNotConfigured,
+	ErrorCodeArtifactNotFound,
+	ErrorCodeArtifactNotQuarantined,
+	ErrorCodeArtifactIrrecoverable,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -151,9 +160,9 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
-	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound},
+	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
 	"throttling":     {ErrorCodeRateLimited},
 	"unavailable":    {ErrorCodeNotConfigured},
 	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed},
@@ -182,6 +191,15 @@ type Endpoint struct {
 // Endpoints is every operation the contract declares, ordered by path then
 // method.
 var Endpoints = []Endpoint{
+	{
+		ID: "listActivity", Method: "GET", Path: "/activity",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListActivityResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
+		},
+	},
 	{
 		ID: "enrollAdministrator", Method: "POST", Path: "/auth/enroll",
 		Authenticated: false, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
@@ -279,6 +297,18 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "setBackupSetEnabled", Method: "POST", Path: "/backup-sets/{source}/{set}/enabled",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "SetEnabledRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "applyRetention", Method: "POST", Path: "/backup-sets/{source}/{set}/retention/apply",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: true, Concurrency: "inventory_revision+config_revision",
 		RequestSchema: "ApplyRetentionRequest", ResponseSchema: "RetentionPlan", SuccessStatus: 200,
@@ -305,6 +335,55 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "listArtifacts", Method: "GET", Path: "/backups",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListArtifactsResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getArtifact", Method: "GET", Path: "/backups/{id}",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "Artifact", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeArtifactNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "rebuildCatalog", Method: "POST", Path: "/catalog/rebuild",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "CatalogReportResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "scanCatalog", Method: "POST", Path: "/catalog/scan",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "CatalogReportResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "listOperations", Method: "GET", Path: "/operations",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListOperationsResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "submitOperation", Method: "POST", Path: "/operations",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "required", DestructiveGate: true, Concurrency: "config_revision",
 		RequestSchema: "SubmitOperationRequest", ResponseSchema: "Operation", SuccessStatus: 202,
@@ -326,6 +405,39 @@ var Endpoints = []Endpoint{
 			404: {ErrorCodeOperationNotFound},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "listQuarantine", Method: "GET", Path: "/quarantine",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ListArtifactsResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "retryArtifactIngestion", Method: "POST", Path: "/quarantine/{id}/retry",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeArtifactNotFound},
+			409: {ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "revalidateArtifact", Method: "POST", Path: "/quarantine/{id}/revalidate",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ArtifactCheckResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeArtifactNotFound},
+			409: {ErrorCodeArtifactNotQuarantined},
+			500: {ErrorCodeInternal},
 		},
 	},
 	{
@@ -401,6 +513,15 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "getSystemHealth", Method: "GET", Path: "/system/health",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "HealthResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "listStorageStatus", Method: "GET", Path: "/system/storage",
 		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "ListStorageStatusResponse", SuccessStatus: 200,
@@ -440,9 +561,59 @@ var CapabilityFields = []string{
 	"app_store_packaging",
 }
 
+// ActivityEvent is one recorded lifecycle moment: a backup moved from one state to
+// another. This is a read of the durable, append-only transition
+// record, not a second event stream.
+type ActivityEvent struct {
+	ArtifactID   string `json:"artifact_id"`
+	ArtifactName string `json:"artifact_name"`
+	BackupSetID  string `json:"backup_set_id"`
+	Detail       string `json:"detail,omitempty"`
+	From         string `json:"from,omitempty"`
+	OccurredAt   string `json:"occurred_at"`
+	SetName      string `json:"set_name"`
+	SourceName   string `json:"source_name"`
+	To           string `json:"to"`
+}
+
 // ApplyRetentionRequest is POST /backup-sets/{source}/{set}/retention/apply.
 type ApplyRetentionRequest struct {
 	PlanID string `json:"plan_id"`
+}
+
+// Artifact is one backup this deployment holds, as the API reports it. Nothing
+// here names an implementation: the fields describe a backup's
+// identity, freshness and trustworthiness, never how it is stored.
+type Artifact struct {
+	BackupSetID             string `json:"backup_set_id"`
+	Checksum                string `json:"checksum,omitempty"`
+	ChecksumAlgorithm       string `json:"checksum_algorithm,omitempty"`
+	DiscoveredAt            string `json:"discovered_at"`
+	ID                      string `json:"id"`
+	LocalPath               string `json:"local_path"`
+	Name                    string `json:"name"`
+	QuarantineIrrecoverable bool   `json:"quarantine_irrecoverable"`
+	QuarantineReason        string `json:"quarantine_reason,omitempty"`
+	Quarantined             bool   `json:"quarantined"`
+	RemotePath              string `json:"remote_path"`
+	RemoteSourceRemovedAt   string `json:"remote_source_removed_at,omitempty"`
+	RetentionTier           string `json:"retention_tier,omitempty"`
+	SetName                 string `json:"set_name"`
+	SizeBytes               int64  `json:"size_bytes"`
+	SourceName              string `json:"source_name"`
+	State                   string `json:"state"`
+	UpdatedAt               string `json:"updated_at"`
+	Validation              string `json:"validation"`
+	ValidationDetail        string `json:"validation_detail,omitempty"`
+}
+
+// ArtifactCheckResponse is the verdict of re-checking one quarantined backup. Nothing is
+// written and the backup is not moved: a pass is evidence for an
+// operator deciding whether to retry, not a rehabilitation.
+type ArtifactCheckResponse struct {
+	Checked bool   `json:"checked"`
+	Passed  bool   `json:"passed"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // AuthErrorResponse is the FLAT error body the /auth operations return, with the
@@ -470,6 +641,29 @@ type BackupSet struct {
 	SourceName         string   `json:"source_name"`
 	User               string   `json:"user"`
 	ValidatorID        string   `json:"validator_id"`
+}
+
+// BackupSetHealth is one backup set's freshness verdict. This is the backup half of
+// health, and it deliberately carries no process or build fact: a
+// running service is not evidence that backups are landing.
+type BackupSetHealth struct {
+	BackupSetID           string `json:"backup_set_id"`
+	CurrentTransfers      int    `json:"current_transfers"`
+	Failures              int    `json:"failures"`
+	FreeBytes             uint64 `json:"free_bytes,omitempty"`
+	FreeBytesKnown        bool   `json:"free_bytes_known"`
+	LastCompletedBackupAt string `json:"last_completed_backup_at,omitempty"`
+	NewestGoodBackupAt    string `json:"newest_good_backup_at,omitempty"`
+	PendingDeletes        int    `json:"pending_deletes"`
+	QuarantinedCount      int    `json:"quarantined_count"`
+	QuarantinedLostCount  int    `json:"quarantined_lost_count"`
+	Reason                string `json:"reason"`
+	SetName               string `json:"set_name"`
+	SourceName            string `json:"source_name"`
+	StaleAfterSeconds     int64  `json:"stale_after_seconds"`
+	State                 string `json:"state"`
+	StorageLevel          string `json:"storage_level,omitempty"`
+	TotalBytes            uint64 `json:"total_bytes,omitempty"`
 }
 
 // BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads
@@ -512,6 +706,25 @@ type CapabilitiesResponse struct {
 	NativeNotifications bool   `json:"native_notifications"`
 	Platform            string `json:"platform"`
 	StoragePicker       bool   `json:"storage_picker"`
+}
+
+// CatalogFailure is one recovery manifest a catalog pass could not use.
+type CatalogFailure struct {
+	BackupSetID string `json:"backup_set_id"`
+	Path        string `json:"path,omitempty"`
+	Reason      string `json:"reason"`
+}
+
+// CatalogReportResponse is POST /catalog/scan and POST /catalog/rebuild. Both return this
+// shape, because a scan is the rebuild with nothing written: a
+// preview computed by a second implementation would be a preview of
+// something else.
+type CatalogReportResponse struct {
+	AlreadyPresent int              `json:"already_present"`
+	DryRun         bool             `json:"dry_run"`
+	Failures       []CatalogFailure `json:"failures"`
+	Reconstructed  int              `json:"reconstructed"`
+	Scanned        int              `json:"scanned"`
 }
 
 // CompleteFirstRunResponse is POST /system/first-run. The backup set the first configuration was
@@ -585,6 +798,14 @@ type FirstRunStatusResponse struct {
 	Configured bool `json:"configured"`
 }
 
+// HealthResponse is GET /system/health. Every configured backup set's freshness
+// verdict, computed fresh on every call. Build and process facts are
+// GET /system/version's, deliberately not restated here.
+type HealthResponse struct {
+	BackupSets  []BackupSetHealth `json:"backup_sets"`
+	GeneratedAt string            `json:"generated_at"`
+}
+
 // HostKeyProbeRequest is POST /ssh/host-key-probe. Opens a real outbound connection, trusts
 // nothing.
 type HostKeyProbeRequest struct {
@@ -614,10 +835,28 @@ type ImportSSHKeyResponse struct {
 	ID          string `json:"id"`
 }
 
+// ListActivityResponse is GET /activity, newest first.
+type ListActivityResponse struct {
+	Events []ActivityEvent `json:"events"`
+}
+
+// ListArtifactsResponse is GET /backups and GET /quarantine. An object with one array field,
+// never a bare top-level array.
+type ListArtifactsResponse struct {
+	Artifacts []Artifact `json:"artifacts"`
+}
+
 // ListBackupSetsResponse is GET /backup-sets. An object with one array field, never a bare
 // top-level array.
 type ListBackupSetsResponse struct {
 	BackupSets []BackupSet `json:"backup_sets"`
+}
+
+// ListOperationsResponse is GET /operations, newest first. The list counterpart of GET
+// /operations/{id}, for a client that has no operation id to poll
+// with.
+type ListOperationsResponse struct {
+	Operations []Operation `json:"operations"`
 }
 
 // ListStorageStatusResponse is GET /system/storage.
@@ -714,6 +953,13 @@ type SessionResponse struct {
 	Username string `json:"username"`
 }
 
+// SetEnabledRequest is POST /backup-sets/{id}/enabled. A disabled backup set is excluded
+// from every run cycle and nothing already backed up is touched,
+// which is why this is state-changing but not destructive.
+type SetEnabledRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 // SettingsResponse is GET and PATCH /settings both return this: the settings now in
 // effect plus the rules they were validated against.
 type SettingsResponse struct {
@@ -747,9 +993,16 @@ type SubmitOperationRequest struct {
 	ConfigRevision string `json:"config_revision"`
 }
 
-// TestConnectionRequest is POST /backup-sets/test-connection. A pre-save reachability and
-// authentication check, before a backup set has an id.
+// TestConnectionRequest is POST /backup-sets/test-connection. A reachability and
+// authentication check, in one of two modes: name backup_set_id to
+// re-check a set that already exists, or supply the connection
+// details to check a candidate before it is saved. Exactly one mode
+// per request. A client testing a persisted set neither knows nor
+// has to echo back that set's key reference and trusted host line,
+// which is what keeps a read-only "does this still work" check from
+// being able to test something else.
 type TestConnectionRequest struct {
+	BackupSetID    string `json:"backup_set_id"`
 	Host           string `json:"host"`
 	KnownHostsLine string `json:"known_hosts_line"`
 	Port           int    `json:"port"`
@@ -806,11 +1059,17 @@ type VersionResponse struct {
 // through this map rather than through a hand-written lookup, so a schema
 // added to the contract cannot quietly go unchecked.
 var SchemaTypes = map[string]any{
+	"ActivityEvent":               ActivityEvent{},
 	"ApplyRetentionRequest":       ApplyRetentionRequest{},
+	"Artifact":                    Artifact{},
+	"ArtifactCheckResponse":       ArtifactCheckResponse{},
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
+	"BackupSetHealth":             BackupSetHealth{},
 	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
+	"CatalogFailure":              CatalogFailure{},
+	"CatalogReportResponse":       CatalogReportResponse{},
 	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
 	"ConfigRevisionStaleResponse": ConfigRevisionStaleResponse{},
 	"CreateBackupSetRequest":      CreateBackupSetRequest{},
@@ -819,11 +1078,15 @@ var SchemaTypes = map[string]any{
 	"ErrorBody":                   ErrorBody{},
 	"ErrorResponse":               ErrorResponse{},
 	"FirstRunStatusResponse":      FirstRunStatusResponse{},
+	"HealthResponse":              HealthResponse{},
 	"HostKeyProbeRequest":         HostKeyProbeRequest{},
 	"HostKeyProbeResponse":        HostKeyProbeResponse{},
 	"ImportSSHKeyRequest":         ImportSSHKeyRequest{},
 	"ImportSSHKeyResponse":        ImportSSHKeyResponse{},
+	"ListActivityResponse":        ListActivityResponse{},
+	"ListArtifactsResponse":       ListArtifactsResponse{},
 	"ListBackupSetsResponse":      ListBackupSetsResponse{},
+	"ListOperationsResponse":      ListOperationsResponse{},
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
 	"Operation":                   Operation{},
@@ -834,6 +1097,7 @@ var SchemaTypes = map[string]any{
 	"RetentionVerdict":            RetentionVerdict{},
 	"RotatePasswordRequest":       RotatePasswordRequest{},
 	"SessionResponse":             SessionResponse{},
+	"SetEnabledRequest":           SetEnabledRequest{},
 	"SettingsResponse":            SettingsResponse{},
 	"SettingsSchema":              SettingsSchema{},
 	"StorageStatus":               StorageStatus{},
