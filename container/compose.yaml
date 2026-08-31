@@ -270,23 +270,40 @@ services:
     # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
-    # `backup-manager status` (issue #26). Real backup-freshness evidence
-    # (HEALTHY/DEGRADED/STALE/FAILING), appropriate here since this is the
-    # container that actually holds the state database - web-ui's own
-    # healthcheck below is deliberately a different, narrower check. See
-    # core/cmd/backup-manager/status.go for the exact contract and
-    # docs/deployment.md for how it was verified against a running
-    # container.
+    # Liveness, deliberately, and NOT `backup-manager status`.
     #
-    # Declared here rather than inherited from the image's own HEALTHCHECK
-    # instruction, even though the two are identical (issue #167): the
-    # runtime contract requires an operator to be able to read what
-    # "healthy" means out of this file, without also reading the
-    # Dockerfile. The values match container/Dockerfile's instruction
-    # exactly, and distribution/compose fails the build if this key goes
-    # missing.
+    # This is the check web-ui waits on: it declares `depends_on:
+    # rclone-manager: condition: service_healthy` below, so whatever this
+    # asks is what stands between an operator and the only LAN-facing
+    # listener in the deployment. `backup-manager status` answers backup
+    # freshness (HEALTHY/DEGRADED/STALE/FAILING) and exits non-zero on a
+    # DEGRADED, STALE or FAILING set, and also when it cannot open the
+    # service at all - so gating on it means a stale backup set, or an
+    # instance nobody has configured yet, keeps the UI from ever
+    # starting. That is a real backup problem being reported as a broken
+    # web server, which is the worst moment to lose the page an operator
+    # would fix it from.
+    #
+    # /health/live is the engine's own bare liveness probe
+    # (apps/common/webhost/router.go, deliberately outside /api/v1 so it
+    # needs no authentication and no configuration). `healthcheck` is the
+    # same subcommand web-ui uses below, against a URL rather than its
+    # own default, and it needs no shell - distroless has none.
+    #
+    # Backup freshness is not lost, it moves back to being the thing it
+    # was built as: the image's own HEALTHCHECK instruction still runs
+    # `backup-manager status` (container/Dockerfile, so a plain `docker
+    # run` still reports backup health), the alerts block delivers it
+    # proactively, and an operator reads it directly with
+    # `docker compose exec rclone-manager /backup-manager status`.
+    #
+    # Declared here rather than inherited from the image (issue #167):
+    # the runtime contract requires an operator to be able to read what
+    # "healthy" means out of this file without also reading the
+    # Dockerfile, and distribution/compose fails the build if this key
+    # goes missing or stops naming a liveness probe.
     healthcheck:
-      test: ["CMD", "/backup-manager", "status"]
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s
@@ -320,7 +337,9 @@ services:
     # (or `docker compose up`) starting both containers at once would
     # otherwise let web-ui begin proxying before rclone-manager is even
     # listening, surfacing as a confusing "bad gateway" instead of a
-    # simple "please wait."
+    # simple "please wait." What "healthy" means here is the engine's
+    # liveness probe and nothing else - see its healthcheck above for why
+    # backup freshness must never be the condition this waits on.
     depends_on:
       rclone-manager:
         condition: service_healthy

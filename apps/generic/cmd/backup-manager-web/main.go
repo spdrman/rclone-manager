@@ -38,6 +38,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -206,6 +207,13 @@ serve-ui flags:
   --profile NAME   runtime profile (default $RUNTIME_PROFILE, or
                     generic). Selects which bundle under --ui-root is
                     served
+  --trusted-gateway CIDR[,CIDR]
+                   CIDR ranges the platform authentication gateway may be
+                    believed from (default $TRUSTED_GATEWAY_CIDRS).
+                    Required by a gateway profile: this process publishes
+                    the only port, so it is the hop that strips a
+                    client-supplied identity header before the engine,
+                    which trusts this hop, can believe it
   --ui-root PATH   a directory of per-profile UI bundles (default
                     $UI_ROOT). The bundle served is <PATH>/<profile>
   --ui-dir PATH    one explicit UI bundle directory (default $UI_DIR),
@@ -384,6 +392,8 @@ func cmdServeUI(args []string) int {
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
 	upstream := fset.String("upstream", envOrDefault("UPSTREAM_ADDR", defaultUpstream), "the engine's base URL, reachable over the internal Docker network")
 	profileName := fset.String("profile", envOrDefault("RUNTIME_PROFILE", defaultProfile), "runtime profile (generic or ugos)")
+	trustedGateway := fset.String("trusted-gateway", envOrDefault("TRUSTED_GATEWAY_CIDRS", ""),
+		"comma-separated CIDR ranges a platform authentication gateway may be believed from; required by a gateway profile, and the range this process strips the identity header outside of")
 	uiRoot := fset.String("ui-root", envOrDefault("UI_ROOT", ""), "a directory of per-profile UI bundles; the bundle served is <ui-root>/<profile>")
 	uiDir := fset.String("ui-dir", envOrDefault("UI_DIR", ""), "one explicit UI bundle directory, which wins over --ui-root")
 	if err := fset.Parse(args); err != nil {
@@ -393,6 +403,40 @@ func cmdServeUI(args []string) int {
 	runtimeProfile, err := profile.Lookup(*profileName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		return 2
+	}
+
+	// The identity strip's trust boundary, resolved before anything
+	// opens a listener and on exactly the same terms `serve` resolves
+	// it: this process is the hop with the published port, so it is the
+	// one that can tell a header the platform gateway set from one a
+	// client on the LAN set against that port. A gateway profile with no
+	// declared range is refused here rather than started with the strip
+	// silently off, which is the shape that made a client-supplied
+	// X-Ugos-User reach the engine believed.
+	var identity serve.IdentitySanitizer
+	if runtimeProfile.Gateway != nil {
+		if *trustedGateway != "" {
+			runtimeProfile.Gateway.TrustedPeers = splitList(*trustedGateway)
+		}
+		gateway, err := runtimeProfile.Gateway.Compile()
+		switch {
+		case err == nil:
+			identity = gateway
+		case errors.Is(err, profile.ErrNoTrustedPeer):
+			// No declared boundary means no gateway, so nothing may
+			// carry an identity through this hop. Said out loud rather
+			// than left as silence, since an operator who meant to
+			// configure one has to find out here.
+			identity = serve.StripAll(runtimeProfile.Gateway.UsernameHeader)
+			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q declares a gateway but no --trusted-gateway range, so %s is stripped from every request\n",
+				runtimeProfile.ID, runtimeProfile.Gateway.UsernameHeader)
+		default:
+			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q: %v\n", runtimeProfile.ID, err)
+			return 2
+		}
+	} else if *trustedGateway != "" {
+		fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-gateway was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
 		return 2
 	}
 
@@ -436,7 +480,7 @@ func cmdServeUI(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: bundle.FS})
+	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: bundle.FS, Identity: identity})
 	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
 	if err := serve.RunEngine(ctx, httpServer, nil, shutdownGrace, os.Stderr); err != nil {

@@ -227,6 +227,13 @@ func roleOf(command []string) Role {
 	return RoleUnknown
 }
 
+// Service returns one service's own declarations by name, or nil. It
+// exists so a caller can reach a single service's keys without this
+// package exporting the whole generic tree.
+func (d Document) Service(name string) map[string]any {
+	return mapOf(d.services()[name])
+}
+
 // serviceFor returns the one service filling role, and whether there was
 // exactly one.
 func (d Document) serviceFor(role Role) (string, map[string]any, bool) {
@@ -252,13 +259,66 @@ type Mount struct {
 }
 
 // Mounts lists a service's declared volumes with ${VAR} references
-// expanded.
+// expanded. An entry this parser cannot resolve to a host path is NOT
+// returned as a Mount: see UnparseableMounts for why answering nothing
+// beats answering wrongly.
 func (d Document) Mounts(service map[string]any) []Mount {
+	parsed, _ := d.mounts(service)
+	return parsed
+}
+
+// UnparseableMounts lists the raw volume entries this parser refused.
+//
+// The refusal exists because the corrupt answer was silent. The contract
+// mandates the ${VAR:?message} form for every host path, that form
+// carries a colon inside its message, and splitting the raw string on
+// ":" turned
+//
+//	${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+//
+// into HostPath "${KEY_FILE", ContainerPath "?set KEY_FILE in .env to
+// the SFTP private key" and ReadOnly false. Every prohibited-path
+// comparison against that HostPath then matched nothing, with no
+// diagnostic, which is a security gate failing open rather than a parse
+// bug. apps/proxmox/compose/backup-manager.yml was already being checked
+// that way. Compose's long volume syntax degraded the same way, through
+// a map rendered as one string.
+func (d Document) UnparseableMounts(service map[string]any) []string {
+	_, refused := d.mounts(service)
+	return refused
+}
+
+func (d Document) mounts(service map[string]any) ([]Mount, []string) {
 	var out []Mount
-	for _, raw := range stringList(service["volumes"]) {
-		expanded, _ := packaging.ExpandCompose(raw, d.env)
+	var refused []string
+
+	for _, entry := range stringListAny(service["volumes"]) {
+		if long, ok := entry.(map[string]any); ok {
+			m, parsed, skip := d.longSyntaxMount(long)
+			switch {
+			case skip:
+			case parsed:
+				out = append(out, m)
+			default:
+				refused = append(refused, scalarString(entry))
+			}
+			continue
+		}
+
+		raw := scalarString(entry)
+		expanded, unresolved := packaging.ExpandCompose(raw, d.env)
+		if len(unresolved) != 0 {
+			refused = append(refused, raw)
+			continue
+		}
 		parts := strings.Split(expanded, ":")
-		if len(parts) < 2 {
+		if len(parts) == 1 {
+			// An anonymous volume ("- /data/cache"): a container path and
+			// no host side at all, so there is no host path to check.
+			continue
+		}
+		if len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+			refused = append(refused, raw)
 			continue
 		}
 		m := Mount{HostPath: parts[0], ContainerPath: parts[1]}
@@ -267,7 +327,32 @@ func (d Document) Mounts(service map[string]any) []Mount {
 		}
 		out = append(out, m)
 	}
-	return out
+	return out, refused
+}
+
+// longSyntaxMount reads compose's long volume syntax. The third result
+// asks the caller to skip the entry rather than refuse it: a named
+// volume or a tmpfs has no host path to check, which is a different
+// claim from "this could not be parsed".
+func (d Document) longSyntaxMount(long map[string]any) (Mount, bool, bool) {
+	switch scalarString(long["type"]) {
+	case "", "bind":
+		// Compose's own default for a typeless entry is "volume". It is
+		// read as a bind here on purpose: guessing "volume" would skip
+		// the prohibition check, and a prohibition that skips is a
+		// prohibition that fails open.
+	default:
+		return Mount{}, false, true
+	}
+
+	source, sourceUnresolved := packaging.ExpandCompose(scalarString(long["source"]), d.env)
+	target, targetUnresolved := packaging.ExpandCompose(scalarString(long["target"]), d.env)
+	if len(sourceUnresolved) != 0 || len(targetUnresolved) != 0 || source == "" || target == "" {
+		return Mount{}, false, false
+	}
+
+	readOnly, _ := long["read_only"].(bool)
+	return Mount{HostPath: source, ContainerPath: target, ReadOnly: readOnly}, true, false
 }
 
 // MountFor finds a role's mount at containerPath.
@@ -311,6 +396,8 @@ func (d Document) CheckField(field Field) []Finding {
 		return d.checkServiceEnv(field)
 	case "service-mount":
 		return d.checkServiceMount(field)
+	case "service-healthcheck":
+		return d.checkServiceHealthcheck(field)
 	case "document":
 		return d.checkDocumentKey(field)
 	default:
@@ -336,6 +423,34 @@ func (d Document) checkServiceKey(field Field) []Finding {
 			joined := strings.Join(stringList(v), " ")
 			if !strings.Contains(joined, field.MustContain) {
 				out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) declares %s %q, which never contains %q", name, role, field.Key, joined, field.MustContain), Why: field.Why})
+			}
+		}
+	}
+	return out
+}
+
+// checkServiceHealthcheck reads inside a service's healthcheck block
+// rather than at the key holding it, because what an orchestrator waits
+// on is the declared test, not the presence of a healthcheck.
+func (d Document) checkServiceHealthcheck(field Field) []Finding {
+	var out []Finding
+	for _, roleName := range field.Roles {
+		role := Role(roleName)
+		name, svc, ok := d.serviceFor(role)
+		if !ok {
+			out = append(out, Finding{Rule: field.ID, Detail: fmt.Sprintf("%s declares no single service in the %q role", d.Source, role), Why: field.Why})
+			continue
+		}
+		check := mapOf(svc["healthcheck"])
+		v, present := check[field.Key]
+		if !present || isEmpty(v) {
+			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) declares no healthcheck %q", name, role, field.Key), Why: field.Why})
+			continue
+		}
+		if field.MustContain != "" {
+			joined := strings.Join(stringList(v), " ")
+			if !strings.Contains(joined, field.MustContain) {
+				out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) declares the healthcheck %s %q, which never contains %q", name, role, field.Key, joined, field.MustContain), Why: field.Why})
 			}
 		}
 	}
@@ -417,6 +532,26 @@ func (d Document) WithoutField(field Field) (Document, string) {
 			}
 			delete(svc, field.Key)
 			return out, fmt.Sprintf("%q from service %q", field.Key, name)
+		}
+	case "service-healthcheck":
+		for _, roleName := range field.Roles {
+			name, svc, ok := out.serviceFor(Role(roleName))
+			if !ok {
+				continue
+			}
+			check := mapOf(svc["healthcheck"])
+			if check == nil {
+				continue
+			}
+			if field.MustContain != "" {
+				// Same reasoning as the service case above: removing the
+				// whole test would also trip the "declared at all" half,
+				// so only the required argument goes.
+				check[field.Key] = withoutArg(stringList(check[field.Key]), field.MustContain)
+				return out, fmt.Sprintf("%s's %q from service %q's healthcheck", field.MustContain, field.Key, name)
+			}
+			delete(check, field.Key)
+			return out, fmt.Sprintf("healthcheck %q from service %q", field.Key, name)
 		}
 	case "service-env":
 		for _, roleName := range field.Roles {
@@ -514,12 +649,21 @@ func (d Document) checkRule(rule ProhibitedRule) []Finding {
 		})
 	case "mount-host-path":
 		for name, raw := range d.services() {
-			for _, m := range d.Mounts(mapOf(raw)) {
+			parsed, refused := d.mounts(mapOf(raw))
+			for _, m := range parsed {
 				for _, p := range rule.Paths {
 					if hostPathMatches(m.HostPath, p) {
 						add(name, fmt.Sprintf("service %q mounts the host path %s (at %s)", name, p, m.ContainerPath))
 					}
 				}
+			}
+			// A volume nothing could resolve is reported rather than
+			// passed over. The rule's question is "does this deployment
+			// mount one of these paths", and "I could not tell" is not
+			// an answer of no - which is exactly how the corrupted parse
+			// used to answer it.
+			for _, entry := range refused {
+				add(name, fmt.Sprintf("service %q declares the volume %s, which this contract cannot resolve to a host path, so it cannot be shown to be free of %s", name, entry, strings.Join(rule.Paths, ", ")))
 			}
 		}
 	case "list-value-prefix":
@@ -619,6 +763,41 @@ func (d Document) WithProhibited(rule ProhibitedRule) (Document, string) {
 		return out, p
 	}
 	return out, ""
+}
+
+// WithVolume returns a copy of this document with entry appended to the
+// engine service's volumes, and a description of what was injected. Like
+// WithProhibited it exists for the positive controls, and specifically
+// for the two mount shapes WithProhibited's own injection cannot reach:
+// it appends a literal host path in short syntax, so it only ever
+// exercises the case that already worked.
+func (d Document) WithVolume(entry any) (Document, string) {
+	out := d.clone()
+	_, svc, ok := out.serviceFor(RoleEngine)
+	if !ok || svc == nil {
+		return out, ""
+	}
+	svc["volumes"] = append(stringListAny(svc["volumes"]), entry)
+	return out, fmt.Sprintf("%v", entry)
+}
+
+// WithServiceHealthcheckTest returns a copy of this document with role's
+// healthcheck test replaced. Like WithProhibited and WithVolume it exists
+// for the positive controls, here so a control can put back the exact
+// check the start gate must never be again.
+func (d Document) WithServiceHealthcheckTest(role Role, test []any) Document {
+	out := d.clone()
+	_, svc, ok := out.serviceFor(role)
+	if !ok || svc == nil {
+		return out
+	}
+	check := mapOf(svc["healthcheck"])
+	if check == nil {
+		check = map[string]any{}
+		svc["healthcheck"] = check
+	}
+	check["test"] = test
+	return out
 }
 
 // ---------------------------------------------------------------------

@@ -73,6 +73,14 @@
       "why": "declared in the runtime definition rather than inherited from an image instruction and described in a comment. An operator reading this file has to be able to see what healthy means without reading the Dockerfile."
     },
     {
+      "id": "start-gate-liveness",
+      "scope": "service-healthcheck",
+      "roles": ["engine"],
+      "key": "test",
+      "mustContain": "/health/live",
+      "why": "the start gate has to be a liveness question, not a backup-freshness one. web-ui declares depends_on: rclone-manager: service_healthy, so whatever the engine's healthcheck asks is what stands between an operator and the only LAN-facing listener. `backup-manager status` exits non-zero on any DEGRADED, STALE or FAILING set and on an instance with no configuration at all, so gating on it means a stale backup set, or a fresh install, keeps the UI from starting. /health/live needs no configuration and is deliberately outside /api/v1. Backup freshness stays the operator and alerting surface it was built to be."
+    },
+    {
       "id": "graceful-shutdown-period",
       "scope": "service",
       "roles": ["engine", "web-ui"],

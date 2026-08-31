@@ -93,7 +93,8 @@ type Profile struct {
 
 	// Capabilities is what this profile reports the host platform can do.
 	// A profile may only declare a capability the running process can
-	// actually deliver; UndeliverableCapabilities is the check.
+	// actually deliver; UndeliverableCapabilities is the check, and
+	// Adapter runs it on every wiring rather than leaving it to a test.
 	Capabilities capabilities.PlatformCapabilities
 
 	// Gateway, when non-nil, is this profile's trusted native
@@ -199,6 +200,14 @@ var (
 	// refusal exists to prevent, so it is a refusal and not a warning.
 	ErrNoAuthenticator = errors.New("this profile authenticates locally but no local authenticator was supplied")
 
+	// ErrUndeliverableCapability is returned when a profile declares a
+	// capability the adapter this wiring produced cannot actually
+	// deliver. It is a refusal and not a warning for the same reason the
+	// two above are: a capability reported to the UI as supported is
+	// acted on, and §22 says an unsupported capability is explicit,
+	// never emulated.
+	ErrUndeliverableCapability = errors.New("this profile declares a capability its wiring cannot deliver")
+
 	// ErrNoTrustedPeer is returned when a gateway profile is wired with
 	// no trusted peer range. Without one there is no gateway, only an
 	// identity header anyone on the LAN can set.
@@ -230,13 +239,22 @@ func (p Profile) Adapter(cfg AdapterConfig) (capabilities.PlatformAdapter, error
 			return nil, err
 		}
 		a.authenticator = g
-		return a, nil
+	} else {
+		if cfg.LocalAuth == nil {
+			return nil, fmt.Errorf("profile %q: %w", p.ID, ErrNoAuthenticator)
+		}
+		a.authenticator = cfg.LocalAuth
 	}
 
-	if cfg.LocalAuth == nil {
-		return nil, fmt.Errorf("profile %q: %w", p.ID, ErrNoAuthenticator)
+	// §22's refusal, run rather than described. Until this call the check
+	// existed and had tests, and no process ever invoked it, so a profile
+	// row declaring a capability its wiring cannot deliver would have
+	// reached a running deployment and been reported to the UI as
+	// supported. Wiring is the only place that can answer the question,
+	// because the answer depends on what this particular call supplied.
+	if undeliverable := UndeliverableCapabilities(a); len(undeliverable) != 0 {
+		return nil, fmt.Errorf("profile %q: %w: %s", p.ID, ErrUndeliverableCapability, strings.Join(undeliverable, "; "))
 	}
-	a.authenticator = cfg.LocalAuth
 	return a, nil
 }
 
@@ -286,6 +304,29 @@ func UndeliverableCapabilities(a capabilities.PlatformAdapter) []string {
 	if caps.NativeNotifications {
 		if err := a.Notifier().Notify(context.Background(), "probe", "probe"); errors.Is(err, capabilities.ErrCapabilityUnsupported) {
 			out = append(out, "native_notifications: declared, but Notifier() is the unsupported null object")
+		}
+	}
+
+	// The remaining three capabilities have no collaborator to probe,
+	// and that IS the finding: capabilities.PlatformAdapter offers
+	// exactly two, Authenticator() and Notifier(), so a server-side
+	// adapter has nothing it could deliver a storage picker, an embedded
+	// window or app-store packaging THROUGH. Those three are facts about
+	// the browser host a provider bridge runs inside, reported to the UI
+	// over GET /api/v1/system/capabilities, and this side of the wire
+	// declaring one would be exactly the emulated claim §22 forbids.
+	// Without these three the check probed two of five, which is how a
+	// future profile row could declare one and be caught by nothing.
+	for _, c := range []struct {
+		declared bool
+		name     string
+	}{
+		{caps.StoragePicker, "storage_picker"},
+		{caps.EmbeddedWindow, "embedded_window"},
+		{caps.AppStorePackaging, "app_store_packaging"},
+	} {
+		if c.declared {
+			out = append(out, c.name+": declared server-side, but a capabilities.PlatformAdapter has no collaborator that could deliver it (it is a browser-host fact, not a process one)")
 		}
 	}
 	return out

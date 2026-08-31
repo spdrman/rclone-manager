@@ -262,6 +262,16 @@ backup set is `DEGRADED` (no artifact ever discovered for it) reports Docker hea
 which exits 0 unconditionally and so reported `healthy` regardless of backup health — real
 (if minimal) process-liveness evidence, but not what FR-24's health states are for.
 
+`container/compose.yaml` deliberately overrides that for the engine service, and asks
+`/health/live` instead. The reason is `web-ui`'s `depends_on: rclone-manager: condition:
+service_healthy`: whatever the engine's healthcheck asks is what stands between an operator
+and the only LAN-facing listener, and `backup-manager status` exits non-zero on a `DEGRADED`
+or `STALE` set and on an instance with no configuration at all. Gating startup on it means a
+stale backup set, or a fresh install, keeps the UI from ever coming up, which is the worst
+moment to lose the page you would fix it from. Backup freshness stays what it was built to
+be: the image's own `HEALTHCHECK` (so a plain `docker run` still reports it), the alerts
+block, and `docker compose exec rclone-manager /backup-manager status`.
+
 ## Building and running it yourself
 
 ```

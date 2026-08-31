@@ -76,5 +76,24 @@ func NewEngine(cfg EngineConfig) http.Handler {
 	mux.Handle("/health/", apiRouter)
 	mux.Handle("/api/v1/", apiRouter)
 
-	return local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)
+	handler := local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)
+
+	// The identity strip, on the request path rather than described in a
+	// doc comment. A gateway Authenticator decides whether to BELIEVE the
+	// header; this deletes it outright for an untrusted peer, so nothing
+	// downstream - a handler, a log line, a future middleware - can read
+	// a value that was never trusted. serve.NewUI runs the same strip one
+	// hop out, where the client's own address is still visible; see
+	// IdentitySanitizer's doc for why both hops do it.
+	if cfg.Platform != nil {
+		if s, ok := cfg.Platform.Authenticator().(IdentitySanitizer); ok {
+			inner := handler
+			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				s.Sanitize(r.Header, r.RemoteAddr)
+				inner.ServeHTTP(w, r)
+			})
+		}
+	}
+
+	return handler
 }

@@ -13,13 +13,23 @@ import (
 // the ${VAR:?message} form for every host path precisely so an unset
 // variable stops the deployment instead of landing somewhere plausible, so
 // a contract check has to supply them the way `docker compose` would.
+//
+// Every variable any registered artifact uses in a host path belongs
+// here, and the omission was not cosmetic: KEY_FILE and DISK were
+// missing, apps/proxmox and apps/openmediavault name them, and the
+// mount parser used to answer those entries with a corrupted host path
+// instead of saying it could not resolve them. Now it refuses, and a
+// missing key here fails the prohibition check by name rather than
+// quietly checking nothing.
 func env() map[string]string {
 	return map[string]string{
 		"STATE_DIR":        "/srv/backup-manager/state",
 		"BACKUP_DIR":       "/srv/backup-manager/backups",
 		"CONFIG_FILE":      "/srv/backup-manager/config/config.yaml",
 		"SSH_KEY_FILE":     "/srv/backup-manager/secrets/id_ed25519",
+		"KEY_FILE":         "/srv/backup-manager/secrets/id_ed25519",
 		"KNOWN_HOSTS_FILE": "/srv/backup-manager/secrets/known_hosts",
+		"DISK":             "/srv/dev-disk-by-uuid-11111111-2222-3333-4444-555555555555",
 	}
 }
 
@@ -201,6 +211,137 @@ services:
 	findings := parsed.CheckProhibited(c)
 	if len(findings) < 2 {
 		t.Fatalf("the scan found %d finding(s) in a document that declares privileged mode AND host networking under an unmodelled key: %s", len(findings), findingText(findings))
+	}
+}
+
+// TestTheStartGateRejectsTheBackupFreshnessCommand is the control that
+// names the regression rather than a generic mutation: the exact
+// healthcheck this file used to declare, put back, has to be rejected.
+// web-ui waits on this check, so with `backup-manager status` in it a
+// DEGRADED backup set or an unconfigured instance keeps the only
+// LAN-facing listener from starting.
+func TestTheStartGateRejectsTheBackupFreshnessCommand(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	var field compose.Field
+	for _, f := range c.Fields {
+		if f.ID == "start-gate-liveness" {
+			field = f
+			break
+		}
+	}
+	if field.ID == "" {
+		t.Fatal("the contract declares no start-gate-liveness field, so nothing checks what web-ui waits on")
+	}
+
+	doc := canonical(t)
+	if findings := doc.CheckField(field); len(findings) != 0 {
+		t.Fatalf("the canonical definition already fails its own start-gate rule: %s", findingText(findings))
+	}
+
+	mutated := doc.WithServiceHealthcheckTest(compose.RoleEngine, []any{"CMD", "/backup-manager", "status"})
+	findings := mutated.CheckField(field)
+	if len(findings) == 0 {
+		t.Fatal("declaring `backup-manager status` as the engine's healthcheck passed the start-gate rule, so the rule cannot see the thing it exists to prevent")
+	}
+	if !strings.Contains(findingText(findings), "start-gate-liveness") {
+		t.Errorf("the finding %q does not name the rule that produced it", findingText(findings))
+	}
+}
+
+// TestProhibitionCheckFiresOnTheMountShapesTheShortFormHides is the
+// control WithProhibited cannot be: it injects a literal host path in
+// short syntax, so it only ever exercises the shape that already worked.
+// These two are the shapes that used to be answered wrongly and in
+// silence, and one of them was already reaching a real derived artifact.
+func TestProhibitionCheckFiresOnTheMountShapesTheShortFormHides(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+
+	cases := []struct {
+		name  string
+		entry any
+	}{
+		{
+			name:  "compose long volume syntax, which the old parser rendered as one nonsense string",
+			entry: map[string]any{"type": "bind", "source": "/var/run/docker.sock", "target": "/var/run/docker.sock"},
+		},
+		{
+			name:  "a host path behind an unresolved variable, whose message carries the colon the parser split on",
+			entry: "${SOCK:?set SOCK in .env to the docker socket}:/var/run/docker.sock",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := canonical(t)
+			if base := doc.CheckProhibited(c); len(base) != 0 {
+				t.Fatalf("the unmutated canonical definition already reports %s, so a finding below would prove nothing", findingText(base))
+			}
+
+			mutated, what := doc.WithVolume(tc.entry)
+			if what == "" {
+				t.Fatal("nothing was injected, so this control proves nothing")
+			}
+
+			var matched *compose.Finding
+			findings := mutated.CheckProhibited(c)
+			for i := range findings {
+				if findings[i].Rule == "docker-socket" {
+					matched = &findings[i]
+					break
+				}
+			}
+			if matched == nil {
+				t.Fatalf("injecting %s did not trip the %q rule (findings: %s), so the rule fails open on this shape", what, "docker-socket", findingText(findings))
+			}
+			if matched.Service == "" {
+				t.Errorf("the finding does not name the service it was found on: %q", matched.Detail)
+			}
+		})
+	}
+}
+
+// TestMountsRefusesWhatItCannotResolveInsteadOfAnsweringWrongly pins the
+// parse itself, one layer below the rule. The reported corruption was
+// exact: HostPath "${KEY_FILE", ContainerPath "?set KEY_FILE in .env to
+// the SFTP private key", ReadOnly false. Nothing said so.
+func TestMountsRefusesWhatItCannotResolveInsteadOfAnsweringWrongly(t *testing.T) {
+	t.Parallel()
+
+	const doc = `
+services:
+  engine:
+    image: backup-manager:dev
+    command: ["/backup-manager-web", "serve"]
+    volumes:
+      - ${KEY_FILE:?set KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+      - /srv/backup-manager/state:/data/state
+`
+	parsed, err := compose.Parse([]byte(doc), "synthetic.yaml", map[string]string{})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	svc := parsed.Service("engine")
+	if svc == nil {
+		t.Fatal("the synthetic document declares no engine service")
+	}
+
+	mounts := parsed.Mounts(svc)
+	if len(mounts) != 1 {
+		t.Fatalf("Mounts = %+v, want only the one entry that actually resolves: an unresolved host path must not be answered as a Mount", mounts)
+	}
+	if mounts[0].HostPath != "/srv/backup-manager/state" {
+		t.Errorf("Mounts[0].HostPath = %q, want the resolved entry", mounts[0].HostPath)
+	}
+
+	refused := parsed.UnparseableMounts(svc)
+	if len(refused) != 1 || !strings.Contains(refused[0], "KEY_FILE") {
+		t.Fatalf("UnparseableMounts = %v, want the one entry naming KEY_FILE: a refusal nobody can read is the silence this replaces", refused)
 	}
 }
 

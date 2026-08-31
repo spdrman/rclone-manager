@@ -15,13 +15,25 @@
 // never changes, which is what section 3.7 requires and what
 // apps/generic/tests/uibundle proves.
 //
-// Deliberately NOT wired into container/Dockerfile. Each bundle is
-// roughly 350 KB, so embedding all seven would add about 2.1 MB to a
-// 43 MB image, against a gated budget of 5% (about 2.15 MB). That is
-// inside the budget by roughly 12 KB, which is not a margin, it is a
-// coin toss on a gate. Converting each adapter to ship its own bundle is
-// #169's work, and the image-size question is worth arguing there with a
-// real measurement rather than pre-empting here.
+// Deliberately NOT wired into container/Dockerfile, and the arithmetic
+// says over the budget, not inside it.
+//
+// Each bundle is about 352 KiB (360,448 bytes). The gate is 1.05x the
+// recorded baseline image of 43,008,762 bytes, so the ceiling is
+// 45,159,200. Which image the headroom is measured from is the whole
+// question, and it moves every time the binary grows: against this
+// change's own measured image of 43,074,298 (docs/runtime-contract.md's
+// metrics table) the headroom is 2,084,902 bytes. The canonical image
+// already carries the generic bundle, so shipping the rest means six
+// more at 2,162,688 bytes, which is OVER the ceiling by about 78 KB. All
+// seven would be over by about 438 KB. The older "inside by roughly
+// 12 KB" reading came from measuring against the baseline image rather
+// than the one this change actually produces.
+//
+// So this is not a coin toss on a gate, it is a gate that fails.
+// Converting each adapter to ship its own bundle is #169's work, and the
+// image-size question is worth re-measuring there rather than
+// pre-empting here.
 import { spawnSync } from "node:child_process";
 import { rmSync, mkdirSync, cpSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -45,8 +57,13 @@ for (const provider of targets) {
   }
 }
 
+// Created once, and NEVER removed wholesale: `build:bundles synology`
+// used to delete every bundle a previous full run had produced, because
+// the removal was scoped to the tree rather than to the targets asked
+// for. Each target's own directory is removed inside the loop below,
+// after its build succeeds, so a subset build replaces exactly what it
+// rebuilds and a failed build leaves the previous good bundle alone.
 const outRoot = resolve(root, "dist-bundles");
-rmSync(outRoot, { recursive: true, force: true });
 mkdirSync(outRoot, { recursive: true });
 
 const failed = [];
@@ -70,7 +87,9 @@ for (const provider of targets) {
     failed.push(provider);
     continue;
   }
-  cpSync(dist, resolve(outRoot, provider), { recursive: true });
+  const out = resolve(outRoot, provider);
+  rmSync(out, { recursive: true, force: true });
+  cpSync(dist, out, { recursive: true });
 }
 
 if (failed.length > 0) {

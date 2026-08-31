@@ -457,3 +457,82 @@ func TestSanitizeStripsIdentityFromAnUntrustedPeer(t *testing.T) {
 		t.Errorf("Sanitize stripped the identity header from the TRUSTED peer too (got %q), so it is deleting rather than deciding", v)
 	}
 }
+
+// TestAdapterRefusesAProfileThatDeclaresAnUndeliverableCapability is the
+// wiring half of the §22 refusal above. Until Adapter ran the check, the
+// only two callers of UndeliverableCapabilities were tests, so a profile
+// row could declare a capability nothing behind it delivers and the
+// running process would report it to the UI as supported. Two of the five
+// capabilities were also never probed at all, which is why the three
+// browser-host ones are exercised here rather than only the two with a
+// collaborator.
+func TestAdapterRefusesAProfileThatDeclaresAnUndeliverableCapability(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		caps capabilities.PlatformCapabilities
+		want string
+	}{
+		{"a storage picker, which no server-side adapter can offer", capabilities.PlatformCapabilities{StoragePicker: true}, "storage_picker"},
+		{"an embedded window", capabilities.PlatformCapabilities{EmbeddedWindow: true}, "embedded_window"},
+		{"app-store packaging", capabilities.PlatformCapabilities{AppStorePackaging: true}, "app_store_packaging"},
+		{"native notifications with no notifier behind them", capabilities.PlatformCapabilities{NativeNotifications: true}, "native_notifications"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := profile.Profile{
+				ID:           "synthetic",
+				PlatformID:   capabilities.PlatformGeneric,
+				DisplayName:  "a synthetic profile that declares more than its wiring delivers",
+				Capabilities: tc.caps,
+			}
+			_, err := p.Adapter(profile.AdapterConfig{LocalAuth: stubAuthenticator{}})
+			if !errors.Is(err, profile.ErrUndeliverableCapability) {
+				t.Fatalf("Adapter error = %v, want %v: a declared capability nothing delivers has to refuse at wiring time, not be reported to the UI as supported", err, profile.ErrUndeliverableCapability)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Adapter error = %q, which never names the undeliverable capability %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestAdapterWiresWhatItCanActuallyDeliver is the control for the refusal
+// above, and it is the half that matters: without it, an Adapter that
+// refused every profile would pass every assertion in that test. The same
+// synthetic profile wires once the declaration matches the wiring, both
+// by dropping the claim and by supplying the collaborator it promised.
+func TestAdapterWiresWhatItCanActuallyDeliver(t *testing.T) {
+	t.Parallel()
+
+	base := profile.Profile{
+		ID:          "synthetic",
+		PlatformID:  capabilities.PlatformGeneric,
+		DisplayName: "a synthetic profile",
+	}
+
+	t.Run("declaring nothing", func(t *testing.T) {
+		t.Parallel()
+		if _, err := base.Adapter(profile.AdapterConfig{LocalAuth: stubAuthenticator{}}); err != nil {
+			t.Fatalf("Adapter: %v, want a working adapter for a profile that declares no capability at all", err)
+		}
+	})
+
+	t.Run("declaring native notifications AND supplying the notifier", func(t *testing.T) {
+		t.Parallel()
+		p := base
+		p.Capabilities = capabilities.PlatformCapabilities{NativeNotifications: true}
+		_, err := p.Adapter(profile.AdapterConfig{LocalAuth: stubAuthenticator{}, Notifier: stubNotifier{}})
+		if err != nil {
+			t.Fatalf("Adapter: %v, want the declaration to be accepted once a real notifier is behind it: the check is behavioural, not a ban on declaring anything", err)
+		}
+	})
+}
+
+type stubNotifier struct{}
+
+func (stubNotifier) Notify(context.Context, string, string) error { return nil }

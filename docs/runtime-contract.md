@@ -28,6 +28,7 @@ prove the check can actually see it go.
 | `command-and-runtime-profile` | both services | the command **and** `--profile=<name>`, standardised as one field |
 | `listen-port` | web UI | the one published port; the engine deliberately publishes none |
 | `health-check` | both services | declared here, not inherited from the image and described in a comment |
+| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it |
 | `graceful-shutdown-period` | both services | `stop_grace_period`: 30s for the engine, 15s for the UI host |
 | `restart-policy` | both services | `unless-stopped` |
 | `ownership` | both services | explicit `user: PUID:PGID` |
@@ -93,8 +94,8 @@ without becoming a second build.
 
 ```
 backup-manager-web serve    --profile=generic
-backup-manager-web serve    --profile=ugos --trusted-gateway=10.0.0.0/8
-backup-manager-web serve-ui --profile=ugos --ui-root=/usr/share/backup-manager/ui
+backup-manager-web serve    --profile=ugos --trusted-gateway=172.19.0.2/32
+backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 --ui-root=/usr/share/backup-manager/ui
 ```
 
 A profile may change exactly four things:
@@ -144,11 +145,35 @@ declared:
   because without a declared peer there is no gateway, only a header anyone on
   the LAN can set.
 
+Write the range as narrowly as the deployment allows, and never as a `/8`.
+The values above are single addresses on purpose: the range's job is to name
+the gateway, and a range wide enough to hold the whole LAN says every host on
+the LAN is the gateway.
+
 `CompiledGateway.Sanitize` strips the identity header from an untrusted
-request, so "stripped or ignored" is literally true rather than a description
-of the authenticator's behaviour. Its positive control checks that the same
-header from the *trusted* peer survives, so the test is about trust and not
-about a function that deletes everything it sees.
+request, and it runs on the request path in both processes, so "stripped or
+ignored" is literally true rather than a description of the authenticator's
+behaviour. Its positive control checks that the same header from the *trusted*
+peer survives, so the test is about trust and not about a function that
+deletes everything it sees.
+
+**Which hop strips.** Both, and they answer for different peers.
+
+The engine publishes no port, so its only peer is `web-ui` over the internal
+network. Its trust test can therefore only ever say "this came from `web-ui`",
+which is equally true of a header the gateway set and one a client on the LAN
+set against the published port and `web-ui` forwarded. `serve-ui` is the hop
+that can tell them apart, because it holds the only published port and its
+`RemoteAddr` is the real client's, which is why `serve-ui` takes
+`--trusted-gateway` too and refuses to start a gateway profile without one.
+
+Stripping unconditionally in the proxy would be the wrong fix, and quietly so.
+On UGOS the platform gateway sits *upstream* of `serve-ui`, so a blanket delete
+removes the legitimate identity and native authentication stops working
+entirely. The proxy carries the same declared trust boundary the engine does
+rather than a bare header name, and the engine strips as well so nothing
+downstream of it, a handler or a log line or a middleware added later, can read
+a value that was never trusted.
 
 EPIC C's #92 proves the same boundary against the real UGOS gateway on real
 hardware. This side needs no UGREEN device: the synthetic trusted peer is
@@ -189,11 +214,27 @@ digests to be identical, with a control proving the comparison can see a real
 change.
 
 **What this does not yet do.** The canonical image still carries only the
-generic bundle. Shipping all seven would add roughly 2.1 MB to a 43 MB image
-against a gated 5% budget of about 2.15 MB, which is inside by roughly 12 KB
-and therefore not a margin. Converting each adapter to ship its own bundle,
-and re-arguing the image-size budget with a real measurement, is #169's work.
-The blocking constraint is gone; the packaging is #169's to do.
+generic bundle, and shipping the rest would break the image-size gate rather
+than squeak past it.
+
+Each bundle is about 352 KiB (360,448 bytes). The gate is 1.05x the recorded
+baseline image of 43,008,762 bytes, so the ceiling is 45,159,200, and the
+headroom depends on which image it is measured from, which is why the basis is
+named here rather than implied. Against this change's own measured image of
+43,074,298 (the metrics table below) the headroom is 2,084,902 bytes:
+
+| measured from | headroom | six more bundles | all seven |
+|---|---|---|---|
+| the baseline image, 43,008,762 | 2,150,438 | over by 12,250 | over by 372,698 |
+| this change's image, 43,074,298 | 2,084,902 | over by 77,786 | over by 438,234 |
+
+Six is the number that matters, since the generic bundle is already in the
+image. Every cell says over, and the honest reading of the earlier "inside by
+roughly 12 KB" is that it measured against the baseline rather than against
+the image this change actually produces, and against a bundle count the image
+does not need. Converting each adapter to ship its own bundle, and
+re-measuring the budget against whatever the image weighs by then, is #169's
+work. The blocking constraint is gone; the packaging is #169's to do.
 
 ## Digest policy
 
@@ -320,7 +361,7 @@ working with no change. What is new is additive:
 | `--profile=${RUNTIME_PROFILE:-generic}` on both commands | none; `generic` is what the previous build did |
 | `TZ: ${TZ:-UTC}` | none; UTC is what the image defaulted to |
 | `stop_grace_period` | the engine now gets 30s instead of Docker's 10s default, so a shutdown during a journal write is less likely to be killed mid-write |
-| explicit `healthcheck` on the engine | none; identical to the image's own HEALTHCHECK instruction |
+| explicit `healthcheck` on the engine | the engine's compose healthcheck is now `/health/live` rather than the image's `backup-manager status`, so a DEGRADED or unconfigured instance no longer keeps `web-ui` from starting. Backup freshness stays the image's own HEALTHCHECK, the alerts block, and `docker compose exec rclone-manager /backup-manager status` |
 | `UI_DIR` / `UI_ROOT` on `web-ui` | none when unset, which is the default |
 | `x-canonical-runtime` | none at runtime; compose ignores unknown `x-` keys |
 

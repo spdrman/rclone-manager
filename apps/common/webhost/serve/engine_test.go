@@ -34,6 +34,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -546,5 +547,227 @@ func TestUI_ProxyTimesOutAgainstAHungUpstream(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Errorf("request took %s to fail, want it bounded by the configured 50ms ResponseHeaderTimeout", elapsed)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The platform identity header is stripped outside the trust boundary
+// ---------------------------------------------------------------------
+
+const testIdentityHeader = "X-Ugos-User"
+
+func mustCompileGateway(t *testing.T, peers ...string) *profile.CompiledGateway {
+	t.Helper()
+	g := &profile.Gateway{TrustedPeers: peers, UsernameHeader: testIdentityHeader}
+	compiled, err := g.Compile()
+	if err != nil {
+		t.Fatalf("Gateway.Compile(%v): %v", peers, err)
+	}
+	return compiled
+}
+
+// TestUI_StripsAClientSuppliedIdentityHeader is the regression test for
+// the hole the two-container topology opens: the engine publishes no
+// port, so its only peer is this proxy, and a trusted-gateway range that
+// contains this proxy's own address makes the engine believe any
+// identity header this proxy forwards. A client hitting the ONE published
+// port with its own X-Ugos-User was therefore the named user for the
+// whole /api/v1 surface. The proxy is the hop that can still see the real
+// client's address, so it is the hop that strips.
+func TestUI_StripsAClientSuppliedIdentityHeader(t *testing.T) {
+	var got string
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(testIdentityHeader)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// 192.0.2.0/24 is TEST-NET-1: the httptest client below always
+	// connects over loopback, so this range can never contain it.
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+		Upstream: upstream,
+		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}},
+		Identity: mustCompileGateway(t, "192.0.2.0/24"),
+	}))
+	t.Cleanup(ui.Close)
+
+	req, err := http.NewRequest(http.MethodGet, ui.URL+"/api/v1/system/version", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set(testIdentityHeader, "attacker")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET via UI proxy: %v", err)
+	}
+	resp.Body.Close()
+
+	if got != "" {
+		t.Errorf("the engine received %s = %q from a client outside the trusted gateway range; the engine trusts this proxy, so it would have believed it", testIdentityHeader, got)
+	}
+}
+
+// TestUI_ForwardsTheIdentityHeaderFromTheTrustedGateway is the control
+// for the test above, and without it that test proves nothing: a proxy
+// that deleted every header, or one whose upstream never saw a header at
+// all, would pass it just as well. Same request, same header, one
+// difference - the trusted range now contains the caller - and the header
+// has to survive, because on UGOS the platform gateway sits upstream of
+// this process and native authentication depends on it arriving.
+func TestUI_ForwardsTheIdentityHeaderFromTheTrustedGateway(t *testing.T) {
+	var got string
+	upstream := fakeUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(testIdentityHeader)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
+		Upstream: upstream,
+		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}},
+		Identity: mustCompileGateway(t, "127.0.0.0/8", "::1/128"),
+	}))
+	t.Cleanup(ui.Close)
+
+	req, err := http.NewRequest(http.MethodGet, ui.URL+"/api/v1/system/version", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set(testIdentityHeader, "operator")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET via UI proxy: %v", err)
+	}
+	resp.Body.Close()
+
+	if got != "operator" {
+		t.Errorf("the engine received %s = %q from inside the trusted gateway range, want %q: an unconditional strip would break native authentication entirely", testIdentityHeader, got, "operator")
+	}
+}
+
+// recordingGateway is a real *profile.CompiledGateway with one addition:
+// it records the identity header exactly as the authenticator saw it. The
+// trust decision and the strip are the real implementation's, so what
+// this proves is that NewEngine RUNS them, which is the thing that was
+// missing.
+type recordingGateway struct {
+	gateway *profile.CompiledGateway
+	seen    chan string
+}
+
+func (g *recordingGateway) Sanitize(h http.Header, remoteAddr string) {
+	g.gateway.Sanitize(h, remoteAddr)
+}
+
+func (g *recordingGateway) Authenticate(ctx context.Context, r capabilities.AuthRequest) (capabilities.AuthContext, error) {
+	select {
+	case g.seen <- r.Headers.Get(testIdentityHeader):
+	default:
+	}
+	return g.gateway.Authenticate(ctx, r)
+}
+
+type gatewayPlatformAdapter struct {
+	capabilities.BasePlatformAdapter
+	auth capabilities.Authenticator
+}
+
+func (a gatewayPlatformAdapter) ID() capabilities.PlatformID { return capabilities.PlatformUGOS }
+func (a gatewayPlatformAdapter) Capabilities() capabilities.PlatformCapabilities {
+	return capabilities.PlatformCapabilities{NativeAuth: true}
+}
+func (a gatewayPlatformAdapter) Authenticator() capabilities.Authenticator { return a.auth }
+func (a gatewayPlatformAdapter) PlatformInfo(_ context.Context) (capabilities.PlatformInfo, error) {
+	return capabilities.PlatformInfo{ID: capabilities.PlatformUGOS, Name: "test gateway"}, nil
+}
+
+func newGatewayEngine(t *testing.T, trusted ...string) (*httptest.Server, *recordingGateway) {
+	t.Helper()
+
+	backend, cleanup, err := service.Open(context.Background(), writeTestConfig(t))
+	if err != nil {
+		t.Fatalf("service.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := cleanup(); err != nil {
+			t.Errorf("BackupService cleanup: %v", err)
+		}
+	})
+
+	auth := &recordingGateway{gateway: mustCompileGateway(t, trusted...), seen: make(chan string, 8)}
+	srv := httptest.NewServer(serve.NewEngine(serve.EngineConfig{
+		Platform:      gatewayPlatformAdapter{auth: auth},
+		Backend:       backend,
+		BinaryVersion: "test",
+		Commit:        "testcommit",
+	}))
+	t.Cleanup(srv.Close)
+	return srv, auth
+}
+
+// TestEngine_StripsAnIdentityHeaderFromAnUntrustedPeer proves the strip
+// runs on the engine's own request path too, so nothing downstream - a
+// handler, a log line, a middleware added later - can read a value that
+// was never trusted. Refusing to authenticate is not the same claim: the
+// header was still there to read.
+func TestEngine_StripsAnIdentityHeaderFromAnUntrustedPeer(t *testing.T) {
+	srv, auth := newGatewayEngine(t, "192.0.2.0/24")
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/system/version", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set(testIdentityHeader, "attacker")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/system/version: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d for a request from outside the trusted gateway range", resp.StatusCode, http.StatusUnauthorized)
+	}
+	select {
+	case got := <-auth.seen:
+		if got != "" {
+			t.Errorf("the authenticator was handed %s = %q; the untrusted request's identity header reached the request path unstripped", testIdentityHeader, got)
+		}
+	default:
+		t.Fatal("the authenticator was never called, so this test cannot see whether the header was stripped")
+	}
+}
+
+// TestEngine_KeepsTheIdentityHeaderFromTheTrustedGateway is the control:
+// the same engine, the same header, a caller inside the trusted range,
+// and now the header has to arrive intact and authenticate. Without this,
+// a NewEngine that deleted the header unconditionally would pass the test
+// above while breaking every gateway deployment.
+func TestEngine_KeepsTheIdentityHeaderFromTheTrustedGateway(t *testing.T) {
+	srv, auth := newGatewayEngine(t, "127.0.0.0/8", "::1/128")
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/system/version", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set(testIdentityHeader, "operator")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/v1/system/version: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("status = %d, want %d for a request from inside the trusted gateway range; body=%s", resp.StatusCode, http.StatusOK, body)
+	}
+	select {
+	case got := <-auth.seen:
+		if got != "operator" {
+			t.Errorf("the authenticator was handed %s = %q, want %q", testIdentityHeader, got, "operator")
+		}
+	default:
+		t.Fatal("the authenticator was never called")
 	}
 }
