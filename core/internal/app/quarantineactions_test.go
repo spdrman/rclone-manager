@@ -114,6 +114,19 @@ func TestRevalidateQuarantined_ReportsAVerdictAndWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
+	// The transition log, not only the artifact row. This assertion
+	// started as an UpdatedAt comparison and a mutation walked straight
+	// past it: a same-state lifecycle.Advance appends a row to
+	// state_transitions and leaves updated_at exactly where it was, so a
+	// revalidate that quietly recorded an audit write looked identical to
+	// one that wrote nothing.
+	transitionsBefore, err := fx.journal.(*state.Journal).RecentActivity(ctx, 100)
+	if err != nil {
+		t.Fatalf("RecentActivity: %v", err)
+	}
+	if len(transitionsBefore) == 0 {
+		t.Fatal("the transition log is empty, so counting it below would prove nothing")
+	}
 
 	result, err := fx.svc.RevalidateQuarantined(ctx, fx.artifact)
 	if err != nil {
@@ -138,6 +151,15 @@ func TestRevalidateQuarantined_ReportsAVerdictAndWritesNothing(t *testing.T) {
 	}
 	if !after.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Errorf("UpdatedAt moved from %s to %s: revalidate writes nothing", before.UpdatedAt, after.UpdatedAt)
+	}
+
+	transitionsAfter, err := fx.journal.(*state.Journal).RecentActivity(ctx, 100)
+	if err != nil {
+		t.Fatalf("RecentActivity: %v", err)
+	}
+	if len(transitionsAfter) != len(transitionsBefore) {
+		t.Errorf("revalidate appended %d transition(s) to the durable log; it must write nothing at all",
+			len(transitionsAfter)-len(transitionsBefore))
 	}
 }
 
