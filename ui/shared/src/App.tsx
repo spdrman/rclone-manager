@@ -97,9 +97,10 @@ export function App() {
           title="Backup Manager update required"
           eyebrow="Version mismatch"
         >
-          {"The user interface and backup service versions do not match. Management " +
-            "actions have been disabled to prevent unsafe changes. UI " +
-            version.data.ui + " \u00b7 Service " + version.data.service + "."}
+          {"This interface was built for a different version of the /api/v1 " +
+            "contract than the backup service speaks, so management actions " +
+            "have been disabled to prevent unsafe changes. Service " +
+            version.data.service + " speaks contract " + version.data.api + "."}
         </WarningBanner>
       ) : null}
 

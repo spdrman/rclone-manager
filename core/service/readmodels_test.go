@@ -505,3 +505,37 @@ func TestTestBackupSetConnection_RefusesAnUnknownBackupSet(t *testing.T) {
 		}
 	}
 }
+
+// TestHealth_CarriesTheCapacityAssessmentForEachSet: one call has to be
+// able to answer "are my backups healthy" completely, and a set landing on
+// a nearly-full disk is not healthy in any useful sense. The control is
+// ListStorageStatus itself, so an empty capacity block here cannot be
+// mistaken for "this deployment has no readable destination".
+func TestHealth_CarriesTheCapacityAssessmentForEachSet(t *testing.T) {
+	svc, _ := openTestService(t)
+	ctx := context.Background()
+	runOneCycle(t, svc)
+
+	statuses, err := svc.ListStorageStatus(ctx)
+	if err != nil {
+		t.Fatalf("ListStorageStatus: %v", err)
+	}
+	if len(statuses) != 1 || !statuses[0].Available {
+		t.Fatalf("the capacity control reports %+v, so the health assertion below would prove nothing", statuses)
+	}
+
+	report, err := svc.Health(ctx)
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	bs := report.BackupSets[0]
+	if bs.TotalBytes != statuses[0].TotalBytes {
+		t.Errorf("TotalBytes = %d, want %d (the same reading ListStorageStatus gives)", bs.TotalBytes, statuses[0].TotalBytes)
+	}
+	if bs.StorageLevel != statuses[0].Level {
+		t.Errorf("StorageLevel = %q, want %q", bs.StorageLevel, statuses[0].Level)
+	}
+	if bs.StorageLevel == "" {
+		t.Error("StorageLevel is empty for a readable destination, so an unreadable one would be indistinguishable")
+	}
+}

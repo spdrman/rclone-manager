@@ -79,34 +79,21 @@ describe("the capability model is the contract's, not a second one", () => {
  * The paths `httpApi` calls that the canonical runtime does not serve and
  * the contract therefore does not declare.
  *
- * This is recorded debt, not an exemption mechanism. Every entry is a
- * method the shared UI can only exercise against `mock.ts` today: the
- * corresponding handler was never built, so calling it against a real
- * runtime 404s or 405s. Issue #166 is explicit that an endpoint whose
- * shape is genuinely wrong gets recorded rather than redesigned here, and
- * `getVersion` is the sharpest case of all: it requests `/api/v1/version`
- * while the runtime serves `/api/v1/system/version`, so the shared UI's
- * own version banner cannot ever have worked against the real server.
+ * EMPTY, and it must stay that way.
  *
- * The list is asserted EXACTLY, so it can only shrink. A new unbacked path
- * fails this test on the commit that adds it.
+ * It used to hold fourteen entries, described here as "recorded debt, not
+ * an exemption mechanism". That description was accurate and the list was
+ * still the reason this suite stayed green while four of the six shipped
+ * pages failed against a real backend (#211): an allowlist asserted
+ * exactly is a gate that reports the drift it was built to stop as a
+ * passing test. Issue #211 closed every entry, and
+ * scripts/api/check-client-paths.sh now enforces the same rule statically,
+ * with no allowlist at all, on every commit.
+ *
+ * Nothing may be added here. A path the contract does not declare is a
+ * path a real backend answers with a 404 or a 405.
  */
-const UNIMPLEMENTED_CLIENT_PATHS = [
-  "GET /api/v1/activity",
-  "GET /api/v1/backups",
-  "GET /api/v1/backups/artifact-1",
-  "GET /api/v1/health",
-  "GET /api/v1/operations",
-  "GET /api/v1/quarantine",
-  "GET /api/v1/version",
-  "POST /api/v1/backup-sets/set-1/enabled",
-  "POST /api/v1/backup-sets/set-1/run",
-  "POST /api/v1/backup-sets/set-1/test-connection",
-  "POST /api/v1/catalog/rebuild",
-  "POST /api/v1/catalog/scan",
-  "POST /api/v1/quarantine/artifact-1/retry",
-  "POST /api/v1/quarantine/artifact-1/revalidate"
-];
+const UNIMPLEMENTED_CLIENT_PATHS: string[] = [];
 
 /**
  * Turns a contract path into a matcher for a concrete URL.
@@ -181,9 +168,9 @@ describe("every request the shared client makes is a declared operation", () => 
       ["getHealth", () => httpApi.getHealth()],
       ["listSets", () => httpApi.listSets()],
       ["getSet", () => httpApi.getSet("src/set-1")],
-      ["runSet", () => httpApi.runSet("set-1")],
+      ["runCycle", () => httpApi.runCycle("rev-1")],
       ["testConnection", () => httpApi.testConnection("set-1")],
-      ["setEnabled", () => httpApi.setEnabled("set-1", true)],
+      ["setEnabled", () => httpApi.setEnabled("src", "set-1", true)],
       ["createBackupSet", () => httpApi.createBackupSet({
         name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
         knownHostsLine: "l", remotePath: "/r", localPath: "/l",
@@ -258,12 +245,16 @@ describe("every request the shared client makes is a declared operation", () => 
    * behaviour in front of a real browser is only observable through a
    * client that actually calls the route.
    *
-   * `submitOperation` is the sharpest case and the reason this assertion
+   * `submitOperation` was the sharpest case and the reason this assertion
    * exists. POST /api/v1/operations is the most destructive route in the
-   * API; the shared UI's own "run now" calls POST
-   * /api/v1/backup-sets/{id}/run, which the runtime does not serve (it is
-   * on UNIMPLEMENTED_CLIENT_PATHS above). So the destructive gate has
-   * never refused anything a browser asked for, and never could.
+   * API, and the shared UI's own "run now" used to call POST
+   * /api/v1/backup-sets/{id}/run, which no runtime has ever served, so the
+   * destructive gate had never refused anything a browser asked for and
+   * never could. Issue #211 pointed "run now" at the real operation, which
+   * is why it has left this list.
+   *
+   * `getSystemVersion` left for the same reason: the version banner used
+   * to request /api/v1/version.
    *
    * Asserted EXACTLY, like its counterpart, so the list can only shrink.
    */
@@ -271,9 +262,7 @@ describe("every request the shared client makes is a declared operation", () => 
     "getOperation",
     "getSession",
     "getSystemCapabilities",
-    "getSystemVersion",
-    "listStorageStatus",
-    "submitOperation"
+    "listStorageStatus"
   ];
 
   it("pins the contract operations no client call reaches", () => {

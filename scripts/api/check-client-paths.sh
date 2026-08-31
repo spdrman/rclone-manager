@@ -244,7 +244,7 @@ if not post_helper:
 # from post (a verb wrapper), without this gate having to hardcode either
 # name.
 
-helpers = {}
+candidates = {}
 for m in re.finditer(r"\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\(", src):
     open_paren = m.end() - 1
     close_paren = match_bracket(src, open_paren)
@@ -264,10 +264,9 @@ for m in re.finditer(r"\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\(", src):
             break
     if body_end is None:
         continue
-    body = src[body_start:body_end].strip()
-    lit = string_literal(split_top_level(body, "+")[0])
-    if lit is not None and lit.startswith("/"):
-        helpers[m.group(1)] = body
+    candidates[m.group(1)] = src[body_start:body_end].strip()
+
+helpers = {}
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +346,31 @@ def reduce_expr(expr, seen=()):
     # one interpolated value, whatever it evaluates to.
     return {PLACEHOLDER}
 
+
+# A helper qualifies as a PATH helper only if its body reduces to paths
+# that are all rooted at "/". Registered by fixpoint rather than in one
+# pass, because one helper may be written in terms of another
+# (retentionPath is backupSetPath plus a tail), and the composed one only
+# becomes reducible once the composed-of one is known.
+#
+# A helper that never qualifies is simply not registered, and a call to it
+# then reduces to a bare placeholder, which section 5 below refuses as an
+# entirely-interpolated path. That is the fail-closed direction: an
+# expression this gate cannot follow is a failure, never a skip.
+for _ in range(len(candidates) + 1):
+    progressed = False
+    for name, body in candidates.items():
+        if name in helpers:
+            continue
+        try:
+            reduced = reduce_expr(body)
+        except ValueError:
+            continue
+        if reduced and all(value.startswith("/") for value in reduced):
+            helpers[name] = body
+            progressed = True
+    if not progressed:
+        break
 
 # ---------------------------------------------------------------------------
 # 5. Every request()/post() call inside the exported client object.

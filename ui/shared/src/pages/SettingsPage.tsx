@@ -136,13 +136,12 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
             <div className="card__body">
               {version.data ? (
                 <dl style={{ margin: 0, display: "grid", gridTemplateColumns: "1fr auto", gap: "10px 14px", fontSize: "var(--text-sm)" }}>
-                  <Row label="Backup Manager version" value={version.data.ui} />
                   <Row label="Service version" value={version.data.service} />
-                  <Row label="Core version" value={version.data.core} />
-                  <Row label="Embedded rclone" value={version.data.rclone} />
-                  <Row label="Database schema" value={String(version.data.schema)} />
+                  <Row label="API contract" value={version.data.api} />
+                  <Row label="Backup engine" value={version.data.engine} />
+                  <Row label="Go toolchain" value={version.data.goVersion} />
+                  <Row label="Configuration revision" value={version.data.configRevision} />
                   <Row label="Platform adapter" value={bridge.deployment.adapterVersion} />
-                  <Row label="Architecture" value={version.data.architecture} />
                   <Row label="Build commit" value={version.data.buildCommit} />
                 </dl>
               ) : version.error ? (

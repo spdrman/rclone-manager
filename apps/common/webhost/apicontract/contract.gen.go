@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "2c95fdb59827ba7d97f5aa1d8572d15faae11e1a30aef209d3706620cb3fcd58"
+const ContractSHA256 = "c0926801ae1fe1b6afeab360bfe8bb350718034d8cfd59b23b0b01272f8b0eed"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -287,7 +287,7 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
-		ID: "setBackupSetEnabled", Method: "POST", Path: "/backup-sets/{id}/enabled",
+		ID: "setBackupSetEnabled", Method: "POST", Path: "/backup-sets/{source}/{set}/enabled",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "SetEnabledRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
@@ -624,6 +624,8 @@ type BackupSetHealth struct {
 	SourceName            string `json:"source_name"`
 	StaleAfterSeconds     int64  `json:"stale_after_seconds"`
 	State                 string `json:"state"`
+	StorageLevel          string `json:"storage_level,omitempty"`
+	TotalBytes            uint64 `json:"total_bytes,omitempty"`
 }
 
 // CapabilitiesResponse is GET /system/capabilities. The API expression of the

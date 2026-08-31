@@ -8,18 +8,29 @@ import { BackupManagerError, toApiErrorCode } from "./contracts";
 // #146's review, mandatory finding M4). Re-run scripts/api/generate.sh
 // after a contract change; scripts/api/check-contract-drift.sh fails CI if
 // the checked-in generated module stops matching the contract.
+import { API_VERSION } from "./generated/contract";
 import type {
+  WireActivityEvent,
+  WireArtifact,
   WireBackupSet,
+  WireCatalogReportResponse,
   WireCreateBackupSetResponse,
+  WireHealthResponse,
+  WireListActivityResponse,
+  WireListArtifactsResponse,
   WireListBackupSetsResponse,
+  WireListOperationsResponse,
+  WireOperation,
   WireRetentionPlan,
   WireRetentionTier,
-  WireSettingsResponse
+  WireSettingsResponse,
+  WireVersionResponse
 } from "./generated/contract";
 import type {
   ApiError,
   AppSettings,
   BackupManagerApi,
+  CatalogScanPreview,
   ConnectionTestOutcome,
   ConnectionTestParams,
   CreateBackupSetRequest,
@@ -29,11 +40,21 @@ import type {
   UpdateSettingsRequest
 } from "./contracts";
 import type {
+  BackupArtifact,
   BackupSet,
   CompletionMethod,
+  QuarantineReason,
   RetentionPlan,
   RetentionVerdictAction
 } from "@shared/types/backup";
+import type {
+  ActivityEvent,
+  ActivityEventType,
+  Operation,
+  Severity,
+  SystemHealth,
+  VersionInfo
+} from "@shared/types/operation";
 
 const BASE = "/api/v1";
 
@@ -378,19 +399,351 @@ function wireUpdateSettings(req: UpdateSettingsRequest) {
   return { retention };
 }
 
-const retentionPath = (source: string, set: string) =>
-  "/backup-sets/" + encodeURIComponent(source) + "/" + encodeURIComponent(set) + "/retention";
+/** RFC3339 or "" off the wire, as a nullable timestamp. The API omits a
+ *  timestamp for an event that has not happened rather than sending a zero
+ *  date, so an absent key is the ordinary case, not an error. */
+const stampOrNull = (value: string | undefined): string | null => value || null;
+
+/** The later of two nullable timestamps. */
+function laterOf(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
+function fromWireVersion(body: WireVersionResponse): VersionInfo {
+  return {
+    api: body.api_version,
+    service: body.core_version,
+    buildCommit: body.commit,
+    goVersion: body.go_version,
+    engine: body.engine_version,
+    configRevision: body.config_revision,
+    ready: body.ready,
+    // §38's compatibility check, made concrete: the service names the
+    // /api/v1 contract version it speaks, and this UI was generated
+    // against exactly one. Before issue #211 this flag came off the wire
+    // as its own boolean, which no endpoint ever sent, so it was
+    // undefined against a real backend and the read-only banner could
+    // never fire.
+    compatible: body.api_version === API_VERSION
+  };
+}
+
+/** Worst-first, so a deployment's headline is its least healthy set.
+ *  Order matters: a FAILING set next to nine HEALTHY ones is not a
+ *  healthy deployment. */
+const HEALTH_ORDER = ["FAILING", "STALE", "DEGRADED", "HEALTHY"] as const;
+
+const HEALTH_STATE: Record<string, SystemHealth["backupHealth"]> = {
+  HEALTHY: "healthy",
+  DEGRADED: "degraded",
+  STALE: "stale",
+  FAILING: "failing"
+};
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * Collapses the per-set health report into the one summary the dashboard
+ * renders.
+ *
+ * The aggregation lives here, in the one translation layer, rather than in
+ * a component: two screens reading the same report must not be able to
+ * disagree about what "the deployment is stale" means.
+ *
+ * Two rules are worth stating out loud, because getting either one wrong
+ * produces a confidently wrong screen rather than a visibly broken one:
+ *
+ *   - The headline is the WORST set's verdict and its reason, never an
+ *     average and never the first set's. A deployment with one failing set
+ *     is failing.
+ *   - A set that has never produced a known-good backup makes
+ *     oldestSetFreshnessHours null, not a large number. "How stale is the
+ *     least fresh set" has no answer when a set has no fresh point to
+ *     measure from, and rendering a made-up number there is exactly the
+ *     kind of false precision an operator would act on.
+ */
+function fromWireHealth(body: WireHealthResponse, now: number): SystemHealth {
+  const sets = body.backup_sets ?? [];
+
+  const counts = { healthy: 0, degraded: 0, stale: 0, failing: 0 };
+  let newestVerified: string | null = null;
+  let lastCompleted: string | null = null;
+  let quarantined = 0;
+  let freeBytes = 0;
+  let totalBytes = 0;
+  let unavailable = 0;
+  let worstStorage = 0; // index into STORAGE_ORDER
+  let oldestFreshnessHours: number | null = 0;
+
+  for (const set of sets) {
+    counts[HEALTH_STATE[set.state] ?? "degraded"] += 1;
+    newestVerified = laterOf(newestVerified, stampOrNull(set.newest_good_backup_at));
+    lastCompleted = laterOf(lastCompleted, stampOrNull(set.last_completed_backup_at));
+    quarantined += set.quarantined_count + set.quarantined_lost_count;
+
+    if (set.free_bytes_known) {
+      freeBytes += set.free_bytes ?? 0;
+      totalBytes += set.total_bytes ?? 0;
+    } else {
+      unavailable += 1;
+    }
+    worstStorage = Math.max(worstStorage, STORAGE_ORDER.indexOf(set.storage_level ?? "OK"));
+
+    if (oldestFreshnessHours !== null) {
+      const newest = stampOrNull(set.newest_good_backup_at);
+      oldestFreshnessHours = newest
+        ? Math.max(oldestFreshnessHours, Math.floor((now - Date.parse(newest)) / HOUR_MS))
+        : null;
+    }
+  }
+
+  const worst = HEALTH_ORDER.find((state) => sets.some((set) => set.state === state));
+  const worstSet = worst ? sets.find((set) => set.state === worst) : undefined;
+
+  return {
+    generatedAt: body.generated_at,
+    // The service answered this request, so it is running. That is the
+    // whole claim, and §8 is emphatic that it says nothing about the
+    // backups: backupHealth beside it is the verdict that matters.
+    serviceRunning: true,
+    backupHealth: worst ? HEALTH_STATE[worst] : "healthy",
+    backupHealthReason:
+      worstSet?.reason ?? "No backup sets are configured yet, so there is nothing to report on.",
+    newestVerifiedBackupAt: newestVerified,
+    lastCompletedBackupAt: lastCompleted,
+    oldestSetFreshnessHours: sets.length ? oldestFreshnessHours : null,
+    setsHealthy: counts.healthy,
+    setsDegraded: counts.degraded,
+    setsStale: counts.stale,
+    setsFailing: counts.failing,
+    quarantinedCount: quarantined,
+    storageFreeBytes: freeBytes,
+    storageTotalBytes: totalBytes,
+    storageState: STORAGE_STATE[STORAGE_ORDER[worstStorage]],
+    storageReadingsUnavailable: unavailable
+  };
+}
+
+/** Least severe first, so Math.max over the indices finds the worst. */
+const STORAGE_ORDER = ["OK", "WARNING", "CRITICAL"] as const;
+
+const STORAGE_STATE: Record<string, SystemHealth["storageState"]> = {
+  OK: "nominal",
+  WARNING: "warning",
+  CRITICAL: "critical"
+};
+
+/**
+ * Maps a wire artifact onto BackupArtifact.
+ *
+ * `quarantine` is a nested record or null rather than a pair of loose
+ * fields, because "is this quarantined" and "why" must not be able to
+ * disagree: a client cannot render a reason for an artifact that is not
+ * held, or hold one with no reason.
+ *
+ * The reason itself is narrowed to the closed vocabulary the UI presents.
+ * The wire carries a free-text explanation (whatever routed the artifact
+ * into quarantine), which is deliberately NOT a closed enum server-side:
+ * the reasons an artifact can be distrusted are not a fixed list, and
+ * pretending otherwise on the wire would mean either a lossy enum or a
+ * contract change per new reason. So the free text is kept verbatim as the
+ * detail and the category is derived here, defaulting to
+ * "validation-failed", which is the honest general case rather than a
+ * specific claim about checksums.
+ */
+function fromWireArtifact(a: WireArtifact): BackupArtifact {
+  return {
+    id: a.id,
+    setId: a.backup_set_id,
+    setName: a.set_name,
+    filename: a.name,
+    remoteOriginalPath: a.remote_path,
+    localPath: a.local_path,
+    producedAt: a.discovered_at,
+    receivedAt: a.updated_at,
+    sizeBytes: a.size_bytes,
+    checksum: a.checksum ?? "",
+    checksumAlgorithm: "sha256",
+    validation:
+      a.validation === "passed" ? "verified" : a.validation === "failed" ? "failed" : "pending",
+    // The backend records which retention tier last selected an artifact,
+    // as one tier name rather than the classification set this type
+    // models. Reporting the one it actually has is the honest mapping;
+    // inventing the others would be a claim about a policy this response
+    // does not carry.
+    retentionClasses: a.retention_tier ? [quarantineTier(a.retention_tier)] : [],
+    remoteSourceRemovedAt: stampOrNull(a.remote_source_removed_at),
+    quarantine: a.quarantined
+      ? {
+          reason: quarantineReasonFor(a),
+          detectedAt: a.updated_at,
+          remoteSourceRetained: true
+        }
+      : null
+  };
+}
+
+/** Narrows a configured retention tier name onto the four classes this UI
+ *  presents, keeping anything else out of the badge row rather than
+ *  rendering an unknown tier as "daily". */
+function quarantineTier(tier: string): BackupArtifact["retentionClasses"][number] {
+  const normalised = tier.toLowerCase();
+  return normalised === "daily" || normalised === "weekly" || normalised === "monthly"
+    ? normalised
+    : "protected";
+}
+
+function quarantineReasonFor(a: WireArtifact): QuarantineReason {
+  const reason = (a.quarantine_reason ?? "").toLowerCase();
+  if (reason.includes("hash") || reason.includes("checksum")) return "checksum-mismatch";
+  if (reason.includes("identity") || reason.includes("host key")) return "remote-identity-changed";
+  if (reason.includes("incomplete") || reason.includes("transfer")) return "incomplete-transfer";
+  if (reason.includes("unexpected")) return "unexpected-artifact";
+  return "validation-failed";
+}
+
+/**
+ * Maps one recorded lifecycle transition onto the activity feed's own
+ * vocabulary.
+ *
+ * The severity and the headline are derived HERE and not read off the
+ * wire, deliberately. Which moves deserve an operator's attention, and
+ * what to call them, is presentation: baking it into the contract would
+ * freeze one client's editorial judgement for every other client, and the
+ * API has no business deciding that a transfer completing is "ok" while a
+ * discovery is "info".
+ *
+ * A transition this table does not name still appears in the feed, as an
+ * "info" event captioned with the states themselves. Dropping it would be
+ * worse than showing it plainly: an unexplained gap in an audit trail is
+ * indistinguishable from nothing having happened.
+ */
+const ACTIVITY_BY_STATE: Record<string, { type: ActivityEventType; severity: Severity; text: string }> = {
+  DISCOVERED: { type: "backup-discovered", severity: "info", text: "Backup discovered on the source" },
+  TRANSFERRING: { type: "transfer-started", severity: "info", text: "Transfer started" },
+  TRANSFERRED: { type: "transfer-complete", severity: "ok", text: "Transfer complete" },
+  VERIFIED: { type: "verification-passed", severity: "ok", text: "Verification passed" },
+  COMMITTED: { type: "backup-committed", severity: "ok", text: "Backup committed" },
+  COMPLETE: { type: "remote-source-deleted", severity: "ok", text: "Remote source released" },
+  QUARANTINED: { type: "validation-failed", severity: "error", text: "Quarantined for review" },
+  QUARANTINED_LOST: { type: "validation-failed", severity: "error", text: "Quarantined, with no source left to recover from" },
+  FAILED: { type: "validation-failed", severity: "warn", text: "Attempt failed" }
+};
+
+function fromWireActivityEvent(e: WireActivityEvent): ActivityEvent {
+  const known = ACTIVITY_BY_STATE[e.to];
+  return {
+    // The transition log has no id column of its own on the wire, and one
+    // artifact legitimately appears many times, so the key is the artifact
+    // plus the moment plus the state entered. That is unique for the same
+    // reason the journal's own append-only ordering is.
+    id: e.artifact_id + "@" + e.occurred_at + ":" + e.to,
+    at: e.occurred_at,
+    type: known?.type ?? "backup-discovered",
+    severity: known?.severity ?? "info",
+    setId: e.backup_set_id,
+    setName: e.set_name,
+    text: known?.text ?? e.to,
+    detail: e.detail || (e.from ? e.from + " to " + e.to : e.to),
+    // The transition log carries no correlation id; it is a property of a
+    // REQUEST, and these are records of work the service did on its own
+    // schedule. Empty rather than a fabricated value, so the "Advanced
+    // details" panel shows nothing instead of showing something wrong.
+    correlationId: ""
+  };
+}
+
+/**
+ * Maps a durable operation record onto the UI's progress model.
+ *
+ * The two are genuinely different things, and the gap is not hidden here.
+ * A durable operation records that a run cycle was submitted, started and
+ * finished; the UI's Operation models a transfer's on-screen progress
+ * (stage, percent, bytes per second, ETA). The backend computes none of
+ * the second kind, so percent is 0 while an operation runs and 100 once it
+ * has finished, and the byte and item counters are left undefined rather
+ * than zeroed: undefined renders as "unknown", a zero renders as "nothing
+ * has been transferred", and only one of those is true.
+ */
+function fromWireOperation(op: WireOperation): Operation {
+  const finished = op.status === "completed" || op.status === "failed";
+  return {
+    id: op.operation_id,
+    setId: op.backup_set_id ?? "",
+    setName: op.backup_set_id ?? "All backup sets",
+    kind: "transfer",
+    stage: finished ? "complete" : null,
+    label: op.action ? op.action.replace(/_/g, " ") : "operation",
+    percent: finished ? 100 : 0,
+    // A run cycle reads from every source and writes only to this
+    // deployment's own storage; it releases a remote source only after a
+    // durable local copy is committed and verified. It is not a
+    // read-only pass, so this is false rather than a comforting default.
+    nonDestructive: false,
+    startedAt: op.started_at ?? op.created_at ?? ""
+  };
+}
+
+function fromWireCatalogReport(body: WireCatalogReportResponse): CatalogScanPreview {
+  return {
+    discovered: body.scanned,
+    // "Valid" is what the journal already holds and the pass left alone;
+    // "requires review" is what it had to reconstruct, plus whatever it
+    // could not read at all. A manifest that failed outright is exactly
+    // what a review is for, so folding it in here is not padding: leaving
+    // it out would report a clean preview for a catalog with unreadable
+    // records in it.
+    valid: body.already_present,
+    requiresReview: body.reconstructed + body.failures.length
+  };
+}
+
+/** apps/common/webhost/router.go's `{source}/{set}` route params
+ *  (model.BackupSetID's own composite shape), URL-encoded independently.
+ *  The contract spells the same thing as one `{id}` that spans segments;
+ *  the router registers two, because chi matches a parameter per segment.
+ *  See BackupSet.source/BackupSet.set's own doc (types/backup.ts). */
+const backupSetPath = (source: string, set: string) =>
+  "/backup-sets/" + encodeURIComponent(source) + "/" + encodeURIComponent(set);
+
+const retentionPath = (source: string, set: string) => backupSetPath(source, set) + "/retention";
 
 export const httpApi: BackupManagerApi = {
-  getVersion: () => request("/version"),
-  getHealth: () => request("/health"),
+  getVersion: () => request<WireVersionResponse>("/system/version").then(fromWireVersion),
+  // GET /system/health, NOT /health/ready. The two answer different
+  // questions and only one of them is this one: /health/live and
+  // /health/ready sit outside /api/v1, carry no authentication, and exist
+  // for an orchestrator deciding whether to send traffic here. A ready
+  // process with no fresh backups is ready and unhealthy at the same time
+  // (failure-safety invariant 14), so a dashboard built on the probe would
+  // keep reporting green after backups stopped landing.
+  getHealth: () =>
+    request<WireHealthResponse>("/system/health").then((r) => fromWireHealth(r, Date.now())),
 
   listSets: () =>
     request<WireListBackupSetsResponse>("/backup-sets").then((r) => r.backup_sets.map(fromWireBackupSet)),
   getSet: (id) => request<WireBackupSet>("/backup-sets/" + id).then(fromWireBackupSet),
-  runSet: (id) => post("/backup-sets/" + id + "/run"),
-  testConnection: (id) => request("/backup-sets/" + id + "/test-connection", { method: "POST" }),
-  setEnabled: (id, enabled) => post("/backup-sets/" + id + "/enabled", { enabled }),
+  // POST /operations with a run_cycle action, not a per-set run route.
+  // There has never been one, and the reason is not an oversight: a run
+  // cycle is deployment-wide (it walks every enabled backup set), which is
+  // why the durable operation record carries no backup set id either. The
+  // config_revision is what makes the submission optimistically
+  // concurrent: a stale value is refused server-side rather than running
+  // against a configuration the caller has not seen.
+  runCycle: (configRevision) =>
+    post("/operations", { action: "run_cycle", config_revision: configRevision }),
+  // The persisted-set mode of the shared test-connection route. Sending
+  // only the id is the point: this client neither knows nor should have to
+  // echo back the key reference and trusted host line the set is
+  // configured with.
+  testConnection: (id) =>
+    request<ConnectionTestOutcome>("/backup-sets/test-connection", {
+      method: "POST",
+      body: JSON.stringify({ backup_set_id: id })
+    }),
+  setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
 
   createBackupSet: (req) =>
     request<WireCreateBackupSetResponse>("/backup-sets", {
@@ -418,12 +771,17 @@ export const httpApi: BackupManagerApi = {
     }),
 
   listArtifacts: (setId) =>
-    request("/backups" + (setId ? "?setId=" + encodeURIComponent(setId) : "")),
-  getArtifact: (id) => request("/backups/" + id),
+    request<WireListArtifactsResponse>(
+      "/backups" + (setId ? "?setId=" + encodeURIComponent(setId) : "")
+    ).then((r) => r.artifacts.map(fromWireArtifact)),
+  getArtifact: (id) => request<WireArtifact>("/backups/" + id).then(fromWireArtifact),
 
-  listOperations: () => request("/operations"),
-  listActivity: () => request("/activity"),
-  listQuarantine: () => request("/quarantine"),
+  listOperations: () =>
+    request<WireListOperationsResponse>("/operations").then((r) => r.operations.map(fromWireOperation)),
+  listActivity: () =>
+    request<WireListActivityResponse>("/activity").then((r) => r.events.map(fromWireActivityEvent)),
+  listQuarantine: () =>
+    request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
   revalidate: (id) => post("/quarantine/" + id + "/revalidate"),
   retryIngestion: (id) => post("/quarantine/" + id + "/retry"),
 
@@ -452,7 +810,8 @@ export const httpApi: BackupManagerApi = {
       body: JSON.stringify(wireUpdateSettings(req))
     }).then(fromWireSettingsResponse),
 
-  scanCatalog: () => request("/catalog/scan", { method: "POST" }),
+  scanCatalog: () =>
+    request<WireCatalogReportResponse>("/catalog/scan", { method: "POST" }).then(fromWireCatalogReport),
   rebuildCatalog: () => post("/catalog/rebuild"),
 
   login: (username, password) => post("/auth/login", { username, password }),

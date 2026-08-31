@@ -325,13 +325,13 @@ describe("add backup set wizard", () => {
         graph.commit("test/version-incompatible", (tx) =>
           tx.set(versionNode, {
             data: {
-              ui: "1.4.0",
+              api: "v0",
               service: "1.3.0",
-              core: "1.3.0",
-              rclone: "1.65.0",
-              schema: 3,
-              architecture: "amd64",
               buildCommit: "0000000",
+              goVersion: "go1.27.0",
+              engine: "1.65.0",
+              configRevision: "cfg_0000000",
+              ready: true,
               compatible: false
             },
             error: null,

@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "2c95fdb59827ba7d97f5aa1d8572d15faae11e1a30aef209d3706620cb3fcd58";
+export const CONTRACT_SHA256 = "c0926801ae1fe1b6afeab360bfe8bb350718034d8cfd59b23b0b01272f8b0eed";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -331,7 +331,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
   {
     id: "setBackupSetEnabled",
     method: "POST",
-    path: "/backup-sets/{id}/enabled",
+    path: "/backup-sets/{source}/{set}/enabled",
     authenticated: true,
     csrfRequired: true,
     idempotencyKey: "none",
@@ -831,6 +831,8 @@ export interface WireBackupSetHealth {
   source_name: string;
   stale_after_seconds: number;
   state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
+  storage_level?: "OK" | "WARNING" | "CRITICAL";
+  total_bytes?: number;
 }
 
 /** GET /system/capabilities. The API expression of the

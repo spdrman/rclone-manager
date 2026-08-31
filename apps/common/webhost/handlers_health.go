@@ -50,6 +50,14 @@ type backupSetHealthResponse struct {
 	// must never be mistaken for.
 	FreeBytes      uint64 `json:"free_bytes,omitempty"`
 	FreeBytesKnown bool   `json:"free_bytes_known"`
+
+	// TotalBytes and StorageLevel are the FR-21 capacity assessment GET
+	// /api/v1/system/storage reports in full, carried here so one call
+	// answers "are my backups healthy" without a caller having to join two
+	// endpoints to find out whether the disk they land on is nearly full.
+	// StorageLevel is omitted, not "OK", when no reading could be taken.
+	TotalBytes   uint64 `json:"total_bytes,omitempty"`
+	StorageLevel string `json:"storage_level,omitempty"`
 }
 
 type healthResponse struct {
@@ -98,5 +106,7 @@ func toBackupSetHealthResponse(bs service.BackupSetHealth) backupSetHealthRespon
 		QuarantinedLostCount:  bs.QuarantinedLostCount,
 		FreeBytes:             bs.FreeBytes,
 		FreeBytesKnown:        bs.FreeBytesKnown,
+		TotalBytes:            bs.TotalBytes,
+		StorageLevel:          bs.StorageLevel,
 	}
 }

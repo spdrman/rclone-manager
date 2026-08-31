@@ -1458,6 +1458,22 @@
           },
           "free_bytes_known": {
             "type": "boolean"
+          },
+          "total_bytes": {
+            "type": "integer",
+            "description": "Total capacity at this set's destination, for display beside free_bytes. Absent, like free_bytes, when the reading could not be taken.",
+            "format": "uint64",
+            "x-go-omitempty": true
+          },
+          "storage_level": {
+            "type": "string",
+            "description": "The capacity assessment this destination's free space produced. Absent when no reading could be taken, which is a different thing from OK.",
+            "enum": [
+              "OK",
+              "WARNING",
+              "CRITICAL"
+            ],
+            "x-go-omitempty": true
           }
         },
         "required": [
@@ -3875,124 +3891,6 @@
         "x-authenticated": true
       }
     },
-    "/backup-sets/{id}/enabled": {
-      "post": {
-        "operationId": "setBackupSetEnabled",
-        "summary": "Turn one backup set on or off. Nothing already backed up is touched.",
-        "tags": [
-          "backup-sets"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "The two-part source/name identity, e.g. \"nas-a/photos\"."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetEnabledRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Success.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupSet"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Refused: INVALID_REQUEST.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "INVALID_REQUEST"
-            ]
-          },
-          "401": {
-            "description": "Refused: UNAUTHENTICATED.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "UNAUTHENTICATED"
-            ]
-          },
-          "403": {
-            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "CSRF_TOKEN_MISSING",
-              "CSRF_TOKEN_MISMATCH"
-            ]
-          },
-          "404": {
-            "description": "Refused: BACKUP_SET_NOT_FOUND.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "BACKUP_SET_NOT_FOUND"
-            ]
-          },
-          "500": {
-            "description": "Refused: INTERNAL.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "INTERNAL"
-            ]
-          }
-        },
-        "x-destructive-gate": false,
-        "x-idempotency-key": "none",
-        "x-optimistic-concurrency": null,
-        "x-csrf-required": true,
-        "x-authenticated": true
-      }
-    },
     "/catalog/scan": {
       "post": {
         "operationId": "scanCatalog",
@@ -4112,6 +4010,133 @@
             "x-error-codes": [
               "CSRF_TOKEN_MISSING",
               "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/enabled": {
+      "post": {
+        "operationId": "setBackupSetEnabled",
+        "summary": "Turn one backup set on or off. Nothing already backed up is touched. Keyed by the two halves of the identity, like the retention routes beside it, because a backup set id is a source and a name.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "500": {

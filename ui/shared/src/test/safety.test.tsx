@@ -11,16 +11,16 @@ import type { SystemHealth } from "@shared/types/operation";
 import type { BackupArtifact } from "@shared/types/backup";
 
 const health: SystemHealth = {
-  serviceRunning: true, serviceUptimeHours: 336,
+  generatedAt: new Date().toISOString(),
+  serviceRunning: true,
   backupHealth: "stale",
   backupHealthReason: "No verified backup received for 31 hours. Expected within 24 hours.",
-  lastSuccessfulCycleAt: new Date().toISOString(),
+  lastCompletedBackupAt: new Date().toISOString(),
   newestVerifiedBackupAt: new Date().toISOString(),
   oldestSetFreshnessHours: 31,
-  setsHealthy: 5, setsStale: 1, setsFailing: 0, quarantinedCount: 0,
-  retainedCount: 318, retainedBytes: 4_000_000_000_000,
+  setsHealthy: 5, setsDegraded: 0, setsStale: 1, setsFailing: 0, quarantinedCount: 0,
   storageFreeBytes: 1_800_000_000_000, storageTotalBytes: 6_200_000_000_000,
-  storageState: "nominal", successRate7d: 0.964
+  storageState: "nominal", storageReadingsUnavailable: 0
 };
 
 describe("health rendering", () => {

@@ -776,3 +776,321 @@ describe("httpApi issue #162: registered-validator catalog", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Issue #211: the paths that were wrong, and the mappers that read the
+// surfaces they now reach.
+//
+// The URL assertions are the point of the first block. Every one of these
+// calls used to request a path no runtime has ever served, so a test that
+// only checked the mapped result would still pass against a client asking
+// the wrong server for it.
+// ---------------------------------------------------------------------------
+
+describe("httpApi requests the paths the contract declares", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function urlOf(fetchMock: ReturnType<typeof mockFetchOk>): string {
+    return (fetchMock.mock.calls[0] as [string, RequestInit])[0];
+  }
+
+  function bodyOf(fetchMock: ReturnType<typeof mockFetchOk>): Record<string, unknown> {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string) as Record<string, unknown>;
+  }
+
+  it("reads the version from /system/version, not /version", async () => {
+    const fetchMock = mockFetchOk({
+      api_version: "v1", core_version: "1.4.0", commit: "abc1234",
+      go_version: "go1.27.0", engine_version: "1.68.2",
+      config_revision: "cfg_7", ready: true
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const got = await httpApi.getVersion();
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/system/version");
+    expect(got).toEqual({
+      api: "v1", service: "1.4.0", buildCommit: "abc1234", goVersion: "go1.27.0",
+      engine: "1.68.2", configRevision: "cfg_7", ready: true, compatible: true
+    });
+  });
+
+  it("reports a service speaking a different contract version as incompatible", async () => {
+    // The §38 read-only banner's whole trigger. Before issue #211 this
+    // flag was read off the wire as its own boolean, which no endpoint has
+    // ever sent, so it was undefined against a real backend and the banner
+    // could not fire at all.
+    const fetchMock = mockFetchOk({
+      api_version: "v2", core_version: "9.0.0", commit: "abc1234",
+      go_version: "go1.27.0", engine_version: "1.68.2",
+      config_revision: "cfg_7", ready: true
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect((await httpApi.getVersion()).compatible).toBe(false);
+  });
+
+  it("reads health from /api/v1/system/health, not from the unauthenticated probe", async () => {
+    const fetchMock = mockFetchOk({ generated_at: "2026-08-30T10:00:00Z", backup_sets: [] });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.getHealth();
+
+    // /health/live and /health/ready sit OUTSIDE /api/v1 and answer a
+    // different question (is this process ready for traffic), so a
+    // dashboard built on them would keep reporting green after backups
+    // stopped landing.
+    expect(urlOf(fetchMock)).toBe("/api/v1/system/health");
+  });
+
+  it("submits a run cycle to /operations with the revision the caller is showing", async () => {
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.runCycle("cfg_7");
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/operations");
+    expect(bodyOf(fetchMock)).toEqual({ action: "run_cycle", config_revision: "cfg_7" });
+  });
+
+  it("tests a persisted set by id alone, on the shared test-connection route", async () => {
+    const fetchMock = mockFetchOk({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.testConnection("nas-a/photos");
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/backup-sets/test-connection");
+    // Only the id. This client neither knows nor should echo back the key
+    // reference and trusted host line the set is configured with.
+    expect(bodyOf(fetchMock)).toEqual({ backup_set_id: "nas-a/photos" });
+  });
+
+  it("enables a set on its two-segment path, encoding each half independently", async () => {
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.setEnabled("nas a", "photos/2026", false);
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/backup-sets/nas%20a/photos%2F2026/enabled");
+    expect(bodyOf(fetchMock)).toEqual({ enabled: false });
+  });
+
+  it("passes a backup set filter as a query parameter, and omits it when absent", async () => {
+    const withFilter = mockFetchOk({ artifacts: [] });
+    vi.stubGlobal("fetch", withFilter);
+    await httpApi.listArtifacts("nas-a/photos");
+    expect(urlOf(withFilter)).toBe("/api/v1/backups?setId=nas-a%2Fphotos");
+
+    const withoutFilter = mockFetchOk({ artifacts: [] });
+    vi.stubGlobal("fetch", withoutFilter);
+    await httpApi.listArtifacts();
+    expect(urlOf(withoutFilter)).toBe("/api/v1/backups");
+  });
+});
+
+describe("httpApi maps the wire shapes onto the domain types", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const WIRE_ARTIFACT = {
+    id: "nas-a/photos/2026-08-30.tar",
+    backup_set_id: "nas-a/photos",
+    source_name: "nas-a",
+    set_name: "photos",
+    name: "2026-08-30.tar",
+    remote_path: "/out/2026-08-30.tar",
+    local_path: "/data/2026-08-30.tar",
+    state: "COMPLETE",
+    discovered_at: "2026-08-30T09:00:00Z",
+    updated_at: "2026-08-30T09:05:00Z",
+    size_bytes: 4096,
+    checksum: "abc",
+    checksum_algorithm: "sha256",
+    validation: "passed" as const,
+    quarantined: false,
+    quarantine_irrecoverable: false
+  };
+
+  it("maps a healthy artifact, leaving quarantine null rather than a half-filled record", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({ artifacts: [WIRE_ARTIFACT] }));
+
+    const [got] = await httpApi.listArtifacts();
+
+    expect(got.id).toBe("nas-a/photos/2026-08-30.tar");
+    expect(got.setId).toBe("nas-a/photos");
+    expect(got.filename).toBe("2026-08-30.tar");
+    expect(got.validation).toBe("verified");
+    expect(got.sizeBytes).toBe(4096);
+    // An omitted timestamp is null, never a zero date: the API omits the
+    // key entirely for an event that has not happened.
+    expect(got.remoteSourceRemovedAt).toBeNull();
+    expect(got.quarantine).toBeNull();
+  });
+
+  it("gives a quarantined artifact a reason, and derives the category from what the server said", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      artifacts: [{
+        ...WIRE_ARTIFACT,
+        state: "QUARANTINED",
+        validation: "failed" as const,
+        quarantined: true,
+        quarantine_reason: "local final file now hashes to something else"
+      }]
+    }));
+
+    const [got] = await httpApi.listQuarantine();
+
+    expect(got.validation).toBe("failed");
+    expect(got.quarantine).not.toBeNull();
+    expect(got.quarantine?.reason).toBe("checksum-mismatch");
+    expect(got.quarantine?.remoteSourceRetained).toBe(true);
+  });
+
+  it("falls back to validation-failed for a quarantine reason it cannot categorise", async () => {
+    // The positive control for the assertion above: without it, a mapper
+    // that always answered "checksum-mismatch" would look correct.
+    vi.stubGlobal("fetch", mockFetchOk({
+      artifacts: [{ ...WIRE_ARTIFACT, quarantined: true, quarantine_reason: "the validator said no" }]
+    }));
+
+    const [got] = await httpApi.listQuarantine();
+    expect(got.quarantine?.reason).toBe("validation-failed");
+  });
+
+  it("collapses the per-set health report to the deployment's WORST verdict", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      generated_at: "2026-08-30T10:00:00Z",
+      backup_sets: [
+        {
+          backup_set_id: "a/one", source_name: "a", set_name: "one",
+          state: "HEALTHY", reason: "fresh", stale_after_seconds: 86400,
+          current_transfers: 0, pending_deletes: 0, failures: 0,
+          quarantined_count: 0, quarantined_lost_count: 0,
+          free_bytes: 100, free_bytes_known: true, total_bytes: 1000, storage_level: "OK",
+          newest_good_backup_at: "2026-08-30T09:00:00Z"
+        },
+        {
+          backup_set_id: "a/two", source_name: "a", set_name: "two",
+          state: "FAILING", reason: "an artifact was lost", stale_after_seconds: 86400,
+          current_transfers: 0, pending_deletes: 0, failures: 1,
+          quarantined_count: 1, quarantined_lost_count: 1,
+          free_bytes: 5, free_bytes_known: true, total_bytes: 1000, storage_level: "CRITICAL",
+          newest_good_backup_at: "2026-08-29T10:00:00Z"
+        }
+      ]
+    }));
+
+    const got = await httpApi.getHealth();
+
+    // A deployment with one failing set is failing, and the headline is
+    // that set's own reason rather than the first set's or an average.
+    expect(got.backupHealth).toBe("failing");
+    expect(got.backupHealthReason).toBe("an artifact was lost");
+    expect(got.setsHealthy).toBe(1);
+    expect(got.setsFailing).toBe(1);
+    expect(got.quarantinedCount).toBe(2);
+    expect(got.storageFreeBytes).toBe(105);
+    expect(got.storageTotalBytes).toBe(2000);
+    expect(got.storageState).toBe("critical");
+    expect(got.newestVerifiedBackupAt).toBe("2026-08-30T09:00:00Z");
+    expect(got.storageReadingsUnavailable).toBe(0);
+  });
+
+  it("reports an unmeasurable freshness as null, not as a large number of hours", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      generated_at: "2026-08-30T10:00:00Z",
+      backup_sets: [{
+        backup_set_id: "a/one", source_name: "a", set_name: "one",
+        state: "DEGRADED", reason: "no backup has ever landed", stale_after_seconds: 86400,
+        current_transfers: 0, pending_deletes: 0, failures: 0,
+        quarantined_count: 0, quarantined_lost_count: 0,
+        free_bytes_known: false
+      }]
+    }));
+
+    const got = await httpApi.getHealth();
+
+    expect(got.oldestSetFreshnessHours).toBeNull();
+    expect(got.setsDegraded).toBe(1);
+    // A capacity reading that could not be taken is counted, not reported
+    // as zero free bytes.
+    expect(got.storageReadingsUnavailable).toBe(1);
+    expect(got.storageFreeBytes).toBe(0);
+  });
+
+  it("says so when nothing is configured, rather than declaring an empty deployment healthy in silence", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({ generated_at: "2026-08-30T10:00:00Z", backup_sets: [] }));
+
+    const got = await httpApi.getHealth();
+
+    expect(got.backupHealth).toBe("healthy");
+    expect(got.backupHealthReason).toMatch(/no backup sets/i);
+    expect(got.oldestSetFreshnessHours).toBeNull();
+  });
+
+  it("maps a transition into a captioned activity event, and keeps an unrecognised one", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      events: [
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          from: "COMMITTED", to: "COMPLETE", occurred_at: "2026-08-30T09:05:00Z",
+          detail: "source released"
+        },
+        {
+          artifact_id: "a/one/x.tar", backup_set_id: "a/one", source_name: "a",
+          set_name: "one", artifact_name: "x.tar",
+          to: "SOMETHING_NEW", occurred_at: "2026-08-30T09:00:00Z"
+        }
+      ]
+    }));
+
+    const got = await httpApi.listActivity();
+
+    expect(got[0].type).toBe("remote-source-deleted");
+    expect(got[0].severity).toBe("ok");
+    expect(got[0].detail).toBe("source released");
+    expect(got[0].id).not.toBe(got[1].id);
+    // An unrecognised transition still appears: an unexplained gap in an
+    // audit trail is indistinguishable from nothing having happened.
+    expect(got[1].text).toBe("SOMETHING_NEW");
+    expect(got[1].severity).toBe("info");
+  });
+
+  it("leaves an operation's byte counters undefined rather than reporting zero transferred", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      operations: [
+        { operation_id: "op_2", status: "running", action: "run_cycle", created_at: "2026-08-30T09:01:00Z" },
+        { operation_id: "op_1", status: "completed", action: "run_cycle", created_at: "2026-08-30T09:00:00Z", finished_at: "2026-08-30T09:00:30Z" }
+      ]
+    }));
+
+    const got = await httpApi.listOperations();
+
+    expect(got[0].id).toBe("op_2");
+    expect(got[0].percent).toBe(0);
+    expect(got[1].percent).toBe(100);
+    // undefined renders as "unknown"; a zero renders as "nothing has been
+    // transferred", and only one of those is true.
+    expect(got[0].bytesDone).toBeUndefined();
+    expect(got[0].bytesTotal).toBeUndefined();
+    expect(got[0].nonDestructive).toBe(false);
+  });
+
+  it("counts an unreadable recovery manifest as needing review, not as a clean scan", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      dry_run: true, scanned: 47, reconstructed: 2, already_present: 45,
+      failures: [{ backup_set_id: "a/one", path: "/m/bad.json", reason: "unreadable" }]
+    }));
+
+    const got = await httpApi.scanCatalog();
+
+    expect(got).toEqual({ discovered: 47, valid: 45, requiresReview: 3 });
+  });
+});

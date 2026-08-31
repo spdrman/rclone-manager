@@ -2,7 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import type { AsyncState } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
-import { operationsNode } from "@shared/state/appNodes";
+import { operationsNode, versionNode } from "@shared/state/appNodes";
 import type { BackupSet } from "@shared/types/backup";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
@@ -21,6 +21,11 @@ export function BackupSetsPage({
   // page ran its own independent listOperations() poll, so the two could
   // disagree about what was currently running for a given set.
   const operations = useCausl(operationsNode);
+  // The configuration revision the screen is CURRENTLY showing, not one
+  // read fresh at submit time: a run submitted against a revision this
+  // page has not seen is exactly what CONFIG_REVISION_STALE exists to
+  // refuse (see BackupManagerApi.runCycle's own doc).
+  const version = useCausl(versionNode);
 
   if (sets.error) return <ErrorState {...sets.error} onRetry={sets.reload} />;
 
@@ -105,7 +110,7 @@ export function BackupSetsPage({
               set={set}
               currentOperation={currentOperation}
               onOpen={() => navigate("/sets/" + set.id)}
-              onRun={() => api.runSet(set.id).then(sets.reload)}
+              onRun={() => api.runCycle(version.data?.configRevision ?? "").then(sets.reload)}
               onTest={() => api.testConnection(set.id)}
               actionsDisabled={readOnly}
             />

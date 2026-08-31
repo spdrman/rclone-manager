@@ -48,6 +48,16 @@ type BackupSetHealth struct {
 	// one thing it must never be mistaken for.
 	FreeBytes      uint64
 	FreeBytesKnown bool
+
+	// TotalBytes and StorageLevel come from the same FR-21 capacity
+	// assessment ListStorageStatus reports, read here so one call can
+	// answer "are my backups healthy" completely rather than leaving a
+	// caller to join two endpoints to find out whether the disk they land
+	// on is nearly full. StorageLevel is "OK", "WARNING" or "CRITICAL",
+	// or "" when no reading could be taken, which is a different thing
+	// from OK and must not be collapsed into it.
+	TotalBytes   uint64
+	StorageLevel string
 }
 
 // HealthReport is FR-24's backup-freshness half: every configured backup
@@ -83,12 +93,34 @@ func (b *BackupService) Health(ctx context.Context) (HealthReport, error) {
 		return HealthReport{}, fmt.Errorf("service: computing health: %w", err)
 	}
 
+	// The FR-21 capacity assessment, taken once and indexed, rather than
+	// per set: ListStorageStatus already walks every configured backup
+	// set, and calling it inside the loop below would stat the same
+	// destination once per set that shares it.
+	//
+	// A failure here is not a failure of the health report. Capacity is
+	// one input to it, and the freshness verdict, which is the thing this
+	// report exists to carry, does not depend on it: an unreadable mount
+	// leaves StorageLevel empty and FreeBytesKnown false, which is exactly
+	// what those two fields are for.
+	capacity := map[string]StorageStatus{}
+	if statuses, statusErr := b.ListStorageStatus(ctx); statusErr == nil {
+		for _, s := range statuses {
+			capacity[s.BackupSetID] = s
+		}
+	}
+
 	out := HealthReport{
 		GeneratedAt: report.GeneratedAt,
 		BackupSets:  make([]BackupSetHealth, 0, len(report.BackupSets)),
 	}
 	for _, bs := range report.BackupSets {
-		out.BackupSets = append(out.BackupSets, toServiceBackupSetHealth(bs))
+		set := toServiceBackupSetHealth(bs)
+		if status, ok := capacity[set.BackupSetID]; ok && status.Available {
+			set.TotalBytes = status.TotalBytes
+			set.StorageLevel = status.Level
+		}
+		out.BackupSets = append(out.BackupSets, set)
 	}
 	return out, nil
 }
