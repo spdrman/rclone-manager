@@ -153,7 +153,7 @@ gate="scripts/ci-local.sh"
 if [ ! -f "$gate" ]; then
   note "FAIL: $gate does not exist, so nothing can be said about whether these checks run on a commit."
 else
-  for invoked in scripts/api/check-contract-drift.sh scripts/api/selftest.sh; do
+  for invoked in scripts/api/check-contract-drift.sh scripts/api/check-client-paths.sh scripts/api/selftest.sh; do
     if grep -qE "^[[:space:]]*bash $invoked" "$gate"; then
       echo "  ok: $gate runs $invoked"
     else

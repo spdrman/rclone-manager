@@ -72,7 +72,7 @@ real, implemented, unit- and integration-tested Go packages under `core/internal
 from both, which is the gap the previous version of this section described honestly and
 which has since been filled.
 
-### The API and the web UI are real, and they do not yet meet in the middle
+### The API and the web UI meet in the middle
 
 `apps/common/webhost` serves a versioned `/api/v1`, authenticated, CSRF-protected, with a
 destructive-operation gate in front of anything that can destroy data.
@@ -80,37 +80,39 @@ destructive-operation gate in front of anything that can destroy data.
 the scheduler and the API in one process, and `serve-ui` serves the built static UI and
 reverse-proxies the API to it. `ui/shared` is the React application both of them exist for.
 
-That much works. What does not work yet is that the browser client asks for routes the
-runtime does not serve. `ui/shared/src/api/client.ts` makes fourteen calls with no route
-behind them:
+Until #211 the browser client asked for fourteen `(method, path)` pairs that neither
+`api/v1/openapi.json` nor `apps/common/webhost/router.go` had, so against a real backend
+the dashboard, the backups list, the activity feed and the quarantine page all failed
+outright with "The backup service returned an unexpected response." Every suite in the
+repository stayed green while that was true, for the reason the next paragraph gives.
 
-| The client calls | The runtime serves |
-|---|---|
-| `GET /api/v1/version` | `GET /api/v1/system/version` |
-| `GET /api/v1/health` | `GET /health/live` and `GET /health/ready`, outside `/api/v1` |
-| `GET /api/v1/backups`, `GET /api/v1/backups/{id}` | nothing |
-| `GET /api/v1/activity` | nothing |
-| `GET /api/v1/quarantine` | nothing |
-| `POST /api/v1/quarantine/{id}/revalidate`, `POST /api/v1/quarantine/{id}/retry` | nothing |
-| `GET /api/v1/operations` | `POST /api/v1/operations` and `GET /api/v1/operations/{id}` only |
-| `POST /api/v1/backup-sets/{id}/run` | nothing |
-| `POST /api/v1/backup-sets/{id}/enabled` | nothing |
-| `POST /api/v1/backup-sets/{id}/test-connection` | `POST /api/v1/backup-sets/test-connection`, the wizard's id-less pre-save check |
-| `POST /api/v1/catalog/scan`, `POST /api/v1/catalog/rebuild` | nothing |
+Four of those were the wrong path for an operation that existed, and are now the right one.
+The other ten are real surfaces, added spec-first (contract, regenerate, then handlers) over
+reads core has always computed and `backup-manager artifacts`, `status` and `catalog`
+already print: the backups list and one backup, the activity feed over the append-only
+lifecycle record, quarantine plus its revalidate and retry actions, the operations list,
+enabling and disabling a backup set, the FR-24 health verdict, and catalog scan and rebuild.
 
-So in a packaged build the dashboard, the backups list, the activity feed, the quarantine
-page and the catalog-recovery page all fail against the shipped runtime, and so do the run
-and test-connection actions on an existing backup set. The backup-set list, the add-backup-set
-wizard, the retention preview and apply, and the settings page are the parts that reach a
-real route. #166 is the work that makes the contract authoritative and generates both sides
-from it; until it lands, treat the web UI as partially wired rather than as the product's
-front door.
+**What keeps it that way is a check, not this paragraph.**
+`scripts/api/check-client-paths.sh` reads `ui/shared/src/api/client.ts` statically, reduces
+every request path it builds back to a `(method, path)` pattern, and requires each one to be
+an operation the contract declares. It has no allowlist, it fails closed (a path it cannot
+reduce, or a client method whose request it cannot find, is a failure rather than a skip),
+and `scripts/ci-local.sh` runs it on every commit. Ten of `scripts/api/selftest.sh`'s
+mutation controls exist to prove it can actually fail.
 
-**The Playwright suite does not contradict any of that, because it never talks to the
+The same drift had been recorded before, exactly, in
+`ui/shared/src/api/contract.conformance.test.ts`'s own list of unserved paths, described
+there as "recorded debt, not an exemption mechanism". That description was accurate and the
+suite was still green: an allowlist asserted exactly is a gate reporting the drift it was
+built to catch as a pass. The list is empty now and says why it must stay so.
+
+**The Playwright suite is still not evidence about the API, because it never talks to the
 runtime.** `ui/shared/src/app/createApp.tsx` substitutes `createMockApi` whenever
 `import.meta.env.DEV` is set, and the browser suite runs against
-`npm run dev`. The suite is a real test of what the browser renders and of how the pages
-behave, and it is no evidence at all about the API. Do not read a green e2e run as an
+`npm run dev`. The mock implements whatever the client asks for, which is precisely why it
+was green throughout. The suite is a real test of what the browser renders and of how the
+pages behave, and it is no evidence at all about the API. Do not read a green e2e run as an
 end-to-end proof.
 
 That is no longer only an argument. Suite C in `rclone-manager-tests` boots the real
@@ -827,18 +829,20 @@ that a machine can decide are now decided on every run, by
   together or the build goes red;
 - the `core/internal/` inventory in [Layout](#layout) matches the packages that are actually
   on disk;
-- the `/api/v1/version` mismatch described above is re-derived from `client.ts` and
-  `router.go` on every run, in both directions, so the claim disappears from this document
-  when the drift does;
+- whether the browser client and the router still agree about the version route is
+  re-derived from `client.ts` and `router.go` on every run, in both directions, so a claim
+  about it in this document cannot outlive the drift it describes (and could not survive
+  the repair either, which is how #211 found out this section needed rewriting);
 - the "build-supported and uncertified" statement holds for exactly as long as the generated
   conformance matrix still reports an unexecuted operator cell, in both directions;
 - the support tiers in the table above come from `distribution/packaging/canonical.json`.
 
 Each of those carries its own positive control, because a check that cannot fail is
-decoration. What is deliberately *not* checked, and why, is written at the top of that test
-file: the fourteen unserved client paths (not decidable by reading TypeScript string
-concatenation, and #166 is building the contract that makes it decidable properly), anything
-needing real hardware, and the measured binary size.
+decoration. What is deliberately *not* checked there, and why, is written at the top of that
+test file: anything needing real hardware, and the measured binary size. The client's
+request paths used to be on that list as "not decidable by reading TypeScript string
+concatenation"; #166 landed the contract that made the question answerable and #211 answered
+it, in `scripts/api/check-client-paths.sh`.
 
 ## Layout
 

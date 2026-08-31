@@ -217,26 +217,25 @@ const ACTIVITY: ActivityEvent[] = [
 ];
 
 const HEALTH: SystemHealth = {
+  generatedAt: "2026-08-29T06:00:00+02:00",
   serviceRunning: true,
-  serviceUptimeHours: 336,
   // The whole point of §8: the daemon is fine, the backups are not.
   backupHealth: "degraded",
   backupHealthReason:
     "One set has not produced a verified backup in 31 hours, and one set is halted after a host-key change.",
-  lastSuccessfulCycleAt: "2026-08-29T05:52:00+02:00",
+  lastCompletedBackupAt: "2026-08-29T05:52:00+02:00",
   newestVerifiedBackupAt: "2026-08-29T05:18:00+02:00",
   oldestSetFreshnessHours: 31,
-  setsHealthy: 5, setsStale: 1, setsFailing: 1,
+  setsHealthy: 5, setsDegraded: 0, setsStale: 1, setsFailing: 1,
   quarantinedCount: 2,
-  retainedCount: 318, retainedBytes: 4.42 * TB,
   storageFreeBytes: 1.8 * TB, storageTotalBytes: 6.2 * TB,
   storageState: "nominal",
-  successRate7d: 0.964
+  storageReadingsUnavailable: 0
 };
 
 const VERSION: VersionInfo = {
-  ui: "1.3.0", service: "1.3.0", core: "1.3.0", rclone: "1.68.2",
-  schema: 41, architecture: "linux/arm64", buildCommit: "9f4c1ab", compatible: true
+  api: "v1", service: "1.3.0", buildCommit: "9f4c1ab", goVersion: "go1.27.0",
+  engine: "1.68.2", configRevision: "cfg_9f4c1ab", ready: true, compatible: true
 };
 
 /**
@@ -417,7 +416,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getVersion: () =>
       delay(
         scenario === "version-mismatch"
-          ? { ...VERSION, service: "1.2.0", core: "1.2.0", compatible: false }
+          ? { ...VERSION, service: "1.2.0", api: "v0", compatible: false }
           : VERSION
       ),
 
@@ -481,7 +480,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         );
       return delay(found);
     },
-    runSet: () => delay(undefined),
+    runCycle: () => delay(undefined),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
     setEnabled: () => delay(undefined),
 

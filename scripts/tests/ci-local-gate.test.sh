@@ -231,11 +231,14 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/perf/$perf.sh"
   done
 
-  # The /api/v1 contract drift check and its mutation self-test (#166). Same
-  # reason again, and the same failure mode if they are missing: they run
-  # unconditionally, FAST included.
+  # The /api/v1 contract drift check, the client-path check (#211) and
+  # their shared mutation self-test (#166). Same reason again, and the same
+  # failure mode if any of them is missing: they run unconditionally, FAST
+  # included, so a gate step pointed at a path this fixture does not have
+  # exits 127 under `set -e` and every case below it fails for a reason
+  # that has nothing to do with what it was measuring.
   mkdir -p "$tree/scripts/api"
-  for api in check-contract-drift selftest; do
+  for api in check-contract-drift check-client-paths selftest; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/api/$api.sh"
   done
 

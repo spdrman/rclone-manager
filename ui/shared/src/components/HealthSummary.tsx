@@ -1,6 +1,6 @@
 import type { SystemHealth } from "@shared/types/operation";
 import { HEALTH_PRESENTATION, StatusBadge } from "./StatusBadge";
-import { bytes, percent, relativeAge } from "@shared/utilities/format";
+import { bytes, relativeAge } from "@shared/utilities/format";
 
 /** §8: "APPLICATION RUNNING" and "BACKUPS HEALTHY" are two different facts.
  *  The headline states the BACKUP verdict; the daemon is a supporting chip. */
@@ -34,10 +34,11 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
             {health.backupHealthReason}
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 3 }}>
+            {/* "Service running" and nothing more. The service answered
+                this request, which is the whole claim; it used to carry an
+                uptime figure that no endpoint has ever reported (#211). */}
             <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} glyph={health.serviceRunning ? "\u25cf" : "\u2715"}>
-              {health.serviceRunning
-                ? "Service running \u00b7 " + Math.round(health.serviceUptimeHours / 24) + "d uptime"
-                : "Service stopped"}
+              {health.serviceRunning ? "Service running" : "Service stopped"}
             </StatusBadge>
             <StatusBadge
               tone={health.storageState === "nominal" ? "ok" : health.storageState === "warning" ? "warn" : "danger"}
@@ -47,6 +48,9 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
             </StatusBadge>
             {health.setsStale > 0 ? (
               <StatusBadge tone="warn" glyph="\u25b2">{health.setsStale + " set stale"}</StatusBadge>
+            ) : null}
+            {health.setsDegraded > 0 ? (
+              <StatusBadge tone="warn" glyph="\u25b2">{health.setsDegraded + " set degraded"}</StatusBadge>
             ) : null}
             {health.setsFailing > 0 ? (
               <StatusBadge tone="danger" glyph="\u2715">{health.setsFailing + " set halted"}</StatusBadge>
@@ -60,18 +64,32 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
             gridTemplateColumns: "auto auto", gap: "9px 26px", fontSize: 13
           }}
         >
-          <Row label="Last successful cycle" value={relativeAge(health.lastSuccessfulCycleAt)} />
+          <Row label="Last completed backup" value={relativeAge(health.lastCompletedBackupAt)} />
           <Row label="Newest verified backup" value={relativeAge(health.newestVerifiedBackupAt)} />
+          {/* Null is "some set has never produced a known-good backup", not
+              a large number of hours. Rendering a figure there would be
+              false precision an operator could act on. */}
           <Row
             label="Oldest set freshness"
-            value={health.oldestSetFreshnessHours + " hours ago"}
-            tone={health.oldestSetFreshnessHours > 24 ? "var(--warn)" : undefined}
+            value={
+              health.oldestSetFreshnessHours === null
+                ? "not yet measurable"
+                : health.oldestSetFreshnessHours + " hours ago"
+            }
+            tone={
+              health.oldestSetFreshnessHours !== null && health.oldestSetFreshnessHours > 24
+                ? "var(--warn)"
+                : undefined
+            }
           />
-          <Row
-            label="Retained artifacts"
-            value={health.retainedCount + " \u00b7 " + bytes(health.retainedBytes)}
-          />
-          <Row label="Success rate \u00b7 7d" value={percent(health.successRate7d)} />
+          <Row label="Free space" value={bytes(health.storageFreeBytes)} />
+          {health.storageReadingsUnavailable > 0 ? (
+            <Row
+              label="Capacity unreadable"
+              value={health.storageReadingsUnavailable + " destination(s)"}
+              tone="var(--warn)"
+            />
+          ) : null}
         </dl>
       </div>
     </section>

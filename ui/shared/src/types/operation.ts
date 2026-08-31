@@ -63,36 +63,79 @@ export interface ActivityEvent {
   correlationId: string;
 }
 
+/**
+ * FR-24's backup-freshness picture, as GET /api/v1/system/health reports
+ * it, aggregated across every configured backup set by client.ts.
+ *
+ * Every field here is something the service actually computes. Before
+ * issue #211 this type carried five more (service uptime, retained
+ * artifact count and bytes, a seven-day success rate), and the shared UI
+ * rendered all of them from `createMockApi`; no backend has ever computed
+ * any of them. Against a real deployment they would each have rendered a
+ * confident zero, which for a success rate and a retained-bytes figure is
+ * not a missing value but a wrong one.
+ */
 export interface SystemHealth {
-  /** The daemon. Deliberately separate from backupHealth (§8). */
+  /** When the service computed this. */
+  generatedAt: string;
+  /** The service answered, so it is running. Deliberately separate from
+   *  backupHealth (§8): a running daemon is not evidence of anything
+   *  about the backups. */
   serviceRunning: boolean;
-  serviceUptimeHours: number;
   /** The backups. A running daemon with stale backups is NOT healthy. */
   backupHealth: "healthy" | "degraded" | "stale" | "failing";
   backupHealthReason: string;
-  lastSuccessfulCycleAt: string;
-  newestVerifiedBackupAt: string;
-  oldestSetFreshnessHours: number;
+  /** The newest known-good restore point across every set, or null when
+   *  no set has produced one yet. */
+  newestVerifiedBackupAt: string | null;
+  /** The newest backup that finished across every set, trustworthy or
+   *  not, or null. */
+  lastCompletedBackupAt: string | null;
+  /** Hours since the LEAST fresh set's newest known-good backup, or null
+   *  when some set has never produced one at all (which is not a large
+   *  number of hours; it is an unanswerable question). */
+  oldestSetFreshnessHours: number | null;
   setsHealthy: number;
+  setsDegraded: number;
   setsStale: number;
   setsFailing: number;
+  /** Every quarantined artifact, including the irrecoverable ones. */
   quarantinedCount: number;
-  retainedCount: number;
-  retainedBytes: number;
+  /** Summed across the destinations whose capacity could be read.
+   *  storageReadingsUnavailable says how many could not be. */
   storageFreeBytes: number;
   storageTotalBytes: number;
   storageState: "nominal" | "warning" | "critical";
-  successRate7d: number;
+  storageReadingsUnavailable: number;
 }
 
+/**
+ * What GET /api/v1/system/version reports, as client.ts maps it.
+ *
+ * Like SystemHealth above, this carries only what the service actually
+ * knows. The fields issue #211 removed (a separate UI version, a "core"
+ * version distinct from the service's, a database schema number, a build
+ * architecture) had no source anywhere in the running system: the version
+ * endpoint has never reported any of them, so every value the shared UI
+ * showed for them came from the dev-server mock.
+ */
 export interface VersionInfo {
-  ui: string;
+  /** The /api/v1 contract version this service speaks. */
+  api: string;
+  /** The running service's own version. */
   service: string;
-  core: string;
-  rclone: string;
-  schema: number;
-  architecture: string;
+  /** The build it was made from. */
   buildCommit: string;
-  /** When false the UI disables all management actions (§38). */
+  goVersion: string;
+  /** The transfer engine's version string, deliberately not named after
+   *  the engine (the contract forbids naming an implementation on the
+   *  public schema, and this field mirrors it). */
+  engine: string;
+  /** The optimistic-concurrency token a write echoes back. */
+  configRevision: string;
+  /** False until the service has finished its startup sequence (§46.1). */
+  ready: boolean;
+  /** Whether the service speaks the contract version this UI was built
+   *  against. When false the UI disables all management actions (§38). */
   compatible: boolean;
 }

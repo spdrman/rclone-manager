@@ -34,13 +34,16 @@ import (
 //
 // What is deliberately NOT checked here, and why:
 //
-//   - The browser client's fourteen unserved /api/v1 paths. The README
-//     states the count and the list. Pinning it would mean re-deriving
-//     the client's own path set from TypeScript string concatenation,
-//     which is not decidable by reading, and #166 is landing a real
-//     contract that makes the question answerable properly. The one
-//     mismatch that is decidable by exact-string comparison, getVersion,
-//     is checked below.
+//   - The browser client's request paths, which used to be listed here
+//     as "not decidable by reading TypeScript string concatenation".
+//     They are decidable, and they are now decided:
+//     scripts/api/check-client-paths.sh reduces every path client.ts
+//     builds and requires each to be an operation api/v1/openapi.json
+//     declares, with ten mutation controls in scripts/api/selftest.sh
+//     proving it can fail (#211). That gate belongs there rather than
+//     here, because it is about the API contract rather than about this
+//     README. The one claim about them that IS this file's business,
+//     getVersion's route, is checked below.
 //   - Anything requiring the platform hardware. The acceptance
 //     procedures are prose until somebody runs them, and no check here
 //     can change that. What IS checked is that the README keeps saying
@@ -444,7 +447,7 @@ func TestREADMEInventoryMatchesCoreInternal(t *testing.T) {
 
 const (
 	clientVersionCall     = `getVersion: () => request("/version")`
-	clientVersionRepaired = `getVersion: () => request("/system/version")`
+	clientVersionRepaired = `getVersion: () => request<WireVersionResponse>("/system/version")`
 	clientVersionAnchor   = "getVersion:"
 	serverVersionRoute    = `r.Get("/system/version", h.systemVersion)`
 	readmeVersionClaim    = "`/api/v1/version`"

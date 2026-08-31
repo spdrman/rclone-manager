@@ -408,3 +408,44 @@ func toOperation(rec state.Operation) Operation {
 	}
 	return op
 }
+
+// DefaultOperationListLimit is how many operations ListOperations returns
+// when a caller does not ask for a number, and MaxOperationListLimit is
+// the most it will return however large a number is asked for. The
+// operations table is append-only and never pruned, so an unbounded read
+// grows with the deployment's whole history.
+const (
+	DefaultOperationListLimit = 100
+	MaxOperationListLimit     = 1000
+)
+
+// ListOperations returns the most recent durable operation records, newest
+// first, across every actor and every backup set.
+//
+// This is the list counterpart of GetOperation (§15.7's polling read). It
+// exists because a client that has just reconnected, or that never
+// submitted the operation in the first place, has no operation id to poll
+// with and would otherwise have no way to learn that anything is running
+// at all.
+//
+// A limit of zero or less means DefaultOperationListLimit; anything above
+// MaxOperationListLimit is clamped to it.
+func (b *BackupService) ListOperations(ctx context.Context, limit int) ([]Operation, error) {
+	if limit <= 0 {
+		limit = DefaultOperationListLimit
+	}
+	if limit > MaxOperationListLimit {
+		limit = MaxOperationListLimit
+	}
+
+	records, err := b.journal.ListOperations(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("service: listing operations: %w", err)
+	}
+
+	out := make([]Operation, 0, len(records))
+	for _, rec := range records {
+		out = append(out, toOperation(rec))
+	}
+	return out, nil
+}

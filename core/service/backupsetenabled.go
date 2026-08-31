@@ -1,0 +1,191 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
+// connectionTestTimeout bounds one reachability check. It is the same
+// ten seconds TestConnection uses for a candidate source: a test that can
+// hang indefinitely is a request an operator cannot cancel.
+const connectionTestTimeout = 10 * time.Second
+
+// SetBackupSetEnabled turns one configured backup set on or off, persists
+// the change to the configuration file this BackupService was opened from,
+// and hot-reloads so it takes effect immediately.
+//
+// # What "disabled" means, and what it does not
+//
+// A disabled backup set is excluded from every run cycle: nothing is
+// discovered, transferred, verified, committed or retained for it while it
+// stays off. Nothing already backed up is touched. Turning a set off
+// deletes no artifact, releases no remote source, and does not run
+// retention; turning it back on resumes the ordinary pipeline from
+// whatever the journal already holds. That is why this is a
+// state-changing but NON-destructive operation in
+// docs/EPIC-B-multi-nas.md §50's terms, in the same bucket as
+// create-backup-set, and why the API layer wraps it in CSRF protection but
+// not the destructive-operations gate.
+//
+// It is worth being explicit about the direction that sounds dangerous:
+// turning a set OFF stops new restore points being made, which degrades
+// freshness over time, and FR-24's health computation reports that
+// honestly as the set goes stale. It is not hidden, and it is reversible
+// by the same call.
+//
+// # Persist, then reload
+//
+// This follows CreateBackupSet's sequence exactly, for the same reasons
+// recorded there: re-read the file fresh rather than trusting the running
+// in-memory copy, encode the bytes BEFORE config.Validate resolves
+// defaults in place (so an unrelated toggle does not freeze this
+// release's defaults into the operator's file), resolve the validator
+// catalog before the write so the only step after it cannot fail, then
+// one atomic state.Store so no concurrent reader ever sees a torn
+// {inner, revision} pair.
+func (b *BackupService) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (BackupSet, error) {
+	if b.configPath == "" {
+		return BackupSet{}, ErrConfigNotFileBacked
+	}
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return BackupSet{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
+	cfg, err := config.Load(b.configPath)
+	if err != nil {
+		return BackupSet{}, fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	found := false
+	for i := range cfg.Sources {
+		if cfg.Sources[i].Name != sourceName {
+			continue
+		}
+		for j := range cfg.Sources[i].BackupSets {
+			if cfg.Sources[i].BackupSets[j].Name != setName {
+				continue
+			}
+			cfg.Sources[i].BackupSets[j].Disabled = !enabled
+			found = true
+		}
+	}
+	if !found {
+		return BackupSet{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	// Encoded before Validate, which resolves defaults in place; see
+	// UpdateSettings' own comment for the full reasoning and for what an
+	// unrelated edit would otherwise silently freeze into the file.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return BackupSet{}, fmt.Errorf("service: encoding configuration: %w", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return BackupSet{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+
+	applyValidators, err := planValidatorCatalog(cfg)
+	if err != nil {
+		return BackupSet{}, err
+	}
+
+	if err := writeConfigBytesAtomically(b.configPath, encoded); err != nil {
+		return BackupSet{}, fmt.Errorf("service: persisting configuration: %w", err)
+	}
+
+	applyValidators()
+
+	prevInner := b.state.Load().inner
+	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
+	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
+		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
+	}
+	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+
+	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
+}
+
+// TestBackupSetConnection runs the same non-destructive reachability and
+// authentication check TestConnection performs, against an ALREADY
+// PERSISTED backup set rather than a candidate a caller is still filling
+// in.
+//
+// The two share one route (POST /api/v1/backup-sets/test-connection) and
+// differ only in where the connection details come from: a candidate
+// carries its own, and a persisted set has them in the configuration
+// already. That matters for more than tidiness. A client asking to test
+// set "nas-a/photos" does not know, and must never have to send back, the
+// key reference and known-hosts line that set is configured with; making
+// it echo them would turn a read-only "does this still work" button into
+// a request that could quietly test something else.
+//
+// Everything reachable from here is read-only: it lists the configured
+// remote path over the transport this service already uses and discards
+// the result. Nothing is written locally or remotely, and no trust
+// decision is made or revised.
+func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) (ConnectionTestResult, error) {
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return ConnectionTestResult{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	st := b.state.Load()
+	var found *config.BackupSet
+	for _, src := range st.inner.Config.Sources {
+		if src.Name != sourceName {
+			continue
+		}
+		for i := range src.BackupSets {
+			if src.BackupSets[i].Name == setName {
+				found = &src.BackupSets[i]
+			}
+		}
+	}
+	if found == nil {
+		return ConnectionTestResult{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	root := found.RemotePath
+	if root == "" {
+		root = "/"
+	}
+
+	testCtx, cancel := context.WithTimeout(ctx, connectionTestTimeout)
+	defer cancel()
+
+	r := found.Remote
+	src := transport.Source{
+		ID:         "connection-test",
+		Type:       r.Type,
+		Host:       r.Host,
+		Port:       r.Port,
+		User:       r.User,
+		KeyFile:    r.Key.File,
+		KeyEnv:     r.Key.Env,
+		KeyCommand: r.Key.Command,
+		KnownHosts: r.KnownHosts,
+		Root:       root,
+	}
+
+	if _, err := st.inner.Transport.List(testCtx, src); err != nil {
+		// Deliberately not %w-wrapped and deliberately not put in
+		// Message, for exactly the reason TestConnection gives: a failed
+		// connection test is an ordinary outcome, and err's own text can
+		// embed transport internals a caller must not have to treat as
+		// safe to render.
+		return ConnectionTestResult{OK: false, Message: "could not connect and list the remote path"}, nil
+	}
+	return ConnectionTestResult{OK: true}, nil
+}

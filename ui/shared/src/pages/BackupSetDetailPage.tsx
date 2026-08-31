@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useResource } from "@shared/state/resource";
+import { useCausl } from "@shared/state/graph";
+import { versionNode } from "@shared/state/appNodes";
 import { currentSetActivityNode, currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
@@ -30,6 +32,11 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // state/backupSetDetailNodes.ts's captureSetEditSnapshot/isSetEditStale).
   const set = useResource(currentSetDetailNode, () => api.getSet(setId), [api, setId]);
   const activity = useResource(currentSetActivityNode, () => api.listActivity(), [api]);
+  // The configuration revision this screen is CURRENTLY showing. A run
+  // submitted against a revision nobody looking at the page has seen is
+  // what CONFIG_REVISION_STALE exists to refuse, so this deliberately
+  // reads the graph rather than fetching a fresh one at submit time.
+  const version = useCausl(versionNode);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -64,8 +71,17 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         }
         actions={
           <>
-            <button className="btn btn--primary" disabled={readOnly || s.halted} onClick={() => api.runSet(s.id).then(set.reload)}>
-              Run now
+            {/* A run cycle is deployment-wide: core walks every enabled
+                backup set in one pass, and there is no per-set run
+                operation to call. The label says so rather than implying
+                this button touches only the set on screen (#211). */}
+            <button
+              className="btn btn--primary"
+              disabled={readOnly || s.halted}
+              title="Runs one pass over every enabled backup set, not only this one."
+              onClick={() => api.runCycle(version.data?.configRevision ?? "").then(set.reload)}
+            >
+              Run all due sets
             </button>
             <button className="btn" disabled={readOnly} onClick={() => api.testConnection(s.id)}>Test connection</button>
             <button className="btn" disabled={readOnly} onClick={() => setEditOpen(true)}>Edit</button>
@@ -198,7 +214,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           {/* Caution and destructive actions live apart from ordinary ones (§11, §35). */}
           <Section title="Set management">
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <button className="btn btn--caution" disabled={readOnly} onClick={() => api.setEnabled(s.id, !s.enabled).then(set.reload)}>
+              <button className="btn btn--caution" disabled={readOnly} onClick={() => api.setEnabled(s.source, s.set, !s.enabled).then(set.reload)}>
                 {s.enabled ? "Disable backup set" : "Enable backup set"}
               </button>
               <button className="btn btn--destructive" disabled={readOnly} onClick={() => setPreviewOpen(true)}>

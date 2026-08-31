@@ -13,12 +13,12 @@ import type { BackupSet } from "@shared/types/backup";
 import type { VersionInfo } from "@shared/types/operation";
 
 const COMPATIBLE_VERSION: VersionInfo = {
-  ui: "1.3.0", service: "1.3.0", core: "1.3.0", rclone: "1.68.2",
-  schema: 41, architecture: "linux/arm64", buildCommit: "9f4c1ab", compatible: true
+  api: "v1", service: "1.3.0", buildCommit: "9f4c1ab", goVersion: "go1.27.0",
+  engine: "1.68.2", configRevision: "cfg_9f4c1ab", ready: true, compatible: true
 };
 
 const INCOMPATIBLE_VERSION: VersionInfo = {
-  ...COMPATIBLE_VERSION, service: "1.2.0", core: "1.2.0", buildCommit: "a1b2c3d", compatible: false
+  ...COMPATIBLE_VERSION, service: "1.2.0", api: "v0", buildCommit: "a1b2c3d", compatible: false
 };
 
 const SET: BackupSet = {

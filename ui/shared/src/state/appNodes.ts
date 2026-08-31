@@ -35,7 +35,16 @@ export interface AppCounts {
 
 export const countsNode = graph.derived<AppCounts>("app.counts", (get) => ({
   sets: get(setsNode).data?.length,
-  backups: get(healthNode).data?.retainedCount,
+  // The health report counts backup SETS, not the artifacts inside them,
+  // so the header's backup count comes from the health report's own
+  // per-set totals rather than from a retained-artifact figure. Nothing
+  // has ever computed that figure server-side: it came off the dev-server
+  // mock, and against a real backend it was undefined (issue #211).
+  backups: (() => {
+    const health = get(healthNode).data;
+    if (!health) return undefined;
+    return health.setsHealthy + health.setsDegraded + health.setsStale + health.setsFailing;
+  })(),
   quarantine: get(quarantineNode).data?.length
 }));
 

@@ -136,10 +136,44 @@ type syncFakeBackend struct {
 	// (BackupServiceClient.Ready), so "not ready" is a state a real
 	// backend can be in, not only a missing one.
 	notReady bool
+
+	// --- issue #211's surfaces: what the fake holds, what it refuses
+	// with, and what the handler asked it for.
+	artifacts     []service.Artifact
+	activity      []service.ActivityEvent
+	operationList []service.Operation
+	health        service.HealthReport
+	catalog       service.CatalogReport
+
+	revalidateResult          service.ArtifactCheck
+	persistedConnectionResult service.ConnectionTestResult
+
+	errOnArtifacts      error
+	errOnActivity       error
+	errOnListOperations error
+	errOnHealth         error
+	errOnCatalog        error
+	errOnRevalidate     error
+	errOnRetry          error
+	errOnSetEnabled     error
+	errOnTestPersisted  error
+
+	lastArtifactFilter    service.ArtifactFilter
+	lastActivityLimit     int
+	lastOperationsLimit   int
+	lastRevalidated       string
+	lastRetried           string
+	lastSetEnabled        setEnabledCall
+	lastTestedBackupSetID string
 }
 
 func newSyncFakeBackend() *syncFakeBackend {
-	return &syncFakeBackend{configRevision: "rev-1", ops: map[string]service.Operation{}, plans: map[string]service.RetentionPlan{}}
+	return &syncFakeBackend{
+		configRevision:            "rev-1",
+		ops:                       map[string]service.Operation{},
+		plans:                     map[string]service.RetentionPlan{},
+		persistedConnectionResult: service.ConnectionTestResult{OK: true},
+	}
 }
 
 func (f *syncFakeBackend) ConfigRevision() string { return f.configRevision }
@@ -276,6 +310,142 @@ func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageS
 	return nil, nil
 }
 
+// --- issue #211's read surface and its two quarantine actions ---
+//
+// Each of these is an in-memory store plus one error-injection field, so
+// handlers_artifacts_test.go, handlers_activity_test.go,
+// handlers_catalog_test.go and handlers_health_test.go can drive both the
+// success shape and every mapped refusal without a real journal. The
+// stores are exported through the fake's own fields rather than through
+// setters: a test arranges the fixture, it does not script it.
+
+func (f *syncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (service.BackupSet, error) {
+	if f.errOnSetEnabled != nil {
+		return service.BackupSet{}, f.errOnSetEnabled
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSetEnabled = setEnabledCall{id: id, enabled: enabled}
+	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *syncFakeBackend) TestBackupSetConnection(_ context.Context, id string) (service.ConnectionTestResult, error) {
+	if f.errOnTestPersisted != nil {
+		return service.ConnectionTestResult{}, f.errOnTestPersisted
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastTestedBackupSetID = id
+	return f.persistedConnectionResult, nil
+}
+
+func (f *syncFakeBackend) ListArtifacts(_ context.Context, filter service.ArtifactFilter) ([]service.Artifact, error) {
+	if f.errOnArtifacts != nil {
+		return nil, f.errOnArtifacts
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastArtifactFilter = filter
+	out := make([]service.Artifact, 0, len(f.artifacts))
+	for _, a := range f.artifacts {
+		if filter.QuarantinedOnly && !a.Quarantined {
+			continue
+		}
+		if filter.BackupSetID != "" && a.BackupSetID != filter.BackupSetID {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func (f *syncFakeBackend) GetArtifact(_ context.Context, id string) (service.Artifact, error) {
+	if f.errOnArtifacts != nil {
+		return service.Artifact{}, f.errOnArtifacts
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.artifacts {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return service.Artifact{}, fmt.Errorf("%w: %s", service.ErrArtifactNotFound, id)
+}
+
+func (f *syncFakeBackend) RevalidateArtifact(_ context.Context, id string) (service.ArtifactCheck, error) {
+	if f.errOnRevalidate != nil {
+		return service.ArtifactCheck{}, f.errOnRevalidate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRevalidated = id
+	return f.revalidateResult, nil
+}
+
+func (f *syncFakeBackend) RetryArtifactIngestion(_ context.Context, id string) error {
+	if f.errOnRetry != nil {
+		return f.errOnRetry
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRetried = id
+	return nil
+}
+
+func (f *syncFakeBackend) ListActivity(_ context.Context, limit int) ([]service.ActivityEvent, error) {
+	if f.errOnActivity != nil {
+		return nil, f.errOnActivity
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastActivityLimit = limit
+	return f.activity, nil
+}
+
+func (f *syncFakeBackend) ListOperations(_ context.Context, limit int) ([]service.Operation, error) {
+	if f.errOnListOperations != nil {
+		return nil, f.errOnListOperations
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastOperationsLimit = limit
+	return f.operationList, nil
+}
+
+func (f *syncFakeBackend) Health(context.Context) (service.HealthReport, error) {
+	if f.errOnHealth != nil {
+		return service.HealthReport{}, f.errOnHealth
+	}
+	return f.health, nil
+}
+
+func (f *syncFakeBackend) ScanCatalog(context.Context) (service.CatalogReport, error) {
+	if f.errOnCatalog != nil {
+		return service.CatalogReport{}, f.errOnCatalog
+	}
+	report := f.catalog
+	report.DryRun = true
+	return report, nil
+}
+
+func (f *syncFakeBackend) RebuildCatalog(context.Context) (service.CatalogReport, error) {
+	if f.errOnCatalog != nil {
+		return service.CatalogReport{}, f.errOnCatalog
+	}
+	report := f.catalog
+	report.DryRun = false
+	return report, nil
+}
+
+// setEnabledCall records what crossed the HTTP-to-core seam, so a test can
+// assert on the id and the flag the handler actually built rather than
+// only on what came back out.
+type setEnabledCall struct {
+	id      string
+	enabled bool
+}
+
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
 // behaves like the real core/service.BackupService's own contract:
 // persist synchronously, then finish the work later on a goroutine that
@@ -389,6 +559,54 @@ func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTes
 
 func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
 	return nil, nil
+}
+
+// Issue #211's surfaces, on the async double. This fake exists only to
+// prove operation lifetime survives a disconnected client
+// (disconnect_test.go), so none of these has behaviour worth modelling:
+// each returns the empty answer, which is a real answer for a deployment
+// that has done nothing yet, rather than an error a test would then have
+// to route around.
+func (f *asyncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (service.BackupSet, error) {
+	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *asyncFakeBackend) TestBackupSetConnection(context.Context, string) (service.ConnectionTestResult, error) {
+	return service.ConnectionTestResult{OK: true}, nil
+}
+
+func (f *asyncFakeBackend) ListArtifacts(context.Context, service.ArtifactFilter) ([]service.Artifact, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) GetArtifact(_ context.Context, id string) (service.Artifact, error) {
+	return service.Artifact{}, fmt.Errorf("%w: %s", service.ErrArtifactNotFound, id)
+}
+
+func (f *asyncFakeBackend) RevalidateArtifact(context.Context, string) (service.ArtifactCheck, error) {
+	return service.ArtifactCheck{}, nil
+}
+
+func (f *asyncFakeBackend) RetryArtifactIngestion(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) ListActivity(context.Context, int) ([]service.ActivityEvent, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) ListOperations(context.Context, int) ([]service.Operation, error) {
+	return nil, nil
+}
+
+func (f *asyncFakeBackend) Health(context.Context) (service.HealthReport, error) {
+	return service.HealthReport{}, nil
+}
+
+func (f *asyncFakeBackend) ScanCatalog(context.Context) (service.CatalogReport, error) {
+	return service.CatalogReport{DryRun: true}, nil
+}
+
+func (f *asyncFakeBackend) RebuildCatalog(context.Context) (service.CatalogReport, error) {
+	return service.CatalogReport{}, nil
 }
 
 var errBoom = errors.New("boom")

@@ -286,6 +286,16 @@ bash scripts/perf/selftest.sh
 gate_step "/api/v1 bindings match the contract, and no implementation type leaks (#166)"
 bash scripts/api/check-contract-drift.sh
 
+# The other half of #166's "generated from it or mechanically validated
+# against it": ui/shared/src/api/client.ts is hand-written on top of the
+# generated module, so its request paths are string literals that the
+# binding comparison above cannot see. Fourteen of them named operations
+# neither the contract nor the router had, and four of the six shipped
+# pages failed against a real backend while every suite stayed green
+# (#211). Static, so it costs about a second and needs no npm install.
+gate_step "every /api/v1 path the shared client builds is a declared operation (#211)"
+bash scripts/api/check-client-paths.sh
+
 gate_step "the /api/v1 contract gates can actually fail (mutation self-test)"
 bash scripts/api/selftest.sh
 

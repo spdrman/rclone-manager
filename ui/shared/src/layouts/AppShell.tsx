@@ -72,7 +72,7 @@ export function AppShell({
         {health ? (
           <StatusBadge tone={health.serviceRunning ? "ok" : "danger"} glyph={health.serviceRunning ? "\u25cf" : "\u2715"}>
             {(health.serviceRunning ? "Service running" : "Service stopped") +
-              (version ? " \u00b7 v" + version.ui : "")}
+              (version ? " \u00b7 v" + version.service : "")}
           </StatusBadge>
         ) : null}
 

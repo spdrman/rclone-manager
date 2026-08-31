@@ -14,7 +14,7 @@ import { OperationProgress } from "@shared/components/OperationProgress";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
-import { bytes, percent } from "@shared/utilities/format";
+import { bytes } from "@shared/utilities/format";
 
 export function DashboardPage({
   health,
@@ -108,9 +108,9 @@ export function DashboardPage({
               detail={h.setsStale + " stale \u00b7 " + h.setsFailing + " failing"}
             />
             <MetricCard
-              label="Success rate \u00b7 7d"
-              value={percent(h.successRate7d)}
-              detail="verified ingestion cycles"
+              label="Degraded or stale"
+              value={String(h.setsDegraded + h.setsStale)}
+              detail="sets needing attention"
             />
             <MetricCard
               label="Quarantine"
