@@ -127,11 +127,20 @@ test.describe("add backup set wizard", () => {
     await expect(validator).toHaveValue("");
     const options = validator.getByRole("option");
     await expect(options.first()).toHaveText("None (transfer and checksum verification only)");
-    // ...and the choices below it come from the backend's catalog rather than
-    // a hardcoded list. Counted, not enumerated, so adding a validator to the
-    // mock fixture does not turn this red. Safe to read without retrying:
-    // toBeEnabled() above already proved the fetch settled.
+    // ...and the choices below it are the backend's catalog rather than a
+    // hardcoded list. A count alone cannot show that: two literal <option>
+    // elements satisfy `> 1` identically, which is exactly the shape #164
+    // removed, and with one entry in the mock catalog it also sat on its
+    // own boundary. So the count stays only as a lower bound, and an id the
+    // fixture actually serves has to be among the choices. Containment
+    // rather than equality, so adding a validator to the mock does not turn
+    // this red; renaming trailer-marker does, which is the point.
     expect(await options.count()).toBeGreaterThan(1);
+    // The option labels are the ids themselves (BackupSetWizardPage renders
+    // v.id, since the id is what gets saved). Safe to read without a manual
+    // wait: toBeEnabled() above already proved the fetch settled, and this
+    // is a retrying assertion regardless.
+    await expect(validator.getByRole("option", { name: "trailer-marker", exact: true })).toHaveCount(1);
   });
 
   test("step 6 summarises source, destination, retention and validation", async ({ page }) => {
