@@ -617,9 +617,12 @@ rclone version is embedded) and backup-set health, one of four states:
 
 `backup-manager status` renders all of it, including the `QuarantinedCount` and
 `QuarantinedLostCount` aggregates FR-24 asks for, and exits non-zero unless every configured
-set reports HEALTHY, which is what makes it usable as a container healthcheck rather than
-only as something to read. The API side is `GET /health/live` and `GET /health/ready` on the
-engine, deliberately outside `/api/v1` and outside authentication. What does not exist is a
+set reports HEALTHY, which is what makes it the container healthcheck the image bakes in
+rather than only something to read. It is deliberately not what any container START waits on:
+a fresh install has backed nothing up, so the verdict is negative and gating on it would keep
+the web UI from ever coming up. The packaged runtime definitions ask `/health/live` for that
+instead. The API side is `GET /health/live` and `GET /health/ready` on the engine,
+deliberately outside `/api/v1` and outside authentication. What does not exist is a
 `/metrics` endpoint, as [Status](#status-what-actually-runs-today) says above.
 
 `core/internal/alert` turns those same computed signals into at most one operator-facing

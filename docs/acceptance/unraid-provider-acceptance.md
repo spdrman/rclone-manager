@@ -196,7 +196,10 @@ in `apps/unraid/README.md`.
       and the right default
 - [ ] The container starts
 - [ ] It reaches Docker health **healthy** (it inherits the image's own
-      `HEALTHCHECK`, `/backup-manager status`)
+      `HEALTHCHECK`, `/backup-manager status`, which is the right answer here:
+      an Unraid template declares no start-ordering dependency, so nothing waits
+      on this verdict and it is the backup-freshness badge FR-24 means it to be.
+      On a fresh install it will be red until the first backup lands)
 - [ ] It has **no published port** (`docker port <engine>` prints nothing)
 - [ ] It is attached to the `backup-manager` network
 

@@ -206,8 +206,12 @@ Record: how long the install took, and the full text of any warning TrueNAS show
 
 - [ ] Install completed without error
 - [ ] TrueNAS shows the app, and both containers reach **running**
-- [ ] The engine container reaches Docker health **healthy** (it inherits the
-      image's own `HEALTHCHECK`, `/backup-manager status`)
+- [ ] The engine container reaches Docker health **healthy** (it declares the
+      liveness probe, `/backup-manager-web healthcheck --url
+      http://127.0.0.1:8080/health/live`, and NOT the image's own
+      `HEALTHCHECK`, `/backup-manager status`. The Web UI will not start until
+      this reports healthy, and `status` is the backup-freshness verdict, which
+      is non-zero on a fresh install that has backed nothing up)
 - [ ] The Web UI container reaches Docker health **healthy** (it overrides that
       healthcheck with `/backup-manager-web healthcheck`, because it has no config
       file and no state database of its own to report on)

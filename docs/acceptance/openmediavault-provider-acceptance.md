@@ -207,8 +207,12 @@ Verify the host key fingerprint out of band. Then write
 
 - [ ] The compose file saves with no validation error
 - [ ] `Up` completes and both services reach **running**
-- [ ] The engine service reaches health **healthy** (it inherits the image's own
-      `HEALTHCHECK`, `/backup-manager status`)
+- [ ] The engine service reaches health **healthy** (it declares the
+      liveness probe, `/backup-manager-web healthcheck --url
+      http://127.0.0.1:8080/health/live`, and NOT the image's own
+      `HEALTHCHECK`, `/backup-manager status`. The Web UI will not start until
+      this reports healthy, and `status` is the backup-freshness verdict, which
+      is non-zero on a fresh install that has backed nothing up)
 - [ ] The Web UI service reaches health **healthy** via its own
       `/backup-manager-web healthcheck` override, not the image's
       `/backup-manager status` (which would fail: no config, no state database)
