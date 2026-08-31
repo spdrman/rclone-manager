@@ -30,6 +30,8 @@ func env() map[string]string {
 		"KEY_FILE":         "/srv/backup-manager/secrets/id_ed25519",
 		"KNOWN_HOSTS_FILE": "/srv/backup-manager/secrets/known_hosts",
 		"DISK":             "/srv/dev-disk-by-uuid-11111111-2222-3333-4444-555555555555",
+		"APPDATA":          "/volume1/docker/backup-manager",
+		"BACKUP_ROOT":      "/volume1/backup-manager",
 	}
 }
 

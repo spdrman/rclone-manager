@@ -121,23 +121,24 @@ end-to-end proof.
 - Restore execution is out of scope by design, not by omission: there is no `restore`
   command and no restore endpoint. [Recovery](#recovery-when-a-backup-did-not-arrive) below
   is the manual procedure, and it is the whole of it.
-- Nothing in a release build selects a provider frontend. `ui/shared/vite.config.ts` picks
-  the shell at build time from `VITE_PLATFORM` and defaults to `generic`, and `serve-ui`
-  serves one embedded bundle, so every artifact anyone installs runs the generic bridge. A
-  capability flag in `apps/<provider>/frontend/platform.ts` is therefore a statement of
-  intent in this repository, not a description of deployed behaviour. That is #180, and it
-  is what holds the Phase 4 exit gate open.
+- A release build does select a provider frontend, since #167 and #169. `serve-ui`
+  resolves its bundle at run time (`--ui-dir`, then `--ui-root/<profile>`, then the
+  compiled-in one) and fails to start rather than falling back to the generic bridge, and
+  the canonical image carries the five provider bundles the shipped adapters name. What is
+  still not exposed is a sixth: the image budget has room for these five and not another,
+  and `ugos` carries its own in EPIC D's UPK, which does not exist here.
 - `serve` refuses to start without a valid config file, because `core/service.Open` loads
   and validates one before anything else happens. An app-store install that has never been
   configured therefore cannot get as far as a setup screen. #176 implements the engine half
   of a first-run experience and is not merged yet.
-- **A packaged container cannot write its own configuration.** `config.yaml` is bind-mounted
-  as a single read-only file by the canonical Compose file and by the TrueNAS, Unraid and
-  OpenMediaVault profiles, and three merged write paths go through that file: creating a
-  backup set, saving settings, and first-run setup. All three fail at the write inside a
-  packaged container no matter how correct the code above them is, and no test catches it
-  because every fixture in the suite uses an ordinary writable file. That is #196, and #169
-  owns the mount-role change that fixes it.
+- A packaged container can write its own configuration, since #169 carried #196's
+  mount-role change: every adapter now bind-mounts the config DIRECTORY, writable, at
+  `/etc/backup-manager/config` rather than the single `config.yaml` read-only. The three
+  merged write paths that go through that file (creating a backup set, saving settings,
+  first-run setup) reach a writable filesystem in a packaged container. What an operator
+  still has to do by hand is make the host directory writable by the container's uid/gid
+  before the first start: a bind mount does not chown its source, and the runtime image is
+  distroless with no root step, so each acceptance procedure's step 0 says so.
 
 ### What has actually been exercised on real hardware
 
@@ -820,6 +821,7 @@ core/internal/
   retention/    GFS classification, last-known-good protection, and the local prune
   revalidate/   scheduled re-verification of artifacts that already passed
   state/        the SQLite journal: durable, idempotent transition recording
+  testenv/      the environment a test has to be in before it may conclude anything from file permissions
   transport/    the manager-owned Transport interface and the rclone adapter behind it
 ```
 

@@ -148,25 +148,18 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 
 | Outcome | Cells |
 |---|---|
-| PASS | 73 |
+| PASS | 78 |
 | PENDING_OPERATOR | 20 |
 | UNSUPPORTED | 26 |
-| NOT_APPLICABLE | 22 |
-| BLOCKED | 20 |
+| NOT_APPLICABLE | 21 |
+| BLOCKED | 16 |
 | FAIL | 0 |
 
 ### Phase 4 Exit Gate
 
 Computed over the 6 providers EPIC B claims, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
 
-**Not met.** 0 cell(s) failed and 4 could not be decided, every one of them in a column EPIC B claims:
-
-| Provider | Capability | Outcome | Tracked by |
-|---|---|---|---|
-| Synology DSM | Embedded window | BLOCKED | #180 |
-| Synology DSM | App-store packaging | BLOCKED | #180 |
-| TrueNAS | App-store packaging | BLOCKED | #180 |
-| Unraid | App-store packaging | BLOCKED | #180 |
+**Met.** Every cell of every one of those columns was decided, and none of them failed.
 
 **UGOS Pro is EPIC D's column** (work package 4.2).
 All 23 of its cells are decided by the same runner, on the same terms as every
