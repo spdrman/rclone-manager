@@ -206,9 +206,23 @@ var platformsWithNoHostPathsToCheck = map[string]string{
 	"synology": "kind \"spk\": DSM chooses the paths, not a file this suite can read. Private state lives in the per-package FHS tree (/var/packages/<pkg>/var, /etc, /home - apps/synology/spk/layout.go) and backup data in the DSM shared folder the data-share resource worker creates, which are structurally disjoint trees rather than two operator-editable paths that could be pointed at each other. apps/synology/spk/lifecycle_test.go is where that split is asserted, in that module.",
 }
 
+// claimedPlatform is one provider as the conformance matrix declares it:
+// its id, and the runtime definition it says it deploys.
+//
+// The compose path is read as well as the id because a platform does not
+// have to own its artifact. Dockge deploys container/compose.yaml, the
+// canonical definition, and says so in that field; its host-path layout
+// therefore IS read by this suite, under the canonical file's own name,
+// and recording that as an exemption would have described the same bytes
+// as unchecked.
+type claimedPlatform struct {
+	ID      string
+	Compose string
+}
+
 // claimedPlatforms reads the provider set the product actually claims,
 // from the same file the conformance matrix is built out of.
-func claimedPlatforms(t *testing.T) []string {
+func claimedPlatforms(t *testing.T) []claimedPlatform {
 	t.Helper()
 	raw, err := os.ReadFile(compose.Path("distribution/packaging/conformance.json"))
 	if err != nil {
@@ -217,18 +231,30 @@ func claimedPlatforms(t *testing.T) []string {
 	var doc struct {
 		Providers map[string]struct {
 			Metadata struct {
-				Kind string `json:"kind"`
+				Kind    string `json:"kind"`
+				Root    string `json:"root"`
+				Compose string `json:"compose"`
 			} `json:"metadata"`
 		} `json:"providers"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("parse conformance.json: %v", err)
 	}
-	out := make([]string, 0, len(doc.Providers))
-	for id := range doc.Providers {
-		out = append(out, id)
+	out := make([]claimedPlatform, 0, len(doc.Providers))
+	for id, p := range doc.Providers {
+		rel := p.Metadata.Compose
+		// A compose path is written relative to the provider's own root
+		// everywhere except where it names a file outside that root,
+		// which is the whole point of the field for a platform that
+		// deploys somebody else's definition.
+		if rel != "" && !strings.HasPrefix(rel, p.Metadata.Root+"/") {
+			if _, err := os.Stat(compose.Path(rel)); err != nil {
+				rel = p.Metadata.Root + "/" + rel
+			}
+		}
+		out = append(out, claimedPlatform{ID: id, Compose: rel})
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
@@ -243,8 +269,10 @@ func TestEveryClaimedPlatformIsReadBySomethingHere(t *testing.T) {
 	t.Parallel()
 
 	c := compose.MustLoadContract()
+	read := map[string]bool{}
 	covered := map[string]string{}
 	for _, rel := range append([]string{c.Canonical}, c.Derived...) {
+		read[rel] = true
 		covered[platformOfArtifact(rel)] = rel
 	}
 
@@ -253,28 +281,100 @@ func TestEveryClaimedPlatformIsReadBySomethingHere(t *testing.T) {
 		t.Fatalf("conformance.json declares %d provider(s); this guard proves nothing below two", len(claimed))
 	}
 
-	for _, id := range claimed {
+	ids := make([]string, 0, len(claimed))
+	for _, p := range claimed {
+		ids = append(ids, p.ID)
 		switch {
-		case covered[id] != "":
-		case nonComposePlatformCoverage[id] != "":
-		case platformsWithNoHostPathsToCheck[id] != "":
+		case covered[p.ID] != "":
+		// A platform that declares a runtime definition this suite
+		// already reads is covered by it, whoever registered that
+		// artifact. This is coverage and not an exemption: the file
+		// whose host paths get checked is the file this platform says
+		// it deploys, byte for byte.
+		case p.Compose != "" && read[p.Compose]:
+		case nonComposePlatformCoverage[p.ID] != "":
+		case platformsWithNoHostPathsToCheck[p.ID] != "":
 		default:
 			t.Errorf("platform %q is claimed in conformance.json and nothing in this suite reads its host-path layout.\n"+
-				"Issue #87's acceptance criterion is that private state, credentials and host keys are proven separate from backup data on EVERY claimed platform. Either read its artifact here, or add an entry to platformsWithNoHostPathsToCheck saying why there is nothing to read.", id)
+				"Issue #87's acceptance criterion is that private state, credentials and host keys are proven separate from backup data on EVERY claimed platform. Either read its artifact here, or add an entry to platformsWithNoHostPathsToCheck saying why there is nothing to read.", p.ID)
 		}
 	}
 
 	// Stale entries are the other direction of the same failure: an
 	// exemption for a platform nobody claims any more reads as coverage.
 	for id := range platformsWithNoHostPathsToCheck {
-		if !slices.Contains(claimed, id) {
+		if !slices.Contains(ids, id) {
 			t.Errorf("platformsWithNoHostPathsToCheck names %q, which conformance.json does not claim", id)
 		}
 	}
 	for id := range nonComposePlatformCoverage {
-		if !slices.Contains(claimed, id) {
+		if !slices.Contains(ids, id) {
 			t.Errorf("nonComposePlatformCoverage names %q, which conformance.json does not claim", id)
 		}
+	}
+}
+
+// TestDeclaredArtifactCoverageIsRealCoverage is the control for the
+// clause above, and it is the clause that needed one: reading coverage
+// out of a platform's own declaration is one typo away from reading it
+// out of nothing at all, and a platform silently covered by an empty
+// string looks exactly like a platform genuinely covered.
+//
+// Two directions, because either one alone passes while the rule is
+// broken. A platform whose declared definition is one this suite reads
+// has to resolve to that definition and no other, and a platform whose
+// declared definition is NOT read has to stay uncovered.
+func TestDeclaredArtifactCoverageIsRealCoverage(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	read := map[string]bool{}
+	for _, rel := range append([]string{c.Canonical}, c.Derived...) {
+		read[rel] = true
+	}
+
+	owned := map[string]bool{}
+	for _, rel := range append([]string{c.Canonical}, c.Derived...) {
+		owned[platformOfArtifact(rel)] = true
+	}
+
+	claimed := claimedPlatforms(t)
+	dependsOnTheClause := 0
+	for _, p := range claimed {
+		if p.Compose != "" {
+			if _, err := os.Stat(compose.Path(p.Compose)); err != nil {
+				t.Errorf("platform %q declares compose %q, which is not in the tree: %v.\n"+
+					"A declared path nobody resolves is how the coverage clause turns into a rubber stamp", p.ID, p.Compose, err)
+				continue
+			}
+		}
+		// The platforms the clause exists for: no artifact of their own
+		// under apps/<id>/, no entry in either exemption map, and so
+		// covered by the file they say they deploy or by nothing.
+		if owned[p.ID] || nonComposePlatformCoverage[p.ID] != "" || platformsWithNoHostPathsToCheck[p.ID] != "" {
+			continue
+		}
+		dependsOnTheClause++
+		if p.Compose == "" {
+			t.Errorf("platform %q is covered by nothing but its declared compose path and declares none", p.ID)
+			continue
+		}
+		if !read[p.Compose] {
+			t.Errorf("platform %q is covered by nothing but its declared compose path %q, and this suite does not read that file", p.ID, p.Compose)
+		}
+	}
+	if dependsOnTheClause == 0 {
+		t.Fatalf("no claimed platform depends on the declared-artifact coverage clause, so it is inert and TestEveryClaimedPlatformIsReadBySomethingHere would pass with it deleted")
+	}
+
+	// The negative direction. A platform pointed at a real file that is
+	// not a registered runtime artifact must not be counted as covered.
+	unread := "container/.env.example"
+	if _, err := os.Stat(compose.Path(unread)); err != nil {
+		t.Fatalf("the control needs a real file this suite does not read: %v", err)
+	}
+	if read[unread] {
+		t.Fatalf("%s is now a registered runtime artifact, so it cannot be the control for a path this suite does not read", unread)
 	}
 }
 

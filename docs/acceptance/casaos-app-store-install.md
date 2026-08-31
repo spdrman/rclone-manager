@@ -82,26 +82,26 @@ chmod 600 /DATA/AppData/backup-manager/secrets/id_ed25519
 
 ---
 
-### 0.4 Write the config before the first start
+### 0.4 The configuration directory, and the config file that is now optional
 
-The engine's healthcheck is `["CMD", "/backup-manager", "status"]`, and `status`
-opens the service, which loads **and validates** `config.yaml` before it returns.
-With no config file on disk it exits non-zero, the engine never turns healthy,
-and `backup-manager-ui` never starts at all: `apps/casaos/compose/backup-manager.yml` gates it on
-`depends_on: backup-manager: condition: service_healthy`, exactly as
-`container/compose.yaml` does and exactly as the equivalence gate requires it to.
-A missing or invalid `config.yaml` is a hard startup failure, not a first-run
-wizard, so "both containers reach `running`" below, and the published port
-loading the shared web UI after it, are unreachable until this file exists.
+The engine's start gate is a liveness question, not a backup-freshness verdict
+(issue #206). It declares
+`["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]`,
+derived from `container/compose.yaml`, and `backup-manager-ui` waits on that with
+`condition: service_healthy`. `/backup-manager status` is still FR-24's freshness
+verdict and still the image's own baked-in `HEALTHCHECK`, and it exits non-zero on a
+fresh install by design, which is exactly why nothing waits on it any more. So a
+**fresh install reaches the web UI**: an empty configuration directory is a legitimate
+state, and the engine serves its first-run setup flow from it (issue #176).
 
-**What still requires this step, precisely (issue #176).** The configuration mount
-is a writable directory the application owns, so once the engine is running it can
-create and replace `config.yaml` itself, and an empty directory is a legitimate
-state rather than a broken deployment. What keeps the step here is that the engine
-still refuses to start without a valid config: removing that refusal, and serving a
-first-run flow instead, is #176's work and is not merged. Until it is, writing the
-file out of band is the interim handling #176 itself names, and it is the same step 0
-the TrueNAS, Unraid and OpenMediaVault procedures already carry.
+**What this step still requires.** The configuration directory itself, created and
+owned by the app's uid and gid before the first start, because a bind mount does not
+create or chown its source and the distroless runtime image has no shell to do it for
+you. Writing `config.yaml` by hand is no longer required to reach the UI, and this
+procedure keeps the commands below only as the faster route for an operator who
+already has the SFTP details: a config file that EXISTS and does not validate is still
+a hard startup failure rather than a first-run wizard, so an invalid one is worse than
+none at all. Either finish setup in the browser and skip the file, or write it here.
 
 **The store install path has no shell step.** CasaOS starts the stack the moment
 the tile is clicked, and the install dialog places no files, so `config.yaml` has to
@@ -144,7 +144,10 @@ host and user.
 - [ ] The install dialog listed the five volumes and the two environment values
       the per-service `x-casaos` blocks describe
 - [ ] Both containers reach `running`
-- [ ] `backup-manager` reports healthy
+- [ ] `backup-manager` reports healthy (it declares the liveness probe
+      `/backup-manager-web healthcheck --url http://127.0.0.1:8080/health/live`,
+      not the image's own `/backup-manager status`: the web UI waits on this, and
+      the backup-freshness verdict is non-zero on a fresh install)
 - [ ] `backup-manager-ui` reports healthy, having overridden the image's own healthcheck
 - [ ] The app claims `amd64` and `arm64`, and it installed on this machine's architecture
 

@@ -8,10 +8,16 @@ in this directory but an icon and this page.
 This is new platform support, not a conversion. No Phase 4 issue targeted
 ZimaOS, so nothing here replaces earlier packaging.
 
+ZimaOS's own documentation for that format, cited here rather than in the compose
+file itself because the compose file is the artifact the store ingests and the
+submission preflight reads every outbound host in a shipped artifact as an
+endpoint until it is shown otherwise:
+https://www.zimaspace.com/docs/developer/app-store-compose-x-casaos
+
 ## The split that makes it an adapter
 
 Everything outside `x-casaos` is Compose and container semantics **derived** from
-`container/compose.yaml` at runtime contract 1.1.0. Seven fields have one
+`container/compose.yaml` at runtime contract 1.2.0. Seven fields have one
 authority each and a mismatch names the field
 (`distribution/packaging/derive.go`); on top of that the whole stack is held to
 the canonical one semantically, service by service, by

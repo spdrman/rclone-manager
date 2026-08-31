@@ -15,7 +15,7 @@
 # uninstalled. distribution/compose fails the build if any of that changes.
 #
 # Every runtime field here is DERIVED from container/compose.yaml at
-# runtime contract 1.1.0, and distribution/packaging/derive.go names the
+# runtime contract 1.2.0, and distribution/packaging/derive.go names the
 # field if one drifts. It is also held to the canonical stack semantically,
 # service for service, by TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack.
 services:
@@ -50,6 +50,17 @@ services:
       # only other member is the Web UI container. Never set this on the
       # Web UI container, which is the edge.
       TRUST_FORWARDED_HEADERS: "true"
+      # Declared, and declared EMPTY. The canonical engine reads this
+      # variable (container/compose.yaml), so leaving it out here would
+      # be a default nobody chose rather than a decision. Empty is the
+      # decision: it is the peer set a gateway runtime profile trusts a
+      # provider-native identity header from, this adapter selects
+      # `--profile=generic`, and generic has no authentication gateway
+      # at all - `serve` exits 2 rather than start if this is set to
+      # anything on a profile with no gateway to trust. Empty and unset
+      # behave identically in the binary, so this costs nothing and says
+      # which of the two it is.
+      TRUSTED_UPSTREAM_CIDRS: ""
 
     # Every host path uses the ":?" form, never a ":-" default, exactly as
     # container/compose.yaml does. Portainer renders the App Template's
@@ -63,8 +74,27 @@ services:
       - ${KEY_FILE:?set KEY_FILE to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
       - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
 
+    # The start gate, and a liveness question rather than a health
+    # verdict (issue #206). The Web UI below declares
+    # `depends_on: backup-manager: condition: service_healthy`, so
+    # whatever this asks stands between an operator and the only
+    # container with a published port. `/backup-manager status` is
+    # FR-24's backup-freshness verdict and exits non-zero on any
+    # DEGRADED, STALE or FAILING set, and on a fresh install, which has
+    # backed nothing up yet: gating the Web UI on it means a stack an operator
+    # just deployed from the App Template never gets a page at all.
+    #
+    # Declared here rather than inherited from the image, because the
+    # image's own HEALTHCHECK is deliberately the freshness verdict: it
+    # is the right default for a plain `docker run` and for the headless
+    # `daemon` command, which serves no HTTP and so has no liveness
+    # endpoint to ask. Backup freshness is not lost - read it with
+    # `docker exec backup-manager /backup-manager status`, or let the
+    # alerts block deliver it.
+    #
+    # Derived from container/compose.yaml, never authored here.
     healthcheck:
-      test: ["CMD", "/backup-manager", "status"]
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s

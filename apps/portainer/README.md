@@ -8,6 +8,13 @@ This is new platform support, not a conversion. Nothing in Phase 4 targeted
 Portainer, so there was no earlier Portainer packaging to convert and nothing
 here replaces anything.
 
+Portainer's own App Template documentation and format reference, cited here
+rather than inside `templates.json` because that file is a shipped artifact and
+the submission preflight reads every outbound host in one as an endpoint until it
+is shown otherwise:
+https://docs.portainer.io/advanced/app-templates and
+https://docs.portainer.io/advanced/app-templates/format
+
 ## What this adapter deliberately is not
 
 No Portainer plugin. No Portainer agent. No call to the Portainer API. No second
@@ -104,7 +111,7 @@ generic bridge says exactly that rather than claiming otherwise.
 ## Where the runtime definition comes from
 
 `compose/backup-manager.yml` is derived from `container/compose.yaml` at runtime
-contract 1.1.0. Seven fields have one authority each and a mismatch names the
+contract 1.2.0. Seven fields have one authority each and a mismatch names the
 field (`distribution/packaging/derive.go`), and on top of that the whole stack is
 held to the canonical one semantically, service by service, by
 `TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack`. The App

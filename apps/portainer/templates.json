@@ -1,7 +1,11 @@
 {
   "_comment": [
     "Portainer App Template (issue #170, B6.6). Template format version 3,",
-    "which is what current Portainer CE reads: https://docs.portainer.io/advanced/app-templates/format.",
+    "which is what current Portainer CE reads. apps/portainer/README.md and",
+    "docs/submission/portainer.md carry the link to Portainer's own format",
+    "documentation; this file is a shipped artifact and the submission preflight",
+    "reads every outbound host in one as an endpoint until it is shown otherwise,",
+    "so the citation lives beside it rather than inside it.",
     "",
     "type 3 is a STACK template. Portainer clones the repository named below,",
     "reads the compose file at repository.stackfile, renders the env list into a",

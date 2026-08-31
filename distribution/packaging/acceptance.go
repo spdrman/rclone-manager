@@ -145,33 +145,41 @@ func ReadAcceptanceProcedure(path, backupRoot string, subs map[string]string) ([
 	return CheckAcceptanceProcedure(string(data), backupRoot, subs), nil
 }
 
-// A third instruction is checkable from here, and it is the one a fresh
-// install fails on first.
+// A third instruction is checkable from here, and what it decides has
+// changed twice under it, which is the reason it is worth restating
+// carefully rather than deleting.
 //
-// Every adapter gives the engine `healthcheck: ["CMD", "/backup-manager",
-// "status"]` and gates the only container that publishes a port on it
-// with `depends_on: condition: service_healthy`, because
-// container/compose.yaml does and EquivalenceProperties compares both.
-// `status` opens the service, `core/service.Open` loads and validates
-// config.yaml, and with no config file on disk it exits non-zero: the
-// engine never turns healthy, and `docker compose up` aborts the UI
-// container. So a procedure that says "both containers reach running"
-// and "the published port loads the web UI" without having asked for a
-// config.yaml first states criteria its own step 1 cannot reach, and the
-// operator is stopped before the destructive-safety re-check the whole
-// procedure exists to produce.
+// It used to be the instruction a fresh install failed on first. Every
+// adapter gave the engine `healthcheck: ["CMD", "/backup-manager",
+// "status"]` and gated the only container that publishes a port on it
+// with `depends_on: condition: service_healthy`. `status` opens the
+// service, `core/service.Open` loaded and validated config.yaml, and with
+// no config file on disk it exits non-zero: the engine never turned
+// healthy and the UI container never started. Two changes since:
+// #176/#195 made the engine serve a first-run setup flow instead of
+// refusing to start, and #206/#210 made the engine's start gate a
+// liveness probe rather than the freshness verdict. A fresh install now
+// reaches the web UI, and this rule is no longer what stands between an
+// operator and step 1.
 //
-// Removing that refusal is #176's work and is not merged. Until it is,
-// the interim handling #176 itself names is to make writing a config
-// step 0 of every acceptance procedure, which is what #175 did for the
-// five procedures #202 converted. This rule is that handling, checked.
+// What remains true is the part worth checking. `status` is still the
+// image's own baked-in HEALTHCHECK and still the operator-facing verdict,
+// and a config file that EXISTS and does not validate is still a hard
+// startup failure rather than a first-run wizard, so an invalid one is
+// worse than none at all. A procedure that reaches its install step
+// without ever naming config.yaml, saying what an invalid one does, or
+// giving the operator a box for it, is a procedure that leaves the one
+// remaining hard failure undocumented. That is what this rule holds, and
+// it is the same four requirements #175 wrote into the five procedures
+// #202 converted, so the rule still describes the repository's own
+// settled handling rather than wording invented for the new four.
 
 // CheckConfigPrecondition holds an install procedure to the config.yaml
 // precondition: before the install step, in the prerequisites where an
-// operator still has a shell, the procedure has to ask for the file, say
-// why refusing to write it is a startup failure rather than a first-run
-// wizard, name #176 as the reason the step exists at all, and carry a
-// checklist box the operator can tick.
+// operator still has a shell, the procedure has to name the file, say why
+// an invalid one is a startup failure rather than a first-run wizard,
+// name #176 as the issue that decided which half of this is still
+// required, and carry a checklist box the operator can tick.
 //
 // The rule fails closed on a document with no `## Step 1` heading, rather
 // than reporting a clean prelude that is the whole file.
@@ -189,13 +197,13 @@ func CheckConfigPrecondition(text string) []Violation {
 	prelude := text[:loc[0]]
 
 	if !strings.Contains(prelude, "config.yaml") {
-		add("never names `config.yaml` before the install step, and the engine's healthcheck runs `status`, which exits non-zero until a valid config exists: the stack cannot reach the running and healthy state this procedure then asks the operator to confirm")
+		add("never names `config.yaml` before the install step, and a config file that exists and does not validate is still a hard startup failure: the stack cannot reach the running and healthy state this procedure then asks the operator to confirm, and the operator was never told which file decides that")
 	}
 	if !configRefusalRe.MatchString(prelude) {
-		add("does not say that a missing or invalid config is a hard startup failure rather than a first-run wizard, which is the one sentence that stops an operator clicking install and waiting for a wizard that never comes")
+		add("does not say that an invalid config is a hard startup failure rather than a first-run wizard, which is the one sentence that separates the state the engine serves a setup flow from (no file at all) from the state it refuses to start in (a file that does not parse or does not validate)")
 	}
 	if !configIssueRe.MatchString(prelude) {
-		add("does not cite #176 as the reason this step exists, so nobody reading it later can tell which part becomes optional once the engine serves a first-run flow")
+		add("does not cite #176 as the issue that decided this step's shape, so nobody reading it later can tell which half of it the first-run flow made optional and which half is still a hard failure")
 	}
 	if !configChecklistRe.MatchString(prelude) {
 		add("has no checklist box naming `config.yaml`, so the precondition is prose an operator can read past rather than a step they tick")

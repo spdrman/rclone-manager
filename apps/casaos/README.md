@@ -11,7 +11,7 @@ CasaOS, so nothing here replaces earlier packaging.
 ## The split that makes it an adapter
 
 Everything outside `x-casaos` is Compose and container semantics **derived** from
-`container/compose.yaml` at runtime contract 1.1.0. Seven fields have one
+`container/compose.yaml` at runtime contract 1.2.0. Seven fields have one
 authority each and a mismatch names the field
 (`distribution/packaging/derive.go`); on top of that the whole stack is held to
 the canonical one semantically, service by service, by

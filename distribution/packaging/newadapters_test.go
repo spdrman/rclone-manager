@@ -1102,20 +1102,23 @@ func TestTheNewAdaptersAcceptanceProceduresAreSafeAndVerifiable(t *testing.T) {
 }
 
 // TestEveryNewProcedureRequiresAConfigBeforeInstall is the #204 review's
-// M1. All four adapters gate the container that publishes a port on the
-// engine reporting healthy, the engine's healthcheck is `status`, and
-// `status` exits non-zero until a valid config.yaml exists on disk. A
-// procedure whose step 0 creates the config directory and never puts a
-// file in it therefore asks the operator to confirm "both containers
-// reach running" and "the published port loads the shared web UI" after
-// an install that cannot get there, and the destructive-safety re-check
-// these four procedures exist to produce is unreachable behind it.
+// M1, restated for what is true after #195 and #210 landed on main.
 //
-// The remedy is the procedure's, not the adapter's: container/compose.yaml
-// carries the identical healthcheck and the identical service_healthy
-// gate, and PropHealthCheck compares both, so an adapter that softened
-// either would fail this suite's own equivalence gate. Fixing the health
-// contract is #176's, and this is the interim handling #176 names.
+// It used to be about reachability: the engine's start gate was
+// `status`, which exits non-zero until a valid config.yaml exists, so a
+// procedure whose step 0 never wrote one asked the operator to confirm a
+// running web UI it could not reach. That gate is now a liveness probe
+// and the engine serves a first-run flow, so a fresh install does reach
+// the UI and the file is no longer required to get there.
+//
+// One hard failure is left, and it is the one an operator can still walk
+// into: a config file that EXISTS and does not validate refuses the
+// start, so an invalid one is worse than no file at all. A procedure that
+// reaches its install step without naming config.yaml, without saying
+// that, and without a box for it, leaves that failure undocumented on a
+// platform where the operator's next move is a store install dialogue.
+// That is what this holds all four procedures to, and it is the same
+// shape the five procedures #202 converted already carry.
 func TestEveryNewProcedureRequiresAConfigBeforeInstall(t *testing.T) {
 	for _, a := range newAdapters() {
 		t.Run(a.id, func(t *testing.T) {
@@ -1160,8 +1163,8 @@ func TestTheConfigPreconditionRuleFires(t *testing.T) {
 	const (
 		head      = "# A procedure\n\n## Step 0 — Prerequisites\n\n"
 		file      = "Write `config.yaml` into the config directory before you install.\n\n"
-		refusal   = "A missing or invalid config is a hard startup failure, not a first-run wizard.\n\n"
-		citation  = "Serving a first-run flow instead is #176's work and is not merged.\n\n"
+		refusal   = "A config file that exists and does not validate is a hard startup failure, not a first-run wizard.\n\n"
+		citation  = "#176 is the issue that decided which half of this step is still required.\n\n"
 		checklist = "- [ ] `config.yaml` written inside it\n\n"
 		install   = "## Step 1 — Install\n\n- [ ] Both containers reach `running`\n"
 	)
@@ -1178,7 +1181,7 @@ func TestTheConfigPreconditionRuleFires(t *testing.T) {
 			"never names `config.yaml`",
 		},
 		{
-			"no statement that the engine refuses to start",
+			"no statement that an invalid config refuses the start",
 			head + file + citation + checklist + install,
 			"hard startup failure",
 		},

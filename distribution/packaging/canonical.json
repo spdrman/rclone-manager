@@ -338,7 +338,7 @@
       "profile": "generic",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
 
@@ -361,7 +361,7 @@
       "profile": "generic",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
 
@@ -384,7 +384,7 @@
       "profile": "generic",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
 
@@ -407,7 +407,7 @@
       "profile": "generic",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     }
   }

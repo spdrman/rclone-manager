@@ -2,8 +2,11 @@
 #
 # ZimaOS is built on CasaOS and reads the same `x-casaos` block out of a
 # docker-compose file, so this single file is both the runtime definition
-# and the store submission. See
-# https://www.zimaspace.com/docs/developer/app-store-compose-x-casaos.
+# and the store submission. apps/zimaos/README.md carries the link to
+# ZimaOS's own developer documentation for that format; this file is the
+# artifact the store ingests, and the submission preflight reads every
+# outbound host in a shipped artifact as an endpoint until it is shown
+# otherwise, so the citation lives beside it rather than inside it.
 #
 # This is a SECOND STORE REGISTRATION OVER ONE RUNTIME, not a second
 # runtime. Its services are byte-for-byte the same shape as
@@ -18,7 +21,7 @@
 #
 # Two halves, and the split is the whole design. Everything outside
 # `x-casaos` is Compose and container semantics DERIVED from
-# container/compose.yaml at runtime contract 1.1.0, held to it field by
+# container/compose.yaml at runtime contract 1.2.0, held to it field by
 # field by distribution/packaging/derive.go and service by service by
 # TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack.
 # Everything inside `x-casaos` is store presentation, it reaches no Go
@@ -95,6 +98,17 @@ services:
       # only other member is the web UI container. Never set this on the
       # web UI container, which is the edge.
       TRUST_FORWARDED_HEADERS: "true"
+      # Declared, and declared EMPTY. The canonical engine reads this
+      # variable (container/compose.yaml), so leaving it out here would
+      # be a default nobody chose rather than a decision. Empty is the
+      # decision: it is the peer set a gateway runtime profile trusts a
+      # provider-native identity header from, this adapter selects
+      # `--profile=generic`, and generic has no authentication gateway
+      # at all - `serve` exits 2 rather than start if this is set to
+      # anything on a profile with no gateway to trust. Empty and unset
+      # behave identically in the binary, so this costs nothing and says
+      # which of the two it is.
+      TRUSTED_UPSTREAM_CIDRS: ""
 
     volumes:
       - /DATA/AppData/backup-manager/state:/data/state
@@ -109,8 +123,27 @@ services:
       - /DATA/AppData/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
       - /DATA/AppData/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
 
+    # The start gate, and a liveness question rather than a health
+    # verdict (issue #206). The Web UI below declares
+    # `depends_on: backup-manager: condition: service_healthy`, so
+    # whatever this asks stands between an operator and the only
+    # container with a published port. `/backup-manager status` is
+    # FR-24's backup-freshness verdict and exits non-zero on any
+    # DEGRADED, STALE or FAILING set, and on a fresh install, which has
+    # backed nothing up yet: gating the Web UI on it means an app an operator just
+    # installed from the store never gets a page at all.
+    #
+    # Declared here rather than inherited from the image, because the
+    # image's own HEALTHCHECK is deliberately the freshness verdict: it
+    # is the right default for a plain `docker run` and for the headless
+    # `daemon` command, which serves no HTTP and so has no liveness
+    # endpoint to ask. Backup freshness is not lost - read it with
+    # `docker exec backup-manager /backup-manager status`, or let the
+    # alerts block deliver it.
+    #
+    # Derived from container/compose.yaml, never authored here.
     healthcheck:
-      test: ["CMD", "/backup-manager", "status"]
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
       timeout: 5s
       start_period: 5s

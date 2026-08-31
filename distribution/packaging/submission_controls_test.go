@@ -797,22 +797,33 @@ func TestHasArtifactIsDerivedRatherThanDeclared(t *testing.T) {
 // criterion, and #81's "a new NAS should cost metadata, not an
 // implementation" made measurable rather than rhetorical.
 //
-// Portainer is one of the four targets #170 adds and none of it exists
-// yet. It is registered here entirely by declaration: a conformance
-// column, a submission row, a compose file and a workflow document, all
-// built in a temp directory. Not one rule, check or element is added or
-// changed for it, which is the claim. If registering a target required
-// touching this package, the loop below could not be written.
+// A target nothing in this repository has ever shipped is registered
+// entirely by declaration: a conformance column, a submission row, a
+// compose file and a workflow document, all built in a temp directory.
+// Not one rule, check or element is added or changed for it, which is the
+// claim. If registering a target required touching this package, the loop
+// below could not be written.
+//
+// The name is one no product will ever have, and that is load-bearing.
+// This fixture used to be Portainer, chosen because #170 had named it and
+// none of it existed yet; #170 then shipped it, the store-submission
+// procedure grew a real "Portainer CE" section, and the one cell this
+// control turns on - a blocked proactive-alert-delivery, blocked because
+// nobody had written that section - started passing. A fixture a real
+// change can turn valid is a control with an expiry date on it, and this
+// is the second one in this repository to hit that (see
+// scripts/architecture/selftest.sh, where the planted violation was
+// apps/casaos until CasaOS became real).
 func TestATargetThisIssueNeverRanAgainstGetsAVerdict(t *testing.T) {
 	dir := t.TempDir()
 	rel := relToRepo(t, dir)
 	write(t, filepath.Join(dir, "stack.yml"), canonicalCompose)
 
 	sub := MustLoadSubmission()
-	workflow := filepath.Join(dir, "portainer.md")
-	write(t, workflow, `# Portainer distribution workflow
+	workflow := filepath.Join(dir, "selftest-unshipped-target.md")
+	write(t, workflow, `# Selftest Unshipped Target distribution workflow
 
-https://docs.portainer.io/user/docker/templates
+https://example.invalid/selftest-unshipped-target
 
 | Item | Where it is | State |
 |---|---|---|
@@ -827,8 +838,8 @@ https://docs.portainer.io/user/docker/templates
 	// here, which is the point: the submission row below adds only what
 	// submission needs.
 	conf := MustLoadConformance()
-	conf.Providers["portainer"] = Provider{
-		DisplayName: "Portainer",
+	conf.Providers["selftest-unshipped-target"] = Provider{
+		DisplayName: "Selftest Unshipped Target",
 		Tier:        "C",
 		Epic:        SubmissionEpic,
 		WorkPackage: "6.6",
@@ -855,15 +866,15 @@ https://docs.portainer.io/user/docker/templates
 	}
 	cells["drift-architecture-support"] = Cell{Declared: DeclNotApplicable, Reason: "makes no architecture claim of its own"}
 	cells["proactive-alert-delivery"] = Cell{
-		Declared: DeclBlocked, Blocker: "#170", ExpectedDetail: "has no section for",
-		Reason: "#170 adds this target; nobody has written its hardware section yet",
+		Declared: DeclBlocked, Blocker: "#90", ExpectedDetail: "has no section for",
+		Reason: "the state this control exists to reproduce: a target registered by declaration before anyone has written its hardware section, so the one rule that needs that section cannot be decided. #90 owns the preflight that decides it once the section exists.",
 	}
 	cells["artifact-provenance"] = Cell{Declared: DeclSupported}
-	sub.Providers["portainer"] = SubmissionProvider{
+	sub.Providers["selftest-unshipped-target"] = SubmissionProvider{
 		Store: Store{
 			Kind:      "none",
 			Checklist: relToRepo(t, workflow),
-			Reference: "https://docs.portainer.io/user/docker/templates",
+			Reference: "https://example.invalid/selftest-unshipped-target",
 		},
 		ArtifactFiles: []string{filepath.Join(rel, "stack.yml")},
 		Cells:         cells,
@@ -873,24 +884,24 @@ https://docs.portainer.io/user/docker/templates
 	// target registered with a gap in its declarations is refused rather
 	// than quietly half-checked.
 	c := sub.AsConformance(conf)
-	if findings := auditPreflightDeclarations(c.Providers["portainer"], c.CapabilityIDs()); len(findings) > 0 {
+	if findings := auditPreflightDeclarations(c.Providers["selftest-unshipped-target"], c.CapabilityIDs()); len(findings) > 0 {
 		t.Fatalf("the registration is itself incomplete: %v", findings)
 	}
 
 	run := runPreflight(t, sub, conf)
 
-	row := run.ReadinessOf("portainer")
+	row := run.ReadinessOf("selftest-unshipped-target")
 	if row.Readiness != ReadyBlocked {
-		t.Errorf("Portainer is recorded %s (%s), want %s: nothing about it failed, and one rule cannot be decided", row.Readiness, row.Why, ReadyBlocked)
+		t.Errorf("the unshipped target is recorded %s (%s), want %s: nothing about it failed, and one rule cannot be decided", row.Readiness, row.Why, ReadyBlocked)
 	}
-	if strings.Join(row.Blockers, ",") != "#170" {
-		t.Errorf("Portainer's blockers are %v, want #170", row.Blockers)
+	if strings.Join(row.Blockers, ",") != "#90" {
+		t.Errorf("the unshipped target's blockers are %v, want #90", row.Blockers)
 	}
 	if len(row.Failed) > 0 {
 		t.Errorf("a target registered by declaration alone failed %v, so registration is not enough after all", row.Failed)
 	}
-	if len(run.Matrix.Results["portainer"]) != len(sub.Capabilities) {
-		t.Errorf("Portainer produced %d results for %d rules", len(run.Matrix.Results["portainer"]), len(sub.Capabilities))
+	if len(run.Matrix.Results["selftest-unshipped-target"]) != len(sub.Capabilities) {
+		t.Errorf("the unshipped target produced %d results for %d rules", len(run.Matrix.Results["selftest-unshipped-target"]), len(sub.Capabilities))
 	}
 
 	// And it is inside the gate, not merely reported beside it. A target
@@ -899,12 +910,12 @@ https://docs.portainer.io/user/docker/templates
 	v := run.Matrix.Verdict(SubmissionEpic)
 	found := false
 	for _, id := range v.Providers {
-		if id == "portainer" {
+		if id == "selftest-unshipped-target" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("Portainer is not in the Phase 5 verdict, which was computed over %v", v.Providers)
+		t.Errorf("the unshipped target is not in the Phase 5 verdict, which was computed over %v", v.Providers)
 	}
 }
 
