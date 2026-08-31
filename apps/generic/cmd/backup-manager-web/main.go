@@ -345,6 +345,26 @@ func cmdServe(args []string) int {
 		}
 	}
 
+	// Take the signal away from the embedded rclone before anything can
+	// reach a remote, so its own handler is never installed at all, and
+	// take on the matching obligation to run its exit handlers on the way
+	// out. service.Open below wires a real rclone transport and this
+	// process drives real backup cycles through it, so `serve` embeds
+	// rclone exactly the way `daemon` does; rclone's lib/atexit ends the
+	// process with 128+signal once a single transfer has armed it, which
+	// made an ordinary `docker stop` of this container exit 143 despite
+	// the handler below and despite compose.yaml's own
+	// stop_grace_period (issue #212, the same defect issue #190 fixed for
+	// the CLI daemon). Docker, Kubernetes and systemd all read a nonzero
+	// exit on stop as a failure, so every routine restart of a container
+	// documented as long-lived looked like a crash: it counted against
+	// restart burst limits and it alerted. A stop an operator asked for,
+	// and that this process performed, is a successful stop. A genuine
+	// failure is untouched: an error out of RunEngine still goes through
+	// fail and still exits 1.
+	service.DisableSignalExit()
+	defer service.RunExitHandlers()
+
 	// The one signal handler in this binary, matching
 	// core/cmd/backup-manager/daemon.go's own convention exactly: this is
 	// what makes ctx the "process shutdown context" §9.3 requires the HTTP
@@ -424,7 +444,22 @@ func cmdServe(args []string) int {
 	backend, cleanup, err := service.Open(ctx, *configPath)
 	switch {
 	case err == nil:
-		defer func() { _ = cleanup() }()
+		// The shutdown counterpart of this command's startup lines, and
+		// the other half of what #212 is about. The process used to leave
+		// whenever rclone got there rather than when the shutdown it was
+		// asked to perform had finished, and os.Exit runs no deferred
+		// function, so the scheduler, the HTTP server and the state store
+		// were all cut off at an arbitrary point with nothing saying so.
+		// This prints from inside the deferred close, after the store is
+		// really shut, so it is reachable only on the path that actually
+		// completed: "the operator stopped it" and "it died" are
+		// different things to a reader of these logs afterwards (FR-23).
+		defer func() {
+			if closeErr := cleanup(); closeErr != nil {
+				fmt.Fprintln(os.Stderr, "backup-manager-web: closing the backup service:", closeErr)
+			}
+			fmt.Fprintln(os.Stderr, "backup-manager-web: shutdown complete, the backup service is closed")
+		}()
 		enableAlerts(backend, platformAdapter)
 		engineConfig.Backend = backend
 		handler = serve.NewEngine(engineConfig)
@@ -465,7 +500,16 @@ func cmdServe(args []string) int {
 		if engErr != nil {
 			return fail(engErr)
 		}
-		defer func() { _ = engine.Close() }()
+		// Same notice as the configured branch above, for the same
+		// reason: a fresh install is stopped by the same `docker stop`,
+		// and #212 would otherwise be fixed only for instances that had
+		// already been configured.
+		defer func() {
+			if closeErr := engine.Close(); closeErr != nil {
+				fmt.Fprintln(os.Stderr, "backup-manager-web: closing the first-run engine:", closeErr)
+			}
+			fmt.Fprintln(os.Stderr, "backup-manager-web: shutdown complete, the backup service is closed")
+		}()
 		// The same value is both the HTTP surface and the scheduler: it
 		// serves setup now, the application after activation, and its
 		// scheduler loop simply waits for a backend to exist rather than

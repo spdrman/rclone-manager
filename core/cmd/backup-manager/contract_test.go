@@ -220,3 +220,103 @@ func TestRun_VersionRefusesWhatItDoesNotUnderstand(t *testing.T) {
 		})
 	}
 }
+
+// TestRun_CatalogAcceptsFlagsOnEitherSideOfItsSubcommand is issue #213.
+//
+// `catalog` used to read its subcommand out of args[0] before it parsed
+// anything, so `catalog --config X rebuild` was refused with `unknown
+// subcommand "--config"`: a message that names the wrong thing entirely,
+// since the subcommand is fine and the parser had simply not reached it.
+// #188 fixed the same shape for `validate` and left the helper behind,
+// and no CLI documentation orders a command's flags against its
+// subcommand, so both orders have to work.
+//
+// The rows that keep this from being "stop checking the subcommand" are
+// the two genuine errors, which must keep their exact wording and their
+// exit code: no subcommand at all, and a subcommand that really is
+// unknown. The last two rows keep "--" meaning what it has always meant,
+// in both directions: it ends flag parsing without hiding the subcommand
+// behind it, and a flag written after it is an operand, so it is an
+// unknown subcommand rather than a flag.
+func TestRun_CatalogAcceptsFlagsOnEitherSideOfItsSubcommand(t *testing.T) {
+	cfg := writeTestConfig(t)
+	if got := run([]string{"run", "--config", cfg}); got != 0 {
+		t.Fatalf("run([\"run\", \"--config\", %q]) = %d, want 0 (this test needs one committed artifact)", cfg, got)
+	}
+
+	const (
+		missing = `backup-manager: catalog: missing subcommand (expected "rebuild")`
+		unknown = `backup-manager: catalog: unknown subcommand "frobnicate" (expected "rebuild")`
+	)
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantExit   int
+		wantStderr string
+	}{
+		{
+			name:     "the subcommand before the flag, the order that already worked",
+			args:     []string{"catalog", "rebuild", "--config", cfg},
+			wantExit: 0,
+		},
+		{
+			name:     "the flag before the subcommand, issue #213's own reproduction",
+			args:     []string{"catalog", "--config", cfg, "rebuild"},
+			wantExit: 0,
+		},
+		{
+			name:     "the subcommand's own flag still works where it always did",
+			args:     []string{"catalog", "rebuild", "--dry-run", "--config", cfg},
+			wantExit: 0,
+		},
+		{
+			name:     "every flag before the subcommand",
+			args:     []string{"catalog", "--config", cfg, "--dry-run", "rebuild"},
+			wantExit: 0,
+		},
+		{
+			name:       "no subcommand at all keeps its own message",
+			args:       []string{"catalog", "--config", cfg},
+			wantExit:   2,
+			wantStderr: missing,
+		},
+		{
+			name:       "a genuinely unknown subcommand keeps its own message",
+			args:       []string{"catalog", "--config", cfg, "frobnicate"},
+			wantExit:   2,
+			wantStderr: unknown,
+		},
+		{
+			name:       "and keeps it with the flag written after it too",
+			args:       []string{"catalog", "frobnicate", "--config", cfg},
+			wantExit:   2,
+			wantStderr: unknown,
+		},
+		{
+			name:     "a subcommand written after the -- terminator is still found",
+			args:     []string{"catalog", "--config", cfg, "--", "rebuild"},
+			wantExit: 0,
+		},
+		{
+			// "--" really does end flag parsing: --dry-run after it is an
+			// operand, so it is an unknown subcommand, not a flag.
+			name:       "a flag written after -- is an operand, not a flag",
+			args:       []string{"catalog", "--config", cfg, "--", "--dry-run"},
+			wantExit:   2,
+			wantStderr: `backup-manager: catalog: unknown subcommand "--dry-run" (expected "rebuild")`,
+		},
+		{
+			name:       "an unknown flag is still an unknown flag",
+			args:       []string{"catalog", "rebuild", "--bogus", "--config", cfg},
+			wantExit:   2,
+			wantStderr: "flag provided but not defined: -bogus",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			checkExitAndStderr(t, tc.args, tc.wantExit, tc.wantStderr)
+		})
+	}
+}

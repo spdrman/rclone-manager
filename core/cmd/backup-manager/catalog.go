@@ -11,15 +11,41 @@ import (
 // cmdCatalog is `backup-manager catalog`, so far just one subcommand,
 // section 71 Work Package 3.3's `catalog rebuild` / `catalog rebuild
 // --dry-run` (EPIC-B section 19.3, issue #102).
+//
+// The flags are parsed BEFORE the subcommand is resolved, and the
+// subcommand is whichever operand that parse left behind, so
+// `catalog --config X rebuild` and `catalog rebuild --config X` are the
+// same command (issue #213). Reading args[0] first made the second form
+// the only one that worked and answered the first with `unknown
+// subcommand "--config"`, a message that names the wrong thing: the
+// subcommand was fine, the parser had simply not reached it. That is
+// #188's finding on `validate` restated, and it is fixed with #188's own
+// helper, parseFlagsAroundOperands (setup.go), which every other command
+// in this binary already resolves its flags through.
+//
+// One flag set carries both `catalog`'s --config and `rebuild`'s
+// --dry-run, rather than one per level. Resolving a subcommand out of the
+// operands means telling an operand apart from a flag's VALUE
+// (`--config X rebuild`: X is a value and rebuild is the subcommand), and
+// only a flag set that knows every flag can do that. With one subcommand
+// that is the whole story; a second one carrying a flag of its own would
+// register it here too.
 func cmdCatalog(args []string) int {
-	if len(args) == 0 {
+	fs, cfgPath := newFlagSet("catalog")
+	dryRun := fs.Bool("dry-run", false, "report what would be reconstructed; write nothing")
+	operands, err := parseFlagsAroundOperands(fs, args)
+	if err != nil {
+		return 2
+	}
+
+	if len(operands) == 0 {
 		return usageError("catalog: missing subcommand (expected \"rebuild\")")
 	}
-	switch args[0] {
+	switch operands[0] {
 	case "rebuild":
-		return cmdCatalogRebuild(args[1:])
+		return cmdCatalogRebuild(*cfgPath, *dryRun)
 	default:
-		return usageError("catalog: unknown subcommand %q (expected \"rebuild\")", args[0])
+		return usageError("catalog: unknown subcommand %q (expected \"rebuild\")", operands[0])
 	}
 }
 
@@ -35,22 +61,16 @@ func cmdCatalog(args []string) int {
 // Like `check`, this never contacts a configured remote: rebuild only
 // ever reads sidecar manifests already on disk and writes to the local
 // journal, so openService is called with withTransport=false.
-func cmdCatalogRebuild(args []string) int {
-	fs, cfgPath := newFlagSet("catalog rebuild")
-	dryRun := fs.Bool("dry-run", false, "report what would be reconstructed; write nothing")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-
+func cmdCatalogRebuild(configPath string, dryRun bool) int {
 	ctx := context.Background()
-	svc, cfg, cleanup, err := openService(ctx, *cfgPath, false)
+	svc, cfg, cleanup, err := openService(ctx, configPath, false)
 	if err != nil {
 		return fail(err)
 	}
 	defer cleanup()
 
 	verb := "reconstructed"
-	if *dryRun {
+	if dryRun {
 		verb = "would reconstruct"
 	}
 
@@ -58,7 +78,7 @@ func cmdCatalogRebuild(args []string) int {
 	total := 0
 	for _, src := range cfg.Sources {
 		for _, bs := range src.BackupSets {
-			report, err := svc.RebuildCatalog(ctx, bs.ID, *dryRun)
+			report, err := svc.RebuildCatalog(ctx, bs.ID, dryRun)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s: %v\n", bs.ID, err)
 				exitCode = 1
@@ -80,7 +100,7 @@ func cmdCatalogRebuild(args []string) int {
 		}
 	}
 
-	if *dryRun {
+	if dryRun {
 		fmt.Printf("dry-run complete: would reconstruct %d artifact(s); nothing was written\n", total)
 	} else {
 		fmt.Printf("catalog rebuild complete: reconstructed %d artifact(s)\n", total)
