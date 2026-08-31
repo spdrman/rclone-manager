@@ -719,6 +719,70 @@ func TestSystemHealth_ReportsReinstatedRemoteRetainedCount(t *testing.T) {
 	}
 }
 
+// Issue #245. A backup set the transport refuses to connect to backs up
+// nothing on every cycle, and until this landed no read surface could say
+// so: the alert pass computed the fact transiently and handed it to a
+// notification sink, so the sets list showed the set as merely stale with
+// a live run control beside it.
+//
+// halt_reason is omitted, never empty-stringed, for a set nothing is known
+// about. That polarity is the whole point of the field being optional:
+// absent means "no refusal has been observed", which is a different claim
+// from "this set is fine", and #231 is the reminder of what a fabricated
+// definite value costs.
+func TestSystemHealth_ReportsWhyASetCouldNotBeConnectedTo(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.health = service.HealthReport{
+		GeneratedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+		BackupSets: []service.BackupSetHealth{
+			{
+				BackupSetID: "production/auth-config", SourceName: "production", SetName: "auth-config",
+				State: "STALE", Reason: "no known-good backup inside the freshness window",
+				StaleAfter: 24 * time.Hour,
+				HaltReason: "HOST_KEY_CHANGED",
+			},
+			{
+				BackupSetID: "production/postgres", SourceName: "production", SetName: "postgres",
+				State: "HEALTHY", Reason: "fresh", StaleAfter: 24 * time.Hour,
+			},
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/system/health")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body healthResponse
+	decodeInto(t, rec, &body)
+	if len(body.BackupSets) != 2 {
+		t.Fatalf("len = %d, want 2", len(body.BackupSets))
+	}
+	if body.BackupSets[0].HaltReason != "HOST_KEY_CHANGED" {
+		t.Errorf("HaltReason = %q, want HOST_KEY_CHANGED", body.BackupSets[0].HaltReason)
+	}
+
+	refused, err := json.Marshal(body.BackupSets[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(refused), `"halt_reason":"HOST_KEY_CHANGED"`) {
+		t.Errorf("the refused set did not carry halt_reason on the wire: %s", refused)
+	}
+
+	reachable, err := json.Marshal(body.BackupSets[1])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(reachable), "halt_reason") {
+		t.Errorf("a set with no observed refusal carries halt_reason anyway: %s", reachable)
+	}
+	// The positive control for that absence: this scan finds the key when
+	// it IS there (the marshalled refused set above), so "not found" means
+	// omitted rather than the substring being unfindable in either body.
+	if !strings.Contains(string(refused), "halt_reason") {
+		t.Fatalf("the same scan finds nothing in a body that does carry halt_reason, so the absence above proves nothing: %s", refused)
+	}
+}
+
 func TestSystemHealth_AFailedComputationIs500Internal(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
 	rt.backend.errOnHealth = errors.New("statfs: no such file or directory")
