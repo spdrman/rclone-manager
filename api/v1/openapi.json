@@ -3771,7 +3771,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A two-part \"source/set\" identity. An id that names no configured backup set selects nothing, which is not an error."
+            "description": "A two-part \"source/set\" identity. An id that names no configured backup set is refused, not answered with an empty list: an empty list means the set exists and holds no backups yet, and those two call for opposite responses."
           }
         ],
         "responses": {
@@ -3796,6 +3796,19 @@
             },
             "x-error-codes": [
               "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "500": {

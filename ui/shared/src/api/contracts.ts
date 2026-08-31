@@ -380,6 +380,16 @@ export interface BackupManagerApi {
    *  persisted set. */
   testCandidateConnection(params: ConnectionTestParams): Promise<ConnectionTestOutcome>;
 
+  /**
+   * Every backup this deployment holds, optionally narrowed to one backup
+   * set by its two-part "source/set" id.
+   *
+   * A setId naming no configured backup set REJECTS with
+   * BACKUP_SET_NOT_FOUND rather than resolving to an empty list. An empty
+   * list has to keep meaning "this backup set exists and holds no backups
+   * yet"; if it also meant "there is no such backup set", a bookmarked
+   * filter that outlived a rename would read as "your backups are gone".
+   */
   listArtifacts(setId?: string): Promise<BackupArtifact[]>;
   getArtifact(id: string): Promise<BackupArtifact>;
 

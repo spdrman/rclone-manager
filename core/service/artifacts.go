@@ -99,9 +99,13 @@ type Artifact struct {
 // states.
 type ArtifactFilter struct {
 	// BackupSetID is a "source/set" id, matched exactly. An id that names
-	// no configured backup set matches nothing, which is not an error: a
-	// filter is a filter, and a caller asking about a set that has since
-	// been removed gets an empty list rather than a refusal.
+	// no configured backup set is REFUSED with ErrBackupSetNotFound
+	// rather than answered with an empty list, following the rule issue
+	// #187 established for the same filter on the CLI side: an empty list
+	// has to keep meaning one thing, "this backup set exists and has no
+	// backups yet". If it also meant "there is no such backup set", a
+	// renamed set would read to an operator as "your backups are gone",
+	// and those two call for opposite responses.
 	BackupSetID     string
 	QuarantinedOnly bool
 }
@@ -118,15 +122,25 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 		source, set, ok := splitBackupSetID(filter.BackupSetID)
 		if !ok {
 			// A syntactically impossible id cannot name a configured
-			// backup set, so it selects nothing. Same reasoning as an id
-			// that is well-formed but unknown.
-			return nil, nil
+			// backup set. Refused for the same reason a well-formed but
+			// unknown one is, and with the same sentinel, so a caller
+			// never has to tell the two apart.
+			return nil, fmt.Errorf("%w: %s", ErrBackupSetNotFound, filter.BackupSetID)
 		}
 		appFilter.Source, appFilter.Set = source, set
 	}
 
 	records, err := st.inner.ListArtifacts(ctx, appFilter)
 	if err != nil {
+		// internal/app refuses a filter naming nothing (#187). Translated
+		// to this package's own sentinel rather than passed through: a
+		// caller outside core/ cannot name *app.NotFoundError, and the
+		// distinction between "no such source" and "no such backup set"
+		// is not one an API client can act on differently.
+		var notFound *app.NotFoundError
+		if errors.As(err, &notFound) {
+			return nil, fmt.Errorf("%w: %s", ErrBackupSetNotFound, filter.BackupSetID)
+		}
 		return nil, fmt.Errorf("service: listing artifacts: %w", err)
 	}
 

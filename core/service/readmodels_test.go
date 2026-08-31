@@ -81,16 +81,15 @@ func TestListArtifacts_FilterSelectsOneBackupSet(t *testing.T) {
 		t.Errorf("len (matching) = %d, want %d", len(matching), len(all))
 	}
 
-	for _, id := range []string{"production/nothing-here", "no-such-source/postgres-primary", "malformed", ""} {
-		if id == "" {
-			continue
-		}
+	// A filter naming nothing is REFUSED, not answered with an empty list
+	// (the rule issue #187 established for the same filter on the CLI
+	// side). An empty list has to keep meaning "this backup set exists and
+	// has no backups yet", or a renamed set reads as "your backups are
+	// gone".
+	for _, id := range []string{"production/nothing-here", "no-such-source/postgres-primary", "malformed"} {
 		other, err := svc.ListArtifacts(ctx, ArtifactFilter{BackupSetID: id})
-		if err != nil {
-			t.Fatalf("ListArtifacts(%q): %v", id, err)
-		}
-		if len(other) != 0 {
-			t.Errorf("ListArtifacts(%q) = %d artifacts, want 0", id, len(other))
+		if !errors.Is(err, ErrBackupSetNotFound) {
+			t.Errorf("ListArtifacts(%q) = %d artifacts, error %v; want ErrBackupSetNotFound", id, len(other), err)
 		}
 	}
 }

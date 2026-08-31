@@ -123,15 +123,23 @@ func writeArtifactsResponse(w http.ResponseWriter, artifacts []service.Artifact)
 // query parameter. Read-only (§50's "list sources"/"view configuration"
 // bucket), so no CSRF and no destructive gate.
 //
-// A setId naming no configured backup set selects nothing and answers 200
-// with an empty list, deliberately rather than 404: this is a filter, and
-// a client whose remembered filter names a backup set that has since been
-// removed should see "no backups here", not an error page.
+// A setId naming no configured backup set is refused with 404
+// BACKUP_SET_NOT_FOUND rather than answered with an empty list. That is
+// the rule issue #187 established for the same filter on the CLI side,
+// and it holds here for the same reason: an empty list has to keep
+// meaning one thing, "this backup set exists and has no backups yet". If
+// it also meant "there is no such backup set", a rename that reached the
+// configuration but not a bookmarked URL would read to an operator as
+// "your backups are gone", and those two call for opposite responses.
 func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	artifacts, err := h.backend.ListArtifacts(r.Context(), service.ArtifactFilter{
 		BackupSetID: r.URL.Query().Get("setId"),
 	})
 	if err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to list backups")
 		return
 	}

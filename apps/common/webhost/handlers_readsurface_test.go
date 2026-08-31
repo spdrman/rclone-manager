@@ -155,14 +155,28 @@ func TestListArtifacts_PassesTheSetFilterThrough(t *testing.T) {
 	}
 }
 
-// TestListArtifacts_AnUnknownSetFilterIsAnEmptyListNotAnError: this is a
-// filter, and a client whose remembered filter names a backup set that has
-// since been removed should see "no backups here", not an error page.
-func TestListArtifacts_AnUnknownSetFilterIsAnEmptyListNotAnError(t *testing.T) {
+// TestListArtifacts_AnUnknownSetFilterIsRefusedRatherThanAnsweredWithNothing.
+// The rule is issue #187's, and this is the API side of it: an empty list
+// has to keep meaning "this backup set exists and holds no backups yet".
+func TestListArtifacts_AnUnknownSetFilterIsRefusedRatherThanAnsweredWithNothing(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
-	rt.backend.artifacts = []service.Artifact{testArtifactFixture}
+	rt.backend.errOnArtifacts = fmt.Errorf("%w: gone/away", service.ErrBackupSetNotFound)
 
 	rec := rt.get(t, "/api/v1/backups?setId=gone/away")
+	mustStatus(t, rec, http.StatusNotFound)
+	if code := errorCodeOf(t, rec); code != "BACKUP_SET_NOT_FOUND" {
+		t.Errorf("code = %q, want BACKUP_SET_NOT_FOUND", code)
+	}
+}
+
+// TestListArtifacts_AKnownSetWithNoBackupsIsAnEmptyArray is the other half
+// of that rule, and the control for it: the empty answer still exists, and
+// it is an empty ARRAY rather than a null, so a client mapping over the
+// field does not have to guard against it being absent.
+func TestListArtifacts_AKnownSetWithNoBackupsIsAnEmptyArray(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.get(t, "/api/v1/backups?setId=production%2Fpostgres")
 	mustStatus(t, rec, http.StatusOK)
 
 	var body listArtifactsResponse
@@ -170,8 +184,6 @@ func TestListArtifacts_AnUnknownSetFilterIsAnEmptyListNotAnError(t *testing.T) {
 	if len(body.Artifacts) != 0 {
 		t.Errorf("len = %d, want 0", len(body.Artifacts))
 	}
-	// An empty list, not a null: a client mapping over the field must not
-	// have to guard against it being absent.
 	if !strings.Contains(rec.Body.String(), `"artifacts":[]`) {
 		t.Errorf("empty result is not an empty array: %s", rec.Body.String())
 	}
