@@ -1,9 +1,9 @@
 package serve
 
 import (
+	"context"
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
@@ -53,6 +53,20 @@ type EngineConfig struct {
 	// webhost.NewRouter's own NotYetImplementedGate default.
 	Gate webhost.DestructiveGate
 
+	// FirstRun is the setup surface of an instance that may have no
+	// configuration yet (issue #176). Set it, leave Backend nil, and
+	// build the engine with NewFirstRunEngine (firstrun.go) rather than
+	// NewEngine: that is what makes a fresh app-store install serve a
+	// setup flow instead of refusing to start.
+	FirstRun webhost.FirstRunClient
+
+	// Activate opens a real backend against the configuration the
+	// first-run flow has just written, and returns it together with the
+	// cleanup that releases it (the same pair core/service.Open already
+	// returns, which is what a provider passes straight through). Called
+	// at most once, and only by a FirstRunEngine.
+	Activate func(ctx context.Context) (webhost.BackupServiceClient, func() error, error)
+
 	BinaryVersion string
 	Commit        string
 }
@@ -62,53 +76,44 @@ type EngineConfig struct {
 // API, and nothing else - no static UI (see NewUI for that half of the
 // two-container split this package's doc comment describes).
 func NewEngine(cfg EngineConfig) http.Handler {
-	apiRouter := webhost.NewRouter(webhost.RouterConfig{
-		Platform:      cfg.Platform,
-		Backend:       cfg.Backend,
-		Gate:          cfg.Gate,
-		BinaryVersion: cfg.BinaryVersion,
-		Commit:        cfg.Commit,
-	})
+	mustIdentityBoundary(cfg)
+	return newEngineHandler(cfg, cfg.Backend, nil)
+}
 
-	mux := http.NewServeMux()
-	if cfg.AuthRoutes != nil {
-		mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", cfg.AuthRoutes))
-	}
-	mux.Handle("/health/", apiRouter)
-	mux.Handle("/api/v1/", apiRouter)
-
-	// Order matters and is the whole point of doing this here rather than
-	// inside the router. StripUntrustedIdentity is outermost, so a forged
-	// identity header is gone before the CSRF middleware, the auth routes,
-	// the /api/v1 router or anything either of them logs has a chance to
-	// read it: "refused" and "never observed" are different claims, and
-	// issue #87 asks for the second.
+// mustIdentityBoundary resolves the trusted-peer boundary cfg's adapter
+// authenticates against, and refuses a deployment that declares native
+// sessions but resolves none (issue #87's review, M2).
+//
+// The nil is SAFE in the security direction and total in the functional
+// one: StripUntrustedIdentity reads it as "trust nobody", so a
+// native-session deployment would authenticate nobody, with no message
+// anywhere saying why. That is exactly the operator experience the
+// serve-ui startup refusal was added to prevent one hop over, so this hop
+// refuses the same way rather than starting into a console nobody can
+// sign in to.
+//
+// A panic and not an error return because there is no request in flight
+// and nothing to degrade to: this is process wiring, it is wrong before a
+// listener is open, and every shipped caller builds its adapter through
+// profile.Profile.Adapter, which cannot produce this state. The way an
+// adapter that decorates its Authenticator satisfies this is
+// IdentityBoundaryCarrier below, not deleting the check.
+//
+// It is called from the two CONSTRUCTORS, NewEngine and NewFirstRunEngine,
+// rather than from newEngineHandler which they share. FirstRunEngine
+// builds a second handler from the same cfg during activation, on a live
+// request, and a panic there would take the process down at the moment an
+// operator submits their first configuration. The inputs are cfg.Platform
+// both times, so construction-time is the same answer, earlier.
+func mustIdentityBoundary(cfg EngineConfig) *profile.CompiledGateway {
 	boundary := gatewayOf(cfg.Platform)
 	if cfg.Platform != nil && cfg.Platform.Capabilities().NativeAuth && boundary == nil {
 		// Fail closed, loudly, at construction (issue #87's review, M2).
-		// The nil is SAFE in the security direction and total in the
-		// functional one: StripUntrustedIdentity reads it as "trust
-		// nobody", so a native-session deployment would authenticate
-		// nobody, with no message anywhere saying why. That is exactly
-		// the operator experience the serve-ui startup refusal was added
-		// to prevent one hop over, so this hop refuses the same way
-		// rather than starting into a console nobody can sign in to.
-		//
-		// A panic and not an error return because there is no request in
-		// flight and nothing to degrade to: this is process wiring, it is
-		// wrong before a listener is open, and every shipped caller
-		// builds its adapter through profile.Profile.Adapter, which
-		// cannot produce this state. The way an adapter that decorates
-		// its Authenticator satisfies this is IdentityBoundaryCarrier
-		// below, not deleting the check.
 		panic("serve: NewEngine: this platform adapter declares NativeAuth but no trusted-peer boundary resolves from its Authenticator, " +
 			"so every identity header would be stripped and nobody could authenticate; " +
 			"implement serve.IdentityBoundaryCarrier on the adapter or its Authenticator")
 	}
-
-	return StripUntrustedIdentity(boundary)(
-		SecurityHeaders(
-			local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)))
+	return boundary
 }
 
 // IdentityBoundaryCarrier is how a platform adapter, or an Authenticator

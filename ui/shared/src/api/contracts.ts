@@ -297,9 +297,39 @@ export interface UpdateSettingsRequest {
   retention?: UpdateRetentionSettings;
 }
 
+/** GET /api/v1/system/first-run's answer (issue #176). `configured` is
+ *  false on an instance that is listening with no config.yaml on disk at
+ *  all: it serves the setup flow, not the application, and every backup,
+ *  retention, quarantine and settings route refuses with NOT_CONFIGURED
+ *  until setup completes. */
+export interface FirstRunStatus {
+  configured: boolean;
+}
+
+/** POST /api/v1/system/first-run's answer. It is `CreatedBackupSet` plus
+ *  the one thing only a first run can report: the configuration is
+ *  durably written, but this process could not open a service against it
+ *  in place, so it needs restarting before it serves the application.
+ *  That is deliberately not modelled as an error — the setup itself
+ *  succeeded. */
+export interface FirstRunResult {
+  backupSet: CreatedBackupSet;
+  restartRequired: boolean;
+}
+
 export interface BackupManagerApi {
   getVersion(): Promise<VersionInfo>;
   getHealth(): Promise<SystemHealth>;
+
+  /** Issue #176: which mode this instance is in. Read before anything
+   *  else, because on an unconfigured instance every other call below
+   *  refuses. */
+  getFirstRunStatus(): Promise<FirstRunStatus>;
+  /** Issue #176: writes this deployment's FIRST configuration. Same
+   *  request body as createBackupSet, because the operator answers the
+   *  same questions in the same wizard; what differs is that there is no
+   *  configuration to fold it into yet. */
+  completeFirstRun(req: CreateBackupSetRequest): Promise<FirstRunResult>;
 
   listSets(): Promise<BackupSet[]>;
   getSet(id: string): Promise<BackupSet>;

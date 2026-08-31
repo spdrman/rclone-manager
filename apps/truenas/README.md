@@ -111,10 +111,19 @@ log into TrueNAS. Nothing in this directory ships a credential, and
 
 ## config.yaml
 
-The engine calls `core/service.Open`, which loads **and validates** the config file
-before the HTTP listener starts. A missing or invalid file is a hard start failure,
-not a first-run wizard, so write it before installing. The container-side paths
-below are fixed by this package and must not be changed:
+The engine no longer needs a configuration to start: as of issue #176 an instance
+with no `config.yaml` serves a first-run setup flow in the web UI that writes one
+for you. A config file that EXISTS and does not validate is still a hard start
+failure, deliberately, because replacing a configuration somebody already wrote
+is worse than refusing.
+
+That flow does not reach this package yet, and the reason is the mount, not the
+engine: `config.yaml` is bind-mounted here as a single **read-only file**, so the
+container cannot create it, and a bind mount cannot express "not there yet"
+either. Until that becomes a writable directory, write the file before
+installing.
+
+The container-side paths below are fixed by this package and must not be changed:
 
 ```yaml
 poll_interval: 1h
@@ -148,13 +157,15 @@ shape; this is the same thing with TrueNAS's paths.
 
 ## The image reference
 
-No registry is configured for this repository yet, so
+The registry is settled and nothing has been pushed to it yet, so
 `ghcr.io/spdrman/backup-manager:1.0.0` is the intended publish target rather than
-something that resolves today. `distribution/packaging/canonical.json` records that
-honestly, and step 0 of the acceptance procedure covers pushing to your own
-registry or side-loading a saved image in the meantime. The reference is one
-question in the wizard and one line in the compose file, so substituting it is a
-one-place change.
+something that resolves today. `distribution/packaging/canonical.json` is the
+single source of truth for the reference and records `image.published: false`,
+and `container/release-manifest.json` carries a `registry_digest` of `null` per
+architecture for exactly as long as that stays false. Step 0 of the acceptance
+procedure covers pushing to your own registry or side-loading a saved image in
+the meantime. The reference is one question in the wizard and one line in the
+compose file, so substituting it is a one-place change.
 
 ## Contributing this to the TrueNAS catalog
 

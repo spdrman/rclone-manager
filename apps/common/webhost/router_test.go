@@ -105,6 +105,25 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// and is NOT on this list. See router.go's own comment on the route
 	// for the full argument.
 	"PATCH /api/v1/settings": true,
+
+	// Issue #176 (B3.x): the setup submission of an instance that has no
+	// configuration yet. Gating it would be self-defeating in the literal
+	// sense: requireDestructiveGate refuses until an operator turns
+	// destructive operations on, and on a fresh app-store install the only
+	// way to turn anything on is the very flow this route completes, so a
+	// gated first-run route is an instance that can never be configured
+	// through its own UI. That is the exact failure #176 exists to remove.
+	//
+	// It is safe to exempt for a reason that does not depend on the gate:
+	// this route can only ever write where nothing was. completeFirstRun
+	// refuses with 409 ALREADY_CONFIGURED the moment a configuration
+	// exists (firstrun.go, and again underneath at
+	// service.ErrAlreadyConfigured), so it cannot replace, damage or even
+	// see a live deployment's configuration - which is what the gate
+	// protects. TestCompleteFirstRun_RefusesOnceConfigured pins that
+	// refusal by its typed code, so this entry's justification is a test
+	// and not just this comment.
+	"POST /api/v1/system/first-run": true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

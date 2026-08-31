@@ -48,9 +48,13 @@ apt-get install openmediavault-compose
 
 ### 0.2 Make the canonical image resolvable
 
-No registry is configured for this repository yet, so the reference in the compose
-file resolves to nothing until you point it somewhere. Either push to your own
-registry:
+The registry is settled and nothing has been pushed to it yet. The reference is
+`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the
+single source of truth for it), and that file records `image.published: false`;
+`container/release-manifest.json` records the same fact as a `registry_digest` of
+`null` on every architecture. So the reference in the compose file resolves to
+nothing today, not because no registry exists but because the first push has not
+happened (issue #88). Until it does, either push to your own registry:
 
 ```bash
 docker buildx build \
@@ -139,8 +143,28 @@ reinstall would rewrite the retained backup store.
 
 ### 0.5 Create the SSH key, the pinned known_hosts, and the config
 
-`/backup-manager-web serve` loads and validates the config before the listener
-starts. A missing or invalid `config.yaml` is a hard startup failure.
+> **This step is packaging debt now, not engine behavior.** As of issue #176 the
+> engine no longer needs a configuration to start: an instance with no
+> `config.yaml` serves a first-run setup flow, in the web UI, that writes one
+> for you. What still blocks that here is the package. The config is
+> bind-mounted as a single **read-only file**, so the container cannot create
+> it, and a bind mount cannot express "this file does not exist yet" either (a
+> missing source gets a directory created for it). Until the packaged config
+> mount becomes a writable **directory**, this platform keeps the hand-written
+> config, and this step keeps its shell commands for that reason and no other.
+> That same mount is already what makes the existing create-backup-set (#146)
+> and settings (#140) write paths inert in a packaged container, so it is one
+> packaging fix for three things.
+>
+> Nothing else here survives that fix: once the mount is writable, the key is
+> pasted into the setup flow's Authentication step, the host key is probed and
+> confirmed on its Verify server step, and no `config.yaml` is written by hand
+> at all.
+
+`/backup-manager-web serve` starts without a `config.yaml` and serves the
+first-run setup flow instead (#176), but a config file that EXISTS and does not
+validate is still a hard startup failure. Given the read-only mount above, create
+all three before the first start.
 
 **What still requires this step, precisely (issue #196).** The configuration mount is
 now a writable directory the application owns, so the container can create and replace
