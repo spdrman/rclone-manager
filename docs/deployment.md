@@ -462,13 +462,30 @@ lesson of issue #174. The manifest previously pinned `c51a07f`, recorded on a fe
 branch; GitHub squash merged that branch, which rewrote the commit, and the manifest
 was left describing a build no checkout could reproduce. Every parity check phrased as
 "matches the release manifest" was then comparing against a fiction, and nothing
-noticed for weeks. The script now refuses three ways of producing that: a `COMMIT` that
-is not `HEAD`, a working tree that is dirty in a path the image is built from, and a
-commit that is not an ancestor of `origin/main`. Set `UNSAFE_LOCAL_BUILD=1` to skip all
-three for a throwaway local build, and do not commit what it writes.
+noticed for weeks. The script now refuses five ways of producing that: a `COMMIT` that
+names no commit here, a `COMMIT` that is not `HEAD`, a working tree that is dirty in a
+path the image is built from, a `REACHABLE_FROM` that cannot be resolved, and a commit
+that is not an ancestor of `origin/main`. The last one tells "git said no" apart from
+"git could not decide": a shallow clone makes `merge-base --is-ancestor` exit 128, and
+that is a fact about the checkout rather than about the manifest, so it gets its own
+message and its own remedy.
+
+Those refusals are not taken on trust. `scripts/tests/record-release-hashes-guards.test.sh`
+drives the real script through its `GUARDS_ONLY=1` seam in a throwaway repository per
+refusal, asserting the exit code and the distinct message for each, and it runs on every
+non-FAST `scripts/ci-local.sh`.
+
+`UNSAFE_LOCAL_BUILD=1` waives all five for a throwaway local build. It is deliberately
+hard to commit the result: the output path defaults to
+`container/.generated/release-manifest.local.json` (already gitignored) instead of the
+tracked manifest, and what it writes carries `"unsafe_local_build": true`, which
+`apps/common/packaging` refuses outright. Overwriting the tracked manifest with a waived
+run takes an explicit `OUT=`, and the checked-in file would then fail the build.
+
 `apps/common/packaging`'s `TestReleaseManifestPinsACommitThisHistoryCanReach` and the
 `release-manifest-integrity` conformance row both re-ask the ancestry question on every
-run, so a manifest that drifts out of the history fails the build rather than being
+run, against the strongest ref the checkout has (`origin/main`, else `main`, else
+`HEAD`), so a manifest that drifts out of the history fails the build rather than being
 found by hand.
 
 The manifest checked in today was produced this way at `8ad3100`, and a second run from

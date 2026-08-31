@@ -153,6 +153,9 @@ if [ "$FAST" != "1" ] && [ -d apps/common/tests ]; then
 fi
 
 if [ "$FAST" != "1" ]; then
+  echo "==> release-manifest generator guards (#174)"
+  bash scripts/tests/record-release-hashes-guards.test.sh
+
   echo "==> repository-structure dependency rules (§7.1)"
   bash scripts/architecture/check-core-dependency-rule.sh
   bash scripts/architecture/verify-core-without-apps.sh
