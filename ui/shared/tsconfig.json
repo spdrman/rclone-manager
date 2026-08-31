@@ -29,6 +29,15 @@
       "vite/client"
     ]
   },
+  // "include" is deliberately `src` and nothing else. This is the browser
+  // program: widening it to reach vite.config.ts would mean adding
+  // @types/node and putting "node" in "types", which makes Node's globals
+  // type-visible to every component under src/ too. So vite.config.ts is
+  // linted but not type-checked, and no compiler option set here should be
+  // read as a coverage claim about any path outside src/. Unused code
+  // outside src/ is eslint.config.js's job, and it owns that whole job on
+  // its own (issue #219); apps/*/frontend is type-checked separately by
+  // tsconfig.providers.json.
   "include": [
     "src"
   ]
