@@ -211,12 +211,6 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		return nil, fmt.Errorf("retention: week_starts_on %q is not a day of the week", cfg.WeekStartsOn)
 	}
 
-	type gfsDated struct {
-		artifact model.ArtifactID
-		occurred time.Time // Record.DiscoveredAt, kept for representative tie-breaking
-		date     gfsCivilDate
-	}
-
 	var eligible []gfsDated
 	verdicts := make(map[model.ArtifactID]*GFSVerdict)
 
@@ -227,11 +221,13 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		if !gfsIsManagedComplete(rec.State) {
 			continue
 		}
-		eligible = append(eligible, gfsDated{
-			artifact: rec.Artifact,
-			occurred: rec.DiscoveredAt,
-			date:     gfsCivilDateIn(rec.DiscoveredAt, loc),
-		})
+		received, producer, hasProducer := gfsPlacementsFor(rec, loc)
+		d := gfsDated{artifact: rec.Artifact, received: received}
+		if hasProducer {
+			p := producer
+			d.producer = &p
+		}
+		eligible = append(eligible, d)
 		verdicts[rec.Artifact] = &GFSVerdict{Artifact: rec.Artifact}
 	}
 
@@ -247,23 +243,18 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 	}
 
 	for _, tb := range tiers {
-		type champion struct {
-			artifact model.ArtifactID
-			occurred time.Time
+		// Two passes, unioned, never merged. See bucketkey.go's doc for
+		// why folding them into one champion map per bucket would let an
+		// untrusted producer timestamp displace an artifact the received
+		// pass had kept, which is the one thing this design forbids.
+		selected := gfsSelectRepresentatives(tb, eligible, gfsReceivedPlacement)
+		for artifact := range gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement) {
+			selected[artifact] = true
 		}
-		champions := map[gfsCivilDate]champion{}
-		for _, d := range eligible {
-			if !tb.inSpan(d.date) {
-				continue
-			}
-			key := tb.bucket(d.date)
-			cur, exists := champions[key]
-			if !exists || gfsIsNewerRepresentative(d.artifact, d.occurred, cur.artifact, cur.occurred) {
-				champions[key] = champion{artifact: d.artifact, occurred: d.occurred}
-			}
-		}
-		for _, c := range champions {
-			v := verdicts[c.artifact]
+		// A tier is attributed to an artifact exactly once even when both
+		// passes selected it, so a verdict never reads DAILY twice.
+		for artifact := range selected {
+			v := verdicts[artifact]
 			v.Keep = true
 			v.Tiers = append(v.Tiers, tb.tier)
 		}
@@ -277,11 +268,68 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 	return out, nil
 }
 
+// gfsDated is one eligible artifact together with the placements FR-18
+// offers it to a tier's buckets under: always the received placement, and
+// the producer placement when one is admissible (nil otherwise). See
+// bucketkey.go for what those two are and why there are two of them.
+type gfsDated struct {
+	artifact model.ArtifactID
+	received gfsPlacement
+	producer *gfsPlacement
+}
+
+// gfsReceivedPlacement and gfsProducerPlacement are the two placement
+// selectors gfsSelectRepresentatives is run with. They exist as named
+// functions rather than inline closures so the two passes in GFSDecide
+// read as one calculation applied twice, which is exactly what they are.
+func gfsReceivedPlacement(d gfsDated) (gfsPlacement, bool) { return d.received, true }
+
+func gfsProducerPlacement(d gfsDated) (gfsPlacement, bool) {
+	if d.producer == nil {
+		return gfsPlacement{}, false
+	}
+	return *d.producer, true
+}
+
+// gfsSelectRepresentatives runs one tier's selection over one placement
+// key: every artifact that place() offers a date for, that falls inside
+// the tier's window, competes for its bucket, and the newest in each
+// bucket is that bucket's representative. The result is the set of
+// artifacts this pass selected, with each bucket contributing at most one
+// of them, which is FR-18's "the newest valid backup in each of its own
+// buckets" exactly as it always read.
+func gfsSelectRepresentatives(tb gfsBoundTier, eligible []gfsDated, place func(gfsDated) (gfsPlacement, bool)) map[model.ArtifactID]bool {
+	type champion struct {
+		artifact model.ArtifactID
+		occurred time.Time
+	}
+	champions := map[gfsCivilDate]champion{}
+	for _, d := range eligible {
+		p, ok := place(d)
+		if !ok || !tb.inSpan(p.date) {
+			continue
+		}
+		key := tb.bucket(p.date)
+		cur, exists := champions[key]
+		if !exists || gfsIsNewerRepresentative(d.artifact, p.occurred, cur.artifact, cur.occurred) {
+			champions[key] = champion{artifact: d.artifact, occurred: p.occurred}
+		}
+	}
+	out := make(map[model.ArtifactID]bool, len(champions))
+	for _, c := range champions {
+		out[c.artifact] = true
+	}
+	return out
+}
+
 // gfsIsNewerRepresentative reports whether candidate should replace
 // current as a bucket's representative: FR-18 says "the newest valid
-// backup in a bucket". Ties (equal DiscoveredAt) are broken on artifact
-// name, which is unique within a backup set, so the winner never depends
-// on which of the two GFSDecide happened to see first in the input slice.
+// backup in a bucket". The two times compared are the two placements'
+// own instants (see bucketkey.go), so a received placement is compared on
+// the received timestamp and a producer placement on the producer's own.
+// Ties are broken on artifact name, which is unique within a backup set,
+// so the winner never depends on which of the two GFSDecide happened to
+// see first in the input slice.
 func gfsIsNewerRepresentative(candidate model.ArtifactID, candidateTime time.Time, current model.ArtifactID, currentTime time.Time) bool {
 	if !candidateTime.Equal(currentTime) {
 		return candidateTime.After(currentTime)
