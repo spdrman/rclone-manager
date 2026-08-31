@@ -1,0 +1,96 @@
+{
+  "_comment": [
+    "Single source of truth for everything the Tier B/C container packaging",
+    "profiles (apps/truenas, apps/unraid, apps/openmediavault, and any later",
+    "profile that wraps the same image) have to agree on. WP4.3's REFACTOR",
+    "step asks for exactly this: the three platforms' metadata is generated",
+    "from and checked against one file instead of drifting independently.",
+    "apps/common/packaging's test suite fails the build if any platform's",
+    "own metadata disagrees with a value in here."
+  ],
+
+  "image": {
+    "registry": "ghcr.io",
+    "repository": "spdrman/backup-manager",
+    "tag": "1.0.0",
+    "reference": "ghcr.io/spdrman/backup-manager:1.0.0",
+    "published": false,
+    "note": [
+      "published:false is the honest state, matching container/release-manifest.json's",
+      "own note: no registry is configured for this repository yet, so this reference",
+      "resolves to nothing today. It is the intended publish target and the one string",
+      "every provider package must carry, so that pointing the project at a real",
+      "registry is a one-line change here rather than an edit in four metadata formats.",
+      "Every acceptance procedure in docs/acceptance/ opens with a step 0 covering how",
+      "to make the image resolvable in the meantime (push to your own registry, or",
+      "docker save/load), and every profile keeps the reference substitutable."
+    ]
+  },
+
+  "architectures": ["amd64", "arm64"],
+
+  "listenPort": 8080,
+
+  "authMode": "local-account",
+
+  "commands": {
+    "engine": ["/backup-manager-web", "serve"],
+    "webUI": ["/backup-manager-web", "serve-ui"],
+    "headless": ["/backup-manager", "daemon"],
+    "healthcheck": ["/backup-manager-web", "healthcheck"]
+  },
+
+  "binaries": ["/backup-manager", "/backup-manager-web"],
+
+  "containerPaths": {
+    "state": "/data/state",
+    "backups": "/data/backups",
+    "config": "/etc/backup-manager/config.yaml",
+    "sshKey": "/etc/backup-manager/id_ed25519",
+    "knownHosts": "/etc/backup-manager/known_hosts"
+  },
+
+  "readOnlyContainerPaths": ["/etc/backup-manager/config.yaml", "/etc/backup-manager/id_ed25519", "/etc/backup-manager/known_hosts"],
+
+  "platforms": {
+    "truenas": {
+      "displayName": "TrueNAS",
+      "tier": "B",
+      "storageMount": "/mnt/tank/backup-manager",
+      "hostPaths": {
+        "state": "/mnt/tank/backup-manager/state",
+        "backups": "/mnt/tank/backup-manager/backups",
+        "config": "/mnt/tank/backup-manager/config/config.yaml",
+        "sshKey": "/mnt/tank/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/mnt/tank/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "tank is the pool name the defaults assume; docs/acceptance/truenas-provider-acceptance.md step 0.2 covers substituting a real pool."
+    },
+    "unraid": {
+      "displayName": "Unraid",
+      "tier": "B",
+      "storageMount": "/mnt/user/backups",
+      "hostPaths": {
+        "state": "/mnt/user/appdata/backup-manager/state",
+        "backups": "/mnt/user/backups",
+        "config": "/mnt/user/appdata/backup-manager/config/config.yaml",
+        "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "appdata holds private state, the backups user share holds retained artifacts; §19.2 keeps those two separate security domains."
+    },
+    "openmediavault": {
+      "displayName": "OpenMediaVault",
+      "tier": "C",
+      "storageMount": "/srv/dev-disk-by-uuid/backups",
+      "hostPaths": {
+        "state": "/srv/dev-disk-by-uuid/appdata/backup-manager/state",
+        "backups": "/srv/dev-disk-by-uuid/backups",
+        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config/config.yaml",
+        "sshKey": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "dev-disk-by-uuid is a placeholder, deliberately matching what apps/openmediavault/frontend/platform.ts already declares: a real OMV system mounts data filesystems at /srv/dev-disk-by-uuid-<UUID>/, which differs per machine. The profile funnels every host path through one env file so the UUID is substituted exactly once."
+    }
+  }
+}
