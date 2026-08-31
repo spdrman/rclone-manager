@@ -24,11 +24,24 @@
 //     still in flight in the kernel at that instant), or, for
 //     after-real-delete, lets the real delete finish and self-destructs
 //     immediately afterward, before this process could ever record
-//     COMPLETE. See -kill-plan's flag doc for the full list and
-//     -calibrate, which measures the real duration to race against instead
-//     of guessing a fixed number that would either always fire too early
-//     (never really interrupting anything) or too late (never firing at
-//     all) depending on the machine.
+//     COMPLETE. See -kill-plan's flag doc for the full list, and the
+//     calibrate* functions below, which measure the real duration to race
+//     against instead of guessing a fixed number that would either always
+//     fire too early (never really interrupting anything) or too late
+//     (never firing at all) depending on the machine.
+//
+//     -kill-plan=mid-verify is the exception, and no longer races anything:
+//     it is a rendezvous through a pipe, with no timer in it. See
+//     verifyReadHandoff in decorators.go for why, and issue #248 for what
+//     the calibrated version cost. A measurement taken a moment before the
+//     operation it predicts is still a guess about the moment that follows
+//     it; a handoff the product itself has to drain is not.
+//
+// This process reports each real operation it starts and finishes as a
+// PROGRESS line on stderr. That is what the parent bounds an invocation by
+// (issue #247): a hang makes no progress and a slow machine makes slow
+// progress, so measuring progress separates the two, where a fixed total
+// deadline cannot.
 //
 // A run that reaches a terminal outcome without being asked to kill itself
 // (kill-after-state="" and kill-plan="none") exits 0 and prints the final
@@ -53,13 +66,14 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -73,10 +87,85 @@ import (
 )
 
 func main() {
+	progress("started")
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "crashmatrix-harness: %v\n", err)
 		os.Exit(1)
 	}
+	progress("exiting")
+}
+
+// --- progress reporting -------------------------------------------------
+//
+// The parent bounds a harness invocation by how long it goes without
+// making progress, not by a fixed total (issue #247, and see
+// crash_matrix_test.go's progressTracker for the whole argument). These
+// lines are that liveness signal. They go to stderr so stdout stays the
+// result channel the tests parse (CALIBRATED, HANDOFF, FINAL_STATE), and
+// they are written with an unbuffered Fprintf so each one reaches the
+// parent at the instant it happens rather than whenever a buffer happens
+// to flush.
+//
+// A step here is deliberately one real operation: a single SSH round trip,
+// a single copy, a single fsync sequence. That is what lets the parent
+// derive a bound from what it has already watched this machine do, instead
+// of guessing how long a whole pipeline ought to take.
+
+var (
+	progressMu  sync.Mutex
+	progressSeq int
+	// hangAt makes the harness stop dead after reporting the named event,
+	// with no further progress and no exit. See the -hang-at flag.
+	hangAt string
+	// stalls makes the harness take a real, named amount of time over a
+	// step while still reporting it. See the -stall-at flag.
+	stalls map[string]time.Duration
+)
+
+func progress(event string) {
+	progressMu.Lock()
+	progressSeq++
+	seq := progressSeq
+	progressMu.Unlock()
+
+	fmt.Fprintf(os.Stderr, "PROGRESS %d %s\n", seq, event)
+	if d, ok := stalls[event]; ok {
+		fmt.Fprintf(os.Stderr, "CRASHMATRIX_PLANTED_STALL: -stall-at makes %s take %s\n", event, d)
+		time.Sleep(d)
+	}
+	if hangAt != "" && event == hangAt {
+		fmt.Fprintf(os.Stderr, "CRASHMATRIX_PLANTED_HANG: -hang-at=%s reached; this process will now make no further progress and will never exit\n", event)
+		select {}
+	}
+}
+
+// parseStalls reads -stall-at's "event:duration,event:duration" form.
+func parseStalls(spec string) (map[string]time.Duration, error) {
+	if spec == "" {
+		return nil, nil
+	}
+	out := map[string]time.Duration{}
+	for _, part := range strings.Split(spec, ",") {
+		event, dur, ok := strings.Cut(part, ":")
+		if !ok {
+			return nil, fmt.Errorf("-stall-at entry %q is not event:duration", part)
+		}
+		d, err := time.ParseDuration(dur)
+		if err != nil {
+			return nil, fmt.Errorf("-stall-at entry %q: %w", part, err)
+		}
+		out[event] = d
+	}
+	return out, nil
+}
+
+// fatalf ends the harness loudly from a goroutine that has no error return
+// to use. Every caller is a failure of this harness's own machinery, never
+// a verdict about the product, so it exits non-zero with an attributed
+// message rather than leaving the parent to infer something from silence.
+func fatalf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "crashmatrix-harness: "+format+"\n", args...)
+	os.Exit(2)
 }
 
 func run() error {
@@ -98,8 +187,19 @@ func run() error {
 		killAfter     = flag.String("kill-after-state", "", "self-destruct the instant this state is durably journaled")
 		killPlanFlag  = flag.String("kill-plan", "none", "none | mid-transfer | mid-verify | mid-commit | mid-delete | after-real-delete")
 		midFraction   = flag.Float64("mid-fraction", 0.4, "fraction of the calibrated duration to wait before racing the kill timer")
+		hangAtFlag    = flag.String("hang-at", "", "plant a genuine hang: stop dead, forever, after reporting this PROGRESS event. Used only by this suite's own watchdog test, which proves a hung harness is still caught promptly")
+		suppressKill  = flag.Bool("mutation-suppress-self-kill", false, "turn every self-destruct into a no-op, so a run that should have died runs to completion instead. Used only by this suite's own mutation tests, which prove the 'the harness must have been killed' guards still fail when the kill genuinely does not happen")
+		stallAt       = flag.String("stall-at", "", `make named steps genuinely slow without hanging, as "event:duration,event:duration". Used only by this suite's own watchdog test, which proves a slow-but-progressing run is not failed`)
 	)
 	flag.Parse()
+
+	hangAt = *hangAtFlag
+	suppressSelfKill = *suppressKill
+	parsedStalls, err := parseStalls(*stallAt)
+	if err != nil {
+		return err
+	}
+	stalls = parsedStalls
 
 	if *journalPath == "" || *localDir == "" || *artifactName == "" {
 		return errors.New("-journal, -local-dir and -artifact-name are required")
@@ -140,11 +240,13 @@ func run() error {
 		return fmt.Errorf("MkdirAll local-dir: %w", err)
 	}
 
+	progress("journal-open-start")
 	realJournal, err := state.Open(ctx, *journalPath)
 	if err != nil {
 		return fmt.Errorf("state.Open: %w", err)
 	}
 	defer func() { _ = realJournal.Close() }()
+	progress("journal-open-done")
 
 	journal := newKillAfterStateJournal(realJournal, *killAfter)
 
@@ -191,33 +293,56 @@ func run() error {
 		ID:         set,
 		Completion: config.Completion{Strategy: "rename"},
 	}
+	progress("discover-start")
 	if _, err := discovery.Discover(ctx, discovery.Deps{Transport: kt, Journal: journal}, source, discoverSet); err != nil {
 		return fmt.Errorf("discover: %w", err)
 	}
+	progress("discover-done")
 
 	switch *killPlanFlag {
-	case "none", "mid-verify", "mid-commit":
-		// mid-verify and mid-commit have no transport call worth racing
-		// (Verify's mandatory check and Commit's fsync/rename/fsync
-		// sequence are local filesystem work, not transport calls), so
-		// they are calibrated and armed with raceKill directly around the
-		// lifecycle.Verify / lifecycle.Commit call in the loop below,
+	case "none", "mid-commit":
+		// mid-commit has no transport call worth racing (Commit's
+		// fsync/rename/fsync sequence is local filesystem work, not a
+		// transport call), so it is calibrated and armed with raceKill
+		// directly around the lifecycle.Commit call in the loop below,
 		// rather than through timedKillTransport.
 		kt.plan = killPlanNone
+	case "mid-verify":
+		// Nothing is calibrated and no timer is armed for this plan any
+		// more: see verifyReadHandoff in decorators.go for why the read
+		// is handed its bytes through a pipe and killed at a rendezvous
+		// instead of being raced against a stopwatch (issue #248).
+		kt.plan = killPlanNone
+		pipePath := filepath.Join(filepath.Dir(*journalPath), fmt.Sprintf("crashmatrix-verify-handoff-%d.fifo", os.Getpid()))
+		if err := syscall.Mkfifo(pipePath, 0o600); err != nil {
+			return fmt.Errorf("creating the mid-verify handoff pipe %q: %w", pipePath, err)
+		}
+		defer os.Remove(pipePath)
+		journal.midVerify = &verifyReadHandoff{
+			pipePath:     pipePath,
+			armAtState:   string(lifecycle.Verifying),
+			handoffBytes: verifyHandoffBytes,
+			progress:     progress,
+		}
+		fmt.Printf("HANDOFF verify_pipe=%s handoff_bytes=%d\n", pipePath, verifyHandoffBytes)
 	case "mid-transfer":
+		progress("calibrate-transfer-start")
 		d, cerr := calibrateTransfer(ctx, realTransport, source, artifact.Name)
 		if cerr != nil {
 			return fmt.Errorf("calibrateTransfer: %w", cerr)
 		}
+		progress("calibrate-transfer-done")
 		kt.plan = killPlanMidTransfer
 		kt.mid = time.Duration(float64(d) * *midFraction)
 		kt.timedOut = &timedOut
 		fmt.Printf("CALIBRATED transfer=%s kill_after=%s\n", d, kt.mid)
 	case "mid-delete":
+		progress("calibrate-delete-start")
 		d, cerr := calibrateDelete(ctx, realTransport, source)
 		if cerr != nil {
 			return fmt.Errorf("calibrateDelete: %w", cerr)
 		}
+		progress("calibrate-delete-done")
 		kt.plan = killPlanMidDelete
 		kt.mid = time.Duration(float64(d) * *midFraction)
 		kt.timedOut = &timedOut
@@ -233,14 +358,17 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("journal.Get: %w", err)
 		}
+		progress("loop-at-" + rec.State)
 
 		switch lifecycle.State(rec.State) {
 		case lifecycle.Discovered, lifecycle.Transferring:
+			progress("transfer-start")
 			if _, err := lifecycle.Transfer(ctx, deps, lifecycle.TransferParams{
 				Artifact: artifact, Source: source, LocalDir: *localDir, AttemptKey: transferKey,
 			}); err != nil {
 				return fmt.Errorf("transfer: %w", err)
 			}
+			progress("transfer-done")
 
 		case lifecycle.Transferred, lifecycle.Verifying:
 			// lifecycle.Verify documents its own contract plainly:
@@ -264,26 +392,18 @@ func run() error {
 					return fmt.Errorf("begin VERIFYING: %w", err)
 				}
 			}
-			verifyCall := func() (struct{}, error) {
-				_, err := lifecycle.Verify(ctx, deps, lifecycle.VerifyParams{
-					Artifact: artifact, Source: source, Validation: validation, AttemptKey: verifyKey,
-				})
-				return struct{}{}, err
-			}
-			if *killPlanFlag == "mid-verify" {
-				partial := filepath.Join(*localDir, artifact.Name+".partial")
-				d, cerr := calibrateLocalRead(partial)
-				if cerr != nil {
-					return fmt.Errorf("calibrateLocalRead: %w", cerr)
-				}
-				mid := time.Duration(float64(d) * *midFraction)
-				fmt.Printf("CALIBRATED verify_read=%s kill_after=%s\n", d, mid)
-				if _, err := raceKill(mid, &timedOut, verifyCall); err != nil {
-					return fmt.Errorf("verify: %w", err)
-				}
-			} else if _, err := verifyCall(); err != nil {
+			// No branch on -kill-plan here any more. When mid-verify is
+			// armed, the crash is driven from inside this exact call by
+			// the journal decorator and the handoff pipe it hands
+			// lifecycle.Verify (see verifyReadHandoff), so there is only
+			// one call site and it is the real, unwrapped one.
+			progress("verify-start")
+			if _, err := lifecycle.Verify(ctx, deps, lifecycle.VerifyParams{
+				Artifact: artifact, Source: source, Validation: validation, AttemptKey: verifyKey,
+			}); err != nil {
 				return fmt.Errorf("verify: %w", err)
 			}
+			progress("verify-done")
 
 		case lifecycle.Verified, lifecycle.Committing:
 			commitCall := func() (struct{}, error) {
@@ -292,6 +412,7 @@ func run() error {
 				})
 				return struct{}{}, err
 			}
+			progress("commit-start")
 			if *killPlanFlag == "mid-commit" {
 				d, cerr := calibrateCommit(*localDir, artifact.Name)
 				if cerr != nil {
@@ -299,18 +420,21 @@ func run() error {
 				}
 				mid := time.Duration(float64(d) * *midFraction)
 				fmt.Printf("CALIBRATED commit=%s kill_after=%s\n", d, mid)
-				if _, err := raceKill(mid, &timedOut, commitCall); err != nil {
+				if _, err := raceKill("mid-commit", mid, &timedOut, commitCall); err != nil {
 					return fmt.Errorf("commit: %w", err)
 				}
 			} else if _, err := commitCall(); err != nil {
 				return fmt.Errorf("commit: %w", err)
 			}
+			progress("commit-done")
 
 		case lifecycle.Committed, lifecycle.RemoteDeletePending:
+			progress("delete-remote-start")
 			_, err := lifecycle.DeleteRemote(ctx, deps, lifecycle.DeleteRemoteRequest{
 				CompletionStrategy: discoverSet.Completion.Strategy,
 				Source:             source, Artifact: artifact, AttemptKey: deleteKey,
 			})
+			progress("delete-remote-done")
 			if err != nil {
 				if refusal, ok := lifecycle.AsRemoteDeleteRefusal(err); ok {
 					final, ferr := journal.Get(ctx, artifact)
@@ -386,24 +510,19 @@ func calibrateDelete(ctx context.Context, tr transport.Transport, source transpo
 	return time.Since(start), nil
 }
 
-// calibrateLocalRead backs -kill-plan=mid-verify. Verify's mandatory check
-// (readAndHashLocal in verify.go) is a local file read+hash with no
-// transport call to intercept, so instead of a transport-level plan this
-// measures how long reading and hashing the real .partial file actually
-// takes on this filesystem, right before racing that same real duration
-// against the real lifecycle.Verify call in the main loop above.
-func calibrateLocalRead(path string) (time.Duration, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	start := time.Now()
-	if _, err := io.Copy(sha256.New(), f); err != nil {
-		return 0, err
-	}
-	return time.Since(start), nil
-}
+// verifyHandoffBytes is how much of the real local file -kill-plan=mid-verify
+// hands lifecycle.Verify before killing this process. It backs
+// verifyReadHandoff in decorators.go, which is where the argument lives;
+// the only two things this number has to satisfy are that it comfortably
+// exceeds a pipe buffer (64 KiB on Linux, 16 KiB on Darwin), so a completed
+// write is unambiguous proof the reader consumed nearly all of it, and that
+// it stays well under the artifact size the mid-verify test uses (48 MiB),
+// so the stream never reaches EOF and lets the read finish on its own.
+//
+// Nothing here is a duration, which is the point: this replaced a
+// calibrated stopwatch (issue #248) whose only failure mode was firing
+// after the read had already finished.
+const verifyHandoffBytes = 4 << 20 // 4 MiB
 
 // calibrateCommit backs -kill-plan=mid-commit. Commit's fsync/rename/fsync
 // sequence (commit.go) is local filesystem work with no transport call to
