@@ -59,6 +59,15 @@ recording that baseline is a red test in `apps/common/packaging`, as is any
 operator re-runs on a reinstall, by which point that tree is the retained backup
 store.
 
+Which of those a given provider actually gets, and which of them it legitimately
+does not, is no longer prose. `apps/common/packaging` runs the cross-provider
+conformance matrix (§63A) over all seven providers and records the result in
+[`../conformance/phase-4-matrix.md`](../conformance/phase-4-matrix.md), one
+outcome per provider per capability. A row marked `OPERATOR` there is a
+capability whose automated half held (the procedure below exists and covers it)
+and whose hardware half has not run. That is the same claim this directory
+makes, said once, in a form a test enforces.
+
 ## Procedures
 
 | Provider | Procedure | Required evidence (§68) |
@@ -66,6 +75,13 @@ store.
 | TrueNAS | [truenas-provider-acceptance.md](truenas-provider-acceptance.md) | current supported TrueNAS release VM or hardware |
 | Unraid | [unraid-provider-acceptance.md](unraid-provider-acceptance.md) | current supported Unraid release VM or hardware |
 | OpenMediaVault | [openmediavault-provider-acceptance.md](openmediavault-provider-acceptance.md) | current OMV 8.x Debian-based test system |
+| Synology DSM | [synology-dsm-package-lifecycle.md](synology-dsm-package-lifecycle.md) | a representative DSM 7.x model per claimed architecture |
+| Proxmox VE | [proxmox-ve-deployment.md](proxmox-ve-deployment.md) | current PVE release test host or VM environment |
+| UGOS | [ugos-local-notification.md](ugos-local-notification.md) | a real authorized UGREEN NAS. Covers notifications only; the install/update/uninstall procedure belongs with the UPK, which is #83 |
+
+Generic Docker has no procedure here on purpose: `apps/generic/tests/dockercli`
+drives the real `docker` CLI against the real image (§67), so there is no
+hardware step left to write down.
 
 ## Recording evidence
 
