@@ -149,6 +149,18 @@ func (r harnessResult) finalState() (string, bool) {
 	return "", false
 }
 
+// killMissed reports the harness's own account of a timer-based kill that
+// fired after the operation it was racing had already finished, if this run
+// produced one.
+func (r harnessResult) killMissed() (string, bool) {
+	for _, line := range strings.Split(r.stdout, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "KILL_MISSED "); ok {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
 // --- bounding a harness invocation ---------------------------------------
 //
 // This used to be one constant, `harnessTimeout = 45 * time.Second`, on the
@@ -283,7 +295,15 @@ func (p *progressTracker) observe(event string, at time.Time) {
 	p.steps++
 }
 
-// window is the current no-progress bound.
+// summary is what the run measured itself at, taken under the lock so it
+// is safe to ask for from the watching goroutine at any point.
+func (p *progressTracker) summary() (steps int, slowest time.Duration, label string, window time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.steps, p.slowestStep, p.slowestLabel, p.window()
+}
+
+// window is the current no-progress bound. Callers hold p.mu.
 func (p *progressTracker) window() time.Duration {
 	if derived := time.Duration(float64(p.slowestStep) * p.b.stepFactor); derived > p.b.stepFloor {
 		return derived
@@ -291,7 +311,7 @@ func (p *progressTracker) window() time.Duration {
 	return p.b.stepFloor
 }
 
-// overallCap is the current total-runtime backstop.
+// overallCap is the current total-runtime backstop. Callers hold p.mu.
 func (p *progressTracker) overallCap() time.Duration {
 	if derived := time.Duration(float64(p.slowestStep) * p.b.overallFactor); derived > p.b.overallFloor {
 		return derived
@@ -433,6 +453,17 @@ watch:
 		// anything the harness did to itself, and reporting it as such
 		// would be a lie a caller could act on.
 		res.signal = 0
+	} else {
+		// What the run measured itself at, on every invocation, not just
+		// failing ones. go test only surfaces this for a failing test or
+		// under -v, so it costs a passing gate nothing, and it is the
+		// difference between "the bound held" and being able to say by
+		// how much (issue #247's complaint is precisely that a gate
+		// failure with no working shown teaches people to re-run).
+		steps, slowest, label, window := tracker.summary()
+		t.Logf("harness finished in %s; %d steps, slowest %s (%s), no-progress window %s",
+			time.Since(start).Round(time.Millisecond), steps,
+			slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
 	}
 	return res, trip
 }
@@ -460,8 +491,16 @@ func notKilledProblem(res harnessResult) string {
 	// place first. A harness that printed a FINAL_STATE reached a terminal
 	// outcome under its own power, so say that instead.
 	if final, ok := res.finalState(); ok {
+		why := "it means the kill was never triggered at all"
+		if missed, ok := res.killMissed(); ok {
+			// The plans that still race a timer report the one number
+			// that explains a miss, which is knowable only on the runs
+			// that missed: how long the real operation actually took
+			// against how long the timer was set for.
+			why = "the kill missed its window (" + missed + ")"
+		}
 		return fmt.Sprintf("the crash never happened: the harness ran all the way to FINAL_STATE=%s under its own power instead of dying at its armed crash point. "+
-			"That is not a signal-delivery problem, it means the kill was never triggered at all.", final)
+			"That is not a signal-delivery problem, %s.", final, why)
 	}
 	return fmt.Sprintf("harness was not killed by SIGKILL (err=%v)", res.err)
 }

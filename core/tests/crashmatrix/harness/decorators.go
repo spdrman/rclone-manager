@@ -190,7 +190,7 @@ func (t *timedKillTransport) CopyToLocal(ctx context.Context, source transport.S
 	if t.plan != killPlanMidTransfer {
 		return t.real.CopyToLocal(ctx, source, remotePath, localPartialPath)
 	}
-	return raceKill(t.mid, t.timedOut, func() (transport.TransferResult, error) {
+	return raceKill("mid-transfer", t.mid, t.timedOut, func() (transport.TransferResult, error) {
 		return t.real.CopyToLocal(ctx, source, remotePath, localPartialPath)
 	})
 }
@@ -202,7 +202,7 @@ func (t *timedKillTransport) RemoteHash(ctx context.Context, source transport.So
 func (t *timedKillTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
 	switch t.plan {
 	case killPlanMidDelete:
-		_, err := raceKill(t.mid, t.timedOut, func() (struct{}, error) {
+		_, err := raceKill("mid-delete", t.mid, t.timedOut, func() (struct{}, error) {
 			return struct{}{}, t.real.DeleteRemote(ctx, source, remotePath)
 		})
 		return err
@@ -238,12 +238,13 @@ func (t *timedKillTransport) DeleteRemote(ctx context.Context, source transport.
 // self-destructing binary, only exercised by this package's own unit test
 // for raceKill's timer-vs-completion race itself) can tell which branch
 // ran.
-func raceKill[T any](delay time.Duration, timedOut *bool, fn func() (T, error)) (T, error) {
+func raceKill[T any](label string, delay time.Duration, timedOut *bool, fn func() (T, error)) (T, error) {
 	type result struct {
 		val T
 		err error
 	}
 	resultCh := make(chan result, 1)
+	started := time.Now()
 	go func() {
 		v, err := fn()
 		resultCh <- result{v, err}
@@ -253,6 +254,15 @@ func raceKill[T any](delay time.Duration, timedOut *bool, fn func() (T, error)) 
 	defer timer.Stop()
 	select {
 	case r := <-resultCh:
+		// The kill missed its window, and this is the only place that can
+		// say by how much: the real operation's duration is knowable only
+		// on the runs where it finished. Issue #248 asked for exactly
+		// this, because "harness was not killed by SIGKILL (err=<nil>)"
+		// reads like a signal-delivery problem. Two of the three plans
+		// that still race a timer treat both sides as legitimate, so this
+		// is a fact rather than a complaint; the test that does require
+		// the kill quotes it back in its own failure.
+		fmt.Printf("KILL_MISSED plan=%s kill_after=%s real_operation=%s\n", label, delay, time.Since(started))
 		return r.val, r.err
 	case <-timer.C:
 		if timedOut != nil {

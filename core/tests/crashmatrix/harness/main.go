@@ -420,7 +420,7 @@ func run() error {
 				}
 				mid := time.Duration(float64(d) * *midFraction)
 				fmt.Printf("CALIBRATED commit=%s kill_after=%s\n", d, mid)
-				if _, err := raceKill(mid, &timedOut, commitCall); err != nil {
+				if _, err := raceKill("mid-commit", mid, &timedOut, commitCall); err != nil {
 					return fmt.Errorf("commit: %w", err)
 				}
 			} else if _, err := commitCall(); err != nil {

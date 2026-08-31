@@ -314,6 +314,43 @@ func TestMutation_AnUnkilledHarnessIsStillRejected(t *testing.T) {
 	}
 }
 
+// TestMutation_ATimerThatMissesItsWindowIsStillRejected reproduces #248's
+// failure exactly, deterministically, and proves two things about it.
+//
+// -kill-plan=mid-transfer still races a calibrated timer against the real
+// copy (only mid-verify was converted to a rendezvous; see this package's
+// doc for why the other raced points do not require the kill to land).
+// Setting the fraction well above 1 makes that timer certain to fire after
+// the copy it is racing has already finished, which is precisely what
+// happened to mid-verify under gate load: the operation finishes first and
+// the process runs on to FINAL_STATE=COMPLETE.
+//
+// So the guard must still reject it, and the rejection must now say the
+// kill missed its window, with the numbers. "harness was not killed by
+// SIGKILL (err=<nil>)" reads like a signal-delivery problem and is what
+// sent the report looking in the wrong place first.
+func TestMutation_ATimerThatMissesItsWindowIsStillRejected(t *testing.T) {
+	s := newLocalScenario(t, 48<<20)
+	res := runHarness(t, append(s.baseArgs(), "-kill-plan=mid-transfer", "-mid-fraction=6.0")...)
+
+	if res.killedBy(syscall.SIGKILL) {
+		t.Fatalf("a timer set to six times the calibrated duration still won its race, so this test is not reproducing a miss\nstdout=%s", res.stdout)
+	}
+	missed, ok := res.killMissed()
+	if !ok {
+		t.Fatalf("the harness missed its window and never said so; that number is knowable only on the runs that miss\nstdout=%s", res.stdout)
+	}
+
+	problem := notKilledProblem(res)
+	if problem == "" {
+		t.Fatal("a kill that fired after the operation it was racing had already finished passed the guard, so that crash point no longer detects anything")
+	}
+	if !strings.Contains(problem, "missed its window") {
+		t.Fatalf("the rejection still does not say the kill missed its window, which is what #248 asked for: %q", problem)
+	}
+	t.Logf("reproduced and rejected: %s\nharness reported: %s", problem, missed)
+}
+
 // TestMidVerifyHandoff_ReallyKillsInsideTheRead is the positive control for
 // the mutation above, and the direct proof of #248's mechanism: the same
 // scenario, without the mutation, dies by SIGKILL with VERIFYING the last
