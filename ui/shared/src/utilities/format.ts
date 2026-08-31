@@ -11,15 +11,6 @@ export function rate(bytesPerSecond: number): string {
   return bytes(bytesPerSecond, 0) + "/s";
 }
 
-export function duration(seconds: number): string {
-  if (seconds < 60) return Math.round(seconds) + "s";
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds % 60);
-  if (m < 60) return m + "m " + String(s).padStart(2, "0") + "s";
-  const h = Math.floor(m / 60);
-  return h + "h " + String(m % 60).padStart(2, "0") + "m";
-}
-
 /** Freshness is the most safety-critical number in the product, so it is always
  *  rendered as an explicit age — never a bare date the operator has to subtract. */
 export function relativeAge(iso: string | null, now = Date.now()): string {
