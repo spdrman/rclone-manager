@@ -28,10 +28,20 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
-      // no-unused-vars: TS's own noUnused* compiler options already cover
-      // this project-wide (tsconfig.json), so the ESLint duplicate is
-      // redundant noise on top of a tsc error that already blocks `lint`.
-      "@typescript-eslint/no-unused-vars": "off",
+      // no-unused-vars: on here, and deliberately not delegated to tsc's
+      // noUnusedLocals/noUnusedParameters. Those two only ever see the
+      // files tsconfig.json's "include" lists, which is `src` (plus
+      // apps/*/frontend through tsconfig.providers.json), whereas
+      // `eslint .` sweeps the whole workspace. So vite.config.ts, and
+      // anything anyone adds outside src/ later, is covered by this rule
+      // and by nothing else. It was off until issue #219 on the claim
+      // that tsc "already covers this project-wide"; it did not, and an
+      // unused binding planted in vite.config.ts passed both `npm run
+      // lint` and `npm run eslint`. Inside src/ the two checks do
+      // genuinely overlap, and that duplicate is the price of a rule
+      // whose reach does not depend on an include list kept in a
+      // different file.
+      "@typescript-eslint/no-unused-vars": "error",
     },
   },
   {
