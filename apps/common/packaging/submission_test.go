@@ -42,6 +42,14 @@ type targetUnderTest struct {
 	providerUnderTest
 	sub    SubmissionProvider
 	bundle Bundle
+	// conf is the cross-provider conformance declaration this target is
+	// registered in, carried rather than re-loaded from the embedded
+	// file. That is what lets a target this repository has never shipped
+	// be registered and decided by all eight drift elements: an element
+	// that reaches for MustLoadConformance() can only ever resolve a
+	// target that is already checked in, which would have made "a new
+	// NAS costs metadata, not an implementation" untestable.
+	conf Conformance
 }
 
 // scanArtifact runs one hard rule over the files this target's package
@@ -100,7 +108,7 @@ func hardRule(rule func(path, text string) []Violation) func(targetUnderTest) (b
 func driftRule(e DriftElement) func(targetUnderTest) (bool, string) {
 	return func(t targetUnderTest) (bool, string) {
 		if e.MatrixCapability != "" {
-			conf := MustLoadConformance()
+			conf := t.conf
 			var cap Capability
 			for _, c := range conf.Capabilities {
 				if c.ID == e.MatrixCapability {
@@ -610,7 +618,7 @@ func TestTheAPIContractIsStatedOnceAndAgreedThreeTimes(t *testing.T) {
 // The run
 // ---------------------------------------------------------------------
 
-func runPreflight(t *testing.T, s Submission, conf Conformance, report bool) PreflightRun {
+func runPreflight(t *testing.T, s Submission, conf Conformance) PreflightRun {
 	t.Helper()
 	c := s.AsConformance(conf)
 	canonical := MustLoad()
@@ -621,6 +629,7 @@ func runPreflight(t *testing.T, s Submission, conf Conformance, report bool) Pre
 			providerUnderTest: providerUnderTest{id: pid, spec: c.Providers[pid], canonical: canonical},
 			sub:               s.Providers[pid],
 			bundle:            s.Bundle,
+			conf:              conf,
 		}
 		epic := c.Providers[pid].Epic
 		t.Run(pid, func(t *testing.T) {
@@ -659,7 +668,7 @@ func runPreflight(t *testing.T, s Submission, conf Conformance, report bool) Pre
 
 func TestProviderStoreSubmissionPreflight(t *testing.T) {
 	s := MustLoadSubmission()
-	run := runPreflight(t, s, MustLoadConformance(), true)
+	run := runPreflight(t, s, MustLoadConformance())
 	m := run.Matrix
 
 	v := m.Verdict(SubmissionEpic)

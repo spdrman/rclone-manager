@@ -409,9 +409,16 @@ var (
 	sentryRe       = regexp.MustCompile(`(?i)\b(SENTRY_DSN|BUGSNAG_API_KEY|DATADOG_API_KEY|NEW_RELIC_LICENSE_KEY)\s*[:=]\s*["']?([^\s"',#]+)`)
 	urlRe          = regexp.MustCompile(`https?://[^\s"'<>)\]}]+`)
 
-	privilegedYAMLRe  = regexp.MustCompile(`(?im)^\s*privileged\s*:\s*["']?true\b`)
-	privilegedXMLRe   = regexp.MustCompile(`(?is)<\s*Privileged\s*>\s*true\s*<`)
-	privilegedFlagRe  = regexp.MustCompile(`--privileged(?:\s|=true|$)`)
+	privilegedYAMLRe = regexp.MustCompile(`(?im)^\s*privileged\s*:\s*["']?true\b`)
+	privilegedXMLRe  = regexp.MustCompile(`(?is)<\s*Privileged\s*>\s*true\s*<`)
+	// `--privileged` with its value captured rather than assumed. RE2 has
+	// no lookahead, so "the flag, unless it is =false" cannot be written
+	// as one pattern: `--privileged(\s|=true|$)` misses
+	// `--privileged</ExtraParams>` at the end of an XML element, which is
+	// exactly where an Unraid template would carry it, and
+	// `--privileged\b` accepts `--privileged=false` as a violation. The
+	// positive control caught the first of those.
+	privilegedFlagRe  = regexp.MustCompile(`--privileged(?:=([A-Za-z0-9]+))?`)
 	networkModeHostRe = regexp.MustCompile(`(?im)^\s*(?:network_mode|pid|ipc|uts)\s*:\s*["']?host\b`)
 	capAddRe          = regexp.MustCompile(`(?im)^\s*cap_add\s*:`)
 	unconfinedRe      = regexp.MustCompile(`(?i)(?:seccomp|apparmor)\s*[:=]\s*unconfined`)
@@ -539,14 +546,27 @@ func CheckNoFloatingTag(path, text string) []Violation {
 		if strings.Contains(ref, "{{") {
 			continue
 		}
-		tag, kind := ImageTag(ref)
+		// Resolve `${VAR:-default}` before classifying. The OMV and
+		// Proxmox profiles write the whole reference as one expansion,
+		// so every colon in them sits inside the braces and a reference
+		// whose default is pinned read as having no tag at all. What
+		// gets deployed is the default, so that is what has to be
+		// judged.
+		resolved, unresolved := ExpandCompose(ref, nil)
+		if len(unresolved) > 0 {
+			add(ref, fmt.Sprintf("deploys %s, which resolves to nothing unless the operator happens to have set %v: a profile that installs a different image depending on an environment variable is not a pinned one",
+				backquote(ref), unresolved))
+			continue
+		}
+
+		tag, kind := ImageTag(resolved)
 		switch kind {
 		case tagAbsent:
-			add(ref, fmt.Sprintf("deploys %s with no tag and no digest, which Docker resolves to `latest`: the bytes that run are whatever the registry holds that day", backquote(ref)))
+			add(ref, fmt.Sprintf("deploys %s with no tag and no digest, which Docker resolves to `latest`: the bytes that run are whatever the registry holds that day", backquote(resolved)))
 		case tagLatest:
-			add(ref, fmt.Sprintf("deploys %s, a floating tag whose contents change under a running deployment", backquote(ref)))
+			add(ref, fmt.Sprintf("deploys %s, a floating tag whose contents change under a running deployment", backquote(resolved)))
 		case tagFloatingDefault:
-			add(ref, fmt.Sprintf("deploys %s, whose variable default is %s, so an operator who sets nothing gets a floating tag", backquote(ref), backquote(tag)))
+			add(ref, fmt.Sprintf("deploys %s, whose variable default is %s, so an operator who sets nothing gets a floating tag", backquote(resolved), backquote(tag)))
 		}
 	}
 
@@ -567,13 +587,21 @@ const (
 // ImageTag splits an OCI reference into its tag and says what kind of tag
 // it is. Exported because the drift gate needs the same answer about the
 // canonical reference that the hard rule needs about a provider's.
+//
+// The tag separator is the last colon OUTSIDE a ${...} expression, and
+// that qualification is the whole check rather than a detail. Written as
+// a plain strings.LastIndex, `backup-manager:${VERSION:-latest}` splits
+// at the `:-` inside the expression and yields a tag of `-latest}`, which
+// is not equal to "latest", so the single worst case this rule exists to
+// catch (a floating default an operator who sets nothing silently gets)
+// read as pinned. The positive control caught it.
 func ImageTag(ref string) (string, tagKind) {
-	if i := strings.Index(ref, "@"); i >= 0 {
+	if i := indexOutsideExpansion(ref, '@'); i >= 0 {
 		return ref[i+1:], tagPinned
 	}
-	// The last colon is only a tag separator when nothing after it looks
-	// like a registry port, which is what the "/" test decides.
-	i := strings.LastIndex(ref, ":")
+	// The last such colon is only a tag separator when nothing after it
+	// looks like a registry port, which is what the "/" test decides.
+	i := lastIndexOutsideExpansion(ref, ':')
 	if i < 0 || strings.Contains(ref[i+1:], "/") {
 		return "", tagAbsent
 	}
@@ -592,6 +620,42 @@ func ImageTag(ref string) (string, tagKind) {
 		return "", tagAbsent
 	}
 	return tag, tagPinned
+}
+
+// indexOutsideExpansion and lastIndexOutsideExpansion find a byte that is
+// not inside a ${...} expansion. Compose references carry expansions with
+// colons in them, and every one of those colons looks exactly like a tag
+// separator to a scan that does not track the braces.
+func indexOutsideExpansion(s string, want byte) int {
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '$' && i+1 < len(s) && s[i+1] == '{':
+			depth++
+			i++
+		case s[i] == '}' && depth > 0:
+			depth--
+		case depth == 0 && s[i] == want:
+			return i
+		}
+	}
+	return -1
+}
+
+func lastIndexOutsideExpansion(s string, want byte) int {
+	depth, found := 0, -1
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '$' && i+1 < len(s) && s[i+1] == '{':
+			depth++
+			i++
+		case s[i] == '}' && depth > 0:
+			depth--
+		case depth == 0 && s[i] == want:
+			found = i
+		}
+	}
+	return found
 }
 
 // CheckNoPrivilegedMode holds a packaged file to the negative half of the
@@ -615,8 +679,11 @@ func CheckNoPrivilegedMode(path, text string) []Violation {
 	if privilegedXMLRe.MatchString(text) {
 		add("declares `<Privileged>true</Privileged>`, which Community Applications shows to the operator as a full-privilege container")
 	}
-	if privilegedFlagRe.MatchString(text) {
-		add("passes `--privileged`")
+	for _, m := range privilegedFlagRe.FindAllStringSubmatch(text, -1) {
+		if m[1] != "" && isFalsy(m[1]) {
+			continue
+		}
+		add("passes `--privileged`, which gives the container the host's full capability set whatever else is on the same line")
 	}
 	if networkModeHostRe.MatchString(text) {
 		add("shares a host namespace (`network_mode`, `pid`, `ipc` or `uts` set to `host`), which puts the container's listeners and process view on the host itself")
@@ -651,8 +718,15 @@ func CheckNoMandatoryTelemetry(path, text string) []Violation {
 	add := func(detail string) { out = append(out, Violation{path, RuleMandatoryTelemetry, detail}) }
 
 	for _, m := range telemetryVarRe.FindAllStringSubmatch(text, -1) {
-		if isTruthy(m[2]) {
-			add(fmt.Sprintf("sets %s to %s, so the deployment reports out unless an operator finds and changes it; §45.5 requires no required telemetry at all", backquote(m[1]), backquote(m[2])))
+		// Off by default, not "true by default". Checking only for a
+		// truthy value missed the more dangerous half entirely: a
+		// telemetry variable is far more often an ENDPOINT than a
+		// boolean, and TELEMETRY_ENDPOINT set to a collector's URL is
+		// not the string "true". The positive control caught that, and
+		// the fix is to invert the test: a named telemetry setting is a
+		// finding unless it is explicitly switched off.
+		if !isFalsy(m[2]) {
+			add(fmt.Sprintf("sets %s to %s, so the deployment reports out unless an operator finds and changes it; §45.5 requires no required telemetry at all, which means the setting is absent or explicitly off", backquote(m[1]), backquote(m[2])))
 		}
 	}
 	for _, m := range sentryRe.FindAllStringSubmatch(text, -1) {
@@ -678,9 +752,12 @@ func CheckNoMandatoryTelemetry(path, text string) []Violation {
 	return out
 }
 
-func isTruthy(v string) bool {
+// isFalsy reports whether a telemetry setting is explicitly switched off.
+// Everything else, including an endpoint URL, a hostname, a sample rate
+// and an empty-looking value that is not one of these, counts as on.
+func isFalsy(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(strings.Trim(v, `"'`))) {
-	case "true", "yes", "on", "1", "enabled":
+	case "", "false", "no", "off", "0", "disabled", "none", "null":
 		return true
 	}
 	return false
@@ -699,7 +776,11 @@ func isPublicHost(host string) bool {
 	if _, err := strconv.Atoi(strings.Split(h, ".")[0]); err == nil {
 		return false
 	}
-	for _, suffix := range []string{".local", ".internal", ".lan", ".home", ".arpa", ".invalid", ".test", ".example"} {
+	// Link-local and site-local suffixes only. RFC 2606's reserved names
+	// (.invalid, .test, .example) are deliberately NOT here: they are not
+	// local addresses, they are names that resolve nowhere, and a shipped
+	// package pointing at one is a defect whichever way it is read.
+	for _, suffix := range []string{".local", ".internal", ".lan", ".home", ".arpa"} {
 		if strings.HasSuffix(h, suffix) {
 			return false
 		}
