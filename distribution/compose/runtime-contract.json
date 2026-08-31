@@ -25,7 +25,7 @@
   ],
 
   "schema": "rclone-manager/runtime-contract/1",
-  "version": "1.1.0",
+  "version": "1.2.0",
 
   "canonical": "container/compose.yaml",
 
@@ -99,7 +99,7 @@
       "roles": ["engine", "web-ui"],
       "key": "healthcheck",
       "derived": "derivation-gate",
-      "derivedWhy": "derive.go checks it per adapter as health-check. It has to be the derivation gate rather than a key-presence check here, because declaring nothing is the CORRECT answer for the engine (it inherits the image's own HEALTHCHECK instruction) and the wrong one for the Web UI, and only a seam-aware rule can tell those apart.",
+      "derivedWhy": "derive.go checks it per adapter as health-check, across four metadata formats this package cannot parse. It has to be the derivation gate rather than a key-presence check here because the seams differ: the Web UI's check is a required override on every Compose adapter and a `--no-healthcheck` on Unraid, whose only seam is shell form the distroless image cannot run, and the engine's is a required declaration on every adapter that gates a start on it. Only a seam-aware rule can tell those apart.",
       "why": "declared in the runtime definition rather than inherited from an image instruction and described in a comment. An operator reading this file has to be able to see what healthy means without reading the Dockerfile."
     },
     {
@@ -108,9 +108,9 @@
       "roles": ["engine"],
       "key": "test",
       "mustContain": "/health/live",
-      "derived": "derivation-gate",
-      "derivedWhy": "the health-check field above is derivation-gate for the same reason, and this is the narrower half of it: distribution/packaging's derive.go decides every adapter's health command per role from canonical.json's healthchecks, across four metadata formats this package cannot parse. A derived artifact's engine service declares no healthcheck at all and inherits the image's own, which canonical.json states as the engine role's test, so there is no `test` here for this check to read and derive.go is what says that is right.",
-      "why": "the start gate has to be a liveness question, not a backup-freshness one. web-ui declares depends_on: rclone-manager: service_healthy, so whatever the engine's healthcheck asks is what stands between an operator and the only LAN-facing listener. `backup-manager status` exits non-zero on any DEGRADED, STALE or FAILING set and on an instance with no configuration at all, so gating on it means a stale backup set, or a fresh install, keeps the UI from starting. /health/live needs no configuration and is deliberately outside /api/v1. Backup freshness stays the operator and alerting surface it was built to be."
+      "derived": "checked",
+      "_derived_note": "CHECKED on every derived artifact, not left to the derivation gate (issue #206). It used to be derivation-gate on the grounds that a derived artifact declares no engine healthcheck at all and inherits the image's, which canonical.json stated as the engine role's test - true while the image's instruction and the canonical engine check were the same command, and the whole of the defect once #167 made the canonical one a liveness probe and left the image's as the freshness verdict. Every derived Compose artifact now declares the start gate itself and is checked here, directly, in the file an operator reads. The derivation gate still checks it too, per adapter and across the four metadata formats this package cannot parse.",
+      "why": "the start gate has to be a liveness question, not a backup-freshness one. Every runtime definition's web UI declares depends_on: <engine>: condition: service_healthy, so whatever the engine's healthcheck asks is what stands between an operator and the only LAN-facing listener. `backup-manager status` exits non-zero on any DEGRADED, STALE or FAILING set and on a fresh install, which has backed nothing up yet and is legitimately not healthy, so gating on it means a stale backup set, or a fresh install, keeps the web UI from ever starting (issue #206). /health/live needs no configuration and is deliberately outside /api/v1. Backup freshness stays the operator and alerting surface it was built to be, and stays the image's own baked-in HEALTHCHECK for a plain `docker run`."
     },
     {
       "id": "graceful-shutdown-period",

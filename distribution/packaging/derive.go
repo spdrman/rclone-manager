@@ -89,7 +89,7 @@ var DerivedFields = []struct {
 	{FieldRuntimeProfile, "host-dependent behaviour is selected, not branched to. A deployment that names no profile is one whose platform identity and capability reporting are implicit."},
 	{FieldStorageMounts, "the container side of every mount is fixed by the binaries. A platform that mounts somewhere else produces a container that starts and then cannot find its own state."},
 	{FieldPublishedPort, "the engine holds the state database and the credentials and must never be on the edge. Exactly one published port, on the Web UI."},
-	{FieldHealthCheck, "what healthy means is the runtime's answer, not the platform's. The Web UI cannot run the engine's check at all, so an adapter that inherits it reports unhealthy forever."},
+	{FieldHealthCheck, "what healthy means is the runtime's answer, not the platform's, and it is what the start order is built on: the Web UI does not start until the engine reports healthy, so the engine's check has to be a liveness question and not a backup-freshness verdict, which is non-zero on a fresh install by design. The Web UI cannot run the engine's check at all, so an adapter that inherits it reports unhealthy forever."},
 	{FieldArchitectures, "the architectures come from the release, once. A per-platform claim is a second answer that can be wrong on its own."},
 }
 
@@ -102,8 +102,16 @@ const (
 	// adapter uses it.
 	SeamDeclared HealthcheckSeam = "declared"
 	// SeamImageInherited: the adapter declares nothing, so the image's
-	// own HEALTHCHECK instruction applies. Correct for the engine, whose
-	// canonical check IS that instruction; never correct for the Web UI.
+	// own HEALTHCHECK instruction applies.
+	//
+	// That instruction is `/backup-manager status`, FR-24's
+	// backup-freshness verdict, and it is deliberately NOT the canonical
+	// engine check any more (issue #206). It is the right default for a
+	// plain `docker run` and for the headless `daemon` command, which
+	// serves no HTTP and so has no liveness endpoint to ask; it is the
+	// wrong thing for anything to WAIT on, because it is non-zero on a
+	// fresh install by design. Never correct for the Web UI, which has
+	// neither the config file nor the state database it reads.
 	SeamImageInherited HealthcheckSeam = "image-inherited"
 	// SeamDisabled: the adapter turns the check off. The one legitimate
 	// use is Unraid's Web UI container: Unraid's only seam is `docker run
@@ -378,11 +386,27 @@ func checkHealth(a AdapterRuntime, c Canonical) []Drift {
 			}
 		case SeamDisabled:
 			out = append(out, Drift{FieldHealthCheck, a.Engine.Name,
-				"disables the health check; the engine is the container whose health is the product's own backup-freshness signal", why})
+				"disables the health check; the engine's health is the start gate every other container in the deployment waits on, and a disabled check reports nothing for them to wait for", why})
 		case SeamImageInherited:
-			// Correct: the image's own HEALTHCHECK instruction IS the
-			// canonical engine check, and canonical.json pins the two
-			// together (TestTheImageHealthcheckIsTheCanonicalEngineCheck).
+			// The image's baked-in HEALTHCHECK applies, and it is the
+			// backup-freshness verdict rather than the canonical start
+			// gate (see SeamImageInherited's own doc). That is a report
+			// where nothing waits on it, and issue #206 where something
+			// does: a fresh install has backed nothing up, so the
+			// verdict is non-zero, so the gate never releases and the
+			// only LAN-facing container never starts.
+			//
+			// Unraid is the adapter this leaves standing, and it stands
+			// on the rule rather than on an exemption: its template
+			// schema has no health-check seam at all, and it also
+			// declares no start-ordering dependency, so nothing there
+			// waits on the verdict and the badge it produces is exactly
+			// the freshness report FR-24 means it to be.
+			if waiters := waitingOnHealthOf(a, a.Engine.Name); len(waiters) > 0 {
+				out = append(out, Drift{FieldHealthCheck, a.Engine.Name,
+					fmt.Sprintf("declares no health check, so it inherits the image's own %v, and %v will not start until that reports healthy; it is the backup-freshness verdict and exits non-zero on a fresh install by design, so the gate never releases. The canonical engine check is %v",
+						c.Commands.ImageHealthcheck, waiters, c.Healthchecks.Engine), why})
+			}
 		}
 	}
 
@@ -402,6 +426,25 @@ func checkHealth(a AdapterRuntime, c Canonical) []Drift {
 		}
 	}
 
+	return out
+}
+
+// waitingOnHealthOf names every service in this adapter that refuses to
+// start until service reports healthy.
+//
+// Sorted and complete rather than a boolean: a drift message that says
+// WHICH container is being held back is the difference between a rule an
+// operator can act on and one they have to go and reproduce.
+func waitingOnHealthOf(a AdapterRuntime, service string) []string {
+	var out []string
+	for _, svc := range a.services() {
+		for _, dep := range svc.WaitsForHealthy {
+			if dep == service {
+				out = append(out, svc.Name)
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
