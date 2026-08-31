@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -264,7 +265,26 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // BackupService is ever constructed and no daemon, API, scheduler tick or
 // transfer ever starts.
 func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, func() error, error) {
+	// #196 made the packaged configuration mount a DIRECTORY, so resolve
+	// it to the file inside before anything below looks at it: the
+	// absence check immediately after has to ask about config.yaml, not
+	// about the directory holding it, or an empty fresh-install mount
+	// reads as "present but broken" instead of "not set up yet".
 	configPath = config.ResolvePath(configPath)
+
+	// An absent configuration file is reported as its own error, before
+	// anything else is attempted (issue #176, firstrun.go). It is the one
+	// startup failure that means "this deployment has not been set up
+	// yet" rather than "this deployment is set up wrongly", and a
+	// provider app branches on it to serve the setup flow instead of
+	// exiting. Statting first, rather than inspecting whatever
+	// config.Load's wrapped error happens to say, keeps that distinction
+	// a property of this function rather than of an error string another
+	// package is free to reword.
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil, fmt.Errorf("%w at %s", ErrConfigAbsent, configPath)
+	}
+
 	cfg, err := config.LoadAndValidate(configPath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("service: load config: %w", err)
