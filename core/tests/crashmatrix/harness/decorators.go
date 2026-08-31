@@ -217,7 +217,10 @@ func (t *timedKillTransport) DeleteRemote(ctx context.Context, source transport.
 		// recorded that yet" window: REMOTE_DELETE_PENDING is the only
 		// thing durably on record, and it always will be for this run.
 		selfDestruct("real remote delete succeeded; killing before the caller could record COMPLETE")
-		return nil // unreachable
+		// Reached only under -mutation-suppress-self-kill, where the
+		// honest answer is the one the real delete just gave: it
+		// succeeded.
+		return nil
 	default:
 		return t.real.DeleteRemote(ctx, source, remotePath)
 	}
