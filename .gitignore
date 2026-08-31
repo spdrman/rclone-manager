@@ -15,6 +15,21 @@
 config.local.*
 *.local.yaml
 
+# Signing and key material. Release signatures are keyless (Sigstore), so
+# a correct release never produces any of these; see
+# docs/compliance/release-provenance.md. They are ignored anyway because
+# the failure mode is permanent: a private key committed once stays in the
+# history whatever is done to the working tree afterwards. Nothing tracked
+# matches these patterns today, and scripts/release/publish-image.sh
+# refuses to run at all beside a file that does, tracked or not, so this
+# is the outer of two nets rather than the only one.
+*.key
+*.pem
+*.p12
+*.pfx
+cosign.key
+cosign.pub
+
 .DS_Store
 
 # Agent worktrees, local only

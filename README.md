@@ -621,4 +621,27 @@ lives here instead; nothing in the design depended on the location.
 - [`apps/proxmox/README.md`](apps/proxmox/README.md) – the Proxmox VE deployment profile: the one supported model, what the PVE host contributes, and what is deliberately absent
 - [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) – the cross-provider conformance matrix (§63A), per provider and per capability, including what is blocked and on what
 - [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written before execution and run on real NAS hardware or a real host
+- [`docs/compliance/release-provenance.md`](docs/compliance/release-provenance.md) – what a release records, how the SBOM and checksums are produced, and how an image is signed without this project ever holding a key
+- [`docs/compliance/`](docs/compliance/) – the store-facing compliance materials: privacy policy, support, and the written offer of source
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged
+
+## Licence
+
+Apache License 2.0. The full text is in [`LICENSE`](LICENSE).
+
+Every third-party component that reaches a shipped artifact is permissive (MIT,
+BSD-2-Clause, BSD-3-Clause, Apache-2.0, CC0-1.0), which is what made that choice
+available. It is checked rather than remembered: the inventory is re-derived
+from the live module graph and the frontend lockfile on every gate run, and a
+copyleft component fails the build.
+
+- [`NOTICE`](NOTICE) – the attribution file Apache-2.0 §4(d) refers to, grouped by licence
+- [`provenance/third-party-licenses.json`](provenance/third-party-licenses.json) – the machine-readable inventory, with the SHA-256 of each component's licence text
+- [`provenance/sbom.spdx.json`](provenance/sbom.spdx.json) – an SPDX 2.3 SBOM of the same set
+- [`provenance/checksums.txt`](provenance/checksums.txt) – `sha256sum -c` over the whole release
+
+All four are generated, never hand-edited:
+
+```
+cd apps/common && go run ./cmd/provenance -write
+```
