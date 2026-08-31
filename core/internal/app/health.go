@@ -7,6 +7,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/health"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
 // BuildHealthReport is `backup-manager status`' use case (FR-24). It calls
@@ -38,12 +39,36 @@ import (
 // capacity.StatPath reading against the backup set's configured LocalPath,
 // taken fresh on every call, exactly the way FR-24 names "free space" as
 // something to be reported, not remembered.
+//
+// HaltReason is the fourth injected input and the only one that IS
+// persisted (issue #245): it comes from internal/state's own
+// backup_set_halts rows, so a `status` invocation in a separate process
+// reports the same refusal the daemon recorded, which is exactly what the
+// follow-up above asks for and does not yet do for the two timestamps.
 func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo) (health.Report, error) {
 	now := s.now()
 	process := health.NewProcessHealth(health.ProcessInputs{
 		BinaryVersion: versionInfo.BinaryVersion,
 		RcloneVersion: versionInfo.RcloneVersion,
 	})
+
+	// Every backup set currently carrying a connection refusal, read once
+	// for the whole report rather than per set (issue #245).
+	//
+	// A failure here fails the whole report, the same way the
+	// reinstatement history below does and unlike FreeBytes. The
+	// reassuring answer is "no set is refused", and a database that could
+	// not be asked must not produce the same output as a deployment where
+	// everything connects: that collapse is the exact defect this field
+	// exists to end.
+	halts, err := s.Journal.ListBackupSetHalts(ctx)
+	if err != nil {
+		return health.Report{}, fmt.Errorf("app: health: connection refusals: %w", err)
+	}
+	haltReasons := make(map[model.BackupSetID]string, len(halts))
+	for _, h := range halts {
+		haltReasons[h.Set] = h.Reason
+	}
 
 	var sets []health.BackupSetHealth
 	for _, src := range s.Config.Sources {
@@ -74,6 +99,10 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 			in := health.BackupSetInputs{
 				LastSuccessfulPollAt: s.lastPollAt(bs.ID),
 				LastRetentionRunAt:   s.lastRetentionAt(bs.ID),
+				// Absent from the map means no refusal is on record, which
+				// is the honest empty rather than a claim that this set is
+				// reachable.
+				HaltReason: haltReasons[bs.ID],
 			}
 			if stat, statErr := capacity.StatPath(bs.LocalPath); statErr == nil {
 				free := stat.AvailableBytes

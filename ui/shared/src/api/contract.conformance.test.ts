@@ -215,7 +215,13 @@ describe("every request the shared client makes is a declared operation", () => 
       await call().catch(() => undefined);
     }
 
-    expect(observed.length).toBe(calls.length);
+    // One request per method, except the two that join the per-set health
+    // report onto the sets list (issue #245). Named exactly rather than
+    // relaxed into ">= calls.length": a method that quietly grew a second
+    // request is worth seeing in a diff, which is the whole reason this
+    // count is asserted at all.
+    const MULTI_REQUEST_METHODS = ["listSets", "getSet"];
+    expect(observed.length).toBe(calls.length + MULTI_REQUEST_METHODS.length);
 
     // Nothing above asserted that `calls` covers httpApi, so a client
     // method nobody added here was simply invisible: it called whatever

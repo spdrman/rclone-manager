@@ -254,7 +254,7 @@ func TestClassify_Docker(t *testing.T) {
 	port := freeTCPPort(t)
 	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
 
-	cont, hostKeyA := startFixtureContainer(t, image, port, "errors-main")
+	cont, hostKeyA := startFixtureContainer(t, image, port, "errors-main", clientKeyPath)
 	writeKnownHosts(t, knownHostsPath, host, port, hostKeyA)
 
 	baseSource := transport.Source{
@@ -262,7 +262,7 @@ func TestClassify_Docker(t *testing.T) {
 		Type:       "sftp",
 		Host:       host,
 		Port:       port,
-		User:       "backup",
+		User:       sftpFixtureUser,
 		KeyFile:    clientKeyPath,
 		KnownHosts: knownHostsPath,
 		Root:       "upload",
@@ -273,10 +273,21 @@ func TestClassify_Docker(t *testing.T) {
 	// Positive control: the correctly-authorized key against the recorded
 	// host key must work, otherwise every "this attack is refused" result
 	// below would prove nothing.
+	//
+	// One attempt, no retry, on purpose. This assertion's whole value is
+	// that it is believed when it fails, and a retry wide enough to absorb
+	// the #250 flake would have had to absorb "unable to authenticate",
+	// which is the one answer a positive control must never shrug off. The
+	// startup race that produced that flake is gone at the source instead:
+	// startFixtureContainer no longer returns until this exact key has
+	// authenticated against this exact container, which is strictly more
+	// than the List below needs. What a failure here gets is a better
+	// account of itself, not another go.
 	t.Run("positive_control_recorded_key_and_authorized_client_succeed", func(t *testing.T) {
 		if _, err := adapter.List(ctx, baseSource); err != nil {
 			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
-			t.Fatalf("List with the recorded host key and authorized client should have succeeded, got: %v\nserver logs:\n%s", err, logs)
+			t.Fatalf("List with the recorded host key and authorized client should have succeeded, got: %v\n%s\nserver logs:\n%s",
+				err, fixtureAuthVerdict(port, clientKeyPath), logs)
 		}
 	})
 
@@ -343,7 +354,7 @@ func TestClassify_Docker(t *testing.T) {
 
 	t.Run("host_verification_unknown_host_is_refused", func(t *testing.T) {
 		unknownPort := freeTCPPort(t)
-		contU, _ := startFixtureContainer(t, image, unknownPort, "errors-unknown")
+		contU, _ := startFixtureContainer(t, image, unknownPort, "errors-unknown", clientKeyPath)
 		defer stopFixtureContainer(contU)
 
 		src := baseSource
@@ -359,7 +370,7 @@ func TestClassify_Docker(t *testing.T) {
 	})
 
 	t.Run("host_verification_changed_host_key_is_refused", func(t *testing.T) {
-		contB, hostKeyB := startFixtureContainer(t, image, port, "errors-changed")
+		contB, hostKeyB := startFixtureContainer(t, image, port, "errors-changed", clientKeyPath)
 		defer stopFixtureContainer(contB)
 
 		if hostKeyB == hostKeyA {

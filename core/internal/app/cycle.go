@@ -120,6 +120,13 @@ sourcesLoop:
 		}
 	}
 
+	// What this cycle learned about which backup sets can be connected to
+	// at all, written down before the alert pass so the health report the
+	// alert pass then builds already carries it (issue #245). Like
+	// alerting, it computes nothing of its own, starts no work, and
+	// cannot fail this cycle.
+	s.recordConnectionOutcomes(ctx, report)
+
 	// Work Package 3.5's proactive alerting pass, last, so it weighs the
 	// journal state this cycle's own work just produced rather than the
 	// picture from before it ran. It is a no-op unless an administrator

@@ -13,13 +13,31 @@
 // killAfterStateJournal). Every test that names an in-flight window
 // (TRANSFERRING, VERIFYING, remote deletion, before COMPLETE, and the
 // local-fsync/rename/directory-sync region inside COMMITTING) also kills
-// for real, racing a real SIGKILL against a real, still-executing
-// syscall (a real file copy, a real local read+hash, a real remote
-// delete), timed by measuring that same real operation once beforehand
-// rather than guessing a fixed duration (see harness/main.go's calibrate*
-// functions). In every case the process dies via signal, not
-// os.Exit: nothing downstream of the kill point, no deferred cleanup, no
-// buffered writer flush, gets to run.
+// for real, with a real SIGKILL landing while a real syscall is still
+// executing. In every case the process dies via signal, not os.Exit:
+// nothing downstream of the kill point, no deferred cleanup, no buffered
+// writer flush, gets to run.
+//
+// How the instant of that kill is chosen differs by window, and the
+// difference matters, because one of the two shapes is a race this machine
+// can lose:
+//
+//   - VERIFYING is a rendezvous, with no timer in it at all.
+//     lifecycle.Verify reads its own journal record and then reads the
+//     local file at exactly the path that record carries, and the journal
+//     is this harness's own decorator, so the harness hands Verify a pipe
+//     and feeds it the artifact's real bytes. A pipe write completing is
+//     proof the product's read consumed them, and only then does the
+//     harness die. See harness/decorators.go's verifyReadHandoff, and
+//     issue #248 for the calibrated stopwatch this replaced, which lost
+//     its race under gate load and failed a UI-only change.
+//   - TRANSFERRING, the remote delete and the COMMITTING sub-window still
+//     race a timer against the real call, measuring that same real
+//     operation once beforehand rather than guessing a fixed duration (see
+//     harness/main.go's calibrate* functions). Of those three, only
+//     TRANSFERRING requires the kill to have landed; the other two treat
+//     both sides of the race as legitimate outcomes and assert only on
+//     convergence, so losing the race costs them nothing.
 //
 // The one crash-matrix point this file does NOT reach with a real kill on
 // its own is resolving which of local-fsync / rename / directory-sync was
@@ -62,6 +80,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -117,43 +136,379 @@ type harnessResult struct {
 
 func (r harnessResult) killedBy(sig syscall.Signal) bool { return r.signal == sig }
 
-// harnessTimeout bounds a single harness invocation. Every real operation
-// this harness performs (a small-to-moderate local copy, a loopback SFTP
-// round trip) normally finishes in well under a second; this exists so a
-// genuine hang (a stuck network call, a goroutine leak in the raceKill
-// machinery) fails this specific test loudly and promptly instead of
-// hanging the whole CI job for the default `go test` timeout.
-const harnessTimeout = 45 * time.Second
+// finalState reports the FINAL_STATE the harness printed, if it printed one
+// at all. A harness that got as far as printing one ran to completion,
+// which is a different and much more diagnosable thing than a harness that
+// died some other way, so the failure messages below distinguish them.
+func (r harnessResult) finalState() (string, bool) {
+	for _, line := range strings.Split(r.stdout, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "FINAL_STATE="); ok {
+			return strings.Fields(rest)[0], true
+		}
+	}
+	return "", false
+}
 
-func runHarness(t *testing.T, args ...string) harnessResult {
+// killMissed reports the harness's own account of a timer-based kill that
+// fired after the operation it was racing had already finished, if this run
+// produced one.
+func (r harnessResult) killMissed() (string, bool) {
+	for _, line := range strings.Split(r.stdout, "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "KILL_MISSED "); ok {
+			return rest, true
+		}
+	}
+	return "", false
+}
+
+// --- bounding a harness invocation ---------------------------------------
+//
+// This used to be one constant, `harnessTimeout = 45 * time.Second`, on the
+// entirely honest reasoning that every real operation the harness performs
+// finishes in well under a second, so 45s could only ever be exceeded by a
+// genuine hang. Issue #247 is what that reasoning missed. The harness makes
+// something like eight or ten of those operations in a run, so 45s was
+// never 45x headroom for a sub-second operation, it was about 5x headroom
+// for a whole pipeline; and a loopback SFTP round trip against a Docker
+// container is not sub-second at all, it was measured at 1.4s on a loaded
+// machine and 2.0s on a quiet one. The gate then failed with
+// "harness did not exit within 45s" on runs where nothing was hung, only
+// slow, and an isolated re-run of the same test passed in 44.6s, which is
+// to say with 0.4s to spare.
+//
+// So the bound is no longer a total, and no longer a guess.
+//
+// # A no-progress window, not a deadline
+//
+// A hang and a slow machine differ in exactly one way: a hang makes no
+// forward progress, a slow machine makes slow forward progress. So that is
+// what is measured. The harness reports each real operation it starts and
+// finishes as a PROGRESS line on stderr (see harness/main.go), and this
+// watchdog fails the run when nothing has arrived for longer than the
+// current window. The two hangs the old comment named, a stuck network
+// call and a goroutine leak in the raceKill machinery, are both
+// no-progress conditions, so both are still caught, and caught sooner than
+// before because the window bounds one operation rather than a pipeline.
+//
+// # Derived from what this machine has already been seen to do
+//
+// The window is stepFactor times the slowest step this very run has
+// already completed. A machine that is five times slower produces steps
+// that are five times longer and gets a window five times wider, with
+// nothing to configure and no guess about how many operations a run
+// contains. stepFloor is only the seed, used until the run has measured
+// itself once; it is deliberately the same 45 seconds the old constant
+// used, because the number is now asked to cover a single operation
+// instead of an entire pipeline, which is the assumption that broke.
+//
+// # And a backstop for the one hang a window cannot see
+//
+// A harness that livelocked while still reporting progress (a resume loop
+// that never advances a state, say) would reset the window forever. The
+// overall cap catches that, and it is derived the same way, which is what
+// keeps it honest: a livelocked run's steps are fast, so its cap stays at
+// the floor and it dies promptly, while a genuinely slow run's steps are
+// long, so its cap grows with them.
+type harnessBounds struct {
+	stepFloor     time.Duration
+	stepFactor    float64
+	overallFloor  time.Duration
+	overallFactor float64
+	poll          time.Duration
+}
+
+var defaultHarnessBounds = harnessBounds{
+	stepFloor:     45 * time.Second,
+	stepFactor:    12,
+	overallFloor:  4 * time.Minute,
+	overallFactor: 40,
+	poll:          250 * time.Millisecond,
+}
+
+// watchdogTrip is what a bound being exceeded produces. It carries the
+// measurements the decision was made from, not just the verdict, because
+// the whole complaint in #247 and #248 is that a gate failure that does not
+// show its working teaches people to re-run rather than read.
+type watchdogTrip struct {
+	kind         string // "no-progress" or "overall"
+	lastEvent    string
+	sinceLast    time.Duration
+	window       time.Duration
+	elapsed      time.Duration
+	overallCap   time.Duration
+	steps        int
+	slowestStep  time.Duration
+	slowestLabel string
+}
+
+func (w watchdogTrip) String() string {
+	measured := fmt.Sprintf("%d steps observed, slowest %s (%s)", w.steps, w.slowestStep.Round(time.Millisecond), w.slowestLabel)
+	if w.steps == 0 {
+		measured = "no step had completed yet, so the window was still the unmeasured floor"
+	}
+	switch w.kind {
+	case "overall":
+		return fmt.Sprintf("the harness kept reporting progress but never finished: %s elapsed against a cap of %s, last event %q. %s. "+
+			"That is a livelock, not a slow machine: the cap is derived from this run's own slowest step, so a genuinely slow run would have widened it.",
+			w.elapsed.Round(time.Millisecond), w.overallCap.Round(time.Millisecond), w.lastEvent, measured)
+	default:
+		return fmt.Sprintf("the harness stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. "+
+			"This is a hang, not a slow machine: the window is 12x this run's own slowest completed step, so being slow widens it and only being stuck trips it.",
+			w.lastEvent, w.sinceLast.Round(time.Millisecond), w.window.Round(time.Millisecond), w.elapsed.Round(time.Millisecond), measured)
+	}
+}
+
+// progressTracker turns the harness's PROGRESS stream into the two derived
+// bounds above. It is deliberately a plain value with an explicit clock
+// passed in, so this package's own tests can prove both branches of its
+// decision at millisecond scale without sleeping and without a subprocess
+// (see TestProgressTracker_* in watchdog_test.go); the end-to-end proof
+// that a real hung harness is really caught lives there too.
+type progressTracker struct {
+	b harnessBounds
+
+	mu           sync.Mutex
+	start        time.Time
+	lastAt       time.Time
+	lastEvent    string
+	steps        int
+	slowestStep  time.Duration
+	slowestLabel string
+}
+
+func newProgressTracker(b harnessBounds, start time.Time) *progressTracker {
+	return &progressTracker{b: b, start: start, lastAt: start, lastEvent: "process start"}
+}
+
+// observe records one PROGRESS line. The interval that just closed is the
+// duration of the step that ended with this event, which is the only
+// measurement of this machine's current speed anything here uses.
+func (p *progressTracker) observe(event string, at time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if d := at.Sub(p.lastAt); d > p.slowestStep {
+		p.slowestStep = d
+		p.slowestLabel = p.lastEvent + " -> " + event
+	}
+	p.lastAt = at
+	p.lastEvent = event
+	p.steps++
+}
+
+// summary is what the run measured itself at, taken under the lock so it
+// is safe to ask for from the watching goroutine at any point.
+func (p *progressTracker) summary() (steps int, slowest time.Duration, label string, window time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.steps, p.slowestStep, p.slowestLabel, p.window()
+}
+
+// window is the current no-progress bound. Callers hold p.mu.
+func (p *progressTracker) window() time.Duration {
+	if derived := time.Duration(float64(p.slowestStep) * p.b.stepFactor); derived > p.b.stepFloor {
+		return derived
+	}
+	return p.b.stepFloor
+}
+
+// overallCap is the current total-runtime backstop. Callers hold p.mu.
+func (p *progressTracker) overallCap() time.Duration {
+	if derived := time.Duration(float64(p.slowestStep) * p.b.overallFactor); derived > p.b.overallFloor {
+		return derived
+	}
+	return p.b.overallFloor
+}
+
+// check reports the bound that has been exceeded as of now, or nil if the
+// run is still within both.
+func (p *progressTracker) check(now time.Time) *watchdogTrip {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	trip := watchdogTrip{
+		lastEvent:    p.lastEvent,
+		sinceLast:    now.Sub(p.lastAt),
+		window:       p.window(),
+		elapsed:      now.Sub(p.start),
+		overallCap:   p.overallCap(),
+		steps:        p.steps,
+		slowestStep:  p.slowestStep,
+		slowestLabel: p.slowestLabel,
+	}
+	switch {
+	case trip.sinceLast > trip.window:
+		trip.kind = "no-progress"
+		return &trip
+	case trip.elapsed > trip.overallCap:
+		trip.kind = "overall"
+		return &trip
+	}
+	return nil
+}
+
+// lineTap captures a stream verbatim while handing complete lines to a
+// callback as they arrive. os/exec gives a non-*os.File writer its own
+// copying goroutine, so each of the harness's unbuffered stderr writes
+// reaches onLine at the instant it happens, which is what makes the
+// watchdog's clock a measurement of the child rather than of a buffer.
+type lineTap struct {
+	onLine func(line string)
+
+	mu      sync.Mutex
+	all     bytes.Buffer
+	partial []byte
+}
+
+func (l *lineTap) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.all.Write(p)
+	if l.onLine == nil {
+		return len(p), nil
+	}
+	l.partial = append(l.partial, p...)
+	for {
+		i := bytes.IndexByte(l.partial, '\n')
+		if i < 0 {
+			break
+		}
+		line := string(l.partial[:i])
+		l.partial = l.partial[i+1:]
+		l.onLine(line)
+	}
+	return len(p), nil
+}
+
+func (l *lineTap) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.all.String()
+}
+
+// runHarnessWatched runs one harness invocation under the derived bounds
+// above and reports which bound, if any, ended it. runHarness is the
+// version every crash-matrix test uses, which turns a trip into a failure;
+// this one exists so watchdog_test.go can assert on a trip instead of
+// being killed by it.
+func runHarnessWatched(t *testing.T, b harnessBounds, args ...string) (harnessResult, *watchdogTrip) {
 	t.Helper()
 	bin := buildHarness(t)
-	ctx, cancel := context.WithTimeout(context.Background(), harnessTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
 
-	res := harnessResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-				res.signal = ws.Signal()
+	cmd := exec.Command(bin, args...)
+	stdout := &lineTap{}
+	cmd.Stdout = stdout
+
+	start := time.Now()
+	tracker := newProgressTracker(b, start)
+	stderr := &lineTap{onLine: func(line string) {
+		if rest, ok := strings.CutPrefix(line, "PROGRESS "); ok {
+			// "PROGRESS <seq> <event>"; the sequence number is there for
+			// a human reading the log, the event is what is measured.
+			if _, event, ok := strings.Cut(rest, " "); ok {
+				tracker.observe(event, time.Now())
+			}
+		}
+	}}
+	cmd.Stderr = stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the harness: %v", err)
+	}
+
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+
+	var (
+		err  error
+		trip *watchdogTrip
+	)
+	ticker := time.NewTicker(b.poll)
+	defer ticker.Stop()
+watch:
+	for {
+		select {
+		case err = <-waited:
+			break watch
+		case now := <-ticker.C:
+			if trip = tracker.check(now); trip != nil {
+				// Kill it, then still wait: a watchdog that leaves the
+				// process it gave up on running behind is how this
+				// machine ends up with the orphans dockerlease exists to
+				// sweep.
+				_ = cmd.Process.Kill()
+				err = <-waited
+				break watch
 			}
 		}
 	}
-	if ctx.Err() == context.DeadlineExceeded {
-		t.Fatalf("harness did not exit within %s (args=%v)\nstdout=%s\nstderr=%s", harnessTimeout, args, res.stdout, res.stderr)
+
+	res := harnessResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			res.signal = ws.Signal()
+		}
+	}
+	if trip != nil {
+		// The signal recorded above is this watchdog's own SIGKILL, not
+		// anything the harness did to itself, and reporting it as such
+		// would be a lie a caller could act on.
+		res.signal = 0
+	} else {
+		// What the run measured itself at, on every invocation, not just
+		// failing ones. go test only surfaces this for a failing test or
+		// under -v, so it costs a passing gate nothing, and it is the
+		// difference between "the bound held" and being able to say by
+		// how much (issue #247's complaint is precisely that a gate
+		// failure with no working shown teaches people to re-run).
+		steps, slowest, label, window := tracker.summary()
+		t.Logf("harness finished in %s; %d steps, slowest %s (%s), no-progress window %s",
+			time.Since(start).Round(time.Millisecond), steps,
+			slowest.Round(time.Millisecond), label, window.Round(time.Millisecond))
+	}
+	return res, trip
+}
+
+func runHarness(t *testing.T, args ...string) harnessResult {
+	t.Helper()
+	res, trip := runHarnessWatched(t, defaultHarnessBounds, args...)
+	if trip != nil {
+		t.Fatalf("%v\nargs=%v\nstdout=%s\nstderr=%s", trip, args, res.stdout, res.stderr)
 	}
 	return res
 }
 
+// notKilledProblem reports why res fails the "this crash point must have
+// killed the harness" requirement, or "" if it does not fail it. It is
+// separate from requireKilledBySIGKILL only so this suite's own mutation
+// test can assert on the verdict instead of being killed by it; see
+// TestMutation_AnUnkilledHarnessIsStillRejected.
+func notKilledProblem(res harnessResult) string {
+	if res.killedBy(syscall.SIGKILL) {
+		return ""
+	}
+	// "harness was not killed by SIGKILL (err=<nil>)" reads like a
+	// signal-delivery problem and sent issue #248 looking in the wrong
+	// place first. A harness that printed a FINAL_STATE reached a terminal
+	// outcome under its own power, so say that instead.
+	if final, ok := res.finalState(); ok {
+		why := "it means the kill was never triggered at all"
+		if missed, ok := res.killMissed(); ok {
+			// The plans that still race a timer report the one number
+			// that explains a miss, which is knowable only on the runs
+			// that missed: how long the real operation actually took
+			// against how long the timer was set for.
+			why = "the kill missed its window (" + missed + ")"
+		}
+		return fmt.Sprintf("the crash never happened: the harness ran all the way to FINAL_STATE=%s under its own power instead of dying at its armed crash point. "+
+			"That is not a signal-delivery problem, %s.", final, why)
+	}
+	return fmt.Sprintf("harness was not killed by SIGKILL (err=%v)", res.err)
+}
+
 func requireKilledBySIGKILL(t *testing.T, res harnessResult) {
 	t.Helper()
-	if !res.killedBy(syscall.SIGKILL) {
-		t.Fatalf("harness was not killed by SIGKILL (err=%v)\nstdout=%s\nstderr=%s", res.err, res.stdout, res.stderr)
+	if problem := notKilledProblem(res); problem != "" {
+		t.Fatalf("%s\nstdout=%s\nstderr=%s", problem, res.stdout, res.stderr)
 	}
 }
 
@@ -489,11 +844,24 @@ func TestCrash_AfterVerifyingBoundary(t *testing.T) {
 	requireRemoteGone(t, s.remoteRoot)
 }
 
+// TestCrash_MidVerifying_RealInFlightKill kills the harness while
+// lifecycle.Verify's own mandatory read-and-hash is genuinely executing,
+// and proves the two things a crash there must leave true: VERIFYING is
+// the last thing durably journaled, and the local file the operator would
+// eventually restore from is untouched, because VERIFYING only ever reads
+// it.
+//
+// The kill instant is a rendezvous rather than a timing guess (see
+// harness/decorators.go's verifyReadHandoff). Under the calibrated
+// stopwatch this used to run on, a loaded machine measured the read at
+// 114ms, fired at 45.6ms, and the process still reached COMPLETE first,
+// which failed a gate run on a change that touched no Go at all. There is
+// nothing left in this path for load to move.
 func TestCrash_MidVerifying_RealInFlightKill(t *testing.T) {
 	s := newLocalScenario(t, 48<<20)
 	artifact := mustArtifactID(t)
 
-	res := runHarness(t, append(s.baseArgs(), "-kill-plan=mid-verify", "-mid-fraction=0.4")...)
+	res := runHarness(t, append(s.baseArgs(), "-kill-plan=mid-verify")...)
 	requireKilledBySIGKILL(t, res)
 	t.Logf("harness stdout:\n%s", res.stdout)
 
