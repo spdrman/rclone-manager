@@ -39,6 +39,12 @@ import (
 // capacity.StatPath reading against the backup set's configured LocalPath,
 // taken fresh on every call, exactly the way FR-24 names "free space" as
 // something to be reported, not remembered.
+//
+// HaltReason is the fourth injected input and the only one that IS
+// persisted (issue #245): it comes from internal/state's own
+// backup_set_halts rows, so a `status` invocation in a separate process
+// reports the same refusal the daemon recorded, which is exactly what the
+// follow-up above asks for and does not yet do for the two timestamps.
 func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo) (health.Report, error) {
 	now := s.now()
 	process := health.NewProcessHealth(health.ProcessInputs{

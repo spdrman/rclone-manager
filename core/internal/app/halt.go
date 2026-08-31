@@ -74,6 +74,11 @@ func haltReasonFor(err error) (string, bool) {
 // failing a backup run over. Recording a refusal also never re-trusts a
 // key, never retries the connection, and never suppresses the refusal it
 // is describing; it only writes down what already happened.
+//
+// A cancelled cycle writes nothing at all. Every write here would fail
+// against a done context anyway, and the direction it leaves things in is
+// the conservative one: a refusal that has since resolved stands for one
+// more cycle rather than a real one being dropped on the way out.
 func (s *Service) recordConnectionOutcomes(ctx context.Context, report CycleReport) {
 	if ctx.Err() != nil {
 		return

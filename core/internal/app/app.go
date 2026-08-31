@@ -89,7 +89,7 @@ type Journal interface {
 	ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error)
 
 	// The durable per-backup-set connection refusal (issue #245).
-	// RunCycle writes through these two at the end of every pass and
+	// RunCycle writes through the first two at the end of every pass and
 	// BuildHealthReport reads the whole population once per report; see
 	// halt.go for which cycle outcomes are allowed to move them, and
 	// internal/state/halts.go for what a row's presence claims.

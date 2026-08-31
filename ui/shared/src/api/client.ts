@@ -284,10 +284,17 @@ const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
  * absent is a claim this type is allowed to make where a boolean was not
  * (issue #231).
  *
- * The remaining placeholders below (retention, validations, counts,
- * fingerprint, last-run) are the fields nothing anywhere in core/service
- * computes yet. They stay clearly labeled rather than being dropped,
- * because this type declares them required.
+ * The join stops at the verdict on purpose. Retention, validations,
+ * counters and the host fingerprint below stay placeholders because
+ * nothing anywhere in core/service computes them yet. The health report
+ * does carry two more facts this type has fields for, and neither is
+ * taken here: `newest_good_backup_at` would map cleanly onto
+ * `newestKnownGoodAt`, and `stale_after_seconds` onto
+ * `expectedIntervalHours`, but `last_completed_backup_at` is NOT
+ * `lastRunAt` (a cycle that ran and found nothing is a run with no
+ * completed backup), so taking two of the three would leave a card
+ * showing two real dates beside one invented null. That is its own
+ * change, with its own naming question, and issue #245 is the refusal.
  */
 function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): BackupSet {
   const haltReason = health ? HALT_REASON[health.halt_reason ?? ""] : undefined;
