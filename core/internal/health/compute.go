@@ -287,5 +287,10 @@ func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reins
 
 		LastRetentionRunAt: in.LastRetentionRunAt,
 		FreeBytes:          in.FreeBytes,
+
+		// Straight through from the inputs, deliberately: this is the
+		// fourth injected display-only fact, and like the other three it
+		// is never handed to decideState above.
+		HaltReason: in.HaltReason,
 	}
 }

@@ -1271,3 +1271,175 @@ describe("httpApi live operation progress", () => {
     expect(progressPercent(op.progress!)).toBeNull();
   });
 });
+
+/**
+ * Issue #245. `haltReason` had two operator-facing banners keyed on it and
+ * no producer anywhere in the running system, so against a real service
+ * they never rendered: a backup set the transport refuses to connect to
+ * showed as `Stale`, with "Health details are not yet reported by the
+ * server for this backup set." beside it.
+ *
+ * The producer is `GET /system/health`, which already computes a verdict
+ * per backup set and now carries the refusal beside it. `listSets` joins
+ * that report onto `GET /backup-sets`, which is what turns this UI type
+ * back into the view model it always was: configuration from one endpoint,
+ * the runtime verdict from the other, instead of placeholders invented in
+ * the mapper.
+ */
+describe("listSets joins the per-set health report (issue #245)", () => {
+  const wireSet = (id: string, name: string) => ({
+    id,
+    source_name: "production",
+    name,
+    host: "prod-db-01.internal",
+    port: 22,
+    user: "backup-agent",
+    remote_path: "/backups",
+    local_path: "/data/backups/production",
+    include: ["*.dump"],
+    completion_strategy: "rename",
+    validator_id: "",
+    disabled: false
+  });
+
+  const wireHealth = (id: string, extra: Record<string, unknown> = {}) => ({
+    backup_set_id: id,
+    source_name: "production",
+    set_name: id.split("/")[1],
+    state: "HEALTHY",
+    reason: "a known-good backup landed 20 minutes ago",
+    stale_after_seconds: 86400,
+    current_transfers: 0,
+    pending_deletes: 0,
+    failures: 0,
+    quarantined_count: 0,
+    quarantined_lost_count: 0,
+    reinstated_remote_retained_count: 0,
+    free_bytes_known: false,
+    ...extra
+  });
+
+  /** Routes by path so one mock can answer both requests the join makes.
+   *  `health` may be null, which stands for the health endpoint failing. */
+  function routedFetch(sets: unknown[], health: unknown[] | null) {
+    return vi.fn().mockImplementation((url: string) => {
+      if (url.includes("/system/health")) {
+        if (health === null) {
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            headers: new Headers(),
+            json: async () => ({ error: { code: "INTERNAL", message: "no" } })
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => ({ generated_at: "2026-08-30T10:00:00Z", backup_sets: health })
+        });
+      }
+      // GET /backup-sets returns the list; GET /backup-sets/{id} returns
+      // one set on its own, and both go through this join.
+      const one = url.replace(/^.*\/backup-sets/, "") !== "";
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => (one ? sets[0] : { backup_sets: sets })
+      });
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("carries a refused connection through as haltReason, and leaves it absent on a set that is fine", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/auth-config", "auth-config"), wireSet("production/postgres", "postgres")],
+        [
+          wireHealth("production/auth-config", {
+            state: "STALE",
+            reason: "no known-good backup inside the freshness window",
+            halt_reason: "HOST_KEY_CHANGED"
+          }),
+          wireHealth("production/postgres")
+        ]
+      )
+    );
+
+    const sets = await httpApi.listSets();
+
+    const refused = sets.find((s) => s.id === "production/auth-config");
+    const fine = sets.find((s) => s.id === "production/postgres");
+
+    expect(refused?.haltReason).toBe("host-key-changed");
+    // Absent, not `null` and not a fabricated placeholder value: #231
+    // removed a required `halted` for exactly this, and optional is what
+    // lets absent honestly mean "no refusal has been observed".
+    expect(fine?.haltReason).toBeUndefined();
+    expect("haltReason" in (fine as object)).toBe(false);
+
+    // The rest of the join, which is what makes the reason trustworthy:
+    // the state and its sentence are the server's own verdict now, not
+    // the mapper's placeholder.
+    expect(refused?.state).toBe("stale");
+    expect(refused?.stateNote).toBe("no known-good backup inside the freshness window");
+    expect(fine?.state).toBe("healthy");
+  });
+
+  it("carries a rejected login through under its own reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/auth-config", "auth-config")],
+        [wireHealth("production/auth-config", { halt_reason: "AUTHENTICATION_FAILED" })]
+      )
+    );
+
+    const [set] = await httpApi.listSets();
+    expect(set.haltReason).toBe("authentication-failed");
+  });
+
+  it("does not render a reason this build does not understand", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/auth-config", "auth-config")],
+        [wireHealth("production/auth-config", { halt_reason: "SOMETHING_NEWER" })]
+      )
+    );
+
+    const [set] = await httpApi.listSets();
+    expect(set.haltReason).toBeUndefined();
+  });
+
+  it("still lists the sets when the health report cannot be read, and claims nothing about them", async () => {
+    vi.stubGlobal("fetch", routedFetch([wireSet("production/auth-config", "auth-config")], null));
+
+    const sets = await httpApi.listSets();
+    expect(sets).toHaveLength(1);
+    // A health endpoint that could not be asked is not evidence the set is
+    // fine, so nothing is claimed: no reason, and the state note says the
+    // verdict is missing rather than inventing one.
+    expect(sets[0].haltReason).toBeUndefined();
+    expect(sets[0].stateNote).toMatch(/not.*reported/i);
+  });
+
+  it("joins the same report onto a single set read", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/auth-config", "auth-config")],
+        [wireHealth("production/auth-config", { halt_reason: "HOST_KEY_CHANGED" })]
+      )
+    );
+
+    const set = await httpApi.getSet("production/auth-config");
+    expect(set.haltReason).toBe("host-key-changed");
+  });
+});

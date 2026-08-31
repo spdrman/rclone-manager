@@ -10,6 +10,7 @@ import { HealthBadge } from "@shared/components/StatusBadge";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { HaltBanner } from "@shared/components/HaltBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
@@ -99,23 +100,14 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         }
       />
 
-      {s.haltReason === "host-key-changed" ? (
-        <WarningBanner
-          tone="danger"
-          eyebrow="Security warning"
-          title={"The SSH host key for " + s.host + " has changed"}
-          actions={
-            <>
-              <button className="btn btn--sm" disabled={readOnly}>Compare fingerprints</button>
-              <button className="btn btn--sm">Keep set halted</button>
-            </>
-          }
-        >
-          Backup operations have been stopped until the new fingerprint is
-          independently verified. No remote artifacts will be deleted while this
-          set is halted.
-        </WarningBanner>
-      ) : null}
+      {/* No actions beside it, deliberately (#245). This banner used to
+          offer "Compare fingerprints" and "Keep set halted" and neither
+          carried an onClick: controls that looked like actions and were
+          not. The evidence an operator needs is already on this page, in
+          the fingerprint panel below, and resuming a set whose host key
+          changed is an administrator action taken out of band that this
+          manager will not offer to perform (§77 invariant 5). */}
+      <HaltBanner set={s} />
 
       <div
         style={{

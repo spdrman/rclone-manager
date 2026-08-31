@@ -64,30 +64,34 @@ export interface BackupSet {
   stateNote: string;
   enabled: boolean;
   /**
-   * Why the manager has stopped running this set, when it knows of a
-   * reason. Optional, and absent is the honest answer for "no reason is
-   * known", which is what a real service says today: nothing computes
-   * this yet.
+   * Why the manager could not connect to this backup set the last time it
+   * tried, so nothing was backed up. Absent when no refusal is on record
+   * (#245).
    *
-   * A required `halted: boolean` sat beside it until #231. That one could
-   * not stay: a required field has to be filled in by every mapper, so
-   * api/client.ts filled it with a literal `false` on every set it
-   * returned, and a fabricated `false` is a claim, not a gap. It drove a
-   * per-card button's disabled state and the word a card printed for its
-   * current activity, so against a real service a set the transport layer
-   * had refused to connect to (FR-6's changed host key) rendered as
-   * "idle" with a live run button. Two fields for one concept could also
-   * disagree; this one carries it alone.
+   * Absent is not "this set is reachable". It is "no refusal has been
+   * observed", which a set that has never been cycled also produces, and
+   * that asymmetry is the reason this is an optional reason rather than a
+   * boolean. A required `halted: boolean` sat beside it until #231, and a
+   * required field has to be filled in by every mapper: api/client.ts
+   * filled it with a literal `false` on every set, which is a claim
+   * rather than a gap, and it drove a per-card button's disabled state
+   * and the word a card printed for its current activity. Two fields for
+   * one concept could also disagree; this one carries it alone.
    *
-   * The concept behind it is real. core/internal/alert/conditions.go
-   * raises HOST_KEY_CHANGED for exactly this and says the connection was
-   * refused, but it raises it into a notification sink during a cycle's
-   * alert pass: nothing persists it and no read endpoint reports it, so
-   * there is no per-set halt fact for this field to read yet. Giving it
-   * one is #245, and until then the two host-key banners keyed on this
-   * field simply do not render.
+   * Both values have a producer. api/client.ts reads them from GET
+   * /system/health's per-set `halt_reason`, which core writes to a
+   * durable per-backup-set record when a cycle's transport refuses the
+   * connection and removes when a later cycle runs that set to
+   * completion. A reason a newer service reports that this build does not
+   * recognise maps to absent rather than through, so a banner never
+   * renders for a word it cannot explain.
+   *
+   * Nothing keyed on this may offer to resume the set. §77 invariant 5
+   * makes re-trusting a changed host key an explicit administrator action
+   * taken outside this manager, so these banners report and link; they
+   * never dismiss, retry or re-trust.
    */
-  haltReason?: "host-key-changed" | "storage-critical" | "manual";
+  haltReason?: "host-key-changed" | "authentication-failed";
   newestKnownGoodAt: string | null;
   lastRunAt: string | null;
   lastValidation: "passed" | "failed" | "not-run";

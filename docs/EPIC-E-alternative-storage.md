@@ -148,7 +148,7 @@ The layering rules in `scripts/architecture/layers.conf` and the `scripts/archit
 | Medium config schema and validation | `core/internal/config` | core |
 | S3 backend registration and the `MediumStore` implementation | `core/internal/transport/rclone` (the only rclone importer, unchanged) | core |
 | The `MediumStore` interface | `core/internal/transport` | core |
-| Placement records and the moves journal | `core/internal/state` + `core/migrations/0004_*.sql` | core |
+| Placement records and the moves journal | `core/internal/state` + the next free `core/migrations/NNNN_*.sql` | core |
 | The move engine | `core/internal/placement` (new package) | core |
 | Tier-to-medium planning, preview and apply | `core/internal/retention`, `core/internal/app`, `core/service` | core |
 | Verification ladder and revalidation policy | `core/internal/placement`, `core/internal/revalidate` | core |

@@ -34,6 +34,23 @@ type backupSetHealthResponse struct {
 	// Reason is one operator-facing sentence. Never empty.
 	Reason string `json:"reason"`
 
+	// HaltReason is why the manager could not connect to this backup set
+	// the last time it tried, so nothing was backed up (issue #245).
+	//
+	// Omitted, never empty-stringed, when no refusal is on record. That
+	// polarity is the whole reason the field is optional: absent means "no
+	// refusal has been observed", which is a different claim from "this
+	// set is reachable", and only the first one is ever available to make.
+	// A required boolean here would force every producer to make the
+	// second claim, which is exactly what issue #231 removed from the
+	// client after it filled a `halted` field with a literal false on
+	// every set.
+	//
+	// It sits beside State, not inside it: a set refused on every cycle
+	// still gets its verdict from journal evidence alone, usually STALE,
+	// which is true and half the story.
+	HaltReason string `json:"halt_reason,omitempty"`
+
 	NewestGoodBackupAt    string `json:"newest_good_backup_at,omitempty"`
 	LastCompletedBackupAt string `json:"last_completed_backup_at,omitempty"`
 	StaleAfterSeconds     int64  `json:"stale_after_seconds"`
@@ -112,6 +129,7 @@ func toBackupSetHealthResponse(bs service.BackupSetHealth) backupSetHealthRespon
 		SetName:               bs.SetName,
 		State:                 bs.State,
 		Reason:                bs.Reason,
+		HaltReason:            bs.HaltReason,
 		NewestGoodBackupAt:    formatTime(bs.NewestGoodBackupAt),
 		LastCompletedBackupAt: formatTime(bs.LastCompletedBackupAt),
 		StaleAfterSeconds:     int64(bs.StaleAfter.Seconds()),

@@ -13,6 +13,7 @@ import { StorageGauge } from "@shared/components/StorageGauge";
 import { OperationProgress } from "@shared/components/OperationProgress";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { bytes } from "@shared/utilities/format";
 
@@ -44,7 +45,12 @@ export function DashboardPage({
     return <ErrorState {...health.error} onRetry={health.reload} />;
 
   const h = health.data;
-  const haltedSet = sets.data?.find((s) => s.haltReason === "host-key-changed");
+  // Any set the manager could not connect to, whatever the reason
+  // (#245). Keying on the reason's presence rather than on one value
+  // means a rejected login raises this too, under its own words: a set
+  // whose credentials the host refuses backs up exactly as little as one
+  // whose key changed.
+  const haltedSet = sets.data?.find((s) => s.haltReason);
   const staleSet = sets.data?.find((s) => s.state === "stale");
 
   if (sets.data && sets.data.length === 0)
@@ -84,23 +90,19 @@ export function DashboardPage({
         }
       />
 
-      {/* A changed host key is the highest-severity state in the product and is
-          surfaced above everything else. */}
+      {/* A set the manager cannot connect to is the highest-severity state
+          in the product and is surfaced above everything else. The wording
+          lives in HaltBanner so this and the set's own page cannot
+          describe the same refusal differently. */}
       {haltedSet ? (
-        <WarningBanner
-          tone="danger"
-          eyebrow="Security warning"
-          title={"The SSH host key for " + haltedSet.host + " has changed"}
+        <HaltBanner
+          set={haltedSet}
           actions={
             <button className="btn btn--sm" onClick={() => navigate("/sets/" + haltedSet.id)}>
               Review fingerprint
             </button>
           }
-        >
-          Backup operations for this set have been stopped until the new fingerprint
-          is independently verified. No remote artifacts will be deleted while the
-          set is halted.
-        </WarningBanner>
+        />
       ) : null}
 
       {h ? <HealthSummary health={h} /> : null}
