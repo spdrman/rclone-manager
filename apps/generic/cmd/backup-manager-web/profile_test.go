@@ -39,7 +39,37 @@ func TestCmdServe_RejectsAGatewayProfileWithNoTrustedPeer(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 	if got := run([]string{"serve", "--profile", "ugos", "--config", config}); got == 0 {
-		t.Error("serve --profile=ugos with no --trusted-gateway started; a gateway profile with no trusted peer must refuse")
+		t.Error("serve --profile=ugos with no --trusted-upstream started; a gateway profile with no trusted peer must refuse")
+	}
+}
+
+// TestCmdServe_RefusesTheEdgesVariableByName is issue #87's review, M1.
+// The two hops trust different peers and each has its own flag now:
+// serve-ui's --trusted-gateway names the platform gateway, serve's
+// --trusted-upstream names the reverse proxy in front of the engine. One
+// variable feeding both hops has exactly one value that lets a gateway
+// deployment authenticate, and that value also makes the edge believe an
+// identity header from anything on the internal network, so an operator
+// carrying the old flag over to `serve` has to be told rather than
+// silently obeyed.
+func TestCmdServe_RefusesTheEdgesVariableByName(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(config, []byte("poll_interval: 1h\nsources: []\n"), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if got := run([]string{"serve", "--profile", "ugos", "--trusted-gateway", "10.0.0.0/8", "--config", config}); got != 2 {
+		t.Errorf("serve --trusted-gateway = %d, want 2: the engine hop must not silently accept the edge's own peer set", got)
+	}
+
+	// The positive control: the same command with the flag this hop
+	// actually owns gets PAST the boundary check. It still fails, on a
+	// later check (this config names no sources and there is no state
+	// directory), which is what proves it got past this one rather than
+	// being refused for the same reason twice.
+	if got := run([]string{"serve", "--profile", "ugos", "--trusted-upstream", "172.16.0.0/12", "--config", config}); got == 2 {
+		t.Error("serve --trusted-upstream exited 2, so it never got past the trusted-peer check and the refusal above proves nothing about which flag was named")
 	}
 }
 
@@ -71,7 +101,7 @@ func TestUsageDocumentsEveryModeTheBinaryCarries(t *testing.T) {
 	n, _ := r.Read(buf)
 	text := string(buf[:n])
 
-	for _, want := range []string{"--profile", "--ui-dir", "--ui-root", "--trusted-gateway", "serve", "serve-ui", "healthcheck"} {
+	for _, want := range []string{"--profile", "--ui-dir", "--ui-root", "--trusted-gateway", "--trusted-upstream", "serve", "serve-ui", "healthcheck"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("usage never mentions %q", want)
 		}

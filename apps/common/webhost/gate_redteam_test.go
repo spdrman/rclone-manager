@@ -15,14 +15,17 @@ import (
 // gate_redteam_test.go is issue #87 (B5.1)'s attack on the destructive
 // gate's own regression test rather than on the gate.
 //
-// TestNoMutatingAPIRouteBypassesTheDestructiveGate (router_test.go) walks
-// every non-GET route and asserts a 403. Every one of those routes also
-// carries requireCSRF, which chi applies FIRST, and which answers a
-// request with no CSRF cookie with... 403. So the walk never reaches the
-// gate on any route at all: it would pass unchanged if
-// requireDestructiveGate were deleted from every route in the table. A
-// negative assertion that does not say WHY the request failed is exactly
-// the shape that keeps passing after the control it names has gone.
+// router_test.go used to carry a walk called
+// TestNoMutatingAPIRouteBypassesTheDestructiveGate: every non-GET route,
+// asserting a 403. Every one of those routes also carries requireCSRF,
+// which chi applies FIRST, and which answers a request with no CSRF
+// cookie with... 403. So the walk never reached the gate on any route at
+// all: it passed unchanged with requireDestructiveGate deleted from every
+// route in the table. A negative assertion that does not say WHY the
+// request failed is exactly the shape that keeps passing after the
+// control it names has gone. That walk is still there, renamed
+// TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair for the property
+// it does prove.
 //
 // The two tests below close that: one drives the same walk with a valid
 // CSRF pair and asserts the gate's own typed code, and one is the

@@ -659,6 +659,16 @@ func (g *recordingGateway) Sanitize(h http.Header, remoteAddr string) {
 	g.gateway.Sanitize(h, remoteAddr)
 }
 
+// IdentityBoundary is how this decorated Authenticator declares the peer
+// set it enforces, which NewEngine reads to build the strip
+// (serve.IdentityBoundaryCarrier). Without it the boundary resolves to
+// nil, every identity header is stripped, and a gateway deployment
+// authenticates nobody — so NewEngine refuses to build at all rather
+// than starting into that. This type IS the decorated shape that
+// refusal exists for, and it is the reason the refusal is not
+// theoretical.
+func (g *recordingGateway) IdentityBoundary() *profile.CompiledGateway { return g.gateway }
+
 func (g *recordingGateway) Authenticate(ctx context.Context, r capabilities.AuthRequest) (capabilities.AuthContext, error) {
 	select {
 	case g.seen <- r.Headers.Get(testIdentityHeader):

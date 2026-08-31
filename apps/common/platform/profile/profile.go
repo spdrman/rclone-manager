@@ -42,6 +42,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 )
@@ -443,8 +444,8 @@ var (
 	// misconfigured gateway, and an operator has to be able to tell.
 	ErrNoGatewayIdentity = errors.New("the trusted platform gateway supplied no identity")
 
-	// ErrAmbiguousIdentity means the identity header arrived more than
-	// once, so the request names more than one caller.
+	// ErrAmbiguousIdentity means the identity header names more than one
+	// caller, in either of the two wire forms that can express it.
 	//
 	// A gateway that REPLACES its header (nginx's proxy_set_header) sends
 	// exactly one value; a gateway that appends one, or any proxy that
@@ -453,8 +454,48 @@ var (
 	// resolving this silently hands the identity to whoever sent the
 	// request rather than to whoever the gateway authenticated. There is
 	// no safe value to pick, so this refuses instead of picking one.
-	ErrAmbiguousIdentity = errors.New("the identity header arrived more than once, so the request names more than one caller")
+	//
+	// The second wire form is the same defect written with a comma. A
+	// proxy that concatenates rather than adding a second field line
+	// sends `X-Ugos-User: attacker, operator` as ONE value, which
+	// Header.Values reports as length 1 and which a naive read resolves
+	// to the whole string. That resolved string is what handlers_*.go
+	// writes into Actor on a retention apply, a backup-set create and an
+	// operation submit, which is the field an operator reads to attribute
+	// a destructive apply, so a username that names two people is refused
+	// here rather than recorded there.
+	ErrAmbiguousIdentity = errors.New("the identity header names more than one caller")
 )
+
+// checkUnambiguousUsername refuses a resolved username that carries a
+// separator, whitespace or a control character: the single-value wire
+// form of the ambiguity ErrAmbiguousIdentity exists for (see that error's
+// own doc), plus the control characters that would let a username forge a
+// field boundary in a log line or an audit record downstream.
+//
+// The trade-off is deliberate and worth naming rather than leaving
+// implicit: a platform whose native usernames legitimately contain a
+// space would be refused by this rule. Today no profile in this table has
+// one, and the rule is a package-wide constant rather than a per-profile
+// pattern for exactly that reason. The day a profile needs a looser or a
+// tighter alphabet, the constraint belongs in the Gateway row of the
+// table next to UsernameHeader, so a profile declares its own alphabet
+// rather than inheriting this one by accident.
+func checkUnambiguousUsername(header, username string) error {
+	for _, r := range username {
+		switch {
+		case r == ',' || r == ';':
+			return fmt.Errorf("%w (header %s, separator %q in %q)", ErrAmbiguousIdentity, header, string(r), username)
+		case unicode.IsSpace(r):
+			// TrimSpace already removed the outer whitespace, so anything
+			// left is between two names.
+			return fmt.Errorf("%w (header %s, whitespace inside %q)", ErrAmbiguousIdentity, header, username)
+		case r < 0x20 || r == 0x7f:
+			return fmt.Errorf("%w (header %s, control character %U)", ErrAmbiguousIdentity, header, r)
+		}
+	}
+	return nil
+}
 
 // Gateway is a profile's trusted native authentication gateway: the
 // declaration that identity arriving in a header may be believed, but
@@ -575,6 +616,11 @@ func (c *CompiledGateway) Authenticate(_ context.Context, r capabilities.AuthReq
 		}
 		if len(values) == 1 {
 			username = strings.TrimSpace(values[0])
+		}
+	}
+	if username != "" {
+		if err := checkUnambiguousUsername(c.usernameHeader, username); err != nil {
+			return capabilities.AuthContext{}, err
 		}
 	}
 	if username == "" {

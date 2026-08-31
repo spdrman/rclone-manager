@@ -238,6 +238,14 @@ describe("every request the shared client makes is a declared operation", () => 
     expect(unmatched.sort()).toEqual(UNIMPLEMENTED_CLIENT_PATHS);
   });
 
+  it("would notice a client method that nothing in the list drives", () => {
+    // The positive control for the coverage assertion above. Without it,
+    // `toEqual([])` passing would be equally consistent with
+    // undrivenMethods always returning an empty array.
+    expect(undrivenMethods(["a"], { a: () => undefined, b: () => undefined })).toEqual(["b"]);
+    expect(undrivenMethods(["a", "b"], { a: () => undefined, b: () => undefined })).toEqual([]);
+  });
+
   /**
    * The reverse direction (issue #87, B5.1): a route the SERVER declares
    * and the client never calls.

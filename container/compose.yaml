@@ -251,20 +251,36 @@ services:
       # published port.
       TRUST_FORWARDED_HEADERS: "true"
 
-      # The trusted platform-gateway range, for a gateway runtime profile
+      # This container's own trusted peer, for a gateway runtime profile
       # (RUNTIME_PROFILE=ugos). Empty for the default `generic` profile,
       # which has no gateway at all and refuses this variable if it is
       # set.
       #
-      # Set on BOTH services on purpose (issue #87). This container's only
-      # possible peer is `web-ui`, so whatever range is set here has to
-      # contain `web-ui` or nothing authenticates - which means this
-      # container cannot tell a request the platform gateway sent from one
-      # a LAN client sent to `web-ui`'s published port. `web-ui` can, and
-      # it strips the identity header from everything it cannot vouch for
-      # before this container ever sees it. The value here is the second
-      # of the two, not the boundary.
-      TRUSTED_GATEWAY_CIDRS: ${TRUSTED_GATEWAY_CIDRS:-}
+      # A DIFFERENT variable from `web-ui`'s TRUSTED_GATEWAY_CIDRS below,
+      # and that is the whole point (issue #87's review, M1). The two hops
+      # need contradictory values:
+      #
+      #  - This container's only possible peer is `web-ui`, so this range
+      #    has to contain `web-ui`'s address on the `internal` network or
+      #    nothing authenticates. It names the INTERNAL NETWORK.
+      #  - `web-ui`'s range has to name the platform GATEWAY, and a range
+      #    containing this container or the internal network is the
+      #    LAN-forgery vulnerability restated as configuration.
+      #
+      # One variable feeding both hops has exactly one value that lets a
+      # ugos deployment authenticate, and it is the value that makes
+      # `web-ui` believe an identity header from anything on the internal
+      # bridge, which under Docker's userland port publishing includes LAN
+      # traffic arriving at the published port. That is the bug this
+      # container's own strip exists to close, reintroduced one layer up,
+      # so the two peer sets are two names.
+      #
+      # The usual value here is the compose bridge subnet (e.g.
+      # 172.16.0.0/12 for the default pools, or the `internal` network's
+      # own configured subnet). Widening it changes nothing an attacker
+      # can reach: only `web-ui` joins `internal`, and this container
+      # publishes no port at all.
+      TRUSTED_UPSTREAM_CIDRS: ${TRUSTED_UPSTREAM_CIDRS:-}
 
     volumes:
       # Persistent SQLite lifecycle journal (FR-9). A directory, per the
@@ -437,7 +453,10 @@ services:
       #    gateway and this container on a network nothing else joins.
       #  - The range names the GATEWAY, never the internal network. A
       #    range containing `rclone-manager` or this container itself is
-      #    the vulnerability restated as configuration.
+      #    the vulnerability restated as configuration. That is why the
+      #    engine reads TRUSTED_UPSTREAM_CIDRS above and not this
+      #    variable: the two hops trust different peers, and a single
+      #    value correct for one of them is wrong for the other.
       TRUSTED_GATEWAY_CIDRS: ${TRUSTED_GATEWAY_CIDRS:-}
 
       # Runtime UI bundle selection (issue #180, owned by #167). Left

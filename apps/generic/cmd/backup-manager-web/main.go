@@ -166,9 +166,23 @@ serve flags:
                                and nothing else - it can never change
                                lifecycle, retention or validation
                                behaviour
-  --trusted-gateway CIDR[,...] the network ranges a profile's platform
-                               authentication gateway may be believed
-                               from (default $TRUSTED_GATEWAY_CIDRS).
+  --trusted-upstream CIDR[,...]
+                               the network ranges THIS container may
+                               believe a provider-native identity header
+                               from (default $TRUSTED_UPSTREAM_CIDRS).
+                               Deliberately not the same variable
+                               serve-ui reads: this container's only
+                               possible peer is serve-ui itself, so this
+                               range names the internal network and
+                               serve-ui's range names the platform
+                               GATEWAY, and the two are mutually
+                               exclusive values. One variable feeding
+                               both hops has exactly one value that lets
+                               a gateway deployment authenticate, and
+                               that value also makes serve-ui believe
+                               anything on the internal network, which is
+                               the LAN-forgery bug restated as
+                               configuration (issue #87).
                                Required by a gateway profile: without it
                                there is no gateway, only an identity
                                header anyone on the LAN can set, so the
@@ -214,7 +228,11 @@ serve-ui flags:
                    header is stripped from every inbound request, which
                    is the right default and is why a gateway profile
                    refuses to start without it rather than serving a
-                   console that can never sign anyone in
+                   console that can never sign anyone in. This range
+                   names the GATEWAY and never the internal network; the
+                   engine's own peer set is a separate variable
+                   (serve --trusted-upstream) precisely because a value
+                   correct for one hop is wrong for the other
   --upstream URL   the engine's base URL, reachable over the internal
                     Docker network (default $UPSTREAM_ADDR, or
                     http://rclone-manager:8080)
@@ -248,8 +266,15 @@ func cmdServe(args []string) int {
 	configPath := fset.String("config", defaultConfigPath, "path to the manager's YAML config file")
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
 	profileName := fset.String("profile", envOrDefault("RUNTIME_PROFILE", defaultProfile), "runtime profile (generic or ugos)")
-	trustedGateway := fset.String("trusted-gateway", envOrDefault("TRUSTED_GATEWAY_CIDRS", ""),
-		"comma-separated CIDR ranges a platform authentication gateway may be believed from; required by a gateway profile")
+	trustedUpstream := fset.String("trusted-upstream", envOrDefault("TRUSTED_UPSTREAM_CIDRS", ""),
+		"comma-separated CIDR ranges THIS container may believe a provider-native identity header from (the proxy in front of it); required by a gateway profile")
+	// Accepted only to refuse it by name. serve used to read
+	// TRUSTED_GATEWAY_CIDRS, which is serve-ui's variable and means
+	// something else here (issue #87's review, M1), and an operator who
+	// carries the old flag over would otherwise get "flag provided but
+	// not defined" and no idea which of the two hops they are looking at.
+	legacyTrustedGateway := fset.String("trusted-gateway", "",
+		"rejected: this hop's peer set is --trusted-upstream; --trusted-gateway names the platform gateway and belongs to serve-ui")
 	authStorePath := fset.String("auth-store", defaultAuthStorePath, "path to the local-auth administrator record")
 	authMode := fset.String("auth-mode", "", "authentication mode (\"local\" or \"gateway\"); follows the profile when unset")
 	trustForwardedHeaders := fset.Bool("trust-forwarded-headers", envBoolOrDefault("TRUST_FORWARDED_HEADERS", false),
@@ -269,12 +294,16 @@ func cmdServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
 		return 2
 	}
-	if *trustedGateway != "" {
+	if *legacyTrustedGateway != "" {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: serve does not take --trusted-gateway. The two hops trust different peers: --trusted-upstream (TRUSTED_UPSTREAM_CIDRS) is this container's own peer, the reverse proxy in front of it, while --trusted-gateway (TRUSTED_GATEWAY_CIDRS) names the platform gateway and belongs to serve-ui. A single value for both is the one configuration that cannot be correct.")
+		return 2
+	}
+	if *trustedUpstream != "" {
 		if runtimeProfile.Gateway == nil {
-			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-gateway was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
+			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-upstream was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
 			return 2
 		}
-		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedGateway)
+		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedUpstream)
 	}
 	if err := checkAuthMode(*authMode, runtimeProfile); err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)

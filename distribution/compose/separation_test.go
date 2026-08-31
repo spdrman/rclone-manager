@@ -1,8 +1,17 @@
 package compose_test
 
 import (
+	"encoding/json"
+	"encoding/xml"
+	"os"
+	"regexp"
+	"slices"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/distribution/compose"
 )
@@ -37,7 +46,15 @@ var privatePaths = []struct {
 	what          string
 }{
 	{"/data/state", "the lifecycle journal and the local-auth administrator record"},
-	{"/etc/backup-manager/config.yaml", "the manager's configuration"},
+	// The DIRECTORY, not config.yaml inside it. Issue #196 turned the
+	// packaged configuration mount from a read-only single file into a
+	// writable directory, because the engine creates and atomically
+	// replaces that file and keeps the ssh_keys/ and known_hosts.d/
+	// stores beside it. The directory is therefore what every artifact
+	// declares, and it is also the stricter thing to check: nesting it
+	// inside the backup destination would publish the two key stores as
+	// well as the configuration.
+	{"/etc/backup-manager/config", "the manager's configuration directory"},
 	{"/etc/backup-manager/id_ed25519", "the SFTP private key"},
 	{"/etc/backup-manager/known_hosts", "the pinned host keys"},
 }
@@ -65,6 +82,276 @@ func separationEnv() map[string]string {
 	return out
 }
 
+// ---------------------------------------------------------------------
+// Reading an artifact honestly
+// ---------------------------------------------------------------------
+
+// helmValuesFor names the values file an artifact's Helm placeholders are
+// expanded from before this suite reads it.
+//
+// apps/truenas/catalog/templates/docker-compose.yaml declares its host
+// paths as `{{ .Values.storage.state.hostPath }}` and friends, and this
+// suite used to compare those strings verbatim: the equality test and
+// both Contains comparisons could never match, so the TrueNAS cell was
+// reported as PASS while checking nothing at all (issue #87's review,
+// M8). ix_values.yaml carries the defaults every one of those questions
+// ships with, which is exactly the layout an operator gets by clicking
+// through, so expanding against it is reading the artifact rather than
+// inventing one.
+var helmValuesFor = map[string]string{
+	"apps/truenas/catalog/templates/docker-compose.yaml": "apps/truenas/catalog/ix_values.yaml",
+}
+
+var helmPlaceholder = regexp.MustCompile(`{{\s*\.Values\.([A-Za-z0-9_.]+)\s*}}`)
+
+// unresolvedIn reports the template or variable markers a host path still
+// carries. A non-empty answer means the path was never resolved, and a
+// comparison against it proves nothing: the whole point of the rule below
+// is that two REAL host paths do not nest.
+func unresolvedIn(hostPath string) []string {
+	var out []string
+	for _, marker := range []string{"{{", "}}", "${", "$("} {
+		if strings.Contains(hostPath, marker) {
+			out = append(out, marker)
+		}
+	}
+	return out
+}
+
+// separationDoc reads one registered artifact with every substitution
+// this suite knows how to make already applied.
+func separationDoc(t *testing.T, rel string) compose.Document {
+	t.Helper()
+	raw, err := os.ReadFile(compose.Path(rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	if valuesRel, ok := helmValuesFor[rel]; ok {
+		raw = expandHelmValues(t, raw, valuesRel)
+	}
+	doc, err := compose.Parse(raw, rel, separationEnv())
+	if err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+	return doc
+}
+
+// expandHelmValues substitutes `{{ .Values.a.b.c }}` from a chart's own
+// values file. A placeholder with no value is left exactly as it is, so
+// it reaches the unresolved-marker check below and fails loudly instead
+// of quietly becoming an empty string that matches nothing.
+func expandHelmValues(t *testing.T, raw []byte, valuesRel string) []byte {
+	t.Helper()
+	valuesRaw, err := os.ReadFile(compose.Path(valuesRel))
+	if err != nil {
+		t.Fatalf("read %s: %v", valuesRel, err)
+	}
+	var values map[string]any
+	if err := yaml.Unmarshal(valuesRaw, &values); err != nil {
+		t.Fatalf("parse %s: %v", valuesRel, err)
+	}
+
+	substituted := 0
+	out := helmPlaceholder.ReplaceAllFunc(raw, func(match []byte) []byte {
+		key := helmPlaceholder.FindSubmatch(match)[1]
+		var node any = values
+		for _, seg := range strings.Split(string(key), ".") {
+			m, ok := node.(map[string]any)
+			if !ok {
+				return match
+			}
+			if node, ok = m[seg]; !ok {
+				return match
+			}
+		}
+		text, ok := node.(string)
+		if !ok {
+			return match
+		}
+		substituted++
+		return []byte(text)
+	})
+	if substituted == 0 {
+		t.Fatalf("%s substituted no placeholder at all, so the artifact it was supposed to resolve is still unresolved", valuesRel)
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------
+// Which platforms this suite actually reads
+// ---------------------------------------------------------------------
+
+// platformOfArtifact maps a registered compose artifact to the claimed
+// platform it belongs to. The canonical definition is the generic
+// profile's own deployment; everything else lives under apps/<platform>.
+func platformOfArtifact(rel string) string {
+	if after, ok := strings.CutPrefix(rel, "apps/"); ok {
+		return strings.SplitN(after, "/", 2)[0]
+	}
+	return "generic"
+}
+
+// nonComposePlatformCoverage names a claimed platform this suite checks
+// through something other than a Compose document, and where.
+var nonComposePlatformCoverage = map[string]string{
+	"unraid": "apps/unraid/template/backup-manager.xml, read by TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare",
+}
+
+// platformsWithNoHostPathsToCheck names a claimed platform this suite
+// deliberately does not read, and why. An entry here is the gap made
+// visible: it is a claim somebody has to defend, not an absence nobody
+// notices.
+var platformsWithNoHostPathsToCheck = map[string]string{
+	"ugos":     "kind \"none\" in conformance.json: UGOS ships no package or deployment artifact of its own, so there is no host-path layout for this rule to read. It runs the canonical Compose deployment, which IS checked here as the generic profile.",
+	"synology": "kind \"spk\": DSM chooses the paths, not a file this suite can read. Private state lives in the per-package FHS tree (/var/packages/<pkg>/var, /etc, /home - apps/synology/spk/layout.go) and backup data in the DSM shared folder the data-share resource worker creates, which are structurally disjoint trees rather than two operator-editable paths that could be pointed at each other. apps/synology/spk/lifecycle_test.go is where that split is asserted, in that module.",
+}
+
+// claimedPlatforms reads the provider set the product actually claims,
+// from the same file the conformance matrix is built out of.
+func claimedPlatforms(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(compose.Path("distribution/packaging/conformance.json"))
+	if err != nil {
+		t.Fatalf("read conformance.json: %v", err)
+	}
+	var doc struct {
+		Providers map[string]struct {
+			Metadata struct {
+				Kind string `json:"kind"`
+			} `json:"metadata"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse conformance.json: %v", err)
+	}
+	out := make([]string, 0, len(doc.Providers))
+	for id := range doc.Providers {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestEveryClaimedPlatformIsReadBySomethingHere is the guard the previous
+// version of this file did not have. Its non-vacuity check counted
+// REGISTERED COMPOSE ARTIFACTS, so two claimed platforms could sit
+// entirely outside the suite (Unraid's template and Synology's SPK did)
+// while the acceptance criterion this file carries says "every claimed
+// platform". Counting artifacts cannot notice a missing platform; only
+// comparing against the claimed set can.
+func TestEveryClaimedPlatformIsReadBySomethingHere(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	covered := map[string]string{}
+	for _, rel := range append([]string{c.Canonical}, c.Derived...) {
+		covered[platformOfArtifact(rel)] = rel
+	}
+
+	claimed := claimedPlatforms(t)
+	if len(claimed) < 2 {
+		t.Fatalf("conformance.json declares %d provider(s); this guard proves nothing below two", len(claimed))
+	}
+
+	for _, id := range claimed {
+		switch {
+		case covered[id] != "":
+		case nonComposePlatformCoverage[id] != "":
+		case platformsWithNoHostPathsToCheck[id] != "":
+		default:
+			t.Errorf("platform %q is claimed in conformance.json and nothing in this suite reads its host-path layout.\n"+
+				"Issue #87's acceptance criterion is that private state, credentials and host keys are proven separate from backup data on EVERY claimed platform. Either read its artifact here, or add an entry to platformsWithNoHostPathsToCheck saying why there is nothing to read.", id)
+		}
+	}
+
+	// Stale entries are the other direction of the same failure: an
+	// exemption for a platform nobody claims any more reads as coverage.
+	for id := range platformsWithNoHostPathsToCheck {
+		if !slices.Contains(claimed, id) {
+			t.Errorf("platformsWithNoHostPathsToCheck names %q, which conformance.json does not claim", id)
+		}
+	}
+	for id := range nonComposePlatformCoverage {
+		if !slices.Contains(claimed, id) {
+			t.Errorf("nonComposePlatformCoverage names %q, which conformance.json does not claim", id)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// The rule itself
+// ---------------------------------------------------------------------
+
+// checkSeparation applies the whole rule to one artifact's engine mounts,
+// however they were read. mountFor answers a container path.
+//
+// It is shared by the Compose walk and the Unraid template so the two
+// cannot drift into checking different things.
+func checkSeparation(t *testing.T, source string, mountFor func(containerPath string) (compose.Mount, bool)) int {
+	t.Helper()
+
+	backups, ok := mountFor(backupDataPath)
+	if !ok {
+		t.Fatalf("%s yields no engine mount at %s, so every rule below silently checks nothing on this artifact.\n"+
+			"Either the adapter genuinely does not mount backup data, or its volume line did not parse (an unexpanded ${VAR:?message} splits on the colons in its own message)",
+			source, backupDataPath)
+	}
+	if markers := unresolvedIn(backups.HostPath); len(markers) > 0 {
+		t.Fatalf("%s: the backup destination is %q, which still carries %v, so it was never resolved to a host path and nothing below can be compared against it",
+			source, backups.HostPath, markers)
+	}
+
+	compared := 0
+	for _, p := range privatePaths {
+		mount, declared := mountFor(p.containerPath)
+		if !declared {
+			// Not a silent continue any more (issue #87's review, M8).
+			// An artifact that contributes nothing used to pass, and the
+			// only fail-open guard covered the backup destination.
+			if reason := privatePathAbsences[source+"|"+p.containerPath]; reason != "" {
+				continue
+			}
+			t.Errorf("%s declares no engine mount at %s, so %s was never compared against the backup destination.\n"+
+				"Either the artifact stopped declaring it, or its volume line did not parse. If this adapter genuinely does not mount it, add an entry to privatePathAbsences with the reason.", source, p.containerPath, p.what)
+			continue
+		}
+		if markers := unresolvedIn(mount.HostPath); len(markers) > 0 {
+			t.Errorf("%s: %s is mounted from %q, which still carries %v, so it was never resolved to a host path and comparing it against the backup destination proves nothing",
+				source, p.containerPath, mount.HostPath, markers)
+			continue
+		}
+
+		compared++
+		if mount.HostPath == backups.HostPath {
+			t.Errorf("%s: %s and the backup destination share the host path %q", p.what, p.containerPath, mount.HostPath)
+			continue
+		}
+		if compose.Contains(backups.HostPath, mount.HostPath) {
+			t.Errorf("%s lives at %q, inside the backup destination %q: %s",
+				p.what, mount.HostPath, backups.HostPath, p.containerPath)
+		}
+		if compose.Contains(mount.HostPath, backups.HostPath) {
+			t.Errorf("the backup destination %q lives inside %q, which holds %s",
+				backups.HostPath, mount.HostPath, p.what)
+		}
+	}
+
+	if compared == 0 {
+		t.Errorf("%s declared a backup destination and not one private path, so this artifact was reported as checked while comparing nothing", source)
+	}
+	return compared
+}
+
+// privatePathAbsences names, per artifact, one private container path
+// that artifact legitimately does not mount, and why. Keyed
+// "<artifact>|<container path>".
+//
+// Empty today: every registered artifact mounts all four. It exists so
+// that an adapter which genuinely does not (a platform that keeps host
+// keys somewhere this rule cannot see, say) has to write the reason down
+// rather than disappear from the comparison silently.
+var privatePathAbsences = map[string]string{}
+
 func TestPrivateStateIsSeparateFromBackupDataOnEveryClaimedPlatform(t *testing.T) {
 	t.Parallel()
 
@@ -79,36 +366,10 @@ func TestPrivateStateIsSeparateFromBackupDataOnEveryClaimedPlatform(t *testing.T
 		t.Run(rel, func(t *testing.T) {
 			t.Parallel()
 
-			doc, err := compose.Read(compose.Path(rel), separationEnv())
-			if err != nil {
-				t.Fatalf("read %s: %v", rel, err)
-			}
-			backups, ok := doc.MountFor(compose.RoleEngine, backupDataPath)
-			if !ok {
-				t.Fatalf("%s yields no engine mount at %s, so every rule below silently checks nothing on this artifact.\n"+
-					"Either the adapter genuinely does not mount backup data, or its volume line did not parse (an unexpanded ${VAR:?message} splits on the colons in its own message)",
-					rel, backupDataPath)
-			}
-
-			for _, p := range privatePaths {
-				mount, declared := doc.MountFor(compose.RoleEngine, p.containerPath)
-				if !declared {
-					continue
-				}
-				checked.Add(1)
-				if mount.HostPath == backups.HostPath {
-					t.Errorf("%s: %s and the backup destination share the host path %q", p.what, p.containerPath, mount.HostPath)
-					continue
-				}
-				if compose.Contains(backups.HostPath, mount.HostPath) {
-					t.Errorf("%s lives at %q, inside the backup destination %q: %s",
-						p.what, mount.HostPath, backups.HostPath, p.containerPath)
-				}
-				if compose.Contains(mount.HostPath, backups.HostPath) {
-					t.Errorf("the backup destination %q lives inside %q, which holds %s",
-						backups.HostPath, mount.HostPath, p.what)
-				}
-			}
+			doc := separationDoc(t, rel)
+			checked.Add(int64(checkSeparation(t, rel, func(containerPath string) (compose.Mount, bool) {
+				return doc.MountFor(compose.RoleEngine, containerPath)
+			})))
 		})
 	}
 
@@ -154,5 +415,177 @@ services:
 			t.Errorf("a mount at %q inside the backup destination %q was not reported as nested, so the rule above fails open",
 				mount.HostPath, backups.HostPath)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// Unraid: a claimed platform that is not a Compose file
+// ---------------------------------------------------------------------
+
+// unraidTemplate is the part of an Unraid Docker template this rule
+// needs: the operator-editable Config rows that become bind mounts.
+type unraidTemplate struct {
+	Configs []unraidConfig `xml:"Config"`
+}
+
+type unraidConfig struct {
+	Name    string `xml:"Name,attr"`
+	Target  string `xml:"Target,attr"`
+	Default string `xml:"Default,attr"`
+	Type    string `xml:"Type,attr"`
+	Value   string `xml:",chardata"`
+}
+
+// mounts turns the template's Path rows into the same Mount shape the
+// Compose side produces, so one rule can read both. The element's own
+// text is the value the operator gets; Default is the fallback for a row
+// that ships empty.
+func (tpl unraidTemplate) mounts() map[string]compose.Mount {
+	out := map[string]compose.Mount{}
+	for _, c := range tpl.Configs {
+		if !strings.EqualFold(c.Type, "Path") {
+			continue
+		}
+		host := strings.TrimSpace(c.Value)
+		if host == "" {
+			host = strings.TrimSpace(c.Default)
+		}
+		out[c.Target] = compose.Mount{HostPath: host, ContainerPath: c.Target}
+	}
+	return out
+}
+
+// TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare closes the
+// biggest half of M8's platform gap.
+//
+// apps/unraid/template/backup-manager.xml declares exactly the mounts
+// this rule is about (`/mnt/user/appdata/backup-manager/state`,
+// `.../secrets/id_ed25519`, `.../secrets/known_hosts` and
+// `/mnt/user/backups/backup-manager`) as operator-editable Config
+// defaults, and nothing checked that an operator who repoints Backup root
+// at `/mnt/user/appdata/backup-manager` has just nested the SFTP private
+// key and the local-auth record inside the backup share. It was outside
+// the suite entirely because the suite only ever read Compose documents.
+func TestTheUnraidTemplateKeepsPrivateStateOutOfTheBackupShare(t *testing.T) {
+	t.Parallel()
+
+	const rel = "apps/unraid/template/backup-manager.xml"
+	raw, err := os.ReadFile(compose.Path(rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	var tpl unraidTemplate
+	if err := xml.Unmarshal(raw, &tpl); err != nil {
+		t.Fatalf("parse %s: %v", rel, err)
+	}
+	mounts := tpl.mounts()
+	if len(mounts) == 0 {
+		t.Fatalf("%s declares no Path rows at all, so every comparison below would be about nothing", rel)
+	}
+
+	checkSeparation(t, rel, func(containerPath string) (compose.Mount, bool) {
+		m, ok := mounts[containerPath]
+		return m, ok
+	})
+}
+
+// TestTheUnraidTemplateReaderSeesTheDeclaredPaths is the reader's own
+// positive control: an XML walk that silently found nothing would make
+// the test above pass on any template at all, including one that nests
+// the private key inside the backup share.
+func TestTheUnraidTemplateReaderSeesTheDeclaredPaths(t *testing.T) {
+	t.Parallel()
+
+	const nested = `<?xml version="1.0"?>
+<Container version="2">
+  <Config Name="Application state" Target="/data/state" Default="/mnt/user/backups/backup-manager/state" Type="Path">/mnt/user/backups/backup-manager/state</Config>
+  <Config Name="Backup root" Target="/data/backups" Default="/mnt/user/backups/backup-manager" Type="Path">/mnt/user/backups/backup-manager</Config>
+  <Config Name="Listen address" Target="LISTEN_ADDR" Default=":8080" Type="Variable">:8080</Config>
+</Container>`
+
+	var tpl unraidTemplate
+	if err := xml.Unmarshal([]byte(nested), &tpl); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	mounts := tpl.mounts()
+
+	if _, ok := mounts["LISTEN_ADDR"]; ok {
+		t.Error("the reader turned a Variable row into a mount, so it would compare an environment value against a host path")
+	}
+	state, ok := mounts["/data/state"]
+	if !ok {
+		t.Fatal("the reader found no mount at /data/state, so the real template's rows are not being read either")
+	}
+	backups, ok := mounts["/data/backups"]
+	if !ok {
+		t.Fatal("the reader found no mount at /data/backups")
+	}
+	if !compose.Contains(backups.HostPath, state.HostPath) {
+		t.Errorf("a state path at %q inside the backup destination %q was not reported as nested, so the rule fails open on this reader",
+			state.HostPath, backups.HostPath)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The unresolved-host-path rule's own control
+// ---------------------------------------------------------------------
+
+// TestAnUnresolvedHostPathIsRefusedRatherThanCompared pins the marker
+// rule, which is what stops the TrueNAS cell passing vacuously.
+//
+// The failure it prevents is subtle and total: two host paths that are
+// still `{{ .Values.storage.state.hostPath }}` and
+// `{{ .Values.storage.backups.hostPath }}` are not equal, neither
+// contains the other, and every assertion in this suite therefore passes
+// on an artifact nobody has actually checked.
+func TestAnUnresolvedHostPathIsRefusedRatherThanCompared(t *testing.T) {
+	t.Parallel()
+
+	for _, unresolved := range []string{
+		"{{ .Values.storage.state.hostPath }}",
+		"${DISK",
+		"$(pwd)/state",
+	} {
+		if got := unresolvedIn(unresolved); len(got) == 0 {
+			t.Errorf("unresolvedIn(%q) reported nothing, so this suite would compare it as though it were a host path", unresolved)
+		}
+	}
+	// The negative half: a real path must not be flagged, or the rule
+	// would fail every artifact and prove nothing about any of them.
+	for _, resolved := range []string{"/mnt/tank/backup-manager/state", "/srv/backup-manager/secrets/id_ed25519"} {
+		if got := unresolvedIn(resolved); len(got) != 0 {
+			t.Errorf("unresolvedIn(%q) = %v, want none", resolved, got)
+		}
+	}
+
+	// And the composition: the rule is actually wired into the walk. A
+	// document whose host paths are unexpanded placeholders must fail,
+	// not pass.
+	const templated = `
+services:
+  engine:
+    image: backup-manager:dev
+    command: ["/backup-manager-web", "serve", "--profile=generic"]
+    volumes:
+      - "{{ .Values.storage.backups.hostPath }}:/data/backups"
+      - "{{ .Values.storage.state.hostPath }}:/data/state"
+`
+	doc, err := compose.Parse([]byte(templated), "synthetic-templated.yaml", separationEnv())
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	backups, ok := doc.MountFor(compose.RoleEngine, backupDataPath)
+	if !ok {
+		t.Fatal("the synthetic document declares no backup mount, so this control proves nothing")
+	}
+	state, ok := doc.MountFor(compose.RoleEngine, "/data/state")
+	if !ok {
+		t.Fatal("the synthetic document declares no state mount")
+	}
+	if backups.HostPath == state.HostPath || compose.Contains(backups.HostPath, state.HostPath) {
+		t.Fatal("the two placeholders happen to compare as nested, so this document cannot demonstrate the silent pass")
+	}
+	if len(unresolvedIn(backups.HostPath)) == 0 || len(unresolvedIn(state.HostPath)) == 0 {
+		t.Fatal("an unexpanded placeholder reached the comparison without being reported, which is exactly how the TrueNAS cell passed while checking nothing")
 	}
 }

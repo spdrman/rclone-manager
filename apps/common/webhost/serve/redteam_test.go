@@ -44,8 +44,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -54,6 +56,7 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/csrf"
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+	"github.com/spdrman/rclone-manager/apps/common/webhost"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -364,7 +367,12 @@ func TestTheEdgeStripsEveryProfilesIdentityHeader(t *testing.T) {
 		}
 	}
 	if len(headers) == 0 {
-		t.Skip("no profile declares an identity header, so there is nothing to strip")
+		// Not a skip (issue #87's review, M3). A registry edit that
+		// removes every Gateway, or a bug in IDs()/Profile(), would turn
+		// the strongest strip assertion in this file into a silent pass,
+		// and a skip does not fail a gate. An empty header table is not a
+		// reason to stop measuring, it is a reason to stop the build.
+		t.Fatal("no profile declares an identity header, so this test would pass without stripping anything; the registry, IDs() or Profile() has changed under it")
 	}
 
 	req, _ := http.NewRequest(http.MethodGet, edge.URL+"/api/v1/backup-sets", nil)
@@ -725,37 +733,647 @@ func TestTheTrustedGatewayPathStillWorksThroughTheEdge(t *testing.T) {
 // running has no provenance even coming from the right peer, and letting
 // it through would make the next profile added to the table a change in
 // what today's deployments believe.
+//
+// The rule is exercised TODAY rather than when a second gateway profile
+// lands (issue #87's review, M3). The previous version of this test hid
+// its only assertion about another profile's header behind
+// `if len(profile.IdentityHeaders()) > 1`, which is false while UGOS is
+// the only profile with a Gateway, so the branch that implements the rule
+// had never had a second declared header run through it. A check first
+// trusted at the exact moment it stops being trivially true is not a
+// check.
+//
+// The shape below gets both arms out of a one-entry table without a seam
+// into the registry: compile a gateway whose own UsernameHeader is a
+// SYNTHETIC name that no profile declares, and plant the real, declared
+// X-Ugos-User alongside it. Sanitize from the trusted peer then has to
+// keep the synthetic header (this gateway owns it) and remove the real
+// one (this gateway does not), which is exactly the two-profile case.
 func TestTheTrustedGatewayStillCannotSetAnotherProfilesIdentity(t *testing.T) {
-	const foreign = "X-Some-Other-Platform-User"
+	const (
+		synthetic = "X-Synthetic-Gateway-User"
+		benign    = "X-Benign-Passthrough"
+	)
+	declared := profile.UGOS.Profile().Gateway.UsernameHeader
 
-	compiled, err := (&profile.Gateway{TrustedPeers: loopbackCIDRs, UsernameHeader: profile.UGOS.Profile().Gateway.UsernameHeader}).Compile()
-	if err != nil {
-		t.Fatalf("Compile: %v", err)
+	// Non-vacuity, both directions. The assertion "the real header was
+	// removed" proves nothing if no profile declares it (Sanitize would
+	// never have looked at it), and the synthetic header has to be
+	// genuinely undeclared or the two arms collapse into one.
+	table := profile.IdentityHeaders()
+	if len(table) == 0 {
+		t.Fatal("no profile declares an identity header, so Sanitize has nothing to remove and this test cannot fail")
+	}
+	if !slices.Contains(table, declared) {
+		t.Fatalf("%s is not in IdentityHeaders() %v, so removing it would prove nothing about the ownership rule", declared, table)
+	}
+	if slices.Contains(table, synthetic) {
+		t.Fatalf("%s is now a declared identity header, so it can no longer stand in for a header this gateway alone owns", synthetic)
 	}
 
-	h := http.Header{}
-	h.Set(profile.UGOS.Profile().Gateway.UsernameHeader, "operator")
-	h.Set(foreign, "operator")
-	h.Set("X-Benign-Passthrough", "keep-me")
-	compiled.Sanitize(h, "127.0.0.1:5000")
-
-	if h.Get(profile.UGOS.Profile().Gateway.UsernameHeader) != "operator" {
-		t.Error("the trusted gateway's own identity header was stripped, so the gateway path cannot work at all")
-	}
-	if h.Get("X-Benign-Passthrough") != "keep-me" {
-		t.Error("Sanitize removed a header that is none of its business")
-	}
-	// Only meaningful once a second profile declares a header; today the
-	// table has one, so this asserts the rule on the shape rather than on
-	// a second live profile.
-	if len(profile.IdentityHeaders()) > 1 {
-		for _, name := range profile.IdentityHeaders() {
-			if name == compiled.UsernameHeader() {
-				continue
-			}
-			if h.Get(name) != "" {
-				t.Errorf("%s survived a request from a gateway that does not own it", name)
-			}
+	t.Run("Sanitize", func(t *testing.T) {
+		compiled, err := (&profile.Gateway{TrustedPeers: loopbackCIDRs, UsernameHeader: synthetic}).Compile()
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
 		}
+
+		h := http.Header{}
+		h.Set(synthetic, "operator")
+		h.Set(declared, "attacker")
+		h.Set(benign, "keep-me")
+		compiled.Sanitize(h, "127.0.0.1:5000")
+
+		if h.Get(synthetic) != "operator" {
+			t.Error("the trusted gateway's own identity header was stripped, so the gateway path cannot work at all")
+		}
+		if got := h.Get(declared); got != "" {
+			t.Errorf("%s survived Sanitize as %q from a gateway that does not own it: a trusted gateway may assert the identity of ITS OWN profile and no other", declared, got)
+		}
+		if h.Get(benign) != "keep-me" {
+			t.Error("Sanitize removed a header that is none of its business")
+		}
+	})
+
+	// The same rule at the hop, not only on the method: a recording
+	// upstream reports exactly which headers crossed NewUI when the edge
+	// is configured with the synthetic gateway.
+	t.Run("through the edge", func(t *testing.T) {
+		recorder, seen := recordingUpstream(t)
+
+		compiled, err := (&profile.Gateway{TrustedPeers: loopbackCIDRs, UsernameHeader: synthetic}).Compile()
+		if err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+		upstream, err := url.Parse(recorder.URL)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		edge := httptest.NewServer(serve.NewUI(serve.UIConfig{
+			Upstream: upstream,
+			StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ui")}},
+			Gateway:  compiled,
+		}))
+		t.Cleanup(edge.Close)
+
+		req := mustRequest(t, http.MethodGet, edge.URL+"/api/v1/backup-sets")
+		req.Header.Set(synthetic, "operator")
+		req.Header.Set(declared, "attacker")
+		req.Header.Set(benign, "keep-me")
+		if code, _, _ := do(t, req); code != http.StatusNoContent {
+			t.Fatalf("the recording upstream answered %d, want 204; the request never crossed the hop so nothing below proves anything", code)
+		}
+
+		got := seen()
+		if got == nil {
+			t.Fatal("the recording upstream never ran")
+		}
+		if got.Get(synthetic) != "operator" {
+			t.Errorf("%s = %q at the upstream, want %q: the edge dropped the header its own configured gateway owns", synthetic, got.Get(synthetic), "operator")
+		}
+		if v := got.Values(declared); len(v) != 0 {
+			t.Errorf("%s crossed the proxy hop as %q, set by a gateway that owns a different profile's header", declared, v)
+		}
+		if got.Get(benign) != "keep-me" {
+			t.Error("an unrelated header did not cross the hop, so the assertion above could pass for the wrong reason")
+		}
+	})
+}
+
+// recordingUpstream is the recording-upstream oracle several tests above
+// build by hand: a server that captures the headers of the last request
+// it was handed and answers 204. The returned func reads the capture
+// safely from the test goroutine.
+func recordingUpstream(t *testing.T) (*httptest.Server, func() http.Header) {
+	t.Helper()
+	var (
+		mu   sync.Mutex
+		seen http.Header
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = r.Header.Clone()
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() http.Header {
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
+	}
+}
+
+// ---------------------------------------------------------------------
+// The ENGINE hop's own strip (issue #87's review, M2)
+// ---------------------------------------------------------------------
+//
+// Everything above this point attacks the edge. The engine's own
+// StripUntrustedIdentity had no executing test at all: every engine-side
+// identity test asserted a 401, which is the AUTHENTICATOR's refusal, and
+// no test in this package ever observed the http.Header an engine handler
+// was actually handed. The PR's stated property is the stronger one -
+// gone before a handler, a middleware or a log line can observe it - and
+// it is claimed for both constructors. A mutation run confirmed the gap:
+// replacing NewEngine's returned chain with the un-stripped handler left
+// the whole package green.
+//
+// The oracle here is a recording Authenticator. It is the first thing
+// inside the engine that is handed the request's headers, so what it saw
+// is what survived the strip.
+
+// headerLog captures the http.Header an Authenticator was handed.
+type headerLog struct {
+	mu    sync.Mutex
+	seen  http.Header
+	calls int
+}
+
+func (l *headerLog) record(h http.Header) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls++
+	if h != nil {
+		l.seen = h.Clone()
+	}
+}
+
+func (l *headerLog) observed(t *testing.T) http.Header {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.calls == 0 {
+		t.Fatal("the recording authenticator was never called, so nothing below observed anything")
+	}
+	return l.seen
+}
+
+// recordingAuthenticator decorates another Authenticator, which is the
+// shape gatewayOf's discarded type assertion used to answer nil for. It
+// deliberately does NOT declare serve.IdentityBoundaryCarrier: that is
+// what declaringAuthenticator below adds, and the difference between the
+// two is the whole of the boundary-resolution finding.
+type recordingAuthenticator struct {
+	log  *headerLog
+	next capabilities.Authenticator
+}
+
+func (a recordingAuthenticator) Authenticate(ctx context.Context, r capabilities.AuthRequest) (capabilities.AuthContext, error) {
+	a.log.record(r.Headers)
+	return a.next.Authenticate(ctx, r)
+}
+
+// declaringAuthenticator is recordingAuthenticator plus the declared
+// boundary, i.e. what a real decorator (audit, metrics, rate limiting, a
+// gateway with a local fallback) is expected to implement.
+type declaringAuthenticator struct {
+	recordingAuthenticator
+	boundary *profile.CompiledGateway
+}
+
+func (a declaringAuthenticator) IdentityBoundary() *profile.CompiledGateway { return a.boundary }
+
+// wrappedAdapter is a PlatformAdapter with its Authenticator replaced.
+type wrappedAdapter struct {
+	capabilities.PlatformAdapter
+	auth capabilities.Authenticator
+}
+
+func (a wrappedAdapter) Authenticator() capabilities.Authenticator { return a.auth }
+
+// engineParts builds the pieces both the engine strip test and its own
+// positive control need: a real backend, and a UGOS-or-generic adapter
+// whose Authenticator records what it was handed.
+func engineParts(t *testing.T, profileID string, trusted []string) (capabilities.PlatformAdapter, webhost.BackupServiceClient, *headerLog, string) {
+	t.Helper()
+
+	configPath := writeTestConfig(t)
+	backend, cleanup, err := service.Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("service.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	authSvc, err := local.New(local.Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	p := profileFor(t, profileID)
+	header := profile.UGOS.Profile().Gateway.UsernameHeader
+	var boundary *profile.CompiledGateway
+	if p.Gateway != nil {
+		p.Gateway.TrustedPeers = trusted
+		header = p.Gateway.UsernameHeader
+		if boundary, err = p.Gateway.Compile(); err != nil {
+			t.Fatalf("Compile: %v", err)
+		}
+	}
+
+	adapter, err := p.Adapter(profile.AdapterConfig{LocalAuth: authSvc.Authenticator()})
+	if err != nil {
+		t.Fatalf("Adapter: %v", err)
+	}
+
+	log := &headerLog{}
+	rec := recordingAuthenticator{log: log, next: adapter.Authenticator()}
+	var wrapped capabilities.PlatformAdapter
+	if boundary != nil {
+		wrapped = wrappedAdapter{PlatformAdapter: adapter, auth: declaringAuthenticator{recordingAuthenticator: rec, boundary: boundary}}
+	} else {
+		wrapped = wrappedAdapter{PlatformAdapter: adapter, auth: rec}
+	}
+	return wrapped, backend, log, header
+}
+
+// TestTheEngineStripsAnUntrustedIdentityBeforeItsAuthenticatorSeesIt is
+// the engine-hop equivalent of
+// TestTheEdgeStripsTheIdentityHeaderBeforeForwarding, with the same two
+// kinds of control: a benign header proving the strip is targeted rather
+// than a blanket wipe, and a run of the identical request through the
+// SAME adapter with the strip removed, proving the observation can see
+// the header when it is there.
+func TestTheEngineStripsAnUntrustedIdentityBeforeItsAuthenticatorSeesIt(t *testing.T) {
+	// untrustedCIDRs excludes loopback, which is what httptest connects
+	// from, so this request is a direct-LAN caller as far as the engine
+	// can tell.
+	adapter, backend, log, header := engineParts(t, string(profile.UGOS), untrustedCIDRs)
+
+	engine := httptest.NewServer(serve.NewEngine(serve.EngineConfig{Platform: adapter, Backend: backend}))
+	t.Cleanup(engine.Close)
+
+	req := mustRequest(t, http.MethodGet, engine.URL+"/api/v1/backup-sets")
+	req.Header[strings.ToLower(header)] = []string{"admin"}
+	req.Header.Set("X-Benign-Passthrough", "keep-me")
+	code, _, body := do(t, req)
+	if code != http.StatusUnauthorized {
+		t.Fatalf("a forged %s from an untrusted peer got %d, want 401: %s", header, code, body)
+	}
+	if got := errorCode(t, body); got != "UNAUTHENTICATED" {
+		t.Fatalf("error code = %q, want UNAUTHENTICATED; without it this 401 is not evidence the request reached the auth boundary (body %s)", got, body)
+	}
+
+	seen := log.observed(t)
+	if v := seen.Values(header); len(v) != 0 {
+		t.Errorf("the engine's authenticator was handed %s = %q; refused and never observed are different claims, and issue #87 asks for the second", header, v)
+	}
+	if seen.Get("X-Benign-Passthrough") != "keep-me" {
+		t.Error("X-Benign-Passthrough did not survive, so the assertion above would pass on an engine that wiped every header")
+	}
+
+	// The positive control, and the mutation this test exists because of:
+	// the same adapter and the same request behind webhost.NewRouter
+	// alone, which is what NewEngine wraps. The header MUST arrive there,
+	// or the observation above proves nothing about the strip.
+	unstripped := httptest.NewServer(webhost.NewRouter(webhost.RouterConfig{
+		Platform: adapter, Backend: backend, BinaryVersion: "test", Commit: "test",
+	}))
+	t.Cleanup(unstripped.Close)
+
+	control := mustRequest(t, http.MethodGet, unstripped.URL+"/api/v1/backup-sets")
+	control.Header[strings.ToLower(header)] = []string{"admin"}
+	if _, _, body := do(t, control); errorCode(t, body) == "" && !strings.Contains(string(body), "backup_sets") {
+		t.Fatalf("the control request produced a body this API did not write: %s", body)
+	}
+	if v := log.observed(t).Values(header); len(v) == 0 {
+		t.Fatal("the same request with StripUntrustedIdentity removed also arrived without the identity header, so this test cannot tell a working strip from a broken oracle")
+	}
+}
+
+// TestTheGenericProfileEngineStripsRatherThanOnlyRefusing. The generic
+// profile has no gateway, so gatewayOf resolves nil and the engine's
+// strip removes EVERY profile's identity header. The existing
+// TestTheGenericProfileNeverBelievesAnIdentityHeader asserts a status
+// code, which a refusing authenticator satisfies without anything having
+// been stripped; this asserts the header never reached the authenticator
+// at all, which is what the engine has to guarantee on the day somebody
+// restarts that same deployment with --profile=ugos.
+func TestTheGenericProfileEngineStripsRatherThanOnlyRefusing(t *testing.T) {
+	adapter, backend, log, header := engineParts(t, string(profile.Generic), nil)
+
+	engine := httptest.NewServer(serve.NewEngine(serve.EngineConfig{Platform: adapter, Backend: backend}))
+	t.Cleanup(engine.Close)
+
+	req := mustRequest(t, http.MethodGet, engine.URL+"/api/v1/backup-sets")
+	req.Header.Set(header, "admin")
+	req.Header.Set("X-Benign-Passthrough", "keep-me")
+	if code, _, body := do(t, req); code != http.StatusUnauthorized {
+		t.Fatalf("the generic profile answered %d to a forged %s, want 401: %s", code, header, body)
+	}
+
+	seen := log.observed(t)
+	if v := seen.Values(header); len(v) != 0 {
+		t.Errorf("a generic-profile engine handed its authenticator %s = %q; a profile with no gateway has no reason to carry another profile's identity header inwards", header, v)
+	}
+	if seen.Get("X-Benign-Passthrough") != "keep-me" {
+		t.Error("X-Benign-Passthrough did not survive, so the assertion above would pass on an engine that wiped every header")
+	}
+}
+
+// TestNewEngineRefusesANativeAuthAdapterWhoseBoundaryDoesNotResolve pins
+// the other half of M2. gatewayOf used to be
+// `gw, _ := platform.Authenticator().(*profile.CompiledGateway)`, whose
+// discarded second value turned any decorated Authenticator into nil,
+// which StripUntrustedIdentity reads as strip-everything: a gateway
+// deployment that authenticates nobody, with no diagnostic anywhere. That
+// is the exact operator experience serve-ui's own startup refusal exists
+// to prevent one hop over, so the engine refuses at construction too.
+func TestNewEngineRefusesANativeAuthAdapterWhoseBoundaryDoesNotResolve(t *testing.T) {
+	adapter, backend, _, header := engineParts(t, string(profile.UGOS), loopbackCIDRs)
+
+	// The undeclared decorator: same adapter, but its Authenticator is
+	// wrapped in something that answers no boundary.
+	undeclared := wrappedAdapter{
+		PlatformAdapter: adapter,
+		auth:            recordingAuthenticator{log: &headerLog{}, next: adapter.Authenticator()},
+	}
+	if !undeclared.Capabilities().NativeAuth {
+		t.Fatal("the adapter under test does not declare NativeAuth, so the refusal this test is about cannot apply to it")
+	}
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered == nil {
+				t.Error("NewEngine accepted a NativeAuth adapter whose trusted-peer boundary does not resolve; that deployment strips every identity header and authenticates nobody, silently")
+			}
+		}()
+		_ = serve.NewEngine(serve.EngineConfig{Platform: undeclared, Backend: backend})
+	}()
+
+	// The positive control: the SAME decorator, declaring the boundary,
+	// builds and authenticates end to end. Without it the refusal above
+	// would be satisfied by a NewEngine that refuses every decorator.
+	engine := httptest.NewServer(serve.NewEngine(serve.EngineConfig{Platform: adapter, Backend: backend}))
+	t.Cleanup(engine.Close)
+
+	req := mustRequest(t, http.MethodGet, engine.URL+"/api/v1/backup-sets")
+	req.Header.Set(header, "operator")
+	if code, _, body := do(t, req); code != http.StatusOK {
+		t.Fatalf("a declared boundary on a decorated Authenticator answered %d, want 200: %s", code, body)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The comma-joined identity (issue #87's review, M4)
+// ---------------------------------------------------------------------
+
+// TestACommaJoinedIdentityHeaderIsRefusedRatherThanResolved is
+// TestDuplicateIdentityHeaderIsRefusedRatherThanResolved's other wire
+// form. A proxy that CONCATENATES rather than adding a second field line
+// sends one value, `attacker, operator`, which Header.Values reports as
+// length 1 and which the multi-value refusal therefore never saw. The
+// resolved username is written straight into Actor on a retention apply,
+// a backup-set create and an operation submit, so a username naming two
+// callers is the field an operator would read to attribute a destructive
+// apply.
+func TestACommaJoinedIdentityHeaderIsRefusedRatherThanResolved(t *testing.T) {
+	s := newStack(t, loopbackCIDRs)
+
+	for _, joined := range []string{"attacker, operator", "attacker;operator", "attacker operator"} {
+		t.Run(joined, func(t *testing.T) {
+			req := mustRequest(t, http.MethodGet, s.engineURL+"/api/v1/backup-sets")
+			req.Header.Set(s.header, joined)
+			code, _, body := do(t, req)
+			if code != http.StatusUnauthorized {
+				t.Fatalf("%s: %q authenticated with %d: %s\nan identity naming two callers was resolved to one rather than refused", s.header, joined, code, body)
+			}
+			if got := errorCode(t, body); got != "UNAUTHENTICATED" {
+				t.Errorf("error code = %q, want UNAUTHENTICATED (body %s)", got, body)
+			}
+		})
+	}
+
+	// Positive control: an ordinary username from the same peer still
+	// authenticates, so the refusals above are about the value and not
+	// about the peer or a broken identity path.
+	ok := mustRequest(t, http.MethodGet, s.engineURL+"/api/v1/backup-sets")
+	ok.Header.Set(s.header, "operator")
+	if code, _, body := do(t, ok); code != http.StatusOK {
+		t.Fatalf("the single-name positive control returned %d, want 200: %s", code, body)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Two hops, two peer sets (issue #87's review, M1)
+// ---------------------------------------------------------------------
+//
+// Every composed test above this point runs both hops over httptest, so
+// both peers are 127.0.0.1 and the two boundaries the whole fix is about
+// are the same address in every proof. That suite would pass equally on a
+// build where the edge sanitised against the engine's range, which is
+// exactly the defect this section exists to catch: container/compose.yaml
+// used to interpolate ONE variable into both hops, whose correct values
+// the file's own comments describe as mutually exclusive.
+//
+// So this section gives the two hops genuinely different peers. httptest
+// fixes RemoteAddr, so each hop is wrapped in a test-only middleware that
+// rewrites it: the engine always sees the edge's internal address, and
+// the edge sees whichever synthetic client the case is about. Nothing
+// under test is modified, and both wrappers sit strictly OUTSIDE the
+// constructor they front, so the strip is still the outermost thing in
+// the handler chain it belongs to.
+
+const (
+	// The platform gateway, on the LAN in front of the edge.
+	gatewayPeer = "192.168.10.5:41000"
+	// An ordinary LAN client. It presents as the compose bridge address
+	// because that is what Docker's userland port publishing does to
+	// traffic arriving at a published port, which is the collapse
+	// security.go documents and the reason the edge cannot simply trust
+	// the internal network.
+	lanClientPeer = "172.18.0.9:41000"
+	// The edge itself, as the engine sees it on the internal network.
+	edgeInternalPeer = "172.18.0.4:41000"
+)
+
+var (
+	// What serve-ui's --trusted-gateway has to name: the GATEWAY.
+	gatewayCIDRs = []string{"192.168.10.0/24"}
+	// What serve's --trusted-upstream has to name: the internal network
+	// the edge reaches the engine over.
+	internalCIDRs = []string{"172.18.0.0/16"}
+	// The only single value that lets a gateway deployment authenticate
+	// at all, which is why one variable for both hops has no safe answer.
+	unionCIDRs = []string{"192.168.10.0/24", "172.18.0.0/16"}
+)
+
+// peerSwitch rewrites the RemoteAddr of every request passing through it.
+type peerSwitch struct{ addr atomic.Value }
+
+func (p *peerSwitch) set(addr string) { p.addr.Store(addr) }
+
+func (p *peerSwitch) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if addr, ok := p.addr.Load().(string); ok && addr != "" {
+			r.RemoteAddr = addr
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// fixedPeer is peerSwitch for a hop whose peer never changes.
+func fixedPeer(addr string, next http.Handler) http.Handler {
+	p := &peerSwitch{}
+	p.set(addr)
+	return p.wrap(next)
+}
+
+// splitStack is the two-service composition with the two hops on
+// genuinely different networks.
+type splitStack struct {
+	edgeURL string
+	header  string
+	client  *peerSwitch
+}
+
+func newSplitStack(t *testing.T, engineTrusts, edgeTrusts []string) *splitStack {
+	t.Helper()
+
+	configPath := writeTestConfig(t)
+	backend, cleanup, err := service.Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("service.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	authSvc, err := local.New(local.Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	p := profileFor(t, string(profile.UGOS))
+	p.Gateway.TrustedPeers = engineTrusts
+	adapter, err := p.Adapter(profile.AdapterConfig{LocalAuth: authSvc.Authenticator()})
+	if err != nil {
+		t.Fatalf("Adapter: %v", err)
+	}
+
+	engine := httptest.NewServer(fixedPeer(edgeInternalPeer,
+		serve.NewEngine(serve.EngineConfig{Platform: adapter, Backend: backend})))
+	t.Cleanup(engine.Close)
+
+	upstream, err := url.Parse(engine.URL)
+	if err != nil {
+		t.Fatalf("parse engine URL: %v", err)
+	}
+	edgeGateway, err := (&profile.Gateway{TrustedPeers: edgeTrusts, UsernameHeader: p.Gateway.UsernameHeader}).Compile()
+	if err != nil {
+		t.Fatalf("compile edge gateway: %v", err)
+	}
+
+	client := &peerSwitch{}
+	edge := httptest.NewServer(client.wrap(serve.NewUI(serve.UIConfig{
+		Upstream: upstream,
+		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ui")}},
+		Gateway:  edgeGateway,
+	})))
+	t.Cleanup(edge.Close)
+
+	return &splitStack{edgeURL: edge.URL, header: p.Gateway.UsernameHeader, client: client}
+}
+
+// asPeer drives one identity-carrying read from the given synthetic
+// client address and returns the status.
+func (s *splitStack) asPeer(t *testing.T, addr string) (int, []byte) {
+	t.Helper()
+	s.client.set(addr)
+	req := mustRequest(t, http.MethodGet, s.edgeURL+"/api/v1/backup-sets")
+	req.Header.Set(s.header, "operator")
+	code, _, body := do(t, req)
+	return code, body
+}
+
+// TestTheTwoHopsNeedTwoPeerSets is M1's composition proof, and the test
+// that would have caught the shipped configuration.
+//
+// Each case configures the two hops the way one operator decision would,
+// and asks the same two questions: can the platform gateway sign in, and
+// is an unauthenticated LAN client still refused. A correct deployment
+// answers yes and no. Every single-value configuration answers wrong to
+// one of them, which is the finding stated as a table: the value that
+// lets the engine authenticate is the value that makes the edge believe
+// the LAN.
+func TestTheTwoHopsNeedTwoPeerSets(t *testing.T) {
+	cases := []struct {
+		name         string
+		engineTrusts []string
+		edgeTrusts   []string
+		wantGateway  int
+		wantLAN      int
+		why          string
+	}{
+		{
+			name:         "two variables, each naming its own hop",
+			engineTrusts: internalCIDRs,
+			edgeTrusts:   gatewayCIDRs,
+			wantGateway:  http.StatusOK,
+			wantLAN:      http.StatusUnauthorized,
+			why:          "the only configuration that both authenticates the gateway and refuses the LAN, and it needs two variables to express",
+		},
+		{
+			name:         "one variable, set to the gateway range",
+			engineTrusts: gatewayCIDRs,
+			edgeTrusts:   gatewayCIDRs,
+			wantGateway:  http.StatusUnauthorized,
+			wantLAN:      http.StatusUnauthorized,
+			why:          "the engine's only possible peer is the edge, which is not in the gateway's range, so nobody can sign in",
+		},
+		{
+			name:         "one variable, set to the internal range",
+			engineTrusts: internalCIDRs,
+			edgeTrusts:   internalCIDRs,
+			wantGateway:  http.StatusUnauthorized,
+			wantLAN:      http.StatusOK,
+			why:          "the edge now believes the internal network, which under userland port publishing is what a LAN client presents as: the forgery this whole issue is about, with the strip in place and every one of its own tests passing",
+		},
+		{
+			name:         "one variable, set to the union of both",
+			engineTrusts: unionCIDRs,
+			edgeTrusts:   unionCIDRs,
+			wantGateway:  http.StatusOK,
+			wantLAN:      http.StatusOK,
+			why:          "the only single value that lets the gateway authenticate, and it authenticates the LAN client too",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSplitStack(t, tc.engineTrusts, tc.edgeTrusts)
+
+			if code, body := s.asPeer(t, gatewayPeer); code != tc.wantGateway {
+				t.Errorf("the platform gateway got %d, want %d (%s): %s", code, tc.wantGateway, tc.why, body)
+			}
+			if code, body := s.asPeer(t, lanClientPeer); code != tc.wantLAN {
+				t.Errorf("an unauthenticated LAN client got %d, want %d (%s): %s", code, tc.wantLAN, tc.why, body)
+			}
+		})
+	}
+}
+
+// TestTheEdgeAndTheEngineDoNotShareOneBoundary is the same finding stated
+// as the property rather than the table, and it is the assertion that
+// fails on a build where one hop sanitises against the other's range.
+//
+// The two ranges below are disjoint, so a hop using the wrong one cannot
+// accidentally agree with the right answer, which is precisely what
+// loopback-everywhere composition could never rule out.
+func TestTheEdgeAndTheEngineDoNotShareOneBoundary(t *testing.T) {
+	s := newSplitStack(t, internalCIDRs, gatewayCIDRs)
+
+	code, body := s.asPeer(t, gatewayPeer)
+	if code != http.StatusOK {
+		t.Fatalf("the correctly split configuration answered %d, want 200: %s\n"+
+			"the edge trusts %v and the engine trusts %v; if this fails, one hop is being evaluated against the other's peer set",
+			code, body, gatewayCIDRs, internalCIDRs)
+	}
+	if !strings.Contains(string(body), "backup_sets") {
+		t.Fatalf("the authenticated response is not the backup-set list: %s", body)
+	}
+
+	// The negative half, on the same listeners: the address the ENGINE
+	// trusts is not an address the EDGE trusts, so a client arriving from
+	// the internal range is stripped and refused.
+	if code, body := s.asPeer(t, lanClientPeer); code != http.StatusUnauthorized {
+		t.Fatalf("a client from the engine's own trusted range authenticated through the edge with %d, want 401: %s\n"+
+			"the edge is trusting the engine's peer set, which is the single-variable configuration this test exists to forbid", code, body)
 	}
 }

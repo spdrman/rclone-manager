@@ -94,8 +94,9 @@ without becoming a second build.
 
 ```
 backup-manager-web serve    --profile=generic
-backup-manager-web serve    --profile=ugos --trusted-gateway=172.19.0.2/32
-backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 --ui-root=/usr/share/backup-manager/ui
+backup-manager-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
+backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
+                            --ui-root=/usr/share/backup-manager/ui
 ```
 
 Seven profiles exist: `generic`, `ugos`, and the five issue #169 added when it
@@ -147,16 +148,32 @@ outcome that refusal exists to prevent.
 may be believed. It is believed **only** from a network source the deployment
 declared:
 
-- a request from outside `--trusted-gateway` is refused with
+- a request from outside the declared range is refused with
   `ErrUntrustedPeer`, its identity header is never read, and the refused
   `AuthContext` never carries the forged username;
 - a request from inside it with no identity is refused with
   `ErrNoGatewayIdentity`, which is a different error on purpose: one is an
   attack and the other is a misconfigured gateway;
+- an identity that names more than one caller is refused with
+  `ErrAmbiguousIdentity`, in both wire forms: a repeated header line, and a
+  single value a proxy joined with a comma;
 - a remote address that does not parse is untrusted, never trusted by accident;
-- `--profile=ugos` with **no** `--trusted-gateway` refuses to start at all,
-  because without a declared peer there is no gateway, only a header anyone on
-  the LAN can set.
+- `--profile=ugos` with **no** declared range refuses to start at all, on
+  either hop, because without a declared peer there is no gateway, only a
+  header anyone on the LAN can set.
+
+**The two hops trust different peers, and each has its own variable.**
+`serve-ui --trusted-gateway` (`TRUSTED_GATEWAY_CIDRS`) names the platform
+gateway, which is the only boundary the network can still answer a question
+about: that container holds the one LAN-facing published port. `serve
+--trusted-upstream` (`TRUSTED_UPSTREAM_CIDRS`) names the engine's own single
+possible peer, the reverse proxy in front of it on the internal network. A
+single variable feeding both is the configuration that cannot be correct: the
+only value that lets the engine authenticate is one that also makes the edge
+believe an identity header from anything on the internal bridge, which under
+Docker's userland port publishing includes LAN traffic arriving at the
+published port. `serve` therefore refuses `--trusted-gateway` by name rather
+than silently accepting the wrong hop's variable.
 
 Write the range as narrowly as the deployment allows, and never as a `/8`.
 The values above are single addresses on purpose: the range's job is to name
