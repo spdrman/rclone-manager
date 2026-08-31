@@ -322,28 +322,14 @@ Re-add both from the same user templates, changing nothing.
 
 ## Step 8 — Remove
 
-This is the destructive-safety step. Capture the evidence before the removal,
-because afterwards there is nothing left to compare against.
+This is the destructive-safety step. Its evidence was captured back in the
+storage step, because after the removal there is nothing left to compare
+against, and any deletion the comparison turns up is a release blocker rather
+than a finding to triage.
 
-1. Put identifiable data in the backup root and record what is there:
-   ```bash
-   dd if=/dev/urandom of=/mnt/user/backups/acceptance-canary.bin bs=1M count=8
-   sha256sum /mnt/user/backups/acceptance-canary.bin | tee /tmp/canary.sha256
-   find /mnt/user/backups /mnt/user/appdata/backup-manager -type f -printf '%p %s\n' \
-     | sort > /tmp/before-remove.txt
-   ```
-2. **Docker → backup-manager → Remove**, and remove the image too.
-3. Repeat for `backup-manager-ui`.
-4. Check the canary FIRST, before anything else:
-   ```bash
-   sha256sum -c /tmp/canary.sha256
-   find /mnt/user/backups /mnt/user/appdata/backup-manager -type f -printf '%p %s\n' \
-     | sort > /tmp/after-remove.txt
-   diff /tmp/before-remove.txt /tmp/after-remove.txt
-   ```
-   Any deletion here is a release blocker, not a finding to triage.
+1. **Docker → backup-manager → Remove**, and remove the image too.
+2. Repeat for `backup-manager-ui`.
 
-- [ ] `sha256sum -c` verifies the canary and the `diff` is empty
 - [ ] Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before

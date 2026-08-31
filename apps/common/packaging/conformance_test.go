@@ -231,6 +231,15 @@ func allPlatforms() []platformFixture {
 			uiService:     "backup-manager-ui",
 			uiHealthcheck: overrideHealthcheck,
 			hardening:     composeHardening,
+			composeProfiles: []composeProfile{
+				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+			},
+			acceptance: "proxmox-ve-deployment.md",
+			// Every path the Proxmox procedure names is literal: the
+			// share root is /mnt/backup-manager inside the guest, and
+			// the profile derives the rest from it, so there is no
+			// machine-specific placeholder to expand.
+			docSubstitutions: map[string]string{},
 		},
 	}
 }

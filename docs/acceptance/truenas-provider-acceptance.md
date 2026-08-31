@@ -325,27 +325,14 @@ Then let TrueNAS restart the app (or **Stop** then **Start** it in the UI).
 
 ## Step 7 — Remove
 
-This is the destructive-safety step. Capture the evidence before the delete,
-because after it there is nothing left to compare against and "the dataset looks
-fine" is not a result.
+This is the destructive-safety step. Its evidence was captured back in the
+storage step, because after the delete there is nothing left to compare against,
+"the dataset looks fine" is not a result, and any deletion the comparison turns
+up is a release blocker rather than a finding to triage.
 
-1. Put identifiable data in the backup root and record what is there:
-   ```bash
-   dd if=/dev/urandom of=<backups dataset>/acceptance-canary.bin bs=1M count=8
-   sha256sum <backups dataset>/acceptance-canary.bin | tee /tmp/canary.sha256
-   find <backups dataset> -type f -printf '%p %s\n' | sort > /tmp/before-remove.txt
-   ```
-2. **Apps → Installed → backup-manager → Delete**.
-3. When TrueNAS asks, do **not** tick anything that deletes the app's datasets.
-4. Check the canary FIRST, before anything else:
-   ```bash
-   sha256sum -c /tmp/canary.sha256
-   find <backups dataset> -type f -printf '%p %s\n' | sort > /tmp/after-remove.txt
-   diff /tmp/before-remove.txt /tmp/after-remove.txt
-   ```
-   Any deletion here is a release blocker, not a finding to triage.
+1. **Apps → Installed → backup-manager → Delete**.
+2. When TrueNAS asks, do **not** tick anything that deletes the app's datasets.
 
-- [ ] `sha256sum -c` verifies the canary and the `diff` is empty
 - [ ] Both containers are gone
 
 Check the backup root against the baseline recorded in the storage step, before

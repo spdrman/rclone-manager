@@ -37,7 +37,12 @@ const (
 )
 
 var (
-	recursiveChownRe = regexp.MustCompile(`(?m)^\s*chown\s+(?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\b(.*)$`)
+	// A privilege prefix is part of the command, not a way past this
+	// rule: every one of these procedures runs its ownership fix-up as
+	// root, and the Proxmox one does it over ssh, where `sudo` is how
+	// that happens. Anchoring on a bare `chown` let `sudo chown -R` over
+	// the backup root's parent through unseen.
+	recursiveChownRe = regexp.MustCompile(`(?m)^\s*(?:(?:sudo|doas)\s+)?chown\s+(?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\b(.*)$`)
 	teeTargetRe      = regexp.MustCompile(`(?:\|\s*tee\s+|>\s*)("?[$/][^\s"'|]*"?)`)
 	untouchedClaimRe = regexp.MustCompile(`(?i)untouched,?\s+byte\s+for\s+byte`)
 )

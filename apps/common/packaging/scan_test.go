@@ -761,6 +761,11 @@ func TestCheckAcceptanceProcedureCatchesDestructiveAndUnverifiableSteps(t *testi
 			wantRule: RuleRecursiveChown,
 		},
 		{
+			name:     "recursive chown behind a privilege prefix",
+			mutate:   func(s string) string { return s + "\n\tsudo chown -R 99:100 /mnt/user/backups\n" },
+			wantRule: RuleRecursiveChown,
+		},
+		{
 			name:     "recursive chown hidden behind a placeholder",
 			mutate:   func(s string) string { return s + "\n\tchown -R 1000:100 \"$SHARE\"\n" },
 			subs:     map[string]string{"$SHARE": "/mnt/user/backups"},

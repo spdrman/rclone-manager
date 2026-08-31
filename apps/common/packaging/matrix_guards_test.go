@@ -2,11 +2,12 @@ package packaging
 
 import (
 	"crypto/sha256"
-	"fmt"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -702,12 +703,21 @@ var gateItemPhrases = map[string]*regexp.Regexp{
 	"package-metadata":           regexp.MustCompile(`(?i)provider package metadata`),
 }
 
-// auditProseAgainstMatrix finds lines that tell a reader a gate item is
-// checked by apps/common/packaging when the matrix passes that capability
-// for nobody. The matrix exists to be the single generated answer to
-// "which capability holds where", and a hand-written table in the
-// directory it is linked from is the more prominent of the two.
-func auditProseAgainstMatrix(text string, m *Matrix) []string {
+// disclaimerRe is how a row says the opposite of a claim. The gate table
+// in docs/acceptance/README.md carries one: #174's review would not let
+// the table fold hash parity into version parity, so the hash row states
+// in as many words that nothing here measures it. Reading that row as an
+// overstatement, on the strength of the package name appearing in the
+// same cell, is the audit being naive rather than the row being wrong.
+//
+// It is a marker, not an escape hatch, because matrixPasses is consulted
+// in both directions below: a row that disclaims a capability the matrix
+// does pass somewhere is drift too, and gets reported as such.
+var disclaimerRe = regexp.MustCompile(`(?i)\*\*not claimed\*\*`)
+
+// matrixPasses counts, per capability, how many providers the matrix
+// passes it for.
+func matrixPasses(m *Matrix) map[string]int {
 	passes := map[string]int{}
 	for _, byCap := range m.Results {
 		for id, r := range byCap {
@@ -716,17 +726,56 @@ func auditProseAgainstMatrix(text string, m *Matrix) []string {
 			}
 		}
 	}
+	return passes
+}
+
+// splitGateRow splits a markdown table row into the gate item it names and
+// the verdict it gives that item. Matching a capability against the whole
+// line conflated the two: the hash-parity row's verdict mentions "per
+// binary per architecture", so the row read as a claim about architecture
+// parity as well as about its own subject. The item is decided by the
+// first cell, the verdict by the rest, and a line that is not a table row
+// is its own verdict and its own subject.
+func splitGateRow(line string) (item, verdict string) {
+	if !strings.HasPrefix(strings.TrimSpace(line), "|") {
+		return line, line
+	}
+	cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+	if len(cells) < 2 {
+		return line, line
+	}
+	return cells[0], strings.Join(cells[1:], "|")
+}
+
+// auditProseAgainstMatrix finds lines that tell a reader a gate item is
+// checked by apps/common/packaging when the matrix passes that capability
+// for nobody, and lines that disclaim a gate item the matrix does pass.
+// The matrix exists to be the single generated answer to "which capability
+// holds where", and a hand-written table in the directory it is linked
+// from is the more prominent of the two, so it may not overstate or
+// understate what the generated answer says.
+func auditProseAgainstMatrix(text string, m *Matrix) []string {
+	passes := matrixPasses(m)
 	var findings []string
 	for _, line := range strings.Split(text, "\n") {
 		if !strings.Contains(line, "apps/common/packaging") {
 			continue
 		}
+		item, verdict := splitGateRow(line)
+		disclaimed := disclaimerRe.MatchString(verdict)
 		for id, phrase := range gateItemPhrases {
-			if phrase.MatchString(line) && passes[id] == 0 {
+			if !phrase.MatchString(item) {
+				continue
+			}
+			switch {
+			case !disclaimed && passes[id] == 0:
 				findings = append(findings, fmt.Sprintf("claims %s is checked by apps/common/packaging, and the matrix passes it for no provider: %q", id, strings.TrimSpace(line)))
+			case disclaimed && passes[id] > 0:
+				findings = append(findings, fmt.Sprintf("says %s is not claimed, and the matrix passes it for %d provider(s): %q", id, passes[id], strings.TrimSpace(line)))
 			}
 		}
 	}
+	sort.Strings(findings)
 	return findings
 }
 
@@ -757,5 +806,36 @@ func TestAcceptanceReadmeDoesNotContradictTheMatrix(t *testing.T) {
 	control := "| core version/hash parity | `apps/common/packaging` (canonical image reference is identical across all three platforms) |"
 	if findings := auditProseAgainstMatrix(control, m); len(findings) == 0 {
 		t.Errorf("the audit did not notice the contradicting row it exists to catch")
+	}
+
+	// The disclaimer is narrow. A row has to say **not claimed** to be
+	// read as one; "not" appearing anywhere in the verdict is the ordinary
+	// prose of a row that is still claiming coverage.
+	nearMiss := "| core version/hash parity | `apps/common/packaging`, though not for every platform yet |"
+	if findings := auditProseAgainstMatrix(nearMiss, m); len(findings) == 0 {
+		t.Errorf("a row that merely contains the word \"not\" was treated as a disclaimer; only **not claimed** is one")
+	}
+
+	// And it is symmetric, so it cannot be used to mute the audit: a row
+	// that disclaims a capability the matrix does pass is drift the other
+	// way round, and has to be reported too. Pick the subject from the
+	// matrix rather than hardcoding it, so the control cannot go vacuous
+	// if a capability's outcomes change.
+	passes := matrixPasses(m)
+	if passes["architecture-parity"] == 0 {
+		t.Fatal("the matrix passes architecture parity for no provider, so the understatement control below would pass vacuously")
+	}
+	understated := "| architecture | **not claimed**. Nothing in `apps/common/packaging` compares an architecture set. |"
+	if findings := auditProseAgainstMatrix(understated, m); len(findings) == 0 {
+		t.Errorf("the audit did not notice a row disclaiming a capability the matrix passes; the disclaimer would then be a mute button")
+	}
+
+	// The honest row #174's review forced into the gate table: it names
+	// the capability, names this package, and states that nothing here
+	// measures it. That is the opposite of the claim the audit hunts, and
+	// reading it as one is what made these two guards look incompatible.
+	honest := "| core binary hash parity | **not claimed**. Nothing in `apps/common/packaging` derives a hash from any artifact. |"
+	if findings := auditProseAgainstMatrix(honest, m); len(findings) > 0 {
+		t.Errorf("the audit read an explicit disclaimer as a claim: %s", strings.Join(findings, "; "))
 	}
 }

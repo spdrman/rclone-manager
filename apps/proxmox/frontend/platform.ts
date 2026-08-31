@@ -7,8 +7,11 @@ import type { AuthContext, PlatformBridge } from "@shared/types/platform";
  *  The supported model (WP4.5, apps/proxmox/README.md) is a dedicated guest
  *  acting as the container host, running the canonical OCI image: a VM by
  *  default, or an unprivileged LXC with nesting if you accept the caveats.
- *  Never the PVE host itself. `storageMount` is where the guest sees the host
- *  directory or dataset, and apps/common/packaging pins it to canonical.json. */
+ *  Never the PVE host itself. The guest sees the shared host directory or
+ *  dataset at /mnt/backup-manager; `storageMount` is its `backups` child, the
+ *  backup root the wizard seeds a destination from, which is deliberately not
+ *  the share root that also holds state, config and key material.
+ *  apps/common/packaging pins it to canonical.json. */
 export const proxmoxBridge: PlatformBridge = {
   id: "proxmox",
   name: "Proxmox VE",
@@ -16,7 +19,7 @@ export const proxmoxBridge: PlatformBridge = {
 
   deployment: {
     label: "Dedicated container host",
-    storageMount: "/mnt/backup-manager",
+    storageMount: "/mnt/backup-manager/backups",
     adapterVersion: "proxmox 1.1.0"
   },
 

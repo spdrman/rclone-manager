@@ -59,14 +59,42 @@ recording that baseline is a red test in `apps/common/packaging`, as is any
 operator re-runs on a reinstall, by which point that tree is the retained backup
 store.
 
-Which of those a given provider actually gets, and which of them it legitimately
-does not, is no longer prose. `apps/common/packaging` runs the cross-provider
-conformance matrix (§63A) over all seven providers and records the result in
+## Which provider actually gets which of those
+
+The table above answers one question: where a gate item is decided, here on a
+laptop or over there on hardware. It deliberately does not answer the other one,
+which provider each item holds for, because a hand-written table that tried to
+would drift from the suite inside a release. One did. It folded version parity
+and binary-hash parity into a single row and told the reader both were checked on
+every commit, while a matrix generated in the same repository recorded the
+release manifest as `BLOCKED` for all seven providers and passed hash parity for
+none of them.
+
+So the second question has exactly one answer and it is generated. The same
+package runs the cross-provider conformance matrix (§63A) over all seven
+providers on every commit and records the result in
 [`../conformance/phase-4-matrix.md`](../conformance/phase-4-matrix.md), one
-outcome per provider per capability. A row marked `OPERATOR` there is a
-capability whose automated half held (the procedure below exists and covers it)
-and whose hardware half has not run. That is the same claim this directory
-makes, said once, in a form a test enforces.
+outcome per provider per capability, generated and then checked against a real
+run. A test holds the table above to that matrix in both directions, so a row
+here can neither claim a capability the matrix passes for nobody nor disclaim one
+it passes. Read the matrix for coverage; read the table for where coverage is
+decided.
+
+What the outcomes there mean:
+
+- `PASS` / `FAIL`: decided from the repository alone, on any laptop.
+- `OPERATOR`: the capability is supported and the procedure below covers it, but
+  deciding it needs the real platform. The automated half held; the hardware half
+  has not run. That is the same claim this directory makes, said once, in a form
+  a test enforces.
+- `UNSUPPORTED` / `N/A`: the provider does not have this at its §4A tier, or
+  expresses the same guarantee somewhere the matrix names.
+- `BLOCKED`: the check is implemented and correct and cannot conclude today, for
+  a reason tracked in a numbered issue.
+
+State persistence and install/update/remove semantics are the two rows that can
+never be anything but `OPERATOR`, per provider, until someone runs a procedure
+from this directory and records what happened.
 
 ## Procedures
 

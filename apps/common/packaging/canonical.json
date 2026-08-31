@@ -101,7 +101,7 @@
     "proxmox": {
       "displayName": "Proxmox VE",
       "tier": "C",
-      "storageMount": "/mnt/backup-manager",
+      "storageMount": "/mnt/backup-manager/backups",
       "hostPaths": {
         "state": "/mnt/backup-manager/state",
         "backups": "/mnt/backup-manager/backups",
@@ -109,7 +109,9 @@
         "sshKey": "/mnt/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/backup-manager/secrets/known_hosts"
       },
-      "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backup-manager. How that sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here."
+      "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backup-manager. That share root is not the backup root: storageMount is its backups child, so private state, config and key material are siblings of the retained artifacts rather than parents of them, and step 0.6 of the acceptance procedure only ever recurses over the paths it created. How the sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers. The guest is dedicated to being the container host, so nothing else on the PVE cluster shares that network: the engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention."
     }
   }
 }

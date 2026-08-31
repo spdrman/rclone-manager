@@ -213,15 +213,28 @@ SFTP connection fails with a permission error that points at the key rather than
 at this step. This is the same ordering the TrueNAS, Unraid and OpenMediaVault
 procedures already use.
 
+**Recurse only over what this step created.** `/mnt/backup-manager` is the shared
+host directory, and `/mnt/backup-manager/backups` is the retained backup store: on
+a reinstall both already hold data this procedure did not write, and a `chown -R`
+across either rewrites the ownership of all of it with nothing to restore it from.
+So the two private trees are chowned recursively and the share root and the backup
+root get their own mountpoint chowned, nothing beneath it. This is the same split
+the TrueNAS, Unraid and OpenMediaVault procedures use, and
+`apps/common/packaging` fails the build if any of the four recurses over the
+backup root or a parent of it.
+
 ```bash
 ssh admin@<guest> '
-  sudo chown -R 1000:100 /mnt/backup-manager
+  sudo chown -R 1000:100 /mnt/backup-manager/state /mnt/backup-manager/config /mnt/backup-manager/secrets
+  sudo chown 1000:100 /mnt/backup-manager /mnt/backup-manager/backups
   sudo chmod 600 /mnt/backup-manager/secrets/id_ed25519
   sudo -u "#1000" cat /mnt/backup-manager/secrets/id_ed25519 > /dev/null && echo readable
 '
 ```
 
 - [ ] `/mnt/backup-manager/{state,backups,config,secrets}` exist, owned by the app's uid/gid
+- [ ] The recursive chown touched only `state`, `config` and `secrets`; the share
+      root and `backups` were chowned as mountpoints, not as trees
 - [ ] The chown ran **after** the key and `known_hosts` were created
 - [ ] `sudo -u '#1000' cat .../secrets/id_ed25519` succeeded, and the key is mode 600
 - [ ] `config/config.yaml` written and valid
