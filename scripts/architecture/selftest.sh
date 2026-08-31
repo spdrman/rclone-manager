@@ -254,6 +254,15 @@ expect_check_fails "core importing a NAS vendor SDK" "$d" "─X─► NAS SDKs" 
 # A check that inspected nothing must refuse rather than report success
 # over an empty set. Three of these checks count what they looked at for
 # exactly that reason, and all three counters are exercised here.
+#
+# The module is git-added, not merely written to disk. Since issue #207 the
+# check classifies the modules the repository TRACKS, and the two controls
+# below are a matched pair: this one proves a tracked module nobody
+# classified is still a hard failure, and the next proves an untracked one
+# is not. Neither is worth anything without the other, because a check that
+# ignores untracked modules and a check that has stopped looking at
+# anything at all produce the same green.
+#
 # Same reasoning as the manifest fixture above: a name no product will
 # ever have, so adding a real platform cannot quietly retire this control.
 d=$(mutant dep-unclassified-module)
@@ -263,8 +272,53 @@ module github.com/spdrman/rclone-manager/apps/selftest-unclassified-provider
 
 go 1.27.0
 EOF
-expect_check_fails "a Go module the manifest classifies into no layer" "$d" \
+git -C "$d" add -A
+expect_check_fails "a TRACKED Go module the manifest classifies into no layer" "$d" \
   "classified into no layer" ./scripts/architecture/check-core-dependency-rule.sh
+
+# The other half of the pair, and the literal #207 regression: modules that
+# are on disk but not in the repository cannot fail this gate.
+#
+# Two are planted, at the two shapes that behave differently. The first is
+# the real case, a nested agent worktree under .claude/worktrees/, which
+# .gitignore covers. The second is a plain untracked directory that no
+# ignore rule mentions, so this control cannot pass merely because
+# .gitignore happened to hide the first one; only sourcing the list from
+# the index excludes it.
+d=$(mutant dep-untracked-module)
+mkdir -p "$d/.claude/worktrees/selftest-planted/core"
+cat > "$d/.claude/worktrees/selftest-planted/core/go.mod" <<'EOF'
+module github.com/spdrman/rclone-manager/core
+
+go 1.27.0
+EOF
+mkdir -p "$d/selftest-untracked-module"
+cat > "$d/selftest-untracked-module/go.mod" <<'EOF'
+module example.invalid/selftest-untracked-module
+
+go 1.27.0
+EOF
+if git -C "$d" ls-files --error-unmatch selftest-untracked-module/go.mod >/dev/null 2>&1; then
+  echo "SELFTEST FAIL: the planted untracked module is tracked after all, so this control proves nothing." >&2
+  fail=$((fail + 1))
+fi
+expect_check_passes "untracked go.mod files, in a nested worktree and in a plain untracked directory (must NOT fire)" "$d" \
+  ./scripts/architecture/check-core-dependency-rule.sh
+
+# And assert WHY it passed, because "the check passed" is also what a check
+# that inspected nothing looks like. The same run has to have named a real
+# tracked module, and neither planted path.
+if grep -qE '^==> core \(core layer\)$' "$tmp/out" \
+  && ! grep -q 'selftest-planted' "$tmp/out" \
+  && ! grep -q 'selftest-untracked-module' "$tmp/out"; then
+  echo "  ok (why):    the same run still inspected the tracked core module, and named neither planted path"
+  pass=$((pass + 1))
+else
+  echo "SELFTEST FAIL: the check passed beside the planted untracked modules, but not for the required reason." >&2
+  echo "    it must still inspect tracked modules (\"==> core (core layer)\") and mention neither planted path." >&2
+  sed 's/^/    /' "$tmp/out" >&2
+  fail=$((fail + 1))
+fi
 
 echo
 echo "==> layer ownership, one mutation per rule"

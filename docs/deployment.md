@@ -279,8 +279,18 @@ and the only LAN-facing listener, and `backup-manager status` exits non-zero on 
 or `STALE` set and on an instance with no configuration at all. Gating startup on it means a
 stale backup set, or a fresh install, keeps the UI from ever coming up, which is the worst
 moment to lose the page you would fix it from. Backup freshness stays what it was built to
-be: the image's own `HEALTHCHECK` (so a plain `docker run` still reports it), the alerts
-block, and `docker compose exec rclone-manager /backup-manager status`.
+be: the image's own `HEALTHCHECK` (so a plain `docker run` still reports it, and so does the
+headless `daemon` command, which serves no HTTP and has no liveness endpoint to ask), the
+alerts block, and `docker compose exec rclone-manager /backup-manager status`.
+
+Every packaged adapter declares the same start gate, and has to (issue #206). The image's
+instruction and the canonical start gate are now deliberately different commands, so an
+adapter that declares nothing for the engine inherits the freshness verdict rather than the
+gate: `distribution/packaging`'s derivation gate allows that only where nothing waits on the
+engine's health, which is the Unraid template and only that. `apps/generic/tests/dockercli`
+brings every derived runtime definition up on a real fresh install and requires the Web UI to
+serve, with `backup-manager status` non-zero inside the same stack as the control that makes
+the result mean something.
 
 ## Building and running it yourself
 

@@ -28,7 +28,7 @@ prove the check can actually see it go.
 | `command-and-runtime-profile` | both services | the command **and** `--profile=<name>`, standardised as one field |
 | `listen-port` | web UI | the one published port; the engine deliberately publishes none |
 | `health-check` | both services | declared here, not inherited from the image and described in a comment |
-| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it |
+| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it. Checked on every derived artifact too, not only here (issue #206) |
 | `graceful-shutdown-period` | both services | `stop_grace_period`: 30s for the engine, 15s for the UI host |
 | `restart-policy` | both services | `unless-stopped` |
 | `ownership` | both services | explicit `user: PUID:PGID` |
@@ -94,8 +94,9 @@ without becoming a second build.
 
 ```
 backup-manager-web serve    --profile=generic
-backup-manager-web serve    --profile=ugos --trusted-gateway=172.19.0.2/32
-backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 --ui-root=/usr/share/backup-manager/ui
+backup-manager-web serve    --profile=ugos --trusted-upstream=172.19.0.2/32
+backup-manager-web serve-ui --profile=ugos --trusted-gateway=10.1.2.3/32 \
+                            --ui-root=/usr/share/backup-manager/ui
 ```
 
 Seven profiles exist: `generic`, `ugos`, and the five issue #169 added when it
@@ -147,16 +148,32 @@ outcome that refusal exists to prevent.
 may be believed. It is believed **only** from a network source the deployment
 declared:
 
-- a request from outside `--trusted-gateway` is refused with
+- a request from outside the declared range is refused with
   `ErrUntrustedPeer`, its identity header is never read, and the refused
   `AuthContext` never carries the forged username;
 - a request from inside it with no identity is refused with
   `ErrNoGatewayIdentity`, which is a different error on purpose: one is an
   attack and the other is a misconfigured gateway;
+- an identity that names more than one caller is refused with
+  `ErrAmbiguousIdentity`, in both wire forms: a repeated header line, and a
+  single value a proxy joined with a comma;
 - a remote address that does not parse is untrusted, never trusted by accident;
-- `--profile=ugos` with **no** `--trusted-gateway` refuses to start at all,
-  because without a declared peer there is no gateway, only a header anyone on
-  the LAN can set.
+- `--profile=ugos` with **no** declared range refuses to start at all, on
+  either hop, because without a declared peer there is no gateway, only a
+  header anyone on the LAN can set.
+
+**The two hops trust different peers, and each has its own variable.**
+`serve-ui --trusted-gateway` (`TRUSTED_GATEWAY_CIDRS`) names the platform
+gateway, which is the only boundary the network can still answer a question
+about: that container holds the one LAN-facing published port. `serve
+--trusted-upstream` (`TRUSTED_UPSTREAM_CIDRS`) names the engine's own single
+possible peer, the reverse proxy in front of it on the internal network. A
+single variable feeding both is the configuration that cannot be correct: the
+only value that lets the engine authenticate is one that also makes the edge
+believe an identity header from anything on the internal bridge, which under
+Docker's userland port publishing includes LAN traffic arriving at the
+published port. `serve` therefore refuses `--trusted-gateway` by name rather
+than silently accepting the wrong hop's variable.
 
 Write the range as narrowly as the deployment allows, and never as a `/8`.
 The values above are single addresses on purpose: the range's job is to name
@@ -312,7 +329,7 @@ fields, one authoritative value each, and a mismatch that names the field:
 | `runtime-profile` | `x-canonical-runtime.profiles`, and the platform's own declared profile |
 | `storage-mounts` | `canonical.json`'s `containerPaths`, all of them, and none besides |
 | `published-port` | `canonical.json`'s `listenPort`, on the Web UI role only |
-| `health-check` | `canonical.json`'s per-role tests |
+| `health-check` | `container/compose.yaml`'s per-role tests, restated in `canonical.json` so four metadata formats can be held to them |
 | `supported-architectures` | the release, once; an adapter states none of its own |
 
 `contract-version` is the one that keeps the other six honest over time. A
@@ -320,6 +337,38 @@ derivation check that only compares values keeps passing after the contract
 grows a field nobody applied, because there is no value to disagree with yet.
 Repeating the version in each adapter makes a contract change fail every one
 of them until somebody has re-derived it and said so.
+
+### Where the engine's health check is decided
+
+`container/compose.yaml`, and nowhere else. `canonical.json` restates both
+per-role tests so `derive.go` can hold four metadata formats to them, including
+an Unraid XML template no Compose parser can read, and
+`TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided` fails the build
+when the restatement stops matching. Nothing compared those two before issue
+#206, which is how the canonical definition came to declare a liveness probe
+while every adapter derived the backup-freshness verdict from a copy nobody
+had changed, for three work packages, with every suite green.
+
+The engine's check is a liveness question. Every adapter's web UI declares
+`depends_on: <engine>: condition: service_healthy`, so whatever it asks stands
+between an operator and the only LAN-facing container in the deployment.
+`backup-manager status` is FR-24's verdict and exits non-zero on a fresh
+install by design, which made "install the app" and "reach the app" mutually
+exclusive on all nine adapters.
+
+Backup freshness is unchanged and unweakened. `status` is still the
+operator-facing verdict, still `container/Dockerfile`'s own baked-in
+`HEALTHCHECK` (so a plain `docker run` reports it, and so does the headless
+`daemon` command, which serves no HTTP and has no liveness endpoint to ask),
+and still what the alerts block delivers. What no longer depends on it is
+container startup ordering.
+
+Because the image's instruction and the canonical start gate now deliberately
+differ, an adapter that declares no engine health check inherits the verdict
+rather than the gate. `derive.go` allows that only where nothing waits on the
+engine's health, which is Unraid and only Unraid: its template schema has no
+health-check seam, and it declares no start-ordering dependency either, so the
+badge it produces is the freshness report it is meant to be.
 
 Every field has a positive control that breaks it deliberately, run against
 every adapter rather than against one, because the five are read out of four

@@ -99,8 +99,8 @@ func toStorageStatusResponse(s service.StorageStatus) storageStatusResponse {
 // level to display ahead of it. Read-only, like GET /system/version and
 // GET /system/capabilities alongside it — no CSRF, no destructive gate,
 // both structurally verified for every route in this package by
-// TestNoAPIRouteBypassesAuthentication and
-// TestNoMutatingAPIRouteBypassesTheDestructiveGate (router_test.go).
+// TestNoAPIRouteBypassesAuthentication (router_test.go) and the gate walk
+// in gate_redteam_test.go.
 func (h *handlers) systemStorage(w http.ResponseWriter, r *http.Request) {
 	statuses, err := h.backend.ListStorageStatus(r.Context())
 	if err != nil {

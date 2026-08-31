@@ -56,59 +56,29 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "704bc85947b3747093b136b8a5e19d140c3ae951f52291edfaa16fe96618d285",
+    "sha256": "979c360dff58bdc99b56287b76caaad734523d392bbb388a5d1c6058f72bc73c",
     "format": "sha256sum"
   },
   "artifacts": [
     {
-      "target": "casaos",
-      "path": "apps/casaos/compose/backup-manager.yml",
-      "sha256": "af08c2fcd19eb0011eeee4f2d86969579ff79ee63e96e47d6bbf80ab822391e7"
-    },
-    {
-      "target": "casaos",
-      "path": "apps/casaos/icon.svg",
-      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
-    },
-    {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.env",
-      "sha256": "9b782e46996319456613c147419264fb12a8a3528eef5a065b1fa1866deb8229"
+      "sha256": "f5a32531efe81955f09799102bc4c2bbff61f960c9e6b25ecb4b95b105c0ba20"
     },
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.yml",
-      "sha256": "fa7702470cd6af35adfcdb2ea0b4fe9d1897c876f0f32a45c333b0b4ebc4141e"
-    },
-    {
-      "target": "portainer",
-      "path": "apps/portainer/compose/backup-manager.env",
-      "sha256": "1f8e9affa39c993aebdc38834b065e4007b4ca523c272eeb0fab87df3cb171bd"
-    },
-    {
-      "target": "portainer",
-      "path": "apps/portainer/compose/backup-manager.yml",
-      "sha256": "1e309bff00f2979815b39c8534390c68fd27851164261a8eb348d1d7ad2be251"
-    },
-    {
-      "target": "portainer",
-      "path": "apps/portainer/logo.svg",
-      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
-    },
-    {
-      "target": "portainer",
-      "path": "apps/portainer/templates.json",
-      "sha256": "c6024cd7bc1e70c1c4a396cd11bea70027a804b444c64623fdf23c1c000ec38e"
+      "sha256": "715a88f8fdbc15368b10e39fb706a9e1a37efa03ea880b5e0d4662a59e4eb86a"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.env",
-      "sha256": "04982caddbebea2dbd3d2a91606b75be765ab94baa70a0183fc2e9930a9a5a3b"
+      "sha256": "b775ed24c7f6df4601d8b1127de759fe32416fb632b1809fd7e3f977fb387989"
     },
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.yml",
-      "sha256": "e910fd971c3e958f17bdb275e0ee6ff1c9db434fccef7c793fd0f1db9415542b"
+      "sha256": "f18ed98fa9fd346af8ea548ed223fc572168815babc69d48cfd43bba918bb60e"
     },
     {
       "target": "truenas",
@@ -128,12 +98,12 @@
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/templates/docker-compose.yaml",
-      "sha256": "852e93723009ad71d889b4fe303807d15476efbc281e69889daccad228a68284"
+      "sha256": "9262c23adcd281dbf2aaead6dae88f296f5207b183dab95eaafcb20a87fbbe10"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "97b0f4b123f28a7cdf297ffc946f45dd3605af309b681408c36e1502209b9250"
+      "sha256": "8a6fca1181c6dd7d68232ee08e257984601534a62cc294f0adf2490d78b46e2c"
     },
     {
       "target": "unraid",
@@ -144,16 +114,6 @@
       "target": "unraid",
       "path": "apps/unraid/template/backup-manager.xml",
       "sha256": "7d78ccf05a46bd44d5d67455f069bd2480e1e1158c753c7345fb1f160b91909a"
-    },
-    {
-      "target": "zimaos",
-      "path": "apps/zimaos/compose/backup-manager.yml",
-      "sha256": "0819ac61a1f8bab3753f9fc4acbdb4f1d529b1e8f74bbf0ff58893a130b4e894"
-    },
-    {
-      "target": "zimaos",
-      "path": "apps/zimaos/icon.svg",
-      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
     },
     {
       "target": "generic",
@@ -168,14 +128,10 @@
     {
       "target": "generic",
       "path": "container/compose.yaml",
-      "sha256": "b0d09a014fee125934f7e9cc8fdeb05a5ae5152704e786663094cfb44403f7d2"
+      "sha256": "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
     }
   ],
   "unbuiltTargets": [
-    {
-      "target": "dockge",
-      "reason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice"
-    },
     {
       "target": "synology",
       "reason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json"

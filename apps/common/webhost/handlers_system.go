@@ -51,6 +51,19 @@ type versionResponse struct {
 	// that answers "not ready, and here is why" is a bigger change than
 	// this endpoint, and is deliberately not what this field claims.
 	Ready bool `json:"ready"`
+
+	// Configured is issue #176's fresh-install flag: false means this
+	// process is listening with no configuration on disk at all and is
+	// serving the setup flow, not the application. It is a different
+	// question from Ready above, and both answers matter separately: an
+	// unconfigured instance is never ready, but a not-ready instance is
+	// not necessarily unconfigured.
+	//
+	// A client that only wants to know which screen to render can read
+	// GET /api/v1/system/first-run instead, which asks exactly this and
+	// nothing else. It is repeated here so a client that already fetches
+	// version does not need a second round trip.
+	Configured bool `json:"configured"`
 }
 
 func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +85,7 @@ func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 		EngineVersion:  v.EngineVersion,
 		ConfigRevision: configRevision,
 		Ready:          isReady(h.backend),
+		Configured:     h.configured(),
 	})
 }
 

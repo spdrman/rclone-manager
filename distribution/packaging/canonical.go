@@ -257,6 +257,18 @@ type Commands struct {
 	WebUI       []string `json:"webUI"`
 	Headless    []string `json:"headless"`
 	Healthcheck []string `json:"healthcheck"`
+	// ImageHealthcheck is container/Dockerfile's own HEALTHCHECK
+	// instruction, which an adapter that declares no health check
+	// inherits.
+	//
+	// Modelled because it is NOT the canonical engine check (issue
+	// #206). While the two were the same command, "declares nothing" and
+	// "derives the canonical check" meant the same thing and neither
+	// needed a name. They stopped being the same command the moment the
+	// start gate became a liveness question, and a rule that has to say
+	// what an adapter actually inherits cannot say it by pointing at the
+	// thing it does not inherit.
+	ImageHealthcheck []string `json:"imageHealthcheck"`
 }
 
 // Canonical is canonical.json.
