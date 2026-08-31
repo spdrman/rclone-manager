@@ -150,6 +150,7 @@ function wireCreateBackupSetRequest(req: CreateBackupSetRequest) {
     local_path: req.localPath,
     include: req.include,
     completion_strategy: req.completionStrategy,
+    validator_id: req.validatorId,
     stable_for_seconds: req.stableForSeconds,
     stale_after_seconds: req.staleAfterSeconds,
     disabled: req.disabled,
@@ -181,6 +182,7 @@ interface WireCreatedBackupSet {
   local_path: string;
   include: string[];
   completion_strategy: string;
+  validator_id?: string;
   disabled: boolean;
   operation?: { operation_id: string; status: string };
 }
@@ -199,6 +201,7 @@ function fromWireCreatedBackupSet(body: WireCreatedBackupSet): CreatedBackupSet 
     localPath: body.local_path,
     include: body.include,
     completionStrategy: body.completion_strategy,
+    validatorId: body.validator_id,
     disabled: body.disabled,
     operation: body.operation
       ? { operationId: body.operation.operation_id, status: body.operation.status }
@@ -372,6 +375,10 @@ export const httpApi: BackupManagerApi = {
       method: "POST",
       body: JSON.stringify(wireCreateBackupSetRequest(req))
     }).then(fromWireCreatedBackupSet),
+  listValidators: () =>
+    request<{ validators?: { id: string; summary: string }[] }>("/validators").then((r) =>
+      (r.validators ?? []).map((v) => ({ id: v.id, summary: v.summary }))
+    ),
   importSSHKey: (privateKeyPem) =>
     request<SSHKeyImportResult>("/ssh-keys", {
       method: "POST",

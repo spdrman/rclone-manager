@@ -140,6 +140,21 @@ func (b *BackupService) runScheduledCycle(ctx context.Context) {
 		}
 	}()
 
+	// Rewrite the registered validators before anything execs one. A
+	// scheduled tick is the path that runs unattended for weeks, so it is
+	// the one most likely to meet a script that has been replaced or
+	// reaped since the process started (validator.go's
+	// refreshValidatorScripts). A failure skips this tick rather than
+	// running it: a cycle that cannot guarantee its validators are the
+	// scripts this build ships is a cycle that must not be allowed to pass
+	// an artifact and authorize deleting the remote source. There is no
+	// operation row to fail here, so the log line is the record, and the
+	// next tick tries again.
+	if err := b.refreshValidatorScripts(); err != nil {
+		b.logger.Error(ctx, "scheduled-cycle-validator-scripts", err)
+		return
+	}
+
 	runCycle(b.state.Load().inner, ctx)
 }
 

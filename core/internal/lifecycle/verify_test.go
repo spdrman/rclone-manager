@@ -897,3 +897,61 @@ func TestVerify_RejectsMissingRequiredParams(t *testing.T) {
 		})
 	}
 }
+
+// TestVerify_ValidatorIDWithoutAResolvedCommand_FailsClosed is issue
+// #162's fail-closed guard on the seam it introduces. A backup set names
+// its validator by id in config.yaml, and core/service resolves that id
+// into Validation.Command at load time. If some path ever reaches Verify
+// with the id still set and the Command still nil -- a constructor that
+// skipped resolution, a hot reload that forgot it -- the honest answer is
+// a refusal, not "no validator was configured, carry on": the operator
+// asked for one, and silently transferring and deleting the remote
+// source without it is the exact outcome FR-13 exists to prevent.
+func TestVerify_ValidatorIDWithoutAResolvedCommand_FailsClosed(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{ValidatorID: "trailer-marker"},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q: a configured validator that was never resolved must never read as \"no validator configured\"", out.Record.State, Failed)
+	}
+	if len(j.recorded) == 0 {
+		t.Fatal("no transition was recorded")
+	}
+	detail := j.recorded[len(j.recorded)-1].Detail
+	if !strings.Contains(detail, "trailer-marker") {
+		t.Fatalf("transition detail = %q, want it to name the unresolved validator id", detail)
+	}
+}
+
+// TestVerify_NoValidatorIDAndNoCommand_StillVerifies is that guard's
+// positive control: the ordinary "this backup set has no application
+// validator" case must be untouched by it, or the test above would pass
+// for a version of decide that refused every artifact.
+func TestVerify_NoValidatorIDAndNoCommand_StillVerifies(t *testing.T) {
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+	tr := &verifyTransport{}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{},
+	})
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if out.Record.State != string(Verified) {
+		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+}

@@ -208,6 +208,16 @@ type configState struct {
 // on a nil *obs.Logger, exactly as internal/obs's own package doc
 // promises.
 //
+// New does NOT resolve a backup set's Validation.ValidatorID into a
+// runnable Validation.Command: that is load-time work, and
+// OpenConfigAndJournal (below) is where it happens, so it covers both
+// production entry points (Open here, and cmd/backup-manager's own
+// openService) in one place rather than each caller of this constructor
+// remembering it. A cfg handed to New with an unresolved ValidatorID is
+// not silently un-validated either: internal/lifecycle/verify.go refuses
+// an artifact whose backup set names a validator that was never resolved,
+// rather than reading it as "no validator configured".
+//
 // New also sweeps journal for any operation left at "queued" or "running"
 // by a previous process using it (see
 // internal/state.Journal.FailInterruptedOperations's own doc): a fresh
@@ -259,8 +269,50 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 		return nil, nil, nil, fmt.Errorf("service: load config: %w", err)
 	}
 
+	// The catalog-membership half of validator resolution runs BEFORE
+	// §46.1's startup sequence, because it is the one refusal here that
+	// needs nothing from disk and every other one is irreversible if it
+	// lands second: runStartupSequence applies any pending schema
+	// migration, and a process that migrates the journal forward and then
+	// refuses to start on a validator_id leaves an operator with a
+	// database the previous binary can no longer open either. The id set
+	// is code-defined, so this is reachable without operator error --
+	// a release that retires an id turns a config file this product wrote
+	// itself into a daemon that will not come up.
+	if err := checkValidatorCatalogMembership(cfg); err != nil {
+		return nil, nil, nil, err
+	}
+
 	journal, releaseJournal, err := runStartupSequence(ctx, cfg.State.Database)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Load-time resolution of every backup set's registered validator
+	// (validator.go's applyValidatorCatalog): the config file carries an
+	// id, the running process carries the command it resolves to. This
+	// happens AFTER runStartupSequence, which is what validated the state
+	// directory the scripts materialize into, and after LoadAndValidate,
+	// which refuses a Validation naming both an id and a command.
+	//
+	// An unregistered id has already been refused above, before anything
+	// on disk moved; what can still fail here is materializing the scripts
+	// themselves. That fails startup too, deliberately. The alternative --
+	// carrying on with no validator for that backup set -- would mean the
+	// one check standing between a bad artifact and remote deletion
+	// silently switched off, with the operator believing it was on.
+	if err := applyValidatorCatalog(cfg); err != nil {
+		// runStartupSequence already took the shared journal lock and
+		// opened the journal, and this function's contract is that a
+		// failure returns a nil *state.Journal. Both have to be given back
+		// here, in that order (see Close's own comment on why the lock is
+		// released only after the handle is closed), or a startup that
+		// fails on a bad validator_id leaves the lock held for the life of
+		// the process that is about to exit anyway.
+		_ = journal.Close()
+		if releaseJournal != nil {
+			_ = releaseJournal()
+		}
 		return nil, nil, nil, err
 	}
 
@@ -339,6 +391,21 @@ func (b *BackupService) Close() error {
 			err = releaseErr
 		}
 	}
+
+	// The materialized validator scripts are deliberately left where they
+	// are. They used to live in a per-process os.MkdirTemp, where removing
+	// them on the way out was the only thing that stopped one directory
+	// leaking per process start; they now live in one fixed directory
+	// beside the state database, which makes them shared deployment state.
+	// The journal lock this just released is a SHARED one, and startup.go
+	// names a container restart racing an old process's shutdown against a
+	// new one's start as a supported case, so a Close that removed the
+	// directory would be deleting the scripts a successor has already
+	// resolved every one of its backup sets against -- wedging every
+	// artifact in every validator-using set for the whole life of the new
+	// process. What is left behind is one directory per deployment, whose
+	// contents are rewritten from the embedded copies at the start of
+	// every cycle anyway (validator.go's refreshValidatorScripts).
 	return err
 }
 

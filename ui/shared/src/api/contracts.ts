@@ -118,6 +118,23 @@ export interface CatalogScanPreview {
  * config.Key (a backup set's config never carries raw key bytes, only
  * where to find them).
  */
+/**
+ * One entry in the registered application-validator catalog
+ * (apps/common/webhost's GET /api/v1/validators, backed by
+ * core/service's own RegisteredValidators).
+ *
+ * An id and a label, and deliberately nothing else. The wizard's step 5
+ * picklist sends `id` back as CreateBackupSetRequest.validatorId; the
+ * script it resolves to is a server-side path this frontend never learns
+ * and could not use (docs/EPIC-B-multi-nas.md §26 Step 5: the API/UI
+ * layer selects a validator by id, never by naming an executable).
+ */
+export interface ValidatorCatalogEntry {
+  id: string;
+  /** One operator-facing sentence: what this validator checks. */
+  summary: string;
+}
+
 export interface CreateBackupSetRequest {
   sourceName?: string;
   name: string;
@@ -132,6 +149,10 @@ export interface CreateBackupSetRequest {
   completionStrategy: "rename" | "marker" | "stable";
   stableForSeconds?: number;
   staleAfterSeconds?: number;
+  /** The registered application validator to run against every artifact
+   *  in this set (listValidators), or omitted for none — which is what
+   *  every request before issue #162 meant, and still the default. */
+  validatorId?: string;
   /** "Save disabled" — excludes the set from every run cycle until an
    *  operator re-enables it. */
   disabled?: boolean;
@@ -163,6 +184,10 @@ export interface CreatedBackupSet {
   localPath: string;
   include: string[];
   completionStrategy: string;
+  /** The registered validator this set was saved with, echoed back so a
+   *  caller can render what it just persisted without a second fetch.
+   *  Empty when none was chosen. */
+  validatorId?: string;
   disabled: boolean;
   /** Present only when the request's runImmediately was set AND
    *  honoured (never when disabled was also set — see
@@ -212,6 +237,10 @@ export interface BackupManagerApi {
 
   /** Issue #146 (B2.7): the wizard's three Save buttons. */
   createBackupSet(req: CreateBackupSetRequest): Promise<CreatedBackupSet>;
+  /** Issue #162: the registered application-validator catalog, read by
+   *  the wizard's step 5 picklist. Read-only — there is no route that
+   *  adds to it, by design. */
+  listValidators(): Promise<ValidatorCatalogEntry[]>;
   /** The wizard's "Import key" step (#98 step 2). Sent once; the
    *  caller discards its own copy of privateKeyPem the instant this
    *  resolves, per that step's own on-screen copy. */

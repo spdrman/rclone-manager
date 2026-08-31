@@ -6,7 +6,8 @@ import type {
   CreateBackupSetRequest,
   CreatedBackupSet,
   HostKeyProbeResult,
-  SSHKeyImportResult
+  SSHKeyImportResult,
+  ValidatorCatalogEntry
 } from "./contracts";
 import { BackupManagerError } from "./contracts";
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
@@ -330,6 +331,19 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
   };
 }
 
+/** The registered application-validator catalog this fixture serves,
+ *  mirroring core/service's own RegisteredValidators entry for entry. It
+ *  is a literal rather than a fetch because that is what it is on the
+ *  backend too: a code-defined catalog fixed at build time, not
+ *  per-deployment data. */
+const VALIDATORS: ValidatorCatalogEntry[] = [
+  {
+    id: "trailer-marker",
+    summary:
+      "Confirms the artifact's own content ends with the completion trailer its producer appends when it has finished writing."
+  }
+];
+
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
   // Every previewRetention call advances this backup set's "inventory" by
@@ -397,10 +411,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         localPath: set.destination,
         include: set.includePatterns,
         completionStrategy: req.completionStrategy,
+        validatorId: req.validatorId,
         disabled: !!req.disabled,
         operation: runImmediately ? { operationId: "op_mock_" + set.id, status: "completed" } : undefined
       });
     },
+    listValidators: (): Promise<ValidatorCatalogEntry[]> => delay(VALIDATORS.map((v) => ({ ...v }))),
     importSSHKey: (): Promise<SSHKeyImportResult> =>
       delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
     probeHostKey: (): Promise<HostKeyProbeResult> =>

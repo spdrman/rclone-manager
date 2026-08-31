@@ -614,3 +614,119 @@ describe("ApiErrorCode covers every code apps/common/webhost actually emits", ()
     expect(toApiErrorCode("RETENTION_PLAN_STALE")).toBe("RETENTION_PLAN_STALE");
   });
 });
+
+describe("httpApi issue #162: registered-validator catalog", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("listValidators GETs /validators and maps the wire shape onto the catalog entry type", async () => {
+    const fetchMock = mockFetchOk({
+      validators: [{ id: "trailer-marker", summary: "Confirms the artifact ends with a completion trailer." }]
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const catalog = await httpApi.listValidators();
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit | undefined];
+    expect(url).toBe("/api/v1/validators");
+    expect((init?.method ?? "GET").toUpperCase()).toBe("GET");
+    expect(catalog).toEqual([
+      { id: "trailer-marker", summary: "Confirms the artifact ends with a completion trailer." }
+    ]);
+  });
+
+  it("listValidators tolerates a backend that sends no validators at all", async () => {
+    const fetchMock = mockFetchOk({ validators: [] });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await httpApi.listValidators()).toEqual([]);
+  });
+
+  it("createBackupSet sends validator_id, and only when one was chosen", async () => {
+    const okBody = {
+      id: "api/x",
+      source_name: "api",
+      name: "x",
+      host: "h",
+      port: 22,
+      user: "u",
+      remote_path: "/r",
+      local_path: "/l",
+      include: [],
+      completion_strategy: "marker",
+      validator_id: "trailer-marker",
+      disabled: false
+    };
+    const fetchMock = mockFetchOk(okBody, 201);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const base = {
+      name: "x",
+      host: "h",
+      port: 22,
+      user: "u",
+      sshKeyId: "k",
+      knownHostsLine: "line",
+      remotePath: "/r",
+      localPath: "/l",
+      include: [],
+      completionStrategy: "marker" as const
+    };
+
+    const withValidator = await httpApi.createBackupSet({ ...base, validatorId: "trailer-marker" });
+    let sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(sent.validator_id).toBe("trailer-marker");
+    // The response carries it back, so a UI can render what it saved.
+    expect(withValidator.validatorId).toBe("trailer-marker");
+
+    await httpApi.createBackupSet(base);
+    sent = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+    expect(sent.validator_id).toBeUndefined();
+  });
+
+  it("never sends anything that could name an executable (§26 Step 5)", async () => {
+    const fetchMock = mockFetchOk(
+      {
+        id: "api/x",
+        source_name: "api",
+        name: "x",
+        host: "h",
+        port: 22,
+        user: "u",
+        remote_path: "/r",
+        local_path: "/l",
+        include: [],
+        completion_strategy: "marker",
+        disabled: false
+      },
+      201
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.createBackupSet({
+      name: "x",
+      host: "h",
+      port: 22,
+      user: "u",
+      sshKeyId: "k",
+      knownHostsLine: "line",
+      remotePath: "/r",
+      localPath: "/l",
+      include: [],
+      completionStrategy: "marker",
+      validatorId: "trailer-marker"
+    });
+
+    const sent = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    const banned = ["command", "executable", "argv", "script", "shell", "binary", "exec"];
+    const offending = Object.keys(sent).filter((k) => banned.some((w) => k.toLowerCase().includes(w)));
+    expect(offending).toEqual([]);
+
+    // Positive control: the same filter over a body that DOES carry the
+    // banned shape has to catch it, or the assertion above proves nothing.
+    const leaky = { name: "x", validator_command: "/bin/sh" };
+    expect(Object.keys(leaky).filter((k) => banned.some((w) => k.toLowerCase().includes(w)))).toEqual([
+      "validator_command"
+    ]);
+  });
+});

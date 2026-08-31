@@ -260,8 +260,65 @@ const DefaultDeleteSafetyDelay = time.Hour
 // Validation configures how a transferred artifact gets checked before it's
 // allowed to be treated as a good restore point (FR-13).
 type Validation struct {
-	Hash    string   `yaml:"hash"` // "" or "sha256"
+	Hash string `yaml:"hash"` // "" or "sha256"
+
+	// ValidatorID names one entry in core/service's registered
+	// application-validator catalog (docs/EPIC-B-multi-nas.md §26 Step 5,
+	// issues #99/#162). It is the ONLY way the API/UI layer can select an
+	// application validator: that layer never names an executable, and
+	// core/service is the only thing that turns an id back into a
+	// Command.
+	//
+	// This package deliberately does not know the catalog -- core/service
+	// imports this package, not the other way around -- so nothing here
+	// decides whether a given id is registered. An unregistered id is
+	// refused at load time by core/service, which fails startup rather
+	// than quietly running a backup set with no validator the operator
+	// believes is configured. What validate.go does check is the shape:
+	// one bare token, and never alongside a Command.
+	//
+	// Storing the id, rather than the executable path it resolves to, is
+	// the whole point. That path is materialized per deployment and can
+	// move between releases; a config.yaml holding a stale one would fail
+	// every artifact in the backup set after a restart, with an error
+	// naming a directory instead of the cause.
+	ValidatorID string `yaml:"validator_id"`
+
 	Command *Command `yaml:"command"`
+}
+
+// ErrValidatorNotResolved reports a Validation that names a ValidatorID
+// nothing ever turned into a runnable Command. See ResolvedCommand.
+var ErrValidatorNotResolved = errors.New("config: the configured application validator was never resolved to a runnable command")
+
+// ResolvedCommand is how every consumer of a Validation must ask for its
+// application validator, rather than reading the Command field directly.
+// It returns nil, nil for "no validator configured", the command for one
+// that was resolved, and ErrValidatorNotResolved for the one combination
+// that must never be read as either: a ValidatorID with no Command.
+//
+// core/service resolves every id at load time and refuses to start on one
+// it does not recognize, so a nil Command beside a non-empty id means some
+// path skipped resolution entirely -- and the one thing that must never
+// do is read as "no validator was configured, carry on". The operator
+// asked for one; transferring and then deleting the remote source without
+// it is exactly the outcome FR-13 exists to prevent.
+//
+// The rule lives here, where a Validation is interpreted, instead of at
+// each place one is consumed, because it was previously enforced in
+// internal/lifecycle's verify path and not in internal/app's
+// operator-triggered revalidation path, which reported an artifact as
+// passing without ever running the validator its backup set names. An
+// invariant that has to be re-implemented per consumer gets missed by
+// exactly one consumer.
+func (v Validation) ResolvedCommand() (*Command, error) {
+	if v.Command == nil {
+		if v.ValidatorID != "" {
+			return nil, fmt.Errorf("%w: %q", ErrValidatorNotResolved, v.ValidatorID)
+		}
+		return nil, nil
+	}
+	return v.Command, nil
 }
 
 // Command is an optional external validator, e.g. something that opens a

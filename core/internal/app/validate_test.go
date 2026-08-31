@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -167,5 +169,59 @@ func TestParseArtifactID_RejectsMalformedInput(t *testing.T) {
 		if _, err := ParseArtifactID(s); err == nil {
 			t.Errorf("ParseArtifactID(%q) = nil error, want an error", s)
 		}
+	}
+}
+
+// TestValidateArtifact_RefusesWhenTheNamedValidatorWasNeverResolved is
+// issue #164's review finding M4. The invariant that a Validation naming
+// a ValidatorID with a nil Command must never read as "no validator
+// configured" was enforced in internal/lifecycle's verify path and
+// nowhere else, so FR-14's operator-triggered `validate` reported an
+// artifact as passing without ever running the validator its backup set
+// names. That is the same fail-open outcome FR-13 exists to prevent,
+// reached through the other door.
+//
+// The pass at the top is this test's positive control, and it is what
+// makes the refusal below mean something: the identical call, over the
+// identical artifact, differing only in whether the backup set names a
+// validator nothing resolved.
+func TestValidateArtifact_RefusesWhenTheNamedValidatorWasNeverResolved(t *testing.T) {
+	fx := newCommittedFixture(t)
+	ctx := context.Background()
+
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("ValidateArtifact (control): %v", err)
+	}
+	if !result.Passed {
+		t.Fatalf("control result = %+v, want Passed: this artifact validates cleanly with no validator configured", result)
+	}
+
+	// The backup set now names a registered validator that nothing ever
+	// resolved into a runnable command.
+	fx.svc.Config.Sources[0].BackupSets[0].Validation.ValidatorID = "trailer-marker"
+
+	before, err := fx.journal.Get(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	result, err = fx.svc.ValidateArtifact(ctx, fx.artifact)
+	if err == nil {
+		t.Fatalf("ValidateArtifact reported %+v for a backup set whose validator was never resolved; want a refusal", result)
+	}
+	if !errors.Is(err, config.ErrValidatorNotResolved) {
+		t.Errorf("error = %v, want one wrapping config.ErrValidatorNotResolved", err)
+	}
+	if result.Passed {
+		t.Error("result.Passed is true on the refusal path")
+	}
+
+	after, err := fx.journal.Get(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.State != before.State {
+		t.Errorf("state moved from %q to %q: an unresolved validator says nothing about the artifact, so it must not quarantine one", before.State, after.State)
 	}
 }

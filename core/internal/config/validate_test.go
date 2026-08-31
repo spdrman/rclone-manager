@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
@@ -1067,5 +1069,105 @@ func TestValidationErrorUnwrapExposesEachProblem(t *testing.T) {
 	}
 	if got := verr.Unwrap(); len(got) != 2 {
 		t.Fatalf("Unwrap() returned %d errors, want 2", len(got))
+	}
+}
+
+// TestValidateValidatorID is issue #162's config-side rule set. The
+// validator_id key exists so a backup set can name a validator this
+// process's own registered catalog (core/service's validator.go) owns,
+// WITHOUT the config file ever carrying the resolved executable path:
+// that path is process- and deployment-specific, and a config.yaml
+// holding a stale one would quarantine every artifact in the set after a
+// restart.
+//
+// This package deliberately does not know the catalog (it cannot import
+// core/service, which imports it), so it never decides whether an id is
+// registered. What it does decide is the shape: an id is one token, and
+// naming both a validator_id and a command is a contradiction rather
+// than a precedence puzzle.
+func TestValidateValidatorID(t *testing.T) {
+	tests := []struct {
+		name       string
+		validation Validation
+		wantErr    string
+	}{
+		{
+			name:       "a plain registered-looking id is accepted",
+			validation: Validation{Hash: "sha256", ValidatorID: "trailer-marker"},
+		},
+		{
+			name:       "no validator at all is still accepted",
+			validation: Validation{Hash: "sha256"},
+		},
+		{
+			name: "a command with no validator_id is still accepted",
+			validation: Validation{
+				Hash:    "sha256",
+				Command: &Command{Executable: "/usr/local/bin/validate", Timeout: Duration(time.Minute)},
+			},
+		},
+		{
+			name: "both a validator_id and a command is a contradiction",
+			validation: Validation{
+				Hash:        "sha256",
+				ValidatorID: "trailer-marker",
+				Command:     &Command{Executable: "/usr/local/bin/validate", Timeout: Duration(time.Minute)},
+			},
+			wantErr: "validator_id",
+		},
+		{
+			name:       "a validator_id naming a path is refused",
+			validation: Validation{Hash: "sha256", ValidatorID: "/usr/local/bin/validate"},
+			wantErr:    "validator_id",
+		},
+		{
+			name:       "a validator_id with a traversal is refused",
+			validation: Validation{Hash: "sha256", ValidatorID: "../../etc/passwd"},
+			wantErr:    "validator_id",
+		},
+		{
+			name:       "a validator_id with surrounding whitespace is refused",
+			validation: Validation{Hash: "sha256", ValidatorID: " trailer-marker "},
+			wantErr:    "validator_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].Validation = tt.validation
+
+			err := cfg.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Validate rejected %+v: %v", tt.validation, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Validate accepted %+v; want an error mentioning %q", tt.validation, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Validate error = %q, want it to mention %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidatorIDRoundTripsThroughYAML pins the wire key itself. The id
+// is what an operator hand-edits and what CreateBackupSet writes back, so
+// renaming the key silently is a breaking change to every existing
+// config file, not an internal refactor.
+func TestValidatorIDRoundTripsThroughYAML(t *testing.T) {
+	const yamlSnippet = "hash: sha256\nvalidator_id: trailer-marker\n"
+	var got Validation
+	if err := yaml.Unmarshal([]byte(yamlSnippet), &got); err != nil {
+		t.Fatalf("unmarshalling %q: %v", yamlSnippet, err)
+	}
+	if got.ValidatorID != "trailer-marker" {
+		t.Fatalf("ValidatorID = %q, want %q (the YAML key must be validator_id)", got.ValidatorID, "trailer-marker")
+	}
+	if got.Command != nil {
+		t.Fatalf("Command = %+v, want nil", got.Command)
 	}
 }

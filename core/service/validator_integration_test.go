@@ -18,14 +18,23 @@ import (
 
 // This file is RED item 3 of WP3.2's TDD plan (docs/EPIC-B-multi-nas.md
 // §71 Work Package 3.2): "a required validator's failure (or timeout)
-// still prevents remote deletion end to end, through this issue's new
-// API/UI validator wiring, not just at internal/lifecycle.Verify
-// directly." Both tests below build their backup set's
-// config.Validation.Command by calling this package's own
-// resolveValidator (validator.go), the new API/UI wiring, and then drive
-// the resulting config through this package's real public entry point
-// (SubmitRunCycle -> internal/app.Service.RunCycle -> the full FR-11
-// pipeline), never a hand-built lifecycle.VerifyParams.
+// still prevents remote deletion end to end ... not just at
+// internal/lifecycle.Verify directly." Both tests below resolve their
+// backup set's config.Validation.Command through this package's own
+// resolveValidator (validator.go) and drive the result through this
+// package's real public entry point (SubmitRunCycle ->
+// internal/app.Service.RunCycle -> the full FR-11 pipeline), never a
+// hand-built lifecycle.VerifyParams.
+//
+// What they do NOT prove, and never did, is that anything an API caller
+// can ask for produces that Command: they call resolveValidator
+// themselves, which is a fixture, not the wiring. Issue #162 is what
+// added the wiring, and validator_wiring_test.go is where the same
+// refusal is proven through it -- a validator selected by id in
+// config.yaml (or in a CreateBackupSetRequest), resolved by Open at load
+// time. These two stay because a fake transport makes them fast and
+// lets them assert DeleteRemote call counts directly, which the
+// local-transport tests next door can only observe as a missing file.
 
 // --- a small, fully-controlled transport.Transport, duplicated from
 // internal/app's own test fixture (core/internal/app/helpers_test.go)
@@ -117,7 +126,7 @@ var wp32Epoch = time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 // ever builds a config.Command by hand.
 func trailerMarkerBackupSet(t *testing.T, localDir string) (config.Source, config.BackupSet) {
 	t.Helper()
-	cmd, err := resolveValidator(ValidatorTrailerMarker)
+	cmd, err := resolveValidator(validatorTestDir(t), ValidatorTrailerMarker)
 	if err != nil {
 		t.Fatalf("resolveValidator: %v", err)
 	}

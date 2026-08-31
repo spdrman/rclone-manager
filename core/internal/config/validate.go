@@ -335,6 +335,20 @@ func (v *validator) validateValidation(path string, val *Validation) {
 		v.addf("%s: unsupported hash %q; must be empty or \"sha256\"", path, val.Hash)
 	}
 
+	if val.ValidatorID != "" {
+		idPath := path + ".validator_id"
+		if val.Command != nil {
+			// Two different answers to "which validator runs here". There
+			// is no sensible precedence to invent: a config that says both
+			// is a mistake, and picking one silently would run something
+			// the operator did not intend.
+			v.addf("%s: must not be set alongside %s.command; a backup set names its validator one way or the other", idPath, path)
+		}
+		if err := validValidatorID(val.ValidatorID); err != nil {
+			v.addf("%s: %v", idPath, err)
+		}
+	}
+
 	if val.Command == nil {
 		return
 	}
@@ -402,6 +416,31 @@ func (v *validator) validateRevalidation(path string, r *Revalidation) {
 	if r.Command.Timeout.Duration() <= 0 {
 		v.addf("%s: timeout must be set to a positive duration", cmdPath)
 	}
+}
+
+// validValidatorID checks a validator_id's shape, and only its shape.
+// Whether the id is actually registered is core/service's question (this
+// package cannot see the catalog); what this rules out is a value that
+// was never an id in the first place -- a path, a traversal, a command
+// line -- so a config that tried to smuggle an executable in through this
+// key is refused here rather than deeper in, with a message naming the
+// key an operator actually wrote.
+//
+// This is belt and braces: core/service's resolver only ever returns a
+// catalog entry it built itself, so an id shaped like a path resolves to
+// nothing regardless. The value of checking here is the error message and
+// the fact that it happens before any destructive processing begins,
+// which is what this package exists for.
+func validValidatorID(id string) error {
+	switch {
+	case strings.TrimSpace(id) != id:
+		return fmt.Errorf("%q must not have leading or trailing whitespace", id)
+	case strings.ContainsAny(id, "/\\\x00\n\r \t"):
+		return fmt.Errorf("%q must be a bare identifier: no path separator, whitespace or control character", id)
+	case id == "." || id == "..":
+		return fmt.Errorf("%q must not be a directory reference", id)
+	}
+	return nil
 }
 
 func (v *validator) validateState(s State) {

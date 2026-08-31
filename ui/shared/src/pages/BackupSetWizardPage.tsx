@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { useApi } from "@shared/api/ApiContext";
 import { BackupManagerError } from "@shared/api/contracts";
+import type { ValidatorCatalogEntry } from "@shared/api/contracts";
 import { PageHeader } from "@shared/components/PageHeader";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
@@ -134,6 +135,38 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
   // wizard would flash whatever a previous session last left on the
   // graph before self-correcting on the next render. Same pattern (and
   // same reasoning) as PlatformContext.tsx's bridge-mounted commit.
+  // Step 5's application-validator picklist (issue #162). Local
+  // useState, not a graph node: nothing outside this component reads
+  // either the catalog or the operator's choice while the wizard is
+  // open, which is the same bar state/wizardNodes.ts holds every other
+  // wizard answer to.
+  //
+  // validatorCatalog is null until the fetch settles, "unavailable" if
+  // it failed. The distinction matters: an empty picklist and a picklist
+  // that could not be loaded look identical on screen and mean opposite
+  // things, and this step's whole history is a control that looked real
+  // and did nothing.
+  const [validatorCatalog, setValidatorCatalog] = useState<ValidatorCatalogEntry[] | null>(null);
+  const [validatorCatalogFailed, setValidatorCatalogFailed] = useState(false);
+  const [validatorId, setValidatorId] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listValidators()
+      .then((catalog) => {
+        if (!cancelled) setValidatorCatalog(catalog);
+      })
+      .catch(() => {
+        if (!cancelled) setValidatorCatalogFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
+  const selectedValidator = (validatorCatalog ?? []).find((v) => v.id === validatorId);
+
   const [hasResetOnMount, setHasResetOnMount] = useState(false);
   if (!hasResetOnMount) {
     resetWizardAnswers();
@@ -277,6 +310,10 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
           .map((p) => p.trim())
           .filter(Boolean),
         completionStrategy: completionStrategyFor(completion),
+        // Omitted, never sent as "", when no validator was chosen: the
+        // backend reads an empty id as "no validator", but leaving the
+        // key out says the same thing without asking it to.
+        validatorId: validatorId || undefined,
         stableForSeconds: completion === "stable-size" ? 3600 : undefined,
         disabled,
         runImmediately
@@ -682,7 +719,46 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 <Toggle label="Transfer verification" note="always on" defaultChecked />
                 <Toggle label="Checksum verification" note="SHA-256" defaultChecked mono />
-                <Toggle label="Application validation" note="pg_restore --list" />
+
+                {/* Issue #162: a real picklist over the backend's own
+                    registered catalog (GET /api/v1/validators), replacing
+                    the decorative toggle #98 shipped. The operator picks
+                    an id; there is deliberately no field here, or
+                    anywhere else in this app, for naming a command
+                    (docs/EPIC-B-multi-nas.md §26 Step 5). */}
+                <label className="field">
+                  <span className="field__label">Application validation</span>
+                  <select
+                    className="select"
+                    value={validatorId}
+                    disabled={validatorCatalogFailed || validatorCatalog === null}
+                    onChange={(e) => setValidatorId(e.target.value)}
+                  >
+                    <option value="">None (transfer and checksum verification only)</option>
+                    {(validatorCatalog ?? []).map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.id}
+                      </option>
+                    ))}
+                  </select>
+                  {/* The option labels are the ids themselves, since an
+                      id is what this actually sends and what an operator
+                      will see again in config.yaml. The chosen entry's
+                      own sentence goes here instead, where there is room
+                      for it. */}
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                    {validatorCatalogFailed
+                      ? "Could not load the available validators. Save without one, or retry after reloading."
+                      : validatorCatalog === null
+                        ? "Loading the available validators…"
+                        : (selectedValidator?.summary ??
+                          "No application validator: transfer and checksum verification only.")}
+                  </span>
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                    A validator runs against every artifact once it is transferred and checksummed. Rejecting one
+                    quarantines it and leaves the remote copy in place.
+                  </span>
+                </label>
               </div>
             </StepBody>
           ) : null}
@@ -699,7 +775,15 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                 <Summary label="Source" lines={[source.host, remoteFolder]} />
                 <Summary label="Destination" lines={[localDestination]} />
                 <Summary label="Retention" lines={["7 daily", "13 weekly", "12 monthly"]} />
-                <Summary label="Validation" lines={["SHA-256", "transfer verify", completionSummaryLabel(completion)]} />
+                <Summary
+                  label="Validation"
+                  lines={[
+                    "SHA-256",
+                    "transfer verify",
+                    validatorId || "no application validator",
+                    completionSummaryLabel(completion)
+                  ]}
+                />
                 <Summary
                   label="Host trust"
                   lines={[hostKeyChanged ? "Host key changed — blocked" : hostTrusted ? "Trusted" : "Not yet trusted"]}
