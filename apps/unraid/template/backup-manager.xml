@@ -50,7 +50,7 @@
   <Category>Backup: Tools: Utilities:</Category>
   <WebUI/>
   <TemplateURL>https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/unraid/template/backup-manager.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/ui/shared/public/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg</Icon>
   <Requires>Run `docker network create backup-manager` before installing, and install the companion backup-manager-ui template for the web interface.</Requires>
   <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m,mode=1777,uid=99,gid=100 --user 99:100</ExtraParams>
   <PostArgs>/backup-manager-web serve</PostArgs>

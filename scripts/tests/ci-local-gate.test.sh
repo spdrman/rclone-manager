@@ -190,6 +190,13 @@ make_full_tree() {
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$SELFTEST_STUB" \
     >"$tree/scripts/tests/ci-local-gate.test.sh"
 
+  # The other guard suite ci-local.sh runs before the self-test. It arrived
+  # with #182 without a stub here, and `bash` on a path that does not exist
+  # exits 127 under set -e, so every full-tree case below that step died for
+  # a reason unrelated to what it measured, Group D's own control included.
+  printf '#!/usr/bin/env bash\nexit 0\n' \
+    >"$tree/scripts/tests/record-release-hashes-guards.test.sh"
+
   # .husky/pre-commit is the one caller that has to act on the exit status
   # rather than read the prose, so Group F drives the real hook in this tree.
   mkdir -p "$tree/.husky"
@@ -199,6 +206,23 @@ make_full_tree() {
   for arch in check-core-dependency-rule verify-core-without-apps \
               verify-ui-shared-without-provider-sdks verify-ugos-removable; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/architecture/$arch.sh"
+  done
+
+  # Stubs for the release-script guard suites the gate runs, for the same
+  # reason the four structure proofs above are stubbed: this fixture
+  # measures which steps the gate chooses to run, not what those steps do,
+  # and the real suites drive Docker-shaped scripts in throwaway git
+  # repositories.
+  #
+  # Not optional. `bash` on a path that does not exist exits 127, the gate
+  # runs under `set -e`, and the run dies at that step, so every full-tree
+  # case below it (Group D's control included) fails for a reason that has
+  # nothing to do with what it is measuring. That is what happened when
+  # #174's guard suite was added to ci-local.sh without being added here:
+  # 18 of this suite's 94 checks were failing on main before this line
+  # existed, and the gate could not reach its own summary.
+  for guard in record-release-hashes-guards publish-image-guards; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/$guard.test.sh"
   done
 
   printf '%s\n' "$tree"

@@ -209,6 +209,25 @@ type Provider struct {
 	Cells      map[string]Cell `json:"cells"`
 }
 
+// The two declaration files this package resolves cells from. A cell's
+// declaration is only ever repaired by editing one of these, so the
+// failure that reports a stale one names the file it came from rather
+// than the reader guessing between them.
+const (
+	ConformanceSource = "conformance.json"
+	SubmissionSource  = "submission.json"
+)
+
+// declarationField is the path to one cell's declaration, in the form a
+// reader can act on without opening anything first. A staleness failure
+// that says only "update the declaration" has already made the reader do
+// the work of finding it, and the pointer to the regeneration command
+// that used to accompany it is not the fix: regeneration records the new
+// verdict, it does not decide what the declaration should now say.
+func declarationField(source, provider, capability string) string {
+	return fmt.Sprintf("%s -> providers.%s.cells.%s.declared", source, provider, capability)
+}
+
 // Conformance is conformance.json.
 type Conformance struct {
 	Capabilities []Capability        `json:"capabilities"`
@@ -704,6 +723,20 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 // clear.
 type ReleaseManifest struct {
 	Commit string `json:"commit"`
+	// Version is the VERSION build argument the recorded binaries were
+	// stamped with, which is what `/backup-manager version` answers. It
+	// is NOT necessarily the semantic version the provider packages
+	// advertise: the generator defaults it to `git describe --tags
+	// --always`, and this repository has no tags, so today it is an
+	// abbreviated commit. VersionParityComplaints is where the two are
+	// held to each other, and it turns the difference into a refusal the
+	// moment canonical.json says the image is published (#88).
+	Version string `json:"version"`
+	// GeneratedAt is when the recording run wrote this file. The
+	// provenance bundle's SBOM takes its SPDX creation timestamp from
+	// here rather than from the clock, so regenerating the SBOM is
+	// byte-stable and "regenerate and diff" can be a real check.
+	GeneratedAt string `json:"generated_at"`
 	// UnsafeLocalBuild is the stamp
 	// scripts/release/record-release-hashes.sh writes when it was run
 	// with UNSAFE_LOCAL_BUILD=1, which waives every guard that makes a
