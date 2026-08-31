@@ -253,6 +253,23 @@ func TestTheImageUnderTestIsTheOneThisRunBuilt(t *testing.T) {
 	if got := runLabelOf(t, ref); got != runID {
 		t.Fatalf("the image at %s was built by run %q, not by this one (%q): this run is testing another worktree's build, which is issue #185 exactly", ref, got, runID)
 	}
+
+	// Logged, not merely checked, so that concurrent-runs-check.sh can
+	// read back which image each run actually tested and show that two
+	// runs from two worktrees tested two different ones.
+	t.Logf("dockercli image under test: reference=%s id=%s run=%s", ref, imageIDOf(t, ref), runID)
+}
+
+// imageIDOf returns the full content id a reference currently resolves
+// to. Two references can share one id (that is what a retag is), so this
+// is what distinguishes "two names" from "two builds".
+func imageIDOf(t *testing.T, ref string) string {
+	t.Helper()
+	out, err := exec.Command("docker", "image", "inspect", "--format", "{{.Id}}", ref).Output()
+	if err != nil {
+		t.Fatalf("docker image inspect %s: %v", ref, err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // TestARaceOverOneTagIsWhatThePerRunReferenceRemoves demonstrates the

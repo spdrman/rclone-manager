@@ -296,8 +296,5 @@ func TestSweepImagesReclaimsStaleImagesAndNothingElse(t *testing.T) {
 // by scanning a list.
 func imageExists(t *testing.T, id string) bool {
 	t.Helper()
-	if err := exec.Command("docker", "image", "inspect", id).Run(); err != nil {
-		return false
-	}
-	return true
+	return exec.Command("docker", "image", "inspect", id).Run() == nil
 }
