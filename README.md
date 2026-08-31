@@ -235,9 +235,12 @@ it.
 
 <!-- END SUPPORT-MODEL -->
 
-The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list and from
-`canonical.json`, and the gate checks the four container profiles in the table against that
-file rather than trusting this table.
+The tiers come from `docs/EPIC-B-multi-nas.md`'s support-tier list, from `canonical.json`
+for the four container profiles it declares, and from `conformance.json`, which declares all
+seven targets with their tiers. The gate checks every row of this table against those two
+files rather than trusting the table, and it checks in both directions: a row here that
+neither file declares is a failure, and so is a target they declare that this table has
+dropped.
 
 Two things about the Proxmox row are worth saying out loud. Its paths are inside the guest,
 not on the PVE host: the supported model is a dedicated container-host guest with one host
