@@ -166,6 +166,16 @@ describe("every request the shared client makes is a declared operation", () => 
     const calls: Array<[string, () => Promise<unknown>]> = [
       ["getVersion", () => httpApi.getVersion()],
       ["getHealth", () => httpApi.getHealth()],
+      ["getFirstRunStatus", () => httpApi.getFirstRunStatus()],
+      // Issue #176. Driven with the same spec createBackupSet is driven
+      // with, deliberately: both operations declare the contract's
+      // BackupSetSpec, and this list is what proves each one's REQUEST
+      // reaches a path the contract declares.
+      ["completeFirstRun", () => httpApi.completeFirstRun({
+        name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
+        knownHostsLine: "l", remotePath: "/r", localPath: "/l",
+        include: [], completionStrategy: "rename"
+      })],
       ["listSets", () => httpApi.listSets()],
       ["getSet", () => httpApi.getSet("src/set-1")],
       ["runCycle", () => httpApi.runCycle("rev-1")],

@@ -6,6 +6,7 @@ import type {
   ConnectionTestParams,
   CreateBackupSetRequest,
   CreatedBackupSet,
+  FirstRunResult,
   HostKeyProbeResult,
   SSHKeyImportResult,
   UpdateSettingsRequest,
@@ -23,13 +24,16 @@ import type {
 /** Development fixtures. Covers every scenario the brief requires (§42):
  *  healthy / stale / failing sets, active transfer, quarantine, retention
  *  preview, stale plan, host-key change, storage pressure, empty install,
- *  catalog recovery. Toggle scenarios with ?scenario= in the URL. */
+ *  catalog recovery, and (issue #176) a genuinely unconfigured instance
+ *  that has no config.yaml at all, which is a different thing from an
+ *  "empty" one with a configuration and no backup sets. Toggle scenarios
+ *  with ?scenario= in the URL. */
 
-export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch";
+export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run";
 
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
-  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch"];
+  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run"];
   return (allowed as string[]).includes(s ?? "") ? (s as Scenario) : "default";
 }
 
@@ -403,6 +407,10 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // same way the real backend's hot reload makes a write visible to the
   // next read (issue #140).
   const settings = defaultSettings();
+  // Issue #176: a fresh app-store install has no configuration at all.
+  // Mutable, because completing setup is what makes it configured — the
+  // same one-way transition the real backend makes in-process.
+  let configured = scenario !== "first-run";
 
   return {
     getVersion: () =>
@@ -411,6 +419,39 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           ? { ...VERSION, service: "1.2.0", api: "v0", compatible: false }
           : VERSION
       ),
+
+    getFirstRunStatus: () => delay({ configured }),
+
+    completeFirstRun: (req: CreateBackupSetRequest): Promise<FirstRunResult> => {
+      if (configured)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "unknown",
+            message: "This instance is already configured.",
+            correlationId: "cid_mock409"
+          })
+        );
+      const set = mockBackupSetFromCreateRequest(req);
+      SETS.push(set);
+      configured = true;
+      return delay({
+        backupSet: {
+          id: set.id,
+          sourceName: req.sourceName ?? "api",
+          name: set.name,
+          host: set.host,
+          port: set.port,
+          user: set.username,
+          remotePath: set.remoteFolder,
+          localPath: set.destination,
+          include: set.includePatterns,
+          completionStrategy: req.completionStrategy,
+          validatorId: req.validatorId,
+          disabled: !!req.disabled
+        },
+        restartRequired: false
+      });
+    },
 
     getHealth: () =>
       delay(

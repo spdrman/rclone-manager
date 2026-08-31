@@ -62,8 +62,17 @@ test.describe("accessibility", () => {
     });
   }
 
-  test("tab order reaches the section navigation", async ({ page }) => {
-    await page.goto("/");
+  test("tab order reaches the section navigation", async ({ page, bm }) => {
+    // bm.goto() rather than a bare page.goto(), for the reason the next
+    // test already gives: it waits on the section nav rendering instead of
+    // racing the app's mount. This one was missed when its neighbours were
+    // fixed, and it won the race often enough to look green. Issue #176's
+    // first-run round trip now sits in front of the shell, so the same
+    // race is one this test always loses: it tabs through a page that has
+    // not painted its nav yet and reports the nav unreachable, which reads
+    // as an accessibility regression and is really a test that never
+    // waited. With the shell up, the nav is three tab stops away.
+    await bm.goto("/");
     for (let i = 0; i < 12; i++) {
       await page.keyboard.press("Tab");
       const inNav = await page.evaluate(

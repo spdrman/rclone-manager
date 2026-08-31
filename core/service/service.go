@@ -25,6 +25,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -265,6 +266,29 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // transfer ever starts.
 func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, func() error, error) {
 	configPath = config.ResolvePath(configPath)
+
+	// An absent configuration file is reported as its own error, before
+	// anything else is attempted (issue #176, firstrun.go). It is the one
+	// startup failure that means "this deployment has not been set up
+	// yet" rather than "this deployment is set up wrongly", and a
+	// provider app branches on it to serve the setup flow instead of
+	// exiting. Statting first, rather than inspecting whatever
+	// config.Load's wrapped error happens to say, keeps that distinction
+	// a property of this function rather than of an error string another
+	// package is free to reword.
+	//
+	// The stat runs on the RESOLVED path, which is why the resolution
+	// above comes first. An operator may spell --config as the packaged
+	// configuration DIRECTORY (#196 made the mount a directory, and
+	// config.ResolvePath exists for that spelling), and statting the
+	// directory would find it present on a completely empty install: the
+	// one shape that most needs ErrConfigAbsent would be the one shape
+	// that never gets it, and the process would exit on a fresh install
+	// rather than serve setup.
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil, fmt.Errorf("%w at %s", ErrConfigAbsent, configPath)
+	}
+
 	cfg, err := config.LoadAndValidate(configPath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("service: load config: %w", err)

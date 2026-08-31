@@ -20,13 +20,20 @@ import (
 // handler reads into memory before giving up.
 const maxCreateBackupSetBodyBytes = 1 << 20 // 1 MiB
 
-// backupSetRequest is POST /api/v1/backup-sets' request body: the
+// backupSetSpec is everything it takes to DESCRIBE one backup set: the
 // add-backup-set wizard's (#98) Review step, translated into
 // service.CreateBackupSetRequest. See that type's own doc for what
 // SSHKeyID and KnownHostsLine reference (a prior POST /ssh-keys and
 // POST /ssh/host-key-probe call respectively) and why neither carries
 // key material or an unverified fingerprint directly.
-type backupSetRequest struct {
+//
+// Nothing in it asks for anything to be RUN, which is what makes it the
+// body of two operations rather than one: POST /api/v1/backup-sets folds
+// a set into a configuration that already exists, and POST
+// /api/v1/system/first-run writes the first configuration there has ever
+// been (firstrun.go). They share this type rather than restating it,
+// exactly as api/v1/openapi.json's BackupSetSpec is shared by both.
+type backupSetSpec struct {
 	SourceName         string   `json:"source_name"`
 	Name               string   `json:"name"`
 	Host               string   `json:"host"`
@@ -49,6 +56,16 @@ type backupSetRequest struct {
 	// (docs/EPIC-B-multi-nas.md §26 Step 5).
 	ValidatorID string `json:"validator_id"`
 	Disabled    bool   `json:"disabled"`
+}
+
+// backupSetRequest is POST /api/v1/backup-sets' request body: the spec
+// above plus the one thing only a create can ask for.
+//
+// The embedded struct marshals inline, so the wire shape is unchanged
+// from when this was one flat type; what changed is that the field below
+// is now declared on the operation that honours it and on no other.
+type backupSetRequest struct {
+	backupSetSpec
 	// RunImmediately is the wizard's "Save, enable & run" tier (as
 	// opposed to "Save & enable", RunImmediately: false, Disabled:
 	// false, or "Save disabled", Disabled: true). See

@@ -67,6 +67,8 @@ type contractBinding struct {
 var contractBindings = map[string]contractBinding{
 	"getSystemVersion":        {"/api/v1/system/version", nil, versionResponse{}, "/api/v1/system/version"},
 	"getSystemCapabilities":   {"/api/v1/system/capabilities", nil, capabilitiesResponse{}, "/api/v1/system/capabilities"},
+	"getFirstRunStatus":       {"/api/v1/system/first-run", nil, firstRunStatusResponse{}, "/api/v1/system/first-run"},
+	"completeFirstRun":        {"/api/v1/system/first-run", backupSetSpec{}, completeFirstRunResponse{}, "/api/v1/system/first-run"},
 	"listStorageStatus":       {"/api/v1/system/storage", nil, listStorageStatusResponse{}, "/api/v1/system/storage"},
 	"submitOperation":         {"/api/v1/operations", submitOperationRequest{}, operationResponse{}, "/api/v1/operations"},
 	"getOperation":            {"/api/v1/operations/{id}", nil, operationResponse{}, "/api/v1/operations/op_1"},

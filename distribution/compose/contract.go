@@ -928,6 +928,31 @@ func (d Document) WithVolume(entry any) (Document, string) {
 	return out, fmt.Sprintf("%v", entry)
 }
 
+// HealthcheckTest reads one role's declared healthcheck test, and says
+// whether the role declared one at all.
+//
+// Exported because the canonical definition is where the health checks
+// are DECIDED (issue #206) and distribution/packaging/canonical.json
+// only restates them, so something has to be able to read both and
+// compare. A restatement nothing compares is how the engine's start gate
+// came to say two different things in two files for three work packages
+// running.
+func (d Document) HealthcheckTest(role Role) ([]string, bool) {
+	_, svc, ok := d.serviceFor(role)
+	if !ok || svc == nil {
+		return nil, false
+	}
+	check := mapOf(svc["healthcheck"])
+	if check == nil {
+		return nil, false
+	}
+	v, present := check["test"]
+	if !present || isEmpty(v) {
+		return nil, false
+	}
+	return stringList(v), true
+}
+
 // WithServiceHealthcheckTest returns a copy of this document with role's
 // healthcheck test replaced. Like WithProhibited and WithVolume it exists
 // for the positive controls, here so a control can put back the exact

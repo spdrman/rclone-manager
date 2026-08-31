@@ -47,7 +47,7 @@
     "schemas": {
       "ApiErrorCode": {
         "type": "string",
-        "description": "Every error code this API contract knows. `wire` codes are the machine-readable tokens a server may put on the wire; `ui` codes are the shared web UI's own presentation vocabulary, which no endpoint ever emits and which is listed here so there is exactly one registry rather than a second hand-maintained copy in ui/shared. `unknown` is the sentinel an unrecognised code off the network degrades to.",
+        "description": "Every error code this API contract knows. `wire` codes are the machine-readable tokens a server may put on the wire; `ui` codes are the shared web UI's own presentation vocabulary, which no endpoint ever emits and which is listed here so there is exactly one registry rather than a second hand-maintained copy in ui/shared. A code is registered here once, whatever number of operations emit it: NOT_CONFIGURED is emitted by every operation an unconfigured instance refuses, and is declared on each of them. `unknown` is the sentinel an unrecognised code off the network degrades to.",
         "enum": [
           "authentication-failed",
           "ssh-host-key-changed",
@@ -79,6 +79,8 @@
           "HOST_KEY_PROBE_FAILED",
           "DESTRUCTIVE_OPERATIONS_DISABLED",
           "INTERNAL",
+          "ALREADY_CONFIGURED",
+          "NOT_CONFIGURED",
           "ARTIFACT_NOT_FOUND",
           "ARTIFACT_NOT_QUARANTINED",
           "ARTIFACT_IRRECOVERABLE"
@@ -114,6 +116,8 @@
           "HOST_KEY_PROBE_FAILED": "wire",
           "DESTRUCTIVE_OPERATIONS_DISABLED": "wire",
           "INTERNAL": "wire",
+          "ALREADY_CONFIGURED": "wire",
+          "NOT_CONFIGURED": "wire",
           "ARTIFACT_NOT_FOUND": "wire",
           "ARTIFACT_NOT_QUARANTINED": "wire",
           "ARTIFACT_IRRECOVERABLE": "wire"
@@ -140,6 +144,7 @@
             "OPERATION_ALREADY_RUNNING",
             "IDEMPOTENCY_KEY_CONFLICT",
             "CONFIG_REVISION_STALE",
+            "ALREADY_CONFIGURED",
             "ARTIFACT_NOT_QUARANTINED",
             "ARTIFACT_IRRECOVERABLE"
           ],
@@ -155,6 +160,9 @@
           "internal": [
             "INTERNAL",
             "INTERNAL_ERROR"
+          ],
+          "unavailable": [
+            "NOT_CONFIGURED"
           ]
         }
       },
@@ -187,6 +195,10 @@
           "ready": {
             "type": "boolean",
             "description": "True once the runtime has completed its startup sequence."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "False on an instance listening with no configuration at all: it is serving the first-run setup flow, not the application, and every operation outside that flow refuses with 503 NOT_CONFIGURED. A different question from ready above, and both answers matter separately: an unconfigured instance is never ready, but a not-ready instance is not necessarily unconfigured. GET /system/first-run asks this and nothing else, for a client that does not already fetch this response."
           }
         },
         "required": [
@@ -196,7 +208,8 @@
           "go_version",
           "engine_version",
           "config_revision",
-          "ready"
+          "ready",
+          "configured"
         ]
       },
       "CapabilitiesResponse": {
@@ -515,82 +528,26 @@
         ]
       },
       "CreateBackupSetRequest": {
-        "type": "object",
-        "description": "POST /backup-sets. ssh_key_id and known_hosts_line carry REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never key material.",
-        "additionalProperties": false,
-        "properties": {
-          "source_name": {
-            "type": "string"
+        "description": "POST /backup-sets. The backup-set spec, plus the one thing only a create can ask for: that the new set also runs at once.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BackupSetSpec"
           },
-          "name": {
-            "type": "string"
-          },
-          "host": {
-            "type": "string"
-          },
-          "port": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "user": {
-            "type": "string"
-          },
-          "ssh_key_id": {
-            "type": "string"
-          },
-          "known_hosts_line": {
-            "type": "string"
-          },
-          "remote_path": {
-            "type": "string"
-          },
-          "local_path": {
-            "type": "string"
-          },
-          "include": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "completion_strategy": {
-            "type": "string",
-            "enum": [
-              "rename",
-              "marker",
-              "stable"
-            ]
-          },
-          "stable_for_seconds": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "stale_after_seconds": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "validator_id": {
-            "type": "string",
-            "description": "A registered validator's id from GET /validators. Never a path, never a command."
-          },
-          "disabled": {
-            "type": "boolean"
-          },
-          "run_immediately": {
-            "type": "boolean",
-            "description": "Also submit a run_cycle. This branch, and only this branch, is subject to the destructive gate."
+          {
+            "type": "object",
+            "description": "The create-only addition on top of the spec itself.",
+            "additionalProperties": false,
+            "properties": {
+              "run_immediately": {
+                "type": "boolean",
+                "description": "Also submit a run_cycle. This branch, and only this branch, is subject to the destructive gate."
+              }
+            },
+            "required": []
           }
-        },
-        "required": [
-          "name",
-          "host",
-          "port",
-          "user",
-          "ssh_key_id",
-          "known_hosts_line",
-          "remote_path",
-          "local_path",
-          "completion_strategy"
+        ],
+        "x-go-embeds": [
+          "BackupSetSpec"
         ]
       },
       "BackupSet": {
@@ -1152,6 +1109,113 @@
           "code",
           "message",
           "correlationId"
+        ]
+      },
+      "BackupSetSpec": {
+        "type": "object",
+        "description": "Everything it takes to DESCRIBE one backup set: where it reads from, where it writes to, how it decides a file is complete, and whether it starts enabled. ssh_key_id and known_hosts_line carry REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never key material. Nothing here asks for anything to be RUN, which is what makes it the body of two different operations: POST /backup-sets folds a set into a configuration that already exists, and POST /system/first-run writes the first configuration there has ever been. Those two share this base rather than restating it, so the wizard that collects these answers can never be right about one operation and wrong about the other.",
+        "additionalProperties": false,
+        "properties": {
+          "source_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "user": {
+            "type": "string"
+          },
+          "ssh_key_id": {
+            "type": "string"
+          },
+          "known_hosts_line": {
+            "type": "string"
+          },
+          "remote_path": {
+            "type": "string"
+          },
+          "local_path": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "completion_strategy": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "marker",
+              "stable"
+            ]
+          },
+          "stable_for_seconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stale_after_seconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "validator_id": {
+            "type": "string",
+            "description": "A registered validator's id from GET /validators. Never a path, never a command."
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "port",
+          "user",
+          "ssh_key_id",
+          "known_hosts_line",
+          "remote_path",
+          "local_path",
+          "completion_strategy"
+        ]
+      },
+      "FirstRunStatusResponse": {
+        "type": "object",
+        "description": "GET /system/first-run. The one question a client asks before it decides whether to render the setup flow or the application. Deliberately one field: a client that has just been handed a 503 NOT_CONFIGURED needs to know which screen to show, not why.",
+        "additionalProperties": false,
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "True once this deployment has a configuration. It never goes back to false for a running process: a live service was opened from a configuration that existed and validated, whatever happens to the file afterwards."
+          }
+        },
+        "required": [
+          "configured"
+        ]
+      },
+      "CompleteFirstRunResponse": {
+        "type": "object",
+        "description": "POST /system/first-run. The backup set the first configuration was written around, NESTED rather than flattened, which is the one place this contract deliberately differs from CreateBackupSetResponse beside it. What this operation creates is a whole configuration; the set is its first member, and restart_required is a fact about the instance, not about the set. Keeping backup_set as exactly a BackupSet means a later v1 addition describing the configuration lands beside it instead of becoming indistinguishable from a backup-set field, and can never collide with a field BackupSet itself grows.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set": {
+            "$ref": "#/components/schemas/BackupSet"
+          },
+          "restart_required": {
+            "type": "boolean",
+            "description": "True when the configuration is durably written but this process could not open a service against it in place, so it has to be restarted before it serves the application. Deliberately not an error: setup succeeded, and reporting it as a failure would leave an operator retrying a write that already happened."
+          }
+        },
+        "required": [
+          "backup_set",
+          "restart_required"
         ]
       },
       "Artifact": {
@@ -1726,6 +1790,19 @@
             "x-error-codes": [
               "INTERNAL"
             ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
           }
         },
         "x-destructive-gate": false,
@@ -1848,6 +1925,19 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },
@@ -1984,6 +2074,19 @@
             "x-error-codes": [
               "INTERNAL"
             ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
           }
         },
         "x-destructive-gate": false,
@@ -2084,6 +2187,19 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },
@@ -2227,6 +2343,19 @@
             "x-error-codes": [
               "INTERNAL"
             ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
           }
         },
         "x-destructive-gate": true,
@@ -2283,6 +2412,19 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },
@@ -2378,6 +2520,19 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },
@@ -2555,6 +2710,19 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },
@@ -2861,6 +3029,19 @@
             "x-error-codes": [
               "INTERNAL"
             ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
           }
         },
         "x-destructive-gate": false,
@@ -2953,6 +3134,19 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },
@@ -3346,6 +3540,157 @@
         "x-idempotency-key": "none",
         "x-optimistic-concurrency": null,
         "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/system/first-run": {
+      "get": {
+        "operationId": "getFirstRunStatus",
+        "summary": "Whether this deployment has been configured at all.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FirstRunStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "post": {
+        "operationId": "completeFirstRun",
+        "summary": "Write this deployment's first configuration, and serve the application against it.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BackupSetSpec"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success. The configuration is durably on disk; read restart_required for whether this process is already serving it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteFirstRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST",
+              "SSH_KEY_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "409": {
+            "description": "Refused: ALREADY_CONFIGURED. A configuration already exists, so this operation is no longer available: change a configured deployment through the ordinary settings and backup-set operations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ALREADY_CONFIGURED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
         "x-authenticated": true
       }
     },
@@ -3891,6 +4236,133 @@
         "x-authenticated": true
       }
     },
+    "/backup-sets/{source}/{set}/enabled": {
+      "post": {
+        "operationId": "setBackupSetEnabled",
+        "summary": "Turn one backup set on or off. Nothing already backed up is touched. Keyed by the two halves of the identity, like the retention routes beside it, because a backup set id is a source and a name.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
     "/catalog/scan": {
       "post": {
         "operationId": "scanCatalog",
@@ -4010,133 +4482,6 @@
             "x-error-codes": [
               "CSRF_TOKEN_MISSING",
               "CSRF_TOKEN_MISMATCH"
-            ]
-          },
-          "500": {
-            "description": "Refused: INTERNAL.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "INTERNAL"
-            ]
-          }
-        },
-        "x-destructive-gate": false,
-        "x-idempotency-key": "none",
-        "x-optimistic-concurrency": null,
-        "x-csrf-required": true,
-        "x-authenticated": true
-      }
-    },
-    "/backup-sets/{source}/{set}/enabled": {
-      "post": {
-        "operationId": "setBackupSetEnabled",
-        "summary": "Turn one backup set on or off. Nothing already backed up is touched. Keyed by the two halves of the identity, like the retention routes beside it, because a backup set id is a source and a name.",
-        "tags": [
-          "backup-sets"
-        ],
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "source",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "The configured source this backup set belongs to."
-          },
-          {
-            "name": "set",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "The backup set's own name within that source."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetEnabledRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Success.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BackupSet"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Refused: INVALID_REQUEST.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "INVALID_REQUEST"
-            ]
-          },
-          "401": {
-            "description": "Refused: UNAUTHENTICATED.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "UNAUTHENTICATED"
-            ]
-          },
-          "403": {
-            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "CSRF_TOKEN_MISSING",
-              "CSRF_TOKEN_MISMATCH"
-            ]
-          },
-          "404": {
-            "description": "Refused: BACKUP_SET_NOT_FOUND.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "500": {

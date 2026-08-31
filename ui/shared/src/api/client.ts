@@ -13,8 +13,12 @@ import type {
   WireActivityEvent,
   WireArtifact,
   WireBackupSet,
+  WireBackupSetSpec,
   WireCatalogReportResponse,
+  WireCompleteFirstRunResponse,
+  WireCreateBackupSetRequest,
   WireCreateBackupSetResponse,
+  WireFirstRunStatusResponse,
   WireHealthResponse,
   WireListActivityResponse,
   WireListArtifactsResponse,
@@ -179,7 +183,11 @@ const post = (path: string, body?: unknown) =>
  * type the rest of the app already speaks. Nothing past these helpers
  * ever sees a snake_case key.
  */
-function wireCreateBackupSetRequest(req: CreateBackupSetRequest) {
+/** The contract's BackupSetSpec: everything that DESCRIBES a backup set,
+ *  and nothing that asks for one to be run. Two operations take exactly
+ *  this body (POST /backup-sets and POST /system/first-run), which is why
+ *  it is built here once rather than at each of them. */
+function wireBackupSetSpec(req: CreateBackupSetRequest): WireBackupSetSpec {
   return {
     source_name: req.sourceName,
     name: req.name,
@@ -195,9 +203,12 @@ function wireCreateBackupSetRequest(req: CreateBackupSetRequest) {
     validator_id: req.validatorId,
     stable_for_seconds: req.stableForSeconds,
     stale_after_seconds: req.staleAfterSeconds,
-    disabled: req.disabled,
-    run_immediately: req.runImmediately
+    disabled: req.disabled
   };
+}
+
+function wireCreateBackupSetRequest(req: CreateBackupSetRequest): WireCreateBackupSetRequest {
+  return { ...wireBackupSetSpec(req), run_immediately: req.runImmediately };
 }
 
 function wireConnectionTestParams(params: ConnectionTestParams) {
@@ -742,6 +753,26 @@ export const httpApi: BackupManagerApi = {
   // keep reporting green after backups stopped landing.
   getHealth: () =>
     request<WireHealthResponse>("/system/health").then((r) => fromWireHealth(r, Date.now())),
+
+  getFirstRunStatus: () =>
+    request<WireFirstRunStatusResponse>("/system/first-run").then((r) => ({
+      configured: r.configured
+    })),
+  // The body is the SPEC, not the create request: POST /system/first-run
+  // declares BackupSetSpec, which carries no run_immediately, because
+  // there is no service running yet to run anything. This method still
+  // takes the wizard's whole answer set, since the operator fills in one
+  // form either way, and drops that one field here, in the single place
+  // this boundary is crossed, rather than sending a key the contract does
+  // not declare and the server would ignore.
+  completeFirstRun: (req) =>
+    request<WireCompleteFirstRunResponse>("/system/first-run", {
+      method: "POST",
+      body: JSON.stringify(wireBackupSetSpec(req))
+    }).then((r) => ({
+      backupSet: fromWireCreateBackupSetResponse(r.backup_set),
+      restartRequired: r.restart_required
+    })),
 
   listSets: () =>
     request<WireListBackupSetsResponse>("/backup-sets").then((r) => r.backup_sets.map(fromWireBackupSet)),

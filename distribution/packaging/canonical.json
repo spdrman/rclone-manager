@@ -34,7 +34,7 @@
     "arm64"
   ],
 
-  "runtimeContract": "1.1.0",
+  "runtimeContract": "1.2.0",
 
   "_derivation_comment": [
     "Issue #169's derivation contract. Every platform below is a THIN ADAPTER:",
@@ -64,8 +64,10 @@
   "healthchecks": {
     "engine": [
       "CMD",
-      "/backup-manager",
-      "status"
+      "/backup-manager-web",
+      "healthcheck",
+      "--url",
+      "http://127.0.0.1:8080/health/live"
     ],
     "webUI": [
       "CMD",
@@ -79,13 +81,42 @@
   "authMode": "local-account",
 
   "_healthcheck_comment": [
-    "The engine's test is container/Dockerfile's own HEALTHCHECK instruction, so an",
-    "adapter that declares nothing for the engine inherits exactly this and is",
-    "derived rather than silent. The Web UI's is not: `/backup-manager status` needs",
-    "a config file and a state database that container does not have, so every",
-    "adapter has to either override it with the Web UI test or disable it outright",
-    "(Unraid, whose only seam is `docker run --health-cmd`, which is shell form the",
-    "distroless image cannot run)."
+    "DERIVED, not authored. Both values restate container/compose.yaml's own",
+    "healthcheck tests for the two roles, which is the authoritative runtime",
+    "definition every platform's derivesFrom block already names, and",
+    "distribution/compose's TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided",
+    "fails the build if they stop agreeing. They are restated here because",
+    "derive.go has to hold four metadata formats to them, one of which is an",
+    "Unraid XML template no Compose parser can read.",
+    "",
+    "The engine's is a LIVENESS question and deliberately not `backup-manager",
+    "status` (issue #206). Every adapter's Web UI declares",
+    "`depends_on: <engine>: condition: service_healthy`, so whatever this asks",
+    "stands between an operator and the only LAN-facing container in the",
+    "deployment. `status` is FR-24's backup-freshness verdict and exits non-zero",
+    "on any DEGRADED, STALE or FAILING set - and on a fresh install, which has",
+    "backed nothing up yet and is legitimately not healthy. Gating the Web UI on",
+    "it meant a fresh install never got a Web UI at all.",
+    "",
+    "Backup freshness is not lost and is not weakened. `status` stays the",
+    "operator-facing verdict, it stays container/Dockerfile's own baked-in",
+    "HEALTHCHECK (so a plain `docker run`, and the headless `daemon` command that",
+    "serves no HTTP, still report it), and the alerts block still delivers it.",
+    "What no longer depends on it is container startup ordering.",
+    "",
+    "Because the image's instruction and this value now deliberately differ, an",
+    "adapter that declares NOTHING for the engine no longer derives this one: it",
+    "inherits the freshness verdict instead. derive.go allows that only where",
+    "nothing waits on the engine's health, which is Unraid and only Unraid - its",
+    "template schema has no health-check seam and declares no start-ordering",
+    "dependency either, so the badge it produces is the freshness report it is",
+    "meant to be.",
+    "",
+    "The Web UI's is unchanged: `/backup-manager status` needs a config file and a",
+    "state database that container does not have, so every adapter has to either",
+    "override it with the Web UI test or disable it outright (Unraid, whose only",
+    "seam is `docker run --health-cmd`, which is shell form the distroless image",
+    "cannot run)."
   ],
 
   "commands": {
@@ -104,6 +135,10 @@
     "healthcheck": [
       "/backup-manager-web",
       "healthcheck"
+    ],
+    "imageHealthcheck": [
+      "/backup-manager",
+      "status"
     ]
   },
 
@@ -173,7 +208,7 @@
       "profile": "truenas",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
     "unraid": {
@@ -193,7 +228,7 @@
       "profile": "unraid",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
     "openmediavault": {
@@ -213,7 +248,7 @@
       "profile": "openmediavault",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
     "proxmox": {
@@ -233,7 +268,7 @@
       "profile": "proxmox",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       }
     },
     "synology": {
@@ -251,7 +286,7 @@
       "profile": "synology",
       "derivesFrom": {
         "source": "container/compose.yaml",
-        "contract": "1.1.0"
+        "contract": "1.2.0"
       },
       "trustForwardedHeaders": true,
       "trustForwardedHeadersNote": "The Container Manager project declares its own project network, created and destroyed with the project, whose only two members are these two containers. This is the same topology the other compose profiles have, and it is why the Container Manager path can trust forwarded headers where the .spk cannot: the .spk's engine binds loopback on the NAS itself, which any local process can reach."

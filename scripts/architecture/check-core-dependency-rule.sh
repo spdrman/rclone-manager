@@ -157,10 +157,24 @@ if [ -n "$bad" ]; then
   echo "$bad" >&2
 fi
 
-# Every Go module in the repository, classified by the manifest. Found
-# rather than listed, so a module added without being classified is a
-# manifest failure (check-layer-manifest.sh) rather than a module this
+# Every Go module the repository TRACKS, classified by the manifest.
+# Discovered rather than listed, so a module added without being classified
+# is a manifest failure (check-layer-manifest.sh) rather than a module this
 # check silently never looked at.
+#
+# git ls-files, not a filesystem walk (issue #207). The question this check
+# asks is what the repository contains, and a walk answers a different one:
+# what happens to be lying on this disk. Agent worktrees live under
+# .claude/worktrees/, untracked but very much present, and a walk descends
+# into all of them and reports every module it meets there as unclassified.
+# In the primary checkout that was 161 failures and a gate that no commit
+# could get past, while a fresh clone and each individual worktree passed,
+# which is why it stayed invisible until the Phase 6 merge.
+#
+# It also settles a disagreement rather than only fixing a bug:
+# check-layer-manifest.sh already classifies `git ls-files`, so before this
+# the two checks held different opinions about which files the repository
+# consists of.
 checked=0
 while IFS= read -r gomod; do
   gomod=${gomod#./}
@@ -173,11 +187,12 @@ while IFS= read -r gomod; do
   echo "==> $dir ($layer layer)"
   check_module "$dir" "$layer"
   checked=$((checked + 1))
-done < <(find . -name go.mod -not -path '*/node_modules/*' -not -path './.git/*' | sort)
+done < <(git ls-files -- '*go.mod' | sort)
 
 # A run that inspected nothing must not report success. Without this,
-# anything that made the find below return no go.mod (a rename, a bad
-# exclude) would print a cheerful OK over zero modules.
+# anything that made the listing above return no go.mod (a rename, a
+# pathspec that stops matching, a run from outside a repository) would
+# print a cheerful OK over zero modules.
 if [ "$checked" -eq 0 ]; then
   echo "FAIL: no Go module was inspected, so this check verified nothing." >&2
   exit 1

@@ -21,6 +21,7 @@ import { ActivityPage } from "@shared/pages/ActivityPage";
 import { QuarantinePage } from "@shared/pages/QuarantinePage";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { CatalogRecoveryPage } from "@shared/pages/CatalogRecoveryPage";
+import { FirstRunPage } from "@shared/pages/FirstRunPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
 
@@ -40,6 +41,33 @@ export function App() {
     document.documentElement.setAttribute("data-theme", theme);
     window.localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
+
+  // Issue #176: which mode this instance is in, asked before anything
+  // else, because on an instance with no configuration at all every
+  // resource below refuses with NOT_CONFIGURED. It is a plain useState
+  // rather than a shared graph node on purpose: exactly one component
+  // reads it, and it changes at most once in the life of a session.
+  const [configured, setConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!auth?.authenticated) return;
+    let cancelled = false;
+    api
+      .getFirstRunStatus()
+      .then((status) => {
+        if (!cancelled) setConfigured(status.configured);
+      })
+      .catch(() => {
+        // An instance that cannot answer this is far more likely to be an
+        // older backend with no such route than an unconfigured one, and
+        // sending an operator with a working deployment into a setup flow
+        // would be the worse mistake of the two.
+        if (!cancelled) setConfigured(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, auth?.authenticated]);
 
   const health = useResource(healthNode, () => api.getHealth(), [api]);
   const version = useResource(versionNode, () => api.getVersion(), [api]);
@@ -63,7 +91,11 @@ export function App() {
     quarantine.reload();
   }, [health, sets, operations, quarantine]);
 
-  usePolling(30_000, reloadAll, auth?.authenticated ?? false);
+  // Polling stays off until this instance is known to be configured:
+  // every one of those four calls refuses with NOT_CONFIGURED on a fresh
+  // install, and a 30-second loop of refusals is noise in the log of the
+  // operator who is mid-setup.
+  usePolling(30_000, reloadAll, (auth?.authenticated ?? false) && configured === true);
 
   // counts and readOnly are derived() nodes (state/appNodes.ts): pure
   // functions of the four resources above, recomputed by the graph rather
@@ -79,6 +111,19 @@ export function App() {
         <Route path="/enroll" element={<EnrollmentPage onEnrolled={refreshAuth} />} />
         <Route path="*" element={<LoginPage onSignedIn={refreshAuth} />} />
       </Routes>
+    );
+  }
+
+  if (configured === null) return <Splash />;
+
+  if (!configured) {
+    return (
+      <FirstRunPage
+        onConfigured={() => {
+          setConfigured(true);
+          reloadAll();
+        }}
+      />
     );
   }
 

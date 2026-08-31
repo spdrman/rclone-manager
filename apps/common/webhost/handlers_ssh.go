@@ -56,7 +56,7 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref, err := h.backend.ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM))
+	ref, err := h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM))
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidRequest) {
 			// Safe to echo: rclone.ValidateImportedPrivateKey's own doc
@@ -111,7 +111,7 @@ func (h *handlers) probeHostKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	probe, err := h.backend.ProbeHostKey(r.Context(), body.Host, body.Port)
+	probe, err := h.setup().ProbeHostKey(r.Context(), body.Host, body.Port)
 	if err != nil {
 		// A probe failure (unreachable host, no SSH service on that port,
 		// a timeout, ...) is an ordinary, expected outcome of an operator
@@ -205,13 +205,25 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 			"name backup_set_id to re-check a persisted backup set, or supply the connection details to check a candidate, but not both")
 		return
 	case body.BackupSetID != "":
+		// h.backend, not h.setup(): re-checking a PERSISTED set needs the
+		// configuration it was persisted into, and an unconfigured
+		// deployment (the first-run surface, where setup() falls back to
+		// a client that can only reach a candidate) has no backup sets at
+		// all. Answering "no such backup set" is the honest reading of a
+		// request that names one there.
+		if h.backend == nil {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
 		result, err = h.backend.TestBackupSetConnection(r.Context(), body.BackupSetID)
 		if errors.Is(err, service.ErrBackupSetNotFound) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
 			return
 		}
 	default:
-		result, err = h.backend.TestConnection(r.Context(), service.ConnectionTestRequest{
+		// h.setup(), so the add-backup-set wizard's pre-save check still
+		// works before this deployment has a configuration at all.
+		result, err = h.setup().TestConnection(r.Context(), service.ConnectionTestRequest{
 			Host:           body.Host,
 			Port:           body.Port,
 			User:           body.User,
