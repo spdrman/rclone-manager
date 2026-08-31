@@ -323,12 +323,33 @@ has to be writable by the container's uid/gid before the first start, because
 a bind mount does not chown its source, and each platform's acceptance
 procedure step 0 now says so.
 
-Two settings are renamed with it: `CONFIG_FILE` becomes `CONFIG_DIR` in
-`container/.env.example` and in the Proxmox profile's env file, and the
-TrueNAS catalog's `storage.config.hostPath` question now asks for the
-directory rather than the file. Both are fail-closed `${VAR:?}` references, so
-an unconverted env file stops the deployment with a message rather than
-starting it against a path nobody meant.
+What enforces the change is not the same on every platform, so it is worth
+saying per platform rather than once:
+
+| platform | what carries the old answer | what stops it |
+|---|---|---|
+| generic, OpenMediaVault, Proxmox | an env file the operator edits | `CONFIG_FILE` became `CONFIG_DIR`, a fail-closed `${VAR:?}` reference, so an unconverted file stops the deployment with a message |
+| Synology (Container Manager) | `backup-manager.env` | the same, `${APPDATA:?...}/config` |
+| TrueNAS (catalog) | the platform, not a file | the question was renamed `config` to `configDir`, so an upgrade has no stored answer to carry forward and the wizard asks again |
+| Unraid | the operator's own template copy | nothing automatic: a changed `<Config>` Target does not retire a mapping already in the user template, so the old read-only file mapping has to be deleted by hand |
+| Synology (`.spk`) | the package's own layout | the package installs the directory itself |
+
+The `${VAR:?}` claim only ever covered the first three rows. There is no
+`${VAR:?}` anywhere in a TrueNAS catalog answer or an Unraid template, and
+saying otherwise made a fail-closed guarantee out of a property those two
+platforms do not have. On TrueNAS the failure it hid was concrete: an upgrade
+that kept a Phase 4 answer of `<pool>/backup-manager/config/config.yaml` bind
+mounts that FILE at `/etc/backup-manager/config`, `--config` resolves to
+`/etc/backup-manager/config/config.yaml` inside it, and the engine crash-loops
+on ENOTDIR with a message naming neither the mount nor the migration.
+
+Two things close that. The TrueNAS question carries a new identifier, so there
+is no answer to carry forward. And the engine now recognises the shape: when
+the configuration path's parent is a file rather than a directory it says so,
+names issue #196 and points here, instead of reporting "not a directory".
+Unraid gets the same message, which is the only thing that can help there,
+because retiring an operator's existing mapping is not something a template
+can do.
 
 ## Digest policy
 
@@ -461,3 +482,7 @@ working with no change. What is new is additive:
 
 No mount, environment variable or host path changed, so there is no migration
 path to test and nothing to roll back.
+
+The configuration mount is the exception, and it has its own migration table
+under "One mount is redeclared" above, including what enforces the change on
+each platform and what does not.

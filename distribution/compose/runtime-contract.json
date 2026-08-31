@@ -43,12 +43,35 @@
     "apps/synology/compose/backup-manager.yml"
   ],
 
+  "_fields_comment": [
+    "Every field carries a \"derived\" policy saying how it is checked on the",
+    "artifacts in \"derived\" above, because \"the canonical definition declares it\"",
+    "was never the same claim as \"every adapter does\". Five fields used to be",
+    "checked on NO adapter at all: CheckField only ever ran against the canonical",
+    "file, the derived artifacts went through the prohibition list only, and",
+    "derive.go covered seven fields that did not include timezone,",
+    "graceful-shutdown-period, restart-policy, ownership or explicit-writable-paths.",
+    "Four of the five converted platforms shipped without TZ as a result, on a",
+    "contract whose own reasoning is that retention's calendar boundaries depend",
+    "on it.",
+    "",
+    "  checked          CheckField runs against every derived artifact.",
+    "  derivation-gate  distribution/packaging's derive.go checks it per adapter,",
+    "                   including the Unraid XML template this package cannot",
+    "                   parse. derivedWhy names the rule.",
+    "  canonical-only   deliberately not checked on derived artifacts, with the",
+    "                   reason stated in derivedWhy. This is the only way a field",
+    "                   may go unchecked, and it has to be typed on purpose."
+  ],
+
   "fields": [
     {
       "id": "image-reference",
       "scope": "service",
       "roles": ["engine", "web-ui"],
       "key": "image",
+      "derived": "derivation-gate",
+      "derivedWhy": "distribution/packaging's derive.go checks it per adapter as image-reference, against canonical.json's one reference, and it reaches the Unraid XML template this package cannot parse at all.",
       "why": "one canonical image, named identically by every service, so `command` is the only thing that varies between them."
     },
     {
@@ -57,6 +80,8 @@
       "roles": ["engine", "web-ui"],
       "key": "command",
       "mustContain": "--profile=",
+      "derived": "derivation-gate",
+      "derivedWhy": "derive.go checks it per adapter as runtime-profile: the command decides the role, and the profile has to be one canonical.json declares for that platform.",
       "why": "the contract standardises 'command and runtime profile' as one field. A deployment that does not name its profile is a deployment whose host-dependent behaviour is implicit, which is the thing #167 exists to remove."
     },
     {
@@ -64,6 +89,8 @@
       "scope": "service",
       "roles": ["web-ui"],
       "key": "ports",
+      "derived": "derivation-gate",
+      "derivedWhy": "derive.go checks it per adapter as published-port, which is the stronger rule: exactly one published port in the whole adapter, on the Web UI, at the canonical listen port.",
       "why": "the HTTP listen port, published by exactly one service. The engine deliberately declares none, which is why this field is required of the web UI role only."
     },
     {
@@ -71,6 +98,8 @@
       "scope": "service",
       "roles": ["engine", "web-ui"],
       "key": "healthcheck",
+      "derived": "derivation-gate",
+      "derivedWhy": "derive.go checks it per adapter as health-check. It has to be the derivation gate rather than a key-presence check here, because declaring nothing is the CORRECT answer for the engine (it inherits the image's own HEALTHCHECK instruction) and the wrong one for the Web UI, and only a seam-aware rule can tell those apart.",
       "why": "declared in the runtime definition rather than inherited from an image instruction and described in a comment. An operator reading this file has to be able to see what healthy means without reading the Dockerfile."
     },
     {
@@ -86,6 +115,7 @@
       "scope": "service",
       "roles": ["engine", "web-ui"],
       "key": "stop_grace_period",
+      "derived": "checked",
       "why": "the declared grace period the runtime shuts down inside. Without it the value is Docker's own 10s default, which is a default rather than a contract, and nothing anywhere records what the application actually needs."
     },
     {
@@ -93,6 +123,7 @@
       "scope": "service",
       "roles": ["engine", "web-ui"],
       "key": "restart",
+      "derived": "checked",
       "why": "survive a crash and a NAS reboot, stay down when an operator stopped it on purpose."
     },
     {
@@ -100,6 +131,7 @@
       "scope": "service",
       "roles": ["engine", "web-ui"],
       "key": "user",
+      "derived": "checked",
       "why": "explicit UID/GID rather than the image's build-time default, because the state directory's ownership is the host's business and not the image's."
     },
     {
@@ -107,6 +139,7 @@
       "scope": "service",
       "roles": ["engine", "web-ui"],
       "key": "read_only",
+      "derived": "checked",
       "why": "a read-only root filesystem is what makes the writable paths explicit rather than implied."
     },
     {
@@ -114,6 +147,7 @@
       "scope": "service-env",
       "roles": ["engine"],
       "key": "TZ",
+      "derived": "checked",
       "why": "retention is evaluated in a timezone. Leaving it to the image's UTC default means the calendar boundaries an operator reasons about and the ones the engine applies are silently different."
     },
     {
@@ -121,14 +155,20 @@
       "scope": "service-mount",
       "roles": ["engine"],
       "containerPath": "/data/state",
-      "why": "the private application state: the lifecycle journal and the local-auth record. Separate from backup data, always."
+      "writable": true,
+      "derived": "derivation-gate",
+      "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
+      "why": "the private application state: the lifecycle journal and the local-auth record. Separate from backup data, always. Writable, and said so rather than left to a default: the engine opens the SQLite journal for writing and creates its sidecar files, so a `:ro` here is a deployment that starts and then cannot record anything it does."
     },
     {
       "id": "backup-data-mount",
       "scope": "service-mount",
       "roles": ["engine"],
       "containerPath": "/data/backups",
-      "why": "the backup destination. Never the same mount as private state, and never a parent of it."
+      "writable": true,
+      "derived": "derivation-gate",
+      "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
+      "why": "the backup destination. Never the same mount as private state, and never a parent of it. Writable, and said so: this is the mount every retained artifact lands on, so a `:ro` here is a deployment whose backups silently do not happen, which is the worst failure this product has."
     },
     {
       "id": "configuration-mount",
@@ -136,6 +176,8 @@
       "roles": ["engine"],
       "containerPath": "/etc/backup-manager/config",
       "writable": true,
+      "derived": "derivation-gate",
+      "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
       "why": "configuration comes from the host, never baked into the image, and the mount is a WRITABLE DIRECTORY the application owns rather than a read-only single file (issue #196). config.yaml lives inside it. The read-only single-file shape made three merged write paths inert inside a packaged container: every one of them replaces config.yaml through a temp file created in its own directory, which on that shape is the image's read-only rootfs. A directory can also be empty, which is how an app-store install honestly represents \"not configured yet\"; a bind mount cannot express that for a file, because Docker creates a directory at a missing source path."
     },
     {
@@ -144,36 +186,48 @@
       "roles": ["engine"],
       "containerPath": "/etc/backup-manager/id_ed25519",
       "readOnly": true,
+      "derived": "derivation-gate",
+      "derivedWhy": "distribution/packaging checks every adapter's mounts, in whatever format they were written in: derive.go's storage-mounts rule for the container side and CheckStorageShapes for the write mode, both against canonical.json. It has to be there rather than here for two reasons. It reads each platform's own env file, so ${APPDATA:?...} and ${STATE_DIR:?...} resolve to the real host path instead of an unexpanded string this package would have to split on a colon that is inside a message; and it covers the Unraid XML template, which is not compose at all.",
       "why": "credential material is a read-only file mount and nothing else. No credential belongs in this file or in the environment."
     },
     {
       "id": "resource-expectations",
       "scope": "document",
       "key": "x-canonical-runtime.resources",
+      "derived": "canonical-only",
+      "derivedWhy": "an x-canonical-runtime document key. It states what the canonical runtime expects of a host, once. An adapter restating it would be a second answer that can be wrong on its own, which is what the derivation model exists to prevent.",
       "why": "documented resource expectations, in the runtime definition rather than in prose that drifts from it."
     },
     {
       "id": "supported-architectures",
       "scope": "document",
       "key": "x-canonical-runtime.architectures",
+      "derived": "derivation-gate",
+      "derivedWhy": "derive.go checks it per adapter as supported-architectures: an adapter may make no architecture claim at all, and if it makes one it has to be the release's.",
       "why": "the architectures this release claims. A deployment definition that does not say which architectures its image exists for cannot be checked against the release metadata."
     },
     {
       "id": "digest-policy",
       "scope": "document",
       "key": "x-canonical-runtime.digest_policy",
+      "derived": "canonical-only",
+      "derivedWhy": "an x-canonical-runtime document key. The digest policy belongs to the release, and an adapter that restated it could pin a different one.",
       "why": "how an operator pins a release. A tag is mutable; the contract has to say what the immutable reference is and where it is recorded."
     },
     {
       "id": "contract-version",
       "scope": "document",
       "key": "x-canonical-runtime.contract",
+      "derived": "derivation-gate",
+      "derivedWhy": "derive.go checks it per adapter as contract-version, through canonical.json's per-platform derivesFrom.contract, which is the mechanism that makes a contract change a visible edit in every adapter.",
       "why": "the version of this contract the definition was written against, so a contract change is a visible edit rather than a silent divergence."
     },
     {
       "id": "runtime-profiles",
       "scope": "document",
       "key": "x-canonical-runtime.profiles",
+      "derived": "canonical-only",
+      "derivedWhy": "an x-canonical-runtime document key listing every profile that exists. An adapter selects one of them, which is checked as command-and-runtime-profile; restating the whole list would be a second registry.",
       "why": "the profiles this runtime definition supports selecting, so `--profile=` above has a declared range rather than an open one."
     }
   ],

@@ -1117,7 +1117,7 @@ func TestTrueNASCatalogDefaultsArePinnedToCanonical(t *testing.T) {
 		"image.reference":             c.Image.Reference,
 		"storage.state.hostPath":      platform.HostPaths.State,
 		"storage.backups.hostPath":    platform.HostPaths.Backups,
-		"storage.config.hostPath":     platform.HostPaths.Config,
+		"storage.configDir.hostPath":  platform.HostPaths.Config,
 		"storage.sshKey.hostPath":     platform.HostPaths.SSHKey,
 		"storage.knownHosts.hostPath": platform.HostPaths.KnownHosts,
 		"network.webPort":             strconv.Itoa(c.ListenPort),

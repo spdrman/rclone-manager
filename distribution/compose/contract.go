@@ -73,7 +73,96 @@ type Field struct {
 	ContainerPath string `json:"containerPath"`
 	ReadOnly      bool   `json:"readOnly"`
 	Writable      bool   `json:"writable"`
-	Why           string `json:"why"`
+	// Derived says how this field is checked on the artifacts derived
+	// from the canonical definition, and DerivedWhy carries the reason
+	// for the two policies that do not check it here. See DerivedPolicy.
+	Derived    DerivedPolicy `json:"derived"`
+	DerivedWhy string        `json:"derivedWhy"`
+	Why        string        `json:"why"`
+}
+
+// DerivedPolicy is how one field is held against the derived artifacts.
+//
+// It exists because "the canonical definition declares it" and "every
+// adapter does" were being treated as the same claim, and they are not.
+// CheckField was only ever invoked against c.Canonical; c.Derived went
+// through CheckProhibited alone, and distribution/packaging's derive.go
+// covered seven fields that did not include timezone,
+// graceful-shutdown-period, restart-policy, ownership or
+// explicit-writable-paths. Those five were checked nowhere on any adapter,
+// and nobody noticed because the only check able to notice was pointed at
+// a different file. Four of the five converted platforms shipped without
+// TZ, on a contract whose own reasoning is that retention's calendar
+// boundaries depend on it.
+//
+// The contract's own _comment warns that holding a derived artifact to the
+// full field set would make it a second definition rather than a
+// derivation. That reasoning holds for the fields derive.go actually
+// derives. For the ones it does not, "derived" only ever meant
+// "unchecked", so the policy is per field and has to be typed out.
+type DerivedPolicy string
+
+const (
+	// DerivedChecked: CheckField runs against every derived artifact.
+	DerivedChecked DerivedPolicy = "checked"
+	// DerivedByDerivationGate: distribution/packaging's derive.go checks
+	// it per adapter, in a form this package cannot express, and it
+	// reaches formats this package cannot parse (the Unraid XML
+	// template). DerivedWhy names the rule.
+	DerivedByDerivationGate DerivedPolicy = "derivation-gate"
+	// DerivedCanonicalOnly: deliberately not checked on derived
+	// artifacts, with the reason stated in DerivedWhy. The only way a
+	// field may go unchecked, and it has to be written down.
+	DerivedCanonicalOnly DerivedPolicy = "canonical-only"
+)
+
+// DerivedCheckedFields is the subset of fields CheckField is run over for
+// each derived artifact.
+func (c Contract) DerivedCheckedFields() []Field {
+	var out []Field
+	for _, f := range c.Fields {
+		if f.Derived == DerivedChecked {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// CheckFieldPolicies holds the contract itself to the two rules that stop
+// a field from quietly going unchecked.
+//
+// Without the first, a mount field that declares neither write mode is
+// verified for presence and says nothing about `:ro`, which is exactly how
+// the configuration mount shipped read-only while every test fixture was
+// writable. /data/state and /data/backups were in that position until this
+// check existed: a `:ro` on the backup destination in the canonical file
+// passed every gate in the tree.
+//
+// Without the second, a field added later lands in the derived gap by
+// default, which is how five of them got there.
+func CheckFieldPolicies(c Contract) []Finding {
+	var out []Finding
+	for _, f := range c.Fields {
+		if f.Scope == "service-mount" {
+			switch {
+			case f.ReadOnly && f.Writable:
+				out = append(out, Finding{Rule: f.ID, Detail: fmt.Sprintf("mount field %q at %s declares both readOnly and writable, so checkServiceMount's verdict depends on which branch runs first", f.ID, f.ContainerPath), Why: f.Why})
+			case !f.ReadOnly && !f.Writable:
+				out = append(out, Finding{Rule: f.ID, Detail: fmt.Sprintf("mount field %q at %s declares neither readOnly nor writable, so its write mode is checked by nothing and a `:ro` there passes every gate", f.ID, f.ContainerPath), Why: f.Why})
+			}
+		}
+		switch f.Derived {
+		case DerivedChecked:
+		case DerivedByDerivationGate, DerivedCanonicalOnly:
+			if strings.TrimSpace(f.DerivedWhy) == "" {
+				out = append(out, Finding{Rule: f.ID, Detail: fmt.Sprintf("field %q is %q on derived artifacts and states no derivedWhy; a field that is not checked here has to say what checks it, or that nothing does and why that is right", f.ID, f.Derived), Why: f.Why})
+			}
+		default:
+			out = append(out, Finding{Rule: f.ID, Detail: fmt.Sprintf("field %q declares derived policy %q, which is none of %q, %q or %q; a field with no policy is a field nothing decides to check", f.ID, f.Derived, DerivedChecked, DerivedByDerivationGate, DerivedCanonicalOnly), Why: f.Why})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Rule < out[j].Rule })
+	return out
 }
 
 // ProhibitedRule is one entry of the prohibition list.
@@ -739,14 +828,17 @@ func (d Document) checkRule(rule ProhibitedRule) []Finding {
 }
 
 // hostPathMatches decides whether a declared host path is the prohibited
-// one. "/" matches only itself, because every absolute path starts with
-// it; every other entry matches itself and anything beneath it.
+// one. It is packaging.HostPathIsAt, re-expressed here only so this
+// package's call sites read locally.
+//
+// It used to be a second implementation, and the two normalised
+// differently: this one cleaned the path and packaging's trimmed a
+// trailing slash, so //var/run/docker.sock was caught here and missed
+// there. The test that claimed to pin the two rules pinned the two path
+// LISTS, so the behavioural difference was invisible to it while its name
+// read as though it were covered. One function, two callers, no drift.
 func hostPathMatches(hostPath, prohibited string) bool {
-	clean := filepath.Clean(hostPath)
-	if prohibited == "/" {
-		return clean == "/"
-	}
-	return clean == prohibited || strings.HasPrefix(clean, prohibited+"/")
+	return packaging.HostPathIsAt(hostPath, prohibited)
 }
 
 // walk visits every key/value pair in the tree, carrying the name of the

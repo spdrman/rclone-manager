@@ -2,6 +2,7 @@ package packaging
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -222,7 +223,7 @@ func CheckMountedHostPaths(svcs []Service) []Violation {
 	for _, svc := range svcs {
 		for _, m := range svc.Mounts {
 			for _, p := range prohibitedHostPaths {
-				if !hostPathIsAt(m.HostPath, p.path) {
+				if !HostPathIsAt(m.HostPath, p.path) {
 					continue
 				}
 				out = append(out, Violation{svc.Source, RuleProhibitedHostPath,
@@ -234,17 +235,37 @@ func CheckMountedHostPaths(svcs []Service) []Violation {
 	return out
 }
 
-// hostPathIsAt decides whether a declared host path is the prohibited
+// HostPathIsAt decides whether a declared host path is the prohibited
 // one. "/" matches only itself, because every absolute path starts with
 // it; every other entry matches itself and anything beneath it.
+//
+// It is exported, and it is the ONLY implementation of this decision in
+// the repository. There used to be two: this one trimmed a trailing
+// slash, and distribution/compose's copy ran filepath.Clean, so
+// //var/run/docker.sock, /var/run/./docker.sock and
+// /mnt/../var/run/docker.sock were caught by the compose rule and missed
+// by this one. This is the rule that covers the Unraid template, which is
+// XML and which the compose rule cannot read at all, so for the one
+// adapter where this matcher is the only defence a Docker socket spelled
+// with a redundant slash reached production unchecked. Two matchers that
+// can disagree is worse than one with a hole, because the hole at least
+// stays where it was put: distribution/compose now calls this.
+//
+// filepath.Clean normalises the spelling and nothing more. It does NOT
+// resolve symlinks, so a host path that is a symlink into /etc still
+// passes both callers. That is deliberate rather than an oversight:
+// neither rule claims to read the host filesystem, and a check whose
+// verdict depended on the machine it ran on could not run in CI at all.
 //
 // An unexpanded ${VAR} reference matches nothing, and that is correct
 // rather than a gap: what it will expand to is the operator's, and
 // TestEveryStoragePathFailsClosed already refuses a profile whose host
 // paths resolve to anything at all without one being set.
-func hostPathIsAt(hostPath, prohibited string) bool {
-	clean := strings.TrimSuffix(hostPath, "/")
-	if clean == "" {
+func HostPathIsAt(hostPath, prohibited string) bool {
+	clean := filepath.Clean(hostPath)
+	if hostPath == "" {
+		// A mount that declares no host path at all is malformed, and
+		// the fail-closed reading of "no path" is the widest one.
 		clean = "/"
 	}
 	if prohibited == "/" {

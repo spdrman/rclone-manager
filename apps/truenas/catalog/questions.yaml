@@ -19,7 +19,7 @@ groups:
   - name: Network
     description: The port the Web UI is published on.
   - name: Runtime
-    description: The account the containers run as.
+    description: The account the containers run as, and the timezone retention is evaluated in.
 
 questions:
   - variable: image
@@ -75,7 +75,16 @@ questions:
                   type: hostpath
                   required: true
                   default: "/mnt/tank/backup-manager/backups"
-        - variable: config
+        # RENAMED from "config" on purpose (issue #196). TrueNAS carries
+        # an installed application's answered values forward across an
+        # upgrade, so keeping the identifier would have kept a Phase 4
+        # answer of /mnt/POOL/backup-manager/config/config.yaml and bind
+        # mounted that FILE at /etc/backup-manager/config, where --config
+        # then resolves to .../config/config.yaml and the engine
+        # crash-loops with "not a directory" — a message naming neither
+        # the mount nor the migration. A new identifier has no answer to
+        # carry forward, so the wizard asks again.
+        - variable: configDir
           label: Configuration directory
           schema:
             type: dict
@@ -161,3 +170,15 @@ questions:
             type: int
             required: true
             default: 568
+        - variable: timezone
+          label: Timezone
+          description: >-
+            Retention is evaluated against calendar boundaries, so this
+            is not cosmetic: leave it at the image's UTC default and the
+            days you reason about and the days the engine applies are
+            silently different. Use the NAS's own zone, in tz database
+            form (for example America/Toronto).
+          schema:
+            type: string
+            required: true
+            default: "UTC"

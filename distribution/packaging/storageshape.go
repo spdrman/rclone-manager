@@ -35,8 +35,43 @@ const (
 	// first-run setup, and a reader who reintroduces it deserves to be
 	// told which three features it breaks rather than that a path is
 	// unrecognised.
+	//
+	// A correction to its own first draft, which is worth keeping: the
+	// claim that without this rule "nothing stops it being reintroduced"
+	// was wrong. roleMounts's generic "not a container path the canonical
+	// image knows about" refusal does stop it. It just says nothing about
+	// which three features it breaks, which is the whole reason this rule
+	// exists.
 	RuleLegacyConfigFileMount = "legacy-config-file-mount"
 )
+
+// LegacyConfigContainerPaths is every container path that means "the
+// configuration was mounted as a FILE".
+//
+// Two of them, and the second is the one that matters. The rule used to
+// match only ConfigFilePath(), which is the config DIRECTORY plus
+// config.yaml, so today it is /etc/backup-manager/config/config.yaml. The
+// pre-#196 shape mounted /etc/backup-manager/config.yaml, one level up,
+// and that value is not derivable from the current containerPaths.config
+// by joining anything to it. So the rule named for the historical shape
+// could not fire on the historical shape: a reintroduced
+// /etc/backup-manager/config.yaml got Role "" from roleForContainerPath,
+// was skipped by CheckStorageShapes's `if m.Role == ""` line, and reached
+// only the generic role refusal.
+//
+// Both are derived rather than written down, so a future move of the
+// configuration directory carries them along instead of leaving a
+// hardcoded string behind pointing at history.
+func LegacyConfigContainerPaths(c Canonical) []string {
+	if c.ConfigFileName == "" {
+		return nil
+	}
+	out := []string{c.ConfigFilePath()}
+	if beside := path.Join(path.Dir(c.ContainerPaths.Config), c.ConfigFileName); beside != out[0] {
+		out = append(out, beside)
+	}
+	return out
+}
 
 // CheckStorageShapes holds one provider's services to the canonical
 // storage contract's write modes.
@@ -48,11 +83,11 @@ const (
 func CheckStorageShapes(svcs []Service, c Canonical) []Violation {
 	var out []Violation
 
-	legacyConfigFile := c.ConfigFilePath()
+	legacyConfigFiles := LegacyConfigContainerPaths(c)
 
 	for _, svc := range svcs {
 		for _, m := range svc.Mounts {
-			if m.ContainerPath == legacyConfigFile {
+			if contains(legacyConfigFiles, m.ContainerPath) {
 				out = append(out, Violation{svc.Source, RuleLegacyConfigFileMount,
 					fmt.Sprintf("service %q mounts the configuration FILE at %s. Issue #196: the config role is the directory %s, mounted writable, because CreateBackupSet, the settings write path and first-run setup all replace %s through a temp file created in its own directory, and a single-file mount puts that directory on the image's read-only rootfs",
 						svc.Name, m.ContainerPath, c.ContainerPaths.Config, c.ConfigFileName)})

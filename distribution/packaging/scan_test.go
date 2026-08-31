@@ -842,7 +842,7 @@ storage:
     hostPath: "/mnt/tank/backup-manager/state"
   backups:
     hostPath: "/mnt/tank/backup-manager/secrets"
-  config:
+  configDir:
     hostPath: "/mnt/tank/backup-manager/config/config.yaml"
   sshKey:
     hostPath: "/mnt/tank/backup-manager/secrets/id_ed25519"
@@ -853,6 +853,7 @@ network:
 runtime:
   puid: 568
   pgid: 568
+  timezone: "UTC"
 `)
 	bad, err := RenderTrueNASCatalogTemplate(template, mutated)
 	if err != nil {

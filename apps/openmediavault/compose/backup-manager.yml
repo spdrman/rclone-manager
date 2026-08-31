@@ -40,6 +40,11 @@ services:
 
     environment:
       TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so this is
+      # not cosmetic: leaving it at the image's UTC default means the
+      # days an operator reasons about and the ones the engine applies
+      # are silently different.
+      TZ: ${TZ:-UTC}
       LISTEN_ADDR: ":8080"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}"
       # Safe here specifically because this container joins only the
@@ -66,6 +71,11 @@ services:
       - ${DISK:?set DISK in backup-manager.env to your /srv/dev-disk-by-uuid-UUID path}/appdata/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
 
     restart: unless-stopped
+    # The grace period the runtime shuts down inside, declared rather
+    # than left at Docker's own 10s default: the engine finishes the
+    # transfer or the delete it is in the middle of, and a default is not
+    # a contract.
+    stop_grace_period: 30s
     networks:
       - internal
 
@@ -93,6 +103,11 @@ services:
 
     environment:
       TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so this is
+      # not cosmetic: leaving it at the image's UTC default means the
+      # days an operator reasons about and the ones the engine applies
+      # are silently different.
+      TZ: ${TZ:-UTC}
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://backup-manager:8080"
       # The per-provider UI bundles the canonical image carries. With
@@ -122,6 +137,9 @@ services:
       - "${WEB_PORT:-8080}:8080"
 
     restart: unless-stopped
+    # Shorter than the engine's: the Web UI holds no state and has
+    # nothing to finish.
+    stop_grace_period: 15s
     networks:
       - internal
 
