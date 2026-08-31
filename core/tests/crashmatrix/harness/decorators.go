@@ -15,6 +15,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"syscall"
@@ -38,10 +39,28 @@ import (
 func selfDestruct(reason string) {
 	fmt.Fprintf(os.Stderr, "CRASHMATRIX_SELF_KILL: %s\n", reason)
 	os.Stderr.Sync()
+	if suppressSelfKill {
+		// The one path on which selfDestruct returns. See
+		// -mutation-suppress-self-kill in main.go: this exists so the
+		// test suite can prove, in CI, that its own
+		// "the harness must have been killed" guard still fails when the
+		// kill genuinely does not happen. Every caller below is written
+		// so that a suppressed run behaves like a run that was never
+		// asked to die at all, rather than like a run that died and
+		// carried on regardless.
+		fmt.Fprintf(os.Stderr, "CRASHMATRIX_SELF_KILL_SUPPRESSED: -mutation-suppress-self-kill is set, so this process keeps running\n")
+		os.Stderr.Sync()
+		return
+	}
 	_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 	for {
 	}
 }
+
+// suppressSelfKill turns every selfDestruct call into a no-op. It is set
+// only by -mutation-suppress-self-kill and only ever by this package's own
+// mutation tests; see main.go's flag doc.
+var suppressSelfKill bool
 
 // --- journal decorator: kill the instant a target state is durably written ---
 
@@ -61,6 +80,12 @@ func selfDestruct(reason string) {
 type killAfterStateJournal struct {
 	real   lifecycleJournal
 	target string // exact state.Transition.To value to kill after; "" disables
+
+	// midVerify, when non-nil, arms the deterministic mid-verify crash:
+	// see verifyReadHandoff. It is consulted on Get, not on
+	// RecordTransition, because Get is the call lifecycle.Verify makes
+	// immediately before it starts reading the local file.
+	midVerify *verifyReadHandoff
 
 	mu      sync.Mutex
 	already bool
@@ -85,7 +110,18 @@ func newKillAfterStateJournal(real *state.Journal, target string) *killAfterStat
 }
 
 func (k *killAfterStateJournal) Get(ctx context.Context, id model.ArtifactID) (state.Record, error) {
-	return k.real.Get(ctx, id)
+	rec, err := k.real.Get(ctx, id)
+	if err == nil && k.midVerify != nil && rec.State == k.midVerify.armAtState {
+		// This is the Get lifecycle.Verify makes on its own way in (see
+		// verify.go: Verify reads the record itself, then decide() calls
+		// readAndHashLocal(rec.LocalPath) as its very first act). Handing
+		// back a record whose LocalPath is the handoff pipe is what puts
+		// the real read under this harness's control; see
+		// verifyReadHandoff for the whole argument.
+		k.midVerify.arm(rec.LocalPath)
+		rec.LocalPath = k.midVerify.pipePath
+	}
+	return rec, err
 }
 
 func (k *killAfterStateJournal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error) {
@@ -223,7 +259,142 @@ func raceKill[T any](delay time.Duration, timedOut *bool, fn func() (T, error)) 
 			*timedOut = true
 		}
 		selfDestruct(fmt.Sprintf("calibrated timer (%s) fired while the real operation was still in flight", delay))
-		var zero T
-		return zero, nil // unreachable
+		// Only reachable under -mutation-suppress-self-kill, where
+		// selfDestruct returns instead of killing. Waiting for fn's real
+		// result (rather than returning a zero value that the caller
+		// would read as a successful call that transferred nothing) is
+		// what makes a suppressed run an honest reproduction of "the
+		// kill never happened".
+		r := <-resultCh
+		return r.val, r.err
 	}
+}
+
+// --- deterministic mid-verify: hand the read its bytes, then kill it ------
+
+// verifyReadHandoff replaces the calibrated stopwatch that used to time the
+// -kill-plan=mid-verify crash with a real rendezvous, so that crash point
+// stops being a race this machine can lose (issue #248).
+//
+// # What was wrong with timing it
+//
+// The old plan measured how long reading and hashing the real .partial
+// takes, halved it, and hoped the SIGKILL landed inside the real read. Two
+// things make that a losing bet under load. The measurement is taken cold
+// and the real read that follows it runs against a warm page cache, so the
+// estimate is biased high by a factor this harness cannot know; and the
+// only way to lose is to fire LATE, after the read already finished, which
+// is exactly the direction that bias pushes. Under gate load the
+// calibration measured 114ms, fired at 45.6ms, and the process still
+// reached COMPLETE first.
+//
+// # The rendezvous
+//
+// lifecycle.Verify reads its own journal record before it does anything
+// else, and reads the local file at exactly the path that record carries
+// (verify.go: decide() calls readAndHashLocal(rec.LocalPath) first). The
+// journal is this harness's own decorator, so the path Verify reads is a
+// value this harness returns. Pointing it at a FIFO turns the whole crash
+// point deterministic, with no timer anywhere in it:
+//
+//  1. This harness creates the FIFO and, on the Get that Verify itself
+//     makes, starts a writer goroutine and hands Verify the FIFO's path.
+//  2. Opening a FIFO for writing blocks until a reader opens it, and
+//     opening one for reading blocks until a writer does. So the writer's
+//     OpenFile returning is proof that the product's own os.Open inside
+//     readAndHashLocal has already happened.
+//  3. The writer then streams the artifact's REAL bytes, read from the
+//     real .partial file the transfer step actually wrote, into the pipe.
+//     A pipe holds only a buffer's worth, so a write of handoffBytes
+//     returning is proof the reader has consumed all but at most that
+//     buffer: Verify is provably deep inside io.Copy, either blocked in a
+//     real read(2) waiting for more or hashing the chunk it just got.
+//  4. Only then does this harness SIGKILL itself.
+//
+// # What this does and does not prove
+//
+// It proves the same thing the stopwatch version was trying to: the
+// process died, uncatchably, while lifecycle.Verify's own mandatory
+// read-and-hash was genuinely executing, with VERIFYING the last thing
+// durably journaled and nothing downstream of the kill point getting to
+// run. The bytes Verify reads are the artifact's real bytes, so what is
+// being hashed is real too.
+//
+// What it does not prove, and what the timed version did not prove either,
+// is anything about reading a regular file specifically: the fd Verify
+// holds is a pipe rather than the .partial itself. That substitution is
+// the price of removing the race, and it is confined to which fd the read
+// is against. The real .partial stays on disk, untouched, which is what
+// the test then asserts about, and the resumed run after the crash reads
+// it normally through the unmodified journal record on disk.
+type verifyReadHandoff struct {
+	// pipePath is the FIFO handed to lifecycle.Verify in place of the
+	// real .partial.
+	pipePath string
+	// armAtState is the exact state.Record.State value that identifies
+	// Verify's own Get (VERIFYING). Passed in from main.go so this file
+	// keeps depending on nothing but the narrow lifecycleJournal
+	// interface.
+	armAtState string
+	// handoffBytes is how much of the real file to hand over before
+	// killing. It only has to exceed a pipe buffer (64 KiB on Linux, 16
+	// KiB on Darwin) by enough that "the reader consumed all but a
+	// buffer's worth" is an unambiguous statement about being inside the
+	// read, and it must stay below the artifact size so the stream never
+	// reaches EOF on its own.
+	handoffBytes int64
+
+	// progress reports each rendezvous step to the parent, both as
+	// evidence in the test log and as the liveness signal the parent's
+	// watchdog measures (see crash_matrix_test.go's progressTracker).
+	progress func(event string)
+
+	once sync.Once
+}
+
+// arm starts the writer side exactly once, against the real local path the
+// journal actually holds. Get calls this before it overwrites LocalPath,
+// so realPath here is the genuine .partial, not the pipe.
+func (h *verifyReadHandoff) arm(realPath string) {
+	h.once.Do(func() { go h.serve(realPath) })
+}
+
+// serve is the writer side of the rendezvous. Every failure in here is
+// fatal to the harness on purpose: a mid-verify run that silently degrades
+// into "no kill happened" is precisely the outcome issue #248 is about, so
+// it must be loud and it must be attributed to this mechanism rather than
+// surfacing later as an unexplained clean exit.
+func (h *verifyReadHandoff) serve(realPath string) {
+	src, err := os.Open(realPath)
+	if err != nil {
+		fatalf("mid-verify handoff: opening the real local file %q to stream it: %v", realPath, err)
+	}
+	defer src.Close()
+
+	h.progress("verify-handoff-waiting-for-reader")
+	// Blocks until lifecycle.Verify's own os.Open of the same FIFO runs.
+	// This returning IS the synchronisation point.
+	w, err := os.OpenFile(h.pipePath, os.O_WRONLY, 0)
+	if err != nil {
+		fatalf("mid-verify handoff: opening the write end of %q: %v", h.pipePath, err)
+	}
+	h.progress("verify-handoff-reader-attached")
+
+	n, err := io.CopyN(w, src, h.handoffBytes)
+	if err != nil {
+		fatalf("mid-verify handoff: streaming the first %d bytes (got %d): %v", h.handoffBytes, n, err)
+	}
+	fmt.Printf("HANDOFF verify_read_bytes=%d\n", n)
+	h.progress("verify-handoff-complete")
+
+	selfDestruct(fmt.Sprintf("lifecycle.Verify has consumed %d bytes of the real local file through the handoff pipe, so its read is provably still in flight", n))
+
+	// Only reachable under -mutation-suppress-self-kill. Streaming the
+	// rest and closing lets Verify's read complete normally and the whole
+	// pipeline run on to COMPLETE, which is exactly the shape of the
+	// failure this suite has to keep detecting.
+	if _, err := io.Copy(w, src); err != nil {
+		fatalf("mid-verify handoff (suppressed): streaming the remainder: %v", err)
+	}
+	_ = w.Close()
 }
