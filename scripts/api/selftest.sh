@@ -91,6 +91,7 @@ gotest() { (cd apps/common && go test -count=1 ./webhost/ ./auth/local/); }
 
 echo "==> negative control: the gates are clean on the real tree"
 expect_check_passes "check-contract-drift" "$root" bash scripts/api/check-contract-drift.sh
+expect_check_passes "check-client-paths" "$root" bash scripts/api/check-client-paths.sh
 
 echo
 echo "==> generated output is generated, not edited"
@@ -197,11 +198,105 @@ rm -f "$d/scripts/ci-local.sh.bak"
 expect_check_fails "the drift gate dropped from the pre-commit gate" "$d" \
   "does not run scripts/api/check-contract-drift.sh" bash scripts/api/check-contract-drift.sh
 
+d=$(mutant ci-local-without-the-client-path-gate)
+sed -i.bak '/^[[:space:]]*bash scripts\/api\/check-client-paths.sh/d' "$d/scripts/ci-local.sh"
+rm -f "$d/scripts/ci-local.sh.bak"
+expect_check_fails "the client-path gate dropped from the pre-commit gate" "$d" \
+  "does not run scripts/api/check-client-paths.sh" bash scripts/api/check-contract-drift.sh
+
 d=$(mutant ci-local-without-the-selftest)
 sed -i.bak '/^[[:space:]]*bash scripts\/api\/selftest.sh/d' "$d/scripts/ci-local.sh"
 rm -f "$d/scripts/ci-local.sh.bak"
 expect_check_fails "this self-test dropped from the pre-commit gate" "$d" \
   "does not run scripts/api/selftest.sh" bash scripts/api/check-contract-drift.sh
+
+echo
+echo "==> every /api/v1 path the shared client builds is a declared operation (#211)"
+
+# check-contract-drift.sh compares the two GENERATED bindings. client.ts is
+# not generated: it is hand-written on top of them and builds its request
+# paths out of string literals, which nothing compared to anything until
+# check-client-paths.sh. Fourteen of those paths named operations that did
+# not exist, and the way that survived is the reason every control below
+# asserts the planted message rather than only a non-zero exit.
+
+d=$(mutant client-path-the-contract-does-not-declare)
+sed -i.bak 's|"/validators"|"/validator-catalog"|' "$d/ui/shared/src/api/client.ts"
+rm -f "$d/ui/shared/src/api/client.ts.bak"
+expect_check_fails "a client path the contract does not declare" "$d" \
+  "are not operations api/v1/openapi.json declares" bash scripts/api/check-client-paths.sh
+
+# The method is half of the key, and the half that is easiest to get wrong
+# silently: GET /operations was a 405, not a 404, precisely because the
+# path existed under a different verb.
+d=$(mutant client-verb-the-contract-does-not-declare)
+sed -i.bak 's|method: "PATCH"|method: "PUT"|' "$d/ui/shared/src/api/client.ts"
+rm -f "$d/ui/shared/src/api/client.ts.bak"
+expect_check_fails "the right path under a verb the contract does not declare" "$d" \
+  "on this path, not PUT" bash scripts/api/check-client-paths.sh
+
+# The other direction: nobody touched the client, the CONTRACT moved out
+# from under it. A rename here is exactly what a spec-first change looks
+# like halfway through, and it must not be able to leave the client behind.
+d=$(mutant contract-renamed-an-operation-the-client-calls)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+doc["paths"]["/preferences"] = doc["paths"].pop("/settings")
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "a contract rename that left the client calling the old path" "$d" \
+  "are not operations api/v1/openapi.json declares" bash scripts/api/check-client-paths.sh
+
+# The three controls that stop this gate from failing OPEN. A path it
+# cannot read has to be a failure, never a quiet skip: a skipped method is
+# indistinguishable from a checked one in the output, and that is the shape
+# of every gate this repository has had to repair.
+
+d=$(mutant client-method-that-makes-no-request)
+sed -i.bak 's|logout: () => post("/auth/logout")|logout: () => Promise.resolve()|' "$d/ui/shared/src/api/client.ts"
+rm -f "$d/ui/shared/src/api/client.ts.bak"
+expect_check_fails "a client method whose request this gate cannot find" "$d" \
+  "makes no request() or post() call this gate could find" bash scripts/api/check-client-paths.sh
+
+d=$(mutant client-path-that-is-entirely-interpolated)
+sed -i.bak 's|request<WireSettingsResponse>("/settings")|request<WireSettingsResponse>("/" + settingsPath)|' "$d/ui/shared/src/api/client.ts"
+rm -f "$d/ui/shared/src/api/client.ts.bak"
+expect_check_fails "a request path with no literal segment left to check" "$d" \
+  "which is entirely interpolated" bash scripts/api/check-client-paths.sh
+
+d=$(mutant client-path-not-rooted-at-slash)
+sed -i.bak 's|request<WireSettingsResponse>("/settings")|request<WireSettingsResponse>(settingsPath)|' "$d/ui/shared/src/api/client.ts"
+rm -f "$d/ui/shared/src/api/client.ts.bak"
+expect_check_fails "a request path that is not rooted at \"/\" at all" "$d" \
+  "which is not rooted at" bash scripts/api/check-client-paths.sh
+
+d=$(mutant client-with-a-second-fetch)
+printf '\nexport const strayRequest = () => fetch("/api/v1/anything");\n' >> "$d/ui/shared/src/api/client.ts"
+expect_check_fails "a request that bypasses the one fetch this gate reasons about" "$d" \
+  "which is only equivalent to what reaches the network" bash scripts/api/check-client-paths.sh
+
+d=$(mutant client-base-path-moved)
+sed -i.bak 's|const BASE = "/api/v1";|const BASE = "/api/v2";|' "$d/ui/shared/src/api/client.ts"
+rm -f "$d/ui/shared/src/api/client.ts.bak"
+expect_check_fails "a client whose base path is no longer the one this gate checks" "$d" \
+  'not "/api/v1"' bash scripts/api/check-client-paths.sh
+
+d=$(mutant client-paths-against-an-empty-contract)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+doc["paths"] = {}
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "a contract with no operations, which would blame the client for everything" "$d" \
+  "declares no operations at all" bash scripts/api/check-client-paths.sh
 
 echo
 echo "==> the generator refuses a shape it would otherwise drop"
