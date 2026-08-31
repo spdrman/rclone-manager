@@ -239,10 +239,11 @@ if not post_helper:
 # 3. Named path helpers, e.g. retentionPath(source, set).
 # ---------------------------------------------------------------------------
 #
-# A helper qualifies only if its body BEGINS with a string literal that
-# starts with "/". That is what separates retentionPath (a path builder)
-# from post (a verb wrapper), without this gate having to hardcode either
-# name.
+# Every `const NAME = (...) => ...;` in the file is a CANDIDATE here; the
+# ones that qualify are decided below, after reduce_expr exists, by whether
+# their bodies reduce to paths rooted at "/". That is what separates
+# retentionPath (a path builder) from post (a verb wrapper), without this
+# gate having to hardcode either name.
 
 candidates = {}
 for m in re.finditer(r"\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*\(", src):
