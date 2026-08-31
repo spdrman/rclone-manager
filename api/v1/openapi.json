@@ -436,7 +436,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -1619,6 +1619,15 @@
           "reason": {
             "type": "string",
             "description": "One operator-facing sentence explaining the state. Never empty: a colour is not an explanation."
+          },
+          "halt_reason": {
+            "type": "string",
+            "description": "Why the manager could not connect to this backup set the last time it tried, so no backup ran. HOST_KEY_CHANGED is FR-6's refusal, the host's SSH key no longer matching its known_hosts entry; AUTHENTICATION_FAILED is the host answering and rejecting the login. Absent means no refusal is on record, which is NOT the same claim as the set being reachable: a set that has never been cycled has nothing on record either, and that asymmetry is why this is an optional reason rather than a halted boolean. The refusal is recorded by the cycle that hit it and removed only by a later cycle that ran the set to completion, because re-trusting a changed host key is an explicit administrator action and a cycle that failed for some other reason is not evidence the key verifies again. Reporting it never re-trusts a key, retries a connection, or resumes a set.",
+            "enum": [
+              "HOST_KEY_CHANGED",
+              "AUTHENTICATION_FAILED"
+            ],
+            "x-go-omitempty": true
           },
           "newest_good_backup_at": {
             "type": "string",

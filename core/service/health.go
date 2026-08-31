@@ -66,6 +66,26 @@ type BackupSetHealth struct {
 	FreeBytes      uint64
 	FreeBytesKnown bool
 
+	// HaltReason is why the manager could not connect to this backup set
+	// the last time it tried: "HOST_KEY_CHANGED", "AUTHENTICATION_FAILED",
+	// or empty when no refusal is on record (issue #245).
+	//
+	// Empty means "no refusal has been observed", never "this set is
+	// reachable". Those are different claims, and only the first one is
+	// ever available to make: a set that has simply never been cycled has
+	// nothing on record either. That asymmetry is why this is an optional
+	// reason and not a halted boolean, which is the shape issue #231
+	// removed after every mapper was forced to fill it with a fabricated
+	// false.
+	//
+	// It sits beside State rather than inside it. A set refused on every
+	// cycle still gets its verdict from journal evidence alone and usually
+	// reads STALE, which is true and only half the story; this is the
+	// other half. Nothing here re-trusts a key, retries a connection or
+	// resumes a set: §77 invariant 5 makes that an explicit administrator
+	// action, and this is a report of a refusal, not a control over it.
+	HaltReason string
+
 	// TotalBytes and StorageLevel come from the same FR-21 capacity
 	// assessment ListStorageStatus reports, read here so one call can
 	// answer "are my backups healthy" completely rather than leaving a
@@ -149,6 +169,7 @@ func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 		SetName:              bs.Set.Set,
 		State:                string(bs.State),
 		Reason:               bs.Reason,
+		HaltReason:           bs.HaltReason,
 		StaleAfter:           bs.StaleThreshold,
 		CurrentTransfers:     len(bs.CurrentTransfers),
 		PendingDeletes:       bs.PendingDeletes,

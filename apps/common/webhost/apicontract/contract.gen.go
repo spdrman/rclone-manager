@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "1d62e9f764d3a5ecbafdcb3cb26ee248fa1e92c3427549331a2629a4916b3c8e"
+const ContractSHA256 = "ea34b4847dc9a8afcf139cb3d72a260927f109192f211ef3c9559ca7afb74b3a"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -683,6 +683,7 @@ type BackupSetHealth struct {
 	Failures                      int    `json:"failures"`
 	FreeBytes                     uint64 `json:"free_bytes,omitempty"`
 	FreeBytesKnown                bool   `json:"free_bytes_known"`
+	HaltReason                    string `json:"halt_reason,omitempty"`
 	LastCompletedBackupAt         string `json:"last_completed_backup_at,omitempty"`
 	NewestGoodBackupAt            string `json:"newest_good_backup_at,omitempty"`
 	PendingDeletes                int    `json:"pending_deletes"`
