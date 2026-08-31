@@ -440,7 +440,7 @@ func (e *ContainerDiedError) Error() string {
 	return fmt.Sprintf("the fixture container %s (%s) died mid-test: docker status %q, exit code %d%s%s", e.Name, e.ID, e.Status, e.ExitCode, oom, logs)
 }
 
-// --- the mid-test watchdog ------------------------------------------------
+// --- the image ------------------------------------------------------------
 
 // ensureImage puts ref on the local daemon before anything tries to run a
 // container from it, and refuses the run when it cannot.
@@ -512,6 +512,8 @@ func (f *Fixture) ensureImage(t *testing.T, ref string) {
 		"That is a FAILURE and deliberately not a skip: skipping would take the whole SFTP suite out of the gate while the gate went on reporting ok, which is the silent hole #160 exists to close. Put the image on this daemon, or fix the registry access, and run again.\n"+
 		"last error: %v", ref, made, time.Since(started).Round(time.Second), lastErr)
 }
+
+// --- the mid-test watchdog ------------------------------------------------
 
 func (f *Fixture) setStage(stage string) {
 	f.mu.Lock()
