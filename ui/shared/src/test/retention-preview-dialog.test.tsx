@@ -46,6 +46,40 @@ const OPEN_TIER_PLAN: RetentionPlan = {
   ]
 };
 
+/** Issue #218. Since #215 a tier can have selected an artifact through
+ *  either of FR-18's two placements: the timestamp this manager
+ *  discovered it, or the producer's own timestamp on the remote object.
+ *  FR-8 trusts one and not the other, so the confirm-before-delete dialog
+ *  has to say which, per tier. This plan holds the case a single
+ *  per-verdict attribution cannot express: one artifact whose DAILY came
+ *  from the discovery pass and whose MONTHLY came from the producer pass.
+ *  LAST_KNOWN_GOOD is FR-19's protection rather than a bucket selection,
+ *  so it carries no placement at all. */
+const MIXED_PLACEMENT_PLAN: RetentionPlan = {
+  ...PLAN,
+  keepCount: 1,
+  deleteCount: 0,
+  reclaimBytes: 0,
+  verdicts: [
+    {
+      artifact: "backdated.dump",
+      action: "KEEP",
+      reason: "kept by the DAILY and MONTHLY tiers",
+      tiers: [
+        { tier: "DAILY", selectedBy: "DISCOVERY" },
+        { tier: "MONTHLY", selectedBy: "PRODUCER" },
+        { tier: "LAST_KNOWN_GOOD", selectedBy: "PROTECTION" }
+      ]
+    },
+    {
+      artifact: "half-year.dump",
+      action: "KEEP",
+      reason: "GFS semi-annual tier",
+      tiers: [{ tier: "SEMI_ANNUAL", selectedBy: "BOTH" }]
+    }
+  ]
+};
+
 function apiWith(overrides: Partial<ReturnType<typeof createMockApi>>) {
   return { ...createMockApi(), previewRetention: () => Promise.resolve(PLAN), ...overrides };
 }
@@ -102,6 +136,32 @@ describe("RetentionPreviewDialog", () => {
     // so, which is what makes the assertion above a measurement.
     const untiered = screen.getByText("no-tier.dump").closest("li");
     expect(untiered?.textContent).toContain("unclassified");
+  });
+
+  it("says which of the two placements selected each tier, per tier and not per verdict", async () => {
+    const api = apiWith({ previewRetention: () => Promise.resolve(MIXED_PLACEMENT_PLAN) });
+    render(
+      <ApiProvider api={api}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+
+    await screen.findByText(/Plan retplan_test_1/);
+
+    // One artifact, two tiers, two different placements. Reading this row
+    // is the whole of issue #218: without it an operator cannot tell a
+    // KEEP this manager's own clock produced from one an untrusted
+    // producer timestamp produced.
+    const kept = screen.getByText("backdated.dump").closest("li");
+    expect(kept?.textContent).toContain("Daily (discovery)");
+    expect(kept?.textContent).toContain("Monthly (producer)");
+    // FR-19's protection is not a placement, so it is not dressed as one.
+    expect(kept?.textContent).toContain("Protected");
+    expect(kept?.textContent).not.toContain("Protected (");
+
+    // A tier this build has never heard of still carries its placement.
+    const openTier = screen.getByText("half-year.dump").closest("li");
+    expect(openTier?.textContent).toContain("Semi Annual (both)");
   });
 
   it("disables Continue the moment the graph learns of an inventory change, from that commit alone — before any apply request reaches the API", async () => {
