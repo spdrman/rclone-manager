@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -144,8 +145,8 @@ func TestRunCycle_PublishesLiveProgress(t *testing.T) {
 			continue
 		}
 		if r.BytesTransferred != nil || r.BytesTotal != nil || r.BytesPerSecond != nil {
-			t.Errorf("reading %d is at stage %q but still carries byte counters (%v/%v): those describe a copy in flight and there is none",
-				i, r.Stage, r.BytesTransferred, r.BytesTotal)
+			t.Errorf("reading %d is at stage %q but still carries byte counters (%s of %s at %s): those describe a copy in flight and there is none",
+				i, r.Stage, shown(r.BytesTransferred), shown(r.BytesTotal), shown(r.BytesPerSecond))
 		}
 	}
 
@@ -221,4 +222,14 @@ func TestRunCycle_WithoutAnObserverIsUnchanged(t *testing.T) {
 	if entries, err := os.ReadDir(localDir); err != nil || len(entries) == 0 {
 		t.Fatalf("the cycle transferred nothing without an observer (ReadDir(%q) = %v, %v)", localDir, entries, err)
 	}
+}
+
+// shown renders a nullable counter for a failure message. A raw *int64
+// prints as an address, which tells a reader nothing about the reading
+// that was wrong.
+func shown(v *int64) string {
+	if v == nil {
+		return "unmeasured"
+	}
+	return strconv.FormatInt(*v, 10)
 }

@@ -328,3 +328,41 @@ func TestListOperations_CarriesProgressForTheRunningOneOnly(t *testing.T) {
 		t.Errorf("the finished operation is listed with progress %+v, want none", got.Progress)
 	}
 }
+
+// TestExecuteRunCycle_LeavesNoLiveProgressBehind is the registry's own
+// housekeeping, asserted directly rather than through a read path.
+//
+// GetOperation refuses to serve a reading for a non-running operation
+// anyway, so a stale entry would not reach a client through it. That makes
+// this the only place the leak is visible: the registry is a map in a
+// process that runs for months, and an entry per operation that is never
+// removed grows with the deployment's whole history.
+func TestExecuteRunCycle_LeavesNoLiveProgressBehind(t *testing.T) {
+	svc := newTestService(t, config.Source{Name: "alpha"})
+	t.Cleanup(func() { _ = svc.Close() })
+
+	withStubbedRunCycle(t, func(inner *app.Service, ctx context.Context) app.CycleReport {
+		if obs := app.ProgressObserverFrom(ctx); obs != nil {
+			obs.ObserveProgress(app.Progress{Stage: app.StageTransferring, Artifact: "nightly.dump"})
+		}
+		return app.CycleReport{}
+	})
+
+	op, err := svc.SubmitRunCycle(context.Background(), RunCycleRequest{
+		IdempotencyKey: "registry-housekeeping", Actor: "tester", ConfigRevision: svc.ConfigRevision(),
+	})
+	if err != nil {
+		t.Fatalf("SubmitRunCycle: %v", err)
+	}
+	waitForTerminalStatus(t, svc, op.ID)
+
+	if _, ok := svc.progress.snapshot(op.ID); ok {
+		t.Errorf("the registry still holds a reading for %s after it finished", op.ID)
+	}
+	svc.progress.mu.RLock()
+	held := len(svc.progress.running)
+	svc.progress.mu.RUnlock()
+	if held != 0 {
+		t.Errorf("the registry holds %d entries after every operation finished, want 0", held)
+	}
+}
