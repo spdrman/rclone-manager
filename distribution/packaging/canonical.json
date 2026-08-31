@@ -5,7 +5,7 @@
     "profile that wraps the same image) have to agree on. WP4.3's REFACTOR",
     "step asks for exactly this: the three platforms' metadata is generated",
     "from and checked against one file instead of drifting independently.",
-    "apps/common/packaging's test suite fails the build if any platform's",
+    "distribution/packaging's test suite fails the build if any platform's",
     "own metadata disagrees with a value in here."
   ],
 

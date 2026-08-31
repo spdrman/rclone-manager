@@ -1,7 +1,7 @@
 # The TrueNAS install wizard for Backup Manager.
 #
 # Every variable here is consumed by templates/docker-compose.yaml and
-# given a default in ix_values.yaml. apps/common/packaging checks that
+# given a default in ix_values.yaml. distribution/packaging checks that
 # correspondence in both directions on every commit, because a question
 # nothing reads and a template value nothing asks for are the two ways a
 # catalog entry silently installs wrong.

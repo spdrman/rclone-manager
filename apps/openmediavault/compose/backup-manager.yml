@@ -7,7 +7,7 @@
 # Tier C (§4A): a supported deployment profile, not an app-store package.
 # There is deliberately no native OMV Workbench plugin, no navigation
 # entry, no RPC service and no Debian package. §4A defers all of that, and
-# apps/common/packaging fails the build if any of it appears here.
+# distribution/packaging fails the build if any of it appears here.
 #
 # Every host path below is ${DISK}/..., so the one substitution an
 # operator has to make (their real /srv/dev-disk-by-uuid-<UUID>/ path)

@@ -23,9 +23,9 @@ does both, by design, so this package ships two templates.
 | `template/backup-manager.xml` | The engine. Install first. |
 | `template/backup-manager-ui.xml` | The web interface. Install second. |
 | `frontend/platform.ts` | The shared platform bridge (§3.5). Provider identity and storage expectations only. |
-| `frontend/webui.json` | WebUI and storage facts, pinned to the templates by `apps/common/packaging` so the two cannot drift. |
+| `frontend/webui.json` | WebUI and storage facts, pinned to the templates by `distribution/packaging` so the two cannot drift. |
 
-No Go, no shell, no install hook, no Unraid plugin. `apps/common/packaging` fails
+No Go, no shell, no install hook, no Unraid plugin. `distribution/packaging` fails
 the build if any appears.
 
 ## The one prerequisite
@@ -63,7 +63,7 @@ names for a share you already use, and every step that creates, owns or later
 inspects the backup root should only ever touch paths this package created. That
 split is a rule rather than a preference: §19.2 makes them separate security
 domains, and the backup root must never contain SSH private keys or authentication
-state. `apps/common/packaging` checks the containment in both directions on every
+state. `distribution/packaging` checks the containment in both directions on every
 commit, and it is what makes the removal criterion meaningful, since Unraid leaves
 appdata alone when a container is removed.
 
@@ -83,7 +83,7 @@ through `<ExtraParams>`:
 ```
 
 The compose profiles express the same settings as first-class keys.
-`apps/common/packaging` parses this string into flags and checks both against one
+`distribution/packaging` parses this string into flags and checks both against one
 another, in both directions: the five hardening flags have to be present, and
 nothing on the same line may undo them. `--privileged`, `--cap-add`,
 `--pid=host`, `--network=host`, `--device`, `--userns=host`, a
@@ -118,7 +118,7 @@ cookie, CSRF protection and per-IP rate limiting.
 
 Unraid's root password cannot log into Backup Manager and Backup Manager's
 administrator cannot log into Unraid. Nothing in this directory ships a credential,
-and `apps/common/packaging` scans for one on every commit.
+and `distribution/packaging` scans for one on every commit.
 
 ### The one place this profile is weaker than the compose ones
 
@@ -162,7 +162,7 @@ are fixed by this package and must not be changed.
 
 No registry is configured for this repository yet, so
 `ghcr.io/spdrman/backup-manager:1.0.0` is the intended publish target rather than
-something that resolves today. `apps/common/packaging/canonical.json` records that
+something that resolves today. `distribution/packaging/canonical.json` records that
 honestly, and step 0 of the acceptance procedure covers pushing to your own
 registry or side-loading a saved image in the meantime. It is one
 `<Repository>` element per template, editable in Unraid's own template editor.

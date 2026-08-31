@@ -844,7 +844,7 @@ func TestTheGateTableClaimsOnlyWhatIsChecked(t *testing.T) {
 	text := string(data)
 
 	if strings.Contains(text, "core version/hash parity") {
-		t.Error("the gate table still folds hash parity into the version-parity row; nothing in apps/common/packaging derives a hash from any artifact, so that row has to name what it measures")
+		t.Error("the gate table still folds hash parity into the version-parity row; nothing in distribution/packaging derives a hash from any artifact, so that row has to name what it measures")
 	}
 	if !strings.Contains(text, "#174") {
 		t.Error("the gate table does not point at #174, which is where the unverified release manifest is tracked")

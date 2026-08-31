@@ -432,7 +432,7 @@ func (t UnraidTemplate) AsService(source string) Service {
 // bridgeStorageMountRe reads deployment.storageMount out of a provider's
 // own frontend bridge. Reading TypeScript with a regular expression is
 // crude, but the alternative is letting apps/<platform>/frontend/
-// platform.ts and apps/common/packaging/canonical.json disagree about
+// platform.ts and distribution/packaging/canonical.json disagree about
 // where a platform stores things, which is exactly the drift WP4.3's
 // REFACTOR step is about. The regex is anchored on the property name and
 // the test fails loudly when it matches nothing, so it cannot silently

@@ -106,6 +106,49 @@ jobs:
         working-directory: apps/common
         run: go test ./...
 
+  distribution-build-vet-test:
+    name: distribution build, vet, test
+    runs-on: ubuntu-latest
+    # The distribution layer's own module (issue #165). It used to be
+    # apps/common/packaging, inside the module that also holds the /api/v1
+    # host and the shared authentication service, which meant the layer
+    # boundary between "shared application code" and "packaging metadata"
+    # was a directory name. It is a module now, so the dependency direction
+    # EPIC B #81 requires (core/app never depends on distribution) is
+    # enforced by the module graph rather than only by a scanner.
+    #
+    # This job carries Phase 4's cross-provider conformance suite, including
+    # the per-capability matrix with its completeness and staleness guards,
+    # so it is load-bearing rather than a formality.
+    #
+    # GOWORK=off, matching every other module job: distribution/go.mod
+    # depends on nothing in this repository, and that is a claim worth
+    # holding it to rather than letting go.work paper over.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: distribution/go.mod
+
+      - name: Build
+        working-directory: distribution
+        run: go build ./...
+
+      - name: Vet
+        working-directory: distribution
+        run: go vet ./...
+
+      - name: Test
+        working-directory: distribution
+        run: go test ./...
+
   apps-generic-build-vet-test:
     name: apps/generic build, vet, test
     runs-on: ubuntu-latest

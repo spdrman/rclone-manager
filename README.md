@@ -849,7 +849,7 @@ Docker templates), `apps/openmediavault/` (a Compose deployment profile) and
 `apps/proxmox/` (the same Compose profile again, for a dedicated container-host guest,
 because Proxmox VE has no application store to package into at all). All four are metadata
 and templates only, wrapping the exact canonical OCI image with no lifecycle code of their
-own, and `apps/common/packaging/` holds them to that on every commit: one shared source of
+own, and `distribution/packaging/` holds them to that on every commit: one shared source of
 truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are decidable from
 the repository alone.
 

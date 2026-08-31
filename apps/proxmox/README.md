@@ -12,7 +12,7 @@ Web UI plugin indefinitely.
 
 So this directory is documentation plus two metadata files, not a package
 format. There is no builder, no installer and no lifecycle code here, and
-`apps/common/packaging` fails the build if any appears.
+`distribution/packaging` fails the build if any appears.
 
 ## The supported deployment model
 
@@ -77,7 +77,7 @@ directories that are four different things:
 | `/mnt/backup-manager/config` | `config.yaml`, mounted read-only | Validated before the listener opens |
 | `/mnt/backup-manager/secrets` | SSH key, pinned `known_hosts`, read-only | Never inside the backup root, never in this repository |
 
-`apps/common/packaging` enforces the containment rule in the last column
+`distribution/packaging` enforces the containment rule in the last column
 on every commit: no key material, config or authentication state may sit
 inside the backup root, and the backup root may not contain any of them.
 
@@ -132,7 +132,7 @@ to do when it does not.
 - no PVE API token, realm, or session integration;
 - no helper script that does any of the above on your behalf.
 
-`apps/common/packaging`'s host-management-plane scanner checks the ones
+`distribution/packaging`'s host-management-plane scanner checks the ones
 that are decidable from this directory. Step 9 of
 [`docs/acceptance/proxmox-ve-deployment.md`](../../docs/acceptance/proxmox-ve-deployment.md)
 checks the rest on a real host, by diffing the host's packages, enabled
@@ -146,7 +146,7 @@ written and version-controlled at
 [`docs/acceptance/proxmox-ve-deployment.md`](../../docs/acceptance/proxmox-ve-deployment.md),
 and it has not been executed: no Proxmox VE host, physical or virtual, was
 available where this profile was built. Every automated check in
-`apps/common/packaging` passes, which proves the metadata is well-formed
+`distribution/packaging` passes, which proves the metadata is well-formed
 and consistent with the other six providers. It proves nothing about how
 PVE behaves.
 

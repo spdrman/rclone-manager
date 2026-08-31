@@ -9,7 +9,7 @@
 # What CI does check, on every commit: every question here is consumed by
 # templates/docker-compose.yaml and given a default in ix_values.yaml, and
 # the rendered image reference is the exact canonical one. See
-# apps/common/packaging.
+# distribution/packaging.
 annotations:
   min_scale_version: "24.10.0"
 

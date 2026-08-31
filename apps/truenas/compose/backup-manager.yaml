@@ -18,9 +18,9 @@
 #   * 568:568, if your datasets are owned by a different uid/gid;
 #   * the image reference, if you have not pushed to the recorded one
 #     (no registry is configured for this repository yet, see
-#     apps/common/packaging/canonical.json).
+#     distribution/packaging/canonical.json).
 #
-# apps/common/packaging holds this file to the shared source of truth on
+# distribution/packaging holds this file to the shared source of truth on
 # every commit: image reference, container-side mount points, port, and
 # the rule that private state and key material never live inside the
 # backup root.

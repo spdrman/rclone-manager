@@ -1241,5 +1241,5 @@ func compareOrUpdateReport(t *testing.T, m *Matrix) {
 		t.Logf("rewrote %s", MatrixReportPath)
 		return
 	}
-	t.Errorf("%s is out of date with a real run. Regenerate it with:\n\n\tcd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix\n", MatrixReportPath)
+	t.Errorf("%s is out of date with a real run. Regenerate it with:\n\n\tcd distribution && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix\n", MatrixReportPath)
 }

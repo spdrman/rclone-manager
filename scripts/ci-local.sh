@@ -125,6 +125,12 @@ gate_step "apps/common go build, vet, test"
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
+echo "==> distribution go build, vet, test"
+(cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+
+echo "==> distribution golangci-lint"
+(cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
+
 if [ -f apps/generic/go.mod ]; then
   gate_step "apps/generic go build, vet, test"
   (cd apps/generic && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
