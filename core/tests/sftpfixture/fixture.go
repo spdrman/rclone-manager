@@ -7,6 +7,19 @@
 // verification and real chroot/permission semantics, for the cost of a
 // disposable container. All key material is generated fresh per test run
 // under tests/.run and removed on cleanup; nothing here is a real credential.
+//
+// What this suite costs, written down here rather than left as folklore for
+// the next person to rediscover through a 25-minute hang (issue #161). Every
+// fixture is a real sshd in its own container, and one scripts/ci-local.sh
+// run starts the suite three times over: once directly, and again inside the
+// throwaway worktrees of verify-core-without-apps.sh and
+// verify-ugos-removable.sh. The Docker VM on the machine this was written on
+// has 4 CPUs and roughly 4 GB, which is comfortable for one gate at a time
+// and demonstrably not comfortable for several at once: under concurrent
+// gate runs, containers get evicted mid-test. If a machine has to run gates
+// in parallel, either that VM needs more than 4 GB, or the two architecture
+// checks need to stop re-running a container-backed suite to prove a
+// dependency boundary that no container is involved in.
 package sftpfixture
 
 import (
@@ -64,6 +77,11 @@ const (
 	// attempt inside its retry loop.
 	keygenTimeout  = 60 * time.Second
 	keyscanTimeout = 10 * time.Second
+	// sshDialTimeout and sshHandshakeTimeout bound the two halves of one
+	// readiness probe separately, because ssh.ClientConfig.Timeout covers
+	// only the first of them.
+	sshDialTimeout      = 2 * time.Second
+	sshHandshakeTimeout = 5 * time.Second
 )
 
 // The mid-test watchdog. Setup was never the gap: the gap is that once
@@ -211,6 +229,7 @@ func Start(t *testing.T) *Fixture {
 	// that was configured exactly the way FR-6 asks for. Pinning both, the way a
 	// real known_hosts populated by a plain `ssh-keyscan host` would, is what makes
 	// this an honest test of "host-key verification works".
+	f.setStage("generating host and client keys")
 	hostKeyEd25519 := filepath.Join(runDir, "ssh_host_ed25519_key")
 	keygenType(t, hostKeyEd25519, "ed25519", "")
 	hostKeyRSA := filepath.Join(runDir, "ssh_host_rsa_key")
@@ -228,8 +247,6 @@ func Start(t *testing.T) *Fixture {
 	must(t, os.MkdirAll(uploadDir, 0o777), "create upload dir")
 	must(t, os.Chmod(uploadDir, 0o777), "chmod upload dir")
 	f.UploadDir = uploadDir
-
-	f.setStage("generating host and client keys")
 
 	// Pull explicitly, before "docker run -d", so the run step itself is
 	// quiet regardless of whether the image was already cached on this
@@ -539,6 +556,16 @@ func (f *Fixture) budgetExceeded(t *testing.T, testName string, budget, grace ti
 // It removes the container FIRST, because the panic below is raised on the
 // watchdog's goroutine and t.Cleanup will never run.
 func (f *Fixture) hardStop(report string) {
+	// The grace timer and the test finishing can land together. Stopping a
+	// process whose test has already passed would be a worse flake than the
+	// one this fixture exists to remove, so the last word is the flag, not
+	// the timer.
+	f.mu.Lock()
+	over := f.finished
+	f.mu.Unlock()
+	if over {
+		return
+	}
 	f.teardown()
 	debug.SetTraceback("all")
 	panic(report)
@@ -848,16 +875,15 @@ func waitForSSHReady(t *testing.T, f *Fixture) {
 		User:            f.User,
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         2 * time.Second,
+		Timeout:         sshDialTimeout,
 	}
 
 	deadline := time.Now().Add(20 * time.Second)
 	var lastErr error
 	addr := net.JoinHostPort(f.Host, strconv.Itoa(f.Port))
 	for time.Now().Before(deadline) {
-		client, err := ssh.Dial("tcp", addr, cfg)
+		err := trySSHHandshake(addr, cfg)
 		if err == nil {
-			_ = client.Close()
 			return
 		}
 		lastErr = err
@@ -865,6 +891,41 @@ func waitForSSHReady(t *testing.T, f *Fixture) {
 	}
 	dumpContainerLogs(t, f.containerID)
 	t.Fatalf("sftpfixture: sftp server never became ready at %s: %v", addr, lastErr)
+}
+
+// trySSHHandshake bounds the handshake as well as the dial, which ssh.Dial
+// does not. ssh.ClientConfig.Timeout is documented as "the maximum amount of
+// time for the TCP connection to establish", and that is all it is used for:
+// the version exchange and key exchange that follow in NewClientConn have no
+// deadline at all.
+//
+// That gap is reachable on every fixture start. A published docker port
+// accepts TCP the moment the mapping exists, which is before sshd inside the
+// container is necessarily answering, so a peer that accepts and then says
+// nothing is this fixture's ordinary startup window rather than an exotic
+// case, and on a loaded host it stretches. One such attempt outlives the
+// 20-second loop above, because that deadline is only re-read between
+// attempts. It is the same shape as the unbounded docker calls in #161, in
+// the one place left that does not shell out.
+func trySSHHandshake(addr string, cfg *ssh.ClientConfig) error {
+	conn, err := net.DialTimeout("tcp", addr, sshDialTimeout)
+	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(time.Now().Add(sshHandshakeTimeout)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	// Clear the deadline before handing the connection on, so the close
+	// below is not racing one that has already passed.
+	_ = conn.SetDeadline(time.Time{})
+	_ = ssh.NewClient(c, chans, reqs).Close()
+	return nil
 }
 
 func dumpContainerLogs(t *testing.T, containerID string) {

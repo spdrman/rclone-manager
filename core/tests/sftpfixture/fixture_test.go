@@ -21,12 +21,15 @@ package sftpfixture
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 )
@@ -185,8 +188,10 @@ func TestFixtureFailsFastWhenDockerStopsAnswering(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("the helper exited SUCCESSFULLY against a docker that answers nothing; a fixture that cannot reach docker must fail or skip loudly, never pass.\nhelper output:\n%s", out)
 	}
-	if !strings.Contains(out, "docker") {
-		t.Fatalf("the failure never mentions docker, so it does not name the stuck step; the whole point of #161 is that the message says what happened.\nhelper output:\n%s", out)
+	// Naming the step is the point, so the assertion is on the step, not
+	// merely on the word "docker" appearing somewhere.
+	if !strings.Contains(out, "docker info") {
+		t.Fatalf("the failure never says it was stuck in `docker info`, so it does not name the step; a message that only says something timed out leaves the reader exactly where #161 left them.\nhelper output:\n%s", out)
 	}
 }
 
@@ -281,4 +286,83 @@ func TestHelperFixturePanicsMidTest(t *testing.T) {
 	f := Start(t)
 	fmt.Println(containerMarker + f.ContainerID())
 	panic("deliberate panic, standing in for any hard failure mid-test")
+}
+
+// --- a peer that accepts TCP and then says nothing ------------------------
+
+// TestSSHHandshakeIsBoundedAgainstASilentPeer covers the one unbounded wait
+// left in this fixture that does not shell out to anything.
+// ssh.ClientConfig.Timeout is documented as bounding "the TCP connection to
+// establish", and that is all ssh.Dial uses it for; the version and key
+// exchange after it have no deadline. Measured against the code this
+// replaced: ssh.Dial with a 2s Timeout was still waiting 20 seconds later.
+//
+// The gap is reachable on every fixture start. A published docker port
+// accepts TCP as soon as the mapping exists, before sshd inside is
+// necessarily answering, so a peer that accepts and then goes quiet is this
+// fixture's ordinary startup window. One of those outlives waitForSSHReady's
+// 20-second loop, because the loop only re-reads its deadline between
+// attempts.
+//
+// No container is involved, which is the point: a bare listener that accepts
+// and never speaks reproduces it identically on every machine, every time.
+func TestSSHHandshakeIsBoundedAgainstASilentPeer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	accepted := make(chan net.Conn, 8)
+	go func() {
+		defer close(accepted)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			// Never written to and never closed: this peer completes the
+			// TCP handshake and then says nothing at all.
+			accepted <- c
+		}
+	}()
+	// One cleanup, in this order on purpose. t.Cleanup runs LIFO, so two
+	// separate ones would drain the channel before the listener was closed,
+	// and the drain would then wait forever for a close that cannot happen
+	// until the listener goes.
+	t.Cleanup(func() {
+		_ = ln.Close()
+		for c := range accepted {
+			_ = c.Close()
+		}
+	})
+
+	cfg := &ssh.ClientConfig{
+		User:            User,
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         sshDialTimeout,
+	}
+
+	const window = 15 * time.Second
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- trySSHHandshake(ln.Addr().String(), cfg) }()
+
+	select {
+	case err := <-done:
+		elapsed := time.Since(start)
+		if err == nil {
+			t.Fatal("the probe reported success against a peer that never sent a byte")
+		}
+		// Elapsed time is the positive control on the mechanism. A probe
+		// that never got past the dial would come back in microseconds and
+		// would satisfy "returned an error quickly" while proving nothing
+		// about the handshake. Only one that connected and then waited out
+		// the handshake deadline can land in this window.
+		if elapsed < sshHandshakeTimeout-time.Second {
+			t.Fatalf("the probe gave up after only %s, well short of the %s handshake deadline, so it cannot have got past the dial and says nothing about the handshake being bounded", elapsed, sshHandshakeTimeout)
+		}
+		t.Logf("bounded at %s: %v", elapsed, err)
+	case <-time.After(window):
+		t.Fatalf("the probe against a peer that accepts TCP and then says nothing was still waiting %s later; ssh.ClientConfig.Timeout bounds only the dial, so this is an unbounded wait inside a loop whose 20-second deadline it outruns, which is #161's shape in the one place that does not shell out", window)
+	}
 }
