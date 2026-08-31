@@ -1042,7 +1042,7 @@ For each backup set, with `tiers` the configured chain:
 
 ``` text
 KEEP =
-    ⋃ over every configured tier t of  ( selections_received(t) ∪ selections_producer(t) )
+    ⋃ over every configured tier t of  ( selections_discovery(t) ∪ selections_producer(t) )
   ∪ protected
 
 DELETE =
@@ -1077,7 +1077,7 @@ Default semantics:
 ``` text
 timezone: America/Vancouver
 week starts: Monday
-bucket key: received timestamp, and producer timestamp where admissible
+bucket key: discovery timestamp, and producer timestamp where admissible
 bucket representative: newest valid backup in bucket, per bucket key
 ```
 
@@ -1091,8 +1091,8 @@ A tier's buckets are calendar buckets, so something has to place an
 artifact on a calendar. Two timestamps could, and they are not the same
 thing:
 
--   the **received timestamp**: the moment this manager first observed the
-    artifact on the remote. It comes from this manager's own clock and
+-   the **discovery timestamp**: the moment this manager first observed
+    the artifact on the remote (`state.Record.DiscoveredAt`). It comes from this manager's own clock and
     nothing outside the manager can move it.
 -   the **producer timestamp**: the remote object's own modification time
     as captured at discovery. It describes when the backup was actually
@@ -1101,16 +1101,16 @@ thing:
 Neither one alone is the answer, and this document used to pick neither,
 which is the ambiguity this section closes.
 
-Bucketing on the received timestamp alone collapses an ingested backlog. A
+Bucketing on the discovery timestamp alone collapses an ingested backlog. A
 new backup set pointed at a directory that already holds a year of dumps,
 a manager that was down for a week and catches up, a NAS restored from
 elsewhere and re-reconciled: in each of those the artifacts have genuinely
-different backup dates, and a received-only key puts every one of them in
+different backup dates, and a discovery-only key puts every one of them in
 the same daily bucket, the same weekly bucket and the same monthly bucket.
 Each tier then selects a single representative, FR-19 saves one more, and
 everything else is a DELETE candidate on the very first retention pass.
 That is the situation GFS retention exists to protect an operator from,
-and it is the situation where a received-only key does the opposite.
+and it is the situation where a discovery-only key does the opposite.
 
 Bucketing on the producer timestamp alone is worse. It hands a producer
 with a wrong clock, or a hostile one, the power to move artifacts *out* of
@@ -1123,7 +1123,7 @@ dead clock, a backend that reports no modification time, a copy that did
 not preserve times.
 
 **Each tier is therefore evaluated twice over the same artifacts, and KEEP
-is the union.** One pass places every artifact by its received timestamp.
+is the union.** One pass places every artifact by its discovery timestamp.
 The other places it by its producer timestamp, and selects among the
 artifacts that have an admissible one. Both passes use the same windows,
 the same buckets and the same "newest valid backup in the bucket" rule;
@@ -1133,32 +1133,32 @@ A producer timestamp is **admissible** only when all three hold:
 
 -   the backend reported one at all (many do not);
 -   it is not the zero time (a missing value, not a date);
--   it is **not after** the received timestamp.
+-   it is **not after** the discovery timestamp.
 
 The third is a refusal, not a clamp. A completed artifact cannot have been
 produced after the moment this manager first observed it, so a timestamp
-in that range is a wrong or forged clock, and clamping it to the received
+in that range is a wrong or forged clock, and clamping it to the discovery
 timestamp would manufacture a date this manager has no evidence for. An
-artifact whose producer timestamp is refused is placed by the received
+artifact whose producer timestamp is refused is placed by the discovery
 pass alone, which is exactly where an artifact with no usable producer
 timestamp belongs.
 
 Nothing bounds how far into the *past* a producer timestamp may reach, and
 nothing needs to. One that is absurdly old simply lands outside every
-window and contributes no selection, while the artifact's received
+window and contributes no selection, while the artifact's discovery
 placement is untouched.
 
 Three properties follow, and SHALL hold:
 
 -   **The producer term may only add.** For any set of artifacts, and for
-    every tier, every artifact the received pass selects is still selected
+    every tier, every artifact the discovery pass selects is still selected
     when producer timestamps are read. No producer timestamp, absent or
     wrong or hostile, can take a tier away from an artifact or move one
     from KEEP to DELETE. This is what makes it safe for retention to read
     a value FR-8 calls untrusted at all: being wrong about a producer
     timestamp costs disk, never a backup.
--   **The most recently received artifact is always kept.** It is placed
-    by the received pass on today's date, today falls inside every enabled
+-   **The most recently discovered artifact is always kept.** It is placed
+    by the discovery pass on today's date, today falls inside every enabled
     tier's window by construction, so it is always some bucket's
     representative whatever any producer claims.
 -   **Each bucket still selects at most one artifact per pass.** Two
@@ -1167,10 +1167,10 @@ Three properties follow, and SHALL hold:
     implies. That is bounded, and it is in the fail-safe direction.
 
 The two passes SHALL NOT be merged into a single selection per bucket.
-Merged, an artifact produced late on Monday but received on Tuesday
-competes for Monday's bucket against an artifact received early on Monday
-and can win it, which takes a tier away from an artifact the received-only
-calculation kept, and the first property above is lost.
+Merged, an artifact produced late on Monday but discovered on Tuesday
+competes for Monday's bucket against an artifact discovered early on
+Monday and can win it, which takes a tier away from an artifact the
+discovery-only calculation kept, and the first property above is lost.
 
 #### What an operator sees
 
@@ -1226,7 +1226,7 @@ committed/complete restore point satisfying required verification.
 
 "Newest" here means newest by the artifact's own retention date, resolved
 exactly as FR-18's producer pass resolves it: the producer's own timestamp
-when the backend reported an admissible one, and the received timestamp
+when the backend reported an admissible one, and the discovery timestamp
 otherwise. It does **not** mean the most recently ingested artifact. A
 backlog ingested in one cycle therefore protects the most recent backup in
 it rather than whichever artifact happens to sort last by name, and the
@@ -1235,7 +1235,7 @@ the two timestamps produced it.
 
 A producer that back-dates its newest artifact can move this protection
 onto an older one. It cannot move the newest artifact out of KEEP, because
-FR-18's received pass places a recently received artifact on today's date
+FR-18's discovery pass places a recently discovered artifact on today's date
 and today falls inside every enabled tier's window, so the manipulation
 costs a label rather than a restore point. A forward-dated producer
 timestamp is refused before it reaches this calculation at all.

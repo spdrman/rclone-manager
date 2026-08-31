@@ -19,9 +19,9 @@ import (
 //
 // FR-18 now answers that with two of them. Every tier is evaluated twice
 // over the same artifacts, once placing each artifact by the timestamp
-// this manager received it and once by the producer's own timestamp
+// this manager discovered it and once by the producer's own timestamp
 // (state.Record's Remote.ModTime) where the backend reported one and it
-// is not after the received timestamp, and KEEP is the union. The tests
+// is not after the discovery timestamp, and KEEP is the union. The tests
 // below hold both halves of that to their contract: the producer term
 // makes an ingested backlog keep its real multi-tier shape, and it can
 // only ever move an artifact from DELETE to KEEP, never the reverse,
@@ -31,9 +31,9 @@ import (
 // --- helpers (prefixed bk* so they cannot collide with gfs_test.go's) ---
 
 type bkRecSpec struct {
-	name     string
-	state    lifecycle.State
-	received time.Time
+	name       string
+	state      lifecycle.State
+	discovered time.Time
 	// producer is the remote object's own modification time as captured
 	// at discovery, or nil when the backend never reported one.
 	producer *time.Time
@@ -46,8 +46,8 @@ func bkBuildRecords(t *testing.T, set model.BackupSetID, specs []bkRecSpec) []st
 		rec := state.Record{
 			Artifact:     gfsMustArtifact(t, set, s.name),
 			State:        string(s.state),
-			DiscoveredAt: s.received,
-			UpdatedAt:    s.received,
+			DiscoveredAt: s.discovered,
+			UpdatedAt:    s.discovered,
 		}
 		if s.producer != nil {
 			p := *s.producer
@@ -59,7 +59,7 @@ func bkBuildRecords(t *testing.T, set model.BackupSetID, specs []bkRecSpec) []st
 }
 
 // bkStripProducer returns records with every producer timestamp removed,
-// which is exactly the input the received-only calculation sees.
+// which is exactly the input the discovery-only calculation sees.
 func bkStripProducer(records []state.Record) []state.Record {
 	out := make([]state.Record, len(records))
 	copy(out, records)
@@ -124,8 +124,8 @@ func bkDefaultChain() config.Retention {
 // TestGFSDecideKeepsTheMultiTierShapeOfABacklogIngestedInOneCycle is issue
 // #192's reported case, asserted as typed values rather than counts.
 //
-// Six artifacts whose backup dates span 500 days are all received in the
-// same cycle, milliseconds apart. Under a received-only bucket key they
+// Six artifacts whose backup dates span 500 days are all discovered in the
+// same cycle, milliseconds apart. Under a discovery-only bucket key they
 // collapse into one daily, one weekly and one monthly bucket, each tier
 // selects a single representative, and five of the six become delete
 // candidates on the first retention pass. Under FR-18's two-key union
@@ -134,7 +134,7 @@ func bkDefaultChain() config.Retention {
 //
 // Every expected tier list below is the union of the two passes:
 //
-//	received pass (all six placed on 2026-08-31, so one champion per
+//	discovery pass (all six placed on 2026-08-31, so one champion per
 //	bucket, resolved on the artifact-name tie-break): pg-2026-08-31.dump
 //	producer pass: DAILY  buckets 08-31, 08-28
 //	               WEEKLY buckets 2026-08-31, 2026-08-24, 2026-08-10, 2026-07-06
@@ -147,15 +147,15 @@ func bkDefaultChain() config.Retention {
 func TestGFSDecideKeepsTheMultiTierShapeOfABacklogIngestedInOneCycle(t *testing.T) {
 	set := gfsMustSet(t, "production", "postgres-primary")
 	now := bkAt(t, "2026-08-31T12:00:00Z")
-	received := bkAt(t, "2026-08-31T09:00:00Z")
+	discovered := bkAt(t, "2026-08-31T09:00:00Z")
 
 	records := bkBuildRecords(t, set, []bkRecSpec{
-		{"pg-2026-08-31.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-31T09:00:00Z"))},
-		{"pg-2026-08-28.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-28T09:00:00Z"))},
-		{"pg-2026-08-11.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-11T09:00:00Z"))},
-		{"pg-2026-07-12.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-07-12T09:00:00Z"))},
-		{"pg-2026-02-12.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-02-12T09:00:00Z"))},
-		{"pg-2025-04-18.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
+		{"pg-2026-08-31.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-31T09:00:00Z"))},
+		{"pg-2026-08-28.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-28T09:00:00Z"))},
+		{"pg-2026-08-11.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-11T09:00:00Z"))},
+		{"pg-2026-07-12.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-07-12T09:00:00Z"))},
+		{"pg-2026-02-12.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-02-12T09:00:00Z"))},
+		{"pg-2025-04-18.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
 	})
 
 	verdicts, lkg, err := DecideKeep(now, bkDefaultChain(), set, records)
@@ -185,7 +185,7 @@ func TestGFSDecideKeepsTheMultiTierShapeOfABacklogIngestedInOneCycle(t *testing.
 // issue #192's own fixture names, where the artifact with the
 // lexicographically largest name is also the oldest backup in the set.
 // That combination is what produced the report's headline symptom: the
-// received-only key put every artifact in one bucket, the name tie-break
+// discovery-only key put every artifact in one bucket, the name tie-break
 // picked the 500-day-old file as every bucket's representative, and
 // FR-19 then described that same file as "the newest eligible restore
 // point".
@@ -197,15 +197,15 @@ func TestGFSDecideKeepsTheMultiTierShapeOfABacklogIngestedInOneCycle(t *testing.
 func TestDecideKeepOnTheReportedBacklogNamesTheRealNewestRestorePoint(t *testing.T) {
 	set := gfsMustSet(t, "production", "postgres-primary")
 	now := bkAt(t, "2026-08-31T12:00:00Z")
-	received := bkAt(t, "2026-08-31T09:00:00Z")
+	discovered := bkAt(t, "2026-08-31T09:00:00Z")
 
 	records := bkBuildRecords(t, set, []bkRecSpec{
-		{"pg-age-000d.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-31T09:00:00Z"))},
-		{"pg-age-003d.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-28T09:00:00Z"))},
-		{"pg-age-020d.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-11T09:00:00Z"))},
-		{"pg-age-050d.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-07-12T09:00:00Z"))},
-		{"pg-age-200d.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-02-12T09:00:00Z"))},
-		{"pg-age-500d.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
+		{"pg-age-000d.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-31T09:00:00Z"))},
+		{"pg-age-003d.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-28T09:00:00Z"))},
+		{"pg-age-020d.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-11T09:00:00Z"))},
+		{"pg-age-050d.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-07-12T09:00:00Z"))},
+		{"pg-age-200d.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-02-12T09:00:00Z"))},
+		{"pg-age-500d.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
 	})
 
 	verdicts, lkg, err := DecideKeep(now, bkDefaultChain(), set, records)
@@ -235,7 +235,7 @@ func TestDecideKeepOnTheReportedBacklogNamesTheRealNewestRestorePoint(t *testing
 // TestGFSDecideProducerTimestampOnlyEverAddsToKeep is the safety property
 // the whole design rests on, and it is asserted per artifact and per tier
 // rather than only over the set of names: for any records, every (artifact,
-// tier) pair the received-only calculation produces is still produced when
+// tier) pair the discovery-only calculation produces is still produced when
 // producer timestamps are read. No producer timestamp, absent or wrong or
 // hostile, can take a tier away from an artifact, which is what lets FR-18
 // read an untrusted value at all.
@@ -254,10 +254,10 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 	now := bkAt(t, "2026-08-31T12:00:00Z")
 	cfg := bkDefaultChain()
 
-	// A deterministic spread of received/producer offsets, built to cover
+	// A deterministic spread of discovered/producer offsets, built to cover
 	// same-day, cross-day, cross-week, cross-month and far-outside-every-
 	// window disagreements between the two timestamps in one table.
-	receivedOffsets := []int{0, 0, 0, 1, 2, 9, 40, 40, 120, 400}
+	discoveryOffsets := []int{0, 0, 0, 1, 2, 9, 40, 40, 120, 400}
 	producerLag := []int{0, 3, 500, 0, 20, 1, 200, 0, 7, 95}
 
 	pairs := func(verdicts []GFSVerdict) map[string]map[GFSTier]bool {
@@ -311,13 +311,13 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 	for caseIdx, batch := range [][]int{{0, 1, 2, 3, 4}, {5, 6, 7, 8, 9}, {0, 2, 4, 6, 8}, {1, 3, 5, 7, 9}, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}} {
 		var specs []bkRecSpec
 		for _, i := range batch {
-			received := now.AddDate(0, 0, -receivedOffsets[i]).Add(-time.Duration(i) * time.Hour)
-			producer := received.AddDate(0, 0, -producerLag[i])
+			discovered := now.AddDate(0, 0, -discoveryOffsets[i]).Add(-time.Duration(i) * time.Hour)
+			producer := discovered.AddDate(0, 0, -producerLag[i])
 			specs = append(specs, bkRecSpec{
-				name:     "artifact-" + string(rune('a'+i)) + ".dump",
-				state:    lifecycle.Complete,
-				received: received,
-				producer: bkPtr(producer),
+				name:       "artifact-" + string(rune('a'+i)) + ".dump",
+				state:      lifecycle.Complete,
+				discovered: discovered,
+				producer:   bkPtr(producer),
 			})
 		}
 		check(fmt.Sprintf("table case %d", caseIdx), specs)
@@ -325,7 +325,7 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 
 	// The table above cannot generate the one shape that separates a
 	// union from a single merged champion map: an artifact whose producer
-	// placement lands late in a day another artifact was received into
+	// placement lands late in a day another artifact was discovered into
 	// early. Written out by hand so this property covers it too.
 	check("late producer, early arrival, same bucket", []bkRecSpec{
 		{"q-early.dump", lifecycle.Complete, bkAt(t, "2026-08-30T09:00:00Z"), nil},
@@ -338,21 +338,21 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 	}
 }
 
-// TestGFSDecideProducerPlacementNeverDisplacesAReceivedRepresentative is
+// TestGFSDecideProducerPlacementNeverDisplacesADiscoveryRepresentative is
 // the structural reason the two passes are kept separate instead of being
 // folded into one champion map per bucket.
 //
-// "p-late.dump" was produced at 23:00 on the 30th and received at 12:00 on
+// "p-late.dump" was produced at 23:00 on the 30th and discovered at 12:00 on
 // the 31st, so its producer placement lands in the 30th's bucket, the same
-// bucket "q-early.dump" was received into at 09:00. In a single merged
+// bucket "q-early.dump" was discovered into at 09:00. In a single merged
 // map p's producer placement is the later instant and takes that bucket,
-// and q, which the received-only calculation kept, silently stops being
+// and q, which the discovery-only calculation kept, silently stops being
 // kept. Two passes unioned afterwards make that impossible.
 //
 // "r-newest.dump" is here so that p is kept by nothing but its own
 // producer placement, which makes this test RED against a calculation
 // that ignores producer timestamps as well as against a merged one.
-func TestGFSDecideProducerPlacementNeverDisplacesAReceivedRepresentative(t *testing.T) {
+func TestGFSDecideProducerPlacementNeverDisplacesADiscoveryRepresentative(t *testing.T) {
 	set := gfsMustSet(t, "displace", "bucket")
 	now := bkAt(t, "2026-08-31T13:00:00Z")
 	cfg := bkDefaultChain()
@@ -381,7 +381,7 @@ func TestGFSDecideProducerPlacementNeverDisplacesAReceivedRepresentative(t *test
 // case FR-8 exists for: a producer whose clock says 1990 stamps every
 // artifact in the set. Every producer placement then falls outside every
 // tier window and contributes nothing, so the verdicts have to be
-// identical to the ones the received timestamps alone produce, not
+// identical to the ones the discovery timestamps alone produce, not
 // emptier.
 //
 // The positive control is the second half: the same records with
@@ -397,9 +397,9 @@ func TestGFSDecideBackDatedProducerTimestampsChangeNothing(t *testing.T) {
 		{"b.dump", lifecycle.Complete, bkAt(t, "2026-08-31T02:00:00Z"), nil},
 		{"c.dump", lifecycle.Complete, bkAt(t, "2026-08-30T02:00:00Z"), nil},
 	}
-	receivedOnly, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, base))
+	discoveryOnly, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, base))
 	if err != nil {
-		t.Fatalf("GFSDecide on received timestamps alone: %v", err)
+		t.Fatalf("GFSDecide on discovery timestamps alone: %v", err)
 	}
 
 	hostile := make([]bkRecSpec, len(base))
@@ -411,9 +411,9 @@ func TestGFSDecideBackDatedProducerTimestampsChangeNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GFSDecide with back-dated producer timestamps: %v", err)
 	}
-	if !reflect.DeepEqual(bkTierMap(got), bkTierMap(receivedOnly)) {
+	if !reflect.DeepEqual(bkTierMap(got), bkTierMap(discoveryOnly)) {
 		t.Errorf("back-dated producer timestamps changed the verdicts:\n got  %v\n want %v",
-			bkTierMap(got), bkTierMap(receivedOnly))
+			bkTierMap(got), bkTierMap(discoveryOnly))
 	}
 
 	// Positive control: a producer timestamp inside the windows is
@@ -426,13 +426,13 @@ func TestGFSDecideBackDatedProducerTimestampsChangeNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GFSDecide with a plausible producer timestamp: %v", err)
 	}
-	if reflect.DeepEqual(bkTierMap(moved), bkTierMap(receivedOnly)) {
+	if reflect.DeepEqual(bkTierMap(moved), bkTierMap(discoveryOnly)) {
 		t.Errorf("a producer timestamp inside the daily window changed nothing (%v): the observation channel does not work, so the back-dating assertion above proves nothing",
 			bkTierMap(moved))
 	}
 }
 
-// TestGFSDecideRefusesAProducerTimestampAfterTheReceivedTimestamp pins the
+// TestGFSDecideRefusesAProducerTimestampAfterTheDiscoveryTimestamp pins the
 // admissibility gate. A completed artifact cannot have been produced
 // after the moment this manager first observed it, so a producer
 // timestamp in that range is a wrong or forged clock and is refused
@@ -440,25 +440,25 @@ func TestGFSDecideBackDatedProducerTimestampsChangeNothing(t *testing.T) {
 // manager has no evidence for.
 //
 // Both artifacts arrive in the same cycle, and "z-arrival.dump" carries
-// the larger name, so the received pass keeps it and only it. Whether
+// the larger name, so the discovery pass keeps it and only it. Whether
 // "m-backdated.dump" survives at all is therefore decided entirely by
 // whether its producer timestamp was admitted, which is what makes this
 // fixture able to see the gate.
 //
 // The second half is the positive control. The refused timestamp moved to
-// before the received timestamp is admitted, and "m-backdated.dump"
+// before the discovery timestamp is admitted, and "m-backdated.dump"
 // appears in KEEP, so the refusal above is a refusal and not a channel
 // that never worked.
-func TestGFSDecideRefusesAProducerTimestampAfterTheReceivedTimestamp(t *testing.T) {
+func TestGFSDecideRefusesAProducerTimestampAfterTheDiscoveryTimestamp(t *testing.T) {
 	set := gfsMustSet(t, "future", "clock")
 	now := bkAt(t, "2026-08-31T12:00:00Z")
 	cfg := bkDefaultChain()
-	received := bkAt(t, "2026-08-31T09:00:00Z")
+	discovered := bkAt(t, "2026-08-31T09:00:00Z")
 
 	specs := func(producer *time.Time) []bkRecSpec {
 		return []bkRecSpec{
-			{"m-backdated.dump", lifecycle.Complete, received, producer},
-			{"z-arrival.dump", lifecycle.Complete, received, nil},
+			{"m-backdated.dump", lifecycle.Complete, discovered, producer},
+			{"z-arrival.dump", lifecycle.Complete, discovered, nil},
 		}
 	}
 
@@ -474,14 +474,14 @@ func TestGFSDecideRefusesAProducerTimestampAfterTheReceivedTimestamp(t *testing.
 		t.Fatalf("baseline without producer timestamps:\n got  %v\n want %v", got, wantNone)
 	}
 
-	// One second after its own received timestamp: refused, so the
+	// One second after its own discovery timestamp: refused, so the
 	// verdicts have to be the baseline's exactly.
-	gotRefused, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, specs(bkPtr(received.Add(time.Second)))))
+	gotRefused, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, specs(bkPtr(discovered.Add(time.Second)))))
 	if err != nil {
 		t.Fatalf("GFSDecide with a future-dated producer timestamp: %v", err)
 	}
 	if got := bkTierMap(gotRefused); !reflect.DeepEqual(got, wantNone) {
-		t.Errorf("a producer timestamp after the received timestamp was not refused:\n got  %v\n want %v", got, wantNone)
+		t.Errorf("a producer timestamp after the discovery timestamp was not refused:\n got  %v\n want %v", got, wantNone)
 	}
 
 	// Positive control: the previous day is admissible, and places
@@ -504,7 +504,7 @@ func TestGFSDecideRefusesAProducerTimestampAfterTheReceivedTimestamp(t *testing.
 // happens to be non-nil. It must be refused the same way an absent one
 // is, so FR-19 can never describe an artifact as "dated 0001-01-01".
 //
-// a.dump is deliberately the artifact the received pass does not keep (it
+// a.dump is deliberately the artifact the discovery pass does not keep (it
 // arrived an hour before b.dump, into the same buckets), so a producer
 // placement for it is observable in the verdicts. The positive control at
 // the end proves exactly that: swap the zero time for a real one and
@@ -559,15 +559,15 @@ func TestGFSDecideIgnoresAZeroProducerTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LastKnownGoodDecide with a zero producer timestamp: %v", err)
 	}
-	if !strings.Contains(lkg.Reason, early.UTC().Format(time.RFC3339)) || !strings.Contains(lkg.Reason, "received") {
-		t.Errorf("Reason %q: a zero producer timestamp must fall back to the received timestamp, not be reported as a date", lkg.Reason)
+	if !strings.Contains(lkg.Reason, early.UTC().Format(time.RFC3339)) || !strings.Contains(lkg.Reason, "discovered") {
+		t.Errorf("Reason %q: a zero producer timestamp must fall back to the discovery timestamp, not be reported as a date", lkg.Reason)
 	}
 }
 
-// TestGFSDecideAlwaysKeepsTheMostRecentlyReceivedArtifact is the property
+// TestGFSDecideAlwaysKeepsTheMostRecentlyDiscoveredArtifact is the property
 // that makes the FR-19 ordering change safe. Whatever any producer claims,
-// the artifact this manager received most recently is placed by the
-// received pass on today's date, and today falls inside every enabled
+// the artifact this manager discovered most recently is placed by the
+// discovery pass on today's date, and today falls inside every enabled
 // tier's window by construction, so it is always some bucket's newest
 // representative and always in KEEP.
 //
@@ -575,12 +575,12 @@ func TestGFSDecideIgnoresAZeroProducerTimestamp(t *testing.T) {
 // hostile producer timestamps used here do change the verdict set, so the
 // invariant above is being asserted against a calculation that is
 // genuinely reading them.
-func TestGFSDecideAlwaysKeepsTheMostRecentlyReceivedArtifact(t *testing.T) {
+func TestGFSDecideAlwaysKeepsTheMostRecentlyDiscoveredArtifact(t *testing.T) {
 	set := gfsMustSet(t, "newest", "arrival")
 	now := bkAt(t, "2026-08-31T12:00:00Z")
 	cfg := bkDefaultChain()
 
-	// "newest.dump" is received last, and its producer back-dates it into
+	// "newest.dump" is discovered last, and its producer back-dates it into
 	// the previous year to try to push it out of every window.
 	records := bkBuildRecords(t, set, []bkRecSpec{
 		{"older-1.dump", lifecycle.Complete, bkAt(t, "2026-08-29T01:00:00Z"), bkPtr(bkAt(t, "2026-08-29T00:00:00Z"))},
@@ -594,7 +594,7 @@ func TestGFSDecideAlwaysKeepsTheMostRecentlyReceivedArtifact(t *testing.T) {
 	}
 	tiers := bkTierMap(verdicts)
 	if len(tiers["newest.dump"]) == 0 {
-		t.Fatalf("the most recently received artifact is not kept (%v); a back-dated producer timestamp must never be able to push it out of KEEP", tiers)
+		t.Fatalf("the most recently discovered artifact is not kept (%v); a back-dated producer timestamp must never be able to push it out of KEEP", tiers)
 	}
 
 	stripped, err := GFSDecide(now, cfg, set, bkStripProducer(records))
@@ -615,13 +615,13 @@ func TestGFSDecideAlwaysKeepsTheMostRecentlyReceivedArtifact(t *testing.T) {
 // whichever artifact happened to win a name tie-break.
 func TestLastKnownGoodProtectsTheNewestBackupNotTheNewestArrival(t *testing.T) {
 	set := gfsMustSet(t, "lkg", "backlog")
-	received := bkAt(t, "2026-08-31T09:00:00Z")
+	discovered := bkAt(t, "2026-08-31T09:00:00Z")
 
 	records := bkBuildRecords(t, set, []bkRecSpec{
-		// zzz sorts last, so under a received-only ordering with a name
+		// zzz sorts last, so under a discovery-only ordering with a name
 		// tie-break this oldest backup would be "the newest".
-		{"zzz-oldest.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
-		{"aaa-newest.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-31T08:00:00Z"))},
+		{"zzz-oldest.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
+		{"aaa-newest.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-31T08:00:00Z"))},
 	})
 
 	got, err := LastKnownGoodDecide(config.Retention{}, set, records)
@@ -643,10 +643,10 @@ func TestLastKnownGoodProtectsTheNewestBackupNotTheNewestArrival(t *testing.T) {
 // provenance in both directions.
 func TestLastKnownGoodReasonNamesTheDateAndWhereItCameFrom(t *testing.T) {
 	set := gfsMustSet(t, "lkg", "reason")
-	received := bkAt(t, "2026-08-31T09:00:00Z")
+	discovered := bkAt(t, "2026-08-31T09:00:00Z")
 
 	fromProducer, err := LastKnownGoodDecide(config.Retention{}, set, bkBuildRecords(t, set, []bkRecSpec{
-		{"a.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-20T04:05:06Z"))},
+		{"a.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-20T04:05:06Z"))},
 	}))
 	if err != nil {
 		t.Fatalf("LastKnownGoodDecide: %v", err)
@@ -658,28 +658,28 @@ func TestLastKnownGoodReasonNamesTheDateAndWhereItCameFrom(t *testing.T) {
 		t.Errorf("Reason %q does not say the date came from the producer's own timestamp", fromProducer.Reason)
 	}
 
-	fromReceived, err := LastKnownGoodDecide(config.Retention{}, set, bkBuildRecords(t, set, []bkRecSpec{
-		{"a.dump", lifecycle.Complete, received, nil},
+	fromDiscovery, err := LastKnownGoodDecide(config.Retention{}, set, bkBuildRecords(t, set, []bkRecSpec{
+		{"a.dump", lifecycle.Complete, discovered, nil},
 	}))
 	if err != nil {
 		t.Fatalf("LastKnownGoodDecide: %v", err)
 	}
-	if !strings.Contains(fromReceived.Reason, "2026-08-31T09:00:00Z") {
-		t.Errorf("Reason %q does not carry the resolved retention date", fromReceived.Reason)
+	if !strings.Contains(fromDiscovery.Reason, "2026-08-31T09:00:00Z") {
+		t.Errorf("Reason %q does not carry the resolved retention date", fromDiscovery.Reason)
 	}
-	if !strings.Contains(fromReceived.Reason, "received") {
-		t.Errorf("Reason %q does not say the date is the moment this manager received the artifact", fromReceived.Reason)
+	if !strings.Contains(fromDiscovery.Reason, "discovered") {
+		t.Errorf("Reason %q does not say the date is the moment this manager discovered the artifact", fromDiscovery.Reason)
 	}
 }
 
-// TestLastKnownGoodIgnoresAProducerTimestampAfterTheReceivedTimestamp:
+// TestLastKnownGoodIgnoresAProducerTimestampAfterTheDiscoveryTimestamp:
 // FR-19 is the last line of defence, so the admissibility gate has to
 // apply here too. Otherwise a producer could claim tomorrow's date and
 // move protection onto an artifact of its choosing.
 //
 // The positive control is the second half: the same artifact with an
 // admissible, genuinely newer producer timestamp does take protection.
-func TestLastKnownGoodIgnoresAProducerTimestampAfterTheReceivedTimestamp(t *testing.T) {
+func TestLastKnownGoodIgnoresAProducerTimestampAfterTheDiscoveryTimestamp(t *testing.T) {
 	set := gfsMustSet(t, "lkg", "future")
 
 	forged, err := LastKnownGoodDecide(config.Retention{}, set, bkBuildRecords(t, set, []bkRecSpec{
@@ -690,12 +690,12 @@ func TestLastKnownGoodIgnoresAProducerTimestampAfterTheReceivedTimestamp(t *test
 		t.Fatalf("LastKnownGoodDecide: %v", err)
 	}
 	if forged.Artifact.Name != "genuine.dump" {
-		t.Errorf("Artifact = %q, want %q: a producer timestamp after the received timestamp must never win FR-19 protection",
+		t.Errorf("Artifact = %q, want %q: a producer timestamp after the discovery timestamp must never win FR-19 protection",
 			forged.Artifact.Name, "genuine.dump")
 	}
 
-	// The received order and the producer order deliberately disagree
-	// here: "genuine.dump" arrived a day later, so a received-only
+	// The discovered order and the producer order deliberately disagree
+	// here: "genuine.dump" arrived a day later, so a discovery-only
 	// ordering picks it, and only a calculation that actually reads the
 	// producer timestamps picks "newer.dump".
 	admissible, err := LastKnownGoodDecide(config.Retention{}, set, bkBuildRecords(t, set, []bkRecSpec{

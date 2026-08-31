@@ -581,21 +581,21 @@ something else.
 ### Which timestamp puts a backup in a bucket
 
 Two of them, and `KEEP` is the union. Each tier runs its selection twice over the same
-artifacts: once placing each one by the **received timestamp** (when this manager first
-saw it on the remote), once by the **producer timestamp** (the remote object's own
+artifacts: once placing each one by the **discovery timestamp** (when this manager
+first saw it on the remote), once by the **producer timestamp** (the remote object's own
 modification time, captured at discovery). Both passes use the same windows and the same
 "newest in the bucket" rule.
 
 That matters the moment you point a new backup set at a directory that already holds a
 year of dumps, or bring a manager back up after a week down. Every one of those artifacts
-arrives in the same cycle, so by received timestamp alone they all land in one daily
+arrives in the same cycle, so by discovery timestamp alone they all land in one daily
 bucket, one weekly bucket and one monthly bucket, each tier keeps one, and everything else
 is a delete candidate on the first pass. Reading the producer timestamp as well puts them
 in the buckets their own backup dates belong to, and the chain keeps the shape you
 configured it to keep.
 
 The producer timestamp is untrusted input (FR-8), so it is admitted only where being
-wrong is survivable. It has to exist, be non-zero, and not be later than the received
+wrong is survivable. It has to exist, be non-zero, and not be later than the discovery
 timestamp (a completed artifact cannot have been produced after this manager first saw
 it; such a timestamp is refused, not clamped). And because the two passes are unioned
 rather than merged, a producer timestamp can only ever move an artifact from DELETE to
@@ -627,7 +627,9 @@ configuration" rather than accepted quietly.
 above resolves it, not the most recently ingested artifact. The preview line names the
 resolved date and says which of the two timestamps produced it, so you can tell at a
 glance whether a remote reported a usable modification time or the manager fell back to
-its own arrival time.
+when it first saw the file. (Note that the recovery sidecar's own `received_timestamp`
+is a different instant: that one is when the artifact finished committing locally. The
+field matching the discovery timestamp is `retention_timestamp`.)
 
 Two ways to see what a policy would do before it does it:
 `backup-manager retention --dry-run`, which also takes per-run overrides for the timezone,

@@ -169,8 +169,8 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 // retention is the artifact's own retention date, resolved exactly the way
 // FR-18's producer pass resolves it (bucketkey.go's gfsRetentionInstant):
 // the producer's own timestamp when the backend reported an admissible
-// one, and the received timestamp otherwise. Ordering on that rather than
-// on the received timestamp is what makes "the newest eligible restore
+// one, and the discovery timestamp otherwise. Ordering on that rather than
+// on the discovery timestamp is what makes "the newest eligible restore
 // point" mean the newest backup instead of the newest arrival, which is
 // the whole of issue #192 as it reaches FR-19: an ingested backlog whose
 // six artifacts all arrived in the same cycle used to resolve entirely on
@@ -181,8 +181,8 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 //
 // A producer can back-date its newest artifact so that an older one looks
 // newest and takes the protection. What it cannot do is take the newest
-// artifact out of KEEP: an artifact this manager received recently is
-// placed by FR-18's received pass on today's date, today falls inside
+// artifact out of KEEP: an artifact this manager discovered recently is
+// placed by FR-18's discovery pass on today's date, today falls inside
 // every enabled tier's window by construction, and so it is always some
 // bucket's representative. The attack therefore costs a label, not a
 // restore point. A forward-dated timestamp is refused outright before it
@@ -191,7 +191,7 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 type lkgCandidate struct {
 	artifact     model.ArtifactID
 	retention    time.Time
-	received     time.Time
+	discovered   time.Time
 	fromProducer bool
 	refusal      gfsProducerRefusal
 }
@@ -201,15 +201,15 @@ func newLKGCandidate(rec state.Record) lkgCandidate {
 	return lkgCandidate{
 		artifact:     rec.Artifact,
 		retention:    ts,
-		received:     gfsReceivedInstant(rec),
+		discovered:   gfsDiscoveryInstant(rec),
 		fromProducer: fromProducer,
 		refusal:      refusal,
 	}
 }
 
-// newerThan orders two candidates: retention date first, then the received
-// timestamp, then the artifact name. The name is last and is what makes
-// the answer independent of the order records arrived in; the received
+// newerThan orders two candidates: retention date first, then the
+// discovery timestamp, then the artifact name. The name is last and is what makes
+// the answer independent of the order records arrived in; the discovery
 // timestamp sits ahead of it so that two artifacts sharing a retention
 // date (a backend that reports whole-second or whole-day mtimes, say)
 // still resolve on something meaningful before falling back to
@@ -218,8 +218,8 @@ func (c lkgCandidate) newerThan(other lkgCandidate) bool {
 	if !c.retention.Equal(other.retention) {
 		return c.retention.After(other.retention)
 	}
-	if !c.received.Equal(other.received) {
-		return c.received.After(other.received)
+	if !c.discovered.Equal(other.discovered) {
+		return c.discovered.After(other.discovered)
 	}
 	return c.artifact.Name > other.artifact.Name
 }
@@ -234,10 +234,10 @@ func (c lkgCandidate) provenance() string {
 		return "by the producer's own timestamp on the remote object"
 	}
 	switch c.refusal {
-	case gfsProducerAfterReceived:
-		return "by the time this manager received it (the remote's own timestamp is later than that, which a completed artifact cannot be, so it was refused as untrustworthy)"
+	case gfsProducerAfterDiscovery:
+		return "by the time this manager discovered it (the remote's own timestamp is later than that, which a completed artifact cannot be, so it was refused as untrustworthy)"
 	default:
-		return "by the time this manager received it (the remote reported no usable modification time)"
+		return "by the time this manager discovered it (the remote reported no usable modification time)"
 	}
 }
 

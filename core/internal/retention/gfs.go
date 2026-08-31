@@ -221,8 +221,8 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		if !gfsIsManagedComplete(rec.State) {
 			continue
 		}
-		received, producer, hasProducer := gfsPlacementsFor(rec, loc)
-		d := gfsDated{artifact: rec.Artifact, received: received}
+		discovered, producer, hasProducer := gfsPlacementsFor(rec, loc)
+		d := gfsDated{artifact: rec.Artifact, discovered: discovered}
 		if hasProducer {
 			p := producer
 			d.producer = &p
@@ -245,9 +245,9 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 	for _, tb := range tiers {
 		// Two passes, unioned, never merged. See bucketkey.go's doc for
 		// why folding them into one champion map per bucket would let an
-		// untrusted producer timestamp displace an artifact the received
+		// untrusted producer timestamp displace an artifact the discovery
 		// pass had kept, which is the one thing this design forbids.
-		selected := gfsSelectRepresentatives(tb, eligible, gfsReceivedPlacement)
+		selected := gfsSelectRepresentatives(tb, eligible, gfsDiscoveryPlacement)
 		for artifact := range gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement) {
 			selected[artifact] = true
 		}
@@ -269,20 +269,20 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 }
 
 // gfsDated is one eligible artifact together with the placements FR-18
-// offers it to a tier's buckets under: always the received placement, and
+// offers it to a tier's buckets under: always the discovery placement, and
 // the producer placement when one is admissible (nil otherwise). See
 // bucketkey.go for what those two are and why there are two of them.
 type gfsDated struct {
-	artifact model.ArtifactID
-	received gfsPlacement
-	producer *gfsPlacement
+	artifact   model.ArtifactID
+	discovered gfsPlacement
+	producer   *gfsPlacement
 }
 
-// gfsReceivedPlacement and gfsProducerPlacement are the two placement
+// gfsDiscoveryPlacement and gfsProducerPlacement are the two placement
 // selectors gfsSelectRepresentatives is run with. They exist as named
 // functions rather than inline closures so the two passes in GFSDecide
 // read as one calculation applied twice, which is exactly what they are.
-func gfsReceivedPlacement(d gfsDated) (gfsPlacement, bool) { return d.received, true }
+func gfsDiscoveryPlacement(d gfsDated) (gfsPlacement, bool) { return d.discovered, true }
 
 func gfsProducerPlacement(d gfsDated) (gfsPlacement, bool) {
 	if d.producer == nil {
@@ -325,8 +325,8 @@ func gfsSelectRepresentatives(tb gfsBoundTier, eligible []gfsDated, place func(g
 // gfsIsNewerRepresentative reports whether candidate should replace
 // current as a bucket's representative: FR-18 says "the newest valid
 // backup in a bucket". The two times compared are the two placements'
-// own instants (see bucketkey.go), so a received placement is compared on
-// the received timestamp and a producer placement on the producer's own.
+// own instants (see bucketkey.go), so a discovery placement is compared on
+// the discovery timestamp and a producer placement on the producer's own.
 // Ties are broken on artifact name, which is unique within a backup set,
 // so the winner never depends on which of the two GFSDecide happened to
 // see first in the input slice.

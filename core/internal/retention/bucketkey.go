@@ -15,7 +15,7 @@ import (
 // A journal record carries two timestamps that could plausibly place an
 // artifact on a calendar:
 //
-//   - the received timestamp (state.Record.DiscoveredAt), the moment this
+//   - the discovery timestamp (state.Record.DiscoveredAt), the moment this
 //     manager first observed the artifact on the remote. It comes from
 //     this manager's own clock and nothing outside the manager can move
 //     it.
@@ -24,16 +24,26 @@ import (
 //     describes when the backup was actually taken, and FR-8 requires it
 //     to be treated as untrusted input.
 //
-// Bucketing on the received timestamp alone is what this package used to
+// "Discovery timestamp" rather than "received timestamp" is deliberate,
+// and the distinction is worth holding on to. internal/recovery's
+// manifest already writes a received_timestamp field into every sidecar
+// file, and that one is a different instant: it is rec.UpdatedAt, the
+// moment the artifact finished committing locally, not the moment it was
+// first seen on the remote. The two are usually the same day, which is
+// exactly what makes confusing them dangerous under a calendar-bucketed
+// policy. The manifest field this package's placement actually
+// corresponds to is retention_timestamp, which carries rec.DiscoveredAt.
+//
+// Bucketing on the discovery timestamp alone is what this package used to
 // do, and it collapses an ingested backlog. A new backup set pointed at a
 // directory holding a year of dumps, a manager that was down for a week
 // and caught up, a NAS restored from elsewhere: in every one of those the
-// artifacts have genuinely different backup dates, and a received-only
+// artifacts have genuinely different backup dates, and a discovery-only
 // key puts all of them in one daily bucket, one weekly bucket and one
 // monthly bucket. Each tier then selects one representative, FR-19 saves
 // one more, and everything else is a delete candidate on the first pass.
 // That is the situation GFS retention exists for, and it is the situation
-// where a received-only key does the opposite of what it exists for.
+// where a discovery-only key does the opposite of what it exists for.
 //
 // Bucketing on the producer timestamp alone is worse, and FR-8 is why. It
 // hands a producer with a wrong clock, or a hostile one, the power to move
@@ -47,10 +57,10 @@ import (
 // FR-18 therefore places every artifact twice, and KEEP is the union of
 // what the chain selects under each placement:
 //
-//	KEEP = ⋃ over every tier t of ( selections_received(t) ∪ selections_producer(t) )
+//	KEEP = ⋃ over every tier t of ( selections_discovery(t) ∪ selections_producer(t) )
 //	     ∪ protected
 //
-// The received pass is bit-for-bit the calculation this package always
+// The discovery pass is bit-for-bit the calculation this package always
 // performed. The producer pass runs beside it, never instead of it. That
 // is the entire safety argument: a producer timestamp can only ever move
 // an artifact from DELETE to KEEP, never the reverse, so being wrong
@@ -60,10 +70,10 @@ import (
 // The two passes are kept separate rather than folded into a single
 // champion map per bucket, and that is load-bearing rather than
 // stylistic. In a merged map a producer placement can out-compete a
-// received placement inside a shared bucket and displace an artifact the
-// received-only calculation had kept: an artifact produced late on Monday
-// but received on Tuesday would compete for Monday's bucket against an
-// artifact received early on Monday, and could win it. Separate passes,
+// discovery placement inside a shared bucket and displace an artifact the
+// discovery-only calculation had kept: an artifact produced late on Monday
+// but discovered on Tuesday would compete for Monday's bucket against an
+// artifact discovered early on Monday, and could win it. Separate passes,
 // unioned afterwards, make that structurally impossible.
 // TestGFSDecideProducerTimestampOnlyEverAddsToKeep holds the resulting
 // invariant to every input it is given, and a mutation that merges the
@@ -92,60 +102,60 @@ const (
 	// a missing value that happens to be non-nil rather than a date.
 	gfsProducerAbsent gfsProducerRefusal = iota
 
-	// gfsProducerAfterReceived: the remote claims the object was modified
+	// gfsProducerAfterDiscovery: the remote claims the object was modified
 	// after the moment this manager first observed it. A completed
 	// artifact cannot have been produced after it was discovered, so this
 	// is a wrong or forged clock.
-	gfsProducerAfterReceived
+	gfsProducerAfterDiscovery
 )
 
-// gfsReceivedInstant is the timestamp this manager first observed the
+// gfsDiscoveryInstant is the timestamp this manager first observed the
 // artifact. It is always available: internal/state's journal writes
 // discovered_at on the row's very first transition and never clears it.
-func gfsReceivedInstant(rec state.Record) time.Time { return rec.DiscoveredAt }
+func gfsDiscoveryInstant(rec state.Record) time.Time { return rec.DiscoveredAt }
 
 // gfsProducerInstant resolves the producer's own timestamp for rec and
 // reports whether FR-18 admits it as a placement.
 //
 // Admissible means the backend reported a modification time, it is not
-// the zero time, and it is not after the received timestamp. The last
+// the zero time, and it is not after the discovery timestamp. The last
 // check is a refusal rather than a clamp on purpose: clamping a
-// future-dated timestamp to the received timestamp would manufacture a
+// future-dated timestamp to the discovery timestamp would manufacture a
 // date this manager has no evidence for and would silently give a wrong
 // clock a placement it did not earn, whereas refusing it leaves the
-// artifact placed by the received pass alone, which is where an artifact
+// artifact placed by the discovery pass alone, which is where an artifact
 // with no usable producer timestamp belongs anyway.
 //
 // Nothing here bounds how far into the past a producer timestamp may
 // reach, and nothing needs to. An absurdly old one simply lands outside
 // every tier window and contributes no placement, while the artifact's
-// received placement is untouched; see this file's doc for why that is
+// discovery placement is untouched; see this file's doc for why that is
 // the whole point of the union.
 func gfsProducerInstant(rec state.Record) (time.Time, gfsProducerRefusal, bool) {
 	if rec.Remote.ModTime == nil || rec.Remote.ModTime.IsZero() {
 		return time.Time{}, gfsProducerAbsent, false
 	}
 	producer := *rec.Remote.ModTime
-	if producer.After(gfsReceivedInstant(rec)) {
-		return producer, gfsProducerAfterReceived, false
+	if producer.After(gfsDiscoveryInstant(rec)) {
+		return producer, gfsProducerAfterDiscovery, false
 	}
 	return producer, 0, true
 }
 
 // gfsPlacementsFor returns the placements a single record contributes: its
-// received placement always, and its producer placement when
+// discovery placement always, and its producer placement when
 // gfsProducerInstant admits one.
-func gfsPlacementsFor(rec state.Record, loc *time.Location) (received gfsPlacement, producer gfsPlacement, hasProducer bool) {
-	r := gfsReceivedInstant(rec)
-	received = gfsPlacement{date: gfsCivilDateIn(r, loc), occurred: r}
+func gfsPlacementsFor(rec state.Record, loc *time.Location) (discovered gfsPlacement, producer gfsPlacement, hasProducer bool) {
+	r := gfsDiscoveryInstant(rec)
+	discovered = gfsPlacement{date: gfsCivilDateIn(r, loc), occurred: r}
 	if p, _, ok := gfsProducerInstant(rec); ok {
-		return received, gfsPlacement{date: gfsCivilDateIn(p, loc), occurred: p}, true
+		return discovered, gfsPlacement{date: gfsCivilDateIn(p, loc), occurred: p}, true
 	}
-	return received, gfsPlacement{}, false
+	return discovered, gfsPlacement{}, false
 }
 
 // gfsRetentionInstant is the single date FR-19 orders candidates by: the
-// producer's own timestamp when it is admissible, and the received
+// producer's own timestamp when it is admissible, and the discovery
 // timestamp otherwise. It is deliberately the same resolution FR-18's
 // producer pass uses, so "the newest eligible restore point" and "the
 // artifact the daily tier kept today" cannot disagree about what an
@@ -155,5 +165,5 @@ func gfsRetentionInstant(rec state.Record) (ts time.Time, fromProducer bool, ref
 	if ok {
 		return p, true, 0
 	}
-	return gfsReceivedInstant(rec), false, why
+	return gfsDiscoveryInstant(rec), false, why
 }
