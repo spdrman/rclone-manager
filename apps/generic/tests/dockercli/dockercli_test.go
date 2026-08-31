@@ -37,6 +37,7 @@ package dockercli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -44,6 +45,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -92,19 +94,50 @@ func requireDocker(t *testing.T) {
 	}
 }
 
-var (
-	buildOnce sync.Once
-	// buildErr and buildLog carry the one build attempt's outcome to
-	// every test that asks for the image, not just to whichever test
-	// happened to ask first. The previous flag could only record success,
-	// so a failed build left the flag false and every following test paid
-	// for the same doomed build again to print the same message again.
-	buildErr error
-	buildLog string
-	// builtImage records that an image now exists at this run's
-	// reference, so TestMain knows whether it has anything to remove.
-	builtImage bool
-)
+// errBuildNotFinished is what an abandoned build reports.
+//
+// sync.Once records itself done in a defer, so a runtime.Goexit out of
+// the closure (which is exactly what t.Fatalf does) still completes the
+// Once. With the error left at its zero value that reads as a successful
+// build, and every later caller then takes the fast path and is handed
+// imageReference() for an image that was never built. The downstream
+// symptom is a cascade of confusing "image not found" failures instead of
+// the one clear build failure buildErr and buildLog exist to produce.
+var errBuildNotFinished = errors.New("the one-shot image build exited before recording an outcome, so nothing was built")
+
+// imageBuilder runs one docker build for the whole test process and
+// hands every caller the same outcome.
+//
+// A type rather than three package variables and a bare sync.Once so
+// that the guard above is drivable: see
+// TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure.
+type imageBuilder struct {
+	once sync.Once
+	// err and log carry the one build attempt's outcome to every test
+	// that asks for the image, not just to whichever test happened to
+	// ask first. The previous flag could only record success, so a
+	// failed build left the flag false and every following test paid for
+	// the same doomed build again to print the same message again.
+	err error
+	log string
+	// built records that an image now exists at this run's reference, so
+	// TestMain knows whether it has anything to remove.
+	built bool
+}
+
+// build runs fn at most once and returns its log and error to every
+// caller. Any exit from fn that does not reach the assignment, a
+// t.Fatalf included, leaves errBuildNotFinished in place.
+func (b *imageBuilder) build(fn func() (log string, err error)) (string, error) {
+	b.once.Do(func() {
+		b.err = errBuildNotFinished
+		b.log, b.err = fn()
+		b.built = b.err == nil
+	})
+	return b.log, b.err
+}
+
+var builder imageBuilder
 
 // buildImage builds container/Dockerfile once per test process (subsequent
 // calls are a cheap no-op thanks to Docker's own layer cache, but this
@@ -123,15 +156,22 @@ var (
 // rather than merely uniquely named: runLabelKey answers "whose build is
 // this?" from the daemon, and imageLabelKey plus bornLabelKey are what
 // sweepImages needs to reclaim an image whose run was killed before it
-// could remove its own.
+// could remove its own. bornLabelKey is stamped here, as the command is
+// assembled, so it records the build's START; imageStaleAfter's comment
+// is written against that reading.
 func buildImage(t *testing.T) string {
 	t.Helper()
 	requireDocker(t)
 
-	buildOnce.Do(func() {
+	// Hoisted out of the one-shot deliberately. repoRoot calls t.Fatalf,
+	// and a t.Fatalf inside the closure would leave the Once done with
+	// nothing built. It is pure and cheap, so calling it on every
+	// buildImage rather than once costs nothing.
+	root := repoRoot(t)
+
+	log, err := builder.build(func() (string, error) {
 		sweepImages()
 
-		root := repoRoot(t)
 		cmd := exec.Command("docker", "build",
 			"-f", filepath.Join(root, "container", "Dockerfile"),
 			"-t", imageReference(),
@@ -144,14 +184,65 @@ func buildImage(t *testing.T) string {
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out
-		buildErr = cmd.Run()
-		buildLog = out.String()
-		builtImage = buildErr == nil
+		return out.String(), cmd.Run()
 	})
-	if buildErr != nil {
-		t.Fatalf("docker build failed: %v\n%s", buildErr, buildLog)
+	if err != nil {
+		t.Fatalf("docker build failed: %v\n%s", err, log)
 	}
 	return imageReference()
+}
+
+// TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure is the
+// control for errBuildNotFinished. Against the shape this replaced (an
+// error left at its zero value until the build assigned to it) the
+// abandoned half below reports success, and every test in the package
+// then runs against an image that does not exist.
+func TestAnImageBuildAbandonedPartWayThroughIsReportedAsAFailure(t *testing.T) {
+	// The positive control first: the ordinary path still builds exactly
+	// once and reports success to both callers.
+	var finished imageBuilder
+	runs := 0
+	if log, err := finished.build(func() (string, error) { runs++; return "build log", nil }); err != nil || log != "build log" {
+		t.Fatalf("a build that succeeded reported log %q, err %v; want the log and no error", log, err)
+	}
+	if _, err := finished.build(func() (string, error) { runs++; return "", errors.New("a second build was run") }); err != nil {
+		t.Fatalf("the second caller got %v, want the first call's success", err)
+	}
+	if runs != 1 {
+		t.Fatalf("the build ran %d times, want 1", runs)
+	}
+	if !finished.built {
+		t.Errorf("a successful build did not record that it built anything, so TestMain would leave this run's image on the daemon")
+	}
+
+	// And the hazard: an exit out of the closure that never reaches the
+	// assignment. runtime.Goexit is what t.Fatalf does, and repoRoot used
+	// to be called from inside here.
+	var abandoned imageBuilder
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = abandoned.build(func() (string, error) {
+			runtime.Goexit()
+			return "", nil
+		})
+	}()
+	<-done
+
+	rebuilt := false
+	_, err := abandoned.build(func() (string, error) { rebuilt = true; return "", nil })
+	if rebuilt {
+		t.Fatalf("the second caller re-ran the build, so sync.Once did not mark the abandoned call done and this test is no longer exercising the hazard it is named for")
+	}
+	if err == nil {
+		t.Fatalf("a build abandoned before it finished reported success; every later caller is then handed %s for an image that was never built, and the suite fails with image-not-found instead of with the build failure", imageReference())
+	}
+	if !errors.Is(err, errBuildNotFinished) {
+		t.Errorf("an abandoned build reported %v, want errBuildNotFinished", err)
+	}
+	if abandoned.built {
+		t.Errorf("an abandoned build recorded that it built an image, so TestMain would try to remove one that does not exist")
+	}
 }
 
 // degradedConfig writes a config whose one backup set has never had an

@@ -254,6 +254,13 @@ func TestTheImageUnderTestIsTheOneThisRunBuilt(t *testing.T) {
 		t.Fatalf("the image at %s was built by run %q, not by this one (%q): this run is testing another worktree's build, which is issue #185 exactly", ref, got, runID)
 	}
 
+	// TestMain's removal keys on this flag and nothing else observes it,
+	// so if buildImage ever stopped setting it every run on this machine
+	// would leak its image and the suite would stay green while doing it.
+	if !builder.built {
+		t.Errorf("buildImage returned %s without recording that it built anything; removeBuiltImage keys on that flag, so TestMain would leave this run's image on the daemon", ref)
+	}
+
 	// Logged, not merely checked, so that concurrent-runs-check.sh can
 	// read back which image each run actually tested and show that two
 	// runs from two worktrees tested two different ones.
