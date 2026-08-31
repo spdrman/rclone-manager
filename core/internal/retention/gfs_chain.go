@@ -29,6 +29,8 @@ import (
 //     the policy it was handed.
 //   - A tier that cannot be evaluated is an error, never an empty
 //     selection. See gfsResolveTier.
+//   - A chain out of which no tier can select anything is an error too,
+//     for the same reason one rung up. See gfsResolveChain.
 
 // gfsBoundTier is one link of the chain, resolved against a fixed "today"
 // and a fixed week-start weekday, so neither has to be threaded through
@@ -40,14 +42,40 @@ type gfsBoundTier struct {
 }
 
 // gfsResolveChain binds every tier in chain against today.
+//
+// A chain in which no tier is enabled is refused. Per tier, a non-positive
+// Keep is the documented "this tier is off" spelling (see gfsResolveTier),
+// and that reading has to stay; applied to every tier at once it stops
+// meaning "off" and starts meaning "KEEP is empty", which is the one
+// verdict set that hands FR-20 every managed-complete artifact in the
+// backup set. Refusing here rather than returning that verdict set costs
+// a caller only the ability to spell "retention is entirely off" by
+// zeroing every tier, which is spelled by not running a retention pass.
+//
+// Reachability is the reason this is a check and not a comment: a
+// validated config cannot produce it (config resolves an omitted
+// daily_days to 7 and refuses a tier with keep <= 0), but GFSDecide's own
+// doc invites callers that skipped config.Validate, and for one of those
+// config.DefaultTierChain expands three zeroed scalars straight into three
+// disabled tiers.
 func gfsResolveChain(chain []config.RetentionTier, today gfsCivilDate, weekStartDay time.Weekday) ([]gfsBoundTier, error) {
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("retention: the tier chain is empty; a chain that can select nothing would put every managed backup in the set on the delete side, so run no retention pass rather than an empty one")
+	}
 	out := make([]gfsBoundTier, 0, len(chain))
+	enabled := 0
 	for i, t := range chain {
 		bound, err := gfsResolveTier(t, today, weekStartDay)
 		if err != nil {
 			return nil, fmt.Errorf("retention: tiers[%d]: %w", i, err)
 		}
+		if t.Keep > 0 {
+			enabled++
+		}
 		out = append(out, bound)
+	}
+	if enabled == 0 {
+		return nil, fmt.Errorf("retention: no tier in the chain of %d is enabled (every keep is zero or negative); that selects nothing, which would put every managed backup in the set on the delete side, so run no retention pass rather than a chain that keeps nothing", len(chain))
 	}
 	return out, nil
 }
@@ -62,10 +90,23 @@ func gfsResolveChain(chain []config.RetentionTier, today gfsCivilDate, weekStart
 // caller. Anything else this function cannot make sense of is an error,
 // because there is no reading of "granularity: fortnight" under which a
 // tier legitimately keeps nothing, and treating it as one would hand FR-20
-// a plan to delete backups the operator believes are covered.
+// a plan to delete backups the operator believes are covered. The two
+// refusals that are not about evaluability, an empty name and FR-19's
+// reserved name, are both about the verdict the tier would be reported
+// under rather than the selection it would make.
 func gfsResolveTier(t config.RetentionTier, today gfsCivilDate, weekStartDay time.Weekday) (gfsBoundTier, error) {
 	if t.Name == "" {
 		return gfsBoundTier{}, fmt.Errorf("a tier must have a name; an unnamed tier cannot be reported against a KEEP verdict")
+	}
+	// config.Validate already reserves this name, but this function is
+	// the one that turns operator text into the wire value, and it is
+	// reachable without Validate. A GFS selection reported as
+	// LAST_KNOWN_GOOD is indistinguishable from FR-19's protected term in
+	// a verdict's tier list, so the confirm-before-delete dialog would
+	// badge an artifact "never deleted by retention" that FR-19 never
+	// protected. See config.TierLastKnownGoodName's own doc.
+	if t.Name == config.TierLastKnownGoodName {
+		return gfsBoundTier{}, fmt.Errorf("name %q is reserved for FR-19's last-known-good protection and cannot name a retention tier", config.TierLastKnownGoodName)
 	}
 
 	bucket, err := gfsBucketFunc(t, weekStartDay)

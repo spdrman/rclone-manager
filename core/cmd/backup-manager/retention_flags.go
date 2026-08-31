@@ -165,21 +165,48 @@ func resolveRetentionFlags(rf *retentionFlags) retentionOverrides {
 // operator who touches no new surface gets exactly today's behavior"
 // true: applyRetentionOverrides with a zero-valued o is a no-op on an
 // already-resolved r, by construction, not by a special case here.
+//
+// Folding is all-or-nothing: a refused override leaves *r exactly as the
+// caller passed it. That matters most for the two mutual-exclusion
+// refusals below, which used to return with the scalars already written,
+// leaving the caller holding a policy that carried both spellings at once
+// (a tiers list plus a scalar), which is the very state being refused and
+// which config.EffectiveTiers resolves silently rather than refusing.
+// Every caller aborts on an error today, so nothing observes it; this
+// policy decides what gets deleted, and the next caller should not have
+// to know that.
 func applyRetentionOverrides(r *config.Retention, o retentionOverrides) error {
+	// Both checks are decided against the caller's inputs alone, before
+	// anything is written, so neither depends on a value the folding
+	// below produces.
+	scalars := o.dailyDays != 0 || o.weeklyMonths != 0 || o.monthlyMonths != 0
+	switch {
+	case len(o.tiers) > 0 && scalars:
+		return fmt.Errorf("-tier cannot be combined with -daily-days, -weekly-months or -monthly-months: those three are sugar for the default chain, so pass one spelling or the other")
+	case len(o.tiers) == 0 && len(r.Tiers) > 0 && scalars:
+		return fmt.Errorf("-daily-days, -weekly-months and -monthly-months are sugar for the default chain and cannot override a config file that already defines retention.tiers; pass -tier to replace the chain instead")
+	}
+
+	// Folded onto a copy, so a refusal from config.ValidateRetention
+	// below leaves the caller's policy untouched too. The copy is shallow
+	// and shares the Tiers backing array, which is safe because nothing
+	// past here writes through it: a -tier override allocates its own
+	// slice, and ValidateRetention only reads the tiers it checks.
+	next := *r
 	if o.timezone != "" {
-		r.Timezone = o.timezone
+		next.Timezone = o.timezone
 	}
 	if o.weekStartsOn != "" {
-		r.WeekStartsOn = o.weekStartsOn
+		next.WeekStartsOn = o.weekStartsOn
 	}
 	if o.dailyDays != 0 {
-		r.DailyDays = o.dailyDays
+		next.DailyDays = o.dailyDays
 	}
 	if o.weeklyMonths != 0 {
-		r.WeeklyMonths = o.weeklyMonths
+		next.WeeklyMonths = o.weeklyMonths
 	}
 	if o.monthlyMonths != 0 {
-		r.MonthlyMonths = o.monthlyMonths
+		next.MonthlyMonths = o.monthlyMonths
 	}
 	// A -tier chain replaces the policy's chain outright rather than
 	// merging into it, and clears the three scalars it supersedes. Merging
@@ -191,16 +218,15 @@ func applyRetentionOverrides(r *config.Retention, o retentionOverrides) error {
 	// function the YAML file goes through) refuses a Retention that
 	// carries both spellings at once.
 	if len(o.tiers) > 0 {
-		if o.dailyDays != 0 || o.weeklyMonths != 0 || o.monthlyMonths != 0 {
-			return fmt.Errorf("-tier cannot be combined with -daily-days, -weekly-months or -monthly-months: those three are sugar for the default chain, so pass one spelling or the other")
-		}
-		r.Tiers = append([]config.RetentionTier(nil), o.tiers...)
-		r.DailyDays, r.WeeklyMonths, r.MonthlyMonths = 0, 0, 0
-	} else if len(r.Tiers) > 0 && (o.dailyDays != 0 || o.weeklyMonths != 0 || o.monthlyMonths != 0) {
-		return fmt.Errorf("-daily-days, -weekly-months and -monthly-months are sugar for the default chain and cannot override a config file that already defines retention.tiers; pass -tier to replace the chain instead")
+		next.Tiers = append([]config.RetentionTier(nil), o.tiers...)
+		next.DailyDays, next.WeeklyMonths, next.MonthlyMonths = 0, 0, 0
 	}
 	if o.protectLastKnownGood != nil {
-		r.ProtectLastKnownGood = o.protectLastKnownGood
+		next.ProtectLastKnownGood = o.protectLastKnownGood
 	}
-	return config.ValidateRetention(r)
+	if err := config.ValidateRetention(&next); err != nil {
+		return err
+	}
+	*r = next
+	return nil
 }

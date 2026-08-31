@@ -565,6 +565,28 @@ var retentionGranularityList = strings.Join([]string{
 // same rule this function applies.
 var retentionTierNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// retentionTierKeepMax and retentionTierPeriodDaysMax bound the two
+// numbers in a tier from above.
+//
+// Both are already bounded from below, and both feed calendar arithmetic
+// that walks a window backwards from today. A large enough value wraps
+// time.Date's own int64 second arithmetic, the window's start lands after
+// today, and the tier selects nothing at all with no error reported: the
+// same silent empty selection every other rule in this function exists to
+// refuse, reached from a config file Validate would otherwise accept. The
+// wrap needs roughly 1e11, so no operator is going to type it by
+// accident; the point of the ceiling is that an input whose out-of-range
+// behaviour is "quietly keep nothing" has no business being unbounded in
+// the last check between a YAML file and a deletion plan.
+//
+// The two numbers are arbitrary, chosen to be far past any policy anyone
+// would write: 10,000 look-back units is 27 years of dailies or a hundred
+// centuries of annuals, and 3,650 days is a ten-year custom period.
+const (
+	retentionTierKeepMax       = 10000
+	retentionTierPeriodDaysMax = 3650
+)
+
 // validateRetentionTiers checks an explicit FR-18 chain. It is only
 // reached when r.Tiers is non-empty; see validateRetention for why the two
 // spellings are mutually exclusive.
@@ -612,8 +634,11 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 		// a mistyped key: a number the operator wrote and this code
 		// silently drops is a policy they think they configured.
 		if t.Granularity == GranularityDays {
-			if t.PeriodDays <= 0 {
+			switch {
+			case t.PeriodDays <= 0:
 				v.addf("%s: granularity %q needs a positive period_days (got %d)", path, GranularityDays, t.PeriodDays)
+			case t.PeriodDays > retentionTierPeriodDaysMax:
+				v.addf("%s: period_days must not exceed %d (got %d); a longer period overflows the calendar arithmetic that walks this tier's window back from today, and a tier that overflows selects nothing at all", path, retentionTierPeriodDaysMax, t.PeriodDays)
 			}
 		} else if t.PeriodDays != 0 {
 			v.addf("%s: period_days is only meaningful with granularity %q (got %d alongside granularity %q)", path, GranularityDays, t.PeriodDays, t.Granularity)
@@ -623,8 +648,17 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 		// the default" reading available: the operator listed this tier
 		// deliberately, so a zero window is a mistake, and the way to run
 		// without a tier is to leave it out of the chain.
-		if t.Keep <= 0 {
-			v.addf("%s: keep must be a positive number of look-back units (got %d); leave a tier out of the chain rather than writing it with a zero window", path, t.Keep)
+		switch {
+		case t.Keep <= 0:
+			// The advice has to carry the fallback with it. "Leave this
+			// tier out" is right for one tier and wrong for all of them:
+			// an operator who follows it down to the last tier arrives at
+			// an empty list, which reads as an absent key and reinstates
+			// the default chain rather than the narrow policy they were
+			// writing (see Retention.Tiers' own doc).
+			v.addf("%s: keep must be a positive number of look-back units (got %d); drop this one tier from the chain rather than writing it with a zero window, and note that emptying retention.tiers entirely falls back to the default daily/weekly/monthly policy instead of keeping nothing", path, t.Keep)
+		case t.Keep > retentionTierKeepMax:
+			v.addf("%s: keep must not exceed %d look-back units (got %d); a longer window overflows the calendar arithmetic that walks it back from today, and a tier that overflows selects nothing at all", path, retentionTierKeepMax, t.Keep)
 		}
 
 		switch {

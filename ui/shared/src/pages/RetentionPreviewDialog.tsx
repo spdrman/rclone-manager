@@ -9,25 +9,11 @@ import {
 } from "@shared/state/appNodes";
 import { useCausl } from "@shared/state/graph";
 import { useResource } from "@shared/state/resource";
-import type { RetentionClass, RetentionPlan, RetentionVerdict } from "@shared/types/backup";
+import type { RetentionPlan, RetentionVerdict } from "@shared/types/backup";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
-import { RetentionBadges } from "@shared/components/RetentionBadge";
+import { RetentionTierBadges } from "@shared/components/RetentionBadge";
 import { bytes } from "@shared/utilities/format";
-
-/** internal/retention.GFSTier / TierLastKnownGood's own string values,
- *  mapped to RetentionBadge's vocabulary. Any tier this dialog doesn't
- *  recognise is simply not badged — never a crash over an unexpected string. */
-const TIER_TO_CLASS: Record<string, RetentionClass> = {
-  DAILY: "daily",
-  WEEKLY: "weekly",
-  MONTHLY: "monthly",
-  LAST_KNOWN_GOOD: "protected"
-};
-
-function tierClasses(tiers: string[]): RetentionClass[] {
-  return tiers.map((t) => TIER_TO_CLASS[t]).filter((c): c is RetentionClass => c !== undefined);
-}
 
 function describeApplyError(e: unknown): ApiError {
   return e instanceof BackupManagerError
@@ -247,7 +233,7 @@ export function RetentionPreviewDialog({
                     {keepVerdicts.map((v) => (
                       <li key={v.artifact} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: "var(--text-sm)" }}>
                         <span className="mono">{v.artifact}</span>
-                        <RetentionBadges classes={tierClasses(v.tiers)} />
+                        <RetentionTierBadges tiers={v.tiers} />
                       </li>
                     ))}
                   </ul>

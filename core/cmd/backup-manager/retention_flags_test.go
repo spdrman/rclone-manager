@@ -462,3 +462,69 @@ func TestApplyRetentionOverrides_InvalidTierIsRefusedWithConfigsOwnErrorText(t *
 		t.Errorf("CLI error text diverged from the config file's:\n cli  = %v\n file = %v", err, wantErr)
 	}
 }
+
+// TestApplyRetentionOverrides_ARefusalLeavesThePolicyUntouched holds the
+// function to the all-or-nothing contract its own doc implies. A refused
+// override used to return with the three scalars already folded onto *r,
+// so the caller was left holding a policy carrying both spellings at once
+// (a tiers list plus a scalar), which is the exact state the refusal
+// exists to prevent and which config.EffectiveTiers resolves silently
+// rather than refusing. No caller reads r after an error today; this is a
+// policy that decides deletions, so the next one should not have to know
+// that.
+func TestApplyRetentionOverrides_ARefusalLeavesThePolicyUntouched(t *testing.T) {
+	chainPolicy := func(t *testing.T) config.Retention {
+		t.Helper()
+		r := config.Retention{Timezone: "UTC", WeekStartsOn: "monday",
+			Tiers: []config.RetentionTier{{Name: "annual", Granularity: config.GranularityYear, Keep: 10}}}
+		if err := config.ValidateRetention(&r); err != nil {
+			t.Fatalf("baseline chain policy: %v", err)
+		}
+		return r
+	}
+
+	t.Run("a scalar flag against a configured chain", func(t *testing.T) {
+		r := chainPolicy(t)
+		before := r
+		o := parseRetentionArgs(t, "-daily-days", "5")
+		if err := applyRetentionOverrides(&r, o); err == nil {
+			t.Fatal("applyRetentionOverrides accepted -daily-days against a configured chain")
+		}
+		if r.DailyDays != before.DailyDays || r.WeeklyMonths != before.WeeklyMonths || r.MonthlyMonths != before.MonthlyMonths {
+			t.Errorf("the refused override still wrote the scalars: %d/%d/%d, want %d/%d/%d",
+				r.DailyDays, r.WeeklyMonths, r.MonthlyMonths, before.DailyDays, before.WeeklyMonths, before.MonthlyMonths)
+		}
+		if len(r.Tiers) != len(before.Tiers) {
+			t.Errorf("Tiers = %+v, want %+v", r.Tiers, before.Tiers)
+		}
+		if err := config.ValidateRetention(&r); err != nil {
+			t.Errorf("the policy left behind by a refused override no longer validates: %v", err)
+		}
+	})
+
+	t.Run("both spellings on one command line", func(t *testing.T) {
+		r := resolvedRetention(t)
+		before := r
+		o := parseRetentionArgs(t, "-tier", "daily:day:2", "-daily-days", "5", "-timezone", "America/Vancouver")
+		if err := applyRetentionOverrides(&r, o); err == nil {
+			t.Fatal("applyRetentionOverrides accepted -tier alongside -daily-days")
+		}
+		if r.DailyDays != before.DailyDays || r.Timezone != before.Timezone || len(r.Tiers) != len(before.Tiers) {
+			t.Errorf("the refused override mutated the policy: %+v, want %+v", r, before)
+		}
+	})
+
+	// The control: an accepted override still has to actually land, or
+	// the assertions above would pass against a function that writes
+	// nothing at all.
+	t.Run("control: an accepted override does mutate the policy", func(t *testing.T) {
+		r := resolvedRetention(t)
+		o := parseRetentionArgs(t, "-daily-days", "5", "-timezone", "America/Vancouver")
+		if err := applyRetentionOverrides(&r, o); err != nil {
+			t.Fatalf("applyRetentionOverrides: %v", err)
+		}
+		if r.DailyDays != 5 || r.Timezone != "America/Vancouver" {
+			t.Errorf("accepted override did not land: daily_days=%d timezone=%q", r.DailyDays, r.Timezone)
+		}
+	})
+}

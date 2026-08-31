@@ -577,12 +577,105 @@ func TestGFSDecideRejectsAnUnusableTier(t *testing.T) {
 		gfsAssertTiers(t, got, "only", []GFSTier{"DAILY"})
 	})
 
+	t.Run("the reserved last-known-good name", func(t *testing.T) {
+		cfg := gfsTierChainCfg("UTC", "monday", config.RetentionTier{Name: config.TierLastKnownGoodName, Granularity: config.GranularityDay, Keep: 3})
+		if _, err := GFSDecide(now, cfg, set, records); err == nil {
+			t.Fatal("GFSDecide accepted a tier named last_known_good; a GFS selection reported under FR-19's own wire name is indistinguishable from a protected artifact in a verdict's tier list")
+		}
+	})
+
+	// The disabled reading survives, but only per tier: the chain as a
+	// whole still has to have something enabled in it (see
+	// TestGFSDecideRefusesAChainWithNoEnabledTier), so this fixture pairs
+	// the zeroed tier with a live one.
 	t.Run("a non-positive window is a disabled tier, not an error", func(t *testing.T) {
-		cfg := gfsTierChainCfg("UTC", "monday", config.RetentionTier{Name: "daily", Granularity: config.GranularityDay, Keep: 0})
+		cfg := gfsTierChainCfg("UTC", "monday",
+			config.RetentionTier{Name: "daily", Granularity: config.GranularityDay, Keep: 0},
+			config.RetentionTier{Name: "annual", Granularity: config.GranularityYear, Keep: 1},
+		)
 		got, err := GFSDecide(now, cfg, set, records)
 		if err != nil {
 			t.Fatalf("GFSDecide: %v", err)
 		}
-		gfsAssertKeptNames(t, got, nil)
+		gfsAssertTiers(t, got, "only", []GFSTier{"ANNUAL"})
 	})
+}
+
+// TestGFSDecideRefusesAChainWithNoEnabledTier is the chain-level half of
+// the rule TestGFSDecideRejectsAnUnusableTier pins per tier: a chain this
+// package cannot get a single selection out of is an error, never a KEEP
+// set of nothing.
+//
+// The per-tier "a non-positive keep means this tier is off" reading is
+// what makes the hole: applied to every tier at once it resolves cleanly
+// to KEEP = {}, and DELETE is everything KEEP did not claim, so FR-20 is
+// handed every managed-complete artifact in the set. The three legacy
+// scalars left at zero are the shape that actually arrives, because
+// config.DefaultTierChain expands them straight into three tiers with
+// Keep: 0 for any caller that skipped config.Validate.
+func TestGFSDecideRefusesAChainWithNoEnabledTier(t *testing.T) {
+	set := gfsMustSet(t, "chain", "all-off")
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	records := gfsChainRecords(t, set, map[string]time.Time{
+		"a": time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC),
+		"b": time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC),
+		"c": time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC),
+	})
+
+	// Not config.Retention{}: the zero value fails on week_starts_on
+	// first, so a test written that way would pass for the wrong reason
+	// and keep passing with the chain check removed.
+	t.Run("the three legacy scalars all left at zero", func(t *testing.T) {
+		cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday"}
+		got, err := GFSDecide(now, cfg, set, records)
+		if err == nil {
+			t.Fatalf("GFSDecide accepted a policy whose every tier is disabled and kept %d of %d artifacts; an empty KEEP is a proposal to delete the whole set", gfsKeptCount(got), len(records))
+		}
+	})
+
+	t.Run("an explicit chain whose every tier is disabled", func(t *testing.T) {
+		cfg := gfsTierChainCfg("UTC", "monday",
+			config.RetentionTier{Name: "daily", Granularity: config.GranularityDay, Keep: 0},
+			config.RetentionTier{Name: "annual", Granularity: config.GranularityYear, Keep: -3},
+		)
+		if _, err := GFSDecide(now, cfg, set, records); err == nil {
+			t.Fatal("GFSDecide accepted an explicit chain in which no tier is enabled")
+		}
+	})
+
+	// The control: the refusal is about the whole chain being off, not
+	// about any single zeroed tier, so one live tier is enough.
+	t.Run("control: one enabled tier alongside a disabled one is accepted", func(t *testing.T) {
+		cfg := gfsTierChainCfg("UTC", "monday",
+			config.RetentionTier{Name: "daily", Granularity: config.GranularityDay, Keep: 0},
+			config.RetentionTier{Name: "annual", Granularity: config.GranularityYear, Keep: 1},
+		)
+		got, err := GFSDecide(now, cfg, set, records)
+		if err != nil {
+			t.Fatalf("GFSDecide refused a chain with a live tier in it: %v", err)
+		}
+		gfsAssertKeptNames(t, got, []string{"a"})
+	})
+
+	// The other control: the legacy scalars, resolved the way
+	// config.Validate resolves them, still decide exactly as they always
+	// have.
+	t.Run("control: the resolved 7/3/12 scalars are accepted", func(t *testing.T) {
+		cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday", DailyDays: 7, WeeklyMonths: 3, MonthlyMonths: 12}
+		got, err := GFSDecide(now, cfg, set, records)
+		if err != nil {
+			t.Fatalf("GFSDecide refused the default chain: %v", err)
+		}
+		gfsAssertKeptNames(t, got, []string{"a", "b", "c"})
+	})
+}
+
+func gfsKeptCount(verdicts []GFSVerdict) int {
+	n := 0
+	for _, v := range verdicts {
+		if v.Keep {
+			n++
+		}
+	}
+	return n
 }

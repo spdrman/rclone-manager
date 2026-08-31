@@ -38,16 +38,27 @@ func retentionTestConfig(bs config.BackupSet, ret config.Retention) *config.Conf
 	}
 }
 
-// retentionAllTiersDisabled mirrors internal/retention's own
-// pruneAllTiersDisabled test helper: every GFS tier off and last-known-good
-// protection off, so a managed-complete artifact's Keep flag depends on
-// nothing this file did not put there itself. A backup set with exactly
-// one such artifact is therefore a guaranteed PruneDelete candidate,
-// without this file needing a second, differently-dated artifact just to
-// prove a plan actually selects something for deletion.
-func retentionAllTiersDisabled() config.Retention {
+// retentionTodayOnlyChain mirrors internal/retention's own
+// pruneTodayOnlyChain test helper: a live chain of one daily tier whose
+// window is today alone, and last-known-good protection off. Every
+// artifact this file seeds is dated well in the past, so each one is a
+// guaranteed PruneDelete candidate and its Keep flag depends on nothing
+// this file did not put there itself, without needing a second,
+// differently-dated artifact just to prove a plan selects something.
+//
+// The narrow live tier replaces what used to be "every tier disabled",
+// which internal/retention now refuses outright: a chain that can select
+// nothing hands FR-20 the whole backup set.
+func retentionTodayOnlyChain() config.Retention {
 	off := false
-	return config.Retention{Timezone: "UTC", WeekStartsOn: "monday", ProtectLastKnownGood: &off}
+	return config.Retention{
+		Timezone:     "UTC",
+		WeekStartsOn: "monday",
+		Tiers: []config.RetentionTier{
+			{Name: "daily", Granularity: config.GranularityDay, Keep: 1},
+		},
+		ProtectLastKnownGood: &off,
+	}
 }
 
 // seedCompleteArtifact writes a real local file for bs/name and records it
@@ -115,7 +126,7 @@ func TestPreviewRetention_ReturnsSpecSchemaFields(t *testing.T) {
 	discoveredAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	seedCompleteArtifact(t, ctx, journal, bs, "backup.dump", discoveredAt, "twenty bytes!!!!!!!!")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	before := now()
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
@@ -171,7 +182,7 @@ func TestApplyRetentionPlan_StalePlanRejectedWithZeroDeletions(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", discoveredAt, "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	// GIVEN plan P selects A for deletion.
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
@@ -224,7 +235,7 @@ func TestApplyRetentionPlan_ValidPlanAppliesExactly(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", discoveredAt, "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -307,7 +318,7 @@ func TestApplyRetentionPlan_ExpiredPlanIsStaleWithZeroDeletions(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", discoveredAt, "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -337,7 +348,7 @@ func TestPreviewRetention_UnknownBackupSetReturnsErrBackupSetNotFound(t *testing
 	}
 }
 
-// retentionOn is retentionAllTiersDisabled's opposite: every GFS tier and
+// retentionOn is retentionTodayOnlyChain's opposite: every GFS tier and
 // last-known-good protection live, for the one test below that actually
 // needs them.
 func retentionOn(dailyDays, weeklyMonths, monthlyMonths int) config.Retention {
@@ -366,7 +377,7 @@ func hasTier(tiers []string, want string) bool {
 // retention decision path (not a mock), against a backup set with daily/
 // weekly/monthly and last-known-good artifacts mixed together — every
 // other test in this file either disables every tier
-// (retentionAllTiersDisabled) or exercises exactly one artifact, neither of
+// (retentionTodayOnlyChain) or exercises exactly one artifact, neither of
 // which proves the daily/weekly/monthly/last-known-good union (FR-18's own
 // formula) actually composes correctly all the way from PreviewRetention
 // through ApplyRetentionPlan.
@@ -595,7 +606,7 @@ func TestApplyRetentionPlan_RefusedWhileACycleIsRunningAndConsumesNothing(t *tes
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -647,7 +658,7 @@ func TestClaimRetentionPlan_ConcurrentClaimsOfOnePlanIDOnlyOneWins(t *testing.T)
 	ctx := context.Background()
 
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -697,7 +708,7 @@ func TestApplyRetentionPlan_ConcurrentAppliesDeleteExactlyOnce(t *testing.T) {
 
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -757,7 +768,7 @@ func TestApplyRetentionPlan_PlanIDSubmittedForAnotherBackupSetIsRefused(t *testi
 
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -805,7 +816,7 @@ func TestApplyRetentionPlan_SuccessInvalidatesThisSetsOtherPlans(t *testing.T) {
 
 	cfg := &config.Config{
 		Sources:   []config.Source{{Name: "production", BackupSets: []config.BackupSet{first, otherSet}}},
-		Retention: retentionAllTiersDisabled(),
+		Retention: retentionTodayOnlyChain(),
 	}
 	svc := New(cfg, journal, nil, nil)
 
@@ -847,7 +858,7 @@ func TestPreviewRetention_SweepsExpiredPlansAndCapsTheStore(t *testing.T) {
 	journal := openTestJournal(t)
 	ctx := context.Background()
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	setClock := pinClock(t, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
 

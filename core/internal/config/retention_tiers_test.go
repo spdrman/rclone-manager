@@ -190,6 +190,30 @@ func TestValidateRetention_TierFieldRules(t *testing.T) {
 			wantErr: "keep",
 		},
 		{
+			name:     "keep is accepted right up to its ceiling",
+			accepted: true,
+			tiers:    []RetentionTier{{Name: "daily", Granularity: GranularityDay, Keep: retentionTierKeepMax}},
+		},
+		{
+			// Large enough to wrap time.Date's own int64 arithmetic, which
+			// puts the window's start date after today and makes the tier
+			// select nothing at all, with no error: the same silent empty
+			// selection every other rule in this function refuses.
+			name:    "keep is bounded from above",
+			tiers:   []RetentionTier{{Name: "annual", Granularity: GranularityYear, Keep: 300000000000}},
+			wantErr: "keep",
+		},
+		{
+			name:     "period_days is accepted right up to its ceiling",
+			accepted: true,
+			tiers:    []RetentionTier{{Name: "decadal", Granularity: GranularityDays, PeriodDays: retentionTierPeriodDaysMax, Keep: 4}},
+		},
+		{
+			name:    "period_days is bounded from above",
+			tiers:   []RetentionTier{{Name: "fortnightly", Granularity: GranularityDays, PeriodDays: 300000000000, Keep: 26}},
+			wantErr: "period_days",
+		},
+		{
 			name:    "period_days is required for a custom period",
 			tiers:   []RetentionTier{{Name: "fortnightly", Granularity: GranularityDays, Keep: 26}},
 			wantErr: "period_days",
@@ -263,5 +287,48 @@ func TestLoad_RetentionTiersRoundTripFromYAML(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate on the parsed chain: %v", err)
+	}
+}
+
+// TestValidateRetention_KeepMessageDoesNotAdviseEmptyingTheChain covers
+// the one piece of advice in this package that pointed somewhere
+// dangerous. "Leave a tier out of the chain rather than writing it with a
+// zero window" is right for one tier and wrong for all of them: an
+// operator who follows it down to the last tier arrives at tiers: [],
+// which is indistinguishable from an absent key and reinstates the
+// default 7/3/12 chain rather than the narrow policy they were writing.
+func TestValidateRetention_KeepMessageDoesNotAdviseEmptyingTheChain(t *testing.T) {
+	r := retentionWithTiers(RetentionTier{Name: "daily", Granularity: GranularityDay, Keep: 0})
+	err := ValidateRetention(&r)
+	if err == nil {
+		t.Fatal("ValidateRetention accepted a zero keep")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "retention.tiers[0]") || !strings.Contains(msg, "keep") {
+		t.Fatalf("error %q does not locate the offending field", msg)
+	}
+	// The message has to carry the fallback with it, because the fallback
+	// is what makes the advice safe to follow.
+	for _, want := range []string{"daily", "weekly", "monthly"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q does not warn that emptying retention.tiers falls back to the default %s tier", msg, want)
+		}
+	}
+}
+
+// TestValidateRetention_ExplicitlyEmptyTiersFallsBackToTheDefaultChain
+// pins the reading the message above now warns about, so the behaviour is
+// documented by a test rather than only by prose. This is deliberately
+// fail-safe (more retention, not less); refusing it outright needs a
+// schema change and is tracked separately.
+func TestValidateRetention_ExplicitlyEmptyTiersFallsBackToTheDefaultChain(t *testing.T) {
+	r := Retention{Timezone: "UTC", WeekStartsOn: "monday", Tiers: []RetentionTier{}}
+	mustValidateRetention(t, &r)
+
+	if r.DailyDays != 7 || r.WeeklyMonths != 3 || r.MonthlyMonths != 12 {
+		t.Errorf("resolved to %d/%d/%d, want 7/3/12", r.DailyDays, r.WeeklyMonths, r.MonthlyMonths)
+	}
+	if got := len(r.EffectiveTiers()); got != 3 {
+		t.Errorf("EffectiveTiers() has %d tier(s), want the 3-tier default chain", got)
 	}
 }

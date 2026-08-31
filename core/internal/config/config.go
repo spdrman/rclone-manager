@@ -349,9 +349,20 @@ type Retention struct {
 	// Tiers are mutually exclusive: see Tiers' own doc, and validate.go's
 	// validateRetention, for why that is an error rather than a silent
 	// precedence rule.
-	DailyDays     int `yaml:"daily_days"`
-	WeeklyMonths  int `yaml:"weekly_months"`
-	MonthlyMonths int `yaml:"monthly_months"`
+	//
+	// All three carry omitempty because this config file is not only read
+	// by the product, it is rewritten by it: core/service's
+	// writeConfigAtomically re-marshals the whole Config on every wizard
+	// save. Without omitempty a tiers-based policy comes back from that
+	// round trip with "daily_days: 0" sitting above the operator's chain,
+	// which reads as "daily retention is off" and invites the one edit
+	// (setting it to 7) that Validate refuses outright, leaving a daemon
+	// that will not start. Zero already means "not configured" for all
+	// three, and validateRetention resolves them to 7/3/12 before any
+	// write, so nothing is lost by omitting them.
+	DailyDays     int `yaml:"daily_days,omitempty"`
+	WeeklyMonths  int `yaml:"weekly_months,omitempty"`
+	MonthlyMonths int `yaml:"monthly_months,omitempty"`
 
 	// Tiers is FR-18's generalized retention chain: an ordered list of any
 	// number of named tiers, each bucketing artifacts at its own
@@ -367,10 +378,25 @@ type Retention struct {
 	// both is asking two different questions, and picking one silently is
 	// how a retention policy ends up deleting on terms nobody wrote.
 	//
+	// An explicitly empty list (tiers: []) is not distinguishable from an
+	// absent key here and reads the same way: the three scalars above,
+	// which resolve to 7/3/12. So emptying the chain does not spell "keep
+	// nothing", it reinstates the default daily/weekly/monthly policy.
+	// That is deliberately the fail-safe direction (more retention, not
+	// less), and it is why the keep validation message points at dropping
+	// one tier rather than at emptying the list. There is no "keep
+	// nothing" spelling in this schema at all: retention is turned off by
+	// not running a retention pass.
+	//
 	// Order is the order the operator wrote, and is preserved end to end
 	// (it fixes the order tier names appear in a KEEP verdict). Because
 	// KEEP is a union, order never changes which artifacts are kept.
-	Tiers []RetentionTier `yaml:"tiers"`
+	//
+	// omitempty for the same round-trip reason as the three scalars
+	// above: a legacy config file must not come back from a wizard save
+	// with an empty "tiers: []" injected into it, which an older binary
+	// then rejects outright under Load's KnownFields(true).
+	Tiers []RetentionTier `yaml:"tiers,omitempty"`
 
 	ProtectLastKnownGood *bool `yaml:"protect_last_known_good"`
 }
@@ -422,8 +448,10 @@ type RetentionTier struct {
 
 	// PeriodDays is the length of a custom period, in days. It is
 	// required when Granularity is GranularityDays and must be zero
-	// otherwise.
-	PeriodDays int `yaml:"period_days"`
+	// otherwise, hence omitempty: the schema doc says period_days is
+	// absent from every other tier, and a config file this product wrote
+	// should read the way the doc says one looks.
+	PeriodDays int `yaml:"period_days,omitempty"`
 
 	// Keep is how many of this tier's look-back units to reach back over,
 	// counting the current one. Keep: 7 on a day-granularity tier is
@@ -440,7 +468,11 @@ type RetentionTier struct {
 	// Without this field that default could not be expressed in the new
 	// schema, and "the old keys keep producing identical decisions" would
 	// be false for one tier out of three.
-	WindowUnit string `yaml:"window_unit"`
+	//
+	// omitempty for the same reason as PeriodDays: empty means "defaults
+	// to Granularity", which is the ordinary case, so a written-back
+	// config should not carry a window_unit: "" on every tier.
+	WindowUnit string `yaml:"window_unit,omitempty"`
 }
 
 // DefaultTierChain returns the three-tier chain the DailyDays,

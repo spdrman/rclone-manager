@@ -1094,6 +1094,16 @@ configuration error, not a silent precedence rule: an operator who writes
 both is asking two different questions and deserves to be told so rather
 than have one answer quietly discarded.
 
+An explicitly empty `tiers: []` is not distinguishable from an absent key
+and reads the same way: the three scalars, which resolve to 7/3/12. So
+emptying the chain does **not** spell "keep nothing", it reinstates the
+default daily/weekly/monthly policy. There is deliberately no "keep
+nothing" spelling in the schema at all, and no chain out of which nothing
+can be selected is accepted: a policy with every tier disabled is refused
+rather than resolved to an empty KEEP, because an empty KEEP puts every
+managed backup in the set on the delete side. Retention is turned off by
+not running a retention pass.
+
 ------------------------------------------------------------------------
 
 ## FR-19 --- Last-Known-Good Protection

@@ -125,10 +125,18 @@ export interface RetentionVerdict {
   action: RetentionVerdictAction;
   reason: string;
   /**
-   * Populated only for a KEEP verdict: which GFS tier(s) selected it
-   * ("DAILY"/"WEEKLY"/"MONTHLY") and/or "LAST_KNOWN_GOOD"
-   * (internal/retention.TierLastKnownGood) if last-known-good protection
-   * is what kept it. Empty for DELETE/REFUSE.
+   * Populated only for a KEEP verdict: which retention tier(s) selected it,
+   * and/or "LAST_KNOWN_GOOD" (internal/retention.TierLastKnownGood) if
+   * last-known-good protection is what kept it. Empty for DELETE/REFUSE.
+   *
+   * The value set is OPEN, not the three legacy names. FR-18's retention
+   * policy is a chain of operator-defined tiers (core/internal/config's
+   * Retention.Tiers), and each entry here is one tier's configured `name`
+   * upper-cased, so "SEMI_ANNUAL", "ANNUAL" or "FORTNIGHTLY" are all
+   * ordinary values. Config constrains a name to ^[a-z][a-z0-9_]*$, so the
+   * string is bounded, but nothing in this UI may treat an unrecognised
+   * tier as "no tier": see RetentionTierBadges, which badges an unknown
+   * tier under its own name rather than dropping it.
    */
   tiers: string[];
 }

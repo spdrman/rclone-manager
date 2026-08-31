@@ -77,10 +77,18 @@ const (
 )
 
 // gfsTierName renders a configured tier's name for the wire. Uppercasing
-// is the whole transformation: config.Validate already constrains a name
-// to lower_snake_case, so this cannot produce anything a client has to
-// parse defensively, and "daily" lands on GFSDaily by construction rather
-// than through a lookup table that could fall out of step with it.
+// is the whole transformation, so "daily" lands on GFSDaily by
+// construction rather than through a lookup table that could fall out of
+// step with it.
+//
+// The set of strings this can produce is open, and a client has to treat
+// it that way: FR-18's chain is operator-defined, so SEMI_ANNUAL, ANNUAL
+// or any other name a config file spells arrives here. What bounds the
+// shape of that string is config.Validate's lower_snake_case rule, which
+// belongs to config alone and is not re-checked here; the one name this
+// function's caller does refuse is FR-19's reserved LAST_KNOWN_GOOD (see
+// gfsResolveTier), because that one is not merely unrecognised by a
+// client, it means something else.
 func gfsTierName(configured string) GFSTier {
 	return GFSTier(strings.ToUpper(configured))
 }
@@ -161,6 +169,9 @@ var gfsWeekdaysByName = map[string]time.Weekday{
 // (daily_days: 7 and so on). A tier whose configured window is zero or
 // negative is treated as disabled (it selects nothing), not as an error,
 // since a caller that bypasses Validate has no other way to spell that.
+// That reading is per tier only: a chain in which every tier is disabled
+// is refused, because "keeps nothing" is not a retention policy (see
+// gfsResolveChain).
 //
 // The chain GFSDecide decides with is cfg.EffectiveTiers(): the explicit
 // cfg.Tiers list when one is configured, and otherwise the three legacy
@@ -171,8 +182,9 @@ var gfsWeekdaysByName = map[string]time.Weekday{
 // produce the identical decisions it always has.
 //
 // A tier GFSDecide cannot evaluate at all (an unknown granularity, a
-// custom period with no length, an empty name) is an error, not a tier
-// that quietly selects nothing. The difference matters because this
+// custom period with no length, an empty name), and a whole chain in
+// which no tier is enabled, are errors, not a chain that quietly selects
+// nothing. The difference matters because this
 // output feeds FR-20: a chain silently reduced to "keeps nothing" would
 // turn a config typo into a proposal to delete every backup in the set.
 //
