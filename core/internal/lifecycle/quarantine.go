@@ -273,6 +273,16 @@ type ReinstatementEvidence struct {
 	HashMatched     bool
 	ValidatorPassed bool
 
+	// AnyCheckFailed is true when any check the caller ran did not pass,
+	// and it refuses the reinstatement on its own no matter what else is
+	// set. A mixed verdict is a failing verdict: a restore-test hook that
+	// passes does not excuse a recorded hash that no longer matches,
+	// because the copy the hook just exercised is then demonstrably not
+	// the copy this manager verified. The caller reports it rather than
+	// this package inferring it from the two positives above, since a
+	// caller can run checks this package knows nothing about.
+	AnyCheckFailed bool
+
 	// Summary is the human-readable rendering of everything the caller
 	// checked, recorded verbatim in the transition's detail so a later
 	// reader of the append-only log can see which evidence carried the
@@ -381,18 +391,21 @@ func AsNeverHeldTargetState(err error) (*NeverHeldTargetStateError, bool) {
 //     is exactly the case where re-ingesting cannot help and keeping the
 //     local copy is the only recovery there is.
 //
-//  2. The evidence is conclusive: at least one check that could have
+//  2. Nothing that ran failed. A mixed verdict is a failing verdict; see
+//     ReinstatementEvidence.AnyCheckFailed.
+//
+//  3. The evidence is conclusive: at least one check that could have
 //     failed on content actually ran and passed. See
 //     ReinstatementEvidence.
 //
-//  3. If the artifact's own record carries a FAILED validator verdict,
+//  4. If the artifact's own record carries a FAILED validator verdict,
 //     the validator itself has to have run and passed now. Hash evidence
 //     cannot answer a validator's rejection: it proves the bytes are
 //     unchanged, and the unchanged bytes are precisely what the validator
 //     refused. The evidence has to address the reason for the distrust,
 //     not merely be strong in the abstract.
 //
-//  4. The append-only transition log records this artifact having entered
+//  5. The append-only transition log records this artifact having entered
 //     the target state before, else *NeverHeldTargetStateError.
 //
 // Every refusal happens before any write, so a refused reinstatement
@@ -437,6 +450,14 @@ func ReinstateFromQuarantine(ctx context.Context, d Deps, p QuarantineReinstateP
 	target, ok := ReinstatementTarget(current)
 	if !ok {
 		return state.Outcome{}, &NotQuarantinedError{Artifact: p.Artifact, Current: current}
+	}
+
+	if p.Evidence.AnyCheckFailed {
+		return state.Outcome{}, &InsufficientEvidenceError{
+			Artifact: p.Artifact,
+			Reason: "at least one check that ran did not pass, and a mixed verdict is a failing verdict: whatever else was proved, something about this durable local copy is not what it was when this manager verified it" +
+				summarySuffix(p.Evidence.Summary),
+		}
 	}
 
 	if !p.Evidence.conclusive() {

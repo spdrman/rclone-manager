@@ -27,6 +27,19 @@ var ErrArtifactNotQuarantined = errors.New("service: artifact is not quarantined
 // remains anywhere to re-ingest.
 var ErrArtifactIrrecoverable = errors.New("service: artifact has no remaining source to re-ingest")
 
+// ErrReinstatementRefused is returned by ReinstateArtifact when the checks
+// it ran are not enough to trust the artifact again, or when the artifact
+// never held the state it would be returned to.
+//
+// It is deliberately distinct from a failing check. A failing check says
+// the durable local copy is bad, which no configuration change fixes; this
+// says the copy may well be fine but what could be proved about it does
+// not justify re-trusting it, which an operator CAN act on (repair the
+// validator the backup set names, so it runs and passes, or re-ingest
+// instead). Collapsing the two would leave an operator with no way to tell
+// "your backup is gone" from "run the validator".
+var ErrReinstatementRefused = errors.New("service: the evidence is not enough to trust this artifact again")
+
 // Artifact is the plain, provider-agnostic shape of one journal row: what
 // this backup is, where it came from, whether it is trustworthy, and
 // whether the remote source has been released.
@@ -200,6 +213,83 @@ type ArtifactCheck struct {
 	Checked bool
 	Passed  bool
 	Reason  string
+}
+
+// ArtifactReinstatement is ReinstateArtifact's outcome.
+//
+// Reinstated and Passed are separate on purpose. Passed is the verdict of
+// the checks that ran; Reinstated is whether the artifact actually moved.
+// They agree in the ordinary cases and a caller still must not conflate
+// them, because "the checks passed and it moved" and "the checks failed
+// and it did not" are not the only two outcomes this can have.
+type ArtifactReinstatement struct {
+	Checked bool
+	Passed  bool
+	Reason  string
+
+	// Reinstated is true only when the artifact was actually returned to
+	// a trusted state.
+	Reinstated bool
+
+	// State is the lifecycle state the artifact was returned to
+	// ("COMMITTED" or "COMPLETE"), empty when nothing moved.
+	State string
+}
+
+// ReinstateArtifact re-checks one quarantined artifact's durable local copy
+// and, when what it finds is enough, returns it to the state it already
+// held so it counts as a restore point again.
+//
+// This is the answer for the two cases RetryArtifactIngestion cannot
+// serve: the local copy is fine and the quarantine was the mistake, or the
+// remote source is gone while the local copy is intact, so there is
+// nothing left to re-ingest from. Before it existed the only remaining
+// option was to leave the artifact quarantined forever.
+//
+// A reinstated artifact never authorises a remote delete again. That
+// forfeiture is permanent and is what makes the whole action safe to
+// offer; see core/internal/lifecycle's DeleteRemote for where it is
+// enforced and why it is enforced there.
+func (b *BackupService) ReinstateArtifact(ctx context.Context, id, note string) (ArtifactReinstatement, error) {
+	artifactID, err := app.ParseArtifactID(id)
+	if err != nil {
+		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
+	}
+
+	result, err := b.state.Load().inner.ReinstateQuarantined(ctx, artifactID, note)
+	switch {
+	case errors.Is(err, state.ErrArtifactNotFound):
+		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
+	case errors.Is(err, app.ErrNotQuarantined):
+		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case err != nil:
+		// internal/lifecycle's own two refusals are business outcomes an
+		// operator reads and acts on, not infrastructure failures, so they
+		// are translated rather than passed through as a generic error.
+		// A caller outside core/ cannot name those types, and the
+		// distinction between "the evidence was inconclusive" and "this
+		// artifact never held that state" is not one an API client acts on
+		// differently: both mean "not on this evidence", and both carry
+		// their own explanation in the message.
+		if _, ok := lifecycle.AsInsufficientEvidence(err); ok {
+			return ArtifactReinstatement{}, fmt.Errorf("%w: %v", ErrReinstatementRefused, err)
+		}
+		if _, ok := lifecycle.AsNeverHeldTargetState(err); ok {
+			return ArtifactReinstatement{}, fmt.Errorf("%w: %v", ErrReinstatementRefused, err)
+		}
+		if _, ok := lifecycle.AsNotQuarantined(err); ok {
+			return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+		}
+		return ArtifactReinstatement{}, fmt.Errorf("service: reinstating %s: %w", id, err)
+	}
+
+	return ArtifactReinstatement{
+		Checked:    result.Checked,
+		Passed:     result.Passed,
+		Reason:     result.Reason,
+		Reinstated: result.Reinstated,
+		State:      string(result.NewState),
+	}, nil
 }
 
 // RetryArtifactIngestion returns one QUARANTINED artifact to DISCOVERED so

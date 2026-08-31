@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "c2d08cc1ac021861bd2b2049af8a6d3d32a57f320def278e4979d6c8e34483f9";
+export const CONTRACT_SHA256 = "adfd846d5d4357729d74bd883ec9899db5fff75f194bd1be154d18446c6dfc3b";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -45,6 +45,7 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_NOT_FOUND",
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
+  "REINSTATEMENT_REFUSED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -102,6 +103,7 @@ export const API_ERROR_CODES = [
   "ARTIFACT_NOT_FOUND",
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
+  "REINSTATEMENT_REFUSED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -111,7 +113,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -545,6 +547,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "reinstateArtifact",
+    method: "POST",
+    path: "/quarantine/{id}/reinstate",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "ArtifactReinstateResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["ARTIFACT_NOT_FOUND"],
+      409: ["ARTIFACT_NOT_QUARANTINED", "REINSTATEMENT_REFUSED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "retryArtifactIngestion",
     method: "POST",
     path: "/quarantine/{id}/retry",
@@ -835,6 +857,22 @@ export interface WireArtifactCheckResponse {
   checked: boolean;
   passed: boolean;
   reason?: string;
+}
+
+/** POST /quarantine/{id}/reinstate. Re-checks one quarantined
+ *  backup's durable local copy and, when what it finds is enough,
+ *  returns it to the state it already held so it counts as a restore
+ *  point again. `reinstated` and `passed` are separate: `passed` is
+ *  the verdict of the checks, `reinstated` is whether the backup
+ *  actually moved. A backup reinstated this way NEVER authorises
+ *  deleting its remote source again; that forfeiture is permanent and
+ *  is what makes the action safe to offer. */
+export interface WireArtifactReinstateResponse {
+  checked: boolean;
+  passed: boolean;
+  reason?: string;
+  reinstated: boolean;
+  state?: string;
 }
 
 /** The FLAT error body the /auth operations return, with the

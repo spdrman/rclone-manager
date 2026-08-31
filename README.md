@@ -90,7 +90,7 @@ Four of those were the wrong path for an operation that existed, and are now the
 The other ten are real surfaces, added spec-first (contract, regenerate, then handlers) over
 reads core has always computed and `backup-manager artifacts`, `status` and `catalog`
 already print: the backups list and one backup, the activity feed over the append-only
-lifecycle record, quarantine plus its revalidate and retry actions, the operations list,
+lifecycle record, quarantine plus its revalidate, retry and reinstate actions, the operations list,
 enabling and disabling a backup set, the FR-24 health verdict, and catalog scan and rebuild.
 
 **What keeps it that way is a check, not this paragraph.**
@@ -509,12 +509,22 @@ in the project on purpose," and it is the only call site allowed to invoke
 `Transport.DeleteRemote`. Before issuing a delete it revalidates, from scratch, every time:
 
 1. the journal artifact is `COMMITTED` or `REMOTE_DELETE_PENDING`;
-2. the expected local final file exists;
-3. the local file's identity is consistent with what the journal recorded;
-4. the remote object still matches what was captured at discovery, via
+2. the artifact has never been reinstated out of quarantine;
+3. the expected local final file exists;
+4. the local file's identity is consistent with what the journal recorded;
+5. the remote object still matches what was captured at discovery, via
    `model.CompareIdentity`.
 
-That fourth check is the TOCTOU defense: `RemoteIdentity` (path, size, mtime, hash where
+Check 2 is what pays for the state machine's reinstatement edges (issue #220,
+`docs/adr/0004-reinstating-a-quarantined-backup.md`). An operator can return a quarantined
+backup whose durable local copy is provably intact to service, which matters most when the
+remote source is already gone and re-ingesting is impossible, and the price is that this
+manager will never delete that backup's remote source afterwards. The refusal is permanent,
+reads the append-only transition log rather than a column, and derives the edges it looks for
+from the state machine's own table, so a future exit from quarantine into a durable state is
+covered the moment it is declared.
+
+That last check is the TOCTOU defense: `RemoteIdentity` (path, size, mtime, hash where
 available, a backend stable identifier where available) is captured once at discovery and
 compared again immediately before delete. `CompareIdentity` can only reach
 `ConfidenceStrong` through a hash match, a stable-identifier match, or an outright mismatch;

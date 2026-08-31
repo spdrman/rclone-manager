@@ -247,6 +247,7 @@ func (o checkOutcome) evidence() lifecycle.ReinstatementEvidence {
 	return lifecycle.ReinstatementEvidence{
 		HashMatched:     o.HashMatched,
 		ValidatorPassed: o.ValidatorPassed,
+		AnyCheckFailed:  !o.Passed,
 		Summary:         o.Reason,
 	}
 }

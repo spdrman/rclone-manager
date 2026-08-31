@@ -178,6 +178,49 @@ func TestReinstateRefusesEvidenceThatCouldNotHaveFailed(t *testing.T) {
 	}
 }
 
+// A mixed verdict is a failing verdict. This is the shape that would slip
+// through a rule written only in positives: the backup set has a validator,
+// it ran and passed, and the recorded hash no longer matches. The hook then
+// exercised a file that is demonstrably not the file this manager verified,
+// and "the validator passed" must not carry the reinstatement on its own.
+func TestReinstateRefusesWhenAnythingThatRanFailed(t *testing.T) {
+	ctx := context.Background()
+	j, artifact := quarantinedFixture(t)
+
+	before := transitionCount(t, j, artifact)
+
+	_, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "reinstate-mixed",
+		Evidence: ReinstatementEvidence{
+			ValidatorPassed: true,
+			AnyCheckFailed:  true,
+			Summary:         "local final file now hashes to abc, but the sha256 hash recorded at verification was def; restore-test hook passed",
+		},
+	})
+	if err == nil {
+		t.Fatal("ReinstateFromQuarantine accepted a verdict in which a check that ran had failed")
+	}
+	if _, ok := AsInsufficientEvidence(err); !ok {
+		t.Fatalf("err = %v, want an *InsufficientEvidenceError", err)
+	}
+	if after := transitionCount(t, j, artifact); after != before {
+		t.Fatalf("state_transitions grew from %d to %d rows on a refused reinstatement", before, after)
+	}
+
+	// Positive control: the identical evidence with nothing failing.
+	if _, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "reinstate-clean",
+		Evidence: ReinstatementEvidence{
+			ValidatorPassed: true,
+			Summary:         "restore-test hook passed",
+		},
+	}); err != nil {
+		t.Fatalf("positive control: the same evidence without a failure was refused: %v", err)
+	}
+}
+
 // An artifact quarantined out of VERIFYING never had a durable local copy
 // at all: its recorded local path is still a .partial. Reinstating it to
 // COMMITTED would declare a half-written file a restore point, so the log

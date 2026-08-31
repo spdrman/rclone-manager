@@ -38,9 +38,46 @@ export function QuarantinePage({
   // silent no-op (mandatory review, PR #147): without it, a backend
   // failure left the button's click looking like it did nothing at all.
   const [actionError, setActionError] = useState<string | null>(null);
+  // Reinstate is the one action whose success is worth saying out loud.
+  // The other two either change the row (and the reload speaks for itself)
+  // or change nothing at all; this one tells an operator that a backup they
+  // were about to give up on is a restore point again, and that its remote
+  // source is now kept for good.
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+
+  const clearOutcome = () => {
+    setActionError(null);
+    setActionNotice(null);
+  };
+
+  /** Reinstating has three outcomes, not two, and an operator has to be
+   *  able to tell them apart. The request can fail; it can succeed and
+   *  report that the local copy is bad, which is a verdict about the
+   *  backup rather than a failure of the request; or it can succeed and
+   *  actually return the backup to service. Only the third reloads the
+   *  list, because only the third changes it. */
+  const reinstate = (a: BackupArtifact) => {
+    clearOutcome();
+    api
+      .reinstate(a.id)
+      .then((outcome) => {
+        if (!outcome.reinstated) {
+          setActionError(
+            "\"" + a.filename + "\" was not reinstated. " + (outcome.reason || "The checks did not pass.")
+          );
+          return;
+        }
+        setActionNotice(
+          "\"" + a.filename + "\" is trusted again (" + outcome.state + "). " + outcome.reason +
+            ". Its remote source is kept from now on."
+        );
+        quarantine.reload();
+      })
+      .catch(() => setActionError("Could not reinstate \"" + a.filename + "\". Try again."));
+  };
 
   const revalidate = (a: BackupArtifact) => {
-    setActionError(null);
+    clearOutcome();
     api
       .revalidate(a.id)
       .then(quarantine.reload)
@@ -48,7 +85,7 @@ export function QuarantinePage({
   };
 
   const retryIngestion = (a: BackupArtifact) => {
-    setActionError(null);
+    clearOutcome();
     api
       .retryIngestion(a.id)
       .then(quarantine.reload)
@@ -69,6 +106,12 @@ export function QuarantinePage({
       {actionError ? (
         <div style={{ marginBottom: 14 }}>
           <ErrorState message={actionError} correlationId="cid_quarantine_action" />
+        </div>
+      ) : null}
+
+      {actionNotice ? (
+        <div className="card" role="status" style={{ marginBottom: 14 }}>
+          {actionNotice}
         </div>
       ) : null}
 
@@ -115,6 +158,9 @@ export function QuarantinePage({
                           <button className="btn btn--sm" disabled={readOnly} onClick={() => retryIngestion(a)}>
                             Retry ingestion
                           </button>
+                          <button className="btn btn--sm" disabled={readOnly} onClick={() => reinstate(a)}>
+                            Reinstate
+                          </button>
                         </span>
                       </td>
                     </tr>
@@ -125,7 +171,10 @@ export function QuarantinePage({
           </div>
           <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
             Quarantined artifacts are never counted as known-good, and never trigger
-            remote deletion.
+            remote deletion. Retry ingestion fetches the backup again from its remote;
+            Reinstate keeps the local copy and trusts it again, which is the answer when
+            the remote is gone or the quarantine was a mistake. A reinstated backup keeps
+            its remote source for good: this manager will never delete it afterwards.
           </p>
         </>
       )}
