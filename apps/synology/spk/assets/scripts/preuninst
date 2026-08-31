@@ -1,0 +1,7 @@
+#!/bin/sh
+# Nothing to do before uninstall.
+#
+# DSM stops the package through start-stop-status before it gets here, and
+# this script deliberately deletes nothing: see postuninst for the whole
+# reasoning about what may and may not be removed.
+exit 0

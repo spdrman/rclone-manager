@@ -130,6 +130,55 @@ jobs:
         working-directory: apps/generic
         run: go test ./...
 
+  apps-synology-build-vet-test:
+    name: apps/synology build, vet, test
+    runs-on: ubuntu-latest
+    # GOWORK=off, matching every other module job: apps/synology has no
+    # dependencies at all (see its go.mod's own comment) and must keep
+    # not having any — it ships no Go binary into the package, only the
+    # machinery that wraps the release binaries and checks them, so a
+    # dependency appearing here would mean something Synology-specific
+    # had started linking against core/ or apps/common.
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.0"
+          cache: true
+          cache-dependency-path: apps/synology/go.mod
+
+      - name: Build
+        working-directory: apps/synology
+        run: go build ./...
+
+      - name: Vet
+        working-directory: apps/synology
+        run: go vet ./...
+
+      # This is where the SPK conformance suite runs: the
+      # documented-layout check, the INFO field check, the bundled-secret
+      # scan, the unsafe-delete scan over the shipped lifecycle scripts,
+      # and the binary-hash parity check (§3.7) exercised against
+      # synthetic fixtures.
+      #
+      # Synthetic, and worth being exact about: nothing in this job
+      # cross-compiles the release binaries, builds a .spk, or runs
+      # `spkctl verify` against container/release-manifest.json. Every
+      # test packs binaries it synthesised itself and checks them against
+      # a manifest hashed from those same files, so what is proven here is
+      # that the packer and the verifier agree, not that any package
+      # carries the release digest. Parity against a real artifact is
+      # blocked on #174 and is checked by hand in
+      # docs/acceptance/synology-dsm-package-lifecycle.md step 1.6.
+      - name: Test
+        working-directory: apps/synology
+        run: go test ./...
+
   ugreen-cross-compile:
     name: UGREEN cross-compile (${{ matrix.goarch }})
     runs-on: ubuntu-latest

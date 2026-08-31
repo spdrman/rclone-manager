@@ -1,0 +1,20 @@
+#!/bin/sh
+# Re-create the runtime directories, in case a much older version of this
+# package kept them somewhere else, then stop.
+set -e
+# DSM installs this package's scripts directory alongside the package, and
+# runs each stage from it, so a sibling common.sh is normally reachable
+# through $0. The documented FHS path is checked as a fallback rather than
+# assuming that holds on every DSM build.
+_sd="$(dirname "$0")"
+if [ -f "${_sd}/common.sh" ]; then
+    . "${_sd}/common.sh"
+elif [ -f "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh" ]; then
+    . "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh"
+else
+    echo "backup-manager: cannot locate common.sh next to $0" >&2
+    exit 1
+fi
+
+mkdir -p "${STATE_DIR}" "${LOG_DIR}" "${RUN_DIR}"
+exit 0

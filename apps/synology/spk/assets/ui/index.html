@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Backup Manager</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 2rem; color: #1f2933; }
+  code { background: #eef1f4; padding: 0 .25em; border-radius: 3px; }
+</style>
+</head>
+<body>
+<!--
+  DSM serves this directory (INFO's dsmuidir) at /webman/3rdparty/BackupManager/,
+  and the desktop launcher entry in ./config points here. The application
+  itself is not served by DSM's own web server: it is this package's own
+  backup-manager-web process, listening on port 8477, so this page's only
+  job is to send the browser there on the same host the DSM session is
+  already open against.
+
+  Deliberately client-side rather than a CGI redirect: a redirect written
+  here would have to run as DSM's web user, and nothing about this package
+  needs code executing outside its own package user.
+-->
+<p id="status">Opening Backup Manager&hellip;</p>
+<p id="fallback" hidden>
+  If nothing happens, open <code id="target"></code> directly.
+</p>
+<script>
+  (function () {
+    // http:// literally, never the DSM session's own scheme. INFO declares
+    // adminprotocol=http, the UI host is started as `serve-ui --listen
+    // ":8477"` and nothing in this package terminates TLS, so mirroring
+    // an https:// DSM session - which is DSM 7's own hardened default on
+    // 5001 - sends the browser into a TLS handshake against a plain HTTP
+    // listener, and the desktop launcher looks broken while the package
+    // runs correctly.
+    //
+    // The trade-off is a plaintext hop on a LAN, recorded as a known gap
+    // in apps/synology/README.md. Mixed-content blocking does not apply:
+    // that is a subresource rule, and this is a top-level navigation,
+    // which browsers permit outside HTTPS-Only mode.
+    var target = "http://" + window.location.hostname + ":8477/";
+    document.getElementById("target").textContent = target;
+    document.getElementById("fallback").hidden = false;
+    window.location.replace(target);
+  })();
+</script>
+<noscript>
+  <p>JavaScript is disabled. Open Backup Manager on port <code>8477</code> of this NAS.</p>
+</noscript>
+</body>
+</html>

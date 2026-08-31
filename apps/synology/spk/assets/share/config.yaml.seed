@@ -1,0 +1,46 @@
+# Backup Manager configuration, seeded by the DSM package on first
+# install. Edit it, then start the package from Package Center.
+#
+# This file lives at /var/packages/BackupManager/etc/config.yaml, which
+# Synology's package FHS documents as surviving both an upgrade and an
+# uninstall. The package never overwrites it once it exists.
+#
+# The service will NOT start until `sources` names at least one backup
+# set: the core refuses to act on a configuration it cannot validate, and
+# that is the same behaviour the generic Docker deployment has. An empty
+# `sources` list below is therefore deliberate, not an oversight - it is
+# the shape of "not configured yet".
+
+poll_interval: 15m
+
+state:
+  # The SQLite lifecycle journal. Under var/, which survives upgrades.
+  database: /var/packages/BackupManager/var/state/backup-manager.db
+
+sources: []
+
+# Replace the empty list above with something like this. The paths assume
+# the shared folder this package asked DSM to create, which appears as
+# /volume1/backup-manager on a single-volume NAS - check `ls -d
+# /volume*/backup-manager` if yours has more than one volume.
+#
+# sources:
+#   - id: production
+#     backup_sets:
+#       - id: postgres-primary
+#         remote:
+#           type: sftp
+#           host: production.example.internal
+#           user: backup
+#           key_file: /var/packages/BackupManager/etc/id_ed25519
+#           known_hosts: /var/packages/BackupManager/etc/known_hosts
+#         remote_path: /backups/postgres
+#         local_path: /volume1/backup-manager/production/postgres
+#         completion:
+#           strategy: stable
+#           stable_for: 10m
+#         stale_after: 30h
+#
+# The SSH private key and the pinned known_hosts file are NOT shipped in
+# this package and never will be: put them at the two paths above
+# yourself, owned by the package user, with the key at mode 0600.

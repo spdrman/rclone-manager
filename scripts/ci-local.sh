@@ -76,6 +76,14 @@ if [ -f apps/generic/go.mod ]; then
   (cd apps/generic && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 fi
 
+if [ -f apps/synology/go.mod ]; then
+  echo "==> apps/synology go build, vet, test"
+  (cd apps/synology && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
+
+  echo "==> apps/synology golangci-lint"
+  (cd apps/synology && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
+fi
+
 if [ -f apps/ugos/backend/go.mod ]; then
   echo "==> apps/ugos/backend go build, vet, test"
   (cd apps/ugos/backend && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
