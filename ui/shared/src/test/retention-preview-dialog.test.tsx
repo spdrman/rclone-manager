@@ -30,6 +30,22 @@ const PLAN: RetentionPlan = {
   ]
 };
 
+/** RetentionVerdict.tiers is an open set: FR-18's chain is operator-defined
+ *  (core/internal/config's Retention.Tiers), so any lower_snake_case tier
+ *  name a config file spells arrives here upper-cased. This plan holds one
+ *  artifact kept by a tier no build of this UI has ever heard of, alongside
+ *  one kept with no tier at all. */
+const OPEN_TIER_PLAN: RetentionPlan = {
+  ...PLAN,
+  keepCount: 2,
+  deleteCount: 0,
+  reclaimBytes: 0,
+  verdicts: [
+    { artifact: "half-year.dump", action: "KEEP", reason: "GFS semi-annual tier", tiers: ["SEMI_ANNUAL"] },
+    { artifact: "no-tier.dump", action: "KEEP", reason: "", tiers: [] }
+  ]
+};
+
 function apiWith(overrides: Partial<ReturnType<typeof createMockApi>>) {
   return { ...createMockApi(), previewRetention: () => Promise.resolve(PLAN), ...overrides };
 }
@@ -62,6 +78,30 @@ describe("RetentionPreviewDialog", () => {
     // The refuse row is not an alert — it is the plan working as intended.
     const refuseRow = screen.getByText(/sibling-prefix directory/).closest("li");
     expect(refuseRow?.getAttribute("role")).not.toBe("alert");
+  });
+
+  it("badges a KEEP verdict from an operator-defined tier under its own name, never as \"unclassified\"", async () => {
+    const api = apiWith({ previewRetention: () => Promise.resolve(OPEN_TIER_PLAN) });
+    render(
+      <ApiProvider api={api}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+
+    await screen.findByText(/Plan retplan_test_1/);
+
+    // "unclassified" is the DELETE condition's own wording ("no tier claims
+    // this"), and the Keep row carries no reason text to contradict it, so
+    // rendering it here would tell the operator the opposite of what the
+    // backend decided — on the screen whose next button deletes files.
+    const kept = screen.getByText("half-year.dump").closest("li");
+    expect(kept?.textContent).toContain("Semi Annual");
+    expect(kept?.textContent).not.toContain("unclassified");
+
+    // The control: a verdict with a genuinely empty tier list still says
+    // so, which is what makes the assertion above a measurement.
+    const untiered = screen.getByText("no-tier.dump").closest("li");
+    expect(untiered?.textContent).toContain("unclassified");
   });
 
   it("disables Continue the moment the graph learns of an inventory change, from that commit alone — before any apply request reaches the API", async () => {

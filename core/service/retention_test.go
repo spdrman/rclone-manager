@@ -38,16 +38,27 @@ func retentionTestConfig(bs config.BackupSet, ret config.Retention) *config.Conf
 	}
 }
 
-// retentionAllTiersDisabled mirrors internal/retention's own
-// pruneAllTiersDisabled test helper: every GFS tier off and last-known-good
-// protection off, so a managed-complete artifact's Keep flag depends on
-// nothing this file did not put there itself. A backup set with exactly
-// one such artifact is therefore a guaranteed PruneDelete candidate,
-// without this file needing a second, differently-dated artifact just to
-// prove a plan actually selects something for deletion.
-func retentionAllTiersDisabled() config.Retention {
+// retentionTodayOnlyChain mirrors internal/retention's own
+// pruneTodayOnlyChain test helper: a live chain of one daily tier whose
+// window is today alone, and last-known-good protection off. Every
+// artifact this file seeds is dated well in the past, so each one is a
+// guaranteed PruneDelete candidate and its Keep flag depends on nothing
+// this file did not put there itself, without needing a second,
+// differently-dated artifact just to prove a plan selects something.
+//
+// The narrow live tier replaces what used to be "every tier disabled",
+// which internal/retention now refuses outright: a chain that can select
+// nothing hands FR-20 the whole backup set.
+func retentionTodayOnlyChain() config.Retention {
 	off := false
-	return config.Retention{Timezone: "UTC", WeekStartsOn: "monday", ProtectLastKnownGood: &off}
+	return config.Retention{
+		Timezone:     "UTC",
+		WeekStartsOn: "monday",
+		Tiers: []config.RetentionTier{
+			{Name: "daily", Granularity: config.GranularityDay, Keep: 1},
+		},
+		ProtectLastKnownGood: &off,
+	}
 }
 
 // seedCompleteArtifact writes a real local file for bs/name and records it
@@ -115,7 +126,7 @@ func TestPreviewRetention_ReturnsSpecSchemaFields(t *testing.T) {
 	discoveredAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	seedCompleteArtifact(t, ctx, journal, bs, "backup.dump", discoveredAt, "twenty bytes!!!!!!!!")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	before := now()
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
@@ -171,7 +182,7 @@ func TestApplyRetentionPlan_StalePlanRejectedWithZeroDeletions(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", discoveredAt, "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	// GIVEN plan P selects A for deletion.
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
@@ -224,7 +235,7 @@ func TestApplyRetentionPlan_ValidPlanAppliesExactly(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", discoveredAt, "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -307,7 +318,7 @@ func TestApplyRetentionPlan_ExpiredPlanIsStaleWithZeroDeletions(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", discoveredAt, "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -337,7 +348,7 @@ func TestPreviewRetention_UnknownBackupSetReturnsErrBackupSetNotFound(t *testing
 	}
 }
 
-// retentionOn is retentionAllTiersDisabled's opposite: every GFS tier and
+// retentionOn is retentionTodayOnlyChain's opposite: every GFS tier and
 // last-known-good protection live, for the one test below that actually
 // needs them.
 func retentionOn(dailyDays, weeklyMonths, monthlyMonths int) config.Retention {
@@ -366,7 +377,7 @@ func hasTier(tiers []string, want string) bool {
 // retention decision path (not a mock), against a backup set with daily/
 // weekly/monthly and last-known-good artifacts mixed together — every
 // other test in this file either disables every tier
-// (retentionAllTiersDisabled) or exercises exactly one artifact, neither of
+// (retentionTodayOnlyChain) or exercises exactly one artifact, neither of
 // which proves the daily/weekly/monthly/last-known-good union (FR-18's own
 // formula) actually composes correctly all the way from PreviewRetention
 // through ApplyRetentionPlan.
@@ -595,7 +606,7 @@ func TestApplyRetentionPlan_RefusedWhileACycleIsRunningAndConsumesNothing(t *tes
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
 
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -647,7 +658,7 @@ func TestClaimRetentionPlan_ConcurrentClaimsOfOnePlanIDOnlyOneWins(t *testing.T)
 	ctx := context.Background()
 
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -697,7 +708,7 @@ func TestApplyRetentionPlan_ConcurrentAppliesDeleteExactlyOnce(t *testing.T) {
 
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -757,7 +768,7 @@ func TestApplyRetentionPlan_PlanIDSubmittedForAnotherBackupSetIsRefused(t *testi
 
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
 	aPath := filepath.Join(bs.LocalPath, "a.dump")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
 	if err != nil {
@@ -805,7 +816,7 @@ func TestApplyRetentionPlan_SuccessInvalidatesThisSetsOtherPlans(t *testing.T) {
 
 	cfg := &config.Config{
 		Sources:   []config.Source{{Name: "production", BackupSets: []config.BackupSet{first, otherSet}}},
-		Retention: retentionAllTiersDisabled(),
+		Retention: retentionTodayOnlyChain(),
 	}
 	svc := New(cfg, journal, nil, nil)
 
@@ -847,7 +858,7 @@ func TestPreviewRetention_SweepsExpiredPlansAndCapsTheStore(t *testing.T) {
 	journal := openTestJournal(t)
 	ctx := context.Background()
 	seedCompleteArtifact(t, ctx, journal, bs, "a.dump", time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC), "payload-a")
-	svc := New(retentionTestConfig(bs, retentionAllTiersDisabled()), journal, nil, nil)
+	svc := New(retentionTestConfig(bs, retentionTodayOnlyChain()), journal, nil, nil)
 
 	setClock := pinClock(t, time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC))
 
@@ -1005,5 +1016,165 @@ func TestApplyRetentionPlan_ConfigurationChangedBetweenPreviewAndApplyIsStale(t 
 	}
 	if _, statErr := os.Lstat(aPath); !os.IsNotExist(statErr) {
 		t.Errorf("control failed: Lstat(%s) after applying the re-previewed plan: err=%v, want a not-exist error", aPath, statErr)
+	}
+}
+
+// retentionChain is retentionOn's generalized counterpart (issue #156,
+// B3.8): an explicit FR-18 tier chain of any length, with last-known-good
+// protection live. The three legacy scalars stay zero, which
+// config.ValidateRetention requires alongside an explicit chain.
+func retentionChain(tiers ...config.RetentionTier) config.Retention {
+	on := true
+	return config.Retention{
+		Timezone: "UTC", WeekStartsOn: "monday",
+		Tiers:                tiers,
+		ProtectLastKnownGood: &on,
+	}
+}
+
+// TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual is issue
+// #156's INTEGRATION checklist item: a real multi-tier chain reaching past
+// monthly, driven all the way through PreviewRetention and
+// ApplyRetentionPlan against the genuine internal/retention decision path,
+// confirming the webhost API's verdicts[].tiers names every tier that
+// selected each artifact.
+//
+// The chain is deliberately non-contiguous (daily, then semi-annual, then
+// annual, with nothing covering the months between them), because a
+// contiguous chain would keep every artifact that has a neighbour and
+// prove nothing about Rom's "everything in-between and outside that policy
+// would be deleted". The two artifacts sharing one year bucket are the
+// gap: the older one is a delete candidate that no tier reaches, and the
+// sub-test below is its positive control, showing the identical fixture
+// keeps it once a monthly tier is chained in.
+//
+// Like the mixed-tier test above, this places artifacts relative to the
+// real wall clock (internal/app.Service.now, which this boundary does not
+// let a caller override) rather than to fixed calendar dates, anchoring on
+// the calendar year and half-year starts the tiers themselves bucket by
+// and leaving whole months of slack around every window edge.
+func TestPreviewThenApply_NonContiguousChainWithSemiAnnualAndAnnual(t *testing.T) {
+	bs := retentionTestBackupSet(t, t.TempDir())
+	journal := openTestJournal(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC()
+	yearStart := time.Date(base.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
+	halfStart := yearStart
+	if base.Month() >= time.July {
+		halfStart = time.Date(base.Year(), 7, 1, 0, 0, 0, 0, time.UTC)
+	}
+
+	// daily reaches back 3 days; semi_annual reaches back 4 calendar
+	// half-years (18 months before the current half's start); annual
+	// reaches back 10 calendar years.
+	daily := config.RetentionTier{Name: "daily", Granularity: config.GranularityDay, Keep: 3}
+	semiAnnual := config.RetentionTier{Name: "semi_annual", Granularity: config.GranularityHalfYear, Keep: 4}
+	annual := config.RetentionTier{Name: "annual", Granularity: config.GranularityYear, Keep: 10}
+
+	newest := seedCompleteArtifact(t, ctx, journal, bs, "newest.dump", base, "newest")
+	// 45 days before the current half-year began: firmly inside the
+	// previous half-year (six months long), firmly inside semi_annual's
+	// 18-month reach, and far outside daily's three days.
+	seedCompleteArtifact(t, ctx, journal, bs, "prev-half.dump", halfStart.AddDate(0, 0, -45), "prev-half")
+	// Two artifacts in the calendar year three years back, days 100 and
+	// 300 of it, so both are unambiguously inside that year and inside the
+	// annual window while being far outside semi_annual's. Only the newer
+	// one wins the year's bucket.
+	gapYearStart := yearStart.AddDate(-3, 0, 0)
+	seedCompleteArtifact(t, ctx, journal, bs, "gap-loser.dump", gapYearStart.AddDate(0, 0, 100), "gap-loser")
+	seedCompleteArtifact(t, ctx, journal, bs, "gap-winner.dump", gapYearStart.AddDate(0, 0, 300), "gap-winner")
+	// Twelve years back: past the end of the longest tier in the chain.
+	seedCompleteArtifact(t, ctx, journal, bs, "ancient.dump", yearStart.AddDate(-12, 0, 0), "ancient")
+
+	svc := New(retentionTestConfig(bs, retentionChain(daily, semiAnnual, annual)), journal, nil, nil)
+
+	plan, err := svc.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+	if err != nil {
+		t.Fatalf("PreviewRetention: %v", err)
+	}
+
+	tiersByArtifact := map[string][]string{}
+	actionByArtifact := map[string]string{}
+	for _, v := range plan.Verdicts {
+		tiersByArtifact[v.Artifact] = v.Tiers
+		actionByArtifact[v.Artifact] = v.Action
+	}
+
+	// The newest artifact wins its day, its half-year and its year, and
+	// carries FR-19's protection on top: a four-way union reported through
+	// the same []string the webhost handler sends as verdicts[].tiers.
+	for _, want := range []string{"DAILY", "SEMI_ANNUAL", "ANNUAL", "LAST_KNOWN_GOOD"} {
+		if !hasTier(tiersByArtifact[newest.Name], want) {
+			t.Errorf("%s tiers = %v, want it to include %s", newest.Name, tiersByArtifact[newest.Name], want)
+		}
+	}
+	if !hasTier(tiersByArtifact["prev-half.dump"], "SEMI_ANNUAL") {
+		t.Errorf("prev-half.dump tiers = %v, want SEMI_ANNUAL", tiersByArtifact["prev-half.dump"])
+	}
+	if hasTier(tiersByArtifact["prev-half.dump"], "DAILY") {
+		t.Errorf("prev-half.dump tiers = %v, want no DAILY: it is far outside the three-day window", tiersByArtifact["prev-half.dump"])
+	}
+	if got := tiersByArtifact["gap-winner.dump"]; len(got) != 1 || got[0] != "ANNUAL" {
+		t.Errorf("gap-winner.dump tiers = %v, want exactly [ANNUAL]", got)
+	}
+
+	// The two artifacts nothing in the chain reaches.
+	for _, name := range []string{"gap-loser.dump", "ancient.dump"} {
+		if actionByArtifact[name] != "DELETE" {
+			t.Errorf("%s action = %q with tiers %v, want DELETE: no configured tier covers it", name, actionByArtifact[name], tiersByArtifact[name])
+		}
+	}
+	for _, name := range []string{"newest.dump", "prev-half.dump", "gap-winner.dump"} {
+		if actionByArtifact[name] != "KEEP" {
+			t.Errorf("%s action = %q, want KEEP", name, actionByArtifact[name])
+		}
+	}
+	if plan.KeepCount != 3 || plan.DeleteCount != 2 {
+		t.Errorf("KeepCount/DeleteCount = %d/%d, want 3/2 (plan=%+v)", plan.KeepCount, plan.DeleteCount, plan)
+	}
+
+	t.Run("control: chaining a monthly tier in rescues the gap artifact", func(t *testing.T) {
+		// Same fixture, same instant, one more link: a monthly tier
+		// reaching back far enough to cover the gap year. If gap-loser
+		// stayed a delete candidate here, the DELETE assertions above
+		// would prove nothing about the gap, only that the fixture is out
+		// of reach of everything.
+		monthly := config.RetentionTier{Name: "monthly", Granularity: config.GranularityMonth, Keep: 60}
+		control := New(retentionTestConfig(bs, retentionChain(daily, monthly, semiAnnual, annual)), journal, nil, nil)
+		got, err := control.PreviewRetention(ctx, bs.ID.Source, bs.ID.Set)
+		if err != nil {
+			t.Fatalf("PreviewRetention (control): %v", err)
+		}
+		for _, v := range got.Verdicts {
+			if v.Artifact != "gap-loser.dump" {
+				continue
+			}
+			if v.Action != "KEEP" || !hasTier(v.Tiers, "MONTHLY") {
+				t.Fatalf("control: gap-loser.dump = %s %v, want KEEP by MONTHLY", v.Action, v.Tiers)
+			}
+			return
+		}
+		t.Fatal("control: no verdict for gap-loser.dump")
+	})
+
+	// Applying the non-contiguous plan removes exactly the two gap and
+	// out-of-range artifacts, and nothing else.
+	applied, err := svc.ApplyRetentionPlan(ctx, ApplyRetentionRequest{PlanID: plan.PlanID, Source: bs.ID.Source, Set: bs.ID.Set, Actor: "alice"})
+	if err != nil {
+		t.Fatalf("ApplyRetentionPlan: %v", err)
+	}
+	if applied.DeleteCount != 2 || applied.KeepCount != 3 {
+		t.Errorf("applied = %+v, want DeleteCount=2, KeepCount=3", applied)
+	}
+	for _, name := range []string{"gap-loser.dump", "ancient.dump"} {
+		if _, statErr := os.Lstat(filepath.Join(bs.LocalPath, name)); !os.IsNotExist(statErr) {
+			t.Errorf("%s survived the apply: Lstat err = %v, want IsNotExist", name, statErr)
+		}
+	}
+	for _, name := range []string{"newest.dump", "prev-half.dump", "gap-winner.dump"} {
+		if _, statErr := os.Lstat(filepath.Join(bs.LocalPath, name)); statErr != nil {
+			t.Errorf("%s was deleted despite a KEEP verdict: %v", name, statErr)
+		}
 	}
 }

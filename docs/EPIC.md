@@ -507,10 +507,42 @@ sources:
 retention:
   timezone: America/Vancouver
   week_starts_on: monday
+  # The classic three-tier chain, written as scalars. These are sugar for
+  # the equivalent `tiers:` list below and cannot be combined with it.
   daily_days: 7
   weekly_months: 3
   monthly_months: 12
   protect_last_known_good: true
+
+# Or, spelled as an explicit chain of any length (FR-18). This example is
+# byte-for-byte equivalent to the three scalars above for its first three
+# entries, and then chains on past them.
+#
+# retention:
+#   timezone: America/Vancouver
+#   week_starts_on: monday
+#   protect_last_known_good: true
+#   tiers:
+#     - name: daily
+#       granularity: day
+#       keep: 7
+#     - name: weekly
+#       granularity: week
+#       keep: 3
+#       window_unit: month
+#     - name: monthly
+#       granularity: month
+#       keep: 12
+#     - name: semi_annual
+#       granularity: half_year
+#       keep: 6
+#     - name: annual
+#       granularity: year
+#       keep: 10
+#     - name: fortnightly
+#       granularity: days
+#       period_days: 14
+#       keep: 26
 ```
 
 Configuration MUST NOT require recompilation.
@@ -958,26 +990,82 @@ Reconciliation SHALL be idempotent.
 
 ## FR-18 --- GFS Retention
 
-Default:
+Retention is an **ordered chain of named tiers**. An administrator picks
+how many tiers there are and what each one keeps: the classic
+daily/weekly/monthly grandfather-father-son chain is the default, but a
+chain may be as long as the operator wants and may reach out to
+semi-annual, annual, or an arbitrary custom period.
 
-  Tier                    Policy
-  --------- --------------------
-  Daily                   7 days
-  Weekly       3 calendar months
-  Monthly     12 calendar months
+Each tier has:
 
-For each backup set:
+  Field              Meaning
+  ------------------ -----------------------------------------------------
+  `name`             lower_snake_case identifier, unique within the chain
+  `granularity`      the calendar bucket the tier groups artifacts into
+  `keep`             how many of that tier's own buckets to look back over
+  `window_unit`      optional: measure the look-back in this unit instead
+  `period_days`      only for `granularity: days`, the custom period length
+
+`granularity` is one of `day`, `week`, `month`, `quarter`, `half_year`,
+`year`, or `days` (with `period_days: N`, the escape hatch for any period
+the named list does not cover: fortnightly, every 10 days, and so on).
+
+`window_unit` accepts the same named granularities (never `days`) and
+exists because a tier's look-back is not always measured in its own
+bucket. The default `weekly` tier is exactly that case: it buckets by
+week but looks back over 3 calendar *months*. Omit `window_unit` and the
+look-back is measured in the tier's own granularity.
+
+A tier's window runs from the start of the bucket `keep - 1` units back
+from today, through today inclusive, where "start of the bucket" means
+the same calendar anchor the granularity itself names: the day itself for
+`day`, the configured week-start weekday for `week`, the 1st for `month`,
+the 1st of January/April/July/October for `quarter`, the 1st of
+January/July for `half_year`, the 1st of January for `year`, and a fixed
+epoch-aligned boundary for a custom `days` period (so custom buckets never
+drift with the day the calculation runs).
+
+Within its window, each tier independently selects the **newest valid
+backup in each of its own buckets**.
+
+Default chain:
+
+  Tier      Granularity   Look-back
+  --------- ------------- -------------------
+  daily     day           7 days
+  weekly    week          3 calendar months
+  monthly   month         12 calendar months
+
+For each backup set, with `tiers` the configured chain:
 
 ``` text
 KEEP =
-    daily
-  ∪ weekly
-  ∪ monthly
+    ⋃ over every configured tier t of  selections(t)
   ∪ protected
 
 DELETE =
     managed_complete_backups - KEEP
 ```
+
+That formula is unchanged from the fixed three-tier version: it is still a
+union of tier selections plus FR-19's protected term, and DELETE is still
+everything managed and complete that the union did not claim. What is
+generalized is only *how many* tiers may contribute to the union and *what
+granularities* they may use.
+
+Two consequences follow, and are stated here rather than left to be
+inferred:
+
+-   The chain does not have to be contiguous. `daily` plus `annual` with
+    nothing in between is a legal policy, and every artifact falling in
+    the gap between the two windows is a DELETE candidate.
+-   An artifact older than the longest configured window is a DELETE
+    candidate, regardless of how many tiers there are.
+
+Tier order is the order the administrator writes the chain in. It is
+presentation and processing order (it fixes the order tier names appear
+against a KEEP verdict) and never changes which artifacts are kept, since
+KEEP is a union.
 
 Retention SHALL be deterministic.
 
@@ -986,11 +1074,35 @@ Default semantics:
 ``` text
 timezone: America/Vancouver
 week starts: Monday
-weekly representative: newest valid backup in bucket
-monthly representative: newest valid backup in bucket
+bucket representative: newest valid backup in bucket
 ```
 
-Calendar semantics, DST, leap years and year boundaries SHALL be tested.
+Calendar semantics, DST, leap years and year boundaries SHALL be tested,
+for every granularity the chain admits, including the calendar half-year
+and calendar-year boundaries semi-annual and annual tiers depend on.
+
+### Backward compatibility
+
+`daily_days`, `weekly_months` and `monthly_months` remain valid
+configuration and are **sugar for the default three-tier chain**. A
+config file that sets only those three (or omits the retention block
+entirely, and takes 7/3/12) SHALL produce exactly the decisions it
+produced before this generalization existed.
+
+Setting both the three scalar keys and an explicit `tiers:` list is a
+configuration error, not a silent precedence rule: an operator who writes
+both is asking two different questions and deserves to be told so rather
+than have one answer quietly discarded.
+
+An explicitly empty `tiers: []` is not distinguishable from an absent key
+and reads the same way: the three scalars, which resolve to 7/3/12. So
+emptying the chain does **not** spell "keep nothing", it reinstates the
+default daily/weekly/monthly policy. There is deliberately no "keep
+nothing" spelling in the schema at all, and no chain out of which nothing
+can be selected is accepted: a policy with every tier disabled is refused
+rather than resolved to an empty KEEP, because an empty KEEP puts every
+managed backup in the set on the delete side. Retention is turned off by
+not running a retention pass.
 
 ------------------------------------------------------------------------
 

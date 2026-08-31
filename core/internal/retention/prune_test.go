@@ -56,18 +56,26 @@ func pruneRawArtifact(set model.BackupSetID, name string) model.ArtifactID {
 	return model.ArtifactID{Set: set, Name: name}
 }
 
-// pruneAllTiersDisabled returns a Retention config with every GFS tier
-// disabled (a zero or negative window selects nothing, per GFSDecide's own
-// doc) and last-known-good protection explicitly off, so DecideKeep's
-// Keep flag for any managed-complete artifact depends on nothing a test
-// did not put there itself. Timezone and WeekStartsOn still need loadable
-// values: GFSDecide parses both unconditionally, before it ever looks at
-// whether a tier is enabled.
-func pruneAllTiersDisabled() config.Retention {
+// pruneTodayOnlyChain returns a live one-tier chain whose whole window is
+// pruneNow's own calendar day, with last-known-good protection explicitly
+// off. Every artifact this file dates before pruneNow is therefore a
+// guaranteed GFS delete candidate, so DecideKeep's Keep flag depends on
+// nothing a test did not put there itself.
+//
+// It used to spell that as "every tier disabled", which gfsResolveChain
+// now refuses: a chain out of which nothing can be selected is an error,
+// because it puts every managed backup in the set on the delete side. A
+// narrow live tier says the same thing about these fixtures without
+// asking the resolver to accept a policy no operator should be able to
+// write.
+func pruneTodayOnlyChain() config.Retention {
 	off := false
 	return config.Retention{
-		Timezone:             "UTC",
-		WeekStartsOn:         "monday",
+		Timezone:     "UTC",
+		WeekStartsOn: "monday",
+		Tiers: []config.RetentionTier{
+			{Name: "daily", Granularity: config.GranularityDay, Keep: 1},
+		},
 		ProtectLastKnownGood: &off,
 	}
 }
@@ -120,7 +128,7 @@ func TestPruneApplyDeletesGenuineCandidate(t *testing.T) {
 
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), path)}
 	bs := pruneBackupSet(set, root)
-	cfg := pruneAllTiersDisabled()
+	cfg := pruneTodayOnlyChain()
 
 	verdicts, err := PruneApply(pruneNow, cfg, bs, records)
 	if err != nil {
@@ -162,7 +170,7 @@ func TestPruneAllowsDeletionWhenBackupRootItselfIsASymlink(t *testing.T) {
 
 	records := []state.Record{pruneRecord(artifact, lifecycle.Committed, pruneNow.Add(-365*24*time.Hour), journalPath)}
 	bs := pruneBackupSet(set, rootLink)
-	cfg := pruneAllTiersDisabled()
+	cfg := pruneTodayOnlyChain()
 
 	verdicts, err := PruneApply(pruneNow, cfg, bs, records)
 	if err != nil {
@@ -268,7 +276,7 @@ func TestPruneRefusesPartialArtifactEvenWhenToldToDeleteIt(t *testing.T) {
 
 	// Also confirm the public entry point never even surfaces this record
 	// as a decision at all, matching GFSDecide's own scope.
-	verdicts, err := PruneDecide(pruneNow, pruneAllTiersDisabled(), bs, []state.Record{rec})
+	verdicts, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, []state.Record{rec})
 	if err != nil {
 		t.Fatalf("PruneDecide: %v", err)
 	}
@@ -297,7 +305,7 @@ func TestPruneNeverConsidersAFileTheJournalDoesNotKnowAbout(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), trackedPath)}
 
 	bs := pruneBackupSet(set, root)
-	verdicts, err := PruneApply(pruneNow, pruneAllTiersDisabled(), bs, records)
+	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -331,7 +339,7 @@ func TestPruneRefusesWhenJournalPathDisagreesWithComputedPath(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), wrongPath)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneAllTiersDisabled(), bs, records)
+	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -375,7 +383,7 @@ func TestPruneRefusesSymlinkAtFinalPath(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), linkPath)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneAllTiersDisabled(), bs, records)
+	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -412,7 +420,7 @@ func TestPruneRejectsPathTraversalViaCraftedArtifactName(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), computed)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneAllTiersDisabled(), bs, records)
+	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -457,7 +465,7 @@ func TestPruneRejectsSiblingPrefixDirectory(t *testing.T) {
 	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), computed)}
 	bs := pruneBackupSet(set, root)
 
-	verdicts, err := PruneApply(pruneNow, pruneAllTiersDisabled(), bs, records)
+	verdicts, err := PruneApply(pruneNow, pruneTodayOnlyChain(), bs, records)
 	if err != nil {
 		t.Fatalf("PruneApply: %v", err)
 	}
@@ -509,13 +517,13 @@ func TestPruneDecideRejectsRecordFromAnotherBackupSet(t *testing.T) {
 	}
 	bs := pruneBackupSet(setA, root)
 
-	if _, err := PruneDecide(pruneNow, pruneAllTiersDisabled(), bs, records); err == nil {
+	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, records); err == nil {
 		t.Fatal("expected an error for a record belonging to a different backup set (FR-7 isolation would be silently broken)")
 	}
 }
 
 func TestPruneDecideRejectsZeroBackupSet(t *testing.T) {
-	if _, err := PruneDecide(pruneNow, pruneAllTiersDisabled(), config.BackupSet{}, nil); err == nil {
+	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), config.BackupSet{}, nil); err == nil {
 		t.Fatal("expected an error for a zero backup set id, got nil")
 	}
 }

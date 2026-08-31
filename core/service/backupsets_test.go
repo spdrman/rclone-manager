@@ -568,3 +568,89 @@ func TestProbeHostKey_UnreachableHostReturnsAnError(t *testing.T) {
 		t.Fatal("err = nil, want an error probing a host nothing listens on")
 	}
 }
+
+// TestCreateBackupSet_ConfigRoundTripKeepsOneRetentionSpelling is the
+// round-trip proof for the file the product writes back over an
+// operator's own config.
+//
+// CreateBackupSet re-marshals the whole *config.Config on every wizard
+// save (writeConfigAtomically), so every retention field without
+// `omitempty` lands in the file whether the operator wrote it or not.
+// With a tiers-based policy that meant `daily_days: 0` sitting directly
+// above the tiers list, which reads as "daily retention is off" and
+// invites exactly one edit: set it to 7. That edit is the one shape
+// config.Validate refuses (the two spellings are mutually exclusive), and
+// a refused config means LoadAndValidate fails, no BackupService is
+// constructed, and there is no UI left to undo it from.
+func TestCreateBackupSet_ConfigRoundTripKeepsOneRetentionSpelling(t *testing.T) {
+	roundTrip := func(t *testing.T, retention string) string {
+		t.Helper()
+		configPath := writeTestConfigFileWithRetention(t, retention)
+		svc, cleanup, err := Open(context.Background(), configPath)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		t.Cleanup(func() { _ = cleanup() })
+
+		if _, err := svc.CreateBackupSet(context.Background(), validCreateReq(t, svc, "new-set")); err != nil {
+			t.Fatalf("CreateBackupSet: %v", err)
+		}
+		written, err := os.ReadFile(configPath)
+		if err != nil {
+			t.Fatalf("reading the config back: %v", err)
+		}
+		// The file must still load, since the daemon's own next start
+		// reads exactly this.
+		if _, err := config.LoadAndValidate(configPath); err != nil {
+			t.Fatalf("the config this product wrote no longer loads: %v", err)
+		}
+		return string(written)
+	}
+
+	t.Run("a tiers-based policy is not written back with the scalar keys", func(t *testing.T) {
+		got := roundTrip(t, "retention:\n"+
+			"  timezone: UTC\n"+
+			"  week_starts_on: monday\n"+
+			"  tiers:\n"+
+			"    - name: daily\n"+
+			"      granularity: day\n"+
+			"      keep: 7\n"+
+			"    - name: annual\n"+
+			"      granularity: year\n"+
+			"      keep: 5\n")
+
+		// Positive control for the three absence assertions below: if the
+		// chain itself were missing, they would pass vacuously.
+		if !strings.Contains(got, "name: annual") {
+			t.Fatalf("the written config lost the operator's chain, so nothing below is being measured:\n%s", got)
+		}
+		for _, key := range []string{"daily_days", "weekly_months", "monthly_months"} {
+			if strings.Contains(got, key) {
+				t.Errorf("the written config carries %s alongside the operator's tiers list; config.Validate refuses that combination the moment the operator gives it a value:\n%s", key, got)
+			}
+		}
+		// The noise the schema doc says is absent from every other tier.
+		for _, key := range []string{"period_days", "window_unit"} {
+			if strings.Contains(got, key) {
+				t.Errorf("the written config carries an empty %s on tiers that do not use it:\n%s", key, got)
+			}
+		}
+	})
+
+	// The control that gives the assertions above teeth: a legacy config
+	// still round-trips its own spelling, so "the key is absent" is a
+	// measurement of omitempty, not of a test that cannot see the file.
+	t.Run("control: a legacy scalar policy is written back with its scalars", func(t *testing.T) {
+		got := roundTrip(t, "retention:\n"+
+			"  timezone: UTC\n"+
+			"  week_starts_on: monday\n"+
+			"  daily_days: 7\n")
+
+		if !strings.Contains(got, "daily_days: 7") {
+			t.Errorf("the written config lost the operator's daily_days:\n%s", got)
+		}
+		if strings.Contains(got, "tiers:") {
+			t.Errorf("the written config injected an empty tiers list into a legacy file, which an older binary rejects outright under KnownFields(true):\n%s", got)
+		}
+	})
+}

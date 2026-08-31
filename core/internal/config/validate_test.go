@@ -111,7 +111,7 @@ func TestValidateIsIdempotent(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("second Validate: %v", err)
 	}
-	if first.Retention != cfg.Retention {
+	if !reflect.DeepEqual(first.Retention, cfg.Retention) {
 		t.Fatalf("second Validate changed already-resolved retention: %#v vs %#v", first.Retention, cfg.Retention)
 	}
 	if first.Sources[0].BackupSets[0].ID != cfg.Sources[0].BackupSets[0].ID {

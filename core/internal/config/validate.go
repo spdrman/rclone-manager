@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -423,9 +424,10 @@ var validWeekdays = map[string]bool{
 	"sunday":    true,
 }
 
-// ValidateRetention validates and resolves-in-place the six FR-18/FR-19
-// retention fields (timezone, week_starts_on, daily_days, weekly_months,
-// monthly_months, protect_last_known_good), exactly as Validate does for
+// ValidateRetention validates and resolves-in-place every FR-18/FR-19
+// retention field (timezone, week_starts_on, the tiers chain or the
+// daily_days/weekly_months/monthly_months scalars it is the general form
+// of, and protect_last_known_good), exactly as Validate does for
 // a whole Config's embedded Retention block: it is not a second
 // implementation of that logic, it is the same validateRetention method
 // this file's Validate already calls, exported so a caller outside this
@@ -467,30 +469,53 @@ func (v *validator) validateRetention(r *Retention) {
 		v.addf("retention.week_starts_on: %q is not a day of the week", r.WeekStartsOn)
 	}
 
-	// FR-18's retention table documents 7 daily / 3 weekly / 12 monthly as
-	// the default policy. A tier left at zero, whether because the key was
-	// omitted or written as 0, falls back to that documented default here
-	// rather than being read literally: a literal zero would mean "keep
-	// none of this tier", and a retention pass that deletes an entire
-	// tier because the operator left a key out of the YAML file is a
-	// data-loss bug, not a permissive default. An operator who explicitly
-	// wants a tighter policy sets a positive number smaller than the
-	// default; there is no way to spell "disable this tier" in this
-	// schema, by design.
-	if r.DailyDays == 0 {
-		r.DailyDays = 7
-	} else if r.DailyDays < 0 {
-		v.addf("retention.daily_days: must not be negative (got %d)", r.DailyDays)
-	}
-	if r.WeeklyMonths == 0 {
-		r.WeeklyMonths = 3
-	} else if r.WeeklyMonths < 0 {
-		v.addf("retention.weekly_months: must not be negative (got %d)", r.WeeklyMonths)
-	}
-	if r.MonthlyMonths == 0 {
-		r.MonthlyMonths = 12
-	} else if r.MonthlyMonths < 0 {
-		v.addf("retention.monthly_months: must not be negative (got %d)", r.MonthlyMonths)
+	// FR-18's chain has two spellings, and validateRetention picks exactly
+	// one of them per call rather than blending the two.
+	//
+	// An explicit tiers list is the general form: any number of named
+	// tiers at any granularity. The three daily_days/weekly_months/
+	// monthly_months scalars are sugar for the specific three-tier chain
+	// config.DefaultTierChain builds, kept because a config file written
+	// before the chain existed has to keep deciding exactly as it always
+	// has (issue #156's own acceptance criterion).
+	//
+	// Writing both is refused rather than resolved by precedence. An
+	// operator who sets daily_days alongside a tiers list is describing
+	// two different policies, and silently keeping one of them is how a
+	// retention pass ends up deleting on terms nobody wrote. Refusing also
+	// keeps this function idempotent, which Validate's own doc promises
+	// and the CLI's override path depends on: because the scalars are only
+	// defaulted when no tiers list is present, a second call over an
+	// already-resolved Retention finds the same branch and changes
+	// nothing.
+	if len(r.Tiers) > 0 {
+		v.validateRetentionTiers(r)
+	} else {
+		// A tier left at zero, whether because the key was omitted or
+		// written as 0, falls back to FR-18's documented default rather
+		// than being read literally: a literal zero would mean "keep none
+		// of this tier", and a retention pass that deletes an entire tier
+		// because the operator left a key out of the YAML file is a
+		// data-loss bug, not a permissive default. An operator who
+		// explicitly wants a tighter policy sets a positive number smaller
+		// than the default; there is no way to spell "disable this tier"
+		// in this spelling, by design. The explicit tiers list is the way
+		// to run fewer than three tiers.
+		if r.DailyDays == 0 {
+			r.DailyDays = 7
+		} else if r.DailyDays < 0 {
+			v.addf("retention.daily_days: must not be negative (got %d)", r.DailyDays)
+		}
+		if r.WeeklyMonths == 0 {
+			r.WeeklyMonths = 3
+		} else if r.WeeklyMonths < 0 {
+			v.addf("retention.weekly_months: must not be negative (got %d)", r.WeeklyMonths)
+		}
+		if r.MonthlyMonths == 0 {
+			r.MonthlyMonths = 12
+		} else if r.MonthlyMonths < 0 {
+			v.addf("retention.monthly_months: must not be negative (got %d)", r.MonthlyMonths)
+		}
 	}
 
 	// FR-19: the newest known-good restore point must never be deleted
@@ -504,6 +529,146 @@ func (v *validator) validateRetention(r *Retention) {
 	if r.ProtectLastKnownGood == nil {
 		protect := true
 		r.ProtectLastKnownGood = &protect
+	}
+}
+
+// validRetentionGranularities is the closed set RetentionTier.Granularity
+// accepts. It is a map rather than a switch so a settings form (B3.7) has
+// something to enumerate, and so the error message below can list every
+// legal value instead of only naming the illegal one.
+var validRetentionGranularities = map[string]bool{
+	GranularityDay:      true,
+	GranularityWeek:     true,
+	GranularityMonth:    true,
+	GranularityQuarter:  true,
+	GranularityHalfYear: true,
+	GranularityYear:     true,
+	GranularityDays:     true,
+}
+
+// retentionGranularityList renders validRetentionGranularities in a fixed
+// order, so the same mistake always produces the same error text (a map
+// range would reorder it per run and make the message untestable).
+var retentionGranularityList = strings.Join([]string{
+	GranularityDay, GranularityWeek, GranularityMonth,
+	GranularityQuarter, GranularityHalfYear, GranularityYear, GranularityDays,
+}, ", ")
+
+// retentionTierNamePattern constrains a tier name to lower_snake_case.
+//
+// The constraint exists because the name is not decoration: internal/
+// retention upper-cases it into the tier string apps/common/webhost sends
+// to the client, so an unconstrained name would put arbitrary text on the
+// wire and make "daily" report as something other than DAILY depending on
+// how the operator capitalised it. One canonical spelling per tier also
+// means a settings form can validate the field client-side against the
+// same rule this function applies.
+var retentionTierNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// retentionTierKeepMax and retentionTierPeriodDaysMax bound the two
+// numbers in a tier from above.
+//
+// Both are already bounded from below, and both feed calendar arithmetic
+// that walks a window backwards from today. A large enough value wraps
+// time.Date's own int64 second arithmetic, the window's start lands after
+// today, and the tier selects nothing at all with no error reported: the
+// same silent empty selection every other rule in this function exists to
+// refuse, reached from a config file Validate would otherwise accept. The
+// wrap needs roughly 1e11, so no operator is going to type it by
+// accident; the point of the ceiling is that an input whose out-of-range
+// behaviour is "quietly keep nothing" has no business being unbounded in
+// the last check between a YAML file and a deletion plan.
+//
+// The two numbers are arbitrary, chosen to be far past any policy anyone
+// would write: 10,000 look-back units is 27 years of dailies or a hundred
+// centuries of annuals, and 3,650 days is a ten-year custom period.
+const (
+	retentionTierKeepMax       = 10000
+	retentionTierPeriodDaysMax = 3650
+)
+
+// validateRetentionTiers checks an explicit FR-18 chain. It is only
+// reached when r.Tiers is non-empty; see validateRetention for why the two
+// spellings are mutually exclusive.
+func (v *validator) validateRetentionTiers(r *Retention) {
+	if r.DailyDays != 0 {
+		v.addf("retention.daily_days: cannot be combined with retention.tiers; daily_days is sugar for the default tiers chain, so write one or the other")
+	}
+	if r.WeeklyMonths != 0 {
+		v.addf("retention.weekly_months: cannot be combined with retention.tiers; weekly_months is sugar for the default tiers chain, so write one or the other")
+	}
+	if r.MonthlyMonths != 0 {
+		v.addf("retention.monthly_months: cannot be combined with retention.tiers; monthly_months is sugar for the default tiers chain, so write one or the other")
+	}
+
+	seen := map[string]int{} // tier name -> the index that first claimed it
+	for i := range r.Tiers {
+		path := fmt.Sprintf("retention.tiers[%d]", i)
+		t := &r.Tiers[i]
+
+		switch {
+		case t.Name == "":
+			v.addf("%s: name must not be empty", path)
+		case !retentionTierNamePattern.MatchString(t.Name):
+			v.addf("%s: name %q must be lower_snake_case (letters, digits and underscores, starting with a letter)", path, t.Name)
+		case t.Name == TierLastKnownGoodName:
+			v.addf("%s: name %q is reserved for FR-19's last-known-good protection and cannot name a retention tier", path, t.Name)
+		default:
+			if first, dup := seen[t.Name]; dup {
+				v.addf("%s: duplicate tier name %q (already used by retention.tiers[%d])", path, t.Name, first)
+			}
+			seen[t.Name] = i
+		}
+
+		if !validRetentionGranularities[t.Granularity] {
+			if t.Granularity == "" {
+				v.addf("%s: granularity must be set to one of: %s", path, retentionGranularityList)
+			} else {
+				v.addf("%s: granularity %q is not one of: %s", path, t.Granularity, retentionGranularityList)
+			}
+		}
+
+		// period_days is required by, and only meaningful to, the custom
+		// granularity. Refusing a stray value rather than ignoring it is
+		// the same call config.Load's KnownFields(true) already makes for
+		// a mistyped key: a number the operator wrote and this code
+		// silently drops is a policy they think they configured.
+		if t.Granularity == GranularityDays {
+			switch {
+			case t.PeriodDays <= 0:
+				v.addf("%s: granularity %q needs a positive period_days (got %d)", path, GranularityDays, t.PeriodDays)
+			case t.PeriodDays > retentionTierPeriodDaysMax:
+				v.addf("%s: period_days must not exceed %d (got %d); a longer period overflows the calendar arithmetic that walks this tier's window back from today, and a tier that overflows selects nothing at all", path, retentionTierPeriodDaysMax, t.PeriodDays)
+			}
+		} else if t.PeriodDays != 0 {
+			v.addf("%s: period_days is only meaningful with granularity %q (got %d alongside granularity %q)", path, GranularityDays, t.PeriodDays, t.Granularity)
+		}
+
+		// Unlike the legacy scalars, an explicit tier has no "zero means
+		// the default" reading available: the operator listed this tier
+		// deliberately, so a zero window is a mistake, and the way to run
+		// without a tier is to leave it out of the chain.
+		switch {
+		case t.Keep <= 0:
+			// The advice has to carry the fallback with it. "Leave this
+			// tier out" is right for one tier and wrong for all of them:
+			// an operator who follows it down to the last tier arrives at
+			// an empty list, which reads as an absent key and reinstates
+			// the default chain rather than the narrow policy they were
+			// writing (see Retention.Tiers' own doc).
+			v.addf("%s: keep must be a positive number of look-back units (got %d); drop this one tier from the chain rather than writing it with a zero window, and note that emptying retention.tiers entirely falls back to the default daily/weekly/monthly policy instead of keeping nothing", path, t.Keep)
+		case t.Keep > retentionTierKeepMax:
+			v.addf("%s: keep must not exceed %d look-back units (got %d); a longer window overflows the calendar arithmetic that walks it back from today, and a tier that overflows selects nothing at all", path, retentionTierKeepMax, t.Keep)
+		}
+
+		switch {
+		case t.WindowUnit == "":
+			// Defaults to the tier's own granularity.
+		case t.WindowUnit == GranularityDays:
+			v.addf("%s: window_unit cannot be %q; a custom period only measures a window when it is the tier's own granularity, in which case leave window_unit unset", path, GranularityDays)
+		case !validRetentionGranularities[t.WindowUnit]:
+			v.addf("%s: window_unit %q is not one of: %s", path, t.WindowUnit, retentionGranularityList)
+		}
 	}
 }
 

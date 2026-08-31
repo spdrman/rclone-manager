@@ -340,12 +340,176 @@ type Revalidation struct {
 // resolution order between set-level and global values) that deserves its
 // own issue rather than riding in on a config/CLI-first change.
 type Retention struct {
-	Timezone             string `yaml:"timezone"`
-	WeekStartsOn         string `yaml:"week_starts_on"`
-	DailyDays            int    `yaml:"daily_days"`
-	WeeklyMonths         int    `yaml:"weekly_months"`
-	MonthlyMonths        int    `yaml:"monthly_months"`
-	ProtectLastKnownGood *bool  `yaml:"protect_last_known_good"`
+	Timezone     string `yaml:"timezone"`
+	WeekStartsOn string `yaml:"week_starts_on"`
+
+	// DailyDays, WeeklyMonths and MonthlyMonths are the original
+	// three-scalar spelling of FR-18's default chain, kept as sugar for
+	// exactly the three-entry Tiers list DefaultTierChain builds. They and
+	// Tiers are mutually exclusive: see Tiers' own doc, and validate.go's
+	// validateRetention, for why that is an error rather than a silent
+	// precedence rule.
+	//
+	// All three carry omitempty because this config file is not only read
+	// by the product, it is rewritten by it: core/service's
+	// writeConfigAtomically re-marshals the whole Config on every wizard
+	// save. Without omitempty a tiers-based policy comes back from that
+	// round trip with "daily_days: 0" sitting above the operator's chain,
+	// which reads as "daily retention is off" and invites the one edit
+	// (setting it to 7) that Validate refuses outright, leaving a daemon
+	// that will not start. Zero already means "not configured" for all
+	// three, and validateRetention resolves them to 7/3/12 before any
+	// write, so nothing is lost by omitting them.
+	DailyDays     int `yaml:"daily_days,omitempty"`
+	WeeklyMonths  int `yaml:"weekly_months,omitempty"`
+	MonthlyMonths int `yaml:"monthly_months,omitempty"`
+
+	// Tiers is FR-18's generalized retention chain: an ordered list of any
+	// number of named tiers, each bucketing artifacts at its own
+	// granularity over its own look-back window. KEEP is the union of
+	// every tier's selections (plus FR-19's protected term); anything the
+	// union does not claim, whether it fell in a gap between two tiers'
+	// windows or outside every window, is a delete candidate.
+	//
+	// An empty Tiers means "use the three scalars above", which is what
+	// makes an existing config file that never heard of this field keep
+	// producing exactly the decisions it produced before the field
+	// existed. Setting both is refused by Validate: an operator who wrote
+	// both is asking two different questions, and picking one silently is
+	// how a retention policy ends up deleting on terms nobody wrote.
+	//
+	// An explicitly empty list (tiers: []) is not distinguishable from an
+	// absent key here and reads the same way: the three scalars above,
+	// which resolve to 7/3/12. So emptying the chain does not spell "keep
+	// nothing", it reinstates the default daily/weekly/monthly policy.
+	// That is deliberately the fail-safe direction (more retention, not
+	// less), and it is why the keep validation message points at dropping
+	// one tier rather than at emptying the list. There is no "keep
+	// nothing" spelling in this schema at all: retention is turned off by
+	// not running a retention pass.
+	//
+	// Order is the order the operator wrote, and is preserved end to end
+	// (it fixes the order tier names appear in a KEEP verdict). Because
+	// KEEP is a union, order never changes which artifacts are kept.
+	//
+	// omitempty for the same round-trip reason as the three scalars
+	// above: a legacy config file must not come back from a wizard save
+	// with an empty "tiers: []" injected into it, which an older binary
+	// then rejects outright under Load's KnownFields(true).
+	Tiers []RetentionTier `yaml:"tiers,omitempty"`
+
+	ProtectLastKnownGood *bool `yaml:"protect_last_known_good"`
+}
+
+// Retention granularity names. These are the values RetentionTier's
+// Granularity and WindowUnit fields accept, spelled exactly as they are
+// written in YAML.
+//
+// GranularityDays is the "any other period" escape hatch FR-18 calls for:
+// paired with PeriodDays it expresses a fortnightly, ten-daily or any
+// other fixed-length chain step the named list above does not cover. Its
+// buckets are anchored to a fixed epoch rather than to today, so a custom
+// period's bucket boundaries never move depending on the day the
+// calculation happens to run (see internal/retention's own doc).
+const (
+	GranularityDay      = "day"
+	GranularityWeek     = "week"
+	GranularityMonth    = "month"
+	GranularityQuarter  = "quarter"
+	GranularityHalfYear = "half_year"
+	GranularityYear     = "year"
+	GranularityDays     = "days"
+)
+
+// TierLastKnownGoodName is reserved: FR-19's protected term already
+// occupies the LAST_KNOWN_GOOD name on the wire (internal/retention's
+// TierLastKnownGood), so a configured tier may not claim it and make a
+// GFS selection indistinguishable from last-known-good protection in a
+// verdict's tier list.
+const TierLastKnownGoodName = "last_known_good"
+
+// RetentionTier is one link in FR-18's retention chain.
+//
+// The shape is deliberately flat and enumerated rather than free-form: a
+// settings form (B3.7) renders it as two selects and two numbers, and can
+// validate every field client-side against the same closed value sets
+// config.Validate checks server-side.
+type RetentionTier struct {
+	// Name identifies the tier and is what surfaces in a KEEP verdict.
+	// It must be lower_snake_case (^[a-z][a-z0-9_]*$) and unique within
+	// the chain; internal/retention upper-cases it for the wire, so
+	// "daily" is reported as "DAILY" exactly as it always has been.
+	Name string `yaml:"name"`
+
+	// Granularity is the calendar bucket this tier groups artifacts into:
+	// one of the Granularity* constants above. Each bucket contributes at
+	// most one artifact to KEEP, the newest valid one in it.
+	Granularity string `yaml:"granularity"`
+
+	// PeriodDays is the length of a custom period, in days. It is
+	// required when Granularity is GranularityDays and must be zero
+	// otherwise, hence omitempty: the schema doc says period_days is
+	// absent from every other tier, and a config file this product wrote
+	// should read the way the doc says one looks.
+	PeriodDays int `yaml:"period_days,omitempty"`
+
+	// Keep is how many of this tier's look-back units to reach back over,
+	// counting the current one. Keep: 7 on a day-granularity tier is
+	// today plus the six days before it.
+	Keep int `yaml:"keep"`
+
+	// WindowUnit optionally measures the look-back in a unit other than
+	// Granularity. It accepts every Granularity* constant except
+	// GranularityDays, and defaults to Granularity when empty.
+	//
+	// This exists because a tier's window is not always counted in its own
+	// buckets, and specifically because FR-18's default weekly tier is not:
+	// weekly_months buckets by week but looks back over calendar months.
+	// Without this field that default could not be expressed in the new
+	// schema, and "the old keys keep producing identical decisions" would
+	// be false for one tier out of three.
+	//
+	// omitempty for the same reason as PeriodDays: empty means "defaults
+	// to Granularity", which is the ordinary case, so a written-back
+	// config should not carry a window_unit: "" on every tier.
+	WindowUnit string `yaml:"window_unit,omitempty"`
+}
+
+// DefaultTierChain returns the three-tier chain the DailyDays,
+// WeeklyMonths and MonthlyMonths scalars are sugar for.
+//
+// This is the single definition of that expansion. internal/retention
+// resolves an empty Retention.Tiers through it, and validate.go checks
+// the scalars that feed it, so there is no second, potentially divergent,
+// spelling of "what do the three old keys mean" anywhere in the tree.
+//
+// The values are passed in rather than read from a Retention so this can
+// be called on an unvalidated policy without implying it has been
+// defaulted: a non-positive window yields a tier internal/retention treats
+// as disabled, which is exactly how the scalars have always behaved for a
+// caller that bypassed Validate.
+func DefaultTierChain(dailyDays, weeklyMonths, monthlyMonths int) []RetentionTier {
+	return []RetentionTier{
+		{Name: "daily", Granularity: GranularityDay, Keep: dailyDays},
+		{Name: "weekly", Granularity: GranularityWeek, Keep: weeklyMonths, WindowUnit: GranularityMonth},
+		{Name: "monthly", Granularity: GranularityMonth, Keep: monthlyMonths},
+	}
+}
+
+// EffectiveTiers returns the tier chain this policy actually decides
+// with: the explicit Tiers list when one is configured, and otherwise the
+// DefaultTierChain expansion of the three scalars.
+//
+// Validate refuses a Retention that sets both, so on any validated policy
+// exactly one of the two branches is meaningful. The branch order still
+// favours an explicit list, so a caller that reached here with a
+// hand-built, unvalidated Retention gets the more specific of the two
+// rather than a silent fall-back to scalars it never set.
+func (r Retention) EffectiveTiers() []RetentionTier {
+	if len(r.Tiers) > 0 {
+		return r.Tiers
+	}
+	return DefaultTierChain(r.DailyDays, r.WeeklyMonths, r.MonthlyMonths)
 }
 
 // Load reads and parses the YAML file at path. It does not validate the

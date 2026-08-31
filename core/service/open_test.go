@@ -20,6 +20,15 @@ import (
 // test of its own otherwise.
 func writeTestConfigFile(t *testing.T) string {
 	t.Helper()
+	return writeTestConfigFileWithRetention(t, "retention:\n  timezone: UTC\n  week_starts_on: monday\n")
+}
+
+// writeTestConfigFileWithRetention is writeTestConfigFile with the
+// retention block spelled by the caller, so a test can start from a
+// tiers-based policy (FR-18's chain) rather than only from the legacy
+// scalars. retention is the whole block, "retention:" line included.
+func writeTestConfigFileWithRetention(t *testing.T, retention string) string {
+	t.Helper()
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote")
 	localDir := filepath.Join(dir, "local")
@@ -48,9 +57,7 @@ func writeTestConfigFile(t *testing.T) string {
 		"        completion:\n" +
 		"          strategy: rename\n" +
 		"        stale_after: 24h\n" +
-		"retention:\n" +
-		"  timezone: UTC\n" +
-		"  week_starts_on: monday\n"
+		retention
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

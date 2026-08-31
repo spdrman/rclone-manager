@@ -463,6 +463,16 @@ func TestGFSDecideFutureDatedRecordIsNeverARepresentative(t *testing.T) {
 	}
 }
 
+// TestGFSDecideDisabledTiersSelectNothing pins the per-tier reading of a
+// non-positive window: the tier is off, it contributes nothing to KEEP,
+// and it is not an error.
+//
+// The fixture leaves one tier live, because the whole chain being off is
+// a different question with a different answer (gfsResolveChain refuses
+// it: see TestGFSDecideRefusesAChainWithNoEnabledTier). "a" falls in the
+// live monthly tier's window and is kept by it alone; if the two zeroed
+// tiers were being read as live, "a" would come back badged DAILY and
+// WEEKLY as well.
 func TestGFSDecideDisabledTiersSelectNothing(t *testing.T) {
 	set := gfsMustSet(t, "disabled", "set")
 	specs := []gfsRecSpec{
@@ -470,16 +480,18 @@ func TestGFSDecideDisabledTiersSelectNothing(t *testing.T) {
 		{"b", lifecycle.Committed, time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)},
 	}
 	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday"} // all tiers zero
+	// daily and weekly off, monthly live over August alone.
+	cfg := config.Retention{Timezone: "UTC", WeekStartsOn: "monday", MonthlyMonths: 1}
 
 	records := gfsBuildRecords(t, set, specs)
 	got, err := GFSDecide(now, cfg, set, records)
 	if err != nil {
 		t.Fatalf("GFSDecide: %v", err)
 	}
-	gfsAssertKeptNames(t, got, nil)
+	gfsAssertTiers(t, got, "a", []GFSTier{GFSMonthly})
+	gfsAssertKeptNames(t, got, []string{"a"})
 	if len(got) != 2 {
-		t.Fatalf("expected both eligible records to still appear (unkept), got %+v", got)
+		t.Fatalf("expected both eligible records to still appear, got %+v", got)
 	}
 }
 
