@@ -10,21 +10,26 @@ package lifecycle
 //
 //	COMMITTED -> REMOTE_DELETE_PENDING -> COMPLETE
 //
-// and, per FR-15, it revalidates four things immediately before issuing the
+// and, per FR-15, it revalidates these immediately before issuing the
 // delete, from scratch, every single time, never trusting that an earlier
 // pass already checked them:
 //
 //  1. the journal artifact is COMMITTED or REMOTE_DELETE_PENDING (the only
 //     two states this transition may legally start from, see machine.go);
-//  2. the expected local final file exists;
-//  3. its local identity/size is consistent with what the journal recorded;
-//  4. the remote object still corresponds to what was captured at
+//  2. the artifact has never been reinstated out of quarantine (issue
+//     #220). This one is not in FR-15's original list; it is the price the
+//     state machine's reinstatement edges pay for existing, and it is
+//     permanent rather than a delay. See the check itself for the full
+//     argument;
+//  3. the expected local final file exists;
+//  4. its local identity/size is consistent with what the journal recorded;
+//  5. the remote object still corresponds to what was captured at
 //     discovery, via model.CompareIdentity (FR-16). This package does not
 //     reimplement that comparison; it only supplies the two RemoteIdentity
 //     values to compare and honours model.IdentityComparison.Preserve().
 //
 // Any one of these failing refuses the delete. Nothing here ever calls
-// transport.Transport.DeleteRemote except after all four hold.
+// transport.Transport.DeleteRemote except after all of them hold.
 //
 // # Why this usually refuses, and why that is not a bug
 //
@@ -175,8 +180,9 @@ type RemoteDeleteRefusalError struct {
 	// Check names which revalidation check refused the delete:
 	// "journal state", "local file", "remote identity" or "remote delete"
 	// (FR-15's own four, the last being the transport call itself failing
-	// after every check upstream of it passed), plus WP3.2's two:
-	// "stable completion safety delay" and "unknown completion strategy".
+	// after every check upstream of it passed), plus WP3.2's two,
+	// "stable completion safety delay" and "unknown completion strategy",
+	// plus issue #220's "quarantine reinstatement".
 	Check string
 
 	// Reason is a short, human-readable explanation suitable for a log

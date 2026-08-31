@@ -120,7 +120,7 @@ func TestIllegalTransitionsFail(t *testing.T) {
 		{Quarantined, QuarantinedLost},    // quarantine can't declare loss without going through Complete
 		{Complete, Committed},             // terminal can't rewind
 		{RemoteDeletePending, Discovered}, // can't abandon a delete-pending mid-flight back to the start
-		{QuarantinedLost, Discovered},     // terminal by design, see TestCompleteCannotLivelockThroughQuarantine
+		{QuarantinedLost, Discovered},     // no route back into the pipeline, see TestCompleteCannotLivelockThroughQuarantine
 		{QuarantinedLost, Quarantined},    // no route from the unrecoverable outcome to the recoverable one
 	} {
 		err := Validate(tc.from, tc.to)
@@ -329,7 +329,7 @@ func TestCompleteCannotLivelockThroughQuarantine(t *testing.T) {
 	}
 }
 
-// --- no state is a dead end, except the one that's terminal on purpose ---
+// --- no state is a dead end, and two move only when an operator says so ---
 
 // noAutomaticExit lists the states this package deliberately gives no
 // AUTOMATIC exit: every edge out of one of them is recorded by an

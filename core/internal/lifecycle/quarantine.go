@@ -35,13 +35,19 @@
 //
 // See machine.go and state.go's package docs for the full reasoning:
 // QUARANTINED_LOST means the durable local copy went bad after COMPLETE,
-// when the remote source is already confirmed gone. There is no copy left
-// anywhere to recover from, so unlike QUARANTINED this is terminal by
-// design, and ReleaseFromQuarantine refuses it with a distinct, typed
-// error (QuarantinedLostIsTerminalError) rather than silently doing
-// nothing or, worse, treating it like an ordinary quarantine. A caller
-// that wants to tell the two apart programmatically uses
-// AsQuarantinedLostIsTerminal rather than comparing error strings.
+// when the remote source is already confirmed gone. Releasing it back to
+// DISCOVERED would ask the pipeline to re-fetch from a source that is not
+// there, so ReleaseFromQuarantine refuses it with a distinct, typed error
+// (QuarantinedLostIsTerminalError) rather than silently doing nothing or,
+// worse, treating it like an ordinary quarantine. A caller that wants to
+// tell the two apart programmatically uses AsQuarantinedLostIsTerminal
+// rather than comparing error strings.
+//
+// The refusal is about THIS exit, not about the state being a dead end.
+// ReinstateFromQuarantine, further down this file, does serve
+// QUARANTINED_LOST: it keeps the local copy instead of re-fetching, which
+// is precisely the case a confirmed-gone source leaves available (issue
+// #220).
 package lifecycle
 
 import (
@@ -88,7 +94,7 @@ type NotQuarantinedError struct {
 }
 
 func (e *NotQuarantinedError) Error() string {
-	return fmt.Sprintf("lifecycle: refusing to release %s from quarantine: its journal state is %s, not %s", e.Artifact, e.Current, Quarantined)
+	return fmt.Sprintf("lifecycle: refusing this quarantine action on %s: its journal state is %s, not %s", e.Artifact, e.Current, Quarantined)
 }
 
 // AsNotQuarantined reports whether err is, or wraps, a *NotQuarantinedError.

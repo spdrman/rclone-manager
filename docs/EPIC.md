@@ -1044,8 +1044,9 @@ final". When the remote copy is gone too, there is no source left to
 re-fetch from, so preserve-and-quarantine (which assumes a fresh attempt
 could still recover the artifact) is the wrong answer. The state machine
 carries a twelfth state, QUARANTINED_LOST, reachable only from COMPLETE and
-terminal by design, for exactly this case; see internal/lifecycle/state.go
-and machine.go. Reconciliation reaches it either directly from COMPLETE, or
+with no route back into the pipeline, for exactly this case; see
+internal/lifecycle/state.go and machine.go, and FR-10's own "Leaving
+quarantine" section for the one operator-triggered exit it does have. Reconciliation reaches it either directly from COMPLETE, or
 by first reconciling REMOTE_DELETE_PENDING to COMPLETE (the row above) and
 then on to QUARANTINED_LOST in the same pass, since that is the only legal
 path the state machine admits.

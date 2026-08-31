@@ -22,8 +22,9 @@ var ErrNotQuarantined = errors.New("app: artifact is not quarantined")
 // retry can change it: QUARANTINED_LOST is reached only from COMPLETE,
 // which is the one state that confirms the remote source is already
 // deleted, so there is nothing left anywhere to re-ingest. See
-// internal/lifecycle's Transitions table, where QUARANTINED_LOST is the
-// one state with no outgoing edge at all.
+// internal/lifecycle's Transitions table, where QUARANTINED_LOST has no
+// edge into the pipeline at all. ReinstateQuarantined is the action that
+// does serve it, by keeping the local copy rather than re-fetching.
 var ErrQuarantineIrrecoverable = errors.New("app: quarantined artifact has no remaining source to re-ingest")
 
 // RevalidateQuarantined re-runs the durable-local-copy checks against one
@@ -86,8 +87,11 @@ func (s *Service) RevalidateQuarantined(ctx context.Context, id model.ArtifactID
 // remote source is gone; sending it to DISCOVERED would rediscover
 // nothing, fail, land in FAILED, and FAILED -> DISCOVERED would send it
 // straight back around. The lifecycle package calls that a livelock and
-// gives QUARANTINED_LOST no outgoing edge for exactly this reason, so the
-// refusal here is naming that rule rather than adding a new one.
+// gives QUARANTINED_LOST no edge into the pipeline for exactly this reason,
+// so the refusal here is naming that rule rather than adding a new one. An
+// operator whose local copy is provably intact wants ReinstateQuarantined
+// instead, which keeps that copy rather than asking for a source that is
+// not there.
 func (s *Service) RetryQuarantinedIngestion(ctx context.Context, id model.ArtifactID) error {
 	rec, err := s.Journal.Get(ctx, id)
 	if err != nil {

@@ -450,8 +450,12 @@ This twelfth state isn't in the original FR-10 list; it was added because the el
 version had no way to represent "the source is confirmed gone and the only copy we have is
 bad," and sending that case back to `DISCOVERED` the way `QUARANTINED` does would just
 livelock against a source that no longer exists. I re-checked the transition table for this
-rewrite: `{From: Complete, To: QuarantinedLost}` is still the only edge into it, and it
-still has no outgoing edges at all, pinned by `TestOnlyCompletePrecedesQuarantinedLost`.
+rewrite: `{From: Complete, To: QuarantinedLost}` is still the only edge into it, pinned by
+`TestOnlyCompletePrecedesQuarantinedLost`, and it still has no edge back into the pipeline
+and no automatic exit of any kind. Issue #220 gave it exactly one operator-triggered exit,
+back to the `COMPLETE` it came from, for the case where the local copy turns out to be intact
+and the finding was the mistake: an unmounted volume makes every `COMPLETE` artifact in a set
+fail its local check, and before that there was no way back at all.
 Whether an artifact is currently `QUARANTINED_LOST` matters enough operationally that it's
 checked first, unconditionally, in health computation (see
 [Status and health](#status-and-health)).
