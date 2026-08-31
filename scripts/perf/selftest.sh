@@ -29,7 +29,7 @@ fail=0
 expect_fail() {
   local name=$1; shift; shift
   if "$@" >"$tmp/out" 2>&1; then
-    echo "SELFTEST FAIL: $name — the gate PASSED a case it must refuse." >&2
+    echo "SELFTEST FAIL: $name. The gate PASSED a case it must refuse." >&2
     sed 's/^/    /' "$tmp/out" >&2
     fail=$((fail + 1))
   else
@@ -45,7 +45,7 @@ expect_pass() {
     echo "  ok (accepted as required): $name"
     pass=$((pass + 1))
   else
-    echo "SELFTEST FAIL: $name — the gate REFUSED a case it must accept." >&2
+    echo "SELFTEST FAIL: $name. The gate REFUSED a case it must accept." >&2
     sed 's/^/    /' "$tmp/out" >&2
     fail=$((fail + 1))
   fi
@@ -63,6 +63,16 @@ expect_fail "a gate naming a host with no checked-in record" -- ./scripts/perf/c
 
 jq '.workload = "some-other-workload"' "$GATE" > "$tmp/gate-workload.json"
 expect_fail "a gate whose workload does not match the record's" -- ./scripts/perf/check-baseline.sh --gate "$tmp/gate-workload.json"
+
+# The two fail-open shapes: a gate that lists nothing must refuse rather
+# than report success over an empty list. Phase 4 learned this on the
+# conformance matrix, where omitting a capability had to fail rather than
+# shrink the matrix.
+jq 'del(.required_metrics)' "$GATE" > "$tmp/gate-noreq.json"
+expect_fail "a gate declaring no required_metrics" -- ./scripts/perf/check-baseline.sh --gate "$tmp/gate-noreq.json"
+
+jq '.thresholds = {}' "$GATE" > "$tmp/gate-nothresholds.json"
+expect_fail "a gate declaring no thresholds" -- ./scripts/perf/check-baseline.sh --gate "$tmp/gate-nothresholds.json" --compare "$record"
 
 # A record missing one required metric, once per metric: this is the guard
 # that stops a --skip-image capture (or any future harness that quietly

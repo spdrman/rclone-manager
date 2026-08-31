@@ -13,7 +13,7 @@ dependency rule named no distribution layer at all.
 
 ## The layers
 
-### 1. core — provider-neutral core, application services, the API host, the shared UI
+### 1. core: provider-neutral core, application services, the API host, the shared UI
 
 Owns lifecycle state, retention policy, validation rules, catalog truth and
 backup policy, **exclusively**. Nothing outside this layer may declare any of
@@ -33,7 +33,7 @@ purpose. #81's dependency rule reads `platform ───► app/core contracts o
 which means the contract itself belongs to core. A runtime profile *implements*
 it; it does not own it.
 
-### 2. runtime platform — a profile, for behaviour that legitimately depends on the host
+### 2. runtime platform: a profile, for behaviour that legitimately depends on the host
 
 A **runtime profile** changes behaviour that genuinely depends on the host: a
 trusted native authentication gateway, a provider notification bridge, a launch
@@ -50,7 +50,7 @@ and it is the line that separates a profile from a fork.
 | `apps/<platform>/frontend/` | one capability declaration, one bootstrap, at most an auth bridge, per platform |
 | `apps/common/tests/` | the cross-provider bridge conformance suite: the one place that imports every provider's `platform.ts` |
 
-### 3. distribution — packaging, metadata, templates, store presentation
+### 3. distribution: packaging, metadata, templates, store presentation
 
 A **distribution adapter** changes only how the same runtime is installed and
 presented: a Portainer app template, TrueNAS catalog metadata, an Unraid Docker
@@ -72,7 +72,7 @@ proof below:
 | `canonical` | the canonical runtime and the shared metadata every adapter derives from | `container/`, `distribution/` |
 | `adapter` | one target's own packaging | `apps/truenas/{catalog,compose,README.md}`, `apps/unraid/{template,README.md,frontend/webui.json}`, `apps/openmediavault/{compose,README.md}`, `apps/proxmox/{compose,README.md,frontend/deployment.md}`, `apps/synology/{spk,cmd,go.mod,README.md}`, `tools/ugcli-install` |
 
-### infrastructure — everything that is not product code
+### infrastructure: everything that is not product code
 
 `docs/`, `scripts/`, `.github/`, `.husky/` and the repository-root config files.
 Listed explicitly rather than silently excluded, so the completeness check has no

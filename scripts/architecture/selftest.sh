@@ -62,11 +62,11 @@ mutant() {
 expect_check_fails() {
   local label=$1 dir=$2 expect=$3; shift 3
   if (cd "$dir" && "$@") >"$tmp/out" 2>&1; then
-    echo "SELFTEST FAIL: $label — the check PASSED against a planted violation." >&2
+    echo "SELFTEST FAIL: $label. The check PASSED against a planted violation." >&2
     sed 's/^/    /' "$tmp/out" >&2
     fail=$((fail + 1))
   elif ! grep -qF "$expect" "$tmp/out"; then
-    echo "SELFTEST FAIL: $label — the check failed, but not for the planted reason." >&2
+    echo "SELFTEST FAIL: $label. The check failed, but not for the planted reason." >&2
     echo "    expected its output to contain: $expect" >&2
     sed 's/^/    /' "$tmp/out" >&2
     fail=$((fail + 1))
@@ -83,7 +83,7 @@ expect_check_passes() {
     echo "  ok (clean):  $label"
     pass=$((pass + 1))
   else
-    echo "SELFTEST FAIL: $label — the check FAILED against an unmutated tree, so its failures mean nothing." >&2
+    echo "SELFTEST FAIL: $label. The check FAILED against an unmutated tree, so its failures mean nothing." >&2
     sed 's/^/    /' "$tmp/out" >&2
     fail=$((fail + 1))
   fi
@@ -180,6 +180,19 @@ type Client struct{}
 EOF
 expect_check_fails "core importing a NAS vendor SDK" "$d" "─X─► NAS SDKs" ./scripts/architecture/check-core-dependency-rule.sh
 
+# A check that inspected nothing must refuse rather than report success
+# over an empty set. Three of these checks count what they looked at for
+# exactly that reason, and all three counters are exercised here.
+d=$(mutant dep-unclassified-module)
+mkdir -p "$d/apps/casaos"
+cat > "$d/apps/casaos/go.mod" <<'EOF'
+module github.com/spdrman/rclone-manager/apps/casaos
+
+go 1.27.0
+EOF
+expect_check_fails "a Go module the manifest classifies into no layer" "$d" \
+  "classified into no layer" ./scripts/architecture/check-core-dependency-rule.sh
+
 echo
 echo "==> layer ownership, one mutation per rule"
 
@@ -243,6 +256,16 @@ cat >> "$d/apps/truenas/frontend/platform.ts" <<'EOF'
 EOF
 expect_check_passes "a commented-out retention declaration in a bridge (must NOT fire)" "$d" ./scripts/architecture/check-layer-ownership.sh
 
+# The ownership check's own empty-set guard: a manifest whose platform and
+# distribution paths hold no Go or TypeScript at all would otherwise make
+# "no violations found" true and worthless.
+d=$(mutant own-nothing-to-scan)
+awk '$1 == "platform" || $1 == "distribution" { print $1, $2, "container"; next } { print }' \
+  "$d/scripts/architecture/layers.conf" > "$d/scripts/architecture/layers.conf.mutated"
+mv "$d/scripts/architecture/layers.conf.mutated" "$d/scripts/architecture/layers.conf"
+expect_check_fails "an ownership run with no Go or TypeScript file to scan" "$d" \
+  "verified nothing" ./scripts/architecture/check-layer-ownership.sh
+
 echo
 echo "==> shared UI provider-SDK import scan"
 
@@ -279,6 +302,13 @@ export type SelftestPlatformId = "casaos" | "zimaos" | "dockge" | "portainer";
 EOF
 expect_check_passes "platform names in prose and in a type union (must NOT fire)" "$d" \
   ./scripts/architecture/check-ui-shared-provider-imports.sh
+
+# The scan's own empty-set guard: if ui/shared/src moved, "no provider
+# import was found" would be true and meaningless.
+d=$(mutant ui-nothing-to-scan)
+mv "$d/ui/shared/src" "$d/ui/shared/source"
+expect_check_fails "a UI scan with no TypeScript file to read" "$d" \
+  "verified nothing" ./scripts/architecture/check-ui-shared-provider-imports.sh
 
 if [ "$fail" -ne 0 ]; then
   echo >&2

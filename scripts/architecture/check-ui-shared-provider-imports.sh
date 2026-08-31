@@ -46,7 +46,9 @@ echo "==> scanning ui/shared/src for provider SDK imports (${#PROVIDERS[@]} plat
 specifier_re='(from|import|require)[[:space:]]*\(?[[:space:]]*["'"'"'][^"'"'"']+["'"'"']'
 
 findings=""
+scanned=0
 while IFS= read -r file; do
+  scanned=$((scanned + 1))
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     spec=$(printf '%s' "$hit" | sed -E 's/.*["'"'"']([^"'"'"']+)["'"'"'].*/\1/')
@@ -73,5 +75,14 @@ if [ -n "$findings" ]; then
   echo "FAIL: the shared UI imports provider-specific code. One shared UI, no provider SDKs in it (EPIC B #81):$findings" >&2
   exit 1
 fi
-echo "OK: no module specifier in ui/shared/src names a provider directory or a provider SDK."
+
+# A scan that read no files must not report success: if ui/shared/src moved
+# or the find stopped matching, "no provider import was found" would be true
+# and meaningless.
+if [ "$scanned" -eq 0 ]; then
+  echo "FAIL: no TypeScript file was scanned under ui/shared/src, so this check verified nothing." >&2
+  exit 1
+fi
+
+echo "OK: no module specifier in $scanned file(s) under ui/shared/src names a provider directory or a provider SDK."
 

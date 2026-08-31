@@ -208,6 +208,14 @@ func main() {
 		}
 	}
 
+	// A run that parsed nothing must not report success. Every target path
+	// disappearing (a rename, a manifest edit) would otherwise produce
+	// "no violations found", which is true and worthless.
+	if scanned == 0 {
+		fmt.Fprintln(os.Stderr, "FAIL: no Go or TypeScript file was scanned, so this check verified nothing.")
+		os.Exit(1)
+	}
+
 	if len(found) == 0 {
 		fmt.Printf("OK: %d file(s) in the runtime-platform and distribution layers declare no core-owned concept.\n", scanned)
 		return

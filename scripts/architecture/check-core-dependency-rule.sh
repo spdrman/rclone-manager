@@ -175,6 +175,14 @@ while IFS= read -r gomod; do
   checked=$((checked + 1))
 done < <(find . -name go.mod -not -path '*/node_modules/*' -not -path './.git/*' | sort)
 
+# A run that inspected nothing must not report success. Without this,
+# anything that made the find below return no go.mod (a rename, a bad
+# exclude) would print a cheerful OK over zero modules.
+if [ "$checked" -eq 0 ]; then
+  echo "FAIL: no Go module was inspected, so this check verified nothing." >&2
+  exit 1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo >&2
   echo "  The layers and what each owns: docs/architecture/layers.md" >&2

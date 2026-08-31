@@ -87,6 +87,16 @@ fi
 # Completeness. Every metric the performance contract names must be
 # present and non-null, so a record that silently dropped one (a
 # --skip-image capture, say) can never pass as a baseline.
+#
+# The gate's own list is checked first. Without this, deleting
+# required_metrics from gate.json would make the loop below iterate zero
+# times and this check would print OK having verified nothing, which is the
+# same fail-open shape Phase 4's conformance matrix already guards against
+# by refusing an omitted capability.
+if ! jq -e '(.required_metrics | type) == "array" and (.required_metrics | length) > 0' "$GATE" >/dev/null; then
+  echo "FAIL: $GATE declares no required_metrics, so the completeness check would verify nothing and pass." >&2
+  exit 1
+fi
 required=$(jq -r '.required_metrics[]' "$GATE")
 missing=""
 for m in $required; do
@@ -127,6 +137,14 @@ fi
 candidate_workload=$(jq -r '.workload' "$COMPARE")
 if [ "$candidate_workload" != "$workload" ]; then
   echo "FAIL: $COMPARE was captured under workload \"$candidate_workload\", not \"$workload\"." >&2
+  exit 1
+fi
+
+# Same fail-open guard as the completeness check above: an empty thresholds
+# object would produce an empty report and a cheerful "every gated metric is
+# within its threshold" having compared nothing.
+if ! jq -e '(.thresholds | type) == "object" and (.thresholds | length) > 0' "$GATE" >/dev/null; then
+  echo "FAIL: $GATE declares no thresholds, so compare mode would gate nothing and pass." >&2
   exit 1
 fi
 

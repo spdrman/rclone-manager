@@ -1,4 +1,4 @@
-# `distribution/` — the distribution layer
+# `distribution/`, the distribution layer
 
 This tree is one of the three layers issue #165 made explicit. It holds
 **packaging, metadata, templates and store presentation**: everything that
