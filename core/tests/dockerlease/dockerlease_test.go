@@ -82,3 +82,32 @@ func TestSweepNeverTouchesAnUnlabelledContainer(t *testing.T) {
 		t.Fatal("did not remove the labelled container, so the previous assertion proves nothing")
 	}
 }
+
+// TestSweepStillReapsWhenAListedContainerVanishedFromUnderIt is issue #161's
+// sweeper finding. StaleAfter is fifteen minutes, and yet #161 found
+// rclone-manager-gate-sftp-* containers still running after 4 and 11 hours.
+// Part of that is simply that they predate the label (it landed the same
+// morning, in #151), but there is a live defect underneath it: the batch
+// `docker inspect` used to date the candidates exits non-zero if ANY of its
+// arguments is missing, and that exit status was being read as "nothing can
+// be dated". One container removed by another worktree between the listing
+// and the inspect therefore turned the entire sweep into a silent no-op.
+func TestSweepStillReapsWhenAListedContainerVanishedFromUnderIt(t *testing.T) {
+	requireDocker(t)
+
+	// Positive control: the same call, with a batch containing nothing
+	// stale-but-missing, does reap. Without it "the live one is gone"
+	// below could just as well mean sweepIDs never works at all.
+	control := create(t, true)
+	sweepIDs([]string{control}, time.Now().Add(time.Hour))
+	if exists(t, control) {
+		t.Fatal("sweepIDs left a labelled container older than the cutoff even with a clean batch, so it does not reap at all and the assertion below would prove nothing")
+	}
+
+	live := create(t, true)
+	const vanished = "0000000000000000000000000000000000000000000000000000000000000000"
+	sweepIDs([]string{live, vanished}, time.Now().Add(time.Hour))
+	if exists(t, live) {
+		t.Fatal("one already-vanished id in the batch made the whole sweep a no-op; on a machine where several worktrees share one docker daemon that race is routine, and a sweeper that silently sweeps nothing is exactly the class of bug #161 is about")
+	}
+}

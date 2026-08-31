@@ -79,8 +79,14 @@ func Sweep() { once.Do(func() { sweepOlderThan(time.Now().Add(-StaleAfter)) }) }
 // sweepOlderThan is Sweep's body with the cutoff lifted out, so a test can
 // drive both sides of the decision against a real docker without waiting
 // StaleAfter or backdating a container, which docker gives no way to do.
-func sweepOlderThan(cutoff time.Time) {
-	ids := listLabelled()
+func sweepOlderThan(cutoff time.Time) { sweepIDs(listLabelled(), cutoff) }
+
+// sweepIDs is sweepOlderThan with the listing lifted out too, so a test can
+// hand it a batch containing an id that has already gone. That is not a
+// contrived case: several worktrees on one machine share a single docker
+// daemon, so a container listed a moment ago is routinely removed by
+// somebody else's cleanup before this call gets to it.
+func sweepIDs(ids []string, cutoff time.Time) {
 	stale := make([]string, 0, len(ids))
 	for id, created := range createdAt(ids) {
 		if created.Before(cutoff) {

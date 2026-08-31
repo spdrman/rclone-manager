@@ -31,7 +31,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -685,4 +687,64 @@ func TestSFTPRemoteObjectReplacement_RefusesDelete(t *testing.T) {
 	if rec.RemoteDeleteError == "" {
 		t.Fatal("the refusal was not persisted into remote_delete_error, so an operator inspecting the journal directly would not see it")
 	}
+}
+
+// --- a fixture container that dies mid-test -------------------------------
+
+// TestSFTPOperationFailsFastWhenTheFixtureContainerDies is issue #161's
+// contract at the level that actually costs time: an operation running
+// against a fixture whose container has just gone must come back in
+// seconds, with the container's death named as the cause, instead of
+// retrying against a corpse.
+//
+// The bar is deliberately set below what the unaided client does on its
+// own. Measured on this machine while writing this test, an adapter.List
+// against a container that had just been removed took 11.1s to give up
+// with a bare "connection refused", which says nothing about why and is
+// only the cheapest of the operations this suite runs. The context the
+// fixture hands out is what turns that into a prompt, self-describing
+// failure.
+//
+// It kills the container by the exact id this fixture created. Several
+// worktrees on this machine share one docker daemon, so anything matched
+// by name pattern or counted from `docker ps` could be another agent's
+// container.
+func TestSFTPOperationFailsFastWhenTheFixtureContainerDies(t *testing.T) {
+	f := sftpfixture.Start(t)
+	adapter := rclone.New()
+	source := f.Source("container-death", "")
+	if err := os.WriteFile(filepath.Join(f.UploadDir, "present.txt"), []byte("present"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Positive control: the very same call, through the very same context,
+	// succeeds while the container is healthy. Without it, "List failed"
+	// below would also be satisfied by a fixture that never worked.
+	if _, err := adapter.List(f.Context(), source); err != nil {
+		t.Fatalf("List against a healthy fixture failed (%v), so the fail-fast assertion below would pass for the wrong reason", err)
+	}
+
+	f.ExpectContainerDeath()
+	if out, err := exec.Command("docker", "rm", "-f", f.ContainerID()).CombinedOutput(); err != nil {
+		t.Fatalf("docker rm -f %s: %v\n%s", f.ContainerID(), err, out)
+	}
+
+	start := time.Now()
+	_, err := adapter.List(f.Context(), source)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("List succeeded against a container that no longer exists")
+	}
+	if elapsed > 8*time.Second {
+		t.Fatalf("List took %s to give up after its container died; the unaided client already manages 11s, so this is not failing fast, it is just failing", elapsed)
+	}
+
+	var died *sftpfixture.ContainerDiedError
+	if !errors.As(context.Cause(f.Context()), &died) {
+		t.Fatalf("the fixture context's cause after the container died is %v, not a *ContainerDiedError; without that a reader cannot tell a dead fixture container from a genuine deadlock in the transport, which is the diagnostic gap #161 is about", context.Cause(f.Context()))
+	}
+	if !strings.Contains(died.Error(), "died") {
+		t.Fatalf("the cause does not say the container died: %q", died.Error())
+	}
+	t.Logf("List gave up %s after the container died, naming it: %v", elapsed, died)
 }

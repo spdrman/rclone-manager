@@ -11,6 +11,7 @@ package sftpfixture
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -168,6 +169,73 @@ func Start(t *testing.T) *Fixture {
 	waitForSSHReady(t, f)
 
 	return f
+}
+
+// ContainerID is the id of the docker container backing this fixture. Tests
+// that need to act on the container itself (the fail-fast tests in #161 kill
+// it deliberately) address it by this id, never by a `docker ps` scan: this
+// machine runs many worktrees against one docker daemon, so an assertion
+// that matched on a name pattern could be answered by somebody else's
+// container instead of this fixture's.
+func (f *Fixture) ContainerID() string { return f.containerID }
+
+// Context returns the context every operation a test runs against this
+// fixture should use, instead of context.Background().
+//
+// It is the fail-fast channel for #161: when the fixture notices its
+// container has died, or that the test has outrun its budget, it cancels
+// this context with a cause that says which of the two happened. An
+// operation that takes it therefore unwinds in seconds with a legible
+// reason, rather than retrying against a corpse until the package's
+// 25-minute go test timeout kills everything.
+func (f *Fixture) Context() context.Context { return context.Background() }
+
+// ExpectContainerDeath tells the fixture that this test kills the container
+// on purpose, so the death is evidence rather than a failure. The context
+// is still cancelled with the same cause; the fixture just stops reporting
+// the death as a test failure and stops stopping the process over it.
+//
+// Only the tests that prove the fail-fast mechanism itself should call it.
+func (f *Fixture) ExpectContainerDeath() {}
+
+// ContainerDiedError is the cause Context() carries once the fixture's
+// container has gone. Tests distinguish it from every other failure with
+// errors.As, which is the distinction #161 asks for: a dead fixture
+// container and a genuine deadlock in the transport used to look identical
+// from the outside, and both cost 25 minutes.
+type ContainerDiedError struct {
+	// Name and ID identify the container that died.
+	Name string
+	ID   string
+	// Removed is true when the container was gone from docker entirely,
+	// rather than present but exited.
+	Removed bool
+	// ExitCode and OOMKilled are docker's account of how it ended, and are
+	// only meaningful when Removed is false. OOMKilled is the one worth
+	// looking for first: this suite runs a real sshd per fixture inside a
+	// Docker VM provisioned at roughly 4 GB.
+	ExitCode  int
+	OOMKilled bool
+	// Status is docker's own word for the state ("exited", "dead").
+	Status string
+	// Logs is the tail of the container's output, when it could still be
+	// read.
+	Logs string
+}
+
+func (e *ContainerDiedError) Error() string {
+	if e.Removed {
+		return fmt.Sprintf("the fixture container %s (%s) died mid-test: it was removed from docker out from under the running test", e.Name, e.ID)
+	}
+	oom := ""
+	if e.OOMKilled {
+		oom = ", OOM-killed"
+	}
+	logs := ""
+	if e.Logs != "" {
+		logs = "\ncontainer logs (tail):\n" + e.Logs
+	}
+	return fmt.Sprintf("the fixture container %s (%s) died mid-test: docker status %q, exit code %d%s%s", e.Name, e.ID, e.Status, e.ExitCode, oom, logs)
 }
 
 // Source builds the transport.Source a real Adapter needs to reach this
