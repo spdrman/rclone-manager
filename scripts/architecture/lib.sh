@@ -50,3 +50,52 @@ arch::cleanup_worktree() {
   git worktree remove --force "$dir" >/dev/null 2>&1 || rm -rf "$dir"
   git worktree prune >/dev/null 2>&1 || true
 }
+
+# --------------------------------------------------------------------------
+# The three-layer manifest (issue #165). See scripts/architecture/layers.conf
+# for the format and docs/architecture/layers.md for the prose.
+#
+# Before Phase 6 the repository had two boundaries, core and "a provider
+# app", and the checks in this directory hard-coded the provider list. The
+# manifest replaces that with one declared classification every check reads,
+# so adding a platform or moving a packaging artifact updates one file
+# instead of four scripts that can drift apart.
+# --------------------------------------------------------------------------
+
+# arch::manifest prints the manifest's path, relative to the repository root.
+arch::manifest() { printf '%s' "scripts/architecture/layers.conf"; }
+
+# arch::manifest_rows prints the manifest with comments and blank lines
+# stripped, one "<layer> <kind> <path>" row per line, space-separated.
+arch::manifest_rows() {
+  local root=${1:-.}
+  sed 's/#.*//' "$root/$(arch::manifest)" |
+    awk 'NF >= 3 { print $1, $2, $3 }'
+}
+
+# arch::layer_paths <layer> [<kind>] [<root>]
+# Prints the manifest paths in a layer, optionally narrowed to one kind.
+# A kind of "" or "any" means every kind.
+arch::layer_paths() {
+  local want_layer=$1 want_kind=${2:-any} root=${3:-.}
+  arch::manifest_rows "$root" | awk -v l="$want_layer" -v k="$want_kind" \
+    '$1 == l && (k == "any" || k == "" || $2 == k) { print $3 }'
+}
+
+# arch::classify <path> [<root>]
+# Prints "<layer> <kind>" for a repository-relative path, choosing the
+# LONGEST matching manifest path so a specific entry beats the directory it
+# sits in. Prints nothing and returns 1 when no entry matches, which is what
+# check-layer-manifest.sh turns into a completeness failure.
+arch::classify() {
+  local path=$1 root=${2:-.}
+  arch::manifest_rows "$root" | awk -v p="$path" '
+    {
+      entry = $3
+      if (p == entry || index(p, entry "/") == 1) {
+        if (length(entry) > best_len) { best_len = length(entry); best = $1 " " $2 }
+      }
+    }
+    END { if (best_len > 0) { print best; exit 0 } exit 1 }
+  '
+}

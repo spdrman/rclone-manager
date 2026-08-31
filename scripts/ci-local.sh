@@ -227,6 +227,19 @@ if [ "$FAST" != "1" ]; then
   esac
 fi
 
+# The static layer checks (issue #165) run even in FAST mode: none of them
+# builds, installs or deletes anything, so together they cost seconds, and
+# they are the ones a mid-refactor edit is most likely to break.
+echo "==> three-layer boundaries, static checks (§7.1, #165)"
+bash scripts/architecture/check-layer-manifest.sh
+bash scripts/architecture/check-core-dependency-rule.sh
+bash scripts/architecture/check-layer-ownership.sh
+bash scripts/architecture/check-ui-shared-provider-imports.sh
+
+echo "==> performance baseline present, and its gate can fail (#165)"
+bash scripts/perf/check-baseline.sh
+bash scripts/perf/selftest.sh
+
 if [ "$FAST" != "1" ]; then
   gate_step "release-manifest generator guards (#174)"
   bash scripts/tests/record-release-hashes-guards.test.sh
@@ -252,9 +265,13 @@ if [ "$FAST" != "1" ]; then
     CI_LOCAL_SELFTEST=1 bash scripts/tests/ci-local-gate.test.sh
   fi
 
-  gate_step "repository-structure dependency rules (§7.1)"
+  gate_step "architecture rules can actually fail (mutation self-test)"
+  bash scripts/architecture/selftest.sh
+
+  gate_step "repository-structure dependency rules (§7.1), by actual deletion"
   bash scripts/architecture/check-core-dependency-rule.sh
   bash scripts/architecture/verify-core-without-apps.sh
+  bash scripts/architecture/verify-core-without-distribution.sh
   bash scripts/architecture/verify-ui-shared-without-provider-sdks.sh
   bash scripts/architecture/verify-ugos-removable.sh
 fi

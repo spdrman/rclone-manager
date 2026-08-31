@@ -353,7 +353,7 @@ jobs:
         run: npm test
 
   dependency-rules:
-    name: repository-structure dependency rules (§7.1)
+    name: repository-structure dependency rules (§7.1, three layers per #165)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -383,17 +383,46 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI"
 
+      # The three-layer manifest (issue #165) comes first: every check
+      # below reads it to decide which layer a path is in, so a hole in it
+      # would make all of them fail open.
+      - name: every tracked file is classified into a layer
+        run: bash scripts/architecture/check-layer-manifest.sh
+
+      - name: architecture rules can actually fail (mutation self-test)
+        run: bash scripts/architecture/selftest.sh
+
       - name: the release-manifest generator still refuses what #174 needs it to
         run: bash scripts/tests/record-release-hashes-guards.test.sh
 
-      - name: core/ has zero imports from apps/ (static check)
+      - name: core/app imports neither platform, distribution nor a NAS SDK (static check)
         run: bash scripts/architecture/check-core-dependency-rule.sh
+
+      - name: no runtime-platform or distribution package owns a core concept
+        run: bash scripts/architecture/check-layer-ownership.sh
+
+      - name: the shared UI imports no provider SDK (full Phase 6 platform list)
+        run: bash scripts/architecture/check-ui-shared-provider-imports.sh
 
       - name: core/ builds and tests with apps/ deleted entirely
         run: bash scripts/architecture/verify-core-without-apps.sh
+
+      - name: core and the generic application build and test with the distribution adapter tree deleted
+        run: bash scripts/architecture/verify-core-without-distribution.sh
 
       - name: ui/shared builds with every provider SDK directory removed
         run: bash scripts/architecture/verify-ui-shared-without-provider-sdks.sh
 
       - name: apps/ugos/ is removable without breaking core or ui/shared
         run: bash scripts/architecture/verify-ugos-removable.sh
+
+      # The performance gate's presence half only (issue #165). It takes no
+      # measurements, so it is safe on a shared runner; compare mode is
+      # deliberately not here, because EPIC B #81 allows the measurements to
+      # run on a dedicated benchmark environment rather than blocking
+      # ordinary CI on noisy numbers.
+      - name: a complete performance baseline is checked in for the designated host
+        run: bash scripts/perf/check-baseline.sh
+
+      - name: the performance gate can actually fail (mutation self-test)
+        run: bash scripts/perf/selftest.sh

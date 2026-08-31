@@ -783,6 +783,16 @@ needing real hardware, and the measured binary size.
 
 ## Layout
 
+Since #165 (Phase 6) the repository has **three product layers**, declared once in
+`scripts/architecture/layers.conf` and enforced rather than described: a
+provider-neutral **core** (plus the application services, the `/api/v1` host and the
+shared UI), a **runtime platform** layer of per-host profiles, and a **distribution**
+layer of packaging, metadata, templates and store presentation.
+[`docs/architecture/layers.md`](docs/architecture/layers.md) is the full account: what each
+layer owns, the dependency direction, which check proves which claim, how each of those
+checks was shown to be able to fail, and the map from the old layout for rebasing an
+in-flight branch. The rest of this section describes the same tree from the inside.
+
 `core/` is its own Go module (`core/go.mod`), separate from the repository root, drawn
 that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 `docs/EPIC-B-multi-nas.md` §7 for why). `core/cmd/backup-manager/` is the entry point,
@@ -888,6 +898,9 @@ lives here instead; nothing in the design depended on the location.
 - [`apps/proxmox/README.md`](apps/proxmox/README.md) – the Proxmox VE deployment profile: the one supported model, what the PVE host contributes, and what is deliberately absent
 - [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) – the cross-provider conformance matrix (§63A), per provider and per capability, including what is blocked and on what
 - [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written and not yet executed
+- [`docs/architecture/layers.md`](docs/architecture/layers.md) – the three layers (core, runtime platform, distribution), what each owns, the dependency direction, and the checks that enforce it
+- [`docs/perf/README.md`](docs/perf/README.md) – the Phase 6 performance baselines, the benchmark host and workload, and the concrete regression thresholds
+- [`distribution/README.md`](distribution/README.md) – the distribution layer: what makes an adapter an adapter, and where the rest of that layer still lives
 - [`docs/compliance/release-provenance.md`](docs/compliance/release-provenance.md) – what a release records, how the SBOM and checksums are produced, and how an image is signed without this project ever holding a key
 - [`docs/compliance/`](docs/compliance/) – the store-facing compliance materials: privacy policy, support, and the written offer of source
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged
