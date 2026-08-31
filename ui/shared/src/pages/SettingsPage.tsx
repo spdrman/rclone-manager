@@ -8,6 +8,7 @@ import { versionNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
+import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
   const navigate = useNavigate();
@@ -55,21 +56,17 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                 <span className="field__label">Storage critical threshold</span>
                 <input className="input input--mono" defaultValue="92%" disabled={readOnly} />
               </label>
-              <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 7 }}>
-                <span className="field__label">Default retention for new sets</span>
-                <div className="mono" style={{ display: "flex", gap: 9, flexWrap: "wrap", fontSize: "var(--text-sm)" }}>
-                  {["7 daily", "13 weekly", "12 monthly"].map((t) => (
-                    <span key={t} style={{ padding: "5px 10px", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", background: "var(--surface-2)" }}>
-                      {t}
-                    </span>
-                  ))}
-                  <span style={{ padding: "5px 10px", border: "1px solid var(--ok)", borderRadius: "var(--radius-md)", background: "var(--ok-quiet)" }}>
-                    protect known-good
-                  </span>
-                </div>
-              </div>
             </div>
           </section>
+
+          {/* B3.7 (#140). This used to be a static row of badges reading
+              "7 daily / 13 weekly / 12 monthly / protect known-good": a
+              picture of a policy, wired to nothing, and wrong twice over
+              once #156 generalized the chain (13 weekly was never a
+              default, and the chain is not three fixed tiers). It is now
+              the real thing, read from and written to the running
+              config. */}
+          <RetentionPolicyCard readOnly={readOnly} />
 
           <section className="card">
             <div className="card__header"><h2 className="eyebrow">Notifications</h2></div>
