@@ -1148,12 +1148,17 @@ func TestCrossProviderConformanceMatrix(t *testing.T) {
 func resolve(p providerUnderTest, cap Capability, cell Cell) Result {
 	check := capabilityChecks[cap.ID]
 	satisfied, detail := check(p)
-	return resolveWith(p.id, cap, cell, satisfied, detail)
+	return resolveWith(ConformanceSource, p.id, cap, cell, satisfied, detail)
 }
 
 // resolveWith is resolve with the check already run, so the declaration
 // arithmetic can be tested against a check whose verdict the test chose.
-func resolveWith(provider string, cap Capability, cell Cell, satisfied bool, detail string) Result {
+//
+// source is the declaration file the cell was read from. It is carried
+// rather than assumed because there are two of them, conformance.json and
+// submission.json, and a staleness failure that names the wrong one sends
+// the reader to edit a file that does not contain the cell.
+func resolveWith(source, provider string, cap Capability, cell Cell, satisfied bool, detail string) Result {
 	r := Result{Provider: provider, Capability: cap.ID, Detail: detail}
 
 	switch cell.Declared {
@@ -1177,7 +1182,7 @@ func resolveWith(provider string, cap Capability, cell Cell, satisfied bool, det
 			// outgrown is worse than no declaration: it is a documented
 			// reason not to look.
 			r.Outcome = OutcomeFail
-			r.Detail = fmt.Sprintf("declared %q, but the check now passes (%s). Update conformance.json rather than the check.", cell.Declared, detail)
+			r.Detail = fmt.Sprintf("declared %q, but the check now passes (%s). Re-derive %s rather than the check.", cell.Declared, detail, declarationField(source, provider, cap.ID))
 			return r
 		}
 		switch cell.Declared {
@@ -1196,7 +1201,7 @@ func resolveWith(provider string, cap Capability, cell Cell, satisfied bool, det
 			// break loudly when the excuse stops being the reason.
 			if !strings.Contains(detail, cell.ExpectedDetail) {
 				r.Outcome = OutcomeFail
-				r.Detail = fmt.Sprintf("declared blocked on %s, which expects a failure containing %q, but the check failed for a different reason: %s", cell.Blocker, cell.ExpectedDetail, detail)
+				r.Detail = fmt.Sprintf("declared blocked on %s, which expects a failure containing %q, but the check failed for a different reason: %s. Re-derive %s rather than the check.", cell.Blocker, cell.ExpectedDetail, detail, declarationField(source, provider, cap.ID))
 				return r
 			}
 			r.Outcome = OutcomeBlocked

@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "0bec15e8b1586b6077fdf4a0dc1010ab63be73d7f11f326aaa3649c5c48f7f65",
+    "sha256": "e533bdd3abdd5d6f0a986d85a83e98909e36cd6d909368e1a2d29e6c6a1871d3",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -83,7 +83,7 @@
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/app.yaml",
-      "sha256": "2656cc9c8c889b706219662cb6d98527cbc6535477057f44a0f67b3367a71e21"
+      "sha256": "d50719f63d10a774e53eb065be03dbe0df8992f8eaecffb526a3391a75f03767"
     },
     {
       "target": "truenas",
@@ -108,12 +108,12 @@
     {
       "target": "unraid",
       "path": "apps/unraid/template/backup-manager-ui.xml",
-      "sha256": "cf8fabedbf6187594b5117e90fe9b9267bab18cb543a34a5453de4357635987a"
+      "sha256": "7bc9ecf7d2ad44b0be37ed34a808c87b2b4f2652f6ffceb920d45cf334be8862"
     },
     {
       "target": "unraid",
       "path": "apps/unraid/template/backup-manager.xml",
-      "sha256": "876fd7bd1086bf609c7f913184f9034c85617cdf44d2e98d242ded2ecb35f848"
+      "sha256": "e884a2b00dcd521bfd0ae61b37990623d07285055e7011588637ce8abfd5a9a2"
     },
     {
       "target": "generic",

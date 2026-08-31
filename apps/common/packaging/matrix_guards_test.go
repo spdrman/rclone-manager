@@ -391,14 +391,14 @@ func TestBlockedCellDoesNotSwallowAnUnrelatedFailure(t *testing.T) {
 	cell := Cell{Declared: DeclBlocked, Blocker: "#174", ExpectedDetail: "is not an ancestor of HEAD", Reason: "tracked"}
 
 	// Positive control: the failure the blocker describes is still BLOCKED.
-	r := resolveWith("generic", cap, cell, false, "release manifest pins commit c51a07f, which is not an ancestor of HEAD, so nothing lines up")
+	r := resolveWith(ConformanceSource, "generic", cap, cell, false, "release manifest pins commit c51a07f, which is not an ancestor of HEAD, so nothing lines up")
 	if r.Outcome != OutcomeBlocked {
 		t.Fatalf("the declared failure must still report BLOCKED, got %s: %s", r.Outcome, r.Detail)
 	}
 
 	// A completely different failure of the same check is a FAIL, not a
 	// free pass for as long as the declaration stands.
-	r = resolveWith("generic", cap, cell, false, "container/release-manifest.json: no such file or directory")
+	r = resolveWith(ConformanceSource, "generic", cap, cell, false, "container/release-manifest.json: no such file or directory")
 	if r.Outcome != OutcomeFail {
 		t.Errorf("an unrelated failure must not be excused by the blocker, got %s: %s", r.Outcome, r.Detail)
 	}
@@ -407,7 +407,7 @@ func TestBlockedCellDoesNotSwallowAnUnrelatedFailure(t *testing.T) {
 	}
 
 	// And the direction that already worked keeps working.
-	r = resolveWith("generic", cap, cell, true, "everything now holds")
+	r = resolveWith(ConformanceSource, "generic", cap, cell, true, "everything now holds")
 	if r.Outcome != OutcomeFail {
 		t.Errorf("a blocked cell whose check now passes must fail, got %s", r.Outcome)
 	}

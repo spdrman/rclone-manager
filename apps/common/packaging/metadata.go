@@ -50,7 +50,19 @@ type Service struct {
 	CapDrop         []string
 	SecurityOpt     []string
 	Tmpfs           []string
-	Source          string
+	// Privileged, CapAdd, NetworkMode, PIDMode and Devices are the
+	// forbidden-privilege set: the keys a profile uses to hand back
+	// exactly what cap_drop, read_only and a non-root user took away.
+	// They are parsed even though every profile in this repository sets
+	// them to nothing, because a rule that reads only the keys a correct
+	// file happens to contain cannot fail on an incorrect one, and
+	// apps/common/packaging's submission preflight has to be able to.
+	Privileged  bool
+	CapAdd      []string
+	NetworkMode string
+	PIDMode     string
+	Devices     []string
+	Source      string
 	// ExtraParams is Unraid's only seam for anything its template schema
 	// has no element for (a read-only rootfs, a dropped capability set, a
 	// disabled healthcheck). Compose expresses all of those as first-class
@@ -86,8 +98,13 @@ type rawService struct {
 	ReadOnly    bool              `yaml:"read_only"`
 	Environment map[string]string `yaml:"environment"`
 	CapDrop     []string          `yaml:"cap_drop"`
+	CapAdd      []string          `yaml:"cap_add"`
 	SecurityOpt []string          `yaml:"security_opt"`
 	Tmpfs       []string          `yaml:"tmpfs"`
+	Privileged  bool              `yaml:"privileged"`
+	NetworkMode string            `yaml:"network_mode"`
+	PIDMode     string            `yaml:"pid"`
+	Devices     []string          `yaml:"devices"`
 	Healthcheck *struct {
 		Test    []string `yaml:"test"`
 		Disable bool     `yaml:"disable"`
@@ -225,8 +242,13 @@ func ParseCompose(data []byte, source string, env map[string]string) ([]Service,
 			ReadOnlyRootFS: rs.ReadOnly,
 			Environment:    map[string]string{},
 			CapDrop:        rs.CapDrop,
+			CapAdd:         rs.CapAdd,
 			SecurityOpt:    rs.SecurityOpt,
 			Tmpfs:          rs.Tmpfs,
+			Privileged:     rs.Privileged,
+			NetworkMode:    rs.NetworkMode,
+			PIDMode:        rs.PIDMode,
+			Devices:        rs.Devices,
 			Source:         rel,
 		}
 
@@ -377,6 +399,11 @@ func (t UnraidTemplate) AsService(source string) Service {
 		// scanXML), so it lands in the same field a compose `command:`
 		// does and the same assertions cover both.
 		Command: strings.Fields(t.PostArgs),
+		// <Privileged> is Unraid's own element for it. The run flags in
+		// <ExtraParams> are a second, independent way to ask for the same
+		// thing, and CheckForbiddenPrivileges reads both rather than
+		// trusting whichever one a template happens to use.
+		Privileged: strings.EqualFold(strings.TrimSpace(t.Privileged), "true"),
 	}
 	for _, c := range t.Config {
 		value := strings.TrimSpace(c.Value)

@@ -40,7 +40,7 @@ description: >-
 home: https://github.com/spdrman/rclone-manager
 sources:
   - https://github.com/spdrman/rclone-manager
-icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/ui/shared/public/icon.svg
+icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg
 
 # No added capabilities and no host mounts. The container drops ALL
 # capabilities, runs non-root on a read-only rootfs, and every path it

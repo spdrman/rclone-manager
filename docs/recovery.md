@@ -14,6 +14,12 @@ own automated command: the design's answer to "how do I get a backup back" has a
 populated by a full daemon loop or, as today, by your own driver code or the test suite.
 This procedure is the permanent shape, not a workaround.
 
+> **No terminal?** Everything below assumes a shell on the NAS. If you have only the web
+> interface, which is the normal case on a NAS appliance and the case every provider store
+> assumes, read [recovery without a terminal](recovery-without-a-terminal.md) instead. It
+> covers the same three failures this page starts with, through the interface, and it is
+> the page the submission bundle's support materials point a reviewer at.
+
 ## The one fact everything else depends on
 
 The journal is a plain SQLite file at whatever path `state.database` names in your config

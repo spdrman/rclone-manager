@@ -1,0 +1,813 @@
+{
+  "_comment": [
+    "The provider store and catalog submission preflight (issue #90 / WP5.4), and the",
+    "adapter conformance drift gate EPIC B's Phase 6 (#81) lands in it.",
+    "",
+    "Read submission.go first: this file is only the declarations, and the two guards",
+    "that keep declarations honest are inherited whole from the cross-provider",
+    "conformance matrix (matrix.go). Completeness: a target that omits a capability",
+    "fails, because omission is how a matrix lies. Staleness: every declaration that is",
+    "not a plain 'supported' still has its check run, and a check that PASSES against an",
+    "unsupported, not-applicable or blocked declaration fails the cell, so this file",
+    "cannot become a list of excuses for checks nobody runs.",
+    "",
+    "Everything about an adapter other than its store and its cells is read from",
+    "conformance.json: its tier, its owning EPIC, its packaging metadata, its acceptance",
+    "procedure. A target registers once, with #86's matrix, and is registered with this",
+    "preflight by that same act.",
+    "",
+    "UGREEN is in this mechanism and out of its gate. Its column is decided by exactly",
+    "these checks, and while EPIC D's #83 has produced no .UPK it has no artifact, so",
+    "every artifact-dependent cell is recorded not-yet-applicable rather than failing.",
+    "That is derived from the packaging metadata by HasArtifact, not declared here: 'not",
+    "ready yet' is the single most useful thing for a declaration to lie about."
+  ],
+  "capabilities": [
+    {
+      "id": "no-self-update",
+      "title": "No self-update mechanism in the shipped package",
+      "spec": "73 WP5.4, 45.4, 77 #9",
+      "mode": "repo"
+    },
+    {
+      "id": "no-floating-tag",
+      "title": "No floating image tag",
+      "spec": "73 WP5.4, 8, 45.4",
+      "mode": "repo"
+    },
+    {
+      "id": "no-privileged-mode",
+      "title": "No privileged mode requested by the package",
+      "spec": "73 WP5.4, 45.4, 19",
+      "mode": "repo"
+    },
+    {
+      "id": "no-mandatory-telemetry",
+      "title": "No mandatory telemetry endpoint",
+      "spec": "73 WP5.4, 45.5, 75",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-image-reference",
+      "title": "Drift gate: image reference",
+      "spec": "81 drift gate, 8",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-required-mounts",
+      "title": "Drift gate: required mounts",
+      "spec": "81 drift gate, 19.2, 22",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-expected-ports",
+      "title": "Drift gate: expected ports",
+      "spec": "81 drift gate, 17",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-health-check",
+      "title": "Drift gate: health check",
+      "spec": "81 drift gate, 9.3",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-runtime-profile",
+      "title": "Drift gate: runtime profile",
+      "spec": "81 drift gate, 19",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-architecture-support",
+      "title": "Drift gate: declared architecture support",
+      "spec": "81 drift gate, 40",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-forbidden-privileges",
+      "title": "Drift gate: forbidden-privilege set",
+      "spec": "81 drift gate, 19",
+      "mode": "repo"
+    },
+    {
+      "id": "drift-api-compatibility",
+      "title": "Drift gate: /api/v1 compatibility",
+      "spec": "81 drift gate, 17, 166",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-description",
+      "title": "Store description",
+      "spec": "73 WP5.4",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-icon",
+      "title": "Store icon",
+      "spec": "73 WP5.4",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-screenshots",
+      "title": "Store screenshots",
+      "spec": "73 WP5.4, 82",
+      "mode": "operator"
+    },
+    {
+      "id": "materials-release-notes",
+      "title": "Release notes",
+      "spec": "73 WP5.4, 60",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-privacy-disclosure",
+      "title": "Privacy disclosure",
+      "spec": "73 WP5.4, 45.5",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-permission-rationale",
+      "title": "Permission rationale",
+      "spec": "73 WP5.4, 19",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-support-source-license",
+      "title": "Support, source and licence materials",
+      "spec": "73 WP5.4, 74",
+      "mode": "repo"
+    },
+    {
+      "id": "materials-submission-checklist",
+      "title": "Submission checklist complete against the tree",
+      "spec": "73 WP5.4",
+      "mode": "repo"
+    },
+    {
+      "id": "proactive-alert-delivery",
+      "title": "Proactive alerts reach the administrator",
+      "spec": "73 WP5.4, 71",
+      "mode": "operator"
+    },
+    {
+      "id": "recovery-docs-no-terminal",
+      "title": "Recovery documented without a terminal",
+      "spec": "73 WP5.4, 49, 77",
+      "mode": "repo"
+    },
+    {
+      "id": "artifact-provenance",
+      "title": "Submitted bytes traceable to a recorded build",
+      "spec": "73 WP5.4, 61, 3.7",
+      "mode": "repo"
+    }
+  ],
+  "bundle": {
+    "assets": {
+      "materials-description": "docs/submission/description.md",
+      "materials-icon": "docs/submission/icon.svg",
+      "materials-screenshots": "docs/submission/screenshots.md",
+      "materials-release-notes": "docs/submission/release-notes.md",
+      "materials-privacy-disclosure": "docs/submission/privacy-disclosure.md",
+      "materials-permission-rationale": "docs/submission/permission-rationale.md",
+      "materials-support-source-license": "docs/submission/support-source-license.md"
+    },
+    "acceptance": "docs/acceptance/store-submission-preflight.md",
+    "recovery": "docs/recovery-without-a-terminal.md"
+  },
+  "providers": {
+    "generic": {
+      "store": {
+        "kind": "none",
+        "name": "",
+        "checklist": "docs/submission/generic.md",
+        "reference": "https://docs.docker.com/compose/compose-file/",
+        "screenshots": 0
+      },
+      "artifactFiles": [
+        "container/compose.yaml",
+        "container/.env.example"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than consuming it by reference, so there is no reference to compare. See apps/common/packaging/conformance.json."
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-icon": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-screenshots": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-release-notes": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-privacy-disclosure": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-permission-rationale": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-support-source-license": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "truenas": {
+      "store": {
+        "kind": "catalog",
+        "name": "TrueNAS Apps catalog",
+        "checklist": "docs/submission/truenas.md",
+        "reference": "https://www.truenas.com/docs/truenasapps/",
+        "screenshots": 3
+      },
+      "artifactFiles": [
+        "apps/truenas/catalog",
+        "apps/truenas/compose"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "supported"
+        },
+        "materials-icon": {
+          "declared": "supported"
+        },
+        "materials-screenshots": {
+          "declared": "supported"
+        },
+        "materials-release-notes": {
+          "declared": "supported"
+        },
+        "materials-privacy-disclosure": {
+          "declared": "supported"
+        },
+        "materials-permission-rationale": {
+          "declared": "supported"
+        },
+        "materials-support-source-license": {
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "unraid": {
+      "store": {
+        "kind": "catalog",
+        "name": "Unraid Community Applications",
+        "checklist": "docs/submission/unraid.md",
+        "reference": "https://forums.unraid.net/topic/87144-ca-application-policies-and-guidelines/",
+        "screenshots": 2
+      },
+      "artifactFiles": [
+        "apps/unraid/template"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "supported"
+        },
+        "materials-icon": {
+          "declared": "supported"
+        },
+        "materials-screenshots": {
+          "declared": "supported"
+        },
+        "materials-release-notes": {
+          "declared": "supported"
+        },
+        "materials-privacy-disclosure": {
+          "declared": "supported"
+        },
+        "materials-permission-rationale": {
+          "declared": "supported"
+        },
+        "materials-support-source-license": {
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "synology": {
+      "store": {
+        "kind": "catalog",
+        "name": "Synology Package Center",
+        "checklist": "docs/submission/synology.md",
+        "reference": "https://help.synology.com/developer-guide/",
+        "screenshots": 3
+      },
+      "artifactFiles": [
+        "apps/synology/spk/assets"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: Synology is the one target that cannot consume the OCI image; its package embeds the canonical binaries instead, which is why it is the one target with a real hash-parity check of its own. See apps/common/packaging/conformance.json."
+        },
+        "drift-required-mounts": {
+          "declared": "not-applicable",
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "not-applicable",
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+        },
+        "drift-runtime-profile": {
+          "declared": "not-applicable",
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+        },
+        "drift-architecture-support": {
+          "declared": "supported"
+        },
+        "drift-forbidden-privileges": {
+          "declared": "not-applicable",
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+        },
+        "drift-api-compatibility": {
+          "declared": "not-applicable",
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+        },
+        "materials-description": {
+          "declared": "supported"
+        },
+        "materials-icon": {
+          "declared": "supported"
+        },
+        "materials-screenshots": {
+          "declared": "supported"
+        },
+        "materials-release-notes": {
+          "declared": "supported"
+        },
+        "materials-privacy-disclosure": {
+          "declared": "supported"
+        },
+        "materials-permission-rationale": {
+          "declared": "supported"
+        },
+        "materials-support-source-license": {
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "openmediavault": {
+      "store": {
+        "kind": "none",
+        "name": "",
+        "checklist": "docs/submission/openmediavault.md",
+        "reference": "https://www.openmediavault.org/",
+        "screenshots": 0
+      },
+      "artifactFiles": [
+        "apps/openmediavault/compose"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-icon": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-screenshots": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-release-notes": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-privacy-disclosure": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-permission-rationale": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-support-source-license": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "proxmox": {
+      "store": {
+        "kind": "none",
+        "name": "",
+        "checklist": "docs/submission/proxmox.md",
+        "reference": "https://pve.proxmox.com/pve-docs/",
+        "screenshots": 0
+      },
+      "artifactFiles": [
+        "apps/proxmox/compose"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-icon": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-screenshots": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-release-notes": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-privacy-disclosure": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-permission-rationale": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-support-source-license": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "ugos": {
+      "store": {
+        "kind": "catalog",
+        "name": "UGREEN App Center",
+        "checklist": "docs/submission/ugreen.md",
+        "reference": "https://www.ugreen.com/pages/nas-developer",
+        "screenshots": 4
+      },
+      "artifactFiles": [],
+      "cells": {
+        "no-self-update": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "no-floating-tag": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "no-privileged-mode": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "no-mandatory-telemetry": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-image-reference": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-required-mounts": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-expected-ports": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-health-check": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-runtime-profile": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "drift-api-compatibility": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        },
+        "materials-description": {
+          "declared": "supported"
+        },
+        "materials-icon": {
+          "declared": "supported"
+        },
+        "materials-screenshots": {
+          "declared": "not-applicable",
+          "reason": "The shared bundle covers UGREEN App Center's listing like every other target's, and a screenshot is of the app running on the hardware. EPIC D's #83 has produced no .UPK, so there is nothing to install and nothing to photograph. The listing copy, the icon, the release notes, the privacy disclosure and the permission rationale are all recorded ready above, which is the bundle #178 consumes rather than assembling a second copy of."
+        },
+        "materials-release-notes": {
+          "declared": "supported"
+        },
+        "materials-privacy-disclosure": {
+          "declared": "supported"
+        },
+        "materials-permission-rationale": {
+          "declared": "supported"
+        },
+        "materials-support-source-license": {
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "not-applicable",
+          "reason": "Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet."
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "not-applicable",
+          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+        }
+      }
+    }
+  }
+}
