@@ -17,8 +17,10 @@
     "published": false,
     "note": [
       "published:false is the honest state, matching container/release-manifest.json's",
-      "own note: no registry is configured for this repository yet, so this reference",
-      "resolves to nothing today. It is the intended publish target and the one string",
+      "own note: the registry is settled (ghcr.io) but nothing has been pushed to it,",
+      "so this reference resolves to nothing today, and the manifest's per-architecture",
+      "registry_digest is null for exactly as long as this stays false. It is the",
+      "intended publish target and the one string",
       "every provider package must carry, so that pointing the project at a real",
       "registry is a one-line change here rather than an edit in four metadata formats.",
       "Every acceptance procedure in docs/acceptance/ opens with a step 0 covering how",

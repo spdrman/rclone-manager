@@ -43,10 +43,16 @@ type Image struct {
 	Tag        string `json:"tag"`
 	Reference  string `json:"reference"`
 	// Published records whether Reference actually resolves anywhere yet.
-	// It is false today and honestly so: no registry is configured for
-	// this repository (container/release-manifest.json says the same
-	// about image digests). Every acceptance procedure's step 0 covers
-	// making the image resolvable in the meantime.
+	// It is false today and honestly so. The registry itself is settled,
+	// ghcr.io, and Reference is the target every provider package
+	// carries; what has not happened is a push to it, so the reference
+	// resolves to nothing. container/release-manifest.json says the same
+	// thing from the other side: its per-architecture registry_digest is
+	// null for exactly as long as this is false, and
+	// TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag
+	// fails if the two ever disagree. Every acceptance procedure's step 0
+	// covers making the image resolvable in the meantime. Doing the push
+	// is #88's work.
 	Published bool `json:"published"`
 }
 

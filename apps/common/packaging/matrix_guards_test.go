@@ -181,18 +181,61 @@ func TestArchitectureParity_IsPerProvider(t *testing.T) {
 // TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo keeps
 // "the commit is not an ancestor" apart from "git could not answer",
 // which are different facts and must not share a blocker.
+//
+// It used to read those two off the real repository, because the real
+// manifest really did pin an unreachable commit. That is fixed (#174), so
+// the failures are now constructed instead: a manifest is cheap to build,
+// and a guard that can only fire while the repository is broken stops
+// being a guard the moment it is fixed.
 func TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo(t *testing.T) {
 	conf := MustLoadConformance()
 	p := providerUnderTest{id: "generic", spec: conf.Providers["generic"], canonical: MustLoad()}
-	ok, detail := checkReleaseManifestIntegrity(p)
+	fx := newSquashMergeFixture(t)
+
+	manifestAt := func(commit string) ReleaseManifest {
+		arches := make([]ReleaseArchitecture, 0, len(p.canonical.Architectures))
+		for _, arch := range p.canonical.Architectures {
+			hashes := map[string]string{}
+			for _, b := range p.canonical.Binaries {
+				hashes[strings.TrimPrefix(b, "/")] = strings.Repeat("a", 64)
+			}
+			arches = append(arches, ReleaseArchitecture{Architecture: arch, BinarySHA256: hashes})
+		}
+		return ReleaseManifest{Commit: commit, Architectures: arches}
+	}
+
+	// The positive control, and it has to come first: if a manifest
+	// pinning a commit the history really has cannot pass, then the two
+	// refusals below prove nothing except that the check always refuses.
+	if ok, detail := releaseManifestIntegrity(p, manifestAt(fx.squashed), fx.dir); !ok {
+		t.Fatalf("a manifest pinning a commit HEAD can reach must pass, got: %s", detail)
+	}
+
+	// git saying no: the branch commit a squash merge rewrote away.
+	ok, detail := releaseManifestIntegrity(p, manifestAt(fx.feature), fx.dir)
 	if ok {
-		t.Fatalf("the manifest pins a commit that is not in this history; the check should not conclude: %s", detail)
+		t.Fatalf("a manifest pinning a commit that is not in this history must not conclude: %s", detail)
 	}
 	if strings.Contains(detail, "git could not decide") {
 		t.Fatalf("git itself failed here, so this run cannot tell the two apart: %s", detail)
 	}
 	if !strings.Contains(detail, "is not an ancestor of HEAD") {
 		t.Errorf("expected the ancestry refusal, got: %s", detail)
+	}
+
+	// git failing to answer: a well-formed SHA that is not an object.
+	// Same verdict, and it must not be reported as the same fact.
+	ok, detail = releaseManifestIntegrity(p, manifestAt(unknownSHA), fx.dir)
+	if ok {
+		t.Fatalf("a manifest pinning a SHA git cannot resolve must not conclude: %s", detail)
+	}
+	if !strings.Contains(detail, "git could not decide") {
+		t.Errorf("an undecidable case was reported as a decided one, which is how a broken check hides behind a known blocker: %s", detail)
+	}
+
+	// And an empty commit is its own refusal rather than either of those.
+	if ok, detail := releaseManifestIntegrity(p, manifestAt(""), fx.dir); ok || !strings.Contains(detail, "pins no commit") {
+		t.Errorf("a manifest with no commit at all must say so, got ok=%v %s", ok, detail)
 	}
 }
 

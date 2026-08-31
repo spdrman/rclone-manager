@@ -5,9 +5,11 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -711,6 +713,19 @@ type ReleaseArchitecture struct {
 	// BinarySHA256 is keyed by the binary's path WITHOUT a leading
 	// slash, which is how the manifest writes it.
 	BinarySHA256 map[string]string `json:"binary_sha256"`
+	// RegistryDigest is the digest ghcr.io assigned this architecture's
+	// image on push, and it is a pointer so that "not pushed yet" and
+	// "pushed, digest not recorded" are different values rather than the
+	// same empty string.
+	//
+	// It is null throughout today, which is the honest reading of
+	// canonical.json's image.published false: the registry is settled
+	// (ghcr.io/spdrman/backup-manager) and nothing has been pushed to it.
+	// The manifest's sibling field local_image_id_sha256 is deliberately
+	// NOT modelled here, because it is not a digest and nothing outside
+	// the machine that built it can resolve it. Filling this in from a
+	// real push is #88's work.
+	RegistryDigest *string `json:"registry_digest"`
 }
 
 // ParseReleaseManifest reads a release manifest.
@@ -770,6 +785,33 @@ func (m ReleaseManifest) HashesFor(binary string) map[string]string {
 		}
 	}
 	return out
+}
+
+// CommitReachableFrom reports whether commit is an ancestor of ref in
+// the repository rooted at repoDir.
+//
+// The two failure modes are kept apart on purpose, and the separation is
+// the whole reason this is a function rather than three lines inlined at
+// each call site. Exit status 1 is git answering "no, that commit is not
+// in this history", which is a fact about the manifest. Anything else is
+// git failing to answer at all (an unknown object, a repository that is
+// not there, git missing from PATH), which is a fact about the check.
+// Collapsing the second into the first is how a broken check gets filed
+// under a known blocker and stops being looked at.
+//
+// So: (true, nil) means reachable, (false, nil) means git said no, and a
+// non-nil error means nobody decided anything.
+func CommitReachableFrom(repoDir, commit, ref string) (bool, error) {
+	cmd := exec.Command("git", "-C", repoDir, "merge-base", "--is-ancestor", commit, ref)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
 }
 
 // SHA256File returns the lowercase hex SHA-256 of a file.

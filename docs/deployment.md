@@ -452,13 +452,39 @@ SHA-256 and image/package digests," and §8's "release manifest SHALL prove core
 through binary hashes and image/package digests."
 
 ```
-VERSION=$(git describe --tags --always) COMMIT=$(git rev-parse HEAD) \
-  bash scripts/release/record-release-hashes.sh
+git checkout main && git pull            # a commit that is ALREADY on main
+git status --porcelain -- core apps ui   # must be empty
+bash scripts/release/record-release-hashes.sh
 ```
 
-**What this doesn't record**: a registry digest. No registry is configured for this
-repository yet, so there is nothing for `docker buildx build --push` to assign one
-against; the manifest's `local_image_id_sha256` field is honestly labeled as the local
-Docker image ID it actually is, never as a stand-in for a digest that doesn't exist. A
-real release, once a registry exists, additionally records what
-`docker buildx imagetools inspect <ref>` (or the `--push` output itself) reports.
+**Run it on a commit that is already on `main`, from a clean tree.** This is the whole
+lesson of issue #174. The manifest previously pinned `c51a07f`, recorded on a feature
+branch; GitHub squash merged that branch, which rewrote the commit, and the manifest
+was left describing a build no checkout could reproduce. Every parity check phrased as
+"matches the release manifest" was then comparing against a fiction, and nothing
+noticed for weeks. The script now refuses three ways of producing that: a `COMMIT` that
+is not `HEAD`, a working tree that is dirty in a path the image is built from, and a
+commit that is not an ancestor of `origin/main`. Set `UNSAFE_LOCAL_BUILD=1` to skip all
+three for a throwaway local build, and do not commit what it writes.
+`apps/common/packaging`'s `TestReleaseManifestPinsACommitThisHistoryCanReach` and the
+`release-manifest-integrity` conformance row both re-ask the ancestry question on every
+run, so a manifest that drifts out of the history fails the build rather than being
+found by hand.
+
+The manifest checked in today was produced this way at `8ad3100`, and a second run from
+the same clean checkout reproduced its binary hashes exactly.
+
+**What this doesn't record**: a registry digest. The registry is settled,
+`ghcr.io/spdrman/backup-manager` (`apps/common/packaging/canonical.json` is the single
+source of truth for the reference), so the gap is no longer that no registry exists. It
+is that nothing has been pushed to it, which `canonical.json` records as
+`image.published: false`. The manifest carries an explicit `registry_digest` slot per
+architecture, `null` while that stays false, and
+`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` makes the two move
+together: the day a release is pushed and `published` flips to `true`, the manifest is
+required to carry the digest `docker buildx build --push` printed (or
+`docker buildx imagetools inspect ghcr.io/spdrman/backup-manager:<tag>` reads back).
+`local_image_id_sha256` stays what it always was, the local Docker image ID that build
+produced, which resolves nowhere but the machine that built it and is never a stand-in
+for a digest. Doing the push, and signing and attesting what it points at, is issue
+#88's work.

@@ -1,11 +1,9 @@
 package packaging
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -271,27 +269,35 @@ func checkCanonicalImageParity(p providerUnderTest) (bool, string) {
 // point: one row that is true repository-wide can no longer stand in for
 // seven answers nobody measured.
 //
-// Today it cannot conclude: the manifest pins a commit that is not an
-// ancestor of main (#174), so its hashes describe a build that is not in
-// this history and there is nothing real on the other side of any
-// comparison.
+// It could not conclude while #174 was open: the manifest pinned a
+// feature-branch commit that a squash merge had rewritten out of the
+// history, so there was nothing real on the other side of any
+// comparison. The manifest now pins a commit that is on main, and
+// TestReleaseManifestPinsACommitThisHistoryCanReach asks the same
+// question a second time, outside the declaration machinery, so that
+// re-declaring this cell blocked cannot make the fact go away.
 func checkReleaseManifestIntegrity(p providerUnderTest) (bool, string) {
 	manifest, err := ReadReleaseManifest()
 	if err != nil {
 		return false, err.Error()
 	}
+	return releaseManifestIntegrity(p, manifest, Path("."))
+}
+
+// releaseManifestIntegrity is the body, taking the manifest and the
+// repository to resolve it against as arguments for the same reason
+// coreBinaryHashParity and architectureParity do: a check whose refusals
+// can only be observed by breaking the real repository is a check whose
+// refusals are never observed at all.
+func releaseManifestIntegrity(p providerUnderTest, manifest ReleaseManifest, repoDir string) (bool, string) {
 	if manifest.Commit == "" {
 		return false, "the release manifest pins no commit"
 	}
-	// Exit status 1 is git answering "no". Anything else is git failing
-	// to answer, which is a different fact and must not be filed under
-	// the blocker for the first one.
-	cmd := exec.Command("git", "-C", Path("."), "merge-base", "--is-ancestor", manifest.Commit, "HEAD")
-	if err := cmd.Run(); err != nil {
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			return false, fmt.Sprintf("git could not decide whether %s is an ancestor of HEAD: %v", short(manifest.Commit), err)
-		}
+	reachable, err := CommitReachableFrom(repoDir, manifest.Commit, "HEAD")
+	if err != nil {
+		return false, fmt.Sprintf("git could not decide whether %s is an ancestor of HEAD: %v", short(manifest.Commit), err)
+	}
+	if !reachable {
 		return false, fmt.Sprintf("release manifest pins commit %s, which is not an ancestor of HEAD, so its hashes describe a build that is not in this history", short(manifest.Commit))
 	}
 	if ok, detail := manifest.RecordsEveryBinary(p.canonical.Binaries); !ok {
