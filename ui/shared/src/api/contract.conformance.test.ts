@@ -127,6 +127,22 @@ function matcherFor(operation: (typeof API_OPERATIONS)[number]): RegExp {
   return new RegExp(`^${API_BASE_PATH}${pattern}$`);
 }
 
+/**
+ * Every method on `api` that no entry in `driven` names.
+ *
+ * This is what makes the hand-written call list above self-checking: it
+ * is a second list in a second file, and the documented guarantee that a
+ * new unbacked path fails CI on the commit that adds it only holds if
+ * this list is complete. It is a free function rather than an inline
+ * expression so it can be driven directly by its own positive control.
+ */
+function undrivenMethods(driven: string[], api: object): string[] {
+  const named = new Set(driven);
+  return Object.keys(api)
+    .filter((method) => !named.has(method))
+    .sort();
+}
+
 describe("every request the shared client makes is a declared operation", () => {
   const observed: string[] = [];
 
@@ -155,51 +171,60 @@ describe("every request the shared client makes is a declared operation", () => 
       })
     );
 
-    // Every method on the client, driven once. The response above is
-    // deliberately thin: what is being recorded is the REQUEST, and a
-    // mapper that throws on a thin body has still already made its call.
-    const calls: Array<() => Promise<unknown>> = [
-      () => httpApi.getVersion(),
-      () => httpApi.getHealth(),
-      () => httpApi.listSets(),
-      () => httpApi.getSet("src/set-1"),
-      () => httpApi.runSet("set-1"),
-      () => httpApi.testConnection("set-1"),
-      () => httpApi.setEnabled("set-1", true),
-      () => httpApi.createBackupSet({
+    // Every method on the client, driven once, each named by the httpApi
+    // key it drives so the coverage assertion below can prove this list
+    // is complete. The response above is deliberately thin: what is being
+    // recorded is the REQUEST, and a mapper that throws on a thin body
+    // has still already made its call.
+    const calls: Array<[string, () => Promise<unknown>]> = [
+      ["getVersion", () => httpApi.getVersion()],
+      ["getHealth", () => httpApi.getHealth()],
+      ["listSets", () => httpApi.listSets()],
+      ["getSet", () => httpApi.getSet("src/set-1")],
+      ["runSet", () => httpApi.runSet("set-1")],
+      ["testConnection", () => httpApi.testConnection("set-1")],
+      ["setEnabled", () => httpApi.setEnabled("set-1", true)],
+      ["createBackupSet", () => httpApi.createBackupSet({
         name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
         knownHostsLine: "l", remotePath: "/r", localPath: "/l",
         include: [], completionStrategy: "rename"
-      }),
-      () => httpApi.listValidators(),
-      () => httpApi.importSSHKey("pem"),
-      () => httpApi.probeHostKey("h", 22),
-      () => httpApi.testCandidateConnection({
+      })],
+      ["listValidators", () => httpApi.listValidators()],
+      ["importSSHKey", () => httpApi.importSSHKey("pem")],
+      ["probeHostKey", () => httpApi.probeHostKey("h", 22)],
+      ["testCandidateConnection", () => httpApi.testCandidateConnection({
         host: "h", port: 22, user: "u", sshKeyId: "k", knownHostsLine: "l"
-      }),
-      () => httpApi.listArtifacts(),
-      () => httpApi.getArtifact("artifact-1"),
-      () => httpApi.listOperations(),
-      () => httpApi.listActivity(),
-      () => httpApi.listQuarantine(),
-      () => httpApi.revalidate("artifact-1"),
-      () => httpApi.retryIngestion("artifact-1"),
-      () => httpApi.previewRetention("src", "set-1"),
-      () => httpApi.applyRetention("src", "set-1", "plan-1"),
-      () => httpApi.getSettings(),
-      () => httpApi.updateSettings({ retention: { timezone: "UTC" } }),
-      () => httpApi.scanCatalog(),
-      () => httpApi.rebuildCatalog(),
-      () => httpApi.login("u", "p"),
-      () => httpApi.enrollAdministrator("u", "p"),
-      () => httpApi.rotatePassword("a", "b"),
-      () => httpApi.logout()
+      })],
+      ["listArtifacts", () => httpApi.listArtifacts()],
+      ["getArtifact", () => httpApi.getArtifact("artifact-1")],
+      ["listOperations", () => httpApi.listOperations()],
+      ["listActivity", () => httpApi.listActivity()],
+      ["listQuarantine", () => httpApi.listQuarantine()],
+      ["revalidate", () => httpApi.revalidate("artifact-1")],
+      ["retryIngestion", () => httpApi.retryIngestion("artifact-1")],
+      ["previewRetention", () => httpApi.previewRetention("src", "set-1")],
+      ["applyRetention", () => httpApi.applyRetention("src", "set-1", "plan-1")],
+      ["getSettings", () => httpApi.getSettings()],
+      ["updateSettings", () => httpApi.updateSettings({ retention: { timezone: "UTC" } })],
+      ["scanCatalog", () => httpApi.scanCatalog()],
+      ["rebuildCatalog", () => httpApi.rebuildCatalog()],
+      ["login", () => httpApi.login("u", "p")],
+      ["enrollAdministrator", () => httpApi.enrollAdministrator("u", "p")],
+      ["rotatePassword", () => httpApi.rotatePassword("a", "b")],
+      ["logout", () => httpApi.logout()]
     ];
-    for (const call of calls) {
+    for (const [, call] of calls) {
       await call().catch(() => undefined);
     }
 
     expect(observed.length).toBe(calls.length);
+
+    // Nothing above asserted that `calls` covers httpApi, so a client
+    // method nobody added here was simply invisible: it called whatever
+    // path it liked and this file never saw it (M5, #194 review). The Go
+    // side has never had that hole, because it enumerates the real chi
+    // route table rather than a hand-written list.
+    expect(undrivenMethods(calls.map(([name]) => name), httpApi)).toEqual([]);
 
     const matchers = API_OPERATIONS.map((op) => ({ op, re: matcherFor(op) }));
     const unmatched = observed.filter(
@@ -211,6 +236,14 @@ describe("every request the shared client makes is a declared operation", () => 
     );
 
     expect(unmatched.sort()).toEqual(UNIMPLEMENTED_CLIENT_PATHS);
+  });
+
+  it("would notice a client method that nothing in the list drives", () => {
+    // The positive control for the coverage assertion above. Without it,
+    // `toEqual([])` passing would be equally consistent with
+    // undrivenMethods always returning an empty array.
+    expect(undrivenMethods(["a"], { a: () => undefined, b: () => undefined })).toEqual(["b"]);
+    expect(undrivenMethods(["a", "b"], { a: () => undefined, b: () => undefined })).toEqual([]);
   });
 
   it("would notice a path the contract does not declare", () => {

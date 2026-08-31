@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "e2a193c142f74495da5e1f5f1c089bfd3803fd9b66556f1c0355d2fa597e9d7a";
+export const CONTRACT_SHA256 = "bc3cf7e50ad1f25d66e7454c2ef6dbafded3c5c8dc849cf1c8dd27e8bbb6f481";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -265,7 +265,6 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT"],
       500: ["INTERNAL"],
     }
   },
@@ -340,6 +339,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "RetentionPlan",
     successStatus: 200,
     errorCodes: {
+      400: ["INVALID_REQUEST"],
       401: ["UNAUTHENTICATED"],
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
@@ -361,7 +361,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["CONFIG_REVISION_STALE"],
+      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING"],
       500: ["INTERNAL"],
     }
   },
@@ -487,6 +487,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     successStatus: 200,
     errorCodes: {
       401: ["UNAUTHENTICATED"],
+      500: ["INTERNAL"],
     }
   },
   {

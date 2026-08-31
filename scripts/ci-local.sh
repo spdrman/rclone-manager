@@ -240,6 +240,20 @@ gate_step "performance baseline present, and its gate can fail (#165)"
 bash scripts/perf/check-baseline.sh
 bash scripts/perf/selftest.sh
 
+# ci.yml's api-contract job, mirrored here because ci.yml is
+# workflow_dispatch-only and therefore runs on no commit: without these two
+# lines the byte-for-byte binding comparison, the implementation-type leak
+# scan and all 15 of their mutation controls had never executed on a commit
+# at all (#166, PR #194 review M1). Unconditional, FAST included: together
+# they take under 20 seconds, and check-contract-drift.sh is the only thing
+# that catches a hand edit to a generated binding that keeps its digest
+# intact.
+echo "==> /api/v1 bindings match the contract, and no implementation type leaks (#166)"
+bash scripts/api/check-contract-drift.sh
+
+echo "==> the /api/v1 contract gates can actually fail (mutation self-test)"
+bash scripts/api/selftest.sh
+
 if [ "$FAST" != "1" ]; then
   gate_step "release-manifest generator guards (#174)"
   bash scripts/tests/record-release-hashes-guards.test.sh

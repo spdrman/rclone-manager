@@ -1274,6 +1274,19 @@
             "x-error-codes": [
               "UNAUTHENTICATED"
             ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
           }
         },
         "x-destructive-gate": false,
@@ -1364,16 +1377,25 @@
             ]
           },
           "409": {
-            "description": "Refused: CONFIG_REVISION_STALE.",
+            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the other two are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConfigRevisionStaleResponse"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ConfigRevisionStaleResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ErrorResponse"
+                    }
+                  ]
                 }
               }
             },
             "x-error-codes": [
-              "CONFIG_REVISION_STALE"
+              "CONFIG_REVISION_STALE",
+              "IDEMPOTENCY_KEY_CONFLICT",
+              "OPERATION_ALREADY_RUNNING"
             ]
           },
           "500": {
@@ -1517,6 +1539,19 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
           },
           "401": {
             "description": "Refused: UNAUTHENTICATED.",
@@ -1836,20 +1871,6 @@
               "CSRF_TOKEN_MISSING",
               "CSRF_TOKEN_MISMATCH",
               "DESTRUCTIVE_OPERATIONS_DISABLED"
-            ]
-          },
-          "409": {
-            "description": "Refused: OPERATION_ALREADY_RUNNING, IDEMPOTENCY_KEY_CONFLICT.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "x-error-codes": [
-              "OPERATION_ALREADY_RUNNING",
-              "IDEMPOTENCY_KEY_CONFLICT"
             ]
           },
           "500": {

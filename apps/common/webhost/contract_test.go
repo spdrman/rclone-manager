@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -574,6 +575,15 @@ func TestContract_TypedRefusalsAreDistinguishable(t *testing.T) {
 		{"session lacking authorization", allowingPlatform("alice"), NotYetImplementedGate{}, nil, `{"action":"run_cycle","config_revision":"rev-1"}`, true, "idem-2", http.StatusForbidden, "DESTRUCTIVE_OPERATIONS_DISABLED"},
 		{"forged cross-site request", allowingPlatform("alice"), alwaysPassGate{}, nil, `{"action":"run_cycle","config_revision":"rev-1"}`, false, "idem-3", http.StatusForbidden, "CSRF_TOKEN_MISSING"},
 		{"stale concurrency token", allowingPlatform("alice"), alwaysPassGate{}, service.ErrConfigRevisionStale, `{"action":"run_cycle","config_revision":"rev-0"}`, true, "idem-4", http.StatusConflict, "CONFIG_REVISION_STALE"},
+		// The other two 409s. They were emitted by this handler and
+		// declared by nothing, and driven by no contract test at all, so a
+		// generated client typed its 409 body as the stale-revision shape
+		// and read undefined out of two thirds of the real cases (PR #194
+		// review, M2). Same status as the case above, deliberately: what
+		// makes them usable is that the CODE differs, which is exactly
+		// what the duplicate check below asserts.
+		{"reused idempotency key", allowingPlatform("alice"), alwaysPassGate{}, service.ErrIdempotencyKeyConflict, `{"action":"run_cycle","config_revision":"rev-1"}`, true, "idem-5", http.StatusConflict, "IDEMPOTENCY_KEY_CONFLICT"},
+		{"another run already in flight", allowingPlatform("alice"), alwaysPassGate{}, service.ErrOperationAlreadyRunning, `{"action":"run_cycle","config_revision":"rev-1"}`, true, "idem-6", http.StatusConflict, "OPERATION_ALREADY_RUNNING"},
 	}
 
 	seen := map[string]string{}
@@ -628,6 +638,83 @@ func TestContract_TypedRefusalsAreDistinguishable(t *testing.T) {
 			if n := len(backend.ops); n != 0 {
 				t.Errorf("a refused request still ran %d operation(s); a refusal must run no work at all", n)
 			}
+		})
+	}
+}
+
+// TestContract_EveryRefusalTheseRoutesReturnIsDeclaredForThatOperation is
+// the same assertion as TestContract_TypedRefusalsAreDistinguishable, on
+// the two routes whose refusals the contract did not declare at all (PR
+// #194 review, M3): previewRetention's 400 INVALID_REQUEST, which it
+// inherits from sharing writeRetentionServiceError with apply, and
+// listStorageStatus's 500 INTERNAL.
+//
+// TestContract_TheErrorCodeRegistryIsExactlyWhatTheHandlersEmit cannot see
+// either of these: it diffs two flat sets, so a code that is registered
+// SOMEWHERE and emitted SOMEWHERE passes regardless of which operation it
+// belongs to. Per-operation is the granularity a client consumes.
+func TestContract_EveryRefusalTheseRoutesReturnIsDeclaredForThatOperation(t *testing.T) {
+	endpoints := contractEndpoints()
+
+	cases := []struct {
+		name       string
+		operation  string
+		method     string
+		target     string
+		arrange    func(*syncFakeBackend)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:      "a backup set id the model layer will not accept",
+			operation: "previewRetention",
+			method:    http.MethodGet,
+			target:    "/api/v1/backup-sets/src/set-1/retention/preview",
+			arrange: func(b *syncFakeBackend) {
+				b.errOnPreview = fmt.Errorf("%w: backup set id has an empty source", service.ErrInvalidRequest)
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "INVALID_REQUEST",
+		},
+		{
+			name:      "capacity assessment that could not be made",
+			operation: "listStorageStatus",
+			method:    http.MethodGet,
+			target:    "/api/v1/system/storage",
+			arrange: func(b *syncFakeBackend) {
+				b.errOnStorage = errors.New("statfs: no such file or directory")
+			},
+			wantStatus: http.StatusInternalServerError,
+			wantCode:   "INTERNAL",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newSyncFakeBackend()
+			tc.arrange(backend)
+			router := NewRouter(RouterConfig{
+				Platform: allowingPlatform("alice"), Backend: backend, Gate: alwaysPassGate{},
+				BinaryVersion: "test", Commit: "test",
+			})
+			req := httptest.NewRequest(tc.method, tc.target, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if code := errorCodeOf(t, rec); code != tc.wantCode {
+				t.Fatalf("code = %q, want %q", code, tc.wantCode)
+			}
+
+			declared := endpoints[tc.operation].ErrorCodes[tc.wantStatus]
+			for _, c := range declared {
+				if string(c) == tc.wantCode {
+					return
+				}
+			}
+			t.Errorf("the handler returned %d %q, which api/v1/openapi.json does not declare for %s at that status (it declares %v). A refusal a client is never told about is one it cannot handle.", tc.wantStatus, tc.wantCode, tc.operation, declared)
 		})
 	}
 }

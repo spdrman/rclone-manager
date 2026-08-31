@@ -456,6 +456,35 @@ describe("add backup set wizard", () => {
       expect(await screen.findByText(/could not load the available validators/i)).toBeTruthy();
     });
 
+    // M4 (#194 review): the create succeeded, the requested run did not
+    // start, and the response says so in run_error. Every assertion above
+    // is the positive control for this one — with no run_error the wizard
+    // navigates away, so "does not navigate" here is a behaviour that
+    // depends on the field rather than on the wizard never navigating.
+    it("says the run did not start, rather than reporting a plain success, when the response carries run_error", async () => {
+      const api = createMockApi();
+      vi.spyOn(api, "createBackupSet").mockResolvedValue({
+        id: "api/x", sourceName: "api", name: "x", host: "h", port: 22, user: "u",
+        remotePath: "/r", localPath: "/l", include: [], completionStrategy: "rename",
+        disabled: false,
+        runError: "the destructive gate is closed, so the run was not submitted"
+      });
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /Save, enable & run/ }));
+
+      expect(await screen.findByText(/Saved, but the run did not start/i)).toBeTruthy();
+      expect(
+        screen.getByText(/the destructive gate is closed, so the run was not submitted/i)
+      ).toBeTruthy();
+      // Not navigated away: the sets list showing the new set is exactly
+      // the "it worked" reading this response contradicts.
+      expect(screen.queryByText("SETS LIST PAGE")).toBeNull();
+      // And no second set can be created by pressing Save again.
+      expect(screen.getByRole("button", { name: /Save, enable & run/ })).toBeDisabled();
+    });
+
     it("surfaces a failed save inline instead of navigating or silently doing nothing", async () => {
       const api = createMockApi();
       vi.spyOn(api, "createBackupSet").mockRejectedValue(

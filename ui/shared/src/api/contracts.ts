@@ -168,6 +168,13 @@ export interface CreatedBackupSet {
    *  honoured (never when disabled was also set — see
    *  CreateBackupSetRequest.runImmediately's own doc). */
   operation?: RunCycleSubmission;
+  /** Why the requested immediate run did not start. The set itself was
+   *  created either way (the response is 201 regardless), so this is the
+   *  ONLY signal that "Save, enable & run" half-succeeded: at most one of
+   *  operation or runError is ever set. Dropping it, which this mapper
+   *  did until PR #194's review, tells an operator a backup is running
+   *  when nothing ever started, and they find out at the next restore. */
+  runError?: string;
 }
 
 export interface SSHKeyImportResult {

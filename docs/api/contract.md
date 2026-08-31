@@ -158,12 +158,25 @@ that every request `httpApi` makes is an operation the contract declares, and
 that no file in `ui/shared/src` branches on a platform NAME instead of on
 capability data.
 
+It also checks that the hand-written list of client calls in that file covers
+`httpApi` itself. Without that, a method nobody remembered to add to the list
+was invisible to the whole check: it could call any path it liked and no
+assertion ever saw it. The Go half never had that hole, because it enumerates
+the real chi route table rather than a list somebody maintains.
+
 ### `scripts/api/selftest.sh`
 
-Fifteen mutation controls, each planting one real violation in a copy of the
+Eighteen mutation controls, each planting one real violation in a copy of the
 real tree and asserting the check fails **with the message that names the
 planted reason**. A gate nobody has watched fail is a gate that might not be
 able to.
+
+Two of them plant the removal of a single line from `scripts/ci-local.sh`. That
+script is what `.husky/pre-commit` runs, and GitHub Actions is
+`workflow_dispatch`-only on this repository, so a check wired only into
+`.github/workflows/ci.yml` runs on no commit at all: `check-contract-drift.sh`
+therefore also asserts that `ci-local.sh` invokes both it and this self-test.
+A check nothing invokes cannot be told apart from a check that does not exist.
 
 ## Compatibility and deprecation rules for `/api/v1`
 
@@ -200,6 +213,33 @@ description what replaces it. It comes out in `v2`, never before.
 `api_version` on `GET /system/version` reports which version a running instance
 serves, so a client and an adapter can both check rather than assume.
 
+## Recorded decision: the shape of `submitOperation`'s 409 body
+
+`POST /operations` refuses with three different codes at 409, and they do not
+all carry the same body. `CONFIG_REVISION_STALE` carries the current revision
+in a structured top-level `config_revision` field, so a client retries against
+a value it can rely on instead of one parsed out of prose (#118 item 5);
+`IDEMPOTENCY_KEY_CONFLICT` and `OPERATION_ALREADY_RUNNING` go through the
+ordinary error envelope and have no such field.
+
+The 409 body is therefore `oneOf(ConfigRevisionStaleResponse, ErrorResponse)`.
+Two alternatives were available and both were rejected:
+
+- **One schema with `config_revision` optional.** Simplest to generate, and it
+  throws away the #118 item 5 guarantee at the type level: every client reading
+  `.config_revision` after a `CONFIG_REVISION_STALE` would be reading an
+  optional field, which is the thing that guarantee exists to prevent.
+- **Giving the stale case its own status.** Cleanest typing, but changing which
+  HTTP status an existing failure returns is a `v2` break by this document's own
+  rules above, and it is only cheap right now because nothing has consumed `v1`
+  yet. Not worth spending the exception on.
+
+`oneOf` is accepted by `scripts/api/gen-bindings.go` on an error response body
+and refused everywhere else, because that is the one position from which
+neither binding generates a type: both represent an error response by its status
+and `x-error-codes`. A named schema using `oneOf` would be dropped from both
+bindings in silence, so the generator now fails on one rather than emitting it.
+
 ## Migration record: what was removed and what replaced it
 
 | removed | replaced by |
@@ -234,7 +274,9 @@ redesigned in this issue. Three things qualify.
    `rebuildCatalog` are the same story. Every one of them works today only
    against `mock.ts`. They are pinned exactly in
    `UNIMPLEMENTED_CLIENT_PATHS`, so the list can only shrink and a *new*
-   unbacked path fails CI on the commit that adds it.
+   unbacked path fails CI on the commit that adds it (which holds only
+   because the same file now asserts its call list covers `httpApi`, see
+   above).
 
 2. **Two error envelopes.** `apps/common/webhost` returns
    `{"error":{"code","message"}}` with the correlation id in a header;

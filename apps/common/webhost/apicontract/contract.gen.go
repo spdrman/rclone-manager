@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "e2a193c142f74495da5e1f5f1c089bfd3803fd9b66556f1c0355d2fa597e9d7a"
+const ContractSHA256 = "bc3cf7e50ad1f25d66e7454c2ef6dbafded3c5c8dc849cf1c8dd27e8bbb6f481"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -244,7 +244,6 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			409: {ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -287,6 +286,7 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "inventory_revision+config_revision",
 		RequestSchema: "", ResponseSchema: "RetentionPlan", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
 			401: {ErrorCodeUnauthenticated},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
@@ -300,7 +300,7 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			409: {ErrorCodeConfigRevisionStale},
+			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -370,6 +370,7 @@ var Endpoints = []Endpoint{
 		RequestSchema: "", ResponseSchema: "ListStorageStatusResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
+			500: {ErrorCodeInternal},
 		},
 	},
 	{

@@ -185,6 +185,51 @@ expect_check_fails "a contract the generator cannot read" "$d" \
   "the generator refused" bash scripts/api/check-contract-drift.sh
 
 echo
+echo "==> the gate that gates actually runs these checks"
+
+# M1 (PR #194 review): these controls are the reason the two lines in
+# scripts/ci-local.sh cannot quietly go missing again. Removing either
+# invocation is a one-line edit that leaves every other check green, and
+# it is exactly the edit that made three controls inert for four PRs.
+d=$(mutant ci-local-without-the-drift-gate)
+sed -i.bak '/^[[:space:]]*bash scripts\/api\/check-contract-drift.sh/d' "$d/scripts/ci-local.sh"
+rm -f "$d/scripts/ci-local.sh.bak"
+expect_check_fails "the drift gate dropped from the pre-commit gate" "$d" \
+  "does not run scripts/api/check-contract-drift.sh" bash scripts/api/check-contract-drift.sh
+
+d=$(mutant ci-local-without-the-selftest)
+sed -i.bak '/^[[:space:]]*bash scripts\/api\/selftest.sh/d' "$d/scripts/ci-local.sh"
+rm -f "$d/scripts/ci-local.sh.bak"
+expect_check_fails "this self-test dropped from the pre-commit gate" "$d" \
+  "does not run scripts/api/selftest.sh" bash scripts/api/check-contract-drift.sh
+
+echo
+echo "==> the generator refuses a shape it would otherwise drop"
+
+# submitOperation's 409 body is a oneOf (M2): its three codes do not all
+# use the same shape. Neither binding generates a type from an error body,
+# so oneOf is safe THERE and nowhere else - and "nowhere else" has to be
+# enforced, because objectSchemaNames skips a oneOf-only schema in silence,
+# which would delete a shape from both bindings without a diff.
+d=$(mutant contract-oneof-on-a-named-schema)
+python3 - "$d/api/v1/openapi.json" <<'PY2'
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+doc["components"]["schemas"]["SubmitOperationConflict"] = {
+    "oneOf": [
+        {"$ref": "#/components/schemas/ConfigRevisionStaleResponse"},
+        {"$ref": "#/components/schemas/ErrorResponse"},
+    ]
+}
+with open(sys.argv[1], "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY2
+expect_check_fails "a named schema using oneOf, which both bindings would drop" "$d" \
+  "would be dropped from both bindings without a word" bash scripts/api/check-contract-drift.sh
+
+echo
 echo "==> Go handlers still match the contract (go test)"
 
 d=$(mutant handler-field-renamed)

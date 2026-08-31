@@ -207,7 +207,12 @@ function fromWireCreateBackupSetResponse(body: WireCreateBackupSetResponse): Cre
     disabled: body.disabled,
     operation: body.operation
       ? { operationId: body.operation.operation_id, status: body.operation.status }
-      : undefined
+      : undefined,
+    // The contract declares run_error on this response precisely so a
+    // failed immediate run is reportable without failing the create
+    // (both are 201). Mapping it is not optional: unmapped, "Save,
+    // enable & run" reports plain success for a run that never started.
+    runError: body.run_error || undefined
   };
 }
 

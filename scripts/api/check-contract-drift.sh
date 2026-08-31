@@ -17,6 +17,13 @@
 #      can reach. If a public shape leaks one, the contract is wrong, not
 #      this check.
 #
+#   3. THE GATE ITSELF NOT RUNNING. Both rules above were wired only into
+#      .github/workflows/ci.yml, which is workflow_dispatch-only, so for
+#      four PRs they ran on no commit at all while .husky/pre-commit's
+#      scripts/ci-local.sh had never heard of scripts/api (PR #194 review,
+#      M1). A check nothing invokes is indistinguishable from a check that
+#      does not exist, so the invocation is now checked here too.
+#
 # What it deliberately does NOT check is whether the Go HANDLERS still
 # match the bindings; that needs reflection over unexported types, so it
 # lives in apps/common/webhost/contract_test.go and
@@ -132,6 +139,28 @@ fi
 
 count=$(printf '%s\n' "$identifiers" | grep -c . || true)
 echo "  ok: $count public-schema identifiers carry no rclone, SQLite, filesystem or provider SDK type"
+
+# ---- 3. the gate that actually gates runs both of these -------------------
+
+# scripts/ci-local.sh is what .husky/pre-commit runs, and its own header
+# claims it "mirrors ci.yml job-for-job, not just a fast subset of it".
+# This is that claim, for these two scripts, turned into something that
+# fails rather than something a reader has to trust. It reads for the
+# literal invocation rather than any mention, so a line that only names
+# the script in a comment does not satisfy it.
+echo "==> the pre-commit gate runs these checks"
+gate="scripts/ci-local.sh"
+if [ ! -f "$gate" ]; then
+  note "FAIL: $gate does not exist, so nothing can be said about whether these checks run on a commit."
+else
+  for invoked in scripts/api/check-contract-drift.sh scripts/api/selftest.sh; do
+    if grep -qE "^[[:space:]]*bash $invoked" "$gate"; then
+      echo "  ok: $gate runs $invoked"
+    else
+      note "FAIL: $gate does not run $invoked. GitHub Actions is workflow_dispatch-only on this repository, so a check that lives only in .github/workflows/ci.yml runs on no commit at all. Add \`bash $invoked\` to $gate."
+    fi
+  done
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo >&2

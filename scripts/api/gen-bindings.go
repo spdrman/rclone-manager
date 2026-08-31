@@ -82,6 +82,13 @@ type schema struct {
 	Items            *schema             `json:"items"`
 	Ref              string              `json:"$ref"`
 	AllOf            []*schema           `json:"allOf"`
+	// OneOf is modelled only where NEITHER binding generates a type from
+	// it: the body of an error response, which both bindings represent by
+	// their status and x-error-codes rather than by a schema. Anywhere a
+	// type WOULD be generated, using oneOf is fatal (see refuseOneOf
+	// below) rather than silently dropped, because a silently dropped
+	// shape is exactly the drift this generator exists to prevent.
+	OneOf            []*schema           `json:"oneOf"`
 	WriteOnly        bool                `json:"writeOnly"`
 	AdditionalProps  *bool               `json:"additionalProperties"`
 	Minimum          *float64            `json:"minimum"`
@@ -174,6 +181,15 @@ func main() {
 		}
 	}
 
+	// oneOf on a named schema would be skipped by objectSchemaNames (it is
+	// neither an object nor an allOf), so both bindings would silently
+	// lose the shape. Refuse it instead.
+	for _, name := range sortedKeys(doc.Components.Schemas) {
+		if len(doc.Components.Schemas[name].OneOf) > 0 {
+			fatal("schema %q uses oneOf at its top level, and this generator only models oneOf on an error response body, where no type is generated from it. A named schema using oneOf would be dropped from both bindings without a word.", name)
+		}
+	}
+
 	eps := flatten(doc)
 	if len(eps) == 0 {
 		fatal("the contract declares no operations, so generating bindings from it would produce nothing and pass vacuously")
@@ -234,7 +250,9 @@ func flatten(doc document) []endpoint {
 				e.Concurrency = *o.Concurrency
 			}
 			if o.RequestBody != nil {
-				e.RequestSchema = refName(o.RequestBody.Content["application/json"].Schema)
+				body := o.RequestBody.Content["application/json"].Schema
+				refuseOneOf(e.ID, "request body", body)
+				e.RequestSchema = refName(body)
 			}
 			for status, r := range o.Responses {
 				n, err := strconv.Atoi(status)
@@ -244,6 +262,7 @@ func flatten(doc document) []endpoint {
 				if n < 400 {
 					e.SuccessStatus = n
 					if c, ok := r.Content["application/json"]; ok {
+						refuseOneOf(e.ID, fmt.Sprintf("%d response body", n), c.Schema)
 						e.ResponseSchema = refName(c.Schema)
 					}
 					continue
@@ -259,6 +278,16 @@ func flatten(doc document) []endpoint {
 		}
 	}
 	return out
+}
+
+// refuseOneOf stops a oneOf reaching a position a binding is generated
+// from. refName would quietly return "" for one (it has no $ref of its
+// own), and an empty schema name means "this operation has no body",
+// which is a different and wrong statement.
+func refuseOneOf(id, where string, s *schema) {
+	if s != nil && len(s.OneOf) > 0 {
+		fatal("operation %s's %s uses oneOf; this generator models oneOf only on an error response body, where no type is generated from it", id, where)
+	}
 }
 
 var refPattern = regexp.MustCompile(`^#/components/schemas/([A-Za-z0-9_]+)$`)
