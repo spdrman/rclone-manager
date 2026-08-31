@@ -86,7 +86,7 @@ func newFreshInstall(t *testing.T) *freshInstall {
 		t.Fatalf("local.New: %v", err)
 	}
 
-	handler := serve.NewEngine(serve.EngineConfig{
+	engine, err := serve.NewFirstRunEngine(serve.EngineConfig{
 		Platform:              testPlatformAdapter{auth: authSvc},
 		AuthRoutes:            authSvc.Handler(),
 		TrustForwardedHeaders: authSvc.TrustForwardedHeaders(),
@@ -97,8 +97,16 @@ func newFreshInstall(t *testing.T) *freshInstall {
 		BinaryVersion: "test",
 		Commit:        "testcommit",
 	})
+	if err != nil {
+		t.Fatalf("serve.NewFirstRunEngine: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("FirstRunEngine.Close: %v", err)
+		}
+	})
 
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewServer(engine)
 	t.Cleanup(srv.Close)
 
 	jar, err := cookiejar.New(nil)

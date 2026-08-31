@@ -1,6 +1,7 @@
 package webhost
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -24,6 +25,27 @@ type RouterConfig struct {
 	// different gate on purpose to change this, never gets one by
 	// omission.
 	Gate DestructiveGate
+
+	// FirstRun, when non-nil, is the setup surface of an instance that
+	// may have no configuration yet (issue #176, firstrun.go). Combined
+	// with a nil Backend it selects a completely different, much smaller
+	// route table: see newUnconfiguredRouter for exactly what a fresh
+	// install serves, and why that is a separate table rather than the
+	// full one with guards on it.
+	//
+	// It is also set alongside a non-nil Backend once setup has
+	// completed, so GET /api/v1/system/first-run keeps answering and a
+	// POST to it keeps refusing with 409 rather than 404.
+	FirstRun FirstRunClient
+
+	// OnConfigured, when non-nil, is called by POST
+	// /api/v1/system/first-run once the first configuration is durably
+	// written: the host's chance to open a real backend against that file
+	// and start serving the application without a restart
+	// (apps/common/webhost/serve does exactly this). An error here is
+	// reported to the caller as restart_required, never as a failed
+	// setup — the configuration is on disk either way.
+	OnConfigured func(context.Context) error
 
 	BinaryVersion string
 	Commit        string
@@ -50,6 +72,11 @@ type handlers struct {
 	// route being gated unconditionally (mandatory review finding M3, PR
 	// #155).
 	gate DestructiveGate
+
+	// firstRun and onConfigured are RouterConfig's own fields of the same
+	// names; see firstrun.go for what each is for.
+	firstRun     FirstRunClient
+	onConfigured func(context.Context) error
 }
 
 // NewRouter builds the /api/v1 HTTP surface plus /health/live and
@@ -85,6 +112,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		binaryVersion: cfg.BinaryVersion,
 		commit:        cfg.Commit,
 		gate:          gate,
+		firstRun:      cfg.FirstRun,
+		onConfigured:  cfg.OnConfigured,
+	}
+
+	// An instance with a first-run surface and no backend has no
+	// configuration yet, and serves a deliberately tiny route table
+	// instead of this one (issue #176). Branching here, rather than
+	// guarding each route below, is what makes a route added to this
+	// function in future unreachable on a fresh install by construction
+	// rather than by somebody remembering — see newUnconfiguredRouter's
+	// own doc.
+	if cfg.Backend == nil && cfg.FirstRun != nil {
+		return newUnconfiguredRouter(h, cfg.Platform)
 	}
 
 	r := chi.NewRouter()
@@ -97,6 +137,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.Get("/system/version", h.systemVersion)
 		r.Get("/system/capabilities", h.systemCapabilities)
+		// Issue #176: the same two routes a fresh install serves, kept on
+		// the configured router so a client that asks always gets an
+		// answer, and so a setup submission arriving after setup already
+		// completed is refused with a 409 that says why rather than a 404
+		// that does not. See firstrun.go.
+		r.Get("/system/first-run", h.firstRunStatus)
+		r.With(requireCSRF).Post("/system/first-run", h.completeFirstRun)
 		// Issue #104 (B3.4): FR-21's existing capacity refusal, surfaced
 		// honestly. Read-only, same as the two routes above.
 		r.Get("/system/storage", h.systemStorage)

@@ -467,9 +467,9 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	return result, nil
 }
 
-// writeKnownHosts writes line to a dedicated known_hosts file for
+// writeKnownHostsIn writes line to a dedicated known_hosts file for
 // sourceName/name, under the same directory as the state journal
-// (b.configPath's sibling "known_hosts" directory, mirroring
+// (configPath's sibling "known_hosts" directory, mirroring
 // docs/ssh-setup.md's own convention of one known_hosts file the
 // operator maintains by hand). One file per backup set, not one shared
 // file for every API-created set, so trusting (or later, rotating) one
@@ -485,18 +485,15 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 // name="../../../../tmp/evil" produced a path outside both the
 // known_hosts sandbox and the config directory. validateCreateRequest
 // (below) is CreateBackupSet's very first call and already refuses any
-// such Name/SourceName before this method is ever reached (its own
+// such Name/SourceName before this function is ever reached (its own
 // validPathSegment check), so this is defense in depth, not the primary
 // guard: even if some future caller reached this method with a value
 // validateCreateRequest never saw, the filepath.Rel check below refuses
 // to write outside dir regardless of what already let sourceName/name
 // through.
-func (b *BackupService) writeKnownHosts(sourceName, name, line string) (string, error) {
-	return writeKnownHostsIn(b.configPath, sourceName, name, line)
-}
-
-// writeKnownHostsIn is writeKnownHosts' configPath-only half; see
-// keysDirIn above for why the split exists.
+//
+// It takes configPath rather than hanging off *BackupService for the
+// reason keysDirIn above gives.
 func writeKnownHostsIn(configPath, sourceName, name, line string) (string, error) {
 	dir := filepath.Join(filepath.Dir(configPath), "known_hosts.d")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -701,19 +698,16 @@ type SSHKeyRef struct {
 	Fingerprint string
 }
 
-// keysDir is where ImportSSHKey persists imported private key files:
-// b.configPath's sibling "ssh_keys" directory, so an imported key mounts
+// keysDirIn is where ImportSSHKey persists imported private key files:
+// configPath's sibling "ssh_keys" directory, so an imported key mounts
 // (or backs up) alongside the config file it is referenced from, the
 // same locality docs/ssh-setup.md already recommends for a manually
 // provisioned key.
-func (b *BackupService) keysDir() (string, error) {
-	return keysDirIn(b.configPath)
-}
-
-// keysDirIn is keysDir's configPath-only half, so the first-run surface
-// (firstrun.go) resolves the same directory from the same configPath
-// without a *BackupService it does not have yet. Everything about where
-// an imported key lands is decided here, once, for both.
+//
+// It takes configPath rather than hanging off *BackupService so the
+// first-run surface (firstrun.go), which has no BackupService yet,
+// resolves the same directory from the same path: where an imported key
+// lands is decided here, once, for both.
 func keysDirIn(configPath string) (string, error) {
 	if configPath == "" {
 		return "", ErrConfigNotFileBacked

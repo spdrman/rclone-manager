@@ -1,9 +1,9 @@
 package serve
 
 import (
+	"context"
 	"net/http"
 
-	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 )
@@ -52,6 +52,20 @@ type EngineConfig struct {
 	// webhost.NewRouter's own NotYetImplementedGate default.
 	Gate webhost.DestructiveGate
 
+	// FirstRun is the setup surface of an instance that may have no
+	// configuration yet (issue #176). Set it, leave Backend nil, and
+	// build the engine with NewFirstRunEngine (firstrun.go) rather than
+	// NewEngine: that is what makes a fresh app-store install serve a
+	// setup flow instead of refusing to start.
+	FirstRun webhost.FirstRunClient
+
+	// Activate opens a real backend against the configuration the
+	// first-run flow has just written, and returns it together with the
+	// cleanup that releases it (the same pair core/service.Open already
+	// returns, which is what a provider passes straight through). Called
+	// at most once, and only by a FirstRunEngine.
+	Activate func(ctx context.Context) (webhost.BackupServiceClient, func() error, error)
+
 	BinaryVersion string
 	Commit        string
 }
@@ -61,39 +75,5 @@ type EngineConfig struct {
 // API, and nothing else - no static UI (see NewUI for that half of the
 // two-container split this package's doc comment describes).
 func NewEngine(cfg EngineConfig) http.Handler {
-	apiRouter := webhost.NewRouter(webhost.RouterConfig{
-		Platform:      cfg.Platform,
-		Backend:       cfg.Backend,
-		Gate:          cfg.Gate,
-		BinaryVersion: cfg.BinaryVersion,
-		Commit:        cfg.Commit,
-	})
-
-	mux := http.NewServeMux()
-	if cfg.AuthRoutes != nil {
-		mux.Handle("/api/v1/auth/", http.StripPrefix("/api/v1/auth", cfg.AuthRoutes))
-	}
-	mux.Handle("/health/", apiRouter)
-	mux.Handle("/api/v1/", apiRouter)
-
-	handler := local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)
-
-	// The identity strip, on the request path rather than described in a
-	// doc comment. A gateway Authenticator decides whether to BELIEVE the
-	// header; this deletes it outright for an untrusted peer, so nothing
-	// downstream - a handler, a log line, a future middleware - can read
-	// a value that was never trusted. serve.NewUI runs the same strip one
-	// hop out, where the client's own address is still visible; see
-	// IdentitySanitizer's doc for why both hops do it.
-	if cfg.Platform != nil {
-		if s, ok := cfg.Platform.Authenticator().(IdentitySanitizer); ok {
-			inner := handler
-			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				s.Sanitize(r.Header, r.RemoteAddr)
-				inner.ServeHTTP(w, r)
-			})
-		}
-	}
-
-	return handler
+	return newEngineHandler(cfg, cfg.Backend, nil)
 }

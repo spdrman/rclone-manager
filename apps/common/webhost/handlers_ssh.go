@@ -56,7 +56,7 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref, err := h.backend.ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM))
+	ref, err := h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM))
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidRequest) {
 			// Safe to echo: rclone.ValidateImportedPrivateKey's own doc
@@ -111,7 +111,7 @@ func (h *handlers) probeHostKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	probe, err := h.backend.ProbeHostKey(r.Context(), body.Host, body.Port)
+	probe, err := h.setup().ProbeHostKey(r.Context(), body.Host, body.Port)
 	if err != nil {
 		// A probe failure (unreachable host, no SSH service on that port,
 		// a timeout, ...) is an ordinary, expected outcome of an operator
@@ -168,7 +168,7 @@ func (h *handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.backend.TestConnection(r.Context(), service.ConnectionTestRequest{
+	result, err := h.setup().TestConnection(r.Context(), service.ConnectionTestRequest{
 		Host:           body.Host,
 		Port:           body.Port,
 		User:           body.User,
