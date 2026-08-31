@@ -154,7 +154,7 @@ func (h *profileHarness) get(t *testing.T, path string) (int, []byte) {
 // mints a fresh single-use plan (#96's stale-plan rejection depends on
 // that), so its plan_id and expires_at differ between two consecutive
 // calls to the SAME profile. Normalising them is not leniency about the
-// profile boundary — normalizeVolatile below fails if a named field is
+// profile boundary: normalizeVolatile below fails if a named field is
 // absent or empty, so the list cannot quietly grow into "ignore the
 // interesting part", and every verdict, count and revision in that same
 // response is still compared byte for byte.

@@ -9,7 +9,7 @@
 // a trusted native authentication gateway, a provider notification
 // bridge, a platform launch or navigation bridge, and platform capability
 // reporting. It may not change backup lifecycle, retention or validation
-// semantics, and it may not change authorization semantics either — a
+// semantics, and it may not change authorization semantics either. A
 // profile can supply an identity, it cannot decide what that identity may
 // do. That distinction is what makes a platform integration an adapter
 // rather than a fork, and profile_test.go asserts it structurally
@@ -29,7 +29,7 @@
 // One consequence is worth stating out loud: scripts/architecture's
 // ownership check only scans the platform and distribution layers, so it
 // does not reach this package. TestProfileCarriesNoBackupDomainPolicy is
-// what covers that gap, and it is stricter than the scanner — an
+// what covers that gap, and it is stricter than the scanner: an
 // allow-list rather than a marker list.
 package profile
 

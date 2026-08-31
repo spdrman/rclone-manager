@@ -41,7 +41,7 @@ var ErrUIBundleUnusable = errors.New("no usable UI bundle")
 // Before this, the shared web host embedded exactly one bundle at compile
 // time and offered no alternative. ui/shared/vite.config.ts picks the
 // provider shell at BUILD time from VITE_PLATFORM, so shipping Synology's
-// bridge meant compiling a Synology-specific binary — and section 3.7
+// bridge meant compiling a Synology-specific binary, and section 3.7
 // requires every provider package to carry the exact same core binary
 // digest. The choice was between the wrong bridge and a forbidden build,
 // and PR #173 correctly took the wrong bridge.
@@ -116,7 +116,7 @@ func ResolveUIBundle(src UIBundleSource) (UIBundle, error) {
 
 // usableDir is the one definition of "this directory is a UI bundle":
 // it exists, it is a directory, and it has an app shell in it. An empty
-// directory is the failure mode this catches — a bind mount that did not
+// directory is the failure mode this catches: a bind mount that did not
 // mount produces exactly that, and serving it would answer every route
 // with 404 instead of saying what went wrong.
 func usableDir(dir string) (fs.FS, error) {

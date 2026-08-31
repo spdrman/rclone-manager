@@ -18,7 +18,7 @@
 // Deliberately NOT wired into container/Dockerfile. Each bundle is
 // roughly 350 KB, so embedding all seven would add about 2.1 MB to a
 // 43 MB image, against a gated budget of 5% (about 2.15 MB). That is
-// inside the budget by roughly 12 KB, which is not a margin — it is a
+// inside the budget by roughly 12 KB, which is not a margin, it is a
 // coin toss on a gate. Converting each adapter to ship its own bundle is
 // #169's work, and the image-size question is worth arguing there with a
 // real measurement rather than pre-empting here.

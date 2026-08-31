@@ -172,7 +172,7 @@ The bundle is now resolved at run time, in this order:
 
 A configured `--ui-dir` or `--ui-root` that turns out to be unusable is a hard
 start failure, never a silent fall back to the embedded bundle. "Unusable"
-means missing, not a directory, or without an `index.html` — an empty directory
+means missing, not a directory, or without an `index.html`. An empty directory
 is exactly what a bind mount that did not mount produces, and serving it would
 answer every route with 404 instead of saying what went wrong.
 
@@ -241,7 +241,7 @@ warmups), five runs:
 
 So the hop costs about **25 microseconds at p50 and 47 microseconds at p95** on
 this host, on a read that itself takes 62 to 82 microseconds. In relative terms
-that is a real cost — roughly 40% of a very fast loopback read — and in
+that is a real cost, roughly 40% of a very fast loopback read, and in
 absolute terms it is well under a tenth of a millisecond on a request whose
 end-to-end budget is dominated by the browser and the network in front of it.
 
@@ -261,6 +261,54 @@ Two things worth noting rather than burying:
 
 **The line this holds.** No further hop, no sidecar, no second runtime. A
 second proxy would double a cost that is already about half the read.
+
+## Performance evidence for this change
+
+All seven metrics EPIC B #81's performance contract names, measured with
+`scripts/perf/capture-baseline.sh --repeat 5` on the designated benchmark host
+`darwin-arm64-mac17-2`, workload `phase6-baseline-v1`, and compared against
+#165's committed baseline with `scripts/perf/check-baseline.sh --compare`.
+Nothing was re-baselined.
+
+| metric | gated | baseline | this change | threshold | result |
+|---|---|---|---|---|---|
+| `api_read_p95_ms` | yes | 0.130 ms | 0.149 ms | ratio <= 1.10 **and** more than 0.05 ms above baseline | **pass**, delta 0.019 ms |
+| `transfer_mb_per_second` | yes | 537.7 MB/s | 673.0 MB/s | >= 483.9 MB/s | **pass**, 1.25x |
+| `idle_rss_bytes` | yes | 98,861,056 | 99,221,504 | <= 1.10x | **pass**, 1.004x |
+| `config_write_p95_ms` | yes | 11.357 ms | 11.448 ms | <= 1.10x | **pass**, 1.008x |
+| `image_size_bytes` | yes | 43,008,762 | 43,074,298 | <= 1.05x | **pass**, 1.0015x (+64 KiB) |
+| `startup_to_healthy_ms` | no | 19.652 ms | 18.403 ms | recorded, not gated | 0.94x |
+| `idle_cpu_seconds_total` | no | 0.12 s | 0.11 s | recorded, not gated | below the measurement floor on both sides |
+
+Two of those deserve more than a tick.
+
+**`api_read_p95_ms` moved 14.6% in ratio terms, and passed on the noise floor
+rather than on the ratio.** That is the gate working as #165 designed it, not a
+gate being lenient: the absolute movement is 0.019 ms, and the within-run
+capture-to-capture spread of that same median was 62% of the median in this
+very run. At 0.13 ms a 10% budget is smaller than the measurement's own
+scatter, which is exactly why `gate.json` requires both conditions. Worth
+saying out loud because the number will look like a near-miss to anyone reading
+the ratio alone: it is not a near-miss, it is a metric whose ratio is not
+meaningful at this magnitude, and the floor is what makes the gate real.
+
+Note also that this is measured against the engine **directly**, so it does not
+contain the reverse-proxy hop measured above. The hop is 0.047 ms, more than
+twice this delta, which is a useful sanity check that the movement here is not
+the two-service topology leaking into the direct path.
+
+**`image_size_bytes` grew by 65,536 bytes.** That is the profile table, the
+gateway authenticator and the bundle resolver compiled into
+`/backup-manager-web`. It is 0.15% of the image against a 5% budget, and it is
+real growth rather than noise: #165 recorded that two independent builds of the
+same commit produced byte-identical image sizes, so there is no noise here to
+hide in and no reason to describe 64 KiB as anything but 64 KiB.
+
+`transfer_mb_per_second` improved by 25% and `startup_to_healthy_ms` by 6%.
+Neither is attributable to this change: nothing here touches the transport or
+the startup sequence, and both metrics have wide recorded spreads (27% and 15%
+within this run). They are recorded because the contract names them, not
+claimed as an improvement.
 
 ## Migration from the previous definition
 
