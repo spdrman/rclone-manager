@@ -1,4 +1,5 @@
 import type {
+  AppSettings,
   BackupManagerApi,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -7,6 +8,7 @@ import type {
   CreatedBackupSet,
   HostKeyProbeResult,
   SSHKeyImportResult,
+  UpdateSettingsRequest,
   ValidatorCatalogEntry
 } from "./contracts";
 import { BackupManagerError } from "./contracts";
@@ -344,6 +346,53 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
   }
 ];
 
+/**
+ * The settings fixture GET/PATCH /api/v1/settings serves here.
+ *
+ * `retention.tiers` is the RESOLVED default chain, spelled exactly the
+ * way core/service reports it for a config file that names neither the
+ * tiers list nor the legacy scalars — the weekly tier included, which
+ * buckets by week but looks back over calendar months. A fixture that
+ * dropped that window_unit would let a form pass here and be unable to
+ * express the real default policy against the actual backend.
+ *
+ * `schema` mirrors core/internal/config's own constants, so the picker
+ * this fixture drives offers exactly what config.Validate accepts.
+ */
+function defaultSettings(): AppSettings {
+  return {
+    retention: {
+      timezone: "Europe/Berlin",
+      weekStartsOn: "monday",
+      tiers: [
+        { name: "daily", granularity: "day", keep: 7 },
+        { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
+        { name: "monthly", granularity: "month", keep: 12 }
+      ],
+      protectLastKnownGood: true
+    },
+    schema: {
+      retention: {
+        granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
+        windowUnits: ["day", "week", "month", "quarter", "half_year", "year"],
+        tierNamePattern: "^[a-z][a-z0-9_]*$",
+        reservedTierName: "last_known_good",
+        keepMax: 10000,
+        periodDaysMax: 3650,
+        // The chain core/internal/config.DefaultRetentionTiers resolves to
+        // when a config configures neither spelling. Served, not
+        // hardcoded in the form, so "Restore default chain" cannot write a
+        // stale copy of the product's default into a config file.
+        defaultTiers: [
+          { name: "daily", granularity: "day", keep: 7 },
+          { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
+          { name: "monthly", granularity: "month", keep: 12 }
+        ]
+      }
+    }
+  };
+}
+
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
   // Every previewRetention call advances this backup set's "inventory" by
@@ -351,6 +400,10 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // ever honors the plan_id from the LATEST tick — anything older is,
   // correctly, stale — mirroring ApplyRetentionPlan's real revision check.
   let retentionTick = 0;
+  // Held per mock instance so a PATCH is visible to the next GET, the
+  // same way the real backend's hot reload makes a write visible to the
+  // next read (issue #140).
+  const settings = defaultSettings();
 
   return {
     getVersion: () =>
@@ -456,6 +509,58 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           correlationId: "cid_stale991"
         }));
       return delay({ ...current, operationId: "op_mock_retention_" + retentionTick });
+    },
+
+    getSettings: () => delay(structuredClone(settings)),
+    updateSettings: (req: UpdateSettingsRequest) => {
+      const r = req.retention;
+      // The real backend refuses a write that names no setting, in both
+      // layers and structurally: an absent retention section and a
+      // present-but-empty one are the same request, and honouring either
+      // would rewrite the config file and move the config revision for a
+      // body with no content (PR #171, mandatory finding M3). A fixture
+      // that resolved with the current settings instead would let a
+      // component that sends an empty body pass here and fail against the
+      // server.
+      const namesNothing =
+        !r ||
+        (r.timezone === undefined &&
+          r.weekStartsOn === undefined &&
+          r.tiers === undefined &&
+          r.protectLastKnownGood === undefined);
+      if (namesNothing)
+        return Promise.reject(new BackupManagerError({
+          code: "INVALID_REQUEST",
+          message: "a settings write must name at least one setting to change",
+          correlationId: "cid_mocksettings400"
+        }));
+      if (r) {
+        // Only the named fields move, exactly like the PATCH contract
+        // (and like core/service's own applyRetentionUpdate): a mock that
+        // overwrote everything would let a component pass here while
+        // wiping settings it never touched against the real backend.
+        if (r.timezone !== undefined) settings.retention.timezone = r.timezone;
+        if (r.weekStartsOn !== undefined) settings.retention.weekStartsOn = r.weekStartsOn;
+        if (r.protectLastKnownGood !== undefined) {
+          settings.retention.protectLastKnownGood = r.protectLastKnownGood;
+        }
+        if (r.tiers !== undefined) {
+          if (r.tiers.length === 0)
+            // The literal refusal core/service returns for this
+            // (settings.go): an emptied chain is not "keep nothing", it
+            // reinstates the default policy, so it is refused rather than
+            // applied. A fixture that accepted it would let a UI ship an
+            // affordance the real backend rejects.
+            return Promise.reject(new BackupManagerError({
+              code: "INVALID_REQUEST",
+              message:
+                "retention.tiers must name at least one tier; an empty chain is not \"keep nothing\", it reinstates the default daily/weekly/monthly policy.",
+              correlationId: "cid_mocksettings400"
+            }));
+          settings.retention.tiers = r.tiers.map((t) => ({ ...t }));
+        }
+      }
+      return delay(structuredClone(settings));
     },
 
     scanCatalog: () =>

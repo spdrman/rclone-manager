@@ -528,3 +528,105 @@ func (f *backupSetFakeBackend) TestConnection(context.Context, service.Connectio
 	}
 	return f.connectionResult, nil
 }
+
+// defaultRetentionSettings is the resolved FR-18 default chain plus
+// FR-19's default protection, spelled exactly the way core/service's own
+// Settings reports it for a config file that names neither the tiers list
+// nor the three legacy scalars. The fakes below start here so a handler
+// test asserts against the real default policy rather than a fixture
+// invented to make an assertion pass.
+func defaultRetentionSettings() service.RetentionSettings {
+	return service.RetentionSettings{
+		Timezone:     "UTC",
+		WeekStartsOn: "monday",
+		Tiers: []service.RetentionTier{
+			{Name: "daily", Granularity: service.GranularityDay, Keep: 7},
+			{Name: "weekly", Granularity: service.GranularityWeek, Keep: 3, WindowUnit: service.GranularityMonth},
+			{Name: "monthly", Granularity: service.GranularityMonth, Keep: 12},
+		},
+		ProtectLastKnownGood: true,
+	}
+}
+
+// Settings and UpdateSettings on syncFakeBackend keep the seam satisfied
+// for every test double built on it (backupSetFakeBackend,
+// storageFakeBackend). They are deliberately inert: the tests that
+// actually exercise issue #140's settings surface use
+// settingsFakeBackend below, which records what crossed the seam.
+func (f *syncFakeBackend) Settings(context.Context) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+func (f *syncFakeBackend) UpdateSettings(context.Context, service.UpdateSettingsRequest) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+func (f *asyncFakeBackend) Settings(context.Context) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+func (f *asyncFakeBackend) UpdateSettings(context.Context, service.UpdateSettingsRequest) (service.Settings, error) {
+	return service.Settings{Retention: defaultRetentionSettings()}, nil
+}
+
+// settingsFakeBackend is a BackupServiceClient double for
+// handlers_settings_test.go: an in-memory settings store that applies a
+// partial update the same way core/service.UpdateSettings does (only the
+// named fields move), and records the exact service.UpdateSettingsRequest
+// the handler built so a test can assert on what crossed the HTTP-to-core
+// seam rather than only on what came back out of it.
+//
+// It deliberately does NOT re-implement config.Validate: refusals are
+// driven through errOnUpdate, because what these tests prove is the HTTP
+// layer's request parsing, error mapping and middleware wiring. That the
+// validator actually refuses each shape is core/service's own
+// settings_test.go, and that the two agree end to end is the CLI boundary
+// test (settings_boundary_test.go).
+type settingsFakeBackend struct {
+	*syncFakeBackend
+
+	settings service.Settings
+
+	lastUpdate  service.UpdateSettingsRequest
+	updateCalls int
+
+	errOnRead   error
+	errOnUpdate error
+}
+
+func newSettingsFakeBackend() *settingsFakeBackend {
+	return &settingsFakeBackend{
+		syncFakeBackend: newSyncFakeBackend(),
+		settings:        service.Settings{Retention: defaultRetentionSettings()},
+	}
+}
+
+func (f *settingsFakeBackend) Settings(context.Context) (service.Settings, error) {
+	if f.errOnRead != nil {
+		return service.Settings{}, f.errOnRead
+	}
+	return f.settings, nil
+}
+
+func (f *settingsFakeBackend) UpdateSettings(_ context.Context, req service.UpdateSettingsRequest) (service.Settings, error) {
+	f.updateCalls++
+	f.lastUpdate = req
+	if f.errOnUpdate != nil {
+		return service.Settings{}, f.errOnUpdate
+	}
+	if req.Retention != nil {
+		if req.Retention.Timezone != nil {
+			f.settings.Retention.Timezone = *req.Retention.Timezone
+		}
+		if req.Retention.WeekStartsOn != nil {
+			f.settings.Retention.WeekStartsOn = *req.Retention.WeekStartsOn
+		}
+		if len(req.Retention.Tiers) > 0 {
+			f.settings.Retention.Tiers = append([]service.RetentionTier(nil), req.Retention.Tiers...)
+		}
+		if req.Retention.ProtectLastKnownGood != nil {
+			f.settings.Retention.ProtectLastKnownGood = *req.Retention.ProtectLastKnownGood
+		}
+	}
+	return f.settings, nil
+}

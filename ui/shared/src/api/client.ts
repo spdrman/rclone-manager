@@ -1,12 +1,15 @@
 import { BackupManagerError, toApiErrorCode } from "./contracts";
 import type {
   ApiError,
+  AppSettings,
   BackupManagerApi,
   ConnectionTestOutcome,
   ConnectionTestParams,
   CreateBackupSetRequest,
   CreatedBackupSet,
-  SSHKeyImportResult
+  RetentionTierSetting,
+  SSHKeyImportResult,
+  UpdateSettingsRequest
 } from "./contracts";
 import type {
   BackupSet,
@@ -356,6 +359,107 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
 /** apps/common/webhost/router.go's `{source}/{set}` route params
  *  (model.BackupSetID's own composite shape), URL-encoded independently —
  *  see BackupSet.source/BackupSet.set's own doc (types/backup.ts). */
+/**
+ * Issue #140 (B3.7): GET/PATCH /api/v1/settings' wire shapes
+ * (apps/common/webhost/handlers_settings.go), snake_case like every other
+ * route in that package.
+ */
+interface WireRetentionTier {
+  name: string;
+  granularity: string;
+  period_days?: number;
+  keep: number;
+  window_unit?: string;
+}
+
+interface WireSettings {
+  retention: {
+    timezone: string;
+    week_starts_on: string;
+    tiers: WireRetentionTier[];
+    protect_last_known_good: boolean;
+  };
+  schema: {
+    retention: {
+      granularities: string[];
+      window_units: string[];
+      tier_name_pattern: string;
+      reserved_tier_name: string;
+      keep_max: number;
+      period_days_max: number;
+      default_tiers: WireRetentionTier[];
+    };
+  };
+}
+
+function fromWireTier(t: WireRetentionTier): RetentionTierSetting {
+  return {
+    name: t.name,
+    granularity: t.granularity,
+    // The backend omits both optional keys rather than sending a zero or
+    // an empty string (their `omitempty` tags), so they come back
+    // undefined here and stay undefined rather than being normalised to
+    // 0/"" — which would send a stray period_days back on the next write
+    // and get the whole policy refused.
+    periodDays: t.period_days,
+    keep: t.keep,
+    windowUnit: t.window_unit
+  };
+}
+
+function wireTier(t: RetentionTierSetting): WireRetentionTier {
+  return {
+    name: t.name,
+    granularity: t.granularity,
+    // Same rule in the other direction: only a positive period_days and a
+    // non-empty window_unit are legal to send at all, so anything else is
+    // omitted rather than sent as 0/"".
+    period_days: t.periodDays && t.periodDays > 0 ? t.periodDays : undefined,
+    keep: t.keep,
+    window_unit: t.windowUnit ? t.windowUnit : undefined
+  };
+}
+
+function fromWireSettings(body: WireSettings): AppSettings {
+  return {
+    retention: {
+      timezone: body.retention.timezone,
+      weekStartsOn: body.retention.week_starts_on,
+      tiers: (body.retention.tiers ?? []).map(fromWireTier),
+      protectLastKnownGood: body.retention.protect_last_known_good
+    },
+    schema: {
+      retention: {
+        granularities: body.schema.retention.granularities,
+        windowUnits: body.schema.retention.window_units,
+        tierNamePattern: body.schema.retention.tier_name_pattern,
+        reservedTierName: body.schema.retention.reserved_tier_name,
+        keepMax: body.schema.retention.keep_max,
+        periodDaysMax: body.schema.retention.period_days_max,
+        defaultTiers: (body.schema.retention.default_tiers ?? []).map(fromWireTier)
+      }
+    }
+  };
+}
+
+/** Builds the PATCH body, carrying "the caller did not name this field"
+ *  through as an ABSENT key rather than a null or a zero. The backend
+ *  reads an absent key as "leave this alone" and an explicitly empty
+ *  tiers list as a refusable request, so collapsing the two here would
+ *  silently turn one into the other. */
+function wireUpdateSettings(req: UpdateSettingsRequest) {
+  if (!req.retention) return {};
+  const r = req.retention;
+  const retention: Record<string, unknown> = {};
+  if (r.timezone !== undefined) retention.timezone = r.timezone;
+  if (r.weekStartsOn !== undefined) retention.week_starts_on = r.weekStartsOn;
+  if (r.tiers !== undefined) retention.tiers = r.tiers.map(wireTier);
+  if (r.protectLastKnownGood !== undefined) {
+    retention.protect_last_known_good = r.protectLastKnownGood;
+  }
+  return { retention };
+}
+
 const retentionPath = (source: string, set: string) =>
   "/backup-sets/" + encodeURIComponent(source) + "/" + encodeURIComponent(set) + "/retention";
 
@@ -418,6 +522,17 @@ export const httpApi: BackupManagerApi = {
       method: "POST",
       body: JSON.stringify({ plan_id: planId })
     }).then(fromWireRetentionPlan),
+
+  getSettings: () => request<WireSettings>("/settings").then(fromWireSettings),
+  // PATCH, not POST or PUT: this applies exactly the settings the body
+  // names and leaves the rest alone (apps/common/webhost/router.go
+  // registers no other verb on this path, so a wrong one 405s rather
+  // than looking like it worked).
+  updateSettings: (req) =>
+    request<WireSettings>("/settings", {
+      method: "PATCH",
+      body: JSON.stringify(wireUpdateSettings(req))
+    }).then(fromWireSettings),
 
   scanCatalog: () => request("/catalog/scan", { method: "POST" }),
   rebuildCatalog: () => post("/catalog/rebuild"),

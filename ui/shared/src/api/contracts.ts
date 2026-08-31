@@ -225,6 +225,96 @@ export interface ConnectionTestParams {
   remotePath?: string;
 }
 
+/**
+ * Issue #140 (B3.7): the server-side settings surface, backed by
+ * apps/common/webhost's GET/PATCH /api/v1/settings.
+ *
+ * One retention tier, exactly as core/internal/config's RetentionTier
+ * models it (FR-18's chain, generalized from three hardcoded tiers by
+ * issue #156). `periodDays` is required by, and only legal on,
+ * granularity "days"; `windowUnit` is optional and empty means "the same
+ * as granularity", which is the ordinary case — but it is not decoration:
+ * the default weekly tier buckets by week and looks back over calendar
+ * MONTHS, so a form without it cannot express the default policy.
+ */
+export interface RetentionTierSetting {
+  name: string;
+  granularity: string;
+  periodDays?: number;
+  keep: number;
+  windowUnit?: string;
+}
+
+/** The FR-18/FR-19 policy as it is actually deciding. `tiers` is always
+ *  the RESOLVED chain: a config file written with the legacy
+ *  daily_days/weekly_months/monthly_months sugar reports the three tiers
+ *  those keys stand for, so this UI renders one shape for one policy and
+ *  never has to know the sugar exists. */
+export interface RetentionSettings {
+  timezone: string;
+  weekStartsOn: string;
+  tiers: RetentionTierSetting[];
+  /** FR-19. Turning this off is what core/internal/retention calls a
+   *  materially more dangerous configuration, and SettingsPage confirms
+   *  it before the write. */
+  protectLastKnownGood: boolean;
+}
+
+/**
+ * The closed value sets and bounds the backend validates a retention
+ * chain against, served alongside the values themselves.
+ *
+ * This is read from the server rather than hardcoded here on purpose: the
+ * lists come from core/internal/config's own constants, so a granularity
+ * added there reaches this form without a second copy in this file
+ * silently going stale.
+ */
+export interface RetentionSchema {
+  granularities: string[];
+  /** Every granularity except the custom period, which can never measure
+   *  a window (config.RetentionTier.windowUnit's own rule). */
+  windowUnits: string[];
+  /** Anchored regular expression source; safe to pass to `new RegExp`. */
+  tierNamePattern: string;
+  /** The one name a configured tier may not claim, because FR-19's
+   *  protected term already occupies it. */
+  reservedTierName: string;
+  keepMax: number;
+  periodDaysMax: number;
+  /** The chain a configuration that spells neither the explicit tier list
+   *  nor the legacy scalars resolves to, straight from
+   *  core/internal/config.DefaultRetentionTiers.
+   *
+   *  Served rather than written into this UI because "restore the default
+   *  chain" is not a display string: saving it writes an explicit tiers
+   *  list, which clears the legacy scalars and permanently migrates a
+   *  config that would have tracked the product's default onto a frozen
+   *  copy of it. A stale copy here could therefore narrow a real retention
+   *  window, silently and in the dangerous direction. */
+  defaultTiers: RetentionTierSetting[];
+}
+
+export interface AppSettings {
+  retention: RetentionSettings;
+  schema: { retention: RetentionSchema };
+}
+
+/** A PARTIAL update: only the fields named here change, everything else
+ *  keeps whatever the config file currently says. Omitting `tiers`
+ *  deliberately leaves the chain (and a legacy file's own spelling of it)
+ *  untouched, which is what lets a caller flip one toggle without
+ *  rewriting a policy it never edited. */
+export interface UpdateRetentionSettings {
+  timezone?: string;
+  weekStartsOn?: string;
+  tiers?: RetentionTierSetting[];
+  protectLastKnownGood?: boolean;
+}
+
+export interface UpdateSettingsRequest {
+  retention?: UpdateRetentionSettings;
+}
+
 export interface BackupManagerApi {
   getVersion(): Promise<VersionInfo>;
   getHealth(): Promise<SystemHealth>;
@@ -273,6 +363,14 @@ export interface BackupManagerApi {
    */
   previewRetention(source: string, set: string): Promise<RetentionPlan>;
   applyRetention(source: string, set: string, planId: string): Promise<RetentionPlan>;
+
+  /** Issue #140 (B3.7): the settings surface. getSettings reads the
+   *  policy in effect plus the schema it is validated against;
+   *  updateSettings applies only the fields the request names and returns
+   *  the settings that are now running, so a caller renders what was
+   *  actually persisted rather than echoing its own request back. */
+  getSettings(): Promise<AppSettings>;
+  updateSettings(req: UpdateSettingsRequest): Promise<AppSettings>;
 
   scanCatalog(): Promise<CatalogScanPreview>;
   rebuildCatalog(): Promise<void>;

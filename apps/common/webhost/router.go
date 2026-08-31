@@ -176,6 +176,59 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		r.With(requireCSRF).Post("/ssh-keys", h.importSSHKey)
 		r.With(requireCSRF).Post("/ssh/host-key-probe", h.probeHostKey)
+
+		// Issue #140 (B3.7): the one generic settings surface — a read
+		// and a partial write covering every server-side setting the
+		// shared Web UI administers, rather than a route per setting. See
+		// handlers_settings.go's own doc for where "generic" stops
+		// (an enumerated request type, never a config passthrough).
+		//
+		// The read is read-only under docs/EPIC-B-multi-nas.md §50 ("view
+		// configuration"), so it carries neither requireCSRF nor
+		// requireDestructiveGate, exactly like the GET routes above.
+		//
+		// The write carries requireCSRF and is deliberately NOT behind
+		// requireDestructiveGate (destructiveGateExemptRoutes,
+		// router_test.go). Editing configuration is §50's "state-changing
+		// but non-destructive" bucket, the same one "create/edit backup
+		// set" sits in: nothing reachable from this route touches, moves
+		// or deletes a single byte of backup data. That includes the one
+		// setting where the question is worth asking out loud — turning
+		// FR-19's protect_last_known_good off, which internal/retention
+		// calls a materially more dangerous configuration. It is
+		// dangerous because it widens what a LATER retention apply may
+		// delete, and that apply is POST /backup-sets/{source}/{set}/
+		// retention/apply, which already carries requireDestructiveGate
+		// and already re-reads the policy at plan time. So the gate still
+		// stands between this deployment and every deletion; putting a
+		// second copy of it here would move nothing except the settings
+		// form, which would be permanently inert until #92 lands.
+		//
+		// That argument is a chain, not a claim, so it is pinned by tests
+		// rather than by this comment: core/service's
+		// TestApplyRetentionPlan_ASettingsWriteBetweenPreviewAndApplyIsStale
+		// drives a settings write in between a preview and its apply and
+		// asserts the apply is refused with ErrRetentionPlanStale and
+		// nothing is deleted, with a control proving the same plan applies
+		// when no settings write intervenes. If a later change made this
+		// route reuse the previous config revision, or made plan staleness
+		// tolerant of a config move, that test fails rather than this
+		// route quietly becoming an ungated way to widen an
+		// already-approved deletion. The
+		// operator-facing confirmation that #140 requires before that
+		// particular change takes effect lives in the UI, in front of the
+		// human who can answer it (ui/shared/src/pages/SettingsPage.tsx).
+		//
+		// This mirrors, rather than contradicts, createBackupSet's own
+		// conditional gate check: that branch is gated because
+		// run_immediately literally starts a run_cycle, the exact action
+		// the gate exists to block. No branch of this route starts
+		// anything.
+		//
+		// Registered as a static path, so it can never be shadowed by the
+		// "/backup-sets/*" catch-all above.
+		r.Get("/settings", h.getSettings)
+		r.With(requireCSRF).Patch("/settings", h.updateSettings)
 	})
 
 	return r

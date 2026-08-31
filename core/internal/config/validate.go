@@ -541,17 +541,17 @@ func (v *validator) validateRetention(r *Retention) {
 		// in this spelling, by design. The explicit tiers list is the way
 		// to run fewer than three tiers.
 		if r.DailyDays == 0 {
-			r.DailyDays = 7
+			r.DailyDays = DefaultDailyDays
 		} else if r.DailyDays < 0 {
 			v.addf("retention.daily_days: must not be negative (got %d)", r.DailyDays)
 		}
 		if r.WeeklyMonths == 0 {
-			r.WeeklyMonths = 3
+			r.WeeklyMonths = DefaultWeeklyMonths
 		} else if r.WeeklyMonths < 0 {
 			v.addf("retention.weekly_months: must not be negative (got %d)", r.WeeklyMonths)
 		}
 		if r.MonthlyMonths == 0 {
-			r.MonthlyMonths = 12
+			r.MonthlyMonths = DefaultMonthlyMonths
 		} else if r.MonthlyMonths < 0 {
 			v.addf("retention.monthly_months: must not be negative (got %d)", r.MonthlyMonths)
 		}
@@ -585,13 +585,48 @@ var validRetentionGranularities = map[string]bool{
 	GranularityDays:     true,
 }
 
-// retentionGranularityList renders validRetentionGranularities in a fixed
-// order, so the same mistake always produces the same error text (a map
-// range would reorder it per run and make the message untestable).
-var retentionGranularityList = strings.Join([]string{
+// retentionGranularities is the same closed set in a fixed order, so the
+// same mistake always produces the same error text (a map range would
+// reorder it per run and make the message untestable) and so a caller
+// outside this package can enumerate it (RetentionGranularities below).
+var retentionGranularities = []string{
 	GranularityDay, GranularityWeek, GranularityMonth,
 	GranularityQuarter, GranularityHalfYear, GranularityYear, GranularityDays,
-}, ", ")
+}
+
+// retentionGranularityList renders retentionGranularities for an error
+// message.
+var retentionGranularityList = strings.Join(retentionGranularities, ", ")
+
+// RetentionGranularities returns every value RetentionTier.Granularity
+// accepts, in the fixed order above, as a fresh slice the caller may keep
+// or sort without moving this package's own copy.
+//
+// This exists for issue #140 (B3.7): the settings form renders the
+// granularity picker from this list, so the closed set a client validates
+// against client-side is the one validateRetentionTiers actually enforces
+// server-side, rather than a second list transcribed by hand into a
+// frontend and free to drift. RetentionTier's own doc already anticipates
+// exactly that ("can validate every field client-side against the same
+// closed value sets config.Validate checks server-side").
+func RetentionGranularities() []string {
+	return append([]string(nil), retentionGranularities...)
+}
+
+// RetentionWindowUnits returns every value RetentionTier.WindowUnit
+// accepts: RetentionGranularities minus GranularityDays, which a window
+// can never be measured in (see WindowUnit's own doc and
+// validateRetentionTiers' refusal of it).
+func RetentionWindowUnits() []string {
+	units := make([]string, 0, len(retentionGranularities)-1)
+	for _, g := range retentionGranularities {
+		if g == GranularityDays {
+			continue
+		}
+		units = append(units, g)
+	}
+	return units
+}
 
 // retentionTierNamePattern constrains a tier name to lower_snake_case.
 //
@@ -602,7 +637,17 @@ var retentionGranularityList = strings.Join([]string{
 // how the operator capitalised it. One canonical spelling per tier also
 // means a settings form can validate the field client-side against the
 // same rule this function applies.
-var retentionTierNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+//
+// The source string is exported as RetentionTierNamePattern so a client
+// can apply the identical rule before submitting, for the same
+// single-source reason as RetentionGranularities above.
+var retentionTierNamePattern = regexp.MustCompile(RetentionTierNamePattern)
+
+// RetentionTierNamePattern is the regular expression source
+// retentionTierNamePattern is compiled from, in a syntax
+// (RE2/JavaScript-compatible: an anchored character-class repetition,
+// nothing Go-specific) both this package and a browser accept.
+const RetentionTierNamePattern = `^[a-z][a-z0-9_]*$`
 
 // retentionTierKeepMax and retentionTierPeriodDaysMax bound the two
 // numbers in a tier from above.
@@ -621,9 +666,20 @@ var retentionTierNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // The two numbers are arbitrary, chosen to be far past any policy anyone
 // would write: 10,000 look-back units is 27 years of dailies or a hundred
 // centuries of annuals, and 3,650 days is a ten-year custom period.
+//
+// Exported as RetentionTierKeepMax/RetentionTierPeriodDaysMax so a
+// settings form can refuse an out-of-range number before it is ever
+// submitted, against these values rather than a copy (issue #140).
 const (
-	retentionTierKeepMax       = 10000
-	retentionTierPeriodDaysMax = 3650
+	retentionTierKeepMax       = RetentionTierKeepMax
+	retentionTierPeriodDaysMax = RetentionTierPeriodDaysMax
+)
+
+// RetentionTierKeepMax and RetentionTierPeriodDaysMax are the exported
+// spellings of the two ceilings documented above.
+const (
+	RetentionTierKeepMax       = 10000
+	RetentionTierPeriodDaysMax = 3650
 )
 
 // validateRetentionTiers checks an explicit FR-18 chain. It is only

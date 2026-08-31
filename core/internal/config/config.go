@@ -553,6 +553,32 @@ func DefaultTierChain(dailyDays, weeklyMonths, monthlyMonths int) []RetentionTie
 	}
 }
 
+// DefaultDailyDays, DefaultWeeklyMonths and DefaultMonthlyMonths are
+// FR-18's documented retention windows, the values validateRetention fills
+// in when a config sets neither an explicit chain nor the legacy scalar
+// (validate.go reads them from here rather than spelling the numbers a
+// second time). They are exported because "what IS the default chain" is a
+// question asked outside this package too: core/service serves it in the
+// settings schema so the Web UI's "Restore default chain" button fills its
+// form from the product's actual default rather than from a copy of these
+// numbers transcribed into a frontend, where nothing would notice it going
+// stale. A narrowed window arrived at that way is a data-loss-shaped
+// drift.
+const (
+	DefaultDailyDays     = 7
+	DefaultWeeklyMonths  = 3
+	DefaultMonthlyMonths = 12
+)
+
+// DefaultRetentionTiers is the chain a Retention that configures neither
+// spelling resolves to: DefaultTierChain over the three defaults above.
+// One function, so there is exactly one answer to "what does this product
+// keep by default" for validate.go, for the settings schema, and for
+// anything that comes later.
+func DefaultRetentionTiers() []RetentionTier {
+	return DefaultTierChain(DefaultDailyDays, DefaultWeeklyMonths, DefaultMonthlyMonths)
+}
+
 // EffectiveTiers returns the tier chain this policy actually decides
 // with: the explicit Tiers list when one is configured, and otherwise the
 // DefaultTierChain expansion of the three scalars.

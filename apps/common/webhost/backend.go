@@ -98,6 +98,30 @@ type BackupServiceClient interface {
 	// from here can turn a "critical" result into a deletion or a call
 	// into internal/retention's apply path.
 	ListStorageStatus(ctx context.Context) ([]service.StorageStatus, error)
+
+	// Settings and UpdateSettings back GET and PATCH /api/v1/settings
+	// (issue #140/B3.7): the one generic, authenticated, CSRF-protected
+	// settings surface a shared Web UI administers server-side
+	// configuration through, rather than a route per setting.
+	//
+	// Settings is read-only (docs/EPIC-B-multi-nas.md §50's "view
+	// configuration") and reports the policy actually in effect, with
+	// FR-18's retention chain already resolved — see
+	// core/service.RetentionSettings' own doc for why a caller never sees
+	// the legacy daily_days/weekly_months/monthly_months spelling here.
+	//
+	// UpdateSettings is state-changing but NOT destructive (§50's
+	// "create/edit backup set" bucket): it edits configuration and
+	// touches no backup data, so this package wraps it in requireCSRF but
+	// not requireDestructiveGate — see router.go's own comment on the
+	// route for the full reasoning, and settings_boundary_test.go for the
+	// proof that a write here and a CLI read agree. Every write it
+	// performs goes through the same config.Validate a hand-edited YAML
+	// file goes through at boot, and refuses rather than partially
+	// applying; this package neither duplicates nor bypasses any part of
+	// that.
+	Settings(ctx context.Context) (service.Settings, error)
+	UpdateSettings(ctx context.Context, req service.UpdateSettingsRequest) (service.Settings, error)
 }
 
 var _ BackupServiceClient = (*service.BackupService)(nil)
