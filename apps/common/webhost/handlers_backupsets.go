@@ -185,8 +185,9 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if result.Set.ID == "" {
 			// Creation itself never happened — nothing was persisted, so
-			// the ordinary error mapping (400/409/500, per the failure
-			// kind) is the whole story.
+			// the ordinary error mapping (400 or 500, per the failure
+			// kind: writeBackupSetError has no conflict branch, and this
+			// route declares no 409) is the whole story.
 			writeBackupSetError(w, err)
 			return
 		}

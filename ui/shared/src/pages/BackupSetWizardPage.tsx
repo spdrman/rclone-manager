@@ -269,6 +269,12 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // The set was created and the immediate run was not started (issue
+  // #194's review, M4). It is neither a save failure nor a plain success,
+  // so it gets its own state rather than being folded into saveError:
+  // there is nothing left to retry here, and the operator has to be told
+  // that no backup is running before they walk away believing one is.
+  const [runNotStarted, setRunNotStarted] = useState<string | null>(null);
 
   // handleSave is every one of the wizard's three Save buttons' onClick
   // (issue #146): "Save, enable & run" and "Save & enable" pass
@@ -296,7 +302,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
     setSaving(true);
     setSaveError(null);
     try {
-      await api.createBackupSet({
+      const created = await api.createBackupSet({
         name: source.name,
         host: source.host,
         port: Number(source.port) || 22,
@@ -319,6 +325,15 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
         runImmediately
       });
       fetchResource(setsNode, () => api.listSets());
+      if (created.runError) {
+        // Deliberately no navigate: the sets list shows the set, which is
+        // exactly the "it worked" reading this response contradicts. Stay
+        // here and say what did not happen, with the Save buttons off,
+        // because the set already exists and pressing one again would
+        // create a second.
+        setRunNotStarted(created.runError);
+        return;
+      }
       navigate("/sets");
     } catch (e) {
       setSaveError(errorMessage(e, "Could not save this backup set."));
@@ -845,22 +860,44 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
                 </div>
               </div>
 
+              {runNotStarted ? (
+                <div style={{ marginTop: 18 }}>
+                  <WarningBanner
+                    tone="warn"
+                    eyebrow="Saved, but the run did not start"
+                    actions={
+                      <button className="btn" onClick={() => navigate("/sets")}>
+                        Go to backup sets
+                      </button>
+                    }
+                  >
+                    The backup set was created and is enabled. The immediate run did not
+                    start: {runNotStarted}. Nothing is backing up yet — start a run from
+                    the backup sets list once that is resolved.
+                  </WarningBanner>
+                </div>
+              ) : null}
+
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
                 <button
                   className="btn btn--primary"
-                  disabled={saveDisabled || saving}
+                  disabled={saveDisabled || saving || runNotStarted !== null}
                   onClick={() => void handleSave(false, true)}
                 >
                   {saving ? "Saving…" : "Save, enable & run"}
                 </button>
                 <button
                   className="btn"
-                  disabled={saveDisabled || saving}
+                  disabled={saveDisabled || saving || runNotStarted !== null}
                   onClick={() => void handleSave(false, false)}
                 >
                   {saving ? "Saving…" : "Save & enable"}
                 </button>
-                <button className="btn btn--quiet" disabled={saving} onClick={() => void handleSave(true, false)}>
+                <button
+                  className="btn btn--quiet"
+                  disabled={saving || runNotStarted !== null}
+                  onClick={() => void handleSave(true, false)}
+                >
                   {saving ? "Saving…" : "Save disabled"}
                 </button>
                 {saveHint ? (

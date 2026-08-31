@@ -408,6 +408,52 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
       disabled: true
     });
     expect(result.operation).toBeUndefined();
+    // The other half of the pair below: no run_error on the wire is no
+    // runError in the mapped result, so the assertion there is about
+    // this field arriving rather than about it always being set.
+    expect(result.runError).toBeUndefined();
+  });
+
+  it("createBackupSet reports a run that did not start instead of dropping it (M4, #194 review)", async () => {
+    const fetchMock = mockFetchOk(
+      {
+        id: "api/x",
+        source_name: "api",
+        name: "x",
+        host: "h",
+        port: 22,
+        user: "u",
+        remote_path: "/r",
+        local_path: "/l",
+        include: [],
+        completion_strategy: "marker",
+        disabled: false,
+        run_error: "the destructive gate is closed, so the run was not submitted"
+      },
+      201
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await httpApi.createBackupSet({
+      name: "x",
+      host: "h",
+      port: 22,
+      user: "u",
+      sshKeyId: "k",
+      knownHostsLine: "line",
+      remotePath: "/r",
+      localPath: "/l",
+      include: [],
+      completionStrategy: "marker",
+      runImmediately: true
+    });
+
+    // 201 with no operation and a run_error is the contract's own way of
+    // saying "the set exists, the run does not". A mapper that keeps only
+    // the first half of that sentence tells the operator a backup is
+    // running when nothing started.
+    expect(result.operation).toBeUndefined();
+    expect(result.runError).toBe("the destructive gate is closed, so the run was not submitted");
   });
 
   it("listSets maps the wire backup_sets array onto BackupSet's full shape, with honest placeholders for fields the backend does not yet send (M4, #146 review)", async () => {

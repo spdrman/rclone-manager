@@ -1,3 +1,5 @@
+import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
+import type { ApiErrorCode } from "./generated/contract";
 import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
@@ -7,71 +9,44 @@ import type {
 } from "@shared/types/operation";
 
 /**
- * Every error code this frontend's backends can actually put on the wire.
+ * Every error code this frontend's backends can actually put on the wire,
+ * re-exported from the generated bindings rather than restated here.
  *
- * A runtime array, not a bare type union, because client.ts has to turn an
- * arbitrary string off the network into one of these: `as ApiErrorCode` is
- * an assertion with no check behind it, so an unrecognised code used to
- * flow into `ApiError.code` and silently fail every comparison against it.
- * See toApiErrorCode below.
+ * Before issue #166 this file held the list itself, as a runtime array
+ * transcribed by hand from two Go packages. That is exactly the shape the
+ * API contract rule prohibits: a second source of truth that goes stale
+ * silently, and had already done so once (issue #96's review, mandatory
+ * finding M2 - the webhost half of the list was missing entirely, so the
+ * one branch in this frontend that reads a code could never match).
  *
- * Two naming conventions live here on purpose, because two Go packages do:
- * the kebab-case values are this UI's own design-canvas vocabulary, while
- * apps/common/auth/local (handler.go/csrf.go) and apps/common/webhost
- * (errors.go and every handler in that package) both emit UPPER_SNAKE_CASE
- * and are listed verbatim rather than translated. Translating would mean a
- * mapping table that has to be kept current with two packages; listing the
- * real tokens means a code either appears here or resolves to "unknown",
- * with nothing in between (issue #96's review, mandatory finding M2 — the
- * webhost half of this list was missing entirely, which is why the one
- * branch in this frontend that reads a code, the retention dialog's stale
- * banner, could never match).
+ * The list now lives in api/v1/openapi.json, is generated into
+ * generated/contract.ts, and is checked from both ends: a Go handler that
+ * emits an unregistered code fails apps/common/webhost's
+ * TestContract_TheErrorCodeRegistryIsExactlyWhatTheHandlersEmit, and a
+ * hand edit to the generated file fails
+ * scripts/api/check-contract-drift.sh.
+ *
+ * Two naming conventions still live in the list on purpose, because two
+ * Go packages do: the kebab-case values are this UI's own design-canvas
+ * vocabulary (WIRE_ERROR_CODES vs UI_ERROR_CODES separates them in the
+ * generated module), while apps/common/auth/local and
+ * apps/common/webhost both emit UPPER_SNAKE_CASE and are listed verbatim
+ * rather than translated.
  */
-export const API_ERROR_CODES = [
-  // This UI's own vocabulary (the design canvas's error states).
-  "authentication-failed",
-  "ssh-host-key-changed",
-  "permission-denied",
-  "remote-path-missing",
-  "checksum-mismatch",
-  "backup-stale",
-  "storage-critical",
-  "version-mismatch",
-  "operation-conflict",
-  "unknown",
-
-  // apps/common/auth/local (handler.go, csrf.go).
-  "UNAUTHENTICATED",
-  "RATE_LIMITED",
-  "INVALID_REQUEST",
-  "ENROLLMENT_CLOSED",
-  "BOOTSTRAP_TOKEN_INVALID",
-  "INTERNAL_ERROR",
-  "CSRF_TOKEN_MISSING",
-  "CSRF_TOKEN_MISMATCH",
-
-  // apps/common/webhost (handlers_*.go, errors.go). INVALID_REQUEST,
-  // UNAUTHENTICATED and the two CSRF codes are shared with the list above
-  // rather than repeated.
-  "RETENTION_PLAN_STALE",
-  "RETENTION_PLAN_NOT_FOUND",
-  "RETENTION_APPLY_BUSY",
-  "BACKUP_SET_NOT_FOUND",
-  "OPERATION_NOT_FOUND",
-  "OPERATION_ALREADY_RUNNING",
-  "IDEMPOTENCY_KEY_CONFLICT",
-  "CONFIG_REVISION_STALE",
-  "SSH_KEY_NOT_FOUND",
-  "HOST_KEY_PROBE_FAILED",
-  "DESTRUCTIVE_OPERATIONS_DISABLED",
-  "INTERNAL"
-] as const;
+export {
+  API_ERROR_CODES,
+  UI_ERROR_CODES,
+  WIRE_ERROR_CODES,
+  API_ERROR_CLASSES,
+  API_OPERATIONS,
+  API_VERSION,
+  API_BASE_PATH
+} from "./generated/contract";
+export type { ApiErrorCode, ContractOperation } from "./generated/contract";
 
 /** Correlation id travels with every failure and is shown under "Advanced
  *  details". Raw stack traces are never rendered (§37). */
-export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
-
-const KNOWN_API_ERROR_CODES: ReadonlySet<string> = new Set(API_ERROR_CODES);
+const KNOWN_API_ERROR_CODES: ReadonlySet<string> = new Set(GENERATED_API_ERROR_CODES);
 
 /** Narrows a code read off the wire to ApiErrorCode, or "unknown" for
  *  anything this frontend does not know. The one place a network string
@@ -193,6 +168,13 @@ export interface CreatedBackupSet {
    *  honoured (never when disabled was also set — see
    *  CreateBackupSetRequest.runImmediately's own doc). */
   operation?: RunCycleSubmission;
+  /** Why the requested immediate run did not start. The set itself was
+   *  created either way (the response is 201 regardless), so this is the
+   *  ONLY signal that "Save, enable & run" half-succeeded: at most one of
+   *  operation or runError is ever set. Dropping it, which this mapper
+   *  did until PR #194's review, tells an operator a backup is running
+   *  when nothing ever started, and they find out at the next restore. */
+  runError?: string;
 }
 
 export interface SSHKeyImportResult {

@@ -125,6 +125,11 @@ type syncFakeBackend struct {
 	errOnPreview error
 	errOnApply   error
 
+	// errOnStorage is ListStorageStatus's equivalent, so a test can drive
+	// systemStorage's own 500 branch (handlers_storage.go) rather than
+	// only its success path.
+	errOnStorage error
+
 	// notReady makes Ready report false, standing in for a backend whose
 	// §46.1 startup sequence did not complete. It is a field rather than a
 	// second fake type because readiness is now a fact the backend owns
@@ -265,6 +270,9 @@ func (f *syncFakeBackend) TestConnection(context.Context, service.ConnectionTest
 }
 
 func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
+	if f.errOnStorage != nil {
+		return nil, f.errOnStorage
+	}
 	return nil, nil
 }
 

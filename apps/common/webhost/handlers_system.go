@@ -78,19 +78,33 @@ func (h *handlers) systemVersion(w http.ResponseWriter, r *http.Request) {
 // capabilitiesResponse is GET /api/v1/system/capabilities' response shape:
 // a direct, field-for-field mirror of
 // apps/common/platform/capabilities.PlatformCapabilities, translated to
-// snake_case JSON. This is the platform's own capability declaration
-// (§3.4), not a core/ concept, so it never touches core/service at all.
+// snake_case JSON, plus the platform identifier those capabilities belong
+// to. This is the platform's own capability declaration (§3.4), not a
+// core/ concept, so it never touches core/service at all.
+//
+// Platform is issue #166 (B6.2)'s one addition to this shape, and it is
+// additive rather than a reshape: the contract (api/v1/openapi.json)
+// documents platform differences as CAPABILITY DATA, and a reading with
+// no platform in it cannot be attributed to a profile at all - an
+// operator looking at a support bundle, or an adapter conformance run
+// comparing two profiles, has to be able to say WHOSE capabilities these
+// are. It is emphatically not an invitation to branch on: a client that
+// switches on this value instead of on the booleans beside it is the
+// exact pattern #81's standing constraint forbids, and
+// ui/shared's contract.conformance.test.ts fails on it.
 type capabilitiesResponse struct {
-	NativeAuth          bool `json:"native_auth"`
-	NativeNotifications bool `json:"native_notifications"`
-	StoragePicker       bool `json:"storage_picker"`
-	EmbeddedWindow      bool `json:"embedded_window"`
-	AppStorePackaging   bool `json:"app_store_packaging"`
+	Platform            string `json:"platform"`
+	NativeAuth          bool   `json:"native_auth"`
+	NativeNotifications bool   `json:"native_notifications"`
+	StoragePicker       bool   `json:"storage_picker"`
+	EmbeddedWindow      bool   `json:"embedded_window"`
+	AppStorePackaging   bool   `json:"app_store_packaging"`
 }
 
 func (h *handlers) systemCapabilities(w http.ResponseWriter, r *http.Request) {
 	c := h.platform.Capabilities()
 	writeJSON(w, http.StatusOK, capabilitiesResponse{
+		Platform:            string(h.platform.ID()),
 		NativeAuth:          c.NativeAuth,
 		NativeNotifications: c.NativeNotifications,
 		StoragePicker:       c.StoragePicker,

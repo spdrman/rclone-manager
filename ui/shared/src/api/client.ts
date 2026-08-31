@@ -1,4 +1,21 @@
 import { BackupManagerError, toApiErrorCode } from "./contracts";
+// The wire shapes below are GENERATED from api/v1/openapi.json, not
+// declared here. Before issue #166 this file carried its own hand-written
+// copy of every snake_case response body, transcribed from the Go
+// handlers - a second source of truth that compiled perfectly while
+// disagreeing with the server, which is how a WireBackupSet missing the
+// health and retention fields reached a page that dereferenced them (issue
+// #146's review, mandatory finding M4). Re-run scripts/api/generate.sh
+// after a contract change; scripts/api/check-contract-drift.sh fails CI if
+// the checked-in generated module stops matching the contract.
+import type {
+  WireBackupSet,
+  WireCreateBackupSetResponse,
+  WireListBackupSetsResponse,
+  WireRetentionPlan,
+  WireRetentionTier,
+  WireSettingsResponse
+} from "./generated/contract";
 import type {
   ApiError,
   AppSettings,
@@ -172,27 +189,9 @@ function wireConnectionTestParams(params: ConnectionTestParams) {
   };
 }
 
-/** The wire shape POST /api/v1/backup-sets actually returns
- *  (handlers_backupsets.go's backupSetResponse/createBackupSetResponse). */
-interface WireCreatedBackupSet {
-  id: string;
-  source_name: string;
-  name: string;
-  host: string;
-  port: number;
-  user: string;
-  remote_path: string;
-  local_path: string;
-  include: string[];
-  completion_strategy: string;
-  validator_id?: string;
-  disabled: boolean;
-  operation?: { operation_id: string; status: string };
-}
-
-/** Translates WireCreatedBackupSet into CreatedBackupSet's camelCase
+/** Translates WireCreateBackupSetResponse into CreatedBackupSet's camelCase
  *  shape this file's callers use. */
-function fromWireCreatedBackupSet(body: WireCreatedBackupSet): CreatedBackupSet {
+function fromWireCreateBackupSetResponse(body: WireCreateBackupSetResponse): CreatedBackupSet {
   return {
     id: body.id,
     sourceName: body.source_name,
@@ -208,38 +207,13 @@ function fromWireCreatedBackupSet(body: WireCreatedBackupSet): CreatedBackupSet 
     disabled: body.disabled,
     operation: body.operation
       ? { operationId: body.operation.operation_id, status: body.operation.status }
-      : undefined
+      : undefined,
+    // The contract declares run_error on this response precisely so a
+    // failed immediate run is reportable without failing the create
+    // (both are 201). Mapping it is not optional: unmapped, "Save,
+    // enable & run" reports plain success for a run that never started.
+    runError: body.run_error || undefined
   };
-}
-
-/** The wire shape GET /api/v1/backup-sets and GET /api/v1/backup-sets/{id}
- *  actually return (handlers_backupsets.go's backupSetResponse) — a
- *  narrow, persistence-facing shape carrying none of the health/
- *  retention/validation fields BackupSet (types/backup.ts) models,
- *  because nothing in this codebase computes that data yet. Before
- *  issue #146, neither route existed at all, so this file's own request()
- *  return type was cast straight to BackupSet with no mapping and no
- *  runtime check — harmless only because the request always 404'd first.
- *  #146 is what first makes these routes answer for real, which is what
- *  turned that cast into a confirmed crash the moment BackupSetDetailPage
- *  dereferences a field (s.retention.daily, s.validations.includes(...))
- *  the wire response never sent (mandatory review finding M4, PR #155). */
-interface WireBackupSet {
-  id: string;
-  source_name: string;
-  name: string;
-  host: string;
-  port: number;
-  user: string;
-  remote_path: string;
-  local_path: string;
-  include: string[];
-  completion_strategy: string;
-  disabled: boolean;
-}
-
-interface WireListBackupSetsResponse {
-  backup_sets: WireBackupSet[];
 }
 
 const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
@@ -313,29 +287,6 @@ function fromWireBackupSet(bs: WireBackupSet): BackupSet {
   };
 }
 
-/** The wire shape GET .../retention/preview and POST .../retention/apply
- *  actually return (apps/common/webhost/handlers_retention.go's
- *  retentionPlanResponse). */
-interface WireRetentionVerdict {
-  artifact: string;
-  action: string;
-  reason: string;
-  tiers?: string[];
-}
-
-interface WireRetentionPlan {
-  plan_id: string;
-  backup_set_id: string;
-  inventory_revision: string;
-  config_revision: string;
-  expires_at: string;
-  keep_count: number;
-  delete_count: number;
-  reclaim_bytes: number;
-  operation_id?: string;
-  verdicts: WireRetentionVerdict[];
-}
-
 function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
   return {
     planId: wire.plan_id,
@@ -359,39 +310,6 @@ function fromWireRetentionPlan(wire: WireRetentionPlan): RetentionPlan {
 /** apps/common/webhost/router.go's `{source}/{set}` route params
  *  (model.BackupSetID's own composite shape), URL-encoded independently —
  *  see BackupSet.source/BackupSet.set's own doc (types/backup.ts). */
-/**
- * Issue #140 (B3.7): GET/PATCH /api/v1/settings' wire shapes
- * (apps/common/webhost/handlers_settings.go), snake_case like every other
- * route in that package.
- */
-interface WireRetentionTier {
-  name: string;
-  granularity: string;
-  period_days?: number;
-  keep: number;
-  window_unit?: string;
-}
-
-interface WireSettings {
-  retention: {
-    timezone: string;
-    week_starts_on: string;
-    tiers: WireRetentionTier[];
-    protect_last_known_good: boolean;
-  };
-  schema: {
-    retention: {
-      granularities: string[];
-      window_units: string[];
-      tier_name_pattern: string;
-      reserved_tier_name: string;
-      keep_max: number;
-      period_days_max: number;
-      default_tiers: WireRetentionTier[];
-    };
-  };
-}
-
 function fromWireTier(t: WireRetentionTier): RetentionTierSetting {
   return {
     name: t.name,
@@ -420,7 +338,7 @@ function wireTier(t: RetentionTierSetting): WireRetentionTier {
   };
 }
 
-function fromWireSettings(body: WireSettings): AppSettings {
+function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
   return {
     retention: {
       timezone: body.retention.timezone,
@@ -475,10 +393,10 @@ export const httpApi: BackupManagerApi = {
   setEnabled: (id, enabled) => post("/backup-sets/" + id + "/enabled", { enabled }),
 
   createBackupSet: (req) =>
-    request<WireCreatedBackupSet>("/backup-sets", {
+    request<WireCreateBackupSetResponse>("/backup-sets", {
       method: "POST",
       body: JSON.stringify(wireCreateBackupSetRequest(req))
-    }).then(fromWireCreatedBackupSet),
+    }).then(fromWireCreateBackupSetResponse),
   listValidators: () =>
     request<{ validators?: { id: string; summary: string }[] }>("/validators").then((r) =>
       (r.validators ?? []).map((v) => ({ id: v.id, summary: v.summary }))
@@ -523,16 +441,16 @@ export const httpApi: BackupManagerApi = {
       body: JSON.stringify({ plan_id: planId })
     }).then(fromWireRetentionPlan),
 
-  getSettings: () => request<WireSettings>("/settings").then(fromWireSettings),
+  getSettings: () => request<WireSettingsResponse>("/settings").then(fromWireSettingsResponse),
   // PATCH, not POST or PUT: this applies exactly the settings the body
   // names and leaves the rest alone (apps/common/webhost/router.go
   // registers no other verb on this path, so a wrong one 405s rather
   // than looking like it worked).
   updateSettings: (req) =>
-    request<WireSettings>("/settings", {
+    request<WireSettingsResponse>("/settings", {
       method: "PATCH",
       body: JSON.stringify(wireUpdateSettings(req))
-    }).then(fromWireSettings),
+    }).then(fromWireSettingsResponse),
 
   scanCatalog: () => request("/catalog/scan", { method: "POST" }),
   rebuildCatalog: () => post("/catalog/rebuild"),

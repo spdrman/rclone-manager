@@ -226,6 +226,14 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/perf/$perf.sh"
   done
 
+  # The /api/v1 contract drift check and its mutation self-test (#166). Same
+  # reason again, and the same failure mode if they are missing: they run
+  # unconditionally, FAST included.
+  mkdir -p "$tree/scripts/api"
+  for api in check-contract-drift selftest; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/api/$api.sh"
+  done
+
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
   # measures which steps the gate chooses to run, not what those steps do,

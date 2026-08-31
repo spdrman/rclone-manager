@@ -22,6 +22,7 @@ them.
 | path | what it is |
 |---|---|
 | `core/` | the provider-neutral engine: lifecycle, retention, catalog, validation, state, transport |
+| `api/` | the authoritative `/api/v1` contract (issue #166) that both the Go host and the shared UI are generated from |
 | `apps/common/webhost/` | the `/api/v1` host |
 | `apps/common/auth/` | the reusable local authentication service |
 | `apps/common/csrf/` | the shared double-submit CSRF primitive |
