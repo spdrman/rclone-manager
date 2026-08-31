@@ -290,6 +290,63 @@ func TestRetryArtifactIngestion_Returns204AndNamesTheArtifact(t *testing.T) {
 	}
 }
 
+// Reinstating is the third quarantine action (issue #220), and its wire
+// shape has to carry two different things at once: whether the artifact
+// actually moved, and what the checks found. A caller that only learned
+// "it did not work" could not tell "the copy is bad" from "the copy is
+// fine but this needs the validator to run".
+func TestReinstateArtifact_ReportsWhetherTheArtifactMovedAndWhatWasFound(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.reinstateResult = service.ArtifactReinstatement{
+		Checked:    true,
+		Passed:     true,
+		Reason:     "recomputed hash still matches the hash recorded at verification",
+		Reinstated: true,
+		State:      "COMMITTED",
+	}
+
+	rec := rt.post(t, "/api/v1/quarantine/production/postgres/bad.dump/reinstate", "")
+	mustStatus(t, rec, http.StatusOK)
+
+	if got := rt.backend.lastReinstated; got != "production/postgres/bad.dump" {
+		t.Errorf("the handler asked about %q, want production/postgres/bad.dump", got)
+	}
+
+	var body artifactReinstateResponse
+	decodeInto(t, rec, &body)
+	if !body.Reinstated || body.State != "COMMITTED" || !body.Passed || body.Reason == "" {
+		t.Errorf("body = %+v", body)
+	}
+}
+
+// A failing check is a verdict about the backup, not a failed request, so
+// it comes back 200 with reinstated false, exactly the way revalidate
+// reports a failing verdict. Only a refusal the operator has to change
+// something to clear is a 409.
+func TestReinstateArtifact_ReportsAFailingCheckAsAVerdictNotAnError(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.reinstateResult = service.ArtifactReinstatement{
+		Checked: true,
+		Passed:  false,
+		Reason:  "local final file now hashes to abc, but the sha256 hash recorded at verification was def",
+	}
+
+	rec := rt.post(t, "/api/v1/quarantine/production/postgres/bad.dump/reinstate", "")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body artifactReinstateResponse
+	decodeInto(t, rec, &body)
+	if body.Reinstated {
+		t.Error("a failing check reported reinstated = true")
+	}
+	if body.State != "" {
+		t.Errorf("state = %q, want it omitted when nothing moved", body.State)
+	}
+	if body.Passed || body.Reason == "" {
+		t.Errorf("body = %+v, want the verdict and its reason", body)
+	}
+}
+
 // TestQuarantineActions_MapEveryRefusalToItsDeclaredStatus. Each row is a
 // refusal an operator reaches by clicking a button on a screen that has
 // gone stale, so each must be a typed answer rather than a 500.
@@ -328,6 +385,29 @@ func TestQuarantineActions_MapEveryRefusalToItsDeclaredStatus(t *testing.T) {
 			arrange:    func(b *syncFakeBackend) { b.errOnRetry = fmt.Errorf("%w: x", service.ErrArtifactNotQuarantined) },
 			wantStatus: http.StatusConflict,
 			wantCode:   "ARTIFACT_NOT_QUARANTINED",
+		},
+		{
+			name:       "reinstating a backup that is not there",
+			target:     "/api/v1/quarantine/production/postgres/gone.dump/reinstate",
+			arrange:    func(b *syncFakeBackend) { b.errOnReinstate = fmt.Errorf("%w: gone", service.ErrArtifactNotFound) },
+			wantStatus: http.StatusNotFound,
+			wantCode:   "ARTIFACT_NOT_FOUND",
+		},
+		{
+			name:       "reinstating a backup that is not quarantined",
+			target:     "/api/v1/quarantine/production/postgres/backup.dump/reinstate",
+			arrange:    func(b *syncFakeBackend) { b.errOnReinstate = fmt.Errorf("%w: x", service.ErrArtifactNotQuarantined) },
+			wantStatus: http.StatusConflict,
+			wantCode:   "ARTIFACT_NOT_QUARANTINED",
+		},
+		{
+			name:   "reinstating on evidence that is not enough to re-trust the backup",
+			target: "/api/v1/quarantine/production/postgres/backup.dump/reinstate",
+			arrange: func(b *syncFakeBackend) {
+				b.errOnReinstate = fmt.Errorf("%w: nothing that could have failed was checked", service.ErrReinstatementRefused)
+			},
+			wantStatus: http.StatusConflict,
+			wantCode:   "REINSTATEMENT_REFUSED",
 		},
 		{
 			name:       "an unclassified failure",

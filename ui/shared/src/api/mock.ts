@@ -542,6 +542,14 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     listQuarantine: () => delay(empty ? [] : ARTIFACTS.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),
+    reinstate: () =>
+      delay({
+        reinstated: true,
+        checked: true,
+        passed: true,
+        state: "COMMITTED",
+        reason: "recomputed hash still matches the hash recorded at verification"
+      }),
 
     previewRetention: (source, set) => {
       retentionTick += 1;

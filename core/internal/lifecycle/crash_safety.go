@@ -131,12 +131,12 @@ package lifecycle
 //
 // # Reading this against the two failure shapes that would be a design bug
 //
-// "The artifact is stuck" can't happen for any state that isn't explicitly
-// terminal by design (TestNoStateIsALeak checks all of them), because every
-// other state this package defines has at least one declared outgoing edge,
-// including FAILED and QUARANTINED. QUARANTINED_LOST is the one deliberate
-// exception, and it's deliberate specifically to avoid the other failure
-// shape below.
+// "The artifact is stuck" can't happen: every state this package defines
+// has at least one declared outgoing edge, FAILED, QUARANTINED and
+// QUARANTINED_LOST included, and TestNoStateIsALeak walks all of them. The
+// two quarantine states are the ones whose every exit is an operator
+// decision rather than an automatic one, which is deliberate and is what
+// avoids the other failure shape below.
 //
 // "The remote may be deleted without a committed local copy" can't happen,
 // because REMOTE_DELETE_PENDING, the only state a delete call may ever be

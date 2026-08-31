@@ -111,13 +111,28 @@ the entire remaining procedure once you have the right path.
 
 ## Step 3: the newest good row is `QUARANTINED_LOST`
 
-Stop looking for that specific backup. It's gone. `QUARANTINED_LOST` is reachable only from
-`COMPLETE`, the one state that confirms the remote copy was already deleted, so by the time
-an artifact reaches it there is no copy anywhere: not on the remote (already deleted), not
-intact locally (that's why it's here). It's terminal by design; nothing in the state machine
-ever routes an artifact back out of it (`core/internal/lifecycle/machine.go`).
+`QUARANTINED_LOST` is reachable only from `COMPLETE`, the one state that confirms the remote
+copy was already deleted, so by the time an artifact reaches it the manager believes there is
+no copy anywhere: not on the remote (already deleted), not intact locally (that's why it's
+here). Nothing automatic ever routes an artifact back out of it
+(`core/internal/lifecycle/machine.go`).
 
-What to actually do:
+**Check the obvious thing first, because the finding itself can be wrong.** The local check
+that put the artifact here fails identically for "the bytes are corrupt" and "the volume was
+not mounted when the check ran", and an unmounted volume takes every `COMPLETE` artifact in
+the backup set down with it. If the file is there and reads correctly now, ask the manager to
+re-check it and trust it again rather than treating this as a loss:
+
+```
+POST /api/v1/quarantine/<source>/<set>/<name>/reinstate
+```
+
+It re-runs the checks itself and only moves the artifact if they pass and the evidence is
+conclusive (a recorded hash the copy still matches, or the backup set's validator running and
+passing now). A reinstated artifact goes back to `COMPLETE` and counts as a restore point
+again. See `docs/adr/0004-reinstating-a-quarantined-backup.md`.
+
+If the local copy really is bad, the backup is gone. What to actually do then:
 
 1. Query for the next-newest row in `COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE` for
    the same backup set (same query as Step 2, drop the `LIMIT 1` and look further down, or

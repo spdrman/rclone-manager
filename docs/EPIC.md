@@ -771,6 +771,47 @@ QUARANTINED
 
 Transitions SHALL be durable and idempotent.
 
+### Leaving quarantine (issue #220, ADR 0004)
+
+A quarantined artifact SHALL have a way back that does not require re-fetching
+it from the remote source. Re-ingesting (QUARANTINED to DISCOVERED) is the right
+answer when the local copy is bad and the source still exists, and it is the
+wrong answer when the local copy is fine and the quarantine was the mistake, or
+when the source is already gone and the intact local copy is the only remaining
+restore point. Without a second exit those cases can only stay quarantined
+forever, where FR-24 keeps reporting them and FR-19's last-known-good protection
+keeps skipping them.
+
+So both quarantine states carry one additional, operator-only exit:
+QUARANTINED to COMMITTED, and QUARANTINED_LOST to COMPLETE. Each returns the
+artifact to the state it already held and to nothing else, proved from the
+append-only transition log rather than assumed, so an artifact quarantined
+before it ever committed (whose local file is still a `.partial`) cannot be
+declared a restore point. There is deliberately no QUARANTINED to
+REMOTE_DELETE_PENDING edge: COMMITTED remains the only predecessor of
+REMOTE_DELETE_PENDING.
+
+Reinstating an artifact SHALL require evidence that could have failed. The
+durable-local-copy check runs unconditionally, so a backup with no recorded hash
+baseline and no configured validator "passes" on nothing more than the file
+still being present, and that re-trusts nothing. At least one of a recorded hash
+the copy still matches, or the backup set's configured validator running now and
+passing, is required; and when the artifact's own record carries a validator
+rejection, the validator itself MUST have run and passed, because a matching
+hash proves only that the bytes are the ones the validator refused. The checks
+and the write are one operation: a verdict measured in an earlier request is not
+evidence about now.
+
+Reinstating SHALL permanently forfeit the artifact's remote delete. See FR-15
+below. This is what makes the edge safe to have at all, and it is why the edge
+does not weaken FR-13's rule that a required validator failure must prevent
+source deletion.
+
+QUARANTINED_LOST remains terminal in the sense that matters: nothing automatic
+moves an artifact out of it, and it has no path back into the pipeline. The
+livelock the state exists to prevent needed neither a passing check nor a human;
+its one exit needs both, every time.
+
 ------------------------------------------------------------------------
 
 ## FR-11 --- Transfer Semantics
@@ -861,7 +902,11 @@ validation:
     timeout: 10m
 ```
 
-Required validator failure MUST prevent source deletion.
+Required validator failure MUST prevent source deletion. This holds through
+reinstatement too (FR-10, ADR 0004): an artifact that was quarantined and later
+re-trusted is refused by the deletion gate permanently, so re-trusting one can
+never become a way to authorise deleting the source of something a validator
+rejected.
 
 Invalid artifacts SHOULD enter `QUARANTINED`.
 
@@ -898,6 +943,7 @@ COMMITTED → REMOTE_DELETE_PENDING → COMPLETE
 Before deletion, the manager SHALL revalidate that:
 
 -   the database artifact is `COMMITTED` or `REMOTE_DELETE_PENDING`;
+-   the artifact has never been reinstated out of quarantine;
 -   the expected local final file exists;
 -   local identity/size is consistent;
 -   the remote object still corresponds to the artifact originally
@@ -909,6 +955,26 @@ reconciliation/intervention.
 
 This protects against deleting a newly replaced remote file that reused
 an old pathname.
+
+I added the reinstatement check above, and it is the price FR-10's
+reinstatement edges pay for existing (issue #220, ADR 0004). An artifact that
+was distrusted and later re-trusted was re-trusted on a local re-check, which is
+a weaker thing than the full FR-13 verification chain it passed on its way to
+COMMITTED the first time, and not enough to authorise destroying the last
+remaining source. The refusal is permanent, not a delay, and it is not
+conditional on how strong the evidence was. It is read from the append-only
+transition log rather than from a column, so it survives every later write, and
+the edges it consults are derived from the state machine's own transition table,
+so a future exit from quarantine into a durable state is covered the moment it
+is declared.
+
+The consequence is that a reinstated artifact's remote source is preserved
+indefinitely and releasing it becomes an operator's job outside this manager.
+That is the same cost this gate already imposes routinely against the project's
+own recommended hardened SFTP posture, where remote identity usually cannot be
+reconfirmed with enough confidence to delete. Preserving a remote copy costs
+storage; deleting the source of an artifact that should not have been re-trusted
+costs the backup.
 
 ------------------------------------------------------------------------
 
@@ -978,8 +1044,9 @@ final". When the remote copy is gone too, there is no source left to
 re-fetch from, so preserve-and-quarantine (which assumes a fresh attempt
 could still recover the artifact) is the wrong answer. The state machine
 carries a twelfth state, QUARANTINED_LOST, reachable only from COMPLETE and
-terminal by design, for exactly this case; see internal/lifecycle/state.go
-and machine.go. Reconciliation reaches it either directly from COMPLETE, or
+with no route back into the pipeline, for exactly this case; see
+internal/lifecycle/state.go and machine.go, and FR-10's own "Leaving
+quarantine" section for the one operator-triggered exit it does have. Reconciliation reaches it either directly from COMPLETE, or
 by first reconciling REMOTE_DELETE_PENDING to COMPLETE (the row above) and
 then on to QUARANTINED_LOST in the same pass, since that is the only legal
 path the state machine admits.

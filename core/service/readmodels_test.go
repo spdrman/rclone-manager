@@ -169,6 +169,21 @@ func TestRevalidateArtifact_RefusesAnArtifactThatIsNotQuarantined(t *testing.T) 
 	}
 }
 
+func TestReinstateArtifact_RefusesAnArtifactThatIsNotQuarantined(t *testing.T) {
+	svc, _ := openTestService(t)
+	ctx := context.Background()
+	runOneCycle(t, svc)
+
+	_, err := svc.ReinstateArtifact(ctx, "production/postgres-primary/backup.dump", "")
+	if !errors.Is(err, ErrArtifactNotQuarantined) {
+		t.Fatalf("error = %v, want ErrArtifactNotQuarantined", err)
+	}
+
+	if _, err := svc.ReinstateArtifact(ctx, "production/postgres-primary/nope.dump", ""); !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("error = %v, want ErrArtifactNotFound", err)
+	}
+}
+
 // TestListActivity_ReportsTheTransitionsARealCycleRecorded is GET
 // /api/v1/activity: the feed is a read of the append-only transition log,
 // not a second event stream invented at the API boundary.

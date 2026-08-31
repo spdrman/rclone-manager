@@ -10,4 +10,4 @@
 # cannot silently change what those suites certify. Each is one line, in one
 # file, reviewable on its own.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=3a49a2aae39b40800bab28526133cb37ad730973
+TESTS_REPO_SHA=9770f9f3899e7fab83af803f9ad2e4dc373b4690

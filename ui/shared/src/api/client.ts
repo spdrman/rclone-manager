@@ -12,6 +12,7 @@ import { API_VERSION } from "./generated/contract";
 import type {
   WireActivityEvent,
   WireArtifact,
+  WireArtifactReinstateResponse,
   WireBackupSet,
   WireBackupSetSpec,
   WireCatalogReportResponse,
@@ -879,6 +880,18 @@ export const httpApi: BackupManagerApi = {
     request<WireListArtifactsResponse>("/quarantine").then((r) => r.artifacts.map(fromWireArtifact)),
   revalidate: (id) => post("/quarantine/" + id + "/revalidate"),
   retryIngestion: (id) => post("/quarantine/" + id + "/retry"),
+  // Unlike its two siblings this one reads its response. A reinstate that
+  // reaches the backend and comes back saying the copy is bad is a 200,
+  // not a rejection, so a caller that ignored the body could not tell that
+  // from a success.
+  reinstate: (id) =>
+    request<WireArtifactReinstateResponse>("/quarantine/" + id + "/reinstate", { method: "POST" }).then((r) => ({
+      reinstated: r.reinstated,
+      checked: r.checked,
+      passed: r.passed,
+      state: r.state ?? "",
+      reason: r.reason ?? ""
+    })),
 
   // Preview is read-only end to end (router.go deliberately does not gate
   // it behind requireCSRF/requireDestructiveGate) — a plain GET, not POST.

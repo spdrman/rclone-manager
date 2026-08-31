@@ -83,7 +83,8 @@
           "NOT_CONFIGURED",
           "ARTIFACT_NOT_FOUND",
           "ARTIFACT_NOT_QUARANTINED",
-          "ARTIFACT_IRRECOVERABLE"
+          "ARTIFACT_IRRECOVERABLE",
+          "REINSTATEMENT_REFUSED"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -120,7 +121,8 @@
           "NOT_CONFIGURED": "wire",
           "ARTIFACT_NOT_FOUND": "wire",
           "ARTIFACT_NOT_QUARANTINED": "wire",
-          "ARTIFACT_IRRECOVERABLE": "wire"
+          "ARTIFACT_IRRECOVERABLE": "wire",
+          "REINSTATEMENT_REFUSED": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -146,7 +148,8 @@
             "CONFIG_REVISION_STALE",
             "ALREADY_CONFIGURED",
             "ARTIFACT_NOT_QUARANTINED",
-            "ARTIFACT_IRRECOVERABLE"
+            "ARTIFACT_IRRECOVERABLE",
+            "REINSTATEMENT_REFUSED"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -1435,6 +1438,40 @@
           }
         },
         "required": [
+          "checked",
+          "passed"
+        ]
+      },
+      "ArtifactReinstateResponse": {
+        "type": "object",
+        "description": "POST /quarantine/{id}/reinstate. Re-checks one quarantined backup's durable local copy and, when what it finds is enough, returns it to the state it already held so it counts as a restore point again. `reinstated` and `passed` are separate: `passed` is the verdict of the checks, `reinstated` is whether the backup actually moved. A backup reinstated this way NEVER authorises deleting its remote source again; that forfeiture is permanent and is what makes the action safe to offer.",
+        "additionalProperties": false,
+        "properties": {
+          "reinstated": {
+            "type": "boolean",
+            "description": "Whether the backup was actually returned to a trusted state."
+          },
+          "checked": {
+            "type": "boolean",
+            "description": "Whether there was anything to check at all. False is never a pass."
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "The combined verdict of the checks that ran. A false here is a fact about the backup, not a failed request, and is reported with 200."
+          },
+          "state": {
+            "type": "string",
+            "description": "The lifecycle state the backup was returned to, \"COMMITTED\" or \"COMPLETE\". Omitted when nothing moved.",
+            "x-go-omitempty": true
+          },
+          "reason": {
+            "type": "string",
+            "description": "What was checked and what it found, suitable for showing an operator.",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "reinstated",
           "checked",
           "passed"
         ]
@@ -4299,6 +4336,115 @@
             "x-error-codes": [
               "ARTIFACT_NOT_QUARANTINED",
               "ARTIFACT_IRRECOVERABLE"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/quarantine/{id}/reinstate": {
+      "post": {
+        "operationId": "reinstateArtifact",
+        "summary": "Re-check one quarantined backup and, if the evidence is enough, trust it again. Forfeits its remote delete permanently.",
+        "tags": [
+          "quarantine"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The three-part source/set/name identity."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The verdict, and whether the backup moved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactReinstateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: ARTIFACT_NOT_QUARANTINED, REINSTATEMENT_REFUSED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_QUARANTINED",
+              "REINSTATEMENT_REFUSED"
             ]
           },
           "500": {

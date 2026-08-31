@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "b52f08ef83307a894a2adb2cbeea48a01c6caf973af1db6fbe5b037a626f6e5a"
+const ContractSHA256 = "3fdd5398e87c582995b050c7160f9f95ac26a75fce0e5971ec186f324c0f9257"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -71,6 +71,7 @@ const (
 	ErrorCodeArtifactNotFound              ErrorCode = "ARTIFACT_NOT_FOUND"
 	ErrorCodeArtifactNotQuarantined        ErrorCode = "ARTIFACT_NOT_QUARANTINED"
 	ErrorCodeArtifactIrrecoverable         ErrorCode = "ARTIFACT_IRRECOVERABLE"
+	ErrorCodeReinstatementRefused          ErrorCode = "REINSTATEMENT_REFUSED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -100,6 +101,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotFound,
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
+	ErrorCodeReinstatementRefused,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -153,6 +155,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotFound,
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
+	ErrorCodeReinstatementRefused,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -160,7 +163,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -417,6 +420,18 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "reinstateArtifact", Method: "POST", Path: "/quarantine/{id}/reinstate",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "ArtifactReinstateResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeArtifactNotFound},
+			409: {ErrorCodeArtifactNotQuarantined, ErrorCodeReinstatementRefused},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "retryArtifactIngestion", Method: "POST", Path: "/quarantine/{id}/retry",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
@@ -614,6 +629,22 @@ type ArtifactCheckResponse struct {
 	Checked bool   `json:"checked"`
 	Passed  bool   `json:"passed"`
 	Reason  string `json:"reason,omitempty"`
+}
+
+// ArtifactReinstateResponse is POST /quarantine/{id}/reinstate. Re-checks one quarantined
+// backup's durable local copy and, when what it finds is enough,
+// returns it to the state it already held so it counts as a restore
+// point again. `reinstated` and `passed` are separate: `passed` is
+// the verdict of the checks, `reinstated` is whether the backup
+// actually moved. A backup reinstated this way NEVER authorises
+// deleting its remote source again; that forfeiture is permanent and
+// is what makes the action safe to offer.
+type ArtifactReinstateResponse struct {
+	Checked    bool   `json:"checked"`
+	Passed     bool   `json:"passed"`
+	Reason     string `json:"reason,omitempty"`
+	Reinstated bool   `json:"reinstated"`
+	State      string `json:"state,omitempty"`
 }
 
 // AuthErrorResponse is the FLAT error body the /auth operations return, with the
@@ -1099,6 +1130,7 @@ var SchemaTypes = map[string]any{
 	"ApplyRetentionRequest":       ApplyRetentionRequest{},
 	"Artifact":                    Artifact{},
 	"ArtifactCheckResponse":       ArtifactCheckResponse{},
+	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
 	"BackupSetHealth":             BackupSetHealth{},

@@ -102,6 +102,7 @@ var contractBindings = map[string]contractBinding{
 	"listQuarantine":            {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
 	"revalidateArtifact":        {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
 	"retryArtifactIngestion":    {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
+	"reinstateArtifact":         {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
 	"setBackupSetEnabled":       {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
 	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
 	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
