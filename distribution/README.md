@@ -24,8 +24,11 @@ constraint, and binding here:
 
 The per-platform packaging artifacts are still under `apps/<platform>/`
 (`apps/truenas/catalog`, `apps/unraid/template`, `apps/openmediavault/compose`,
-`apps/proxmox/compose`, `apps/synology/spk`, and the canonical runtime in
-`container/`). They are already **classified** as distribution-layer in
+`apps/proxmox/compose`, `apps/synology/spk`, `apps/portainer`, `apps/casaos`,
+`apps/zimaos`, `apps/dockge`, and the canonical runtime in `container/`). The
+last four are issue #170's, and they are the cheapest evidence in the
+repository for what this layer is for: four new targets, four adapter entries
+in `layers.conf`, and no new entry in any other layer. They are already **classified** as distribution-layer in
 `scripts/architecture/layers.conf`, so every layer check covers them today,
 and `verify-core-without-distribution.sh` deletes exactly them to prove the
 core and the generic application stand without the adapter tree.

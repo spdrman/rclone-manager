@@ -107,13 +107,20 @@ expect_check_passes "check-core-dependency-rule" "$root" ./scripts/architecture/
 echo
 echo "==> layer-manifest completeness"
 
+# The planted directory is NOT the name of a platform anyone might add.
+# It used to be apps/casaos, chosen as a plausible future provider, and
+# issue #170 then added CasaOS for real: the fixture became a classified
+# directory, the planted violation stopped being one, and this control
+# passed while proving nothing. A fixture that a real change can turn
+# valid is a control with an expiry date on it, so the name below is one
+# no product will ever have.
 d=$(mutant manifest-unclassified)
-mkdir -p "$d/apps/casaos/frontend"
-cat > "$d/apps/casaos/frontend/platform.ts" <<'EOF'
-export const casaosBridge = { id: "casaos" };
+mkdir -p "$d/apps/selftest-unclassified-provider/frontend"
+cat > "$d/apps/selftest-unclassified-provider/frontend/platform.ts" <<'EOF'
+export const selftestBridge = { id: "selftest-unclassified-provider" };
 EOF
 git -C "$d" add -A
-expect_check_fails "a new provider directory nobody classified" "$d" "apps/casaos/frontend/platform.ts" ./scripts/architecture/check-layer-manifest.sh
+expect_check_fails "a new provider directory nobody classified" "$d" "apps/selftest-unclassified-provider/frontend/platform.ts" ./scripts/architecture/check-layer-manifest.sh
 
 d=$(mutant manifest-stale)
 printf '\ncore            -           a/path/that/does/not/exist\n' >> "$d/scripts/architecture/layers.conf"
@@ -247,10 +254,12 @@ expect_check_fails "core importing a NAS vendor SDK" "$d" "─X─► NAS SDKs" 
 # A check that inspected nothing must refuse rather than report success
 # over an empty set. Three of these checks count what they looked at for
 # exactly that reason, and all three counters are exercised here.
+# Same reasoning as the manifest fixture above: a name no product will
+# ever have, so adding a real platform cannot quietly retire this control.
 d=$(mutant dep-unclassified-module)
-mkdir -p "$d/apps/casaos"
-cat > "$d/apps/casaos/go.mod" <<'EOF'
-module github.com/spdrman/rclone-manager/apps/casaos
+mkdir -p "$d/apps/selftest-unclassified-provider"
+cat > "$d/apps/selftest-unclassified-provider/go.mod" <<'EOF'
+module github.com/spdrman/rclone-manager/apps/selftest-unclassified-provider
 
 go 1.27.0
 EOF

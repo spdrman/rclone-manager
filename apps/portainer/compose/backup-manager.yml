@@ -1,0 +1,126 @@
+# Portainer stack definition for Backup Manager (issue #170, B6.6).
+#
+# Portainer deploys this file as a STACK, either from the App Template in
+# ../templates.json or pasted into Custom Templates. There is no Portainer
+# plugin, no Portainer agent, no Portainer API dependency and no second
+# application server: Portainer's whole integration surface for a
+# third-party application is a compose file plus the environment values it
+# reads, so that is the whole adapter.
+#
+# The one thing worth saying out loud. Portainer itself holds
+# /var/run/docker.sock, because managing containers is what Portainer is.
+# Nothing below inherits that. This stack mounts no socket, needs no
+# capability a plain non-root process does not already have, and would run
+# identically if it had been started by `docker compose up` with Portainer
+# uninstalled. distribution/compose fails the build if any of that changes.
+#
+# Every runtime field here is DERIVED from container/compose.yaml at
+# runtime contract 1.1.0, and distribution/packaging/derive.go names the
+# field if one drifts. It is also held to the canonical stack semantically,
+# service for service, by TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack.
+services:
+  # The engine: local authentication, the versioned /api/v1 API and the
+  # scheduler, one process sharing one shutdown context. Holds the state
+  # database and the credentials, and publishes no port at all.
+  backup-manager:
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:1.0.0}
+    command: ["/backup-manager-web", "serve", "--profile=generic"]
+
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so the
+      # timezone is not cosmetic: left at the image's UTC default, the day
+      # an operator thinks a restore point belongs to and the day
+      # retention assigns it to differ for most of the world.
+      TZ: "${TZ:-UTC}"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}"
+      # Safe here specifically because this container joins only the
+      # private network below, created and destroyed with the stack, whose
+      # only other member is the Web UI container. Never set this on the
+      # Web UI container, which is the edge.
+      TRUST_FORWARDED_HEADERS: "true"
+
+    # Every host path uses the ":?" form, never a ":-" default, exactly as
+    # container/compose.yaml does. Portainer renders the App Template's
+    # env list into a form, and a form field an operator clears has to
+    # stop the deployment rather than silently bind-mount a directory
+    # Docker creates on the OS disk.
+    volumes:
+      - ${STATE_DIR:?set STATE_DIR to the host directory for the SQLite state directory}:/data/state
+      - ${BACKUP_DIR:?set BACKUP_DIR to the host directory retained artifacts land in}:/data/backups
+      - ${CONFIG_DIR:?set CONFIG_DIR to the host directory holding config.yaml}:/etc/backup-manager/config
+      - ${KEY_FILE:?set KEY_FILE to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+
+    healthcheck:
+      test: ["CMD", "/backup-manager", "status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # The Web UI: the shared static bundle plus a reverse proxy to the
+  # engine. The only container with a published port, and the only URL an
+  # operator ever opens. Portainer's "Published ports" link on the stack
+  # view points at this one.
+  backup-manager-ui:
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:1.0.0}
+    command: ["/backup-manager-web", "serve-ui", "--profile=generic"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+    # Neither UI_DIR nor UI_ROOT, on purpose: this adapter serves the
+    # bundle compiled into the binary. apps/portainer/README.md has the
+    # measurement behind that decision.
+
+    # No volumes at all: this container never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory.
+
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:

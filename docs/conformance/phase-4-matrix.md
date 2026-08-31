@@ -109,9 +109,13 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | Provider | Tier | Gated by | Work package | Acceptance procedure |
 |---|---|---|---|---|
 | UGOS Pro | A | EPIC D (reported here, gated there) | 4.2 | `docs/acceptance/ugos-local-notification.md` |
+| CasaOS | B | EPIC B (Phase 6) | 6.6 | `docs/acceptance/casaos-app-store-install.md` |
+| Portainer CE | B | EPIC B (Phase 6) | 6.6 | `docs/acceptance/portainer-stack-deployment.md` |
 | Synology DSM | B | EPIC B (Phase 4) | 4.4 | `docs/acceptance/synology-dsm-package-lifecycle.md` |
 | TrueNAS | B | EPIC B (Phase 4) | 4.3 | `docs/acceptance/truenas-provider-acceptance.md` |
 | Unraid | B | EPIC B (Phase 4) | 4.3 | `docs/acceptance/unraid-provider-acceptance.md` |
+| ZimaOS | B | EPIC B (Phase 6) | 6.6 | `docs/acceptance/zimaos-app-store-install.md` |
+| Dockge | C | EPIC B (Phase 6) | 6.6 | `docs/acceptance/dockge-stack-import.md` |
 | Generic Docker | C | EPIC B (Phase 4) | 4.1 | `none (automated instead)` |
 | OpenMediaVault | C | EPIC B (Phase 4) | 4.3 | `docs/acceptance/openmediavault-provider-acceptance.md` |
 | Proxmox VE | C | EPIC B (Phase 4) | 4.5 | `docs/acceptance/proxmox-ve-deployment.md` |
@@ -155,9 +159,31 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | BLOCKED | 16 |
 | FAIL | 0 |
 
+### Phase 6 release qualification (issue #170)
+
+Computed over every one of the 10 targets this refactor claims: CasaOS, Portainer CE, Synology DSM, TrueNAS, Unraid, ZimaOS, Dockge, Generic Docker, OpenMediaVault, Proxmox VE.
+
+**Not met.** 0 cell(s) failed and 10 could not be decided, every one of them in a column this gate claims:
+
+| Provider | Capability | Outcome | Tracked by |
+|---|---|---|---|
+| CasaOS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Portainer CE | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Synology DSM | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| TrueNAS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Unraid | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| ZimaOS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Dockge | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Generic Docker | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| OpenMediaVault | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Proxmox VE | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+
 ### Phase 4 Exit Gate
 
-Computed over the 6 providers EPIC B claims, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
+Computed over the 6 providers the §72 exit gate names, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
+The 4 target(s) Phase 6 adds (CasaOS, Portainer CE, ZimaOS, Dockge) are checked and reported here on the same
+terms and are not in this verdict: a finished gate whose target set moves under it
+cannot be cited afterwards.
 
 **Met.** Every cell of every one of those columns was decided, and none of them failed.
 
@@ -193,6 +219,43 @@ why.
 | Embedded window | BLOCKED | #83 — Section 12's embedded provider window is delivered by the UPK, which is exactly what ui-launch above says. Declaring this supported while blocking ui-launch on the same sentence was a contradiction: both rows are the same missing package. |
 | App-store packaging | BLOCKED | #83 — The bridge claims it, and section 4A promises it, but no UPK exists in this repository yet. Passing on the bridge flag alone would be exactly the kind of claim the store-artifact half of this check exists to refuse. |
 | Storage picker | BLOCKED | #83 — Same as native-auth: declared in a bridge no shipped artifact loads. |
+
+#### CasaOS (Tier B, gated by EPIC B's Phase 6)
+
+| Capability | Outcome | Why |
+|---|---|---|
+| Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
+| Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
+| Install / update / remove semantics | OPERATOR | covered by docs/acceptance/casaos-app-store-install.md, not yet executed |
+| UI launches | OPERATOR | covered by docs/acceptance/casaos-app-store-install.md, not yet executed |
+| Upgrade preserves state | OPERATOR | covered by docs/acceptance/casaos-app-store-install.md, not yet executed |
+| Removal does not delete retained backups | OPERATOR | covered by docs/acceptance/casaos-app-store-install.md, not yet executed |
+| Native authentication | UNSUP | CasaOS has a user account of its own and this adapter does not borrow it: sign-in is the product's own local account over its own session cookie. A provider-native identity bridge is explicitly out of scope for issue #170. |
+| Native notifications | UNSUP | CasaOS exposes no notification API a third-party compose app can post to. Webhooks instead. |
+| Embedded window | UNSUP | The app tile opens the published port in a browser tab; CasaOS hosts no third-party application window. |
+| App-store packaging | N/A | The store artifact exists and is real: the compose file carries the x-casaos block CasaOS builds the app tile and the install dialog from. What this capability actually decides is whether the SHIPPED BUNDLE tells the user they installed from a store, and it cannot, because this adapter ships no bridge (see provider-identity). The store metadata itself is checked by name, in both directions against the services beside it. |
+| Storage picker | UNSUP | No host volume API a compose app can browse. The store install dialog shows the five fixed mounts and nothing selects among them. |
+
+#### Portainer CE (Tier B, gated by EPIC B's Phase 6)
+
+| Capability | Outcome | Why |
+|---|---|---|
+| Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
+| This provider's own architecture claim matches the build | N/A | This adapter makes no architecture claim of its own: it names one multi-arch canonical image by reference and lets the runtime pick. The repository-wide claim is release-manifest-integrity's. |
+| Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
+| Install / update / remove semantics | OPERATOR | covered by docs/acceptance/portainer-stack-deployment.md, not yet executed |
+| UI launches | OPERATOR | covered by docs/acceptance/portainer-stack-deployment.md, not yet executed |
+| Upgrade preserves state | OPERATOR | covered by docs/acceptance/portainer-stack-deployment.md, not yet executed |
+| Removal does not delete retained backups | OPERATOR | covered by docs/acceptance/portainer-stack-deployment.md, not yet executed |
+| Native authentication | UNSUP | Portainer has its own users, and this adapter does not borrow them: sign-in is the product's own local account. A provider-native identity bridge is explicitly out of scope for issue #170, and one that trusted a header with no authenticated gateway in front of it would be worse than none. |
+| Native notifications | UNSUP | Portainer has no notification surface a third-party stack can post to. Webhooks instead. |
+| Embedded window | UNSUP | Portainer's stack view links out to the published port; it hosts no third-party application window. |
+| App-store packaging | N/A | The store artifact exists and is real: templates.json is a Portainer App Template and an operator does install this from Portainer's own catalogue. What this capability actually decides is whether the SHIPPED BUNDLE tells the user so, and it cannot, because this adapter ships no bridge (see provider-identity). Declaring it supported would be a claim about the UI that the UI does not make. The template itself is checked by name. |
+| Storage picker | UNSUP | No host volume API a stack can browse. Paths are typed into the App Template's form. |
 
 #### Synology DSM (Tier B, gated by EPIC B's Phase 4)
 
@@ -239,6 +302,44 @@ why.
 | Native notifications | UNSUP | Tier B. Webhooks instead of Unraid notifications, which would need a plugin. |
 | Embedded window | UNSUP | Tier B. The WebUI link opens a normal browser tab. |
 | Storage picker | UNSUP | Tier B. Community Applications collects the paths at install time; the app does not browse shares. |
+
+#### ZimaOS (Tier B, gated by EPIC B's Phase 6)
+
+| Capability | Outcome | Why |
+|---|---|---|
+| Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
+| Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
+| Install / update / remove semantics | OPERATOR | covered by docs/acceptance/zimaos-app-store-install.md, not yet executed |
+| UI launches | OPERATOR | covered by docs/acceptance/zimaos-app-store-install.md, not yet executed |
+| Upgrade preserves state | OPERATOR | covered by docs/acceptance/zimaos-app-store-install.md, not yet executed |
+| Removal does not delete retained backups | OPERATOR | covered by docs/acceptance/zimaos-app-store-install.md, not yet executed |
+| Native authentication | UNSUP | ZimaOS has a user account of its own and this adapter does not borrow it: sign-in is the product's own local account over its own session cookie. A provider-native identity bridge is explicitly out of scope for issue #170. |
+| Native notifications | UNSUP | ZimaOS exposes no notification API a third-party compose app can post to. Webhooks instead. |
+| Embedded window | UNSUP | The app tile opens the published port in a browser tab; ZimaOS hosts no third-party application window. |
+| App-store packaging | N/A | The store artifact exists and is real: the compose file carries the x-casaos block ZimaOS builds the app tile and the install dialog from. What this capability actually decides is whether the SHIPPED BUNDLE tells the user they installed from a store, and it cannot, because this adapter ships no bridge (see provider-identity). The store metadata itself is checked by name, in both directions against the services beside it. |
+| Storage picker | UNSUP | No host volume API a compose app can browse. The store install dialog shows the five fixed mounts and nothing selects among them. |
+
+#### Dockge (Tier C, gated by EPIC B's Phase 6)
+
+| Capability | Outcome | Why |
+|---|---|---|
+| Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
+| Uses the exact canonical image | N/A | Dockge deploys container/compose.yaml itself, and that file BUILDS the canonical image from container/Dockerfile rather than pulling a published reference: it is the source of the image, not a consumer of one. Identical to the generic column's answer, and for the identical reason, which is the point of this column reading the canonical stack rather than a copy. |
+| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
+| Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
+| This provider's own architecture claim matches the build | N/A | This adapter makes no architecture claim of its own: it names one multi-arch canonical image by reference and lets the runtime pick. The repository-wide claim is release-manifest-integrity's. |
+| Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
+| Install / update / remove semantics | OPERATOR | covered by docs/acceptance/dockge-stack-import.md, not yet executed |
+| UI launches | OPERATOR | covered by docs/acceptance/dockge-stack-import.md, not yet executed |
+| Upgrade preserves state | OPERATOR | covered by docs/acceptance/dockge-stack-import.md, not yet executed |
+| Removal does not delete retained backups | OPERATOR | covered by docs/acceptance/dockge-stack-import.md, not yet executed |
+| Native authentication | UNSUP | Dockge is a compose manager with a single operator login of its own and no identity to federate. Section 13A local auth is the whole story. |
+| Native notifications | UNSUP | Dockge has no notification surface. Webhooks instead. |
+| Embedded window | UNSUP | Dockge links out to a stack's published port; it hosts no third-party application window. |
+| App-store packaging | UNSUP | Dockge has no application store or catalogue at all. It manages compose stacks in a directory, which is why this adapter is supported by compatibility and ships no packaging: apps/dockge/ holds documentation and nothing else, and a runtime definition appearing there is a red test. |
+| Storage picker | UNSUP | No host volume API. Paths are typed into the stack's .env. |
 
 #### Generic Docker (Tier C, gated by EPIC B's Phase 4)
 

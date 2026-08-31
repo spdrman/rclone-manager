@@ -1,0 +1,206 @@
+# ZimaOS app-store entry for Backup Manager (issue #170, B6.6).
+#
+# ZimaOS is built on CasaOS and reads the same `x-casaos` block out of a
+# docker-compose file, so this single file is both the runtime definition
+# and the store submission. See
+# https://www.zimaspace.com/docs/developer/app-store-compose-x-casaos.
+#
+# This is a SECOND STORE REGISTRATION OVER ONE RUNTIME, not a second
+# runtime. Its services are byte-for-byte the same shape as
+# apps/casaos/compose/backup-manager.yml and its host paths are the same
+# paths, because ZimaOS lays /DATA out the way CasaOS does. What differs
+# is the store the file is submitted to and the identity it is submitted
+# under, which is exactly the amount of difference a thin adapter is
+# allowed to have. Saying that plainly is better than inventing a
+# distinction to justify the second directory: the two are separately
+# submitted and separately certified, so they are two rows of the release
+# matrix, and they are one deployment.
+#
+# Two halves, and the split is the whole design. Everything outside
+# `x-casaos` is Compose and container semantics DERIVED from
+# container/compose.yaml at runtime contract 1.1.0, held to it field by
+# field by distribution/packaging/derive.go and service by service by
+# TestEveryNewAdapterIsSemanticallyEquivalentToTheCanonicalStack.
+# Everything inside `x-casaos` is store presentation, it reaches no Go
+# package and no shared UI module, and a test fails the build if it ever
+# does.
+#
+# No variables anywhere. A ZimaOS store install deploys this file as it
+# stands, with no `.env` beside it, so a `${STATE_DIR}` here would be an
+# unresolved reference at install time rather than a knob. Every path
+# below is literal and every one of them is ZimaOS's own layout: private
+# application data under /DATA/AppData, user data under /DATA.
+x-casaos:
+  architectures:
+    - amd64
+    - arm64
+  main: backup-manager-ui
+  author: spdrman
+  developer: spdrman
+  category: Backup
+  store_app_id: backup-manager
+  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/zimaos/icon.svg
+  scheme: http
+  hostname: ""
+  port_map: "8080"
+  index: /
+  title:
+    en_us: Backup Manager
+  tagline:
+    en_us: Scheduled, verified pull-based backups with retention tiers
+  description:
+    en_us: >-
+      Pulls backups from an SFTP source on a schedule, verifies each artifact,
+      and applies daily, weekly and monthly retention tiers. Two containers run
+      from one image: the engine holds the catalogue and the credentials and
+      publishes no port, and the web UI is the only thing reachable from the
+      network. It signs you in with its own local account, needs no Docker
+      socket, no privileged mode and no host networking.
+  tips:
+    before_install:
+      en_us: >-
+        Create /DATA/AppData/backup-manager/state, /DATA/AppData/backup-manager/config,
+        /DATA/AppData/backup-manager/secrets and /DATA/Backups/backup-manager and give
+        them to uid 1000 / gid 1000 before installing. The runtime image is distroless,
+        so nothing inside the container can create or chown them for you. Put your SFTP
+        private key at /DATA/AppData/backup-manager/secrets/id_ed25519 (mode 0600) and
+        the pinned host key at .../known_hosts. The engine prints a one-time enrollment
+        link on first start; read it in the container log.
+
+services:
+  # The engine: local authentication, the versioned /api/v1 API and the
+  # scheduler in one process. Holds the state database and the
+  # credentials, and publishes no port at all.
+  backup-manager:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    command: ["/backup-manager-web", "serve", "--profile=generic"]
+
+    user: "1000:1000"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=1000,gid=1000
+
+    environment:
+      TMPDIR: "/tmp"
+      TZ: "UTC"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "http://localhost:8080"
+      # Safe here specifically because this container joins only the
+      # private network below, created and destroyed with the app, whose
+      # only other member is the web UI container. Never set this on the
+      # web UI container, which is the edge.
+      TRUST_FORWARDED_HEADERS: "true"
+
+    volumes:
+      - /DATA/AppData/backup-manager/state:/data/state
+      - /DATA/Backups/backup-manager:/data/backups
+      # A writable DIRECTORY holding config.yaml (issue #196), not a
+      # read-only single file: the engine replaces that file through a
+      # temp file created beside it, and its ssh_keys/ and known_hosts.d/
+      # stores are siblings of it. It may legitimately be empty on a
+      # fresh install, which a directory can express and a file mount
+      # cannot.
+      - /DATA/AppData/backup-manager/config:/etc/backup-manager/config
+      - /DATA/AppData/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
+      - /DATA/AppData/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+
+    healthcheck:
+      test: ["CMD", "/backup-manager", "status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+    x-casaos:
+      envs:
+        - container: TZ
+          description:
+            en_us: Timezone the retention tiers are evaluated in.
+        - container: PUBLIC_BASE_URL
+          description:
+            en_us: Externally reachable base URL, used for the one-time enrollment link.
+      volumes:
+        - container: /data/state
+          description:
+            en_us: Private application state, the catalogue and the local administrator record.
+        - container: /data/backups
+          description:
+            en_us: The backup root. Retained artifacts land here and nothing else does.
+        - container: /etc/backup-manager/config
+          description:
+            en_us: Writable configuration directory holding config.yaml.
+        - container: /etc/backup-manager/id_ed25519
+          description:
+            en_us: SFTP private key, mounted read-only.
+        - container: /etc/backup-manager/known_hosts
+          description:
+            en_us: Pinned SFTP host key, mounted read-only.
+
+  # The web UI: the shared static bundle plus a reverse proxy to the
+  # engine. The only container with a published port, and the app ZimaOS
+  # opens when the tile is clicked.
+  backup-manager-ui:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    command: ["/backup-manager-web", "serve-ui", "--profile=generic"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "1000:1000"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=1000,gid=1000
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+    # Neither UI_DIR nor UI_ROOT, on purpose: this adapter serves the
+    # bundle compiled into the binary. apps/zimaos/README.md has the
+    # measurement behind that decision.
+
+    # No volumes at all: this container never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory.
+
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "8080:8080"
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+    x-casaos:
+      ports:
+        - container: "8080"
+          description:
+            en_us: The web UI. The only port this app publishes.
+      envs:
+        - container: UPSTREAM_ADDR
+          description:
+            en_us: Where the reverse proxy reaches the engine, on the app's private network.
+
+networks:
+  internal:

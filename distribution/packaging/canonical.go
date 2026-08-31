@@ -29,6 +29,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -171,6 +172,81 @@ type Platform struct {
 	// TrustForwardedHeadersNote records why, in the file an operator or a
 	// reviewer reads rather than in a commit message.
 	TrustForwardedHeadersNote string `json:"trustForwardedHeadersNote"`
+	// UIBridge is the frontend bridge this platform ships, relative to the
+	// repository root, or UIBridgeNone (issue #170).
+	//
+	// "none" is a declaration and not an omission. Four of the targets in
+	// this file are container managers and app stores whose whole
+	// integration surface is a compose file or a template: they have no
+	// payload to carry a UI bundle in, the canonical image has no room for
+	// another one, and a bridge would put their platform id into the
+	// /api/v1 contract, the capability table and the shared UI. So they
+	// ship none, select the generic runtime profile, and serve the bundle
+	// compiled into the binary.
+	//
+	// The check on this field is deliberately two-sided
+	// (CheckUIBridgeDeclaration). A platform that names a bridge has its
+	// storageMount pinned to what that bridge declares; a platform that
+	// says "none" must have no frontend directory at all, so "none" cannot
+	// become the cheap way out of the pin.
+	UIBridge string `json:"uiBridge"`
+	// UIBridgeNote records why a platform ships no bridge, in the file a
+	// reviewer reads.
+	UIBridgeNote string `json:"uiBridgeNote"`
+}
+
+// UIBridgeNone is Platform.UIBridge's value for a platform that ships no
+// frontend bridge at all.
+const UIBridgeNone = "none"
+
+// RuleUIBridgeDeclaration is what fires when a platform's frontend-bridge
+// declaration and the tree disagree, in either direction.
+const RuleUIBridgeDeclaration = "ui-bridge-declaration"
+
+// CheckUIBridgeDeclaration holds one platform to what it says about its
+// frontend bridge, in both directions.
+//
+// platformDir is the platform's own apps/<name>/ directory, passed in
+// rather than derived, so a test can point this at a fixture it built and
+// watch each branch fail. A rule that can only ever run against the real
+// tree is a rule nobody has watched fail.
+func CheckUIBridgeDeclaration(name string, p Platform, platformDir string) []Violation {
+	var out []Violation
+	frontend := filepath.Join(platformDir, "frontend")
+	bridge := filepath.Join(frontend, "platform.ts")
+
+	if p.UIBridge == "" {
+		return []Violation{{name, RuleUIBridgeDeclaration,
+			"declares no uiBridge at all; a platform that has not said whether it ships a frontend bridge is one whose storage mount nothing pins"}}
+	}
+
+	if p.UIBridge == UIBridgeNone {
+		if strings.TrimSpace(p.UIBridgeNote) == "" {
+			out = append(out, Violation{name, RuleUIBridgeDeclaration,
+				"ships no frontend bridge and records no reason; shipping none is a design decision and belongs in the file a reviewer reads"})
+		}
+		if _, err := os.Stat(frontend); err == nil {
+			out = append(out, Violation{name, RuleUIBridgeDeclaration,
+				fmt.Sprintf("declares uiBridge %q while %s exists, so the storageMount pin every other platform gets is silently switched off for this one", UIBridgeNone, frontend)})
+		}
+		return out
+	}
+
+	if p.UIBridge != filepath.ToSlash(filepath.Join("apps", name, "frontend", "platform.ts")) {
+		out = append(out, Violation{name, RuleUIBridgeDeclaration,
+			fmt.Sprintf("declares uiBridge %q, want %q or %q", p.UIBridge, filepath.ToSlash(filepath.Join("apps", name, "frontend", "platform.ts")), UIBridgeNone)})
+	}
+	got, err := BridgeStorageMount(bridge)
+	if err != nil {
+		out = append(out, Violation{name, RuleUIBridgeDeclaration,
+			fmt.Sprintf("declares a frontend bridge and it cannot be read: %v", err)})
+		return out
+	}
+	if got != p.StorageMount {
+		out = append(out, Violation{name, RuleUIBridgeDeclaration,
+			fmt.Sprintf("the frontend bridge declares storageMount %q and canonical.json declares %q", got, p.StorageMount)})
+	}
+	return out
 }
 
 // Commands are the argv forms the canonical image supports. A provider

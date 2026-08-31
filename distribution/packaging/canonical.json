@@ -61,6 +61,28 @@
     "synology"
   ],
 
+  "_uiBridge_comment": [
+    "Every platform says which frontend bridge it ships, and \"none\" is a real",
+    "answer rather than an omission (issue #170). The five Phase 4 platforms",
+    "each ship apps/<name>/frontend/platform.ts and the storage mount it",
+    "declares is pinned to the one here; the four container managers and app",
+    "stores #170 adds ship no bridge at all, and the check is two-sided so that",
+    "declaring none cannot become a way to dodge the pin: a platform that says",
+    "\"none\" must have no apps/<name>/frontend directory either.",
+    "",
+    "They ship none because a bridge has to be CARRIED somewhere and there are",
+    "exactly three carriers (docs/runtime-contract.md). The canonical image",
+    "already carries five bundles with 347,956 bytes of headroom against its",
+    "gated 5% ceiling, which is less than one more bundle at roughly 352 KB; a",
+    "template, a store compose file and a documented import workflow have no",
+    "payload of their own to carry one in; and a bridge would need its platform",
+    "id in the /api/v1 contract, the capability table, the profile table and the",
+    "bundle list, which is core and shared-UI code in adapters whose own",
+    "contract forbids exactly that. So all four select the generic runtime",
+    "profile and serve the bundle compiled into the binary, and the UI describes",
+    "them as the Docker Compose deployments they are."
+  ],
+
   "healthchecks": {
     "engine": [
       "CMD",
@@ -157,6 +179,7 @@
 
   "platforms": {
     "truenas": {
+      "uiBridge": "apps/truenas/frontend/platform.ts",
       "displayName": "TrueNAS",
       "tier": "B",
       "storageMount": "/mnt/tank/backup-manager/backups",
@@ -177,6 +200,7 @@
       }
     },
     "unraid": {
+      "uiBridge": "apps/unraid/frontend/platform.ts",
       "displayName": "Unraid",
       "tier": "B",
       "storageMount": "/mnt/user/backups/backup-manager",
@@ -197,6 +221,7 @@
       }
     },
     "openmediavault": {
+      "uiBridge": "apps/openmediavault/frontend/platform.ts",
       "displayName": "OpenMediaVault",
       "tier": "C",
       "storageMount": "/srv/dev-disk-by-uuid/backups/backup-manager",
@@ -217,6 +242,7 @@
       }
     },
     "proxmox": {
+      "uiBridge": "apps/proxmox/frontend/platform.ts",
       "displayName": "Proxmox VE",
       "tier": "C",
       "storageMount": "/mnt/backup-manager/backups",
@@ -237,6 +263,7 @@
       }
     },
     "synology": {
+      "uiBridge": "apps/synology/frontend/platform.ts",
       "displayName": "Synology DSM",
       "tier": "B",
       "storageMount": "/volume1/backup-manager",
@@ -255,6 +282,98 @@
       },
       "trustForwardedHeaders": true,
       "trustForwardedHeadersNote": "The Container Manager project declares its own project network, created and destroyed with the project, whose only two members are these two containers. This is the same topology the other compose profiles have, and it is why the Container Manager path can trust forwarded headers where the .spk cannot: the .spk's engine binds loopback on the NAS itself, which any local process can reach."
+    },
+
+    "portainer": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge. A Portainer App Template has no payload to carry a bundle in, the canonical image has 347,956 bytes of headroom and a bundle costs roughly 352 KB, and a bridge would need this platform's id in the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. The deployment selects the generic profile and the shared UI describes it as the Docker Compose deployment it is.",
+      "displayName": "Portainer CE",
+      "tier": "B",
+      "storageMount": "/opt/backup-manager/backups",
+      "hostPaths": {
+        "state": "/opt/backup-manager/state",
+        "backups": "/opt/backup-manager/backups",
+        "config": "/opt/backup-manager/config",
+        "sshKey": "/opt/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/opt/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "Portainer runs on an ordinary Docker host, so there is no vendor share layout to follow. /opt/backup-manager is the default the App Template puts in front of an operator and is substitutable in one place, the template's env list, which distribution/packaging pins to compose/backup-manager.env. Retained artifacts land in a dedicated child rather than in the app root, so state, config and key material are siblings of the backup root and never parents of it.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The stack declares its own project network, created and destroyed with the stack, whose only two members are these two containers. Portainer itself is not on it. The engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention, which is what apps/common/auth/local requires.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
+    },
+
+    "dockge": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge, and no packaging either: Dockge is supported by compatibility with the canonical Compose stack, so there is nothing in apps/dockge/ that could carry a bundle. The stack it imports is container/compose.yaml, which serves the bundle compiled into the binary.",
+      "displayName": "Dockge",
+      "tier": "C",
+      "storageMount": "/volume1/backups",
+      "hostPaths": {
+        "state": "/volume1/backup-manager/state",
+        "backups": "/volume1/backups",
+        "config": "/volume1/backup-manager/config",
+        "sshKey": "/volume1/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/volume1/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "These are container/.env.example's own defaults, not a Dockge layout, and that is the point: Dockge deploys the canonical stack unmodified, so its host paths ARE the canonical stack's. TestTheDockgeStackIsTheCanonicalStack pins these five to that file, so the import workflow in apps/dockge/README.md cannot drift from the runtime it imports.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "container/compose.yaml declares its own project network, created and destroyed with the deployment, whose only two members are these two containers, and it sets TRUST_FORWARDED_HEADERS on the engine for exactly that reason. Dockge changes nothing about the topology: it starts and stops the same stack.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
+    },
+
+    "casaos": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge. A store compose file has no payload to carry a bundle in and the canonical image cannot carry a sixth one; a bridge would also need a CasaOS platform id in the /api/v1 contract, the capability table, the profile table and the bundle list, and this adapter's own contract says no CasaOS import may enter the Go core or the shared UI.",
+      "displayName": "CasaOS",
+      "tier": "B",
+      "storageMount": "/DATA/Backups/backup-manager",
+      "hostPaths": {
+        "state": "/DATA/AppData/backup-manager/state",
+        "backups": "/DATA/Backups/backup-manager",
+        "config": "/DATA/AppData/backup-manager/config",
+        "sshKey": "/DATA/AppData/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/DATA/AppData/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "CasaOS's own layout: private application data under /DATA/AppData, user data under /DATA. The backup root is deliberately outside /DATA/AppData, so an uninstall that offers to delete the app's data cannot reach a retained artifact. Literal, not variables: a CasaOS store install deploys the file as it stands with no .env beside it, so a ${VAR} here would be an unresolved reference at install time rather than a knob.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The store compose file declares its own project network, created and destroyed with the app, whose only two members are these two containers.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
+    },
+
+    "zimaos": {
+      "uiBridge": "none",
+      "uiBridgeNote": "No frontend bridge, for the same three reasons CasaOS ships none: no payload, no room in the image, and a bridge would put a ZimaOS platform id into the Go core and the shared UI.",
+      "displayName": "ZimaOS",
+      "tier": "B",
+      "storageMount": "/DATA/Backups/backup-manager",
+      "hostPaths": {
+        "state": "/DATA/AppData/backup-manager/state",
+        "backups": "/DATA/Backups/backup-manager",
+        "config": "/DATA/AppData/backup-manager/config",
+        "sshKey": "/DATA/AppData/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/DATA/AppData/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "The same five paths CasaOS uses, because ZimaOS is built on CasaOS and lays /DATA out the same way. They are identical on purpose and the two adapters are one runtime under two store registrations; inventing a difference to justify the second directory would be worse than saying so.",
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The store compose file declares its own project network, created and destroyed with the app, whose only two members are these two containers.",
+      "profile": "generic",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
     }
   }
 }

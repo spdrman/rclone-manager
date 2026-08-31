@@ -1,0 +1,105 @@
+{
+  "_comment": [
+    "Portainer App Template (issue #170, B6.6). Template format version 3,",
+    "which is what current Portainer CE reads: https://docs.portainer.io/advanced/app-templates/format.",
+    "",
+    "type 3 is a STACK template. Portainer clones the repository named below,",
+    "reads the compose file at repository.stackfile, renders the env list into a",
+    "form, and runs the stack. That is the entire integration: no Portainer",
+    "plugin, no Portainer agent, no call to the Portainer API, and no second",
+    "application server. The same file also works pasted into Portainer's own",
+    "Custom Templates, which is the offline route apps/portainer/README.md",
+    "documents for a host that cannot reach the repository.",
+    "",
+    "Every entry in env below is checked against compose/backup-manager.env by",
+    "distribution/packaging: same variable set, same defaults. A form field an",
+    "operator fills in and a compose file that reads a different variable is the",
+    "failure this adapter is most likely to have, and it is silent."
+  ],
+
+  "version": "3",
+  "templates": [
+    {
+      "type": 3,
+      "title": "Backup Manager",
+      "name": "backup-manager",
+      "description": "Scheduled, verified pull-based backups with retention tiers, an /api/v1 HTTP API and a shared web UI. Two containers from one canonical image: the engine holds the state database and publishes nothing, and the web UI is the only published port.",
+      "note": "This stack does NOT need the Docker socket, privileged mode or host networking, and it must never be given them. Create the four host directories in the environment values below and chown them to PUID:PGID before deploying: the runtime image is distroless, so nothing inside the container can create or chown them for you. The engine prints a one-time enrollment link on first start; read it with the container logs.",
+      "categories": ["backup", "storage"],
+      "platform": "linux",
+      "logo": "https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/portainer/logo.svg",
+      "repository": {
+        "url": "https://github.com/spdrman/rclone-manager",
+        "stackfile": "apps/portainer/compose/backup-manager.yml"
+      },
+      "env": [
+        {
+          "name": "IMAGE",
+          "label": "Canonical image reference",
+          "description": "The one multi-architecture image both containers run. No registry is configured for this repository yet, so change this to wherever you pushed or loaded it.",
+          "default": "ghcr.io/spdrman/backup-manager:1.0.0"
+        },
+        {
+          "name": "PUID",
+          "label": "User id",
+          "description": "The account both containers run as. It must already own the state, backup and config directories.",
+          "default": "1000"
+        },
+        {
+          "name": "PGID",
+          "label": "Group id",
+          "description": "The group both containers run as.",
+          "default": "1000"
+        },
+        {
+          "name": "STATE_DIR",
+          "label": "Private state directory (host)",
+          "description": "The SQLite catalogue and the local administrator record. Never inside the backup root.",
+          "default": "/opt/backup-manager/state"
+        },
+        {
+          "name": "BACKUP_DIR",
+          "label": "Backup root (host)",
+          "description": "Where retained artifacts land, and nothing else. A separate security domain from the three directories above.",
+          "default": "/opt/backup-manager/backups"
+        },
+        {
+          "name": "CONFIG_DIR",
+          "label": "Configuration directory (host)",
+          "description": "A writable directory holding config.yaml. May be empty on a fresh install; the first-run setup writes it.",
+          "default": "/opt/backup-manager/config"
+        },
+        {
+          "name": "KEY_FILE",
+          "label": "SFTP private key file (host)",
+          "description": "Mounted read-only. Keep it at mode 0600 on the host.",
+          "default": "/opt/backup-manager/secrets/id_ed25519"
+        },
+        {
+          "name": "KNOWN_HOSTS_FILE",
+          "label": "Pinned known_hosts file (host)",
+          "description": "Mounted read-only. Host-key pinning for the SFTP source.",
+          "default": "/opt/backup-manager/secrets/known_hosts"
+        },
+        {
+          "name": "WEB_PORT",
+          "label": "Published web port",
+          "description": "The only published port in the stack. The engine publishes none.",
+          "default": "8080"
+        },
+        {
+          "name": "TZ",
+          "label": "Timezone",
+          "description": "Retention tiers are evaluated against calendar boundaries, so this decides which day a restore point belongs to.",
+          "default": "UTC"
+        },
+        {
+          "name": "PUBLIC_BASE_URL",
+          "label": "Externally reachable base URL",
+          "description": "Used for the one-time enrollment link the engine prints on first start. localhost is only right when you open the link on the Docker host itself.",
+          "default": "http://localhost:8080"
+        }
+      ]
+    }
+  ]
+}

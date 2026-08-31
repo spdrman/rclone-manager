@@ -29,8 +29,19 @@ func TestTheCanonicalImageCarriesEachAdapterBundle(t *testing.T) {
 	c := MustLoad()
 	conf := MustLoadConformance()
 
-	// Every adapter that selects a bundle from the image must find one
-	// there.
+	// Every adapter that ships a bridge must select it from the image and
+	// find one there; every adapter that ships none must select the
+	// bundle compiled into the binary and must not be carried at all.
+	//
+	// Two-sided since issue #170, which added four adapters with no
+	// bridge. The reason is arithmetic rather than preference: the image
+	// carries five bundles with 347,956 bytes of headroom against its
+	// gated 5% ceiling and one bundle costs roughly 352 KB, so a sixth
+	// does not fit, let alone four more. Reading the answer off
+	// canonical.json's uiBridge rather than off "does this compose file
+	// happen to set UI_ROOT" is what keeps that a declaration somebody
+	// made instead of a shape somebody noticed.
+	carriers := 0
 	for _, p := range allPlatforms() {
 		t.Run(p.name, func(t *testing.T) {
 			for _, art := range p.runtimeArtifacts(t) {
@@ -39,6 +50,17 @@ func TestTheCanonicalImageCarriesEachAdapterBundle(t *testing.T) {
 					t.Fatalf("%s: %s", art.name, FormatDrift(drift))
 				}
 				sel := SelectUIBundle(rt.WebUI, UIBundleSelection{Mechanism: UIBundleNone}, c.Platforms[p.name].Profile)
+
+				if c.Platforms[p.name].UIBridge == UIBridgeNone {
+					if sel.Mechanism != UIBundleEmbedded {
+						t.Errorf("%s ships no frontend bridge and yet selects a %q bundle (%s); there is nothing for it to select and serve-ui fails closed rather than falling back", art.name, sel.Mechanism, sel.Detail)
+					}
+					if contains(carried, p.name) {
+						t.Errorf("the image carries a %s bundle and that adapter ships no bridge to put in it, which is roughly 352 KB of image against a ceiling with 347,956 bytes left", p.name)
+					}
+					continue
+				}
+				carriers++
 				if sel.Mechanism != UIBundleImageRoot {
 					t.Fatalf("%s does not select a bundle from the image (%s); every converted adapter here is metadata only, so the image is its only carrier", art.name, sel.Detail)
 				}
@@ -53,6 +75,9 @@ func TestTheCanonicalImageCarriesEachAdapterBundle(t *testing.T) {
 				}
 			}
 		})
+	}
+	if carriers == 0 {
+		t.Error("no adapter selects a bundle out of the image at all, so the carriage this test exists to check was never exercised")
 	}
 
 	// And nothing else is in there. A bundle for a provider that has its

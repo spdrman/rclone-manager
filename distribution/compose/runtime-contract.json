@@ -40,7 +40,20 @@
     "apps/truenas/catalog/templates/docker-compose.yaml",
     "apps/openmediavault/compose/backup-manager.yml",
     "apps/proxmox/compose/backup-manager.yml",
-    "apps/synology/compose/backup-manager.yml"
+    "apps/synology/compose/backup-manager.yml",
+    "apps/portainer/compose/backup-manager.yml",
+    "apps/casaos/compose/backup-manager.yml",
+    "apps/zimaos/compose/backup-manager.yml"
+  ],
+
+  "_dockge_comment": [
+    "Dockge is not in the list above and has no entry of its own, on purpose",
+    "(issue #170). It deploys `canonical` itself, so it derives nothing: the",
+    "artifact the prohibition rules run over for Dockge IS the canonical",
+    "definition, already checked as the canonical definition. apps/dockge/ is",
+    "held to containing no runtime definition at all by",
+    "distribution/packaging's ScanForForkedStack, so this is an absence with a",
+    "check behind it rather than an omission."
   ],
 
   "_fields_comment": [
