@@ -45,6 +45,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -703,20 +704,73 @@ func composeEnvFile(t *testing.T, dir string, listenPort int) string {
 type composeProject struct {
 	name    string
 	envFile string
+	// files is the `-f` list this project was brought up with, in the
+	// order it was given. Every later `docker compose` call has to repeat
+	// it: an override file named on `up` and not on `ps` describes a
+	// different merged definition, so the second call would be answering
+	// about a stack that was never started.
+	files []string
 }
 
+// composeArgs is the invariant half of every `docker compose` call this
+// project makes: the same env file, the same `-f` list and the same
+// project name, in the same order, with the subcommand appended.
+func (p *composeProject) composeArgs(rest ...string) []string {
+	args := []string{"compose", "--env-file", p.envFile}
+	for _, f := range p.files {
+		args = append(args, "-f", f)
+	}
+	args = append(args, "-p", p.name)
+	return append(args, rest...)
+}
+
+// startComposeStack brings up the canonical stack against a backup set
+// that is already HEALTHY, which is what the proxy end-to-end test needs
+// (see workingRemoteConfig's own doc).
 func startComposeStack(t *testing.T, image string, listenPort int) *composeProject {
 	t.Helper()
-	root := repoRoot(t)
-	dir := workingRemoteConfig(t)
+	return mustStartComposeStack(t, image, listenPort, workingRemoteConfig(t))
+}
+
+// mustStartComposeStack brings a stack up from dir's fixtures and fails
+// the test if it does not come up. extraComposeFiles are merged after
+// the canonical definition, in the order given.
+func mustStartComposeStack(t *testing.T, image string, listenPort int, dir string, extraComposeFiles ...string) *composeProject {
+	t.Helper()
+	p, out, err := upComposeStack(t, image, listenPort, dir, extraComposeFiles...)
+	if err != nil {
+		t.Fatalf("docker compose up: %v\n%s", err, out)
+	}
+	return p
+}
+
+// upComposeStack is the same thing without the verdict: it hands back
+// `docker compose up`'s own combined output and error instead of failing
+// on them, because issue #206's controls need a stack that deliberately
+// does NOT come up and need to read which service refused and why.
+//
+// Cleanup is registered before `up` runs rather than after it succeeds:
+// a stack that fails its dependency gate has still created the engine's
+// container and the project's network, and leaving those behind would
+// leak a container per run.
+func upComposeStack(t *testing.T, image string, listenPort int, dir string, extraComposeFiles ...string) (*composeProject, string, error) {
+	t.Helper()
+	files := append([]string{filepath.Join(repoRoot(t), "container", "compose.yaml")}, extraComposeFiles...)
+	return upComposeFiles(t, image, listenPort, dir, files)
+}
+
+// upComposeFiles is upComposeStack over an explicit `-f` list, for the
+// tests that drive an adapter's own runtime definition rather than the
+// canonical one.
+func upComposeFiles(t *testing.T, image string, listenPort int, dir string, files []string) (*composeProject, string, error) {
+	t.Helper()
 	envFile := composeEnvFile(t, dir, listenPort)
 
 	p := &composeProject{
 		name:    "backup-manager-dockercli-" + sanitizeProjectName(t.Name()),
 		envFile: envFile,
+		files:   files,
 	}
-
-	composeFilePath := filepath.Join(root, "container", "compose.yaml")
 
 	// Compose resolves `image: backup-manager:${VERSION:-dev}` against
 	// VERSION, so VERSION has to be exactly the tag half of the image
@@ -733,61 +787,61 @@ func startComposeStack(t *testing.T, image string, listenPort int) *composeProje
 	// coupling against the real compose.yaml without needing a stack.
 	version, err := composeVersion(image)
 	if err != nil {
-		t.Fatalf("startComposeStack cannot point compose at %q: %v", image, err)
+		t.Fatalf("upComposeFiles cannot point compose at %q: %v", image, err)
 	}
+	env := append(os.Environ(), "VERSION="+version)
+
+	t.Cleanup(func() {
+		down := exec.Command("docker", p.composeArgs("down", "-v", "--remove-orphans")...)
+		down.Env = env
+		_ = down.Run()
+	})
 
 	// Pin both services to the already-built image (see buildImage) so
 	// this test proves compose.yaml's OWN topology/network/healthcheck
 	// wiring, not a second build of the same Dockerfile compose would
 	// otherwise trigger on its own.
-	up := exec.Command("docker", "compose",
-		"--env-file", envFile,
-		"-f", composeFilePath,
-		"-p", p.name,
-		"up", "-d",
-		"--no-build",
-	)
-	up.Env = append(os.Environ(), "VERSION="+version)
+	up := exec.Command("docker", p.composeArgs("up", "-d", "--no-build")...)
+	up.Env = env
 
 	var out bytes.Buffer
 	up.Stdout = &out
 	up.Stderr = &out
-	if err := up.Run(); err != nil {
-		t.Fatalf("docker compose up: %v\n%s", err, out.String())
-	}
-
-	t.Cleanup(func() {
-		down := exec.Command("docker", "compose",
-			"--env-file", envFile,
-			"-f", composeFilePath,
-			"-p", p.name,
-			"down", "-v", "--remove-orphans",
-		)
-		down.Env = up.Env
-		_ = down.Run()
-	})
-
-	return p
+	err = up.Run()
+	return p, out.String(), err
 }
 
+// projectNameUnsafe is every character compose will not accept in a
+// project name. Compose allows lowercase alphanumerics, hyphens and
+// underscores and nothing else, and a subtest named after a file path
+// carries dots straight into `-p`, which fails the whole invocation with
+// a message about the name rather than about the stack.
+var projectNameUnsafe = regexp.MustCompile(`[^a-z0-9_-]+`)
+
 func sanitizeProjectName(name string) string {
-	r := strings.NewReplacer("/", "-", " ", "-", "_", "-")
-	return strings.ToLower(r.Replace(name)) + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	safe := projectNameUnsafe.ReplaceAllString(strings.ToLower(name), "-")
+	return strings.Trim(safe, "-") + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+// containerIDIfAny answers what `docker compose ps -q` says, with an
+// empty string for a service that has no container at all. Separate from
+// containerID because "this service never started" is a finding for one
+// test and a fatal for every other one.
+func (p *composeProject) containerIDIfAny(t *testing.T, service string) string {
+	t.Helper()
+	cmd := exec.Command("docker", p.composeArgs("ps", "-a", "-q", service)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("docker compose ps -q %s: %v\n%s", service, err, stderr.String())
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func (p *composeProject) containerID(t *testing.T, service string) string {
 	t.Helper()
-	root := repoRoot(t)
-	out, err := exec.Command("docker", "compose",
-		"--env-file", p.envFile,
-		"-f", filepath.Join(root, "container", "compose.yaml"),
-		"-p", p.name,
-		"ps", "-q", service,
-	).Output()
-	if err != nil {
-		t.Fatalf("docker compose ps -q %s: %v", service, err)
-	}
-	id := strings.TrimSpace(string(out))
+	id := p.containerIDIfAny(t, service)
 	if id == "" {
 		t.Fatalf("docker compose ps -q %s returned no container", service)
 	}
