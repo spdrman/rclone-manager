@@ -917,6 +917,42 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     quarantine_irrecoverable: false
   };
 
+  it("refuses to badge an unrecognised retention tier as protected", async () => {
+    // FR-18's tier chain is operator-defined, so "semi_annual" is an
+    // ordinary value; RetentionClass is a closed four-value vocabulary.
+    // Forcing an unknown tier into it would have to pick one, and
+    // "protected" means FR-19 will never delete this backup, which is the
+    // one direction that is actively dangerous to claim by accident.
+    vi.stubGlobal("fetch", mockFetchOk({
+      artifacts: [
+        { ...WIRE_ARTIFACT, id: "a/b/known", retention_tier: "weekly" },
+        { ...WIRE_ARTIFACT, id: "a/b/protected", retention_tier: "last_known_good" },
+        { ...WIRE_ARTIFACT, id: "a/b/unknown", retention_tier: "semi_annual" }
+      ]
+    }));
+
+    const got = await httpApi.listArtifacts();
+
+    expect(got[0].retentionClasses).toEqual(["weekly"]);
+    expect(got[1].retentionClasses).toEqual(["protected"]);
+    expect(got[2].retentionClasses).toEqual([]);
+  });
+
+  it("reports the hash algorithm the server named rather than assuming one", async () => {
+    vi.stubGlobal("fetch", mockFetchOk({
+      artifacts: [
+        { ...WIRE_ARTIFACT, id: "a/b/hashed" },
+        { ...WIRE_ARTIFACT, id: "a/b/unhashed", checksum: undefined, checksum_algorithm: undefined }
+      ]
+    }));
+
+    const got = await httpApi.listArtifacts();
+
+    expect(got[0].checksumAlgorithm).toBe("sha256");
+    expect(got[1].checksumAlgorithm).toBe("");
+    expect(got[1].checksum).toBe("");
+  });
+
   it("maps a healthy artifact, leaving quarantine null rather than a half-filled record", async () => {
     vi.stubGlobal("fetch", mockFetchOk({ artifacts: [WIRE_ARTIFACT] }));
 

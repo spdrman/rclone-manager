@@ -86,7 +86,13 @@ export interface BackupArtifact {
   receivedAt: string;
   sizeBytes: number;
   checksum: string;
-  checksumAlgorithm: "sha256";
+  /** Whatever algorithm produced `checksum`, reported rather than assumed.
+   *  It is sha256 for everything core records today (internal/transport's
+   *  own SHA256, and the operator-triggered validate refuses any other
+   *  recorded algorithm outright), but a literal type here would mean the
+   *  UI silently relabelled a hash it did not recognise. Empty when
+   *  nothing has been hashed. */
+  checksumAlgorithm: string;
   validation: "verified" | "failed" | "pending";
   retentionClasses: RetentionClass[];
   /** Remote deletion is a lifecycle FACT, never a user action. */

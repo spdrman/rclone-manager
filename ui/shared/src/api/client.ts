@@ -44,6 +44,7 @@ import type {
   BackupSet,
   CompletionMethod,
   QuarantineReason,
+  RetentionClass,
   RetentionPlan,
   RetentionVerdictAction
 } from "@shared/types/backup";
@@ -565,15 +566,15 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     receivedAt: a.updated_at,
     sizeBytes: a.size_bytes,
     checksum: a.checksum ?? "",
-    checksumAlgorithm: "sha256",
+    checksumAlgorithm: a.checksum_algorithm ?? "",
     validation:
       a.validation === "passed" ? "verified" : a.validation === "failed" ? "failed" : "pending",
     // The backend records which retention tier last selected an artifact,
-    // as one tier name rather than the classification set this type
+    // as ONE tier name rather than the classification set this type
     // models. Reporting the one it actually has is the honest mapping;
     // inventing the others would be a claim about a policy this response
     // does not carry.
-    retentionClasses: a.retention_tier ? [quarantineTier(a.retention_tier)] : [],
+    retentionClasses: retentionClassesFor(a.retention_tier),
     remoteSourceRemovedAt: stampOrNull(a.remote_source_removed_at),
     quarantine: a.quarantined
       ? {
@@ -585,14 +586,34 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
   };
 }
 
-/** Narrows a configured retention tier name onto the four classes this UI
- *  presents, keeping anything else out of the badge row rather than
- *  rendering an unknown tier as "daily". */
-function quarantineTier(tier: string): BackupArtifact["retentionClasses"][number] {
-  const normalised = tier.toLowerCase();
-  return normalised === "daily" || normalised === "weekly" || normalised === "monthly"
-    ? normalised
-    : "protected";
+/**
+ * Narrows a recorded retention tier name onto RetentionClass, which is a
+ * CLOSED four-value vocabulary while FR-18's tier chain is operator-defined
+ * and open (core/internal/config's Retention.Tiers, so "SEMI_ANNUAL" or
+ * "FORTNIGHTLY" are ordinary values).
+ *
+ * An unrecognised tier therefore yields NO class rather than being forced
+ * into one. Forcing it would have to pick a value, and every value here is
+ * a specific claim: "protected" in particular is FR-19's last-known-good
+ * protection, which means "retention will never delete this", and claiming
+ * that for a tier this UI simply does not recognise is the one direction
+ * that is actively dangerous.
+ *
+ * The open vocabulary is rendered elsewhere, by RetentionTierBadges
+ * (components/RetentionBadge.tsx), which badges an unknown tier under its
+ * own name. This field is not that: it is the closed badge row, and the
+ * detail page already renders an empty one as "unclassified".
+ */
+const RETENTION_CLASS_BY_TIER: Record<string, RetentionClass> = {
+  daily: "daily",
+  weekly: "weekly",
+  monthly: "monthly",
+  last_known_good: "protected"
+};
+
+function retentionClassesFor(tier: string | undefined): RetentionClass[] {
+  const known = tier ? RETENTION_CLASS_BY_TIER[tier.toLowerCase()] : undefined;
+  return known ? [known] : [];
 }
 
 function quarantineReasonFor(a: WireArtifact): QuarantineReason {
