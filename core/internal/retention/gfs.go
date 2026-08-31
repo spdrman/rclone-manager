@@ -6,6 +6,16 @@
 // weekly and monthly tiers, each of which retains the newest valid backup
 // in every calendar bucket that falls inside that tier's look-back window.
 //
+// # Which timestamp puts an artifact in a bucket
+//
+// Two of them, and each tier is evaluated once per placement with the
+// results unioned: the discovery timestamp (when this manager first saw
+// the artifact) always, and the producer's own timestamp (the remote
+// object's modification time) where one is admissible. bucketkey.go holds
+// that rule, why neither timestamp alone is the answer, and why the union
+// is what keeps FR-8's untrusted-input requirement intact. Read it before
+// changing anything in this file's tier loop.
+//
 // # Determinism
 //
 // The whole point of this package is that the same inputs always produce
