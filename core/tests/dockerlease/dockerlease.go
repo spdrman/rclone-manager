@@ -114,10 +114,17 @@ func createdAt(ids []string) map[string]time.Time {
 	if len(ids) == 0 {
 		return nil
 	}
-	out, err := run(append([]string{"inspect", "--format", "{{.Id}} {{.Created}}"}, ids...)...)
-	if err != nil {
-		return nil
-	}
+	// The exit status is deliberately ignored, and that is the #161 fix.
+	// `docker inspect` exits non-zero if ANY of its arguments is missing,
+	// while still printing a good line for every id it did find. Reading
+	// that status as "nothing can be dated" meant one container removed by
+	// another worktree between listLabelled and here turned the whole
+	// sweep into a silent no-op. Several worktrees share one daemon on this
+	// machine, so that race is routine rather than exotic, and a sweeper
+	// that silently sweeps nothing is worse than no sweeper: it looks like
+	// the leak is handled. What actually comes back is parsed instead, so a
+	// vanished id costs its own line and nothing more.
+	out, _ := run(append([]string{"inspect", "--format", "{{.Id}} {{.Created}}"}, ids...)...)
 	got := make(map[string]time.Time, len(ids))
 	for _, line := range strings.Split(out, "\n") {
 		id, ts, ok := strings.Cut(strings.TrimSpace(line), " ")
