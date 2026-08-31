@@ -260,6 +260,23 @@ rather than one, which is a stronger statement about a larger surface.
   release. Surfacing that (a count of reinstated artifacts whose remote source
   is still present, alongside FR-24's existing counts) is worth doing and is not
   in this change.
+
+  Landed since, in issue #227. `health.BackupSetHealth` carries
+  `ReinstatedRemoteRetainedCount`, computed by asking the append-only
+  transition log once per backup set through `lifecycle.ReinstatedArtifacts`,
+  which derives its edge set from the same `ReinstatementEdges()` the delete
+  gate refuses on, so the reported population and the refused population cannot
+  drift apart. Artifacts whose remote this manager has already released are
+  excluded, which matters because the `QUARANTINED_LOST` to `COMPLETE` edge is
+  reachable only from `COMPLETE` and so always describes a remote that is
+  already gone. It reaches `backup-manager status`, the Prometheus gauge
+  `backup_manager_backup_set_reinstated_remote_retained`, and
+  `GET /api/v1/system/health`. No bytes figure goes with it: the only
+  measurement this manager ever took of those remote objects was at discovery,
+  FR-8 treats that as untrusted, and re-reading them on every health pass would
+  be a network round trip per artifact against a source that may be
+  unreachable. It is deliberately not a fifth alert condition; see
+  `internal/alert/conditions.go` for that argument.
 - A backup set configured for transfer verification alone, with no local hash
   baseline recorded and no validator configured, cannot be reinstated at all.
   That is the correct refusal: there is genuinely nothing to prove with. The

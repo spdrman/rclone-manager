@@ -6,6 +6,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/health"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 )
 
 // BuildHealthReport is `backup-manager status`' use case (FR-24). It calls
@@ -52,6 +53,24 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 				return health.Report{}, fmt.Errorf("app: health: listing %s: %w", bs.ID, err)
 			}
 
+			// The reinstatement history (issue #227), read once for the
+			// whole set from the append-only transition log, via the same
+			// edge set FR-15's delete gate refuses on.
+			//
+			// A failure here fails the whole report rather than leaving
+			// the count at zero. Zero is the reassuring answer, and the
+			// entire complaint issue #227 makes is that a permanently
+			// growing population was being reported as nothing at all; a
+			// database that could not be asked must not produce the same
+			// output as a deployment that has never reinstated anything.
+			// This is different from FreeBytes below, which is a live
+			// reading of something outside the journal and is genuinely
+			// allowed to be unavailable.
+			reinstated, err := lifecycle.ReinstatedArtifacts(ctx, s.Journal, bs.ID)
+			if err != nil {
+				return health.Report{}, fmt.Errorf("app: health: reinstatement history for %s: %w", bs.ID, err)
+			}
+
 			in := health.BackupSetInputs{
 				LastSuccessfulPollAt: s.lastPollAt(bs.ID),
 				LastRetentionRunAt:   s.lastRetentionAt(bs.ID),
@@ -61,7 +80,7 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 				in.FreeBytes = &free
 			}
 
-			sets = append(sets, health.ComputeBackupSetHealth(bs.ID, records, bs.StaleAfter.Duration(), in, now))
+			sets = append(sets, health.ComputeBackupSetHealth(bs.ID, records, reinstated, bs.StaleAfter.Duration(), in, now))
 		}
 	}
 	return health.NewReport(process, sets, now), nil

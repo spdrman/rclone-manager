@@ -227,6 +227,71 @@ type BackupSetHealth struct {
 	QuarantinedCount     int
 	QuarantinedLostCount int
 
+	// ReinstatedRemoteRetainedCount is how many artifacts in this set were
+	// reinstated out of quarantine and still have a remote source this
+	// manager has undertaken never to delete (issue #227).
+	//
+	// # Why this is a standing condition and not a failure
+	//
+	// Reinstating an artifact permanently forfeits its remote delete:
+	// internal/lifecycle's FR-15 gate refuses one outright, before it
+	// records intent and before it touches the transport, reading the fact
+	// out of the append-only transition log (see ADR 0004). That is the
+	// price that makes the reinstatement edges safe, and the direction it
+	// fails in is deliberate: a reinstatement that should not have
+	// happened costs disk on the source, while a delete that should not
+	// have happened costs the backup.
+	//
+	// But it is permanent by design, so this number only ever grows, and
+	// an operator is told about it exactly once, at the moment they
+	// reinstate. remotedelete.go's own package doc already names what that
+	// costs for the other reason a delete gets refused routinely: an
+	// archive that never prunes its remote side fills the source disk
+	// eventually, and that has to be loud rather than discovered when the
+	// volume is full. This is the count that makes it askable a month
+	// later.
+	//
+	// It never reaches decideState, which has no field it could arrive
+	// through (see compute.go's evidence type): the backups themselves are
+	// fine, and a set holding reinstated artifacts is not thereby
+	// DEGRADED. What is accumulating is storage on a machine this manager
+	// does not measure.
+	//
+	// # Which artifacts it counts, and why not the others
+	//
+	// Membership comes from the append-only transition log, via
+	// lifecycle.ReinstatedArtifacts, which derives its edge set from the
+	// same lifecycle.ReinstatementEdges() the delete gate's own refusal
+	// reads. That is the whole reason it is not a counter maintained
+	// alongside the writes: two independently-kept answers to the same
+	// question drift, and the one that drifts silently is this one.
+	//
+	// An artifact whose remote source this manager has already released
+	// (state.Record.RemoteDeletedAt is set) is excluded, because there is
+	// nothing left for it to be holding. That is not a corner case: the
+	// QUARANTINED_LOST -> COMPLETE edge is reachable only from COMPLETE,
+	// which is precisely the state that says the remote object is gone, so
+	// every reinstatement of that kind lands here and counting it would
+	// send an operator looking for storage that does not exist.
+	//
+	// # There is deliberately no byte figure beside it
+	//
+	// How much those preserved remote objects actually occupy is a fact
+	// this manager does not have and must not invent. The only size it
+	// ever recorded is what the remote object measured at discovery, and
+	// FR-8's rule that remote metadata is untrusted applies with full
+	// force here: the object may since have been removed by its producer,
+	// replaced, or grown, and the reason the delete gate refuses in the
+	// first place is that the manager usually cannot re-establish the
+	// remote's identity with confidence. Summing discovery-time sizes
+	// would be a confident number about bytes nobody has looked at, and
+	// re-Stat-ing every artifact on every health pass would put a network
+	// call per artifact behind every status invocation and dashboard load,
+	// against a source that may be unreachable. So this is a count, and
+	// the size is not known: see issue #211 for what this repository does
+	// with a field it cannot compute honestly.
+	ReinstatedRemoteRetainedCount int
+
 	// LastRetentionRunAt and FreeBytes are injected; see BackupSetInputs.
 	LastRetentionRunAt *time.Time
 	FreeBytes          *uint64

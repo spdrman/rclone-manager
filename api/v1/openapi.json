@@ -1658,6 +1658,11 @@
             "description": "How many of the quarantined backups have no source left to recover from.",
             "format": "int32"
           },
+          "reinstated_remote_retained_count": {
+            "type": "integer",
+            "description": "How many backups in this set were re-trusted after quarantine and still hold a remote source this manager has undertaken never to delete. The forfeiture is permanent by design, so this only ever grows, and releasing those remote copies is an operator decision made outside this manager. There is deliberately no companion size: the only measurement this manager ever took of a remote object was at discovery, the producer may since have removed or replaced it, and re-reading every one on every health call would be a network round trip per backup against a source that may be unreachable. The count is known; the bytes are not. Zero here is a real reading, not a missing one, so it is always present.",
+            "format": "int32"
+          },
           "free_bytes": {
             "type": "integer",
             "description": "Free space at this set's destination. Absent when the reading could not be taken; a zero would otherwise read as \"full\", which is the one thing it must not be mistaken for.",
@@ -1696,6 +1701,7 @@
           "failures",
           "quarantined_count",
           "quarantined_lost_count",
+          "reinstated_remote_retained_count",
           "free_bytes_known"
         ]
       },
