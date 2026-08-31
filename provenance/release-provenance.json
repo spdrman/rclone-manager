@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "2a5c43274afa7fd2e42006e7159919953fe4247d1f1bb5b7d6621e3fe1f25c3e",
+    "sha256": "22cb0d14121116739ab963dfe4b9caca93fa6a1c929420386063d108890208ea",
     "format": "sha256sum"
   },
   "artifacts": [

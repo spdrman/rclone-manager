@@ -1,28 +1,23 @@
-# Playwright end to end, nightly on main, deliberately NOT per pull request.
+# The browser end-to-end suite, on demand.
 #
-# WHY THIS IS NOT IN ci.yml. The browser suite is the slowest and least stable
-# signal we have: it installs browsers, boots a dev server, and drives a real
-# renderer, and it re-runs the shell specs once per provider on top of that.
-# Hanging that off every push turns a fifteen second typecheck into a multi
-# minute wait on the one job people watch before merging, and a flake there
-# blocks a change it has nothing to say about.
+# WHERE THE SUITE IS NOW. It is not in this repository. Issue #158 moved it
+# to spdrman/rclone-manager-tests as Suite B, pinned here by
+# scripts/e2e/tests-repo.pin, and this workflow checks that repository out
+# at the pinned sha and runs it against this repository's ui/shared.
 #
-# The per-PR gate stays typecheck, unit tests and build, which is what catches
-# a commit that cannot build. This job is what catches a regression in what the
-# browser actually renders, one night later, on main only.
+# WHERE THE GATE IS. Also not here. Every workflow in this repository is
+# workflow_dispatch-only, so a required check on this file would gate
+# nothing. The blocking signal is scripts/ci-local.sh, via
+# .husky/pre-commit, which runs the same Suite B on every non-FAST commit
+# plus a CLI smoke slice, both against the working tree (#197). This
+# workflow exists for the case that gate cannot serve: a run on a clean
+# machine, on demand, with a trace to download afterwards, including the
+# seven-provider matrix the local gate deliberately leaves out.
 #
-# The same split is why the Go integration tree (tests/crashmatrix,
-# tests/sftpintegration) is not in the pre-commit hook: slow suites that need a
-# daemon or a browser belong somewhere nobody is waiting on them.
-#
-# It can be run by hand from the Actions tab when a UI change wants the signal
-# before morning.
-#
-# Schedule trigger disabled: GitHub Actions is no longer auto-triggered on
-# this repo (see ci.yml and rclone-upgrade-gate.yml). Run this by hand
-# (workflow_dispatch) before a release or when a UI change specifically
-# wants the browser-level signal; `npm run e2e` locally covers the common
-# case day-to-day.
+# The schedule stays commented. Re-enabling it would reintroduce the flake
+# noise this workflow's own history argues against, and it is no longer the
+# only thing standing between a red spec and a merge, which is what made
+# the argument close before. Turning it on is the owner's call.
 
 name: Nightly E2E
 
@@ -50,39 +45,66 @@ jobs:
           - suite: all-providers
             script: "e2e:all-providers"
     steps:
-      - name: Checkout
+      - name: Checkout the product
         uses: actions/checkout@v7
+        with:
+          path: product
+
+      # The pin, not a branch. What this job runs has to be the same thing
+      # the local gate runs, or a green here would say nothing about a
+      # commit the gate refused.
+      - name: Read the pinned tests-repo sha
+        id: pin
+        working-directory: product
+        run: |
+          . scripts/e2e/tests-repo.pin
+          echo "url=$TESTS_REPO_URL" >>"$GITHUB_OUTPUT"
+          echo "sha=$TESTS_REPO_SHA" >>"$GITHUB_OUTPUT"
+
+      - name: Checkout the tests repository at the pin
+        uses: actions/checkout@v7
+        with:
+          repository: spdrman/rclone-manager-tests
+          ref: ${{ steps.pin.outputs.sha }}
+          path: tests
+          token: ${{ secrets.TESTS_REPO_TOKEN || github.token }}
 
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: ui/shared/package-lock.json
 
-      - name: Install
-        working-directory: ui/shared
+      # The app under test is this repository's ui/shared, so its own
+      # dependencies are what the dev server runs.
+      - name: Install the app under test
+        working-directory: product/ui/shared
+        run: npm ci --no-audit --no-fund
+
+      - name: Install the suite
+        working-directory: tests/suites/web-ui
         run: npm ci --no-audit --no-fund
 
       # Only the browsers the config actually uses, with their system deps.
       - name: Install Playwright browsers
-        working-directory: ui/shared
+        working-directory: tests/suites/web-ui
         run: npx playwright install --with-deps chromium
 
       - name: Run ${{ matrix.suite }}
-        working-directory: ui/shared
+        working-directory: tests/suites/web-ui
+        env:
+          RM_UI_DIR: ${{ github.workspace }}/product/ui/shared
         run: npm run ${{ matrix.script }}
 
       # A failed browser run is close to unusable without the trace, and the
-      # person reading it is doing so the morning after, with no way to
-      # reproduce the runner's state.
+      # person reading it is doing so with no way to reproduce the runner's
+      # state.
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-${{ matrix.suite }}
           path: |
-            ui/shared/playwright-report/
-            ui/shared/test-results/
+            tests/suites/web-ui/playwright-report/
+            tests/suites/web-ui/test-results/
           retention-days: 14
           if-no-files-found: ignore

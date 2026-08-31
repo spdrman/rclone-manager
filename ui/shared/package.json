@@ -10,14 +10,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "e2e": "playwright test --project=generic --project=small-window",
     "lint": "tsc --noEmit",
     "eslint": "eslint .",
     "typecheck:providers": "tsc --noEmit -p tsconfig.providers.json",
-    "e2e:ui": "playwright test --ui",
-    "e2e:providers": "playwright test --project=providers",
-    "e2e:all-providers": "node scripts/e2e-all-providers.mjs",
-    "test:all": "npm run lint && npm run eslint && npm run typecheck:providers && npm test && npm run e2e"
+    "test:all": "npm run lint && npm run eslint && npm run typecheck:providers && npm test"
   },
   "dependencies": {
     "@causlts/core": "0.3.3",
@@ -27,7 +23,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.47.0",
     "@testing-library/jest-dom": "^6.5.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.5.2",

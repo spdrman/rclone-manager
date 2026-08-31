@@ -105,6 +105,11 @@ assert_nonzero() { # <label> <status>
 # suite, and D1/D7 assert on this marker in both directions.
 SELFTEST_STUB='SELFTEST-STUB-RAN'
 
+# Printed by the stub browser-e2e step the synthetic trees carry. Group G
+# asserts on this marker in both directions, the same way D1/D7 do for the
+# self-test stub.
+E2E_STUB='E2E-GATE-STUB-RAN'
+
 make_tree() { # -> path of a synthetic checkout carrying only the gate scripts
   # mktemp, not a counter: this runs inside $( ), so a counter would increment
   # in the subshell and every caller would get the same directory back. That
@@ -251,6 +256,21 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/$guard.test.sh"
   done
 
+  # The browser e2e step (#158, #197). Same reason as every stub above, and
+  # the same failure mode without it, which this suite has now been bitten
+  # by twice: `bash` on a path that does not exist exits 127, the gate runs
+  # under `set -e`, and every full-tree case below the step dies for a
+  # reason that has nothing to do with what it measures. That is what
+  # #174's guard suite did to 18 of these checks before its stub existed.
+  #
+  # The real script clones a pinned repository, builds a binary, and drives
+  # a browser. This fixture measures which steps the gate chooses to run,
+  # so the stub prints a marker and succeeds; Group G replaces it with a
+  # failing one where it needs the other direction.
+  mkdir -p "$tree/scripts/e2e"
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$E2E_STUB" \
+    >"$tree/scripts/e2e/run-tests-repo-gate.sh"
+
   printf '%s\n' "$tree"
 }
 
@@ -264,7 +284,7 @@ run_hook() { # <tree> [VAR=VAL ...]
   hook_tree="$1"
   shift
   out="$(cd "$hook_tree" && env -u CI_LOCAL_FAST -u CI_LOCAL_SKIP_JS \
-    -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST \
+    -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST -u CI_LOCAL_SKIP_E2E \
     PATH="$hook_tree/bin:$PATH" "$@" sh .husky/pre-commit 2>&1)"
   status=$?
 }
@@ -277,7 +297,7 @@ run_gate() { # <tree> [VAR=VAL ...]
   # CI_LOCAL_SELFTEST=1 around this very script, which would otherwise reach
   # every synthetic run as an inherited skip.
   out="$(cd "$gate_tree" && env -u CI_LOCAL_FAST -u CI_LOCAL_SKIP_JS \
-    -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST \
+    -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST -u CI_LOCAL_SKIP_E2E \
     PATH="$gate_tree/bin:$PATH" "$@" bash scripts/ci-local.sh 2>&1)"
   status=$?
 }
@@ -646,6 +666,78 @@ run_hook "$tree"
 assert_nonzero "F3 the hook blocks a run that actually failed" "$status"
 assert_not_contains "F3 a real failure is not treated as INCOMPLETE" \
   'allowing this commit on an INCOMPLETE gate run' "$out"
+
+# ------------------------- Group G: the browser e2e step is a real signal
+
+echo "==> G. the browser e2e step (#158, #197)"
+
+# G1 is the control for everything below it. The step is not conditional on
+# anything but FAST, so a complete run must actually invoke it. Without this
+# case, G3's absence assertion would also pass against a gate that had lost
+# the step entirely.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "G1 a complete run invokes the browser e2e step" \
+  'browser e2e + CLI smoke' "$out"
+assert_contains "G1 the step really ran (and was the stub)" "$E2E_STUB" "$out"
+assert_contains "G1 a complete run still reports success" 'ci-local: ok' "$out"
+
+# G2: the out-loud opt-out ledgers rather than printing a note and carrying
+# on. This is #197's first open question answered: a missing browser is
+# openable, but only the way a stopped Docker daemon is, and the run that
+# opens it says so and cannot be merge evidence.
+tree="$(make_full_tree)"
+run_gate "$tree" CI_LOCAL_SKIP_E2E=1
+assert_not_contains "G2 CI_LOCAL_SKIP_E2E=1 does not run the step" "$E2E_STUB" "$out"
+assert_not_contains "G2 CI_LOCAL_SKIP_E2E=1 cannot report success" 'ci-local: ok' "$out"
+assert_contains "G2 CI_LOCAL_SKIP_E2E=1 ends INCOMPLETE" 'ci-local: INCOMPLETE' "$out"
+assert_contains "G2 the summary names the browser suite" \
+  'browser e2e suite and the CLI smoke slice' "$out"
+assert_eq "G2 CI_LOCAL_SKIP_E2E=1 exits $INCOMPLETE" "$INCOMPLETE" "$status"
+
+# G3: FAST leaves it out, which the never-merge-on-FAST rule already covers.
+# D4 owns the INCOMPLETE half; this owns the "it did not run" half.
+tree="$(make_full_tree)"
+run_gate "$tree" CI_LOCAL_FAST=1
+assert_not_contains "G3 CI_LOCAL_FAST=1 does not run the browser e2e step" "$E2E_STUB" "$out"
+
+# G4: the whole point. A red suite has to refuse the commit, not annotate
+# it. The stub is replaced by a failing one, which is the closest a
+# synthetic tree can get to a red spec without cloning a repository and
+# driving a browser; the real thing is demonstrated in the pull request by
+# breaking a spec in a worktree and watching this step go red.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "a spec failed"\nexit 1\n' \
+  >"$tree/scripts/e2e/run-tests-repo-gate.sh"
+run_gate "$tree"
+assert_nonzero "G4 a red browser suite fails the run" "$status"
+assert_not_contains "G4 a red browser suite cannot report success" 'ci-local: ok' "$out"
+assert_contains "G4 the verdict line names the step that failed" \
+  'ci-local: FAILED (browser e2e + CLI smoke' "$out"
+
+# G5: the pin is a full sha, checked statically. A branch name or a short
+# sha there would let the tests under this gate change without the pin
+# changing, which is the one thing the pin exists to stop. Checked against
+# the REAL pin file, not a fixture, because the fixture would only prove the
+# fixture.
+pin="$REPO_ROOT/scripts/e2e/tests-repo.pin"
+if [ ! -f "$pin" ]; then
+  fail "G5 scripts/e2e/tests-repo.pin exists"
+elif grep -qE '^TESTS_REPO_SHA=[0-9a-f]{40}$' "$pin"; then
+  pass "G5 the tests-repo pin is a full 40-character sha"
+else
+  fail "G5 the tests-repo pin is a full 40-character sha"
+fi
+
+# G6 is G5's positive control: the same scan against a copy carrying exactly
+# the bad habit G5 forbids must flag it.
+mutant_pin="$SANDBOX/tests-repo.pin"
+printf 'TESTS_REPO_URL=https://example.invalid/x.git\nTESTS_REPO_SHA=main\n' >"$mutant_pin"
+if grep -qE '^TESTS_REPO_SHA=[0-9a-f]{40}$' "$mutant_pin"; then
+  fail "G6 the G5 scan flags a branch-name pin -- the scan cannot fail, so G5 proves nothing"
+else
+  pass "G6 the G5 scan flags a branch-name pin"
+fi
 
 # ------------------------------------------------------------------ result
 
