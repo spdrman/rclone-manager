@@ -20,6 +20,8 @@ package sftpfixture
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -365,4 +367,402 @@ func TestSSHHandshakeIsBoundedAgainstASilentPeer(t *testing.T) {
 	case <-time.After(window):
 		t.Fatalf("the probe against a peer that accepts TCP and then says nothing was still waiting %s later; ssh.ClientConfig.Timeout bounds only the dial, so this is an unbounded wait inside a loop whose 20-second deadline it outruns, which is #161's shape in the one place that does not shell out", window)
 	}
+}
+
+// --- the registry is not a dependency of a run that needs nothing from it --
+
+// serverImageOnDaemon makes the premise of the image tests below true:
+// they are about what the fixture does when the image is ALREADY on the
+// local daemon, so there has to be one. It inspects first and pulls only
+// when the image is genuinely missing, so on an ordinary machine it costs
+// no network at all, and on a cold one it does the download a first run
+// cannot avoid anyway.
+//
+// A failure here is fatal rather than a skip on purpose. A machine with
+// neither the image nor a reachable registry cannot run the SFTP suite at
+// all, and saying that once, out loud, beats skipping quietly and leaving
+// the reader believing these ran.
+func serverImageOnDaemon(t *testing.T) {
+	t.Helper()
+
+	inspect, cancel := context.WithTimeout(context.Background(), dockerProbeTimeout)
+	defer cancel()
+	if exec.CommandContext(inspect, "docker", "image", "inspect", serverImage).Run() == nil {
+		return
+	}
+
+	pull, cancelPull := context.WithTimeout(context.Background(), dockerPullTimeout)
+	defer cancelPull()
+	out, err := exec.CommandContext(pull, "docker", "pull", serverImage).CombinedOutput()
+	if err != nil {
+		t.Fatalf("this machine has neither %s on its daemon nor a registry that will hand it over, so the SFTP suite cannot run here at all and there is no premise for these tests to stand on: %v\n%s", serverImage, err, out)
+	}
+}
+
+// recordingDocker writes a `docker` that appends its arguments to a log and
+// then execs the real one, and returns the directory to put in front of
+// PATH plus the path of that log.
+//
+// Nothing is faked: every command still reaches the real daemon and comes
+// back with the real answer, so the log is not a record of what a stand-in
+// was asked, it is a record of what the fixture actually ran. That is the
+// observable this file needs. "Did it pull?" is a question about the
+// processes the fixture started, and reading them directly beats asserting
+// on an internal flag that a future edit could set without the behaviour
+// following.
+func recordingDocker(t *testing.T) (dir, logPath string) {
+	t.Helper()
+
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skipf("SKIPPING (missing capability: %q not on PATH): %v", "docker", err)
+	}
+	dir = t.TempDir()
+	logPath = filepath.Join(dir, "invocations.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\nexec " + shellQuote(realDocker) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the recording docker shim: %v", err)
+	}
+	return dir, logPath
+}
+
+// shellQuote wraps s for /bin/sh. The paths here come from t.TempDir() and
+// exec.LookPath and contain nothing exotic, but a shim that mangles its own
+// log path would produce an empty log, which reads exactly like "the
+// fixture ran no docker commands" and would make an assertion about a
+// missing pull pass for the wrong reason.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// dockerInvocations reads back what the recording shim saw, one command per
+// entry, already split into arguments.
+func dockerInvocations(t *testing.T, logPath string) [][]string {
+	t.Helper()
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading the recorded docker invocations at %s: %v", logPath, err)
+	}
+	var invocations [][]string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			invocations = append(invocations, fields)
+		}
+	}
+	return invocations
+}
+
+// countInvocations counts the recorded commands starting with prefix.
+func countInvocations(invocations [][]string, prefix ...string) int {
+	n := 0
+	for _, args := range invocations {
+		if len(args) < len(prefix) {
+			continue
+		}
+		match := true
+		for i, want := range prefix {
+			if args[i] != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			n++
+		}
+	}
+	return n
+}
+
+// TestFixtureDoesNotPullWhenTheImageIsAlreadyOnTheDaemon is issue #243's
+// evidence. The fixture pulled atmoz/sftp:alpine unconditionally on every
+// single start, so every gate run on every branch was a hard dependency on
+// Docker Hub answering at that moment. Three separate gate runs died that
+// way during one campaign, each with the image already sitting on the local
+// daemon, and each reported at the verdict line as
+// "FAILED (repository-structure dependency rules (§7.1), by actual
+// deletion)" because the deletion proof re-runs core's suite. Reading that
+// as an architecture violation and then finding a TLS handshake timeout a
+// hundred lines up is how a gate stops being read.
+//
+// A pinned tag that is already on the local daemon does not need
+// re-fetching to start a container, so the assertion is simply that no
+// pull happened. It is made on the processes the fixture ran, not on
+// anything the fixture reports about itself.
+func TestFixtureDoesNotPullWhenTheImageIsAlreadyOnTheDaemon(t *testing.T) {
+	requireDocker(t)
+	serverImageOnDaemon(t)
+
+	shim, logPath := recordingDocker(t)
+
+	const window = 150 * time.Second
+	out, exited, code := runHelper(t, "TestHelperStartsAFixtureAndReturns", window,
+		"PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if !exited {
+		t.Fatalf("the helper that just starts a fixture was still running %s later.\nhelper output:\n%s", window, out)
+	}
+	if code != 0 {
+		t.Fatalf("starting a fixture with %s already on this daemon failed (exit %d); nothing below can say anything about pulls until an ordinary start works.\nhelper output:\n%s", serverImage, code, out)
+	}
+
+	invocations := dockerInvocations(t, logPath)
+
+	// Two positive controls on the recorder, before the assertion that
+	// matters. Without them "no pull was recorded" is also what an empty
+	// log says, and an empty log is what a shim that never got onto the
+	// child's PATH produces.
+	if len(invocations) == 0 {
+		t.Fatalf("the recording shim logged nothing at all, so it was never the `docker` the fixture ran; an assertion about a missing pull would pass here no matter what the fixture did.\nhelper output:\n%s", out)
+	}
+	if countInvocations(invocations, "run", "-d") == 0 {
+		t.Fatalf("the recorder never saw the `docker run -d` that starts the container, so it did not observe the fixture's own docker calls; recorded instead:\n%s", strings.Join(flatten(invocations), "\n"))
+	}
+
+	if got := countInvocations(invocations, "image", "inspect", serverImage); got == 0 {
+		t.Fatalf("the fixture never asked whether %s was already on this daemon, so it cannot be deciding anything from the answer; recorded:\n%s", serverImage, strings.Join(flatten(invocations), "\n"))
+	}
+	if got := countInvocations(invocations, "pull"); got != 0 {
+		t.Fatalf("the fixture ran `docker pull` %d time(s) for an image that was already on this daemon, so every start of it still depends on the registry answering: that is #243, and it has already failed three gate runs that had nothing wrong with them.\nrecorded:\n%s", got, strings.Join(flatten(invocations), "\n"))
+	}
+}
+
+// flatten renders recorded invocations for a failure message.
+func flatten(invocations [][]string) []string {
+	lines := make([]string, 0, len(invocations))
+	for _, args := range invocations {
+		lines = append(lines, "  docker "+strings.Join(args, " "))
+	}
+	return lines
+}
+
+// TestHelperStartsAFixtureAndReturns is an ordinary, successful fixture
+// start. It exists as a child process so the parent can read back every
+// docker command the start ran, from a log the child's own PATH shim wrote,
+// after the child and its cleanup are both finished.
+func TestHelperStartsAFixtureAndReturns(t *testing.T) {
+	skipUnlessHelper(t)
+	f := Start(t)
+	fmt.Println(containerMarker + f.ContainerID())
+}
+
+// --- a missing image is fetched, and an unfetchable one refuses ----------
+
+// helperImageEnv carries the image reference a helper process should try to
+// obtain, so the parent can hand its child a name that exists nowhere.
+const helperImageEnv = "SFTPFIXTURE_HELPER_IMAGE"
+
+// ensureReturnedMarker is how a helper reports that ensureImage came back
+// normally. It has to be distinguishable from a refusal AND from a skip: a
+// version of the fixture that shrugged and carried on would otherwise look
+// like a pass.
+const ensureReturnedMarker = "ENSURE_IMAGE_RETURNED"
+
+// registryDocker writes a `docker` that stands in for the registry and for
+// nothing else: `pull` is answered here, every other command is handed
+// straight to the real daemon.
+//
+// failures is how many pull attempts fail before one succeeds, with the
+// stderr of the real thing (the TLS handshake timeout that took two of
+// #243's three gate runs). source is a local image to tag as the pulled
+// reference when an attempt succeeds, which is what makes the success a
+// genuine one: the reference really is absent beforehand and really is on
+// the daemon afterwards, with no registry anywhere in it. An empty source
+// means a pull that can never succeed.
+func registryDocker(t *testing.T, failures int, source string) (dir, logPath string) {
+	t.Helper()
+
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skipf("SKIPPING (missing capability: %q not on PATH): %v", "docker", err)
+	}
+	dir = t.TempDir()
+	logPath = filepath.Join(dir, "invocations.log")
+	counter := filepath.Join(dir, "attempts")
+
+	success := "echo 'the stand-in registry was asked to succeed but has nothing to hand over' >&2\n  exit 1"
+	if source != "" {
+		success = "exec " + shellQuote(realDocker) + " tag " + shellQuote(source) + ` "$2"`
+	}
+
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "$*" >> ` + shellQuote(logPath) + "\n" +
+		`if [ "$1" = "pull" ]; then` + "\n" +
+		"  attempt=$(cat " + shellQuote(counter) + " 2>/dev/null || echo 0)\n" +
+		"  attempt=$((attempt + 1))\n" +
+		`  printf '%s' "$attempt" > ` + shellQuote(counter) + "\n" +
+		fmt.Sprintf("  if [ \"$attempt\" -le %d ]; then\n", failures) +
+		`    echo 'Error response from daemon: Head "https://registry-1.docker.io/v2/'"$2"'/manifests/x": net/http: TLS handshake timeout' >&2` + "\n" +
+		"    exit 1\n" +
+		"  fi\n" +
+		"  " + success + "\n" +
+		"fi\n" +
+		"exec " + shellQuote(realDocker) + ` "$@"` + "\n"
+
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the stand-in registry docker shim: %v", err)
+	}
+	return dir, logPath
+}
+
+// TestEnsureImageFetchesAMissingImageAndRidesOutATransientFailure is the
+// other half of #243, and the reason the presence check above cannot be
+// the whole fix. An image that is genuinely not here still has to be
+// fetched, and the registry failures that started this were transient by
+// nature, so one blip must not end the run.
+//
+// The absence is real. The reference is a tag this machine has never had
+// and no registry has ever heard of, and the stand-in registry makes it
+// appear by tagging a local image, so "it was missing, then it was here"
+// is checked against the daemon both times rather than inferred. Nothing
+// touches atmoz/sftp:alpine itself, so a failure here cannot leave the
+// machine without the image every other test needs.
+func TestEnsureImageFetchesAMissingImageAndRidesOutATransientFailure(t *testing.T) {
+	requireDocker(t)
+	serverImageOnDaemon(t)
+
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skipf("SKIPPING (missing capability: %q not on PATH): %v", "docker", err)
+	}
+
+	runID := time.Now().UnixNano()
+	source := fmt.Sprintf("rclone-manager-gate-243-source:%d", runID)
+	absent := fmt.Sprintf("rclone-manager-gate-243-absent:%d", runID)
+
+	// Both of these are tags this test creates and this test removes, and
+	// `docker rmi` on a tag that shares an image with another one only
+	// drops the tag. atmoz/sftp:alpine keeps every layer it had.
+	if out, err := exec.Command(realDocker, "tag", serverImage, source).CombinedOutput(); err != nil {
+		t.Fatalf("tagging %s as the stand-in registry's copy %s: %v\n%s", serverImage, source, err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command(realDocker, "rmi", source).Run() })
+	t.Cleanup(func() { _ = exec.Command(realDocker, "rmi", absent).Run() })
+
+	// The premise, checked rather than assumed: "it pulled a missing
+	// image" proves nothing if the image was never missing.
+	if exec.Command(realDocker, "image", "inspect", absent).Run() == nil {
+		t.Fatalf("%s is somehow already on this daemon, so this test cannot say anything about an image that is not", absent)
+	}
+
+	const failures = 2
+	shim, logPath := registryDocker(t, failures, source)
+	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(pullBackoffEnv, "200ms")
+
+	f := &Fixture{}
+	started := time.Now()
+	f.ensureImage(t, absent)
+	elapsed := time.Since(started)
+
+	if err := exec.Command(realDocker, "image", "inspect", absent).Run(); err != nil {
+		t.Fatalf("ensureImage returned as though it had the image, but the daemon still does not know %s: a fixture that believes it has an image it has not got fails later, at `docker run`, with a message about the wrong thing: %v", absent, err)
+	}
+
+	invocations := dockerInvocations(t, logPath)
+	if got := countInvocations(invocations, "pull", absent); got != failures+1 {
+		t.Fatalf("the pull was attempted %d time(s) against a registry that failed the first %d, want %d: without the retry a single TLS handshake timeout is still a red gate, which is what #243 is.\nrecorded:\n%s", got, failures, failures+1, strings.Join(flatten(invocations), "\n"))
+	}
+
+	// A positive control on the backoff itself. Three attempts with a
+	// 200ms base wait cannot be over in less than 200ms + 400ms, so an
+	// elapsed time below that would mean the retries were immediate,
+	// which against a registry that needs a moment to recover is barely a
+	// retry at all.
+	if floor := 600 * time.Millisecond; elapsed < floor {
+		t.Fatalf("three pull attempts were over in %s, under the %s that a %s base backoff makes unavoidable, so nothing waited between them", elapsed, floor, "200ms")
+	}
+}
+
+// refusalVerdict reports whether a child run REFUSED, meaning it failed and
+// said so, rather than skipping or quietly passing. It is deliberately a
+// value the test can check both ways, because "this fixture refuses" is
+// only worth asserting if the check would notice a skip, and a skip exits 0
+// exactly like a pass.
+func refusalVerdict(out string, code int) error {
+	if strings.Contains(out, "--- SKIP") {
+		return errors.New("the run SKIPPED, which is the failure mode this is here to catch: the suite silently leaves the gate and the gate still says ok")
+	}
+	if code == 0 {
+		return fmt.Errorf("the run exited 0, so it did not refuse")
+	}
+	if !strings.Contains(out, "--- FAIL") {
+		return fmt.Errorf("the run exited %d but never reported a test failure, so what stopped it is not the fixture refusing", code)
+	}
+	return nil
+}
+
+// TestEnsureImageRefusesRatherThanSkippingWhenTheImageCannotBeObtained is
+// the assertion that matters most in #243, and the one a well meaning fix
+// breaks. Making the fixture skip when the image cannot be fetched looks
+// like kindness to a machine that is offline. It is not: it deletes the
+// whole SFTP suite from the gate and lets the gate go on printing ok, which
+// is strictly worse than the loud failure it replaced and is the same hole
+// #160 was opened about. So an image that genuinely cannot be obtained has
+// to be fatal, and it has to stay fatal.
+func TestEnsureImageRefusesRatherThanSkippingWhenTheImageCannotBeObtained(t *testing.T) {
+	requireDocker(t)
+
+	absent := fmt.Sprintf("rclone-manager-gate-243-unobtainable:%d", time.Now().UnixNano())
+
+	// The positive control, run first and on the checker rather than on
+	// the subject. A skipping fixture is the exact thing this test exists
+	// to reject, so a helper that skips in that shape is put through the
+	// same verdict, and the verdict has to reject it. Without this, a
+	// check that called everything a refusal would pass below and prove
+	// nothing at all.
+	skipOut, skipExited, skipCode := runHelper(t, "TestHelperEnsureImageSkipsInstead", 45*time.Second,
+		helperImageEnv+"="+absent)
+	if !skipExited {
+		t.Fatalf("the skipping control helper never finished, so the control says nothing.\nhelper output:\n%s", skipOut)
+	}
+	if err := refusalVerdict(skipOut, skipCode); err == nil {
+		t.Fatalf("refusalVerdict ACCEPTED a run that skipped in exactly the shape this test forbids, so it cannot tell a refusal from a silent skip and its verdict on the real fixture below would mean nothing.\ncontrol helper output:\n%s", skipOut)
+	}
+
+	shim, logPath := registryDocker(t, 1000, "")
+	out, exited, code := runHelper(t, "TestHelperEnsureImageAgainstAnUnobtainableImage", 60*time.Second,
+		helperImageEnv+"="+absent,
+		pullBackoffEnv+"=200ms",
+		"PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if !exited {
+		t.Fatalf("ensureImage never came back for an image no registry will hand over.\nhelper output:\n%s", out)
+	}
+	if strings.Contains(out, ensureReturnedMarker) {
+		t.Fatalf("ensureImage RETURNED for an image it never obtained, so the fixture would carry on to `docker run` with nothing to run.\nhelper output:\n%s", out)
+	}
+	if err := refusalVerdict(out, code); err != nil {
+		t.Fatalf("the fixture did not refuse an image it cannot obtain: %v.\nSkipping here takes the SFTP suite out of the gate while the gate goes on saying ok, which is #160's hole and is worse than the network failure it would be papering over.\nhelper output:\n%s", err, out)
+	}
+	if !strings.Contains(out, absent) {
+		t.Fatalf("the refusal never names %s, so the reader is told something failed without being told which image is missing.\nhelper output:\n%s", absent, out)
+	}
+
+	invocations := dockerInvocations(t, logPath)
+	if got := countInvocations(invocations, "pull", absent); got != pullAttempts {
+		t.Fatalf("a doomed pull was attempted %d time(s), want exactly %d: fewer means the retry does not apply on the path that matters, more means the fixture keeps a dead gate waiting.\nrecorded:\n%s", got, pullAttempts, strings.Join(flatten(invocations), "\n"))
+	}
+}
+
+// TestHelperEnsureImageAgainstAnUnobtainableImage asks for an image that is
+// not on this daemon and that the stand-in registry in front of it will
+// never hand over.
+func TestHelperEnsureImageAgainstAnUnobtainableImage(t *testing.T) {
+	skipUnlessHelper(t)
+	ref := os.Getenv(helperImageEnv)
+	if ref == "" {
+		t.Fatalf("%s was not set, so this helper has no image to ask for", helperImageEnv)
+	}
+	f := &Fixture{}
+	f.ensureImage(t, ref)
+	fmt.Println(ensureReturnedMarker)
+	t.Fatal("ensureImage returned for an image that cannot be obtained")
+}
+
+// TestHelperEnsureImageSkipsInstead is the obliging fixture this repository
+// must not ship, written down so the test above can be shown rejecting it.
+// It exists only as the positive control: nothing here is called by the
+// fixture.
+func TestHelperEnsureImageSkipsInstead(t *testing.T) {
+	skipUnlessHelper(t)
+	t.Skipf("sftpfixture: SKIPPING (missing capability: %s could not be pulled)", os.Getenv(helperImageEnv))
 }
