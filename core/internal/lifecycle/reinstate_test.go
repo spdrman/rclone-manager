@@ -118,6 +118,15 @@ func TestReinstateFromQuarantineReturnsTheArtifactToCommitted(t *testing.T) {
 	if !strings.Contains(detail, "replaced the failing validator binary") {
 		t.Errorf("recorded detail = %q, want it to carry the operator's note", detail)
 	}
+
+	// Only a validator that ran and passed may write a validator verdict.
+	// This reinstatement was carried by a hash comparison, which says
+	// nothing about whether the artifact restores, so the record's
+	// validation column has to be left exactly as it was rather than
+	// quietly promoted to "passed".
+	if out.Record.ValidationPassed != nil {
+		t.Errorf("validation_passed = %v after a hash-carried reinstatement, want it left unset: a hash match is not a validator verdict", *out.Record.ValidationPassed)
+	}
 }
 
 // A pass that could not actually have failed is not evidence. The check

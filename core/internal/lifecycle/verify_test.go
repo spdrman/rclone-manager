@@ -60,6 +60,14 @@ func (j *verifyJournal) LastEnteredAt(_ context.Context, _ model.ArtifactID, st 
 	return at, ok, nil
 }
 
+// LastTransition is unused by the step under test, and the safety property
+// it exists for (issue #220's reinstatement forfeiture) is proved against a
+// real journal in remotedelete_reinstate_test.go, not here. Reporting "no
+// such edge" is the honest answer for a fake that records no log at all.
+func (j *verifyJournal) LastTransition(context.Context, model.ArtifactID, string, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 func (j *verifyJournal) Get(context.Context, model.ArtifactID) (state.Record, error) {
 	if j.getErr != nil {
 		return state.Record{}, j.getErr
@@ -785,18 +793,18 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 		t.Fatalf("state = %q, want %q", out.Record.State, Quarantined)
 	}
 
-	// Structural proof #1: Quarantined's only legal successor at all is
-	// Discovered. There is no direct edge to anything closer to deletion.
-	successors := Successors(Quarantined)
-	if len(successors) != 1 || successors[0] != Discovered {
-		t.Fatalf("Successors(Quarantined) = %v, want exactly [Discovered]", successors)
-	}
+	// Structural proof #1: Quarantined reaches exactly two states, and
+	// neither is REMOTE_DELETE_PENDING or COMPLETE. DISCOVERED re-ingests
+	// from scratch; COMMITTED is issue #220's operator-only reinstatement,
+	// which proofs #2 and #3 below show cannot help this artifact reach a
+	// delete either.
+	assertStateSet(t, "Successors(Quarantined)", Successors(Quarantined), Discovered, Committed)
 
 	// Structural proof #2: Advance itself, backed by the real journal,
 	// refuses every attempt to move straight from Quarantined to a
 	// delete-eligible or later state, and leaves the journal untouched
 	// when it does.
-	for _, illegal := range []State{Verified, Committing, Committed, RemoteDeletePending, Complete} {
+	for _, illegal := range []State{Verified, Committing, RemoteDeletePending, Complete} {
 		if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
 			Artifact: artifact,
 			Key:      "attempt-1:illegal:" + string(illegal),
@@ -807,12 +815,51 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 		}
 	}
 
+	// Structural proof #3: the one edge that does exist refuses this
+	// artifact by name. It was quarantined out of VERIFYING, so it never
+	// durably committed at all, and the transition log is what says so.
+	if _, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "attempt-1:reinstate",
+		Evidence:   ReinstatementEvidence{ValidatorPassed: true, Summary: "a second validator run passed"},
+	}); err == nil {
+		t.Fatal("ReinstateFromQuarantine promoted an artifact the validator rejected before it ever committed")
+	} else if _, ok := AsNeverHeldTargetState(err); !ok {
+		t.Fatalf("err = %v, want a *NeverHeldTargetStateError", err)
+	}
+
 	rec, err := j.Get(ctx, artifact)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if rec.State != string(Quarantined) {
 		t.Fatalf("journal state = %q after the refused Advance attempts, want it to still be %q", rec.State, Quarantined)
+	}
+
+	// Structural proof #4, and the one that makes FR-13's guarantee
+	// survive the new edge no matter what any caller does: force the
+	// artifact onto COMMITTED with a bare Advance, bypassing
+	// ReinstateFromQuarantine and every rule it enforces, and the remote
+	// delete is STILL refused. The refusal comes from the transition log,
+	// which now records a QUARANTINED -> COMMITTED edge, so it does not
+	// depend on the writer having gone through the sanctioned entry point.
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact,
+		Key:      "attempt-1:forced-committed",
+		From:     string(Quarantined),
+		To:       string(Committed),
+	}); err != nil {
+		t.Fatalf("forcing QUARANTINED -> COMMITTED: %v", err)
+	}
+	tp := &deleteTransport{}
+	_, err = DeleteRemote(ctx, Deps{Journal: j, Transport: tp}, DeleteRemoteRequest{
+		Artifact:           artifact,
+		AttemptKey:         "attempt-1:delete",
+		CompletionStrategy: "rename",
+	})
+	_ = requireRefusal(t, err, reinstatementCheck)
+	if tp.deleteCalls != 0 {
+		t.Fatalf("transport.DeleteRemote called %d times, want 0: a required validator failure must prevent source deletion (FR-13)", tp.deleteCalls)
 	}
 }
 

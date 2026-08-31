@@ -25,7 +25,18 @@ type Journal interface {
 	// only other timestamp on hand, state.Record.UpdatedAt, is advanced by
 	// every transition write there is, including the routine same-state
 	// ones that would otherwise keep restarting that gate's safety clock.
+	// ReinstateFromQuarantine needs it too, to prove an artifact really did
+	// hold the state it is being returned to.
 	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
+
+	// LastTransition reports when an artifact most recently recorded one
+	// exact from -> to edge, and whether it ever did. remotedelete.go's
+	// issue #220 gate needs the narrower question LastEnteredAt cannot
+	// answer: not "when did this become COMMITTED" but "did it become
+	// COMMITTED by being reinstated out of quarantine", which is the one
+	// fact that permanently forfeits its remote delete and which nothing
+	// on the artifacts row records.
+	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
 }
 
 // Deps is what every lifecycle step is handed. Steps take this rather than

@@ -151,6 +151,11 @@ const (
 // on it and the tests asserting it cannot drift apart.
 const stableSafetyDelayCheck = "stable completion safety delay"
 
+// reinstatementCheck is the RemoteDeleteRefusalError.Check value every
+// issue #220 reinstatement refusal carries, named once so a caller matching
+// on it and the tests asserting it cannot drift apart.
+const reinstatementCheck = "quarantine reinstatement"
+
 func (r DeleteRemoteRequest) key(tag string) string {
 	return r.AttemptKey + ":" + tag
 }
@@ -254,6 +259,52 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 			Artifact: req.Artifact,
 			Check:    "journal state",
 			Reason:   fmt.Sprintf("journal records %s, which is not COMMITTED or REMOTE_DELETE_PENDING", rec.State),
+		}
+	}
+
+	// --- revalidation (issue #220): this artifact has never been
+	// reinstated out of quarantine.
+	//
+	// COMMITTED is the only state a remote delete can be reached from, so
+	// an edge that returns an artifact from quarantine to COMMITTED is
+	// precisely where re-trusting one could turn into destroying the only
+	// other copy of it. This check is what stops that, and it is what
+	// makes those edges safe to declare at all: an artifact that was ever
+	// re-trusted after being distrusted keeps its remote source forever,
+	// and releasing that source is an operator's decision made outside
+	// this manager, not something this gate will ever authorise.
+	//
+	// It is deliberately permanent rather than a delay, and deliberately
+	// not conditional on how good the evidence was. The whole reason a
+	// reinstatement is allowed is that the evidence available locally was
+	// convincing; that is a different and weaker thing than the FR-13
+	// verification chain the artifact passed on its way to COMMITTED the
+	// first time, and it is not enough to authorise destroying the last
+	// remaining source. Preserving a remote copy costs storage. Deleting
+	// the source of an artifact that should not have been re-trusted costs
+	// the backup.
+	//
+	// The fact is read from the append-only state_transitions log (see
+	// state.Journal.LastTransition), never from a column on the artifacts
+	// row: the row is overwritten by every later write, and this has to
+	// survive every one of them. The edges consulted are derived from the
+	// Transitions table itself (ReinstatementEdges), so a future exit from
+	// quarantine into a durable state is covered here the moment it is
+	// declared.
+	//
+	// Like the checks below it this is pure and side-effect free, and it
+	// runs before any journal write, so a refusal leaves no mark of its
+	// own and the artifact stays exactly where it was.
+	if at, reinstated, err := lastReinstatement(ctx, d, req.Artifact); err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: DeleteRemote: reading the transition log for %s: %w", req.Artifact, err)
+	} else if reinstated {
+		return state.Outcome{}, &RemoteDeleteRefusalError{
+			Artifact: req.Artifact,
+			Check:    reinstatementCheck,
+			Reason: fmt.Sprintf(
+				"this artifact was reinstated out of quarantine at %s, so it was distrusted once and re-trusted on a local re-check rather than on the full verification it passed originally; a reinstated artifact never authorises deleting its remote source, and this refusal is permanent",
+				at.UTC().Format(time.RFC3339),
+			),
 		}
 	}
 
@@ -386,6 +437,29 @@ func DeleteRemote(ctx context.Context, d Deps, req DeleteRemoteRequest) (state.O
 		return state.Outcome{}, fmt.Errorf("lifecycle: DeleteRemote: the remote object was deleted but recording COMPLETE failed, reconciliation must confirm it independently: %w", err)
 	}
 	return outcome, nil
+}
+
+// lastReinstatement reports whether artifact has ever been reinstated out
+// of quarantine, and when it most recently was.
+//
+// It asks the journal once per declared reinstatement edge rather than
+// interpreting the artifact's current state, because the current state
+// cannot answer the question: a reinstated artifact and one that was never
+// distrusted are both simply COMMITTED. Only the append-only log still
+// holds which of the two happened.
+func lastReinstatement(ctx context.Context, d Deps, artifact model.ArtifactID) (time.Time, bool, error) {
+	var newest time.Time
+	found := false
+	for _, edge := range reinstatementEdges {
+		at, ok, err := d.Journal.LastTransition(ctx, artifact, string(edge.From), string(edge.To))
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		if ok && (!found || at.After(newest)) {
+			newest, found = at, true
+		}
+	}
+	return newest, found, nil
 }
 
 // refuseRemoteIdentity builds the *RemoteDeleteRefusalError for a
