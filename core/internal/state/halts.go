@@ -103,6 +103,13 @@ func (j *Journal) ClearBackupSetHalt(ctx context.Context, set model.BackupSetID)
 // one caller builds a health report over every configured backup set and
 // would otherwise issue a query per set on every status call and dashboard
 // load. Sets with no refusal are simply absent.
+//
+// A row for a backup set that is no longer configured stays here and is
+// never reported: the caller walks the configured sets and looks each one
+// up in what this returns, so an orphan is inert rather than visible.
+// Nothing collects it, because collecting it would mean this package
+// knowing what the configuration currently contains, which is exactly the
+// policy knowledge its own package doc says it does not have.
 func (j *Journal) ListBackupSetHalts(ctx context.Context) ([]BackupSetHalt, error) {
 	rows, err := j.db.QueryContext(ctx,
 		`SELECT source, backup_set, reason, observed_at FROM backup_set_halts ORDER BY source, backup_set`)

@@ -75,6 +75,14 @@ func haltReasonFor(err error) (string, bool) {
 // key, never retries the connection, and never suppresses the refusal it
 // is describing; it only writes down what already happened.
 //
+// A backup set saved disabled is not cycled at all, so it appears in no
+// CycleReport and nothing here touches it: whatever was last observed
+// about it stands. That is deliberate rather than overlooked. Switching a
+// set off is not evidence that its host key verifies again, and a refusal
+// left standing on a set nobody is running says something true, which is
+// that the last time this manager tried, it was refused, and nothing has
+// happened since.
+//
 // A cancelled cycle writes nothing at all. Every write here would fail
 // against a done context anyway, and the direction it leaves things in is
 // the conservative one: a refusal that has since resolved stands for one
