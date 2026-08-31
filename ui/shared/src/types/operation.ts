@@ -28,17 +28,19 @@ export const TRANSFER_STAGES = [
 
 export type TransferStage = (typeof TRANSFER_STAGES)[number];
 
-/** The stages a running operation can report, mirroring the contract's
- *  OperationProgress.stage enum exactly. */
-export const LIVE_TRANSFER_STAGES = [
-  "discovering",
-  "transferring",
-  "verifying",
-  "committing",
-  "cleaning-remote"
-] as const;
-
-export type LiveTransferStage = (typeof LIVE_TRANSFER_STAGES)[number];
+/**
+ * The stages a RUNNING operation can report: every checklist stage except
+ * "complete", which is where the checklist points rather than anything
+ * the service ever reports (a completed operation reports no progress at
+ * all).
+ *
+ * Derived from TRANSFER_STAGES rather than restated, so the on-screen
+ * order and the reportable set cannot disagree. It is also exactly
+ * api/v1/openapi.json's OperationProgress.stage enum, and client.ts
+ * assigns the generated wire union straight into it with no cast, so the
+ * two drifting apart is a type error rather than a runtime surprise.
+ */
+export type LiveTransferStage = Exclude<TransferStage, "complete">;
 
 /** The durable operation record's own status, straight off the wire. */
 export type OperationStatus = "queued" | "running" | "completed" | "failed";

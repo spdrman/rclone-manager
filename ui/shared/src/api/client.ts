@@ -55,7 +55,6 @@ import type {
 import type {
   ActivityEvent,
   ActivityEventType,
-  LiveTransferStage,
   Operation,
   OperationStatus,
   Severity,
@@ -733,7 +732,7 @@ function fromWireProgress(p: NonNullable<WireOperation["progress"]>): TransferPr
   return {
     observedAt: p.observed_at,
     sequence: p.sequence,
-    stage: p.stage as LiveTransferStage,
+    stage: p.stage,
     backupSetId: p.backup_set_id,
     backupSetsDone: p.backup_sets_done,
     backupSetsTotal: p.backup_sets_total,
