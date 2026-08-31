@@ -1,0 +1,2843 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Backup Manager /api/v1",
+    "version": "1.0.0",
+    "summary": "The authoritative definition of the versioned /api/v1 boundary.",
+    "description": "Issue #166 (B6.2). This document, not the Go handlers and not the TypeScript client, is the definition of /api/v1. Both sides are generated from it (scripts/api/generate.sh) and both are held to it by a drift check (scripts/api/check-contract-drift.sh plus the conformance tests named in docs/api/contract.md). Compatibility and deprecation rules are in docs/api/contract.md."
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Every path in this document is relative to the versioned base path. /health/live and /health/ready are deliberately NOT in this contract: they sit outside /api/v1, carry no authentication and exist for an orchestrator, not for a client of this API."
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "bm_session",
+        "description": "The authenticated session. For the generic runtime profile this is apps/common/auth/local's own HTTP-only cookie; a runtime profile with a native gateway (native_auth) establishes the same session from provider identity headers accepted only from a trusted peer. Which mechanism established it is a profile concern; that a caller of a secured operation has one is not."
+      },
+      "csrf": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token",
+        "description": "The double-submit CSRF token (apps/common/csrf). Required on every state-changing operation, and on the two read-only-in-effect operations that still open an outbound connection to a caller-supplied host."
+      },
+      "bootstrapToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Bootstrap-Token",
+        "description": "The single-use enrollment secret printed to the runtime's own log. Only /auth/enroll accepts it."
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "Caller-supplied key that makes a retried submission a replay rather than a second operation. Reusing one key for two different operation bodies is IDEMPOTENCY_KEY_CONFLICT, never a silent second run.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "schemas": {
+      "ApiErrorCode": {
+        "type": "string",
+        "description": "Every error code this API contract knows. `wire` codes are the machine-readable tokens a server may put on the wire; `ui` codes are the shared web UI's own presentation vocabulary, which no endpoint ever emits and which is listed here so there is exactly one registry rather than a second hand-maintained copy in ui/shared. `unknown` is the sentinel an unrecognised code off the network degrades to.",
+        "enum": [
+          "authentication-failed",
+          "ssh-host-key-changed",
+          "permission-denied",
+          "remote-path-missing",
+          "checksum-mismatch",
+          "backup-stale",
+          "storage-critical",
+          "version-mismatch",
+          "operation-conflict",
+          "unknown",
+          "UNAUTHENTICATED",
+          "RATE_LIMITED",
+          "INVALID_REQUEST",
+          "ENROLLMENT_CLOSED",
+          "BOOTSTRAP_TOKEN_INVALID",
+          "INTERNAL_ERROR",
+          "CSRF_TOKEN_MISSING",
+          "CSRF_TOKEN_MISMATCH",
+          "RETENTION_PLAN_STALE",
+          "RETENTION_PLAN_NOT_FOUND",
+          "RETENTION_APPLY_BUSY",
+          "BACKUP_SET_NOT_FOUND",
+          "OPERATION_NOT_FOUND",
+          "OPERATION_ALREADY_RUNNING",
+          "IDEMPOTENCY_KEY_CONFLICT",
+          "CONFIG_REVISION_STALE",
+          "SSH_KEY_NOT_FOUND",
+          "HOST_KEY_PROBE_FAILED",
+          "DESTRUCTIVE_OPERATIONS_DISABLED",
+          "INTERNAL"
+        ],
+        "x-code-origins": {
+          "authentication-failed": "ui",
+          "ssh-host-key-changed": "ui",
+          "permission-denied": "ui",
+          "remote-path-missing": "ui",
+          "checksum-mismatch": "ui",
+          "backup-stale": "ui",
+          "storage-critical": "ui",
+          "version-mismatch": "ui",
+          "operation-conflict": "ui",
+          "unknown": "ui",
+          "UNAUTHENTICATED": "wire",
+          "RATE_LIMITED": "wire",
+          "INVALID_REQUEST": "wire",
+          "ENROLLMENT_CLOSED": "wire",
+          "BOOTSTRAP_TOKEN_INVALID": "wire",
+          "INTERNAL_ERROR": "wire",
+          "CSRF_TOKEN_MISSING": "wire",
+          "CSRF_TOKEN_MISMATCH": "wire",
+          "RETENTION_PLAN_STALE": "wire",
+          "RETENTION_PLAN_NOT_FOUND": "wire",
+          "RETENTION_APPLY_BUSY": "wire",
+          "BACKUP_SET_NOT_FOUND": "wire",
+          "OPERATION_NOT_FOUND": "wire",
+          "OPERATION_ALREADY_RUNNING": "wire",
+          "IDEMPOTENCY_KEY_CONFLICT": "wire",
+          "CONFIG_REVISION_STALE": "wire",
+          "SSH_KEY_NOT_FOUND": "wire",
+          "HOST_KEY_PROBE_FAILED": "wire",
+          "DESTRUCTIVE_OPERATIONS_DISABLED": "wire",
+          "INTERNAL": "wire"
+        },
+        "x-error-classes": {
+          "authentication": [
+            "UNAUTHENTICATED",
+            "BOOTSTRAP_TOKEN_INVALID"
+          ],
+          "authorization": [
+            "ENROLLMENT_CLOSED",
+            "DESTRUCTIVE_OPERATIONS_DISABLED",
+            "CSRF_TOKEN_MISSING",
+            "CSRF_TOKEN_MISMATCH"
+          ],
+          "validation": [
+            "INVALID_REQUEST",
+            "SSH_KEY_NOT_FOUND",
+            "HOST_KEY_PROBE_FAILED"
+          ],
+          "conflict": [
+            "RETENTION_PLAN_STALE",
+            "RETENTION_APPLY_BUSY",
+            "OPERATION_ALREADY_RUNNING",
+            "IDEMPOTENCY_KEY_CONFLICT",
+            "CONFIG_REVISION_STALE"
+          ],
+          "not-found": [
+            "BACKUP_SET_NOT_FOUND",
+            "OPERATION_NOT_FOUND",
+            "RETENTION_PLAN_NOT_FOUND"
+          ],
+          "throttling": [
+            "RATE_LIMITED"
+          ],
+          "internal": [
+            "INTERNAL",
+            "INTERNAL_ERROR"
+          ]
+        }
+      },
+      "VersionResponse": {
+        "type": "object",
+        "description": "GET /system/version. Nothing here names an implementation: no rclone, no SQLite, no filesystem path.",
+        "additionalProperties": false,
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "description": "Always \"v1\" for this contract."
+          },
+          "core_version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "go_version": {
+            "type": "string"
+          },
+          "engine_version": {
+            "type": "string",
+            "description": "The transfer engine's own version string, deliberately not named after the engine."
+          },
+          "config_revision": {
+            "type": "string",
+            "description": "The optimistic-concurrency token a client echoes back on POST /operations. Read here rather than scraped out of a 409's prose."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True once the runtime has completed its startup sequence."
+          }
+        },
+        "required": [
+          "api_version",
+          "core_version",
+          "commit",
+          "go_version",
+          "engine_version",
+          "config_revision",
+          "ready"
+        ]
+      },
+      "CapabilitiesResponse": {
+        "type": "object",
+        "description": "GET /system/capabilities. The API expression of the PlatformCapabilities contract (apps/common/platform/capabilities). A capability says what a platform CAN do; it never says who MAY do it, and server-side authorization never consults it.",
+        "additionalProperties": false,
+        "properties": {
+          "platform": {
+            "type": "string",
+            "description": "The runtime profile's stable platform identifier.",
+            "enum": [
+              "generic",
+              "ugos",
+              "synology",
+              "truenas",
+              "unraid",
+              "openmediavault",
+              "proxmox"
+            ]
+          },
+          "native_auth": {
+            "type": "boolean"
+          },
+          "native_notifications": {
+            "type": "boolean"
+          },
+          "storage_picker": {
+            "type": "boolean"
+          },
+          "embedded_window": {
+            "type": "boolean"
+          },
+          "app_store_packaging": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "platform",
+          "native_auth",
+          "native_notifications",
+          "storage_picker",
+          "embedded_window",
+          "app_store_packaging"
+        ],
+        "x-capability-fields": [
+          "native_auth",
+          "native_notifications",
+          "storage_picker",
+          "embedded_window",
+          "app_store_packaging"
+        ]
+      },
+      "StorageStatus": {
+        "type": "object",
+        "description": "One backup set's capacity assessment.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "local_path": {
+            "type": "string",
+            "description": "The configured destination directory for this set, as the operator entered it."
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "type": "string",
+            "enum": [
+              "",
+              "not_created",
+              "unreadable",
+              "misconfigured"
+            ]
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "free_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "Observability only. level is decided from available_bytes."
+          },
+          "available_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "warning_free_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "critical_free_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "",
+              "OK",
+              "WARNING",
+              "CRITICAL"
+            ]
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "local_path",
+          "available",
+          "unavailable_reason",
+          "total_bytes",
+          "free_bytes",
+          "available_bytes",
+          "warning_free_bytes",
+          "critical_free_bytes",
+          "level"
+        ]
+      },
+      "ListStorageStatusResponse": {
+        "type": "object",
+        "description": "GET /system/storage.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageStatus"
+            }
+          }
+        },
+        "required": [
+          "backup_sets"
+        ]
+      },
+      "SubmitOperationRequest": {
+        "type": "object",
+        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation.",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "What to submit. An enumerated action name, never a command line."
+          },
+          "config_revision": {
+            "type": "string",
+            "description": "Optimistic concurrency: the revision the caller believes is current. A stale value is refused with CONFIG_REVISION_STALE and nothing runs."
+          }
+        },
+        "required": [
+          "action",
+          "config_revision"
+        ]
+      },
+      "Operation": {
+        "type": "object",
+        "description": "One durable operation record. Timestamp fields are omitted, not zero-valued, until the event they name has happened.",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "backup_set_id": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "config_revision": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "action": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time",
+            "x-go-omitempty": true
+          },
+          "result": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "error": {
+            "type": "string",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ]
+      },
+      "RetentionVerdict": {
+        "type": "object",
+        "description": "What the plan decided for one artifact, and why.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "artifact",
+          "action",
+          "reason"
+        ]
+      },
+      "RetentionPlan": {
+        "type": "object",
+        "description": "A server-computed retention plan. The client may only apply one by id; it never proposes what to delete.",
+        "additionalProperties": false,
+        "properties": {
+          "plan_id": {
+            "type": "string"
+          },
+          "backup_set_id": {
+            "type": "string"
+          },
+          "inventory_revision": {
+            "type": "string",
+            "description": "Optimistic concurrency, half one: the inventory this plan was computed against."
+          },
+          "config_revision": {
+            "type": "string",
+            "description": "Optimistic concurrency, half two: the configuration this plan was computed against. Either moving makes the plan stale and the apply is refused."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "keep_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "delete_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reclaim_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "operation_id": {
+            "type": "string",
+            "description": "Set on apply, absent on preview.",
+            "x-go-omitempty": true
+          },
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionVerdict"
+            }
+          }
+        },
+        "required": [
+          "plan_id",
+          "backup_set_id",
+          "inventory_revision",
+          "config_revision",
+          "expires_at",
+          "keep_count",
+          "delete_count",
+          "reclaim_bytes",
+          "verdicts"
+        ]
+      },
+      "ApplyRetentionRequest": {
+        "type": "object",
+        "description": "POST /backup-sets/{source}/{set}/retention/apply.",
+        "additionalProperties": false,
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "description": "The plan the operator approved. A plan the server no longer recognises, or one computed against a moved revision, is refused."
+          }
+        },
+        "required": [
+          "plan_id"
+        ]
+      },
+      "CreateBackupSetRequest": {
+        "type": "object",
+        "description": "POST /backup-sets. ssh_key_id and known_hosts_line carry REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never key material.",
+        "additionalProperties": false,
+        "properties": {
+          "source_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "user": {
+            "type": "string"
+          },
+          "ssh_key_id": {
+            "type": "string"
+          },
+          "known_hosts_line": {
+            "type": "string"
+          },
+          "remote_path": {
+            "type": "string"
+          },
+          "local_path": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "completion_strategy": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "marker",
+              "stable"
+            ]
+          },
+          "stable_for_seconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stale_after_seconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "validator_id": {
+            "type": "string",
+            "description": "A registered validator's id from GET /validators. Never a path, never a command."
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "run_immediately": {
+            "type": "boolean",
+            "description": "Also submit a run_cycle. This branch, and only this branch, is subject to the destructive gate."
+          }
+        },
+        "required": [
+          "name",
+          "host",
+          "port",
+          "user",
+          "ssh_key_id",
+          "known_hosts_line",
+          "remote_path",
+          "local_path",
+          "completion_strategy"
+        ]
+      },
+      "BackupSet": {
+        "type": "object",
+        "description": "A persisted backup set as the API reports it.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "source_name": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "user": {
+            "type": "string"
+          },
+          "remote_path": {
+            "type": "string"
+          },
+          "local_path": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "completion_strategy": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "marker",
+              "stable"
+            ]
+          },
+          "validator_id": {
+            "type": "string"
+          },
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "source_name",
+          "name",
+          "host",
+          "port",
+          "user",
+          "remote_path",
+          "local_path",
+          "include",
+          "completion_strategy",
+          "validator_id",
+          "disabled"
+        ]
+      },
+      "CreateBackupSetResponse": {
+        "description": "POST /backup-sets. The created set, plus at most one of operation (the run_immediately branch started) or run_error (it did not). Always 201: the set itself exists either way.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/BackupSet"
+          },
+          {
+            "type": "object",
+            "description": "The create-only additions on top of the backup set itself.",
+            "additionalProperties": false,
+            "properties": {
+              "operation": {
+                "$ref": "#/components/schemas/Operation",
+                "x-go-omitempty": true,
+                "x-go-pointer": true
+              },
+              "run_error": {
+                "type": "string",
+                "x-go-omitempty": true
+              }
+            },
+            "required": []
+          }
+        ],
+        "x-go-embeds": [
+          "BackupSet"
+        ]
+      },
+      "ListBackupSetsResponse": {
+        "type": "object",
+        "description": "GET /backup-sets. An object with one array field, never a bare top-level array.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_sets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BackupSet"
+            }
+          }
+        },
+        "required": [
+          "backup_sets"
+        ]
+      },
+      "ImportSSHKeyRequest": {
+        "type": "object",
+        "description": "POST /ssh-keys. Sent once; the caller discards its own copy immediately.",
+        "additionalProperties": false,
+        "properties": {
+          "private_key_pem": {
+            "type": "string",
+            "description": "Private key material. Write-only: it is never echoed back by any operation in this contract.",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "private_key_pem"
+        ]
+      },
+      "ImportSSHKeyResponse": {
+        "type": "object",
+        "description": "The reference a later create-backup-set call carries instead of key material.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "algorithm": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "algorithm",
+          "fingerprint"
+        ]
+      },
+      "HostKeyProbeRequest": {
+        "type": "object",
+        "description": "POST /ssh/host-key-probe. Opens a real outbound connection, trusts nothing.",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "required": [
+          "host",
+          "port"
+        ]
+      },
+      "HostKeyProbeResponse": {
+        "type": "object",
+        "description": "What the server actually saw. Presenting it to an operator for approval is the caller's job.",
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "type": "string"
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "known_hosts_line": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "fingerprint",
+          "known_hosts_line"
+        ]
+      },
+      "TestConnectionRequest": {
+        "type": "object",
+        "description": "POST /backup-sets/test-connection. A pre-save reachability and authentication check, before a backup set has an id.",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "user": {
+            "type": "string"
+          },
+          "ssh_key_id": {
+            "type": "string"
+          },
+          "known_hosts_line": {
+            "type": "string"
+          },
+          "remote_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "port",
+          "user",
+          "ssh_key_id",
+          "known_hosts_line"
+        ]
+      },
+      "TestConnectionResponse": {
+        "type": "object",
+        "description": "The outcome of a pre-save connection test.",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "Validator": {
+        "type": "object",
+        "description": "One registered application validator. An id and a sentence, and deliberately nothing else: the script it resolves to is server-side and a client never learns it.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "summary"
+        ]
+      },
+      "ListValidatorsResponse": {
+        "type": "object",
+        "description": "GET /validators. Read-only by design: a client-extensible catalog would be an arbitrary-command surface.",
+        "additionalProperties": false,
+        "properties": {
+          "validators": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Validator"
+            }
+          }
+        },
+        "required": [
+          "validators"
+        ]
+      },
+      "RetentionTier": {
+        "type": "object",
+        "description": "One link in the retention chain, on the wire. The same shape is read and written, so a client round-trips exactly what it was served.",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "granularity": {
+            "type": "string"
+          },
+          "period_days": {
+            "type": "integer",
+            "format": "int32",
+            "x-go-omitempty": true
+          },
+          "keep": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "window_unit": {
+            "type": "string",
+            "x-go-omitempty": true
+          }
+        },
+        "required": [
+          "name",
+          "granularity",
+          "keep"
+        ]
+      },
+      "RetentionSettings": {
+        "type": "object",
+        "description": "The retention policy actually in effect. tiers is always the RESOLVED chain.",
+        "additionalProperties": false,
+        "properties": {
+          "timezone": {
+            "type": "string"
+          },
+          "week_starts_on": {
+            "type": "string"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionTier"
+            }
+          },
+          "protect_last_known_good": {
+            "type": "boolean",
+            "description": "Turning this off widens what a later retention apply may delete. The apply itself stays behind the destructive gate."
+          }
+        },
+        "required": [
+          "timezone",
+          "week_starts_on",
+          "tiers",
+          "protect_last_known_good"
+        ]
+      },
+      "RetentionSchema": {
+        "type": "object",
+        "description": "The closed value sets and bounds a retention chain is validated against, served rather than transcribed into a frontend.",
+        "additionalProperties": false,
+        "properties": {
+          "granularities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "window_units": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tier_name_pattern": {
+            "type": "string",
+            "description": "Anchored regular expression source."
+          },
+          "reserved_tier_name": {
+            "type": "string"
+          },
+          "keep_max": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "period_days_max": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "default_tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionTier"
+            }
+          }
+        },
+        "required": [
+          "granularities",
+          "window_units",
+          "tier_name_pattern",
+          "reserved_tier_name",
+          "keep_max",
+          "period_days_max",
+          "default_tiers"
+        ]
+      },
+      "SettingsSchema": {
+        "type": "object",
+        "description": "The schema half of the settings response.",
+        "additionalProperties": false,
+        "properties": {
+          "retention": {
+            "$ref": "#/components/schemas/RetentionSchema"
+          }
+        },
+        "required": [
+          "retention"
+        ]
+      },
+      "SettingsResponse": {
+        "type": "object",
+        "description": "GET and PATCH /settings both return this: the settings now in effect plus the rules they were validated against.",
+        "additionalProperties": false,
+        "properties": {
+          "retention": {
+            "$ref": "#/components/schemas/RetentionSettings"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/SettingsSchema"
+          }
+        },
+        "required": [
+          "retention",
+          "schema"
+        ]
+      },
+      "UpdateRetentionSettings": {
+        "type": "object",
+        "description": "A PARTIAL retention update. An omitted field is left exactly as the running configuration has it; omitting tiers leaves the chain, and a legacy file's own spelling of it, untouched.",
+        "additionalProperties": false,
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "x-go-pointer": true
+          },
+          "week_starts_on": {
+            "type": "string",
+            "x-go-pointer": true
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionTier"
+            }
+          },
+          "protect_last_known_good": {
+            "type": "boolean",
+            "x-go-pointer": true
+          }
+        },
+        "required": []
+      },
+      "UpdateSettingsRequest": {
+        "type": "object",
+        "description": "PATCH /settings. An enumerated request type, never a configuration passthrough.",
+        "additionalProperties": false,
+        "properties": {
+          "retention": {
+            "$ref": "#/components/schemas/UpdateRetentionSettings",
+            "x-go-pointer": true
+          }
+        },
+        "required": []
+      },
+      "CredentialsRequest": {
+        "type": "object",
+        "description": "POST /auth/login and POST /auth/enroll. camelCase, unlike every schema above: apps/common/auth/local predates the snake_case convention the rest of /api/v1 uses. Recorded here as it is rather than silently normalised; see docs/api/contract.md for why fixing it is a separate issue.",
+        "additionalProperties": false,
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ]
+      },
+      "RotatePasswordRequest": {
+        "type": "object",
+        "description": "POST /auth/password. Requires an already-authenticated session AND the current password: holding a cookie is not enough.",
+        "additionalProperties": false,
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "writeOnly": true
+          },
+          "newPassword": {
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "currentPassword",
+          "newPassword"
+        ]
+      },
+      "SessionResponse": {
+        "type": "object",
+        "description": "GET /auth/session.",
+        "additionalProperties": false,
+        "properties": {
+          "username": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username"
+        ]
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The nested error body every operation outside /auth returns. code is stable and machine-readable; message is human-readable and MAY change without notice.",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ApiErrorCode"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "The error envelope every operation outside /auth returns. The correlation id travels in the X-Correlation-Id response header.",
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "ConfigRevisionStaleResponse": {
+        "type": "object",
+        "description": "The CONFIG_REVISION_STALE 409 body. It carries the current revision as a structured field so a client retries against a value it can rely on rather than one parsed out of prose.",
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          },
+          "config_revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "config_revision"
+        ]
+      },
+      "AuthErrorResponse": {
+        "type": "object",
+        "description": "The FLAT error body the /auth operations return, with the correlation id in the body as well as the header. Deliberately recorded as a second shape rather than pretended away: apps/common/auth/local diverged from the envelope above before this contract existed.",
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ApiErrorCode"
+          },
+          "message": {
+            "type": "string"
+          },
+          "correlationId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "correlationId"
+        ]
+      }
+    },
+    "responses": {}
+  },
+  "paths": {
+    "/system/version": {
+      "get": {
+        "operationId": "getSystemVersion",
+        "summary": "Version, build identity and the current configuration revision.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/system/capabilities": {
+      "get": {
+        "operationId": "getSystemCapabilities",
+        "summary": "What this runtime profile's host platform can do for the product.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/system/storage": {
+      "get": {
+        "operationId": "listStorageStatus",
+        "summary": "Per-backup-set capacity assessment.",
+        "tags": [
+          "system"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListStorageStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/operations": {
+      "post": {
+        "operationId": "submitOperation",
+        "summary": "Submit a durable operation.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitOperationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH, DESTRUCTIVE_OPERATIONS_DISABLED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH",
+              "DESTRUCTIVE_OPERATIONS_DISABLED"
+            ]
+          },
+          "409": {
+            "description": "Refused: CONFIG_REVISION_STALE.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigRevisionStaleResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CONFIG_REVISION_STALE"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": true,
+        "x-idempotency-key": "required",
+        "x-optimistic-concurrency": "config_revision",
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/operations/{id}": {
+      "get": {
+        "operationId": "getOperation",
+        "summary": "Read one operation record.",
+        "tags": [
+          "operations"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: OPERATION_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "OPERATION_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/retention/preview": {
+      "get": {
+        "operationId": "previewRetention",
+        "summary": "Compute, but do not apply, a retention plan. Read-only.",
+        "tags": [
+          "retention"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPlan"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": "inventory_revision+config_revision",
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/retention/apply": {
+      "post": {
+        "operationId": "applyRetention",
+        "summary": "Apply a plan the operator already approved, by id. The one operation in this contract that deletes local restore points.",
+        "tags": [
+          "retention"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRetentionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionPlan"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH, DESTRUCTIVE_OPERATIONS_DISABLED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH",
+              "DESTRUCTIVE_OPERATIONS_DISABLED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND, RETENTION_PLAN_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND",
+              "RETENTION_PLAN_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: RETENTION_PLAN_STALE, RETENTION_APPLY_BUSY.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RETENTION_PLAN_STALE",
+              "RETENTION_APPLY_BUSY"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": true,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": "inventory_revision+config_revision",
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets": {
+      "get": {
+        "operationId": "listBackupSets",
+        "summary": "Every configured backup set.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListBackupSetsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "post": {
+        "operationId": "createBackupSet",
+        "summary": "Persist a new backup set, and optionally start its first run.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBackupSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateBackupSetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST",
+              "SSH_KEY_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH, DESTRUCTIVE_OPERATIONS_DISABLED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH",
+              "DESTRUCTIVE_OPERATIONS_DISABLED"
+            ]
+          },
+          "409": {
+            "description": "Refused: OPERATION_ALREADY_RUNNING, IDEMPOTENCY_KEY_CONFLICT.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "OPERATION_ALREADY_RUNNING",
+              "IDEMPOTENCY_KEY_CONFLICT"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/test-connection": {
+      "post": {
+        "operationId": "testCandidateConnection",
+        "summary": "Reachability and authentication check for a set that does not exist yet. Carries CSRF because it opens an outbound connection to a caller-supplied host.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestConnectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestConnectionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST, SSH_KEY_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST",
+              "SSH_KEY_NOT_FOUND"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{id}": {
+      "get": {
+        "operationId": "getBackupSet",
+        "summary": "Read one backup set. The id is a two-part source/name identity, so it spans path segments.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The two-part identity, e.g. \"nas-a/photos\". Registered in the router as a catch-all for exactly that reason."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/validators": {
+      "get": {
+        "operationId": "listValidators",
+        "summary": "The registered application-validator catalog.",
+        "tags": [
+          "validators"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListValidatorsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/ssh-keys": {
+      "post": {
+        "operationId": "importSSHKey",
+        "summary": "Import a private key and get back a reference to it.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportSSHKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportSSHKeyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/ssh/host-key-probe": {
+      "post": {
+        "operationId": "probeHostKey",
+        "summary": "Fetch a host key fingerprint, trusting nothing. Carries CSRF because it opens an outbound connection to a caller-supplied host.",
+        "tags": [
+          "ssh"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HostKeyProbeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostKeyProbeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST, HOST_KEY_PROBE_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST",
+              "HOST_KEY_PROBE_FAILED"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "getSettings",
+        "summary": "The settings in effect, plus the schema they are validated against.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "patch": {
+        "operationId": "updateSettings",
+        "summary": "Apply only the named fields; everything else keeps what the running configuration says.",
+        "tags": [
+          "settings"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "Start a session with local credentials.",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Success, no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "429": {
+            "description": "Refused: RATE_LIMITED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": false
+      }
+    },
+    "/auth/enroll": {
+      "post": {
+        "operationId": "enrollAdministrator",
+        "summary": "Create the one administrator account, once, against a single-use bootstrap token.",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "csrf": [],
+            "bootstrapToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Success, no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: BOOTSTRAP_TOKEN_INVALID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BOOTSTRAP_TOKEN_INVALID"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH, ENROLLMENT_CLOSED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH",
+              "ENROLLMENT_CLOSED"
+            ]
+          },
+          "429": {
+            "description": "Refused: RATE_LIMITED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": false
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "operationId": "rotatePassword",
+        "summary": "Rotate the administrator password and revoke every other live session.",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotatePasswordRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Success, no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "429": {
+            "description": "Refused: RATE_LIMITED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "RATE_LIMITED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL_ERROR.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL_ERROR"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "End the current session.",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "session": [],
+            "csrf": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Success, no body."
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/auth/session": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "Who, if anyone, this request is authenticated as.",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    }
+  },
+  "x-go-package": "apicontract",
+  "x-generated": {
+    "go": "apps/common/webhost/apicontract/contract.gen.go",
+    "typescript": "ui/shared/src/api/generated/contract.ts"
+  }
+}
