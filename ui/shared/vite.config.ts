@@ -22,7 +22,11 @@ export default defineConfig({
     // e2e/ holds Playwright specs. Without this, `vitest run` collects
     // them and every one fails with "Playwright Test did not expect
     // test.describe() to be called here", which is what made 13 of the
-    // 16 test files fail on a clean checkout.
-    exclude: ["e2e/**", "node_modules/**", "dist/**"]
+    // 16 test files fail on a clean checkout. Matched on `.spec.ts`
+    // rather than the whole directory, so the suite's own plain helpers
+    // (e2e/port.ts) can carry vitest unit tests next to them: every
+    // Playwright file under e2e/ is a `.spec.ts`, and a `.test.ts` there
+    // is a unit test of the harness, not a browser test.
+    exclude: ["e2e/**/*.spec.ts", "node_modules/**", "dist/**"]
   }
 });
