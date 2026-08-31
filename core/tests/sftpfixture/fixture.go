@@ -51,6 +51,12 @@ const User = "backupuser"
 
 const containerUID = "1001"
 
+// serverImage is the SFTP server this fixture runs. Every place that names
+// the image reads it from here, so the presence check, the pull and the
+// `docker run` can never drift apart and start talking about two different
+// images.
+const serverImage = "atmoz/sftp:alpine"
+
 // Every subprocess this fixture starts gets a timeout, because the
 // deadline-bounded retry loops further down only re-read their deadline
 // BETWEEN attempts. One `docker` that never returns outruns all of them,
@@ -259,9 +265,9 @@ func Start(t *testing.T) *Fixture {
 	f.setStage("dockerlease.Sweep (reclaiming containers a killed run left behind)")
 	dockerlease.Sweep()
 
-	f.setStage("docker pull atmoz/sftp:alpine")
-	if _, err := dockerCapture(t, dockerPullTimeout, "pull", "atmoz/sftp:alpine"); err != nil {
-		t.Fatalf("sftpfixture: docker pull atmoz/sftp:alpine: %v", err)
+	f.setStage("docker pull " + serverImage)
+	if _, err := dockerCapture(t, dockerPullTimeout, "pull", serverImage); err != nil {
+		t.Fatalf("sftpfixture: docker pull %s: %v", serverImage, err)
 	}
 
 	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
@@ -279,10 +285,10 @@ func Start(t *testing.T) *Fixture {
 		"-v", hostKeyRSA + ".pub:/etc/ssh/ssh_host_rsa_key.pub:ro",
 		"-v", authorizedDir + ":/home/" + User + "/.ssh/keys:ro",
 		"-v", uploadDir + ":/home/" + User + "/upload",
-		"atmoz/sftp:alpine",
+		serverImage,
 		User + "::" + containerUID + ":" + containerUID + ":upload",
 	}
-	f.setStage("docker run atmoz/sftp:alpine")
+	f.setStage("docker run " + serverImage)
 	containerID, err := dockerCapture(t, dockerRunTimeout, args...)
 	if err != nil {
 		t.Fatalf("sftpfixture: docker run: %v", err)

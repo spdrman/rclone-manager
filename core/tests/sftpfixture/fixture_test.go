@@ -20,6 +20,7 @@ package sftpfixture
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -365,4 +366,179 @@ func TestSSHHandshakeIsBoundedAgainstASilentPeer(t *testing.T) {
 	case <-time.After(window):
 		t.Fatalf("the probe against a peer that accepts TCP and then says nothing was still waiting %s later; ssh.ClientConfig.Timeout bounds only the dial, so this is an unbounded wait inside a loop whose 20-second deadline it outruns, which is #161's shape in the one place that does not shell out", window)
 	}
+}
+
+// --- the registry is not a dependency of a run that needs nothing from it --
+
+// serverImageOnDaemon makes the premise of the image tests below true:
+// they are about what the fixture does when the image is ALREADY on the
+// local daemon, so there has to be one. It inspects first and pulls only
+// when the image is genuinely missing, so on an ordinary machine it costs
+// no network at all, and on a cold one it does the download a first run
+// cannot avoid anyway.
+//
+// A failure here is fatal rather than a skip on purpose. A machine with
+// neither the image nor a reachable registry cannot run the SFTP suite at
+// all, and saying that once, out loud, beats skipping quietly and leaving
+// the reader believing these ran.
+func serverImageOnDaemon(t *testing.T) {
+	t.Helper()
+
+	inspect, cancel := context.WithTimeout(context.Background(), dockerProbeTimeout)
+	defer cancel()
+	if exec.CommandContext(inspect, "docker", "image", "inspect", serverImage).Run() == nil {
+		return
+	}
+
+	pull, cancelPull := context.WithTimeout(context.Background(), dockerPullTimeout)
+	defer cancelPull()
+	out, err := exec.CommandContext(pull, "docker", "pull", serverImage).CombinedOutput()
+	if err != nil {
+		t.Fatalf("this machine has neither %s on its daemon nor a registry that will hand it over, so the SFTP suite cannot run here at all and there is no premise for these tests to stand on: %v\n%s", serverImage, err, out)
+	}
+}
+
+// recordingDocker writes a `docker` that appends its arguments to a log and
+// then execs the real one, and returns the directory to put in front of
+// PATH plus the path of that log.
+//
+// Nothing is faked: every command still reaches the real daemon and comes
+// back with the real answer, so the log is not a record of what a stand-in
+// was asked, it is a record of what the fixture actually ran. That is the
+// observable this file needs. "Did it pull?" is a question about the
+// processes the fixture started, and reading them directly beats asserting
+// on an internal flag that a future edit could set without the behaviour
+// following.
+func recordingDocker(t *testing.T) (dir, logPath string) {
+	t.Helper()
+
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skipf("SKIPPING (missing capability: %q not on PATH): %v", "docker", err)
+	}
+	dir = t.TempDir()
+	logPath = filepath.Join(dir, "invocations.log")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(logPath) + "\nexec " + shellQuote(realDocker) + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the recording docker shim: %v", err)
+	}
+	return dir, logPath
+}
+
+// shellQuote wraps s for /bin/sh. The paths here come from t.TempDir() and
+// exec.LookPath and contain nothing exotic, but a shim that mangles its own
+// log path would produce an empty log, which reads exactly like "the
+// fixture ran no docker commands" and would make an assertion about a
+// missing pull pass for the wrong reason.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// dockerInvocations reads back what the recording shim saw, one command per
+// entry, already split into arguments.
+func dockerInvocations(t *testing.T, logPath string) [][]string {
+	t.Helper()
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading the recorded docker invocations at %s: %v", logPath, err)
+	}
+	var invocations [][]string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			invocations = append(invocations, fields)
+		}
+	}
+	return invocations
+}
+
+// countInvocations counts the recorded commands starting with prefix.
+func countInvocations(invocations [][]string, prefix ...string) int {
+	n := 0
+	for _, args := range invocations {
+		if len(args) < len(prefix) {
+			continue
+		}
+		match := true
+		for i, want := range prefix {
+			if args[i] != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			n++
+		}
+	}
+	return n
+}
+
+// TestFixtureDoesNotPullWhenTheImageIsAlreadyOnTheDaemon is issue #243's
+// evidence. The fixture pulled atmoz/sftp:alpine unconditionally on every
+// single start, so every gate run on every branch was a hard dependency on
+// Docker Hub answering at that moment. Three separate gate runs died that
+// way during one campaign, each with the image already sitting on the local
+// daemon, and each reported at the verdict line as
+// "FAILED (repository-structure dependency rules (§7.1), by actual
+// deletion)" because the deletion proof re-runs core's suite. Reading that
+// as an architecture violation and then finding a TLS handshake timeout a
+// hundred lines up is how a gate stops being read.
+//
+// A pinned tag that is already on the local daemon does not need
+// re-fetching to start a container, so the assertion is simply that no
+// pull happened. It is made on the processes the fixture ran, not on
+// anything the fixture reports about itself.
+func TestFixtureDoesNotPullWhenTheImageIsAlreadyOnTheDaemon(t *testing.T) {
+	requireDocker(t)
+	serverImageOnDaemon(t)
+
+	shim, logPath := recordingDocker(t)
+
+	const window = 150 * time.Second
+	out, exited, code := runHelper(t, "TestHelperStartsAFixtureAndReturns", window,
+		"PATH="+shim+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if !exited {
+		t.Fatalf("the helper that just starts a fixture was still running %s later.\nhelper output:\n%s", window, out)
+	}
+	if code != 0 {
+		t.Fatalf("starting a fixture with %s already on this daemon failed (exit %d); nothing below can say anything about pulls until an ordinary start works.\nhelper output:\n%s", serverImage, code, out)
+	}
+
+	invocations := dockerInvocations(t, logPath)
+
+	// Two positive controls on the recorder, before the assertion that
+	// matters. Without them "no pull was recorded" is also what an empty
+	// log says, and an empty log is what a shim that never got onto the
+	// child's PATH produces.
+	if len(invocations) == 0 {
+		t.Fatalf("the recording shim logged nothing at all, so it was never the `docker` the fixture ran; an assertion about a missing pull would pass here no matter what the fixture did.\nhelper output:\n%s", out)
+	}
+	if countInvocations(invocations, "run", "-d") == 0 {
+		t.Fatalf("the recorder never saw the `docker run -d` that starts the container, so it did not observe the fixture's own docker calls; recorded instead:\n%s", strings.Join(flatten(invocations), "\n"))
+	}
+
+	if got := countInvocations(invocations, "image", "inspect", serverImage); got == 0 {
+		t.Fatalf("the fixture never asked whether %s was already on this daemon, so it cannot be deciding anything from the answer; recorded:\n%s", serverImage, strings.Join(flatten(invocations), "\n"))
+	}
+	if got := countInvocations(invocations, "pull"); got != 0 {
+		t.Fatalf("the fixture ran `docker pull` %d time(s) for an image that was already on this daemon, so every start of it still depends on the registry answering: that is #243, and it has already failed three gate runs that had nothing wrong with them.\nrecorded:\n%s", got, strings.Join(flatten(invocations), "\n"))
+	}
+}
+
+// flatten renders recorded invocations for a failure message.
+func flatten(invocations [][]string) []string {
+	lines := make([]string, 0, len(invocations))
+	for _, args := range invocations {
+		lines = append(lines, "  docker "+strings.Join(args, " "))
+	}
+	return lines
+}
+
+// TestHelperStartsAFixtureAndReturns is an ordinary, successful fixture
+// start. It exists as a child process so the parent can read back every
+// docker command the start ran, from a log the child's own PATH shim wrote,
+// after the child and its cleanup are both finished.
+func TestHelperStartsAFixtureAndReturns(t *testing.T) {
+	skipUnlessHelper(t)
+	f := Start(t)
+	fmt.Println(containerMarker + f.ContainerID())
 }
