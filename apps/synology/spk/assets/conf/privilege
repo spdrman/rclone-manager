@@ -1,0 +1,19 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "tool": [
+        {
+            "relpath": "bin/backup-manager",
+            "user": "package",
+            "group": "package",
+            "permission": "0750"
+        },
+        {
+            "relpath": "bin/backup-manager-web",
+            "user": "package",
+            "group": "package",
+            "permission": "0750"
+        }
+    ]
+}

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Create the directories that have to outlive an upgrade, and seed a
+# configuration file if - and only if - there is not one already.
+set -e
+# DSM installs this package's scripts directory alongside the package, and
+# runs each stage from it, so a sibling common.sh is normally reachable
+# through $0. The documented FHS path is checked as a fallback rather than
+# assuming that holds on every DSM build.
+_sd="$(dirname "$0")"
+if [ -f "${_sd}/common.sh" ]; then
+    . "${_sd}/common.sh"
+elif [ -f "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh" ]; then
+    . "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh"
+else
+    echo "backup-manager: cannot locate common.sh next to $0" >&2
+    exit 1
+fi
+
+mkdir -p "${STATE_DIR}" "${LOG_DIR}" "${RUN_DIR}"
+chmod 0750 "${PKG_VAR}" "${STATE_DIR}" "${LOG_DIR}" "${RUN_DIR}"
+
+# Never overwrite an existing configuration. This script runs on a first
+# install, and it also runs after an uninstall/reinstall cycle - and etc/
+# is documented to survive an uninstall, so on that second path there is
+# very likely an edited config.yaml sitting there that the administrator
+# would not expect a reinstall to throw away.
+if [ ! -f "${CONFIG_FILE}" ]; then
+    cp "${SYNOPKG_PKGDEST}/share/config.yaml.seed" "${CONFIG_FILE}"
+    chmod 0640 "${CONFIG_FILE}"
+    say "Wrote a starter configuration to ${CONFIG_FILE}."
+    say "Backup Manager will not start until it names at least one source."
+fi
+
+exit 0

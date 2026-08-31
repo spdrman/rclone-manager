@@ -1,0 +1,142 @@
+#!/bin/sh
+# The two processes this package runs, and how DSM starts, stops and polls
+# them.
+#
+# Two processes rather than one because that is what the canonical release
+# binary offers: `backup-manager-web serve` is the engine (local
+# authentication, /api/v1, the scheduler) and `backup-manager-web serve-ui`
+# is the shared static UI plus a reverse proxy in front of it. Splitting
+# them this way is not a Synology decision - it is exactly the topology
+# container/compose.yaml already ships for the generic Docker app, running
+# the same commands of the same unmodified binaries. A DSM-only single
+# process would mean a DSM-only binary, and §3.7 requires this package to
+# carry the release binary unchanged.
+# DSM installs this package's scripts directory alongside the package, and
+# runs each stage from it, so a sibling common.sh is normally reachable
+# through $0. The documented FHS path is checked as a fallback rather than
+# assuming that holds on every DSM build.
+_sd="$(dirname "$0")"
+if [ -f "${_sd}/common.sh" ]; then
+    . "${_sd}/common.sh"
+elif [ -f "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh" ]; then
+    . "/var/packages/${SYNOPKG_PKGNAME}/scripts/common.sh"
+else
+    echo "backup-manager: cannot locate common.sh next to $0" >&2
+    exit 1
+fi
+
+start_daemon() {
+    _pidfile="$1"
+    _log="$2"
+    shift 2
+    "$@" >> "${_log}" 2>&1 &
+    echo $! > "${_pidfile}"
+}
+
+# Signals the process a pid file names and waits for it to go. It
+# deliberately does NOT remove the pid file itself: the caller does that,
+# naming the path literally, so that every deletion in this package
+# resolves to a path a reader (and ScanForUnsafeDeletes) can follow back
+# to the package's own var directory instead of to "$1".
+stop_daemon() {
+    _pidfile="$1"
+    _name="$2"
+    if pid_alive "${_pidfile}"; then
+        _pid=$(cat "${_pidfile}")
+        kill "${_pid}" 2>/dev/null
+        # SIGTERM is the signal both commands install a graceful-shutdown
+        # handler for, so give that handler its own window before
+        # escalating rather than pulling the state database out from
+        # under a running backup.
+        _waited=0
+        while [ "${_waited}" -lt 30 ] && kill -0 "${_pid}" 2>/dev/null; do
+            sleep 1
+            _waited=$((_waited + 1))
+        done
+        if kill -0 "${_pid}" 2>/dev/null; then
+            say "${_name} did not exit within 30s of SIGTERM; sending SIGKILL."
+            kill -9 "${_pid}" 2>/dev/null
+        fi
+    fi
+}
+
+case "$1" in
+start)
+    mkdir -p "${STATE_DIR}" "${LOG_DIR}" "${RUN_DIR}"
+
+    if [ ! -f "${CONFIG_FILE}" ]; then
+        say "No configuration at ${CONFIG_FILE}. Reinstall the package, or write one there."
+        exit 1
+    fi
+
+    # The engine. --trust-forwarded-headers is deliberately NOT set: the
+    # generic Docker deployment can set it because compose puts the engine
+    # on a private network only the UI container joins, but a loopback
+    # bind on a NAS is reachable by any local process, so the forwarded
+    # headers here are not attributable to one verified peer.
+    start_daemon "${ENGINE_PID}" "${ENGINE_LOG}" \
+        "${PKG_BIN}/backup-manager-web" serve \
+        --config "${CONFIG_FILE}" \
+        --listen "${ENGINE_ADDR}" \
+        --auth-store "${STATE_DIR}/local-auth.json" \
+        --public-base-url "http://$(hostname):${UI_PORT}"
+
+    # Give the engine a moment to fail on a configuration it cannot
+    # validate. Without this, an unconfigured package reports "started"
+    # and then quietly is not running, which is a worse experience than a
+    # failed start that says why.
+    sleep 3
+    if ! pid_alive "${ENGINE_PID}"; then
+        say "Backup Manager's engine exited immediately. Last lines of ${ENGINE_LOG}:"
+        tail -n 20 "${ENGINE_LOG}" 2>/dev/null | while IFS= read -r line; do say "  ${line}"; done
+        say "A fresh install needs at least one source in ${CONFIG_FILE} before it can start."
+        rm -f "${ENGINE_PID}"
+        exit 1
+    fi
+
+    # The UI host: the only LAN-facing listener, reverse-proxying to the
+    # engine over loopback.
+    start_daemon "${UI_PID}" "${UI_LOG}" \
+        "${PKG_BIN}/backup-manager-web" serve-ui \
+        --listen ":${UI_PORT}" \
+        --upstream "http://${ENGINE_ADDR}"
+
+    sleep 1
+    if ! pid_alive "${UI_PID}"; then
+        say "Backup Manager's web UI failed to start. Last lines of ${UI_LOG}:"
+        tail -n 20 "${UI_LOG}" 2>/dev/null | while IFS= read -r line; do say "  ${line}"; done
+        stop_daemon "${ENGINE_PID}" "engine"
+        rm -f "${ENGINE_PID}"
+        rm -f "${UI_PID}"
+        exit 1
+    fi
+    exit 0
+    ;;
+
+stop)
+    # UI first, so nothing is proxying into an engine that is on its way
+    # down.
+    stop_daemon "${UI_PID}" "web UI"
+    rm -f "${UI_PID}"
+    stop_daemon "${ENGINE_PID}" "engine"
+    rm -f "${ENGINE_PID}"
+    exit 0
+    ;;
+
+status)
+    if pid_alive "${ENGINE_PID}" && pid_alive "${UI_PID}"; then
+        exit 0
+    fi
+    exit 1
+    ;;
+
+log)
+    echo "${ENGINE_LOG}"
+    exit 0
+    ;;
+
+*)
+    echo "usage: $0 {start|stop|status|log}" >&2
+    exit 1
+    ;;
+esac

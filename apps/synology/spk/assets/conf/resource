@@ -1,0 +1,13 @@
+{
+    "data-share": {
+        "shares": [
+            {
+                "name": "backup-manager",
+                "once": false,
+                "permission": {
+                    "rw": ["BackupManager"]
+                }
+            }
+        ]
+    }
+}

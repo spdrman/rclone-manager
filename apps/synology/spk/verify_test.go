@@ -156,31 +156,52 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 // that itself recorded the wrong file, so the packaged binary's own ELF
 // machine field is checked against the architecture INFO declares.
 func TestVerify_RejectsWrongELFMachine(t *testing.T) {
-	release := stagedBinaries(t, "arm64", "release")
-	manifest := manifestFor(t, "arm64", release)
-
-	// Same manifest, but the package is assembled for armv8 out of x86-64
-	// binaries: hash parity is satisfied only if the manifest is rebuilt
-	// from them, so this control deliberately rebuilds it that way and
-	// leans entirely on the ELF check.
-	wrong := stagedBinaries(t, "amd64", "release")
-	manifest = manifestFor(t, "arm64", wrong)
+	// Build refuses to assemble this package in the first place, which is
+	// the right place to stop it — so this control produces the mismatch
+	// the way it could still reach a user: a package built correctly for
+	// one architecture, then relabelled as the other. Hash parity is kept
+	// intact on purpose (the manifest entry is relabelled to match), so
+	// the only thing left that can catch it is the ELF machine check.
+	bins := stagedBinaries(t, "amd64", "release")
+	manifest := manifestFor(t, "amd64", bins)
 	path, err := Build(BuildOptions{
-		GOARCH:      "arm64",
+		GOARCH:      "amd64",
 		Version:     manifest.Version,
-		BinariesDir: wrong,
+		BinariesDir: bins,
 		OutDir:      t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
+	manifest.Architectures[0].Architecture = "arm64"
 
-	rep, err := Verify(path, manifest)
+	relabelled := mutateSPK(t, path, func(entries []tarEntry) []tarEntry {
+		body := strings.Replace(string(infoBody(t, entries)),
+			`arch="x86_64"`, `arch="armv8"`, 1)
+		return replaceBody(entries, INFOName, []byte(body))
+	})
+
+	rep, err := Verify(relabelled, manifest)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	requirePass(t, rep, CheckBinaryParity) // the hashes really do agree
 	requireFail(t, rep, CheckBinaryMachine, "EM_X86_64")
+}
+
+// TestBuild_RefusesAWrongArchitectureBinary is the other half of that
+// pair: Build must not assemble the mislabelled package at all.
+func TestBuild_RefusesAWrongArchitectureBinary(t *testing.T) {
+	bins := stagedBinaries(t, "amd64", "release")
+	_, err := Build(BuildOptions{
+		GOARCH: "arm64", Version: "1.0.0-1", BinariesDir: bins, OutDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Build assembled an armv8 package out of x86-64 binaries")
+	}
+	if !strings.Contains(err.Error(), "EM_AARCH64") {
+		t.Fatalf("error %q does not say what architecture was needed", err)
+	}
 }
 
 // TestVerify_RequiresTheDocumentedLayout walks every member the Synology
@@ -282,7 +303,7 @@ func TestVerify_RejectsBundledSecret(t *testing.T) {
 		{
 			name:   "private key left in the package payload",
 			inner:  true,
-			file:   PayloadRoot + "/etc/id_ed25519",
+			file:   "etc/id_ed25519",
 			body:   "-----BEGIN OPENSSH PRIVATE KEY-----\nNOT-A-REAL-KEY\n-----END OPENSSH PRIVATE KEY-----\n",
 			detail: "id_ed25519",
 		},
@@ -295,7 +316,7 @@ func TestVerify_RejectsBundledSecret(t *testing.T) {
 		{
 			name:   "an environment file carrying a filled-in password",
 			inner:  true,
-			file:   PayloadRoot + "/etc/app.env",
+			file:   "etc/app.env",
 			body:   "LISTEN_ADDR=:8477\nADMIN_PASSWORD=hunter2\n",
 			detail: "app.env",
 		},

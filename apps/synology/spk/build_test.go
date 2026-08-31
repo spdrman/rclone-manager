@@ -123,7 +123,7 @@ func TestBuild_PayloadCarriesTheDSMLauncher(t *testing.T) {
 	// Control: strip the launcher config out and the check must notice,
 	// rather than treating "dsmuidir declared" as sufficient.
 	broken := mutateInnerPayload(t, path, func(inner []tarEntry) []tarEntry {
-		return dropEntry(inner, PayloadRoot+"/"+DSMUIDir+"/config")
+		return dropEntry(inner, DSMUIDir+"/config")
 	})
 	rep, err = Verify(broken, manifest)
 	if err != nil {

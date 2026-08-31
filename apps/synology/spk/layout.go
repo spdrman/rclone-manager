@@ -51,15 +51,19 @@ const (
 	IconName    = "PACKAGE_ICON.PNG"
 	Icon256Name = "PACKAGE_ICON_256.PNG"
 
-	// PayloadRoot is the notional root of everything inside package.tgz.
-	// DSM extracts it to /var/packages/<pkg>/target, so a path recorded
-	// as PayloadRoot+"/bin/backup-manager" lands at
+	// PayloadBinDir is where the two release binaries live inside
+	// package.tgz. DSM extracts that archive to
+	// /var/packages/<pkg>/target, so "bin/backup-manager" lands at
 	// /var/packages/BackupManager/target/bin/backup-manager.
-	PayloadRoot = "."
+	//
+	// Member names carry no "./" prefix, matching what the toolkit's own
+	// pkg_make_inner_tarball produces: it pipes `ls <dir>` into `tar -C
+	// <dir> -T -`, so every name is relative with no leading dot.
+	PayloadBinDir = "bin"
 
-	// PayloadBinDir is where the two release binaries live inside the
-	// payload.
-	PayloadBinDir = PayloadRoot + "/bin"
+	// PayloadShareDir holds files the lifecycle scripts read at runtime,
+	// currently just the starter configuration postinst seeds from.
+	PayloadShareDir = "share"
 
 	// DSMUIDir is INFO's `dsmuidir`: the directory inside the target that
 	// DSM exposes at /webman/3rdparty/<name>/ and reads the desktop

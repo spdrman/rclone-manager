@@ -110,7 +110,15 @@ func TestLifecycleScripts_KeepStateOutsideTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LifecycleScripts: %v", err)
 	}
-	postinst := scripts["postinst"]
+	shared, err := SharedScript()
+	if err != nil {
+		t.Fatalf("SharedScript: %v", err)
+	}
+	// postinst sources the shared library, so the paths it acts on are
+	// only visible in the two files together. Reading the stage alone
+	// would make this test pass or fail on where a constant happens to be
+	// written down rather than on where state actually lands.
+	postinst := shared + scripts["postinst"]
 
 	// Synology documents SYNOPKG_PKGDEST (the target directory) but does
 	// NOT document an environment variable for the var/etc directories, so
