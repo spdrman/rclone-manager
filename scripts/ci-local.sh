@@ -248,10 +248,10 @@ bash scripts/perf/selftest.sh
 # they take under 20 seconds, and check-contract-drift.sh is the only thing
 # that catches a hand edit to a generated binding that keeps its digest
 # intact.
-echo "==> /api/v1 bindings match the contract, and no implementation type leaks (#166)"
+gate_step "/api/v1 bindings match the contract, and no implementation type leaks (#166)"
 bash scripts/api/check-contract-drift.sh
 
-echo "==> the /api/v1 contract gates can actually fail (mutation self-test)"
+gate_step "the /api/v1 contract gates can actually fail (mutation self-test)"
 bash scripts/api/selftest.sh
 
 if [ "$FAST" != "1" ]; then
