@@ -435,11 +435,13 @@ func publishedPort(t *testing.T, container, containerPort string) string {
 	return line[idx+1:]
 }
 
-// composeFile is just enough of container/compose.yaml's shape to check
-// which services publish ports - not a general compose-file model.
+// composeFile is just enough of container/compose.yaml's shape for the
+// two static checks in this package, which services publish ports and
+// which image each one resolves to, not a general compose-file model.
 type composeFile struct {
 	Services map[string]struct {
-		Ports []any `yaml:"ports"`
+		Image string `yaml:"image"`
+		Ports []any  `yaml:"ports"`
 	} `yaml:"services"`
 }
 
