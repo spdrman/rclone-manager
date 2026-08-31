@@ -401,10 +401,7 @@
           "declared": "supported"
         },
         "release-manifest-integrity": {
-          "declared": "blocked",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report.",
-          "blocker": "#174",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         },
         "core-binary-hash-parity": {
           "declared": "not-applicable",
@@ -510,10 +507,7 @@
           "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go"
         },
         "release-manifest-integrity": {
-          "declared": "blocked",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report.",
-          "blocker": "#174",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         },
         "core-binary-hash-parity": {
           "declared": "not-applicable",
@@ -625,10 +619,7 @@
           "declared": "supported"
         },
         "release-manifest-integrity": {
-          "declared": "blocked",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report.",
-          "blocker": "#174",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         },
         "core-binary-hash-parity": {
           "declared": "not-applicable",
@@ -740,10 +731,7 @@
           "declared": "supported"
         },
         "release-manifest-integrity": {
-          "declared": "blocked",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report.",
-          "blocker": "#174",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         },
         "core-binary-hash-parity": {
           "declared": "not-applicable",

@@ -56,10 +56,20 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "2a5c43274afa7fd2e42006e7159919953fe4247d1f1bb5b7d6621e3fe1f25c3e",
+    "sha256": "704bc85947b3747093b136b8a5e19d140c3ae951f52291edfaa16fe96618d285",
     "format": "sha256sum"
   },
   "artifacts": [
+    {
+      "target": "casaos",
+      "path": "apps/casaos/compose/backup-manager.yml",
+      "sha256": "af08c2fcd19eb0011eeee4f2d86969579ff79ee63e96e47d6bbf80ab822391e7"
+    },
+    {
+      "target": "casaos",
+      "path": "apps/casaos/icon.svg",
+      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+    },
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.env",
@@ -69,6 +79,26 @@
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.yml",
       "sha256": "fa7702470cd6af35adfcdb2ea0b4fe9d1897c876f0f32a45c333b0b4ebc4141e"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/compose/backup-manager.env",
+      "sha256": "1f8e9affa39c993aebdc38834b065e4007b4ca523c272eeb0fab87df3cb171bd"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/compose/backup-manager.yml",
+      "sha256": "1e309bff00f2979815b39c8534390c68fd27851164261a8eb348d1d7ad2be251"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/logo.svg",
+      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+    },
+    {
+      "target": "portainer",
+      "path": "apps/portainer/templates.json",
+      "sha256": "c6024cd7bc1e70c1c4a396cd11bea70027a804b444c64623fdf23c1c000ec38e"
     },
     {
       "target": "proxmox",
@@ -116,6 +146,16 @@
       "sha256": "7d78ccf05a46bd44d5d67455f069bd2480e1e1158c753c7345fb1f160b91909a"
     },
     {
+      "target": "zimaos",
+      "path": "apps/zimaos/compose/backup-manager.yml",
+      "sha256": "0819ac61a1f8bab3753f9fc4acbdb4f1d529b1e8f74bbf0ff58893a130b4e894"
+    },
+    {
+      "target": "zimaos",
+      "path": "apps/zimaos/icon.svg",
+      "sha256": "7e087903e4914d6ffb2d6caf7f31c3fa155975c701c5c92b83c0747e132460c9"
+    },
+    {
       "target": "generic",
       "path": "container/.env.example",
       "sha256": "44516790cbbebfed6826f115d23d9d87faa2f3c317eb45818b3878b4346656cf"
@@ -132,6 +172,10 @@
     }
   ],
   "unbuiltTargets": [
+    {
+      "target": "dockge",
+      "reason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice"
+    },
     {
       "target": "synology",
       "reason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json"

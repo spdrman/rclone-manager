@@ -142,7 +142,7 @@ func CheckPortainerTemplate(source string, t PortainerTemplates, composeVars []s
 		out = append(out, Violation{source, RulePrivileged, "the template asks Portainer to run the container privileged"})
 	}
 	for _, v := range tpl.Volumes {
-		if hostPathIsAt(v.Bind, "/var/run/docker.sock") || hostPathIsAt(v.Bind, "/run/docker.sock") {
+		if HostPathIsAt(v.Bind, "/var/run/docker.sock") || HostPathIsAt(v.Bind, "/run/docker.sock") {
 			out = append(out, Violation{source, RuleProhibitedHostPath,
 				fmt.Sprintf("the template binds %s: Portainer holds the Docker socket because that is what Portainer is, and backup-manager must never inherit it", v.Bind)})
 		}

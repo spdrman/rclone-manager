@@ -201,7 +201,34 @@
         ],
         "unbuiltReason": ""
       },
-      "synology": {
+      "portainer": {
+    "artifacts": [
+     "apps/portainer/compose/backup-manager.env",
+     "apps/portainer/compose/backup-manager.yml",
+     "apps/portainer/templates.json",
+     "apps/portainer/logo.svg"
+    ],
+    "unbuiltReason": ""
+   },
+   "dockge": {
+    "artifacts": [],
+    "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice"
+   },
+   "casaos": {
+    "artifacts": [
+     "apps/casaos/compose/backup-manager.yml",
+     "apps/casaos/icon.svg"
+    ],
+    "unbuiltReason": ""
+   },
+   "zimaos": {
+    "artifacts": [
+     "apps/zimaos/compose/backup-manager.yml",
+     "apps/zimaos/icon.svg"
+    ],
+    "unbuiltReason": ""
+   },
+   "synology": {
         "artifacts": [],
         "unbuiltReason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json"
       },

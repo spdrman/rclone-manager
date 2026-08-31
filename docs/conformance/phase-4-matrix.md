@@ -122,40 +122,40 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 
 ### Per-capability results
 
-| Capability | UGOS Pro (EPIC D) | Synology DSM | TrueNAS | Unraid | Generic Docker | OpenMediaVault | Proxmox VE |
-|---|---|---|---|---|---|---|---|
-| Provider identified correctly | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Provider package metadata present | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
-| Uses the exact canonical image | BLOCKED | N/A | PASS | PASS | N/A | PASS | PASS |
-| Release manifest well-formed and reachable (repository-wide) | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Core binary hash parity (this provider's own shipped bytes) | BLOCKED | N/A | N/A | N/A | N/A | N/A | N/A |
-| This provider's own architecture claim matches the build | BLOCKED | PASS | N/A | N/A | N/A | N/A | N/A |
-| State path persists outside the container | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
-| Backup root constrained | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
-| Auth mode explicit and honest | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| No bundled secrets | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| No provider-specific lifecycle implementation | PASS | N/A | PASS | PASS | N/A | PASS | PASS |
-| API reachable only through the intended path | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
-| Provider removal does not alter core | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
-| Host management plane not modified | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Install / update / remove semantics | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
-| UI launches | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
-| Upgrade preserves state | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
-| Removal does not delete retained backups | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
-| Native authentication | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| Native notifications | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| Embedded window | BLOCKED | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| App-store packaging | BLOCKED | PASS | PASS | PASS | UNSUP | UNSUP | UNSUP |
-| Storage picker | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| Capability | UGOS Pro (EPIC D) | CasaOS (P6) | Portainer CE (P6) | Synology DSM | TrueNAS | Unraid | ZimaOS (P6) | Dockge (P6) | Generic Docker | OpenMediaVault | Proxmox VE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Provider identified correctly | PASS | N/A | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS | PASS |
+| Provider package metadata present | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Uses the exact canonical image | BLOCKED | PASS | PASS | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
+| Release manifest well-formed and reachable (repository-wide) | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Core binary hash parity (this provider's own shipped bytes) | BLOCKED | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |
+| This provider's own architecture claim matches the build | BLOCKED | PASS | N/A | PASS | N/A | N/A | PASS | N/A | N/A | N/A | N/A |
+| State path persists outside the container | BLOCKED | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Backup root constrained | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Auth mode explicit and honest | PASS | N/A | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS | PASS |
+| No bundled secrets | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No provider-specific lifecycle implementation | PASS | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
+| API reachable only through the intended path | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Provider removal does not alter core | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | N/A | PASS | PASS |
+| Host management plane not modified | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Install / update / remove semantics | BLOCKED | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
+| UI launches | BLOCKED | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
+| Upgrade preserves state | BLOCKED | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
+| Removal does not delete retained backups | BLOCKED | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
+| Native authentication | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| Native notifications | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| Embedded window | BLOCKED | UNSUP | UNSUP | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| App-store packaging | BLOCKED | N/A | N/A | PASS | PASS | PASS | N/A | UNSUP | UNSUP | UNSUP | UNSUP |
+| Storage picker | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
 
 ### Totals
 
 | Outcome | Cells |
 |---|---|
-| PASS | 78 |
-| PENDING_OPERATOR | 20 |
-| UNSUPPORTED | 26 |
-| NOT_APPLICABLE | 21 |
+| PASS | 119 |
+| PENDING_OPERATOR | 36 |
+| UNSUPPORTED | 43 |
+| NOT_APPLICABLE | 39 |
 | BLOCKED | 16 |
 | FAIL | 0 |
 
@@ -163,20 +163,7 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 
 Computed over every one of the 10 targets this refactor claims: CasaOS, Portainer CE, Synology DSM, TrueNAS, Unraid, ZimaOS, Dockge, Generic Docker, OpenMediaVault, Proxmox VE.
 
-**Not met.** 0 cell(s) failed and 10 could not be decided, every one of them in a column this gate claims:
-
-| Provider | Capability | Outcome | Tracked by |
-|---|---|---|---|
-| CasaOS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Portainer CE | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Synology DSM | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| TrueNAS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Unraid | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| ZimaOS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Dockge | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Generic Docker | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| OpenMediaVault | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Proxmox VE | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+**Met.** Every cell of every one of those columns was decided, and none of them failed.
 
 ### Phase 4 Exit Gate
 
@@ -190,8 +177,9 @@ cannot be cited afterwards.
 **UGOS Pro is EPIC D's column** (work package 4.2).
 All 23 of its cells are decided by the same runner, on the same terms as every
 other column, and reported in full below; 16 are blocked today, on #83.
-None of them is in the verdict above. A capability EPIC D owns cannot hold
-EPIC B's Phase 4 open, and an EPIC D column that goes green cannot close it.
+None of them is in either verdict above. A capability EPIC D owns cannot hold
+EPIC B's Phase 4 or its Phase 6 release qualification open, and an EPIC D
+column that goes green cannot close either of them.
 
 ### Every cell that is not a plain PASS
 
@@ -225,7 +213,6 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
 | Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/casaos-app-store-install.md, not yet executed |
@@ -243,7 +230,6 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
 | This provider's own architecture claim matches the build | N/A | This adapter makes no architecture claim of its own: it names one multi-arch canonical image by reference and lets the runtime pick. The repository-wide claim is release-manifest-integrity's. |
 | Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
@@ -308,7 +294,6 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
 | Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/zimaos-app-store-install.md, not yet executed |
@@ -327,7 +312,6 @@ why.
 |---|---|---|
 | Provider identified correctly | N/A | This adapter ships no frontend bridge, which canonical.json records as uiBridge "none" with the reason. It is a container manager or an app store whose whole integration surface is a template or a compose file: it has no payload to carry a UI bundle in, the canonical image has 347,956 bytes of headroom against a bundle that costs roughly 352 KB, and a bridge would put this platform's id into the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. Identity is instead the runtime profile the stack selects, and it is generic because that is what this deployment honestly is. |
 | Uses the exact canonical image | N/A | Dockge deploys container/compose.yaml itself, and that file BUILDS the canonical image from container/Dockerfile rather than pulling a published reference: it is the source of the image, not a consumer of one. Identical to the generic column's answer, and for the identical reason, which is the point of this column reading the canonical stack rather than a copy. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of this branch's history, so its hashes describe a build that cannot be reached. This is repository-wide and identical for every column. It is fixed on main by PR #182, whose manifest pins a commit that IS an ancestor of this branch: I measured it by dropping main's manifest in and rerunning, and the check passes for every column. Note what that measurement also showed. Merging main does not turn this row green on its own, it turns it red: the staleness guard fails a blocked cell whose check has started passing, on purpose, because a documented reason not to look is worse than no declaration. Whoever merges main flips these declarations to supported in the same commit and regenerates the report. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This adapter consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. |
 | This provider's own architecture claim matches the build | N/A | This adapter makes no architecture claim of its own: it names one multi-arch canonical image by reference and lets the runtime pick. The repository-wide claim is release-manifest-integrity's. |
 | Auth mode explicit and honest | N/A | The check reads the auth mode out of a frontend bridge and this adapter ships none (see provider-identity). The claim underneath it still holds and is still decided: the runtime is the canonical one, which uses section 13A local auth, and the adapter wires no authentication of its own. That half is the security-relevant half and it is checked by name rather than skipped. |

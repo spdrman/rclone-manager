@@ -232,6 +232,10 @@ it.
 | Synology DSM | Tier B | a real `.spk` built by `apps/synology`, wrapping the release binaries unchanged and checking their digest against `container/release-manifest.json` | [`apps/synology/README.md`](apps/synology/README.md) |
 | OpenMediaVault | Tier C | a Compose deployment profile, metadata only | [`apps/openmediavault/README.md`](apps/openmediavault/README.md) |
 | Proxmox VE | Tier C | the same Compose profile for a dedicated container-host guest, metadata only | [`apps/proxmox/README.md`](apps/proxmox/README.md) |
+| Portainer CE | Tier B | a version 3 App Template plus the Compose stack it deploys, metadata only | [`apps/portainer/README.md`](apps/portainer/README.md) |
+| Dockge | Tier C | no packaging at all, by design: Dockge imports `container/compose.yaml` itself, and the deliverable is the workflow that keeps that true | [`apps/dockge/README.md`](apps/dockge/README.md) |
+| CasaOS | Tier B | one `docker-compose.yml` carrying an `x-casaos` block, which is both the runtime definition and the store submission | [`apps/casaos/README.md`](apps/casaos/README.md) |
+| ZimaOS | Tier B | the same `x-casaos` compose file again, for the CasaOS-derived store ZimaOS ships | [`apps/zimaos/README.md`](apps/zimaos/README.md) |
 | UGREEN UGOS Pro | Tier A | the frontend bridge and nothing else: no `.UPK`, no packaging | EPIC D, issue #83 |
 
 <!-- END SUPPORT-MODEL -->
