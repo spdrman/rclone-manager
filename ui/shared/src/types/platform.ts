@@ -36,7 +36,14 @@ export interface PlatformDeploymentInfo {
    *  `deployment`, so a consumer reads `bridge.deployment.label` rather
    *  than the doubled-up `bridge.deployment.deployment`. */
   label: string;
-  /** Documented storage mount for this integration. */
+  /** The host directory this integration lands retained backup artifacts
+   *  in: the backup root, not the app root and not a container path. The
+   *  UI shows it, and the backup-set wizard seeds a destination from it, so
+   *  a value that also holds private state, config or key material both
+   *  misinforms the operator and proposes writing backups next to a private
+   *  key (§19.2). The container-packaged platforms are pinned to
+   *  apps/common/packaging/canonical.json, which is where their value is
+   *  changed; bridges that file does not cover are not yet pinned to it. */
   storageMount: string;
   adapterVersion: string;
 }

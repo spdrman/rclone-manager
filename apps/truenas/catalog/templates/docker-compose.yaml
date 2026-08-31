@@ -1,0 +1,81 @@
+# Rendered by the TrueNAS Apps catalog from questions.yaml/ix_values.yaml.
+#
+# Every template expression is quoted so this file stays parseable YAML
+# with no rendering step, which is what lets apps/common/packaging read it
+# on every commit rather than only after a TrueNAS install. It is also a
+# straight-line render on purpose: no conditionals, no loops, nothing that
+# would make the rendered shape depend on an answer. What comes out of
+# here must be the same two-container deployment
+# ../../compose/backup-manager.yaml describes, with the operator's answers
+# substituted and nothing else different.
+services:
+  backup-manager:
+    image: "{{ .Values.image.reference }}"
+    command: ["/backup-manager-web", "serve"]
+
+    user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - "/tmp:size=64m,mode=1777,uid={{ .Values.runtime.puid }},gid={{ .Values.runtime.pgid }}"
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "http://localhost:{{ .Values.network.webPort }}"
+      TRUST_FORWARDED_HEADERS: "true"
+
+    volumes:
+      - "{{ .Values.storage.state.hostPath }}:/data/state"
+      - "{{ .Values.storage.backups.hostPath }}:/data/backups"
+      - "{{ .Values.storage.config.hostPath }}:/etc/backup-manager/config.yaml:ro"
+      - "{{ .Values.storage.sshKey.hostPath }}:/etc/backup-manager/id_ed25519:ro"
+      - "{{ .Values.storage.knownHosts.hostPath }}:/etc/backup-manager/known_hosts:ro"
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+  backup-manager-ui:
+    image: "{{ .Values.image.reference }}"
+    command: ["/backup-manager-web", "serve-ui"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "{{ .Values.runtime.puid }}:{{ .Values.runtime.pgid }}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - "/tmp:size=16m,mode=1777,uid={{ .Values.runtime.puid }},gid={{ .Values.runtime.pgid }}"
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "{{ .Values.network.webPort }}:8080"
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:

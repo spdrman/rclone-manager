@@ -1,0 +1,124 @@
+# TrueNAS custom-app deployment for Backup Manager (WP4.3, issue #84).
+#
+# Paste this whole file into Apps -> Discover Apps -> Custom App ->
+# Install via YAML. It is the same two-container shape
+# container/compose.yaml already ships for the generic Docker app, using
+# the exact same canonical image, with TrueNAS host paths substituted in.
+# Nothing here is TrueNAS-specific behaviour; this is metadata pointed at
+# an image that already knows how to run.
+#
+# Before installing, work through docs/acceptance/truenas-provider-acceptance.md
+# step 0: create the four datasets, own them by the uid/gid below, and
+# write config.yaml, the SSH key and the pinned known_hosts. The engine
+# loads and validates its config before it opens a listener, so a missing
+# config file is a hard start failure rather than a first-run wizard.
+#
+# Substitute, in this file only:
+#   * "tank" in every host path, for your own pool;
+#   * 568:568, if your datasets are owned by a different uid/gid;
+#   * the image reference, if you have not pushed to the recorded one
+#     (no registry is configured for this repository yet, see
+#     apps/common/packaging/canonical.json).
+#
+# apps/common/packaging holds this file to the shared source of truth on
+# every commit: image reference, container-side mount points, port, and
+# the rule that private state and key material never live inside the
+# backup root.
+services:
+  # The engine: local authentication, the versioned /api/v1 API and the
+  # backup scheduler, one process sharing one shutdown context. It holds
+  # the state database and the credentials, and it publishes no port at
+  # all. Reachable only from backup-manager-ui, over this project's own
+  # network.
+  backup-manager:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    command: ["/backup-manager-web", "serve"]
+
+    user: "568:568"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=568,gid=568
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      # What the Web UI container's published port looks like from
+      # outside this NAS. The engine prints the one-time enrollment link
+      # against this, because its own listen address is never reachable.
+      # "localhost" is only right when you open the link on the NAS
+      # itself; set your NAS's real hostname here to get a link that
+      # works from another machine.
+      PUBLIC_BASE_URL: "http://localhost:8080"
+      # Safe here specifically because the engine joins only the private
+      # network below, whose only other member is backup-manager-ui: the
+      # forwarded headers can only have come from that proxy. Never set
+      # this on the Web UI container, which is the actual edge.
+      TRUST_FORWARDED_HEADERS: "true"
+
+    volumes:
+      - /mnt/tank/backup-manager/state:/data/state
+      - /mnt/tank/backup-manager/backups:/data/backups
+      - /mnt/tank/backup-manager/config/config.yaml:/etc/backup-manager/config.yaml:ro
+      - /mnt/tank/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
+      - /mnt/tank/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # The Web UI: the shared static bundle plus a reverse proxy to the
+  # engine. The only container with a published port, and the only one
+  # TrueNAS's Web Portal button should ever open.
+  backup-manager-ui:
+    image: ghcr.io/spdrman/backup-manager:1.0.0
+    command: ["/backup-manager-web", "serve-ui"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "568:568"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=568,gid=568
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+    # No volumes at all. This container never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory: it serves its own
+    # embedded bundle and proxies HTTP. Smaller attack surface by
+    # construction rather than by discipline.
+
+    # Overrides the image's own HEALTHCHECK, which runs
+    # `/backup-manager status` and needs a config file and a state
+    # database this container does not have. Without this override the
+    # container runs correctly and TrueNAS reports it unhealthy forever.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "8080:8080"
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:

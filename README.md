@@ -528,6 +528,18 @@ supplies a `PlatformBridge` implementation and, for the seven that exist today
 (`generic`, `ugos`, `synology`, `truenas`, `unraid`, `openmediavault`, `proxmox`), nothing
 else — `ui/shared` never imports a provider, only the reverse.
 
+Three of those providers also carry packaging metadata next to their bridge:
+`apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
+`apps/unraid/` (two Community Applications Docker templates) and
+`apps/openmediavault/` (a Compose deployment profile). All three are metadata and
+templates only, wrapping the exact canonical OCI image with no lifecycle code of their
+own, and `apps/common/packaging/` holds them to that on every commit: one shared source
+of truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are
+decidable from the repository alone. The half that is not decidable here — installing,
+updating and removing on the real platform — lives in [`docs/acceptance/`](docs/acceptance/)
+as prewritten operator procedures, and until one is executed its provider is
+build-supported and uncertified.
+
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
 
@@ -539,4 +551,5 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/recovery.md`](docs/recovery.md) – recovery and the restore procedure, in full
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`docs/deployment.md`](docs/deployment.md) – UGREEN container packaging (issue #27; check it exists yet)
+- [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written before execution and run on real NAS hardware
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged

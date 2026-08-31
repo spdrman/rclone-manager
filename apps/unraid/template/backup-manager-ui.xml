@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Docker template for the Backup Manager WEB UI container
+  (WP4.3, deliverable D-7).
+
+  Install backup-manager.xml first, and create the user-defined network
+  both templates share:
+
+      docker network create backup-manager
+
+  This container mounts nothing at all: it serves its own embedded static
+  bundle and reverse-proxies API requests to the engine. It is the only
+  one of the two with a published port.
+
+  The no-healthcheck flag in ExtraParams is deliberate, and it is the one
+  place the two compose profiles and this template solve the same problem
+  differently. The canonical image bakes in a HEALTHCHECK running
+  "/backup-manager status", which needs a config file and a state database
+  this container does not have, so left inherited it would report
+  unhealthy forever while working perfectly. Compose overrides the test
+  with "/backup-manager-web healthcheck". Unraid's only seam is docker
+  run's health-cmd flag, which is shell form, and the runtime image is
+  distroless with no shell, so an override there would be a healthcheck
+  that can never pass. Off is honest; permanently failing is not.
+-->
+<Container version="2">
+  <Name>backup-manager-ui</Name>
+  <Repository>ghcr.io/spdrman/backup-manager:1.0.0</Repository>
+  <Registry>https://github.com/spdrman/rclone-manager/pkgs/container/backup-manager</Registry>
+  <Network>backup-manager</Network>
+  <MyIP/>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/spdrman/rclone-manager/issues</Support>
+  <Project>https://github.com/spdrman/rclone-manager</Project>
+  <Overview>
+    The Backup Manager web interface: the shared UI plus a reverse proxy to the engine container. Install the backup-manager engine template first.
+
+    This container mounts nothing and holds no state. Everything durable lives with the engine.
+  </Overview>
+  <Category>Backup: Tools: Utilities:</Category>
+  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/unraid/template/backup-manager-ui.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/ui/shared/public/icon.svg</Icon>
+  <Requires>Run `docker network create backup-manager` and install the backup-manager engine template before this one.</Requires>
+  <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=16m,mode=1777,uid=99,gid=100 --user 99:100 --no-healthcheck</ExtraParams>
+  <PostArgs>/backup-manager-web serve-ui</PostArgs>
+  <DonateText/>
+  <DonateLink/>
+  <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="The only published port in this deployment. The engine container publishes nothing." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="TMPDIR" Target="TMPDIR" Default="/tmp" Mode="" Description="Go's temp directory. The rootfs is read-only, so this has to point at the tmpfs in ExtraParams." Type="Variable" Display="advanced" Required="true" Mask="false">/tmp</Config>
+  <Config Name="Listen address" Target="LISTEN_ADDR" Default=":8080" Mode="" Description="This container's own bind address, always :8080 regardless of the host port above." Type="Variable" Display="advanced" Required="true" Mask="false">:8080</Config>
+  <Config Name="Engine address" Target="UPSTREAM_ADDR" Default="http://backup-manager:8080" Mode="" Description="The engine container, by name, on the shared user-defined network. Docker's embedded DNS resolves this; the default bridge network would not." Type="Variable" Display="advanced" Required="true" Mask="false">http://backup-manager:8080</Config>
+</Container>

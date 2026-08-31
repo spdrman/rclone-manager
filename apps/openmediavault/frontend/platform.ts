@@ -10,8 +10,10 @@ export const openmediavaultBridge: PlatformBridge = {
 
   deployment: {
     label: "omv-compose",
-    storageMount: "/srv/dev-disk-by-uuid/backups",
-    adapterVersion: "omv 1.0.2"
+    // A dedicated directory inside the backups directory, not the
+    // directory itself. Pinned to apps/common/packaging/canonical.json.
+    storageMount: "/srv/dev-disk-by-uuid/backups/backup-manager",
+    adapterVersion: "omv 1.1.0"
   },
 
   capabilities: () => capabilities({}),

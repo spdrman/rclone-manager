@@ -1,0 +1,66 @@
+# TrueNAS Apps catalog metadata (WP4.3, deliverable D-6).
+#
+# This directory is the contribution-ready shape for the TrueNAS apps
+# catalog: copy it in as ix-dev/community/backup-manager/ and run that
+# repository's own validation and render tooling. Nothing on a developer
+# laptop can run that validator, so it is step 8 of
+# docs/acceptance/truenas-provider-acceptance.md rather than a CI check.
+#
+# What CI does check, on every commit: every question here is consumed by
+# templates/docker-compose.yaml and given a default in ix_values.yaml, and
+# the rendered image reference is the exact canonical one. See
+# apps/common/packaging.
+annotations:
+  min_scale_version: "24.10.0"
+
+name: backup-manager
+title: Backup Manager
+train: community
+
+# app_version is the upstream application version; version is this catalog
+# entry's own. Both are pinned, and neither is `latest`: §8's canonical
+# image rule forbids deploying a floating tag.
+app_version: "1.0.0"
+version: "1.0.0"
+
+categories:
+  - backup
+
+keywords:
+  - backup
+  - sftp
+  - rclone
+  - retention
+
+description: >-
+  Pulls backup artifacts off a remote SFTP source on a schedule, verifies
+  them, retains them under a configurable policy, and keeps a durable
+  catalog of everything it holds.
+
+home: https://github.com/spdrman/rclone-manager
+sources:
+  - https://github.com/spdrman/rclone-manager
+icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/ui/shared/public/icon.svg
+
+# No added capabilities and no host mounts. The container drops ALL
+# capabilities, runs non-root on a read-only rootfs, and every path it
+# touches is a host path the operator chose at install time.
+capabilities: []
+host_mounts: []
+
+run_as_context:
+  - description: >-
+      Backup Manager runs as the uid/gid you choose at install time, which
+      must already own the four host paths. The runtime image is
+      distroless: no shell, no root step, no init process, so nothing
+      inside the container can fix ownership for you at startup.
+    uid: 568
+    gid: 568
+    user_name: apps
+    group_name: apps
+
+maintainers:
+  - name: spdrman
+    url: https://github.com/spdrman/rclone-manager
+
+screenshots: []
