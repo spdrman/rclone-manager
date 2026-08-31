@@ -93,6 +93,17 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/backup-sets/test-connection": true,
 	"POST /api/v1/ssh-keys":                    true,
 	"POST /api/v1/ssh/host-key-probe":          true,
+
+	// Issue #140 (B3.7): editing server-side configuration is §50's
+	// "state-changing but non-destructive" bucket, alongside "create/edit
+	// backup set" — nothing reachable from this route touches, moves or
+	// deletes backup data. The one setting worth naming here,
+	// protect_last_known_good, is dangerous because it widens what a
+	// LATER retention apply may delete, and that apply
+	// (POST /backup-sets/{source}/{set}/retention/apply) is itself gated
+	// and is NOT on this list. See router.go's own comment on the route
+	// for the full argument.
+	"PATCH /api/v1/settings": true,
 }
 
 // TestNoMutatingAPIRouteBypassesTheDestructiveGate is issue #118 item 3's
