@@ -25,7 +25,7 @@ func env() map[string]string {
 	return map[string]string{
 		"STATE_DIR":        "/srv/backup-manager/state",
 		"BACKUP_DIR":       "/srv/backup-manager/backups",
-		"CONFIG_FILE":      "/srv/backup-manager/config/config.yaml",
+		"CONFIG_DIR":       "/srv/backup-manager/config",
 		"SSH_KEY_FILE":     "/srv/backup-manager/secrets/id_ed25519",
 		"KEY_FILE":         "/srv/backup-manager/secrets/id_ed25519",
 		"KNOWN_HOSTS_FILE": "/srv/backup-manager/secrets/known_hosts",
@@ -99,6 +99,78 @@ func TestRequiredFieldCheckFailsWhenAFieldIsRemoved(t *testing.T) {
 				t.Errorf("the finding %q does not name the rule %q that produced it", joined, field.ID)
 			}
 		})
+	}
+}
+
+// TestEveryMountFieldDeclaresAtMostOneWriteMode stops the two write-mode
+// booleans from being set together. They are separate claims, and a field
+// asserting both would silently resolve to whichever branch of
+// checkServiceMount runs first, which is a rule whose meaning depends on
+// statement order.
+func TestEveryMountFieldDeclaresAtMostOneWriteMode(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range compose.MustLoadContract().Fields {
+		if field.ReadOnly && field.Writable {
+			t.Errorf("field %q declares both readOnly and writable", field.ID)
+		}
+	}
+}
+
+// TestWriteModeCheckFailsWhenAMountCarriesTheWrongOne is the positive
+// control for the write-mode half of checkServiceMount, which the
+// removal control above cannot reach: removing a mount proves the
+// presence branch works and says nothing about whether :ro is inspected
+// at all.
+//
+// It is what stops issue #196's defect returning. The configuration mount
+// was `:ro` for the whole of Phase 4, and no check anywhere read that
+// flag against a declared intent, so three merged write paths were inert
+// in every packaged container while the suite stayed green.
+func TestWriteModeCheckFailsWhenAMountCarriesTheWrongOne(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	data, err := os.ReadFile(compose.Path(c.Canonical))
+	if err != nil {
+		t.Fatalf("read canonical: %v", err)
+	}
+
+	controlled := 0
+	for _, field := range c.Fields {
+		if field.Scope != "service-mount" || (!field.ReadOnly && !field.Writable) {
+			continue
+		}
+		controlled++
+		t.Run(field.ID, func(t *testing.T) {
+			t.Parallel()
+
+			doc, err := compose.Parse(data, c.Canonical, env())
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if findings := doc.CheckField(field); len(findings) != 0 {
+				t.Fatalf("the unmutated definition already fails %q (%s), so this control would pass for the wrong reason", field.ID, findingText(findings))
+			}
+			mutated, what, ok := doc.WithWrongWriteMode(field)
+			if !ok {
+				t.Fatalf("nothing to flip for %q, so this control proves nothing", field.ID)
+			}
+			findings := mutated.CheckField(field)
+			if len(findings) == 0 {
+				t.Fatalf("making %s did not fail the %q check, so the write mode of that mount is not checked at all", what, field.ID)
+			}
+			joined := findingText(findings)
+			if !strings.Contains(joined, field.ID) {
+				t.Errorf("the finding %q does not name the rule %q that produced it", joined, field.ID)
+			}
+		})
+	}
+
+	// A loop over an empty list is a passing test that checked nothing,
+	// and the contract is a JSON file anyone can edit.
+	if controlled == 0 {
+		t.Fatal("no mount field declares a write mode, so this control ran zero mutations")
 	}
 }
 

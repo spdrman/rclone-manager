@@ -47,12 +47,38 @@
   "containerPaths": {
     "state": "/data/state",
     "backups": "/data/backups",
-    "config": "/etc/backup-manager/config.yaml",
+    "config": "/etc/backup-manager/config",
     "sshKey": "/etc/backup-manager/id_ed25519",
     "knownHosts": "/etc/backup-manager/known_hosts"
   },
 
-  "readOnlyContainerPaths": ["/etc/backup-manager/config.yaml", "/etc/backup-manager/id_ed25519", "/etc/backup-manager/known_hosts"],
+  "configFileName": "config.yaml",
+
+  "_config_role_comment": [
+    "The config role is a WRITABLE DIRECTORY the application owns, with",
+    "config.yaml inside it (issue #196). It used to be a read-only single-file",
+    "mount, and that shape made three merged features inert inside a packaged",
+    "container: CreateBackupSet (#146), the settings write path (#140) and",
+    "first-run setup (#176) all replace config.yaml through one temp-file-plus-",
+    "rename, which needs to create a sibling temp file in the file's own",
+    "directory. On a read-only single-file mount that directory is the image's",
+    "read-only rootfs, so every one of them failed at the write however correct",
+    "the code above it was. ImportSSHKey and the known-hosts store write into",
+    "two more siblings of the same directory (ssh_keys/ and known_hosts.d/) and",
+    "were inert for the same reason.",
+    "",
+    "A directory also lets the mount be EMPTY, which is what an app-store",
+    "install actually starts from. A bind mount cannot express \"not there yet\"",
+    "for a file: Docker creates a directory at a source path that does not",
+    "exist, so the absent-config case was not even representable.",
+    "",
+    "Key material stays a read-only single-file mount. Nothing writes it, the",
+    "engine only ever reads it, and the shapes are different claims."
+  ],
+
+  "readOnlyContainerPaths": ["/etc/backup-manager/id_ed25519", "/etc/backup-manager/known_hosts"],
+
+  "writableContainerPaths": ["/data/state", "/data/backups", "/etc/backup-manager/config"],
 
   "platforms": {
     "truenas": {
@@ -62,7 +88,7 @@
       "hostPaths": {
         "state": "/mnt/tank/backup-manager/state",
         "backups": "/mnt/tank/backup-manager/backups",
-        "config": "/mnt/tank/backup-manager/config/config.yaml",
+        "config": "/mnt/tank/backup-manager/config",
         "sshKey": "/mnt/tank/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/tank/backup-manager/secrets/known_hosts"
       },
@@ -77,7 +103,7 @@
       "hostPaths": {
         "state": "/mnt/user/appdata/backup-manager/state",
         "backups": "/mnt/user/backups/backup-manager",
-        "config": "/mnt/user/appdata/backup-manager/config/config.yaml",
+        "config": "/mnt/user/appdata/backup-manager/config",
         "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
       },
@@ -92,7 +118,7 @@
       "hostPaths": {
         "state": "/srv/dev-disk-by-uuid/appdata/backup-manager/state",
         "backups": "/srv/dev-disk-by-uuid/backups/backup-manager",
-        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config/config.yaml",
+        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config",
         "sshKey": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/known_hosts"
       },
@@ -107,7 +133,7 @@
       "hostPaths": {
         "state": "/mnt/backup-manager/state",
         "backups": "/mnt/backup-manager/backups",
-        "config": "/mnt/backup-manager/config/config.yaml",
+        "config": "/mnt/backup-manager/config",
         "sshKey": "/mnt/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/backup-manager/secrets/known_hosts"
       },

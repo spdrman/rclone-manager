@@ -25,7 +25,7 @@
   ],
 
   "schema": "rclone-manager/runtime-contract/1",
-  "version": "1.0.0",
+  "version": "1.1.0",
 
   "canonical": "container/compose.yaml",
 
@@ -133,9 +133,9 @@
       "id": "configuration-mount",
       "scope": "service-mount",
       "roles": ["engine"],
-      "containerPath": "/etc/backup-manager/config.yaml",
-      "readOnly": true,
-      "why": "configuration comes from the host, read-only, never baked into the image."
+      "containerPath": "/etc/backup-manager/config",
+      "writable": true,
+      "why": "configuration comes from the host, never baked into the image, and the mount is a WRITABLE DIRECTORY the application owns rather than a read-only single file (issue #196). config.yaml lives inside it. The read-only single-file shape made three merged write paths inert inside a packaged container: every one of them replaces config.yaml through a temp file created in its own directory, which on that shape is the image's read-only rootfs. A directory can also be empty, which is how an app-store install honestly represents \"not configured yet\"; a bind mount cannot express that for a file, because Docker creates a directory at a missing source path."
     },
     {
       "id": "secret-file-mount",

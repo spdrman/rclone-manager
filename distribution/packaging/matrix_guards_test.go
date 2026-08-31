@@ -551,7 +551,7 @@ func TestProxmoxProfileRefusesToStartWithAnUnsetHostPath(t *testing.T) {
 	}
 	compose := string(body)
 
-	hostPaths := []string{"STATE_DIR", "BACKUP_DIR", "CONFIG_FILE", "KEY_FILE", "KNOWN_HOSTS_FILE"}
+	hostPaths := []string{"STATE_DIR", "BACKUP_DIR", "CONFIG_DIR", "KEY_FILE", "KNOWN_HOSTS_FILE"}
 
 	// With nothing set, every host path must stop the deployment. A
 	// ${VAR:-default} would quietly resolve here, which is how a bind
