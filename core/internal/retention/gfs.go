@@ -213,11 +213,17 @@ type GFSVerdict struct {
 	Tiers []GFSTierSelection
 }
 
-// TierNames projects Tiers down to bare tier names, for the callers that
-// genuinely only need the list (FR-20's KEEP sentence, the wire's own
-// `tiers` field). It is a projection of Tiers and never a second stored
-// copy of it, so the two cannot drift.
-func (v GFSVerdict) TierNames() []GFSTier {
+// tierNames projects Tiers down to bare tier names, which is what this
+// package's own tests assert against when the claim under test is which
+// tiers kept an artifact rather than which placement selected it.
+//
+// Unexported, and staying that way while nothing outside this package
+// needs it: the wire's own `tiers` field is the same projection but is
+// built one layer out, in apps/common/webhost, from what core/service
+// hands it. Exporting a second way to spell it would invite a caller to
+// read the names and never look at the placements, which is the exact
+// habit issue #218 exists to break.
+func (v GFSVerdict) tierNames() []GFSTier {
 	if len(v.Tiers) == 0 {
 		return nil
 	}

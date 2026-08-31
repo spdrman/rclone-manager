@@ -90,7 +90,7 @@ func bkTierMap(verdicts []GFSVerdict) map[string][]GFSTier {
 			out[v.Artifact.Name] = nil
 			continue
 		}
-		out[v.Artifact.Name] = v.TierNames()
+		out[v.Artifact.Name] = v.tierNames()
 	}
 	return out
 }
@@ -264,7 +264,7 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 		out := map[string]map[GFSTier]bool{}
 		for _, v := range verdicts {
 			set := map[GFSTier]bool{}
-			for _, tier := range v.TierNames() {
+			for _, tier := range v.tierNames() {
 				set[tier] = true
 			}
 			out[v.Artifact.Name] = set

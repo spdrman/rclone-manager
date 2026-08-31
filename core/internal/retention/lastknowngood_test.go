@@ -332,7 +332,7 @@ func TestApplyLastKnownGoodKeepsArtifactOutsideEveryGFSTier(t *testing.T) {
 		t.Fatalf("Keep = false, want true: an artifact outside every GFS tier but holding last-known-good title must be kept (%+v)", v)
 	}
 	want := []GFSTier{TierLastKnownGood}
-	if !reflect.DeepEqual(v.TierNames(), want) {
+	if !reflect.DeepEqual(v.tierNames(), want) {
 		t.Errorf("Tiers = %v, want %v: the kept reason must be visible on the verdict, not merely inferred", v.Tiers, want)
 	}
 
@@ -374,7 +374,7 @@ func TestApplyLastKnownGoodAddsTierAlongsideExistingGFSTiers(t *testing.T) {
 		t.Fatalf("Keep = false, want true")
 	}
 	want := []GFSTier{GFSDaily, GFSWeekly, GFSMonthly, TierLastKnownGood}
-	if !reflect.DeepEqual(v.TierNames(), want) {
+	if !reflect.DeepEqual(v.tierNames(), want) {
 		t.Errorf("Tiers = %v, want %v (GFS tiers first, TierLastKnownGood appended last, no duplicate)", v.Tiers, want)
 	}
 }
@@ -455,7 +455,7 @@ func TestDecideKeepComposesGFSAndLastKnownGoodEndToEnd(t *testing.T) {
 	if !v.Keep {
 		t.Errorf("Keep = false, want true: last-known-good protection must keep it despite being outside every GFS window")
 	}
-	if !reflect.DeepEqual(v.TierNames(), []GFSTier{TierLastKnownGood}) {
+	if !reflect.DeepEqual(v.tierNames(), []GFSTier{TierLastKnownGood}) {
 		t.Errorf("Tiers = %v, want [%v]", v.Tiers, TierLastKnownGood)
 	}
 }

@@ -518,7 +518,7 @@ func TestGFSVerdictListsTiersInFixedOrder(t *testing.T) {
 		t.Fatalf("expected Keep == true, got %+v", v)
 	}
 	want := []GFSTier{GFSDaily, GFSWeekly, GFSMonthly}
-	if !reflect.DeepEqual(v.TierNames(), want) {
+	if !reflect.DeepEqual(v.tierNames(), want) {
 		t.Errorf("Tiers = %v, want %v (fixed Daily, Weekly, Monthly order)", v.Tiers, want)
 	}
 }
