@@ -100,8 +100,8 @@ func TestResolveValidator_EveryRegisteredValidatorResolves(t *testing.T) {
 // straight into config.Validation.Command, and neither the compiler nor
 // this suite would have objected, because until this test there was
 // nothing asserting the request types stay free of that shape. That is the
-// same gap TestNoMutatingAPIRouteBypassesTheDestructiveGate closes for
-// webhost's routes, in the same spirit.
+// same gap webhost's own route walks close for its routes, in the same
+// spirit.
 //
 // This walks every exported request type this package accepts from the API
 // layer and refuses any field that could carry an executable: a

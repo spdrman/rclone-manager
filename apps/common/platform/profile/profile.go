@@ -42,6 +42,7 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 )
@@ -237,6 +238,43 @@ func (id ID) Profile() Profile {
 	return p
 }
 
+// IdentityHeaders lists every provider-native identity header ANY profile
+// in the table declares, sorted and deduplicated.
+//
+// A hop that has to remove an untrusted identity needs this list rather
+// than one profile's own header. The browser-facing edge does not know
+// which profile the engine behind it was started with, and a deployment
+// running the generic profile today can be restarted onto a gateway
+// profile tomorrow without the header ever having been scrubbed in
+// between. Stripping the whole set costs one map lookup per header and
+// removes the class rather than one instance of it.
+func IdentityHeaders() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range registry() {
+		if p.Gateway == nil {
+			continue
+		}
+		h := strings.TrimSpace(p.Gateway.UsernameHeader)
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// StripIdentityHeaders removes every header IdentityHeaders names from h.
+// Unconditional: a caller that has decided the peer is not trusted has
+// nothing left to decide.
+func StripIdentityHeaders(h http.Header) {
+	for _, name := range IdentityHeaders() {
+		h.Del(name)
+	}
+}
+
 // IDs lists every implemented profile, sorted.
 func IDs() []ID {
 	table := registry()
@@ -405,7 +443,59 @@ var (
 	// ErrUntrustedPeer on purpose: one is an attack and the other is a
 	// misconfigured gateway, and an operator has to be able to tell.
 	ErrNoGatewayIdentity = errors.New("the trusted platform gateway supplied no identity")
+
+	// ErrAmbiguousIdentity means the identity header names more than one
+	// caller, in either of the two wire forms that can express it.
+	//
+	// A gateway that REPLACES its header (nginx's proxy_set_header) sends
+	// exactly one value; a gateway that appends one, or any proxy that
+	// passes the client's copy through alongside its own, sends two. Go's
+	// Header.Get returns the FIRST, which on the wire is the client's, so
+	// resolving this silently hands the identity to whoever sent the
+	// request rather than to whoever the gateway authenticated. There is
+	// no safe value to pick, so this refuses instead of picking one.
+	//
+	// The second wire form is the same defect written with a comma. A
+	// proxy that concatenates rather than adding a second field line
+	// sends `X-Ugos-User: attacker, operator` as ONE value, which
+	// Header.Values reports as length 1 and which a naive read resolves
+	// to the whole string. That resolved string is what handlers_*.go
+	// writes into Actor on a retention apply, a backup-set create and an
+	// operation submit, which is the field an operator reads to attribute
+	// a destructive apply, so a username that names two people is refused
+	// here rather than recorded there.
+	ErrAmbiguousIdentity = errors.New("the identity header names more than one caller")
 )
+
+// checkUnambiguousUsername refuses a resolved username that carries a
+// separator, whitespace or a control character: the single-value wire
+// form of the ambiguity ErrAmbiguousIdentity exists for (see that error's
+// own doc), plus the control characters that would let a username forge a
+// field boundary in a log line or an audit record downstream.
+//
+// The trade-off is deliberate and worth naming rather than leaving
+// implicit: a platform whose native usernames legitimately contain a
+// space would be refused by this rule. Today no profile in this table has
+// one, and the rule is a package-wide constant rather than a per-profile
+// pattern for exactly that reason. The day a profile needs a looser or a
+// tighter alphabet, the constraint belongs in the Gateway row of the
+// table next to UsernameHeader, so a profile declares its own alphabet
+// rather than inheriting this one by accident.
+func checkUnambiguousUsername(header, username string) error {
+	for _, r := range username {
+		switch {
+		case r == ',' || r == ';':
+			return fmt.Errorf("%w (header %s, separator %q in %q)", ErrAmbiguousIdentity, header, string(r), username)
+		case unicode.IsSpace(r):
+			// TrimSpace already removed the outer whitespace, so anything
+			// left is between two names.
+			return fmt.Errorf("%w (header %s, whitespace inside %q)", ErrAmbiguousIdentity, header, username)
+		case r < 0x20 || r == 0x7f:
+			return fmt.Errorf("%w (header %s, control character %U)", ErrAmbiguousIdentity, header, r)
+		}
+	}
+	return nil
+}
 
 // Gateway is a profile's trusted native authentication gateway: the
 // declaration that identity arriving in a header may be believed, but
@@ -453,6 +543,9 @@ func (g *Gateway) Compile() (*CompiledGateway, error) {
 	return out, nil
 }
 
+// UsernameHeader is the identity header this gateway is entitled to set.
+func (c *CompiledGateway) UsernameHeader() string { return c.usernameHeader }
+
 // Trusts reports whether remoteAddr is one of the configured peers. An
 // address that cannot be parsed is untrusted: the only safe reading of
 // "I do not know where this came from".
@@ -484,15 +577,26 @@ func parseAddr(remoteAddr string) (netip.Addr, bool) {
 	return addr.Unmap().WithZone(""), true
 }
 
-// Sanitize removes the identity header from a request that did not arrive
-// from a trusted peer, so nothing downstream can read it even by
-// accident. It leaves every other header alone, and it leaves the
-// identity header alone for a request that DID arrive from the gateway.
+// Sanitize removes provider-native identity headers a request is not
+// entitled to carry, so nothing downstream can read one even by accident.
+// It leaves every other header alone.
+//
+// From an untrusted peer, every identity header any profile declares is
+// removed, this gateway's included. From the trusted peer, this gateway's
+// own header survives and every OTHER profile's is still removed: the
+// gateway authenticated one identity, not a set, and a header belonging
+// to a profile this process is not running has no provenance at all.
 func (c *CompiledGateway) Sanitize(h http.Header, remoteAddr string) {
-	if c.Trusts(remoteAddr) {
-		return
+	trusted := c.Trusts(remoteAddr)
+	for _, name := range IdentityHeaders() {
+		if trusted && http.CanonicalHeaderKey(name) == http.CanonicalHeaderKey(c.usernameHeader) {
+			continue
+		}
+		h.Del(name)
 	}
-	h.Del(c.usernameHeader)
+	if !trusted {
+		h.Del(c.usernameHeader)
+	}
 }
 
 // Authenticate resolves the caller's identity, or refuses. The refusal
@@ -504,7 +608,20 @@ func (c *CompiledGateway) Authenticate(_ context.Context, r capabilities.AuthReq
 	}
 	username := ""
 	if r.Headers != nil {
-		username = strings.TrimSpace(r.Headers.Get(c.usernameHeader))
+		// Values, not Get: Get would silently answer with the first of
+		// several, which is the smuggled one. See ErrAmbiguousIdentity.
+		values := r.Headers.Values(c.usernameHeader)
+		if len(values) > 1 {
+			return capabilities.AuthContext{}, fmt.Errorf("%w (header %s, %d values)", ErrAmbiguousIdentity, c.usernameHeader, len(values))
+		}
+		if len(values) == 1 {
+			username = strings.TrimSpace(values[0])
+		}
+	}
+	if username != "" {
+		if err := checkUnambiguousUsername(c.usernameHeader, username); err != nil {
+			return capabilities.AuthContext{}, err
+		}
 	}
 	if username == "" {
 		return capabilities.AuthContext{}, fmt.Errorf("%w (header %s)", ErrNoGatewayIdentity, c.usernameHeader)

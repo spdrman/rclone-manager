@@ -251,6 +251,37 @@ services:
       # published port.
       TRUST_FORWARDED_HEADERS: "true"
 
+      # This container's own trusted peer, for a gateway runtime profile
+      # (RUNTIME_PROFILE=ugos). Empty for the default `generic` profile,
+      # which has no gateway at all and refuses this variable if it is
+      # set.
+      #
+      # A DIFFERENT variable from `web-ui`'s TRUSTED_GATEWAY_CIDRS below,
+      # and that is the whole point (issue #87's review, M1). The two hops
+      # need contradictory values:
+      #
+      #  - This container's only possible peer is `web-ui`, so this range
+      #    has to contain `web-ui`'s address on the `internal` network or
+      #    nothing authenticates. It names the INTERNAL NETWORK.
+      #  - `web-ui`'s range has to name the platform GATEWAY, and a range
+      #    containing this container or the internal network is the
+      #    LAN-forgery vulnerability restated as configuration.
+      #
+      # One variable feeding both hops has exactly one value that lets a
+      # ugos deployment authenticate, and it is the value that makes
+      # `web-ui` believe an identity header from anything on the internal
+      # bridge, which under Docker's userland port publishing includes LAN
+      # traffic arriving at the published port. That is the bug this
+      # container's own strip exists to close, reintroduced one layer up,
+      # so the two peer sets are two names.
+      #
+      # The usual value here is the compose bridge subnet (e.g.
+      # 172.16.0.0/12 for the default pools, or the `internal` network's
+      # own configured subnet). Widening it changes nothing an attacker
+      # can reach: only `web-ui` joins `internal`, and this container
+      # publishes no port at all.
+      TRUSTED_UPSTREAM_CIDRS: ${TRUSTED_UPSTREAM_CIDRS:-}
+
     volumes:
       # Persistent SQLite lifecycle journal (FR-9). A directory, per the
       # WAL note above, not a single file. `/backup-manager-web serve` also
@@ -401,6 +432,32 @@ services:
       # what host port LISTEN_PORT maps it to.
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://rclone-manager:8080"
+
+      # THE trust boundary for a gateway runtime profile (issue #87).
+      # This is the only container with a published port, so this is the
+      # only hop where the network can still answer "did the platform
+      # gateway send this request, or did somebody on the LAN". Left
+      # empty, every provider-native identity header is stripped from
+      # every inbound request, which is what makes the default `generic`
+      # deployment safe without an operator having to know any of this.
+      #
+      # Two things a gateway deployment has to get right, because a CIDR
+      # range on its own does not settle either:
+      #
+      #  - Docker's userland port publishing can present traffic arriving
+      #    at `ports:` below as coming from the bridge gateway address
+      #    whoever sent it, which collapses "the platform gateway" and
+      #    "any LAN client" into one peer. Publish to loopback
+      #    (LISTEN_PORT bound as 127.0.0.1:8080) so the host's own gateway
+      #    is the only thing that can reach this port at all, or put the
+      #    gateway and this container on a network nothing else joins.
+      #  - The range names the GATEWAY, never the internal network. A
+      #    range containing `rclone-manager` or this container itself is
+      #    the vulnerability restated as configuration. That is why the
+      #    engine reads TRUSTED_UPSTREAM_CIDRS above and not this
+      #    variable: the two hops trust different peers, and a single
+      #    value correct for one of them is wrong for the other.
+      TRUSTED_GATEWAY_CIDRS: ${TRUSTED_GATEWAY_CIDRS:-}
 
       # Runtime UI bundle selection (issue #180, owned by #167). Left
       # unset, this container serves the bundle compiled into the binary,

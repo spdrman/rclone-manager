@@ -78,9 +78,10 @@ func TestNoAPIRouteBypassesAuthentication(t *testing.T) {
 // destructiveGateExemptRoutes names every non-GET /api/v1 route that is
 // deliberately NOT behind requireDestructiveGate, and (in a real entry, not
 // just this comment) why. A future route added to this map without a
-// genuine justification is defeating the point of
-// TestNoMutatingAPIRouteBypassesTheDestructiveGate below, not satisfying
-// it.
+// genuine justification is defeating the point of the gate walk in
+// gate_redteam_test.go, not satisfying it. (The walk below, which shares
+// this list, is the CSRF one: see its own doc for why the two are
+// separate tests.)
 var destructiveGateExemptRoutes = map[string]bool{
 	// Issue #146 (B2.7): every one of these is "state-changing but
 	// non-destructive" or outright read-only under
@@ -106,26 +107,30 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"PATCH /api/v1/settings": true,
 }
 
-// TestNoMutatingAPIRouteBypassesTheDestructiveGate is issue #118 item 3's
-// structural regression test, mirroring
-// TestNoAPIRouteBypassesAuthentication above exactly the way the review
-// that asked for it did: `r.With(requireDestructiveGate(gate)).Post(...)`
-// compiles fine and passes every other test in this package even if a
-// future mutating route forgets to chain requireDestructiveGate onto
-// itself, since nothing else in this package's route table walks every
-// route and checks. This does, using the same chi.Walk-driven,
-// fire-a-real-request approach as the auth test, rather than the auth
-// test's neighbour asserting a specific route list by name (that list
-// would silently stop proving anything the day a route is added and
-// nobody updates it).
+// TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route
+// table and fires a real request at every non-GET /api/v1 route, and
+// what it proves is the CSRF walk in its name and nothing more.
 //
-// The platform here is fully authenticated (allowingPlatform), unlike
-// TestNoAPIRouteBypassesAuthentication's noAuthWiredAdapter: a 403 from an
-// authenticated request proves the GATE rejected it, not auth (auth is
-// already proven not to bypass anything, and ordering between the two is
-// TestSubmitOperation_GateIsCheckedAfterAuthentication's own job, not
-// this test's).
-func TestNoMutatingAPIRouteBypassesTheDestructiveGate(t *testing.T) {
+// It was called TestNoMutatingAPIRouteBypassesTheDestructiveGate, and its
+// doc comment said "a 403 from an authenticated request proves the GATE
+// rejected it, not auth". Issue #87 (B5.1) disproved that by mutation:
+// deleting requireDestructiveGate from BOTH gated routes leaves this test
+// green, because the requests below carry no CSRF cookie/header pair and
+// requireCSRF refuses first, with the same 403. A green test whose name
+// promises a control it does not exercise is worse than no test, so this
+// one is named for what it actually walks.
+//
+// The destructive gate's own structural proof is gate_redteam_test.go,
+// which satisfies CSRF so the request reaches the gate, asserts the
+// gate's own typed error code rather than a bare status, and refuses to
+// run vacuously. Do not re-add a gate claim here without making these
+// requests satisfy CSRF first.
+//
+// What remains is still worth having: every mutating route is reachable,
+// is behind requireCSRF, and answers 403 to a request that does not carry
+// the double-submit pair. The platform is fully authenticated
+// (allowingPlatform), so the 403 is not authentication answering either.
+func TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair(t *testing.T) {
 	router := NewRouter(RouterConfig{
 		Platform:      allowingPlatform("alice"),
 		Backend:       newSyncFakeBackend(),
@@ -157,7 +162,7 @@ func TestNoMutatingAPIRouteBypassesTheDestructiveGate(t *testing.T) {
 		router.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusForbidden {
-			t.Errorf("%s %s: status = %d, want %d (a non-GET route must be behind the destructive gate)", method, route, rec.Code, http.StatusForbidden)
+			t.Errorf("%s %s: status = %d, want %d (a mutating route must refuse a request carrying no CSRF pair)", method, route, rec.Code, http.StatusForbidden)
 		}
 		return nil
 	})

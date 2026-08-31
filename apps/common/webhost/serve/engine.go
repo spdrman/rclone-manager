@@ -5,6 +5,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 )
 
@@ -76,24 +77,99 @@ func NewEngine(cfg EngineConfig) http.Handler {
 	mux.Handle("/health/", apiRouter)
 	mux.Handle("/api/v1/", apiRouter)
 
-	handler := local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)
-
-	// The identity strip, on the request path rather than described in a
-	// doc comment. A gateway Authenticator decides whether to BELIEVE the
-	// header; this deletes it outright for an untrusted peer, so nothing
-	// downstream - a handler, a log line, a future middleware - can read
-	// a value that was never trusted. serve.NewUI runs the same strip one
-	// hop out, where the client's own address is still visible; see
-	// IdentitySanitizer's doc for why both hops do it.
-	if cfg.Platform != nil {
-		if s, ok := cfg.Platform.Authenticator().(IdentitySanitizer); ok {
-			inner := handler
-			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				s.Sanitize(r.Header, r.RemoteAddr)
-				inner.ServeHTTP(w, r)
-			})
-		}
+	// Order matters and is the whole point of doing this here rather than
+	// inside the router. StripUntrustedIdentity is outermost, so a forged
+	// identity header is gone before the CSRF middleware, the auth routes,
+	// the /api/v1 router or anything either of them logs has a chance to
+	// read it: "refused" and "never observed" are different claims, and
+	// issue #87 asks for the second.
+	boundary := gatewayOf(cfg.Platform)
+	if cfg.Platform != nil && cfg.Platform.Capabilities().NativeAuth && boundary == nil {
+		// Fail closed, loudly, at construction (issue #87's review, M2).
+		// The nil is SAFE in the security direction and total in the
+		// functional one: StripUntrustedIdentity reads it as "trust
+		// nobody", so a native-session deployment would authenticate
+		// nobody, with no message anywhere saying why. That is exactly
+		// the operator experience the serve-ui startup refusal was added
+		// to prevent one hop over, so this hop refuses the same way
+		// rather than starting into a console nobody can sign in to.
+		//
+		// A panic and not an error return because there is no request in
+		// flight and nothing to degrade to: this is process wiring, it is
+		// wrong before a listener is open, and every shipped caller
+		// builds its adapter through profile.Profile.Adapter, which
+		// cannot produce this state. The way an adapter that decorates
+		// its Authenticator satisfies this is IdentityBoundaryCarrier
+		// below, not deleting the check.
+		panic("serve: NewEngine: this platform adapter declares NativeAuth but no trusted-peer boundary resolves from its Authenticator, " +
+			"so every identity header would be stripped and nobody could authenticate; " +
+			"implement serve.IdentityBoundaryCarrier on the adapter or its Authenticator")
 	}
 
-	return handler
+	return StripUntrustedIdentity(boundary)(
+		SecurityHeaders(
+			local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)))
+}
+
+// IdentityBoundaryCarrier is how a platform adapter, or an Authenticator
+// that decorates one, DECLARES the trusted-peer boundary it enforces.
+//
+// It exists because the alternative was discovery by type assertion, and
+// a discarded one at that: `gw, _ := platform.Authenticator().(*profile.
+// CompiledGateway)` answers nil for every authenticator that is not
+// literally that concrete type, and nil means strip-everything. Wrapping
+// is not hypothetical. A gateway with a local fallback is what the
+// first-run auth bootstrap wants, and audit, metrics and rate-limit
+// decorators are the usual next step; each of them would silently turn a
+// working gateway deployment into one that authenticates nobody.
+//
+// Declared rather than widened into capabilities.PlatformAdapter on
+// purpose: that interface is implemented directly by six providers, and
+// adding a method to it makes every one of them change to say something
+// only a native-session profile has an answer for. An optional interface
+// costs one type switch here and nothing at all to an adapter that has no
+// gateway.
+type IdentityBoundaryCarrier interface {
+	// IdentityBoundary returns the peer set this adapter's Authenticator
+	// will believe an identity header from, or nil when it believes none.
+	IdentityBoundary() *profile.CompiledGateway
+}
+
+// gatewayOf reports the trusted-peer boundary the running profile
+// authenticates against, or nil for a profile that has none.
+//
+// It is READ OFF the adapter's own Authenticator rather than configured
+// separately, and that is the point: the thing that decides whether to
+// believe an identity header and the thing that decides whether to strip
+// one have to be the same object, or a deployment eventually ends up with
+// an engine stripping against one peer list and authenticating against
+// another. A second EngineConfig field would have made that drift
+// possible; there is nothing here to set inconsistently.
+//
+// nil is never "skip the check". StripUntrustedIdentity reads nil as "no
+// peer is trusted at this hop", which for a profile with no gateway is
+// exactly right: a generic-profile engine has no reason to forward a UGOS
+// identity header inwards, and every reason not to on the day somebody
+// restarts it with --profile=ugos.
+func gatewayOf(platform capabilities.PlatformAdapter) *profile.CompiledGateway {
+	if platform == nil {
+		return nil
+	}
+	// The declared answer first, asked of the adapter and then of the
+	// authenticator it hands out, so a decorated Authenticator can still
+	// say what it enforces. The concrete type is the fallback rather than
+	// the mechanism: it is what profile.Profile.Adapter returns today,
+	// and it keeps this working for an adapter written before the
+	// interface existed.
+	if carrier, ok := platform.(IdentityBoundaryCarrier); ok {
+		return carrier.IdentityBoundary()
+	}
+	auth := platform.Authenticator()
+	if carrier, ok := auth.(IdentityBoundaryCarrier); ok {
+		return carrier.IdentityBoundary()
+	}
+	if gw, ok := auth.(*profile.CompiledGateway); ok {
+		return gw
+	}
+	return nil
 }
