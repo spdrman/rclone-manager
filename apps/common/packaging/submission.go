@@ -278,12 +278,6 @@ func ReadinessFor(m *Matrix, s Submission, id string) ProviderReadiness {
 		Epic:        pr.Epic,
 	}
 
-	if !HasArtifact(pr) {
-		out.Readiness = ReadyNotYetApplicable
-		out.Why = fmt.Sprintf("%s declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet", pr.DisplayName)
-		return out
-	}
-
 	seen := map[string]bool{}
 	for _, cap := range s.Capabilities {
 		r, ok := m.Results[id][cap.ID]
@@ -308,6 +302,18 @@ func ReadinessFor(m *Matrix, s Submission, id string) ProviderReadiness {
 	where := "submission"
 	if sp.Store.Kind == "none" {
 		where = "distribution"
+	}
+
+	// Deliberately after the cells rather than before them. A target
+	// with no artifact still has every rule run and every blocker
+	// recorded, because "out of the gate" must not quietly become "out
+	// of the run": a row whose blockers column reads "none" while its
+	// cells are blocked is a row that has stopped describing the run it
+	// came from.
+	if !HasArtifact(pr) {
+		out.Readiness = ReadyNotYetApplicable
+		out.Why = fmt.Sprintf("%s declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet; its shared listing materials are recorded on their own merits above", pr.DisplayName)
+		return out
 	}
 
 	switch {

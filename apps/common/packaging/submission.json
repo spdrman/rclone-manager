@@ -795,39 +795,36 @@
           "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
         },
         "materials-description": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "materials-icon": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "materials-screenshots": {
           "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "reason": "The shared bundle covers UGREEN App Center's listing like every other target's, and a screenshot is of the app running on the hardware. EPIC D's #83 has produced no .UPK, so there is nothing to install and nothing to photograph. The listing copy, the icon, the release notes, the privacy disclosure and the permission rationale are all recorded ready above, which is the bundle #178 consumes rather than assembling a second copy of."
         },
         "materials-release-notes": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "materials-privacy-disclosure": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "materials-permission-rationale": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "supported"
         },
         "materials-support-source-license": {
-          "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "declared": "blocked",
+          "blocker": "#88",
+          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project.",
+          "expectedDetail": "ships no LICENSE file"
         },
         "materials-submission-checklist": {
           "declared": "supported"
         },
         "proactive-alert-delivery": {
           "declared": "not-applicable",
-          "reason": "EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here."
+          "reason": "Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet."
         },
         "recovery-docs-no-terminal": {
           "declared": "supported"

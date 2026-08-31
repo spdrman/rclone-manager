@@ -203,6 +203,9 @@ func checkScreenshots(t targetUnderTest) (bool, string) {
 // purpose: the word "screenshot" appearing in another target's section,
 // or in the preamble, is not this target having a procedure.
 func (t targetUnderTest) acceptanceCovers(topic string) (bool, string) {
+	if !HasArtifact(t.spec) {
+		return false, "there is no package for this target yet, so nobody can install one and no operator step against it can be run; a procedure that cannot be executed is not coverage"
+	}
 	path := Path(t.bundle.Acceptance)
 	want := regexp.MustCompile(`(?i)^#+ .*\b` + regexp.QuoteMeta(t.spec.DisplayName))
 	body, err := ProcedureSection(path, want)
@@ -289,6 +292,9 @@ var alertKinds = []string{"STALE_BACKUP", "REPEATED_FAILURE", "HOST_KEY_CHANGED"
 // operator run that decides it is written down before it happens rather
 // than after.
 func checkProactiveAlertDelivery(t targetUnderTest) (bool, string) {
+	if !HasArtifact(t.spec) {
+		return false, "there is no package for this target yet, so no administrator can install it and watch an alert arrive"
+	}
 	health, err := os.ReadFile(Path("ui/shared/src/components/HealthSummary.tsx"))
 	if err != nil {
 		return false, err.Error()
@@ -323,7 +329,12 @@ func checkProactiveAlertDelivery(t targetUnderTest) (bool, string) {
 // an administrator who has no terminal, which §73's own acceptance
 // criterion is written about and docs/recovery.md is made almost entirely
 // of.
-var terminalOnlyMarkers = []string{"sqlite3 ", "ssh ", "docker exec", "docker compose logs", "$ "}
+// A fenced shell block rather than a keyword list. "ssh" is a word this
+// document has to be able to use, because a changed host key is one of
+// the three failures it covers and naming the protocol is not the same as
+// telling somebody to open a terminal. What is decidable is that the
+// document contains no command for anyone to run.
+var terminalOnlyMarkers = []string{"```bash", "```sh", "```console", "```shell", "sqlite3", "docker exec", "docker compose"}
 
 func checkRecoveryDocsNoTerminal(t targetUnderTest) (bool, string) {
 	rel := t.bundle.Recovery
@@ -356,11 +367,11 @@ func checkRecoveryDocsNoTerminal(t targetUnderTest) (bool, string) {
 // gate reports undecided rather than letting a green run imply traceable
 // bytes.
 func checkArtifactProvenance(t targetUnderTest) (bool, string) {
-	if ok, detail := checkReleaseManifestIntegrity(t.providerUnderTest); !ok {
-		return false, detail
-	}
 	if len(t.sub.ArtifactFiles) == 0 {
 		return false, "this target ships no packaged files, so there is nothing whose provenance could be recorded"
+	}
+	if ok, detail := checkReleaseManifestIntegrity(t.providerUnderTest); !ok {
+		return false, detail
 	}
 	for _, f := range t.sub.ArtifactFiles {
 		if _, err := os.Stat(Path(f)); err != nil {

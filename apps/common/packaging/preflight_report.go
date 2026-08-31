@@ -94,6 +94,26 @@ func sortStrings(s []string) {
 	}
 }
 
+// submissionGateLabel is gateLabel for this report. gateLabel says
+// "Phase 4", which is the other gate over the other matrix, and one label
+// standing for both is how a reader ends up believing a Phase 5 column is
+// reported against a Phase 4 verdict.
+func submissionGateLabel(e Epic) string {
+	if e == SubmissionEpic {
+		return "EPIC " + string(e) + " (Phase 5)"
+	}
+	return "EPIC " + string(e) + " (reported here, gated there)"
+}
+
+// submissionGatedBy is submissionGateLabel in the short form a heading
+// can carry.
+func submissionGatedBy(e Epic) string {
+	if e == SubmissionEpic {
+		return "gated by EPIC " + string(e) + "'s Phase 5"
+	}
+	return "reported here, gated by EPIC " + string(e)
+}
+
 func storeLabel(st Store) string {
 	if st.Kind == "none" {
 		return "no store (documented workflow)"
@@ -123,7 +143,7 @@ func (r PreflightRun) Render() string {
 			pending = fmt.Sprintf("%d step(s)", len(row.Pending))
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s | **%s** | %s | %s |\n",
-			row.DisplayName, storeLabel(row.Store), gateLabel(row.Epic), row.Readiness, blockers, pending)
+			row.DisplayName, storeLabel(row.Store), submissionGateLabel(row.Epic), row.Readiness, blockers, pending)
 	}
 
 	b.WriteString("\nWhy each target reads the way it does:\n\n")
@@ -206,7 +226,7 @@ func (r PreflightRun) Render() string {
 		if len(rows) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\n#### %s (Tier %s, %s, %s)\n\n", pr.DisplayName, pr.Tier, storeLabel(sp.Store), gatedBy(pr.Epic))
+		fmt.Fprintf(&b, "\n#### %s (Tier %s, %s, %s)\n\n", pr.DisplayName, pr.Tier, storeLabel(sp.Store), submissionGatedBy(pr.Epic))
 		b.WriteString("| Rule | Outcome | Why |\n|---|---|---|\n")
 		for _, row := range rows {
 			b.WriteString(row)
