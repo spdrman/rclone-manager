@@ -69,10 +69,10 @@ these checks.
 
 | Target | Store or catalog | Gated by | Verdict | Undecided, tracked by | Needs the real platform |
 |---|---|---|---|---|---|
-| UGOS Pro | UGREEN App Center | EPIC D (reported here, gated there) | **NOT_YET_APPLICABLE** | #88 | nothing |
-| Synology DSM | Synology Package Center | EPIC B (Phase 5) | **BLOCKED** | #88 | 2 step(s) |
-| TrueNAS | TrueNAS Apps catalog | EPIC B (Phase 5) | **BLOCKED** | #88 | 2 step(s) |
-| Unraid | Unraid Community Applications | EPIC B (Phase 5) | **BLOCKED** | #88 | 2 step(s) |
+| UGOS Pro | UGREEN App Center | EPIC D (reported here, gated there) | **NOT_YET_APPLICABLE** | none | nothing |
+| Synology DSM | Synology Package Center | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
+| TrueNAS | TrueNAS Apps catalog | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
+| Unraid | Unraid Community Applications | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
 | Generic Docker | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | OpenMediaVault | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | Proxmox VE | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
@@ -80,9 +80,9 @@ these checks.
 Why each target reads the way it does:
 
 - **UGOS Pro** — UGOS Pro declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet; its shared listing materials are recorded on their own merits above
-- **Synology DSM** — nothing failed, and 1 rule(s) could not be decided, tracked by #88
-- **TrueNAS** — nothing failed, and 1 rule(s) could not be decided, tracked by #88
-- **Unraid** — nothing failed, and 1 rule(s) could not be decided, tracked by #88
+- **Synology DSM** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
+- **TrueNAS** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
+- **Unraid** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
 - **Generic Docker** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **OpenMediaVault** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **Proxmox VE** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
@@ -109,7 +109,7 @@ Why each target reads the way it does:
 | Release notes | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
 | Privacy disclosure | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
 | Permission rationale | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Support, source and licence materials | BLOCKED | BLOCKED | BLOCKED | BLOCKED | N/A | N/A | N/A |
+| Support, source and licence materials | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
 | Submission checklist complete against the tree | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Proactive alerts reach the administrator | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR |
 | Recovery documented without a terminal | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
@@ -119,28 +119,19 @@ Why each target reads the way it does:
 
 | Outcome | Cells |
 |---|---|
-| PASS | 100 |
+| PASS | 104 |
 | PENDING_OPERATOR | 9 |
 | UNSUPPORTED | 0 |
 | NOT_APPLICABLE | 48 |
-| BLOCKED | 4 |
+| BLOCKED | 0 |
 | FAIL | 0 |
 
 ### Phase 5 submission gate
 
 Computed over the 6 targets EPIC B ships, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
 
-**Not met.** 0 rule(s) failed and 3 could not be decided:
-
-| Target | Rule | Outcome | Tracked by |
-|---|---|---|---|
-| Synology DSM | Support, source and licence materials | BLOCKED | #88 |
-| TrueNAS | Support, source and licence materials | BLOCKED | #88 |
-| Unraid | Support, source and licence materials | BLOCKED | #88 |
-
-Nothing in this run failed on a rule this work package owns. What stands between these
-targets and a submission is #88, and the gate reports that as undecided rather than
-letting a green run imply bytes nobody can trace.
+**Met.** Every rule that applies to every one of those targets was decided here and held.
+External store approval stays outside this repository's control (§75).
 
 **UGOS Pro is EPIC D's column** (work package 4.2), and it is recorded **NOT_YET_APPLICABLE**.
 It is decided by these same checks, on the same terms as every other target, and it is in
@@ -169,7 +160,6 @@ below, with why.
 | Drift gate: forbidden-privilege set | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 | Drift gate: /api/v1 compatibility | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 | Store screenshots | N/A | The shared bundle covers UGREEN App Center's listing like every other target's, and a screenshot is of the app running on the hardware. EPIC D's #83 has produced no .UPK, so there is nothing to install and nothing to photograph. The listing copy, the icon, the release notes, the privacy disclosure and the permission rationale are all recorded ready above, which is the bundle #178 consumes rather than assembling a second copy of. |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | N/A | Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet. |
 | Submitted bytes traceable to a recorded build | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 
@@ -184,7 +174,6 @@ below, with why.
 | Drift gate: forbidden-privilege set | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
 | Drift gate: /api/v1 compatibility | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's Synology DSM section covers "screenshot"; the hardware run has not happened |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Synology DSM section exercises all four; the hardware run has not happened |
 
 #### TrueNAS (Tier B, TrueNAS Apps catalog, gated by EPIC B's Phase 5)
@@ -193,7 +182,6 @@ below, with why.
 |---|---|---|
 | Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's TrueNAS section covers "screenshot"; the hardware run has not happened |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's TrueNAS section exercises all four; the hardware run has not happened |
 
 #### Unraid (Tier B, Unraid Community Applications, gated by EPIC B's Phase 5)
@@ -202,7 +190,6 @@ below, with why.
 |---|---|---|
 | Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's Unraid section covers "screenshot"; the hardware run has not happened |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Unraid section exercises all four; the hardware run has not happened |
 
 #### Generic Docker (Tier C, no store (documented workflow), gated by EPIC B's Phase 5)

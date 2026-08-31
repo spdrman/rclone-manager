@@ -229,31 +229,31 @@
         },
         "materials-description": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-icon": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-screenshots": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-release-notes": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-privacy-disclosure": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-permission-rationale": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-support-source-license": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it."
         },
         "materials-submission-checklist": {
           "declared": "supported"
@@ -338,10 +338,8 @@
           "declared": "supported"
         },
         "materials-support-source-license": {
-          "declared": "blocked",
-          "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
-          "expectedDetail": "ships no LICENSE file"
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
         },
         "materials-submission-checklist": {
           "declared": "supported"
@@ -425,10 +423,8 @@
           "declared": "supported"
         },
         "materials-support-source-license": {
-          "declared": "blocked",
-          "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
-          "expectedDetail": "ships no LICENSE file"
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
         },
         "materials-submission-checklist": {
           "declared": "supported"
@@ -474,29 +470,29 @@
         },
         "drift-required-mounts": {
           "declared": "not-applicable",
-          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. \u00a781's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
         },
         "drift-expected-ports": {
           "declared": "supported"
         },
         "drift-health-check": {
           "declared": "not-applicable",
-          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. \u00a781's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
         },
         "drift-runtime-profile": {
           "declared": "not-applicable",
-          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. \u00a781's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
         },
         "drift-architecture-support": {
           "declared": "supported"
         },
         "drift-forbidden-privileges": {
           "declared": "not-applicable",
-          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. \u00a781's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
         },
         "drift-api-compatibility": {
           "declared": "not-applicable",
-          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. \u00a781's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
+          "reason": "Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above."
         },
         "materials-description": {
           "declared": "supported"
@@ -517,10 +513,8 @@
           "declared": "supported"
         },
         "materials-support-source-license": {
-          "declared": "blocked",
-          "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
-          "expectedDetail": "ships no LICENSE file"
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
         },
         "materials-submission-checklist": {
           "declared": "supported"
@@ -587,31 +581,31 @@
         },
         "materials-description": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-icon": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-screenshots": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-release-notes": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-privacy-disclosure": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-permission-rationale": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-support-source-license": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it."
         },
         "materials-submission-checklist": {
           "declared": "supported"
@@ -678,31 +672,31 @@
         },
         "materials-description": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-icon": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-screenshots": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-release-notes": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-privacy-disclosure": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-permission-rationale": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-support-source-license": {
           "declared": "not-applicable",
-          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. \u00a773's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it."
         },
         "materials-submission-checklist": {
           "declared": "supported"
@@ -796,10 +790,8 @@
           "declared": "supported"
         },
         "materials-support-source-license": {
-          "declared": "blocked",
-          "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
-          "expectedDetail": "ships no LICENSE file"
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
         },
         "materials-submission-checklist": {
           "declared": "supported"

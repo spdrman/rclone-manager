@@ -164,15 +164,6 @@ func CheckRuntimeProfile(svc Service) []Violation {
 	return out
 }
 
-func containsFold(list []string, want string) bool {
-	for _, v := range list {
-		if strings.EqualFold(strings.TrimSpace(v), want) {
-			return true
-		}
-	}
-	return false
-}
-
 func anyContains(list []string, want string) bool {
 	for _, v := range list {
 		if strings.Contains(v, want) {
