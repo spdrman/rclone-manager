@@ -184,9 +184,11 @@ are fixed by this profile and must not be changed.
 
 ## The image reference
 
-No registry is configured for this repository yet, so
+The registry is settled and nothing has been pushed to it yet, so
 `ghcr.io/spdrman/backup-manager:1.0.0` is the intended publish target rather than
-something that resolves today. `distribution/packaging/canonical.json` records that
-honestly, and step 0.2 of the acceptance procedure covers pushing to your own
-registry or side-loading a saved image in the meantime. It is the `IMAGE` variable
-in the env file, and nothing else.
+something that resolves today. `distribution/packaging/canonical.json` is the
+single source of truth for the reference and records `image.published: false`,
+and `container/release-manifest.json` carries a `registry_digest` of `null` per
+architecture for exactly as long as that stays false. Step 0.2 of the acceptance
+procedure covers pushing to your own registry or side-loading a saved image in
+the meantime. It is the `IMAGE` variable in the env file, and nothing else.
