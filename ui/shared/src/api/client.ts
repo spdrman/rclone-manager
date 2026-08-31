@@ -709,15 +709,39 @@ function fromWireOperation(op: WireOperation): Operation {
     kind: "transfer",
     label: op.action ? op.action.replace(/_/g, " ") : "operation",
     status: toOperationStatus(op.status),
-    // STUB (issue #221): the wire now carries op.progress; this does not
-    // read it yet.
-    progress: null,
+    progress: op.progress ? fromWireProgress(op.progress) : null,
     // A run cycle reads from every source and writes only to this
     // deployment's own storage; it releases a remote source only after a
     // durable local copy is committed and verified. It is not a
     // read-only pass, so this is false rather than a comforting default.
     nonDestructive: false,
     startedAt: op.started_at ?? op.created_at ?? ""
+  };
+}
+
+/**
+ * Maps one live reading.
+ *
+ * Every optional field passes through as-is, undefined included: the
+ * service omits a field it did not measure, and this must not helpfully
+ * fill in a zero on the way past. `bytes_transferred: 0` is a copy that
+ * has started and moved nothing; an absent `bytes_transferred` is a copy
+ * nobody is measuring. The renderer needs to be able to tell those apart,
+ * so this preserves the difference rather than flattening it.
+ */
+function fromWireProgress(p: NonNullable<WireOperation["progress"]>): TransferProgress {
+  return {
+    observedAt: p.observed_at,
+    sequence: p.sequence,
+    stage: p.stage as LiveTransferStage,
+    backupSetId: p.backup_set_id,
+    backupSetsDone: p.backup_sets_done,
+    backupSetsTotal: p.backup_sets_total,
+    artifact: p.artifact,
+    artifactsDone: p.artifacts_done,
+    bytesDone: p.bytes_transferred,
+    bytesTotal: p.bytes_total,
+    bytesPerSecond: p.bytes_per_second
   };
 }
 

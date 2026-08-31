@@ -32,6 +32,12 @@ export function DashboardPage({
   // its own copy. BackupSetsPage (#97) reads the exact same node, so the
   // two can never disagree about what is currently running.
   const operations = useCausl(operationsNode);
+  // GET /api/v1/operations returns recent operations, newest first, not
+  // only the live ones, so a panel headed "Active operations" that counted
+  // the whole list would report every finished run of the day as running.
+  // Filtering here rather than in the client keeps the node holding what
+  // the endpoint actually returns.
+  const active = operations.data?.filter((op) => op.status === "running" || op.status === "queued") ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
 
   if (health.error)
@@ -140,7 +146,7 @@ export function DashboardPage({
         <div className="card__header">
           <h2 className="eyebrow">Active operations</h2>
           <span style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
-            {operations.data ? operations.data.length + " running" : "…"}
+            {active ? active.length + " running" : "…"}
           </span>
         </div>
         <div style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -158,14 +164,14 @@ export function DashboardPage({
               Live operation status is unavailable ({operations.error.message}).
             </div>
           ) : null}
-          {operations.data === null
+          {active === null
             ? (operations.error
                 ? null
                 : <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking for active operations…</p>)
-            : operations.data.length
+            : active.length
               ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-                  {operations.data.map((op, i) => (
+                  {active.map((op, i) => (
                     <div
                       key={op.id}
                       style={{
