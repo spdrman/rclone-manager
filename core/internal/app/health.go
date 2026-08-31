@@ -7,6 +7,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/health"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
 // BuildHealthReport is `backup-manager status`' use case (FR-24). It calls
@@ -45,6 +46,24 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 		RcloneVersion: versionInfo.RcloneVersion,
 	})
 
+	// Every backup set currently carrying a connection refusal, read once
+	// for the whole report rather than per set (issue #245).
+	//
+	// A failure here fails the whole report, the same way the
+	// reinstatement history below does and unlike FreeBytes. The
+	// reassuring answer is "no set is refused", and a database that could
+	// not be asked must not produce the same output as a deployment where
+	// everything connects: that collapse is the exact defect this field
+	// exists to end.
+	halts, err := s.Journal.ListBackupSetHalts(ctx)
+	if err != nil {
+		return health.Report{}, fmt.Errorf("app: health: connection refusals: %w", err)
+	}
+	haltReasons := make(map[model.BackupSetID]string, len(halts))
+	for _, h := range halts {
+		haltReasons[h.Set] = h.Reason
+	}
+
 	var sets []health.BackupSetHealth
 	for _, src := range s.Config.Sources {
 		for _, bs := range src.BackupSets {
@@ -74,6 +93,10 @@ func (s *Service) BuildHealthReport(ctx context.Context, versionInfo VersionInfo
 			in := health.BackupSetInputs{
 				LastSuccessfulPollAt: s.lastPollAt(bs.ID),
 				LastRetentionRunAt:   s.lastRetentionAt(bs.ID),
+				// Absent from the map means no refusal is on record, which
+				// is the honest empty rather than a claim that this set is
+				// reachable.
+				HaltReason: haltReasons[bs.ID],
 			}
 			if stat, statErr := capacity.StatPath(bs.LocalPath); statErr == nil {
 				free := stat.AvailableBytes

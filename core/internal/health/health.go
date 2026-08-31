@@ -168,6 +168,23 @@ type BackupSetInputs struct {
 	// destination. Nil means the caller has not wired a free-space source
 	// yet, not that free space is zero.
 	FreeBytes *uint64
+
+	// HaltReason is why the manager could not connect to this backup set
+	// the last time it tried, or empty when nothing of the kind has been
+	// observed (issue #245). It comes from internal/state's durable
+	// backup_set_halts record, which is written by the cycle that hit the
+	// refusal and removed by a later cycle that connected.
+	//
+	// Empty is "no refusal is on record", never "this set is reachable".
+	// The two are different claims and only the first one is ever
+	// available to make here, which is exactly why this is a reason and
+	// not a boolean: see issue #231 for what a fabricated definite value
+	// cost the last time this concept had one.
+	//
+	// Like the three fields above it, this is carried for a renderer and
+	// never reaches decideState. That is not a convention: decideState's
+	// evidence parameter has no field it could arrive through.
+	HaltReason string
 }
 
 // TransferInProgress names one artifact currently in the TRANSFERRING
@@ -292,9 +309,17 @@ type BackupSetHealth struct {
 	// with a field it cannot compute honestly.
 	ReinstatedRemoteRetainedCount int
 
-	// LastRetentionRunAt and FreeBytes are injected; see BackupSetInputs.
+	// LastRetentionRunAt, FreeBytes and HaltReason are injected; see
+	// BackupSetInputs.
 	LastRetentionRunAt *time.Time
 	FreeBytes          *uint64
+
+	// HaltReason is why this set could not be connected to, empty when no
+	// refusal is on record (issue #245). It sits beside the verdict and
+	// never inside it: a set refused on every cycle still gets its State
+	// from journal evidence alone, and that State is usually STALE, which
+	// is true and incomplete. This is the missing half of the sentence.
+	HaltReason string
 }
 
 // Report bundles one ProcessHealth with every configured backup set's

@@ -87,6 +87,15 @@ type Journal interface {
 	// once per backup set rather than once per artifact per edge on every
 	// status call and dashboard load.
 	ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error)
+
+	// The durable per-backup-set connection refusal (issue #245).
+	// RunCycle writes through these two at the end of every pass and
+	// BuildHealthReport reads the whole population once per report; see
+	// halt.go for which cycle outcomes are allowed to move them, and
+	// internal/state/halts.go for what a row's presence claims.
+	RecordBackupSetHalt(ctx context.Context, set model.BackupSetID, reason string, observedAt time.Time) error
+	ClearBackupSetHalt(ctx context.Context, set model.BackupSetID) error
+	ListBackupSetHalts(ctx context.Context) ([]state.BackupSetHalt, error)
 }
 
 var _ Journal = (*state.Journal)(nil)

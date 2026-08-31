@@ -14,6 +14,7 @@ import type {
   WireArtifact,
   WireArtifactReinstateResponse,
   WireBackupSet,
+  WireBackupSetHealth,
   WireBackupSetSpec,
   WireCatalogReportResponse,
   WireCompleteFirstRunResponse,
@@ -266,19 +267,30 @@ const COMPLETION_STRATEGY_TO_METHOD: Record<string, CompletionMethod> = {
  * `disabled` -> the INVERSE of `enabled`, not the same boolean under a
  * different name).
  *
- * Every field the backend does not yet compute — health/retention/
- * validation/last-run data, none of which exists anywhere in
- * core/service yet — gets an honest, clearly-labeled placeholder instead
- * of being left `undefined` against a type that declares it required:
- * `state: "stale"` with a stateNote that says why, zeroed counters,
- * empty arrays, null timestamps. This is deliberately NOT the richer fix
- * (enriching the Go response to compute real health/retention data) —
- * that data does not exist yet anywhere in this codebase to enrich FROM
- * — so BackupSetsPage/BackupSetDetailPage render a correctly-typed, if
- * visibly incomplete, page against a real deployment instead of
- * throwing, until a future issue actually computes this data server-side.
+ * `health` is that set's entry from GET /system/health, when the report
+ * could be read (issue #245). This type has always been a view model
+ * rather than a copy of one endpoint: `state`, `stateNote` and
+ * `haltReason` are runtime facts sitting on a shape whose other half is
+ * configuration, and before the join they were placeholders this mapper
+ * invented, so a set the transport refused to connect to rendered as
+ * `stale` with "Health details are not yet reported by the server for
+ * this backup set." beside it. The verdict, its sentence and any standing
+ * connection refusal now come from the server that computed them.
+ *
+ * `health` is undefined when the report could not be read, or carried no
+ * entry for this set. That case keeps the old placeholder rather than
+ * guessing: a health endpoint nobody could ask is not evidence the set is
+ * fine. `haltReason` stays ABSENT there, which is the honest answer, and
+ * absent is a claim this type is allowed to make where a boolean was not
+ * (issue #231).
+ *
+ * The remaining placeholders below (retention, validations, counts,
+ * fingerprint, last-run) are the fields nothing anywhere in core/service
+ * computes yet. They stay clearly labeled rather than being dropped,
+ * because this type declares them required.
  */
-function fromWireBackupSet(bs: WireBackupSet): BackupSet {
+function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): BackupSet {
+  const haltReason = health ? HALT_REASON[health.halt_reason ?? ""] : undefined;
   return {
     id: bs.id,
     // BackupSet.source/BackupSet.set are model.BackupSetID's own two
@@ -308,9 +320,15 @@ function fromWireBackupSet(bs: WireBackupSet): BackupSet {
       protectLastKnownGood: false
     },
     validations: [],
-    state: "stale",
-    stateNote: "Health details are not yet reported by the server for this backup set.",
+    state: health ? HEALTH_STATE[health.state] ?? "degraded" : "stale",
+    stateNote: health
+      ? health.reason
+      : "Health details are not yet reported by the server for this backup set.",
     enabled: !bs.disabled,
+    // Spread, not `haltReason: undefined`. A key that is present and
+    // undefined still reads as the mapper having an opinion; this way a
+    // set with no refusal on record simply does not carry the field.
+    ...(haltReason ? { haltReason } : {}),
     newestKnownGoodAt: null,
     lastRunAt: null,
     lastValidation: "not-run",
@@ -461,6 +479,20 @@ const HEALTH_STATE: Record<string, SystemHealth["backupHealth"]> = {
   DEGRADED: "degraded",
   STALE: "stale",
   FAILING: "failing"
+};
+
+/**
+ * The wire's halt vocabulary, mapped onto this UI's own (issue #245).
+ *
+ * A reason this build does not recognise maps to undefined and renders
+ * nothing, rather than being passed through as a value no banner knows
+ * what to do with. A newer service reporting a reason this UI has never
+ * heard of is a real possibility, and the honest thing to show for it is
+ * what is shown for a set nothing is known about.
+ */
+const HALT_REASON: Record<string, BackupSet["haltReason"]> = {
+  HOST_KEY_CHANGED: "host-key-changed",
+  AUTHENTICATION_FAILED: "authentication-failed"
 };
 
 const HOUR_MS = 3_600_000;
@@ -782,6 +814,32 @@ function fromWireCatalogReport(body: WireCatalogReportResponse): CatalogScanPrev
   };
 }
 
+/**
+ * GET /system/health's per-set array, keyed by backup set id, for the join
+ * fromWireBackupSet makes (issue #245).
+ *
+ * getHealth() next door reads the same endpoint and aggregates it down to
+ * fleet counts, throwing the per-set array away. This keeps it, which is
+ * what gives `haltReason` a producer at all and what replaces the sets
+ * list's invented `state`/`stateNote` with the verdict the server actually
+ * computed.
+ *
+ * A failed read resolves EMPTY rather than rejecting, and the reasoning is
+ * worth stating because swallowing an error usually is not defensible.
+ * This one is a secondary read behind a primary one: failing the whole
+ * sets list because a second endpoint was unavailable would take away the
+ * page an operator uses to find out what is configured. An empty map is
+ * not a claim that anything is fine either, because every field it feeds
+ * falls back to saying it is not known: `haltReason` stays absent and the
+ * state note says the verdict is missing. The failure that matters, the
+ * dashboard's own health call, still surfaces through getHealth().
+ */
+function perSetHealth(): Promise<Map<string, WireBackupSetHealth>> {
+  return request<WireHealthResponse>("/system/health")
+    .then((r) => new Map((r.backup_sets ?? []).map((set) => [set.backup_set_id, set])))
+    .catch(() => new Map<string, WireBackupSetHealth>());
+}
+
 /** apps/common/webhost/router.go's `{source}/{set}` route params
  *  (model.BackupSetID's own composite shape), URL-encoded independently.
  *  The contract spells the same thing as one `{id}` that spans segments;
@@ -825,8 +883,13 @@ export const httpApi: BackupManagerApi = {
     })),
 
   listSets: () =>
-    request<WireListBackupSetsResponse>("/backup-sets").then((r) => r.backup_sets.map(fromWireBackupSet)),
-  getSet: (id) => request<WireBackupSet>("/backup-sets/" + id).then(fromWireBackupSet),
+    Promise.all([request<WireListBackupSetsResponse>("/backup-sets"), perSetHealth()]).then(
+      ([r, health]) => r.backup_sets.map((bs) => fromWireBackupSet(bs, health.get(bs.id)))
+    ),
+  getSet: (id) =>
+    Promise.all([request<WireBackupSet>("/backup-sets/" + id), perSetHealth()]).then(([bs, health]) =>
+      fromWireBackupSet(bs, health.get(bs.id))
+    ),
   // POST /operations with a run_cycle action, not a per-set run route.
   // There has never been one, and the reason is not an oversight: a run
   // cycle is deployment-wide (it walks every enabled backup set), which is
