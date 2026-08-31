@@ -82,6 +82,53 @@ chmod 600 /volume1/backup-manager/secrets/id_ed25519
 
 ---
 
+### 0.4 Write the config before the first start
+
+The engine's healthcheck is `["CMD", "/backup-manager", "status"]`, and `status`
+opens the service, which loads **and validates** `config.yaml` before it returns.
+With no config file on disk it exits non-zero, the engine never turns healthy,
+and `web-ui` never starts at all: the canonical `container/compose.yaml` this stack
+is a copy of gates it on `depends_on: rclone-manager: condition: service_healthy`,
+which is the same gate every other adapter carries and the equivalence gate compares.
+A missing or invalid `config.yaml` is a hard startup failure, not a first-run
+wizard, so "both containers reach `running`" below, and the published port
+loading the shared web UI after it, are unreachable until this file exists.
+
+**What still requires this step, precisely (issue #176).** The configuration mount
+is a writable directory the application owns, so once the engine is running it can
+create and replace `config.yaml` itself, and an empty directory is a legitimate
+state rather than a broken deployment. What keeps the step here is that the engine
+still refuses to start without a valid config: removing that refusal, and serving a
+first-run flow instead, is #176's work and is not merged. Until it is, writing the
+file out of band is the interim handling #176 itself names, and it is the same step 0
+the TrueNAS, Unraid and OpenMediaVault procedures already carry.
+
+**Write it before you press Start.** Dockge's editor edits the stack's `compose.yaml`
+and `.env`, and nothing under the config mount, so `config.yaml` has to be on the host
+before the stack starts. Step 1 already puts you in a shell on that host: do it there,
+and do it before **Start**.
+
+```bash
+$EDITOR /volume1/backup-manager/config/config.yaml
+chown 1000:1000 /volume1/backup-manager/config/config.yaml
+chmod 600 /volume1/backup-manager/config/config.yaml
+```
+
+The container-side paths in it are fixed by this package and must not be changed:
+every adapter mounts the same ones, which is why `apps/truenas/README.md`'s
+annotated example is this same file with another platform's host paths, and
+`scripts/deploy/deploy_generic.py`'s `render_config_yaml` is the authoritative shape.
+
+**Never commit the config or paste one into the evidence table:** it names the SFTP
+host and user.
+
+- [ ] `config.yaml` written into `/volume1/backup-manager/config` **before** the install, and valid
+- [ ] It is owned by the app's uid and gid and readable by them
+- [ ] It was written after 0.3's ownership fix-up, or chowned afterwards
+- [ ] The engine reported healthy on the first start, rather than restarting
+
+---
+
 ## Step 1 — Install
 
 1. Create the stack directory under Dockge's stacks root and copy the canonical

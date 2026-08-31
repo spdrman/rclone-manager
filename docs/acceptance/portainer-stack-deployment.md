@@ -84,6 +84,53 @@ chmod 600 /opt/backup-manager/secrets/id_ed25519
 
 ---
 
+### 0.4 Write the config before the first start
+
+The engine's healthcheck is `["CMD", "/backup-manager", "status"]`, and `status`
+opens the service, which loads **and validates** `config.yaml` before it returns.
+With no config file on disk it exits non-zero, the engine never turns healthy,
+and `backup-manager-ui` never starts at all: `apps/portainer/compose/backup-manager.yml` gates it on
+`depends_on: backup-manager: condition: service_healthy`, exactly as
+`container/compose.yaml` does and exactly as the equivalence gate requires it to.
+A missing or invalid `config.yaml` is a hard startup failure, not a first-run
+wizard, so "both containers reach `running`" below, and the published port
+loading the shared web UI after it, are unreachable until this file exists.
+
+**What still requires this step, precisely (issue #176).** The configuration mount
+is a writable directory the application owns, so once the engine is running it can
+create and replace `config.yaml` itself, and an empty directory is a legitimate
+state rather than a broken deployment. What keeps the step here is that the engine
+still refuses to start without a valid config: removing that refusal, and serving a
+first-run flow instead, is #176's work and is not merged. Until it is, writing the
+file out of band is the interim handling #176 itself names, and it is the same step 0
+the TrueNAS, Unraid and OpenMediaVault procedures already carry.
+
+**The stack form places no files.** Every field Portainer shows is one environment
+variable of `apps/portainer/compose/backup-manager.env`, and the stack deploys as soon
+as you press Deploy, so `config.yaml` has to be on the host before that press. Write it
+over SSH on the host running the Docker engine, not inside the Portainer container.
+
+```bash
+$EDITOR /opt/backup-manager/config/config.yaml
+chown 1000:1000 /opt/backup-manager/config/config.yaml
+chmod 600 /opt/backup-manager/config/config.yaml
+```
+
+The container-side paths in it are fixed by this package and must not be changed:
+every adapter mounts the same ones, which is why `apps/truenas/README.md`'s
+annotated example is this same file with another platform's host paths, and
+`scripts/deploy/deploy_generic.py`'s `render_config_yaml` is the authoritative shape.
+
+**Never commit the config or paste one into the evidence table:** it names the SFTP
+host and user.
+
+- [ ] `config.yaml` written into `/opt/backup-manager/config` **before** the install, and valid
+- [ ] It is owned by the app's uid and gid and readable by them
+- [ ] It was written after 0.3's ownership fix-up, or chowned afterwards
+- [ ] The engine reported healthy on the first start, rather than restarting
+
+---
+
 ## Step 1 — Install
 
 1. In Portainer, **Settings, App Templates**, set the templates URL to this

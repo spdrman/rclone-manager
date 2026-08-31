@@ -1101,6 +1101,134 @@ func TestTheNewAdaptersAcceptanceProceduresAreSafeAndVerifiable(t *testing.T) {
 	}
 }
 
+// TestEveryNewProcedureRequiresAConfigBeforeInstall is the #204 review's
+// M1. All four adapters gate the container that publishes a port on the
+// engine reporting healthy, the engine's healthcheck is `status`, and
+// `status` exits non-zero until a valid config.yaml exists on disk. A
+// procedure whose step 0 creates the config directory and never puts a
+// file in it therefore asks the operator to confirm "both containers
+// reach running" and "the published port loads the shared web UI" after
+// an install that cannot get there, and the destructive-safety re-check
+// these four procedures exist to produce is unreachable behind it.
+//
+// The remedy is the procedure's, not the adapter's: container/compose.yaml
+// carries the identical healthcheck and the identical service_healthy
+// gate, and PropHealthCheck compares both, so an adapter that softened
+// either would fail this suite's own equivalence gate. Fixing the health
+// contract is #176's, and this is the interim handling #176 names.
+func TestEveryNewProcedureRequiresAConfigBeforeInstall(t *testing.T) {
+	for _, a := range newAdapters() {
+		t.Run(a.id, func(t *testing.T) {
+			v, err := ReadConfigPrecondition(Path(a.acceptance))
+			if err != nil {
+				t.Fatalf("read %s: %v", a.acceptance, err)
+			}
+			if len(v) > 0 {
+				t.Errorf("%s:\n%s", a.acceptance, format(v))
+			}
+		})
+	}
+}
+
+// TestTheConfigPreconditionIsTheEstablishedShape holds the rule above to
+// the procedures #175 already wrote it into. If it passes on the four new
+// ones and fails on these three, it is describing wording I invented
+// rather than the handling this repository settled on.
+func TestTheConfigPreconditionIsTheEstablishedShape(t *testing.T) {
+	for _, name := range []string{
+		"truenas-provider-acceptance.md",
+		"unraid-provider-acceptance.md",
+		"openmediavault-provider-acceptance.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			v, err := ReadConfigPrecondition(Path(filepath.Join("docs", "acceptance", name)))
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			if len(v) > 0 {
+				t.Errorf("docs/acceptance/%s:\n%s", name, format(v))
+			}
+		})
+	}
+}
+
+// TestTheConfigPreconditionRuleFires is the control the clean results
+// above need: one fixture per requirement, each missing exactly one
+// thing, and each checked for the violation it is supposed to raise
+// rather than for any violation at all.
+func TestTheConfigPreconditionRuleFires(t *testing.T) {
+	const (
+		head      = "# A procedure\n\n## Step 0 — Prerequisites\n\n"
+		file      = "Write `config.yaml` into the config directory before you install.\n\n"
+		refusal   = "A missing or invalid config is a hard startup failure, not a first-run wizard.\n\n"
+		citation  = "Serving a first-run flow instead is #176's work and is not merged.\n\n"
+		checklist = "- [ ] `config.yaml` written inside it\n\n"
+		install   = "## Step 1 — Install\n\n- [ ] Both containers reach `running`\n"
+	)
+
+	complete := head + file + refusal + citation + checklist + install
+	if v := CheckConfigPrecondition(complete); len(v) > 0 {
+		t.Fatalf("the complete fixture was reported as incomplete, so every control below proves nothing:\n%s", format(v))
+	}
+
+	for _, tc := range []struct{ name, doc, want string }{
+		{
+			"no config.yaml anywhere before the install",
+			head + refusal + citation + "- [ ] the SSH key written and owned\n\n" + install,
+			"never names `config.yaml`",
+		},
+		{
+			"no statement that the engine refuses to start",
+			head + file + citation + checklist + install,
+			"hard startup failure",
+		},
+		{
+			"no #176 citation",
+			head + file + refusal + checklist + install,
+			"#176",
+		},
+		{
+			"no checklist box",
+			head + file + refusal + citation + install,
+			"checklist box",
+		},
+		{
+			"the precondition sits after the install step",
+			head + "- [ ] the host recorded\n\n" + install + "\n## Step 2 — Configure\n\n" + file + refusal + citation + checklist,
+			"never names `config.yaml`",
+		},
+		{
+			"no install step at all",
+			head + file + refusal + citation + checklist,
+			"`## Step 1` heading",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := CheckConfigPrecondition(tc.doc)
+			if len(v) == 0 {
+				t.Fatalf("a procedure with %s passed", tc.name)
+			}
+			// Every violation is read, not the one-line summary: that
+			// summary elides after three entries, and a fixture missing
+			// the whole precondition raises four.
+			found := false
+			for _, got := range v {
+				if strings.Contains(got.Detail, tc.want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("the rule fired for a different reason than %q:\n%s", tc.want, format(v))
+			}
+			for _, got := range v {
+				if got.Rule != RuleMissingConfigPrecondition {
+					t.Errorf("reported rule %q, and this fixture only breaks the config precondition", got.Rule)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------
