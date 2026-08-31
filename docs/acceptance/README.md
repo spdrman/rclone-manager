@@ -1,0 +1,95 @@
+# Provider acceptance procedures
+
+Section 68 of `docs/EPIC-B-multi-nas.md` (the Provider Test Matrix) says provider
+acceptance procedures are written and version-controlled **before** anyone executes
+them manually. This directory is where they live.
+
+Every procedure in here covers behaviour that no test on a developer laptop can
+reach: installing a package through a real NAS platform's own app store, letting
+that platform's own updater replace the container, and proving retained backup
+data survived. Nothing in this directory runs in CI, and nothing in it is
+"verified" until an operator has executed it against the hardware or VM named in
+its own header and filled in the evidence table at the bottom.
+
+## The rule this directory exists to enforce
+
+Section 68:
+
+> A provider/architecture SHALL be described as **build-supported but uncertified**
+> until its required acceptance test is completed.
+
+So: a green `ci-local: ok` proves the metadata is *well-formed*. It never proves a
+platform *accepted* it. Until the evidence table in a procedure is filled in and
+committed, that provider is build-supported and uncertified, and any PR, release
+note, or README that says otherwise is wrong.
+
+## What CI can and cannot prove
+
+`apps/common/packaging` is the automated half. It runs on every commit and checks
+the parts of the Phase 4 TDD Gate that are decidable from the repository alone:
+
+| Phase 4 gate item | Where it is checked |
+| --- | --- |
+| core version parity | `apps/common/packaging` (one canonical image reference, identical across every platform and across the TrueNAS catalog as an install renders it) |
+| core binary hash parity | **not claimed**. Nothing in `apps/common/packaging` derives a hash from any artifact. It checks only that `container/release-manifest.json` records a non-empty SHA-256 per binary per architecture, which cannot detect a stale or wrong hash, and #174 records that the manifest currently pins a commit that is not an ancestor of `main`. The only place binary hashes are verified against real bytes is `spkctl verify` against a built `.spk` in `apps/synology`. |
+| provider package metadata | `apps/common/packaging` (every metadata file parses, and carries the keys its platform requires) |
+| architecture | `apps/common/packaging` (the claimed set equals what `container/release-manifest.json` records as built) |
+| backup-root containment | `apps/common/packaging` (§19.2: private state, config and key material are never inside the backup root, and the declared storage mount IS the backup root, so the rule has one reading rather than three) |
+| auth mode | `apps/common/packaging` (every platform declares `local-account`, none ships its own auth) |
+| no bundled secrets | `apps/common/packaging` |
+| no provider-specific lifecycle implementation | `apps/common/packaging` |
+| state persistence | **here**, on hardware |
+| install/update/remove semantics | **here**, on hardware |
+
+The last two rows are the reason this directory exists. The second row is the
+reason the first one is worded so narrowly: a gate item marked as covered by a
+check that cannot fail for the reason the item names is worse than an openly
+unclaimed gap, because it stops anyone looking.
+
+## What these procedures prove about your data
+
+Every procedure ends by asking whether the backup root survived removal
+untouched. That question is only answerable against a baseline, so each one
+writes an 8 MiB canary of known content into the backup root during the storage
+step and records its SHA-256 and a full file listing **outside** the backup root,
+then verifies both immediately after removal, before anything else is inspected.
+A procedure that claims the backup root is untouched byte for byte without
+recording that baseline is a red test in `apps/common/packaging`, as is any
+`chown -R` that reaches the backup root or a parent of it: step 0 is what an
+operator re-runs on a reinstall, by which point that tree is the retained backup
+store.
+
+## Procedures
+
+| Provider | Procedure | Required evidence (§68) |
+| --- | --- | --- |
+| TrueNAS | [truenas-provider-acceptance.md](truenas-provider-acceptance.md) | current supported TrueNAS release VM or hardware |
+| Unraid | [unraid-provider-acceptance.md](unraid-provider-acceptance.md) | current supported Unraid release VM or hardware |
+| OpenMediaVault | [openmediavault-provider-acceptance.md](openmediavault-provider-acceptance.md) | current OMV 8.x Debian-based test system |
+
+## Recording evidence
+
+Every procedure ends with the same evidence table, whose rows are section 68's own
+required fields:
+
+- provider / OS version
+- hardware or model where relevant
+- architecture
+- package / image version
+- install result
+- auth result
+- storage result
+- update result
+- uninstall / removal result
+- retained-backup safety
+- evidence (log paths, screenshots, command transcripts)
+
+Fill it in **in the same commit** that flips a provider from uncertified to
+certified, so the claim and its evidence never live apart.
+
+## Credentials
+
+No procedure in this directory ever asks anyone to commit a credential. Where a
+step produces one (the one-time enrollment token, the administrator password, an
+SSH private key), the procedure says so and says to keep it off the repository.
+Paste command transcripts with those values redacted.

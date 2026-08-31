@@ -10,8 +10,12 @@ export const truenasBridge: PlatformBridge = {
 
   deployment: {
     label: "TrueNAS app (container)",
-    storageMount: "/mnt/tank/backup-manager",
-    adapterVersion: "truenas 1.1.0"
+    // The backup root, not the app root: the shared UI shows this string
+    // and the backup-set wizard seeds a destination from it, so it must not
+    // name a directory that also holds the SSH key (§19.2). Pinned to
+    // apps/common/packaging/canonical.json.
+    storageMount: "/mnt/tank/backup-manager/backups",
+    adapterVersion: "truenas 1.2.0"
   },
 
   capabilities: () => capabilities({}),

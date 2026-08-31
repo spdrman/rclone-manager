@@ -1,0 +1,24 @@
+# Defaults for every question in questions.yaml. apps/common/packaging
+# fails the build if a question has no default here, or if this file
+# declares a value no question asks for.
+image:
+  reference: "ghcr.io/spdrman/backup-manager:1.0.0"
+
+storage:
+  state:
+    hostPath: "/mnt/tank/backup-manager/state"
+  backups:
+    hostPath: "/mnt/tank/backup-manager/backups"
+  config:
+    hostPath: "/mnt/tank/backup-manager/config/config.yaml"
+  sshKey:
+    hostPath: "/mnt/tank/backup-manager/secrets/id_ed25519"
+  knownHosts:
+    hostPath: "/mnt/tank/backup-manager/secrets/known_hosts"
+
+network:
+  webPort: 8080
+
+runtime:
+  puid: 568
+  pgid: 568

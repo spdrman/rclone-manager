@@ -532,6 +532,18 @@ packaging and conformance module (#85/B4.4), which ships no product binary of it
 it wraps the release binaries unchanged and checks their digest against
 `container/release-manifest.json`.
 
+Three of those providers also carry packaging metadata next to their bridge:
+`apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
+`apps/unraid/` (two Community Applications Docker templates) and
+`apps/openmediavault/` (a Compose deployment profile). All three are metadata and
+templates only, wrapping the exact canonical OCI image with no lifecycle code of their
+own, and `apps/common/packaging/` holds them to that on every commit: one shared source
+of truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are
+decidable from the repository alone. The half that is not decidable here — installing,
+updating and removing on the real platform — lives in [`docs/acceptance/`](docs/acceptance/)
+as prewritten operator procedures, and until one is executed its provider is
+build-supported and uncertified.
+
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
 
@@ -544,5 +556,5 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`docs/deployment.md`](docs/deployment.md) – UGREEN container packaging (issue #27; check it exists yet)
 - [`apps/synology/README.md`](apps/synology/README.md) – the Synology DSM `.spk`: supported architectures/models, how to build and verify one, and what is still uncertified
-- [`docs/acceptance/synology-dsm-package-lifecycle.md`](docs/acceptance/synology-dsm-package-lifecycle.md) – the DSM install/update/uninstall acceptance procedure, to be executed on real hardware
+- [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written before execution and run on real NAS hardware
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged
