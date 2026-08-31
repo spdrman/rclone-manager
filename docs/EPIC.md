@@ -1042,7 +1042,8 @@ For each backup set, with `tiers` the configured chain:
 
 ``` text
 KEEP =
-    ⋃ over every configured tier t of  ( selections_discovery(t) ∪ selections_producer(t) )
+    ⋃ over every configured tier t of
+        ( selections_discovery(t) ∪ selections_producer(t) )
   ∪ protected
 
 DELETE =
@@ -1092,8 +1093,12 @@ artifact on a calendar. Two timestamps could, and they are not the same
 thing:
 
 -   the **discovery timestamp**: the moment this manager first observed
-    the artifact on the remote (`state.Record.DiscoveredAt`). It comes from this manager's own clock and
-    nothing outside the manager can move it.
+    the artifact on the remote (`state.Record.DiscoveredAt`). It comes
+    from this manager's own clock and nothing outside the manager can
+    move it. Note that this is *not* the recovery manifest's
+    `received_timestamp`, which records when the artifact finished
+    committing locally; the manifest field carrying this one is
+    `retention_timestamp`.
 -   the **producer timestamp**: the remote object's own modification time
     as captured at discovery. It describes when the backup was actually
     taken, and FR-8 requires it to be treated as untrusted input.
@@ -1101,8 +1106,8 @@ thing:
 Neither one alone is the answer, and this document used to pick neither,
 which is the ambiguity this section closes.
 
-Bucketing on the discovery timestamp alone collapses an ingested backlog. A
-new backup set pointed at a directory that already holds a year of dumps,
+Bucketing on the discovery timestamp alone collapses an ingested backlog.
+A new backup set pointed at a directory that already holds a year of dumps,
 a manager that was down for a week and catches up, a NAS restored from
 elsewhere and re-reconciled: in each of those the artifacts have genuinely
 different backup dates, and a discovery-only key puts every one of them in
@@ -1150,17 +1155,17 @@ placement is untouched.
 
 Three properties follow, and SHALL hold:
 
--   **The producer term may only add.** For any set of artifacts, and for
-    every tier, every artifact the discovery pass selects is still selected
-    when producer timestamps are read. No producer timestamp, absent or
-    wrong or hostile, can take a tier away from an artifact or move one
-    from KEEP to DELETE. This is what makes it safe for retention to read
-    a value FR-8 calls untrusted at all: being wrong about a producer
-    timestamp costs disk, never a backup.
--   **The most recently discovered artifact is always kept.** It is placed
-    by the discovery pass on today's date, today falls inside every enabled
-    tier's window by construction, so it is always some bucket's
-    representative whatever any producer claims.
+-   **The producer term may only add.** For any set of artifacts, and
+    for every tier, every artifact the discovery pass selects is still
+    selected when producer timestamps are read. No producer timestamp,
+    absent or wrong or hostile, can take a tier away from an artifact or
+    move one from KEEP to DELETE. This is what makes it safe for
+    retention to read a value FR-8 calls untrusted at all: being wrong
+    about a producer timestamp costs disk, never a backup.
+-   **The most recently discovered artifact is always kept.** It is
+    placed by the discovery pass on today's date, today falls inside
+    every enabled tier's window by construction, so it is always some
+    bucket's representative whatever any producer claims.
 -   **Each bucket still selects at most one artifact per pass.** Two
     passes mean one bucket can contribute up to two artifacts to KEEP, so
     a chain can retain up to twice what its bucket count nominally
