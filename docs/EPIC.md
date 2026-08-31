@@ -1026,7 +1026,9 @@ epoch-aligned boundary for a custom `days` period (so custom buckets never
 drift with the day the calculation runs).
 
 Within its window, each tier independently selects the **newest valid
-backup in each of its own buckets**.
+backup in each of its own buckets**. Which timestamp puts an artifact in a
+bucket is answered below, under "Which timestamp puts an artifact in a
+bucket", and the answer is two of them.
 
 Default chain:
 
@@ -1040,18 +1042,19 @@ For each backup set, with `tiers` the configured chain:
 
 ``` text
 KEEP =
-    ⋃ over every configured tier t of  selections(t)
+    ⋃ over every configured tier t of  ( selections_received(t) ∪ selections_producer(t) )
   ∪ protected
 
 DELETE =
     managed_complete_backups - KEEP
 ```
 
-That formula is unchanged from the fixed three-tier version: it is still a
-union of tier selections plus FR-19's protected term, and DELETE is still
-everything managed and complete that the union did not claim. What is
-generalized is only *how many* tiers may contribute to the union and *what
-granularities* they may use.
+The shape of that formula is unchanged from the fixed three-tier version:
+it is still a union of tier selections plus FR-19's protected term, and
+DELETE is still everything managed and complete that the union did not
+claim. What is generalized is *how many* tiers may contribute to the
+union, *what granularities* they may use, and that each tier contributes
+two selections rather than one. The next section says what those two are.
 
 Two consequences follow, and are stated here rather than left to be
 inferred:
@@ -1074,12 +1077,119 @@ Default semantics:
 ``` text
 timezone: America/Vancouver
 week starts: Monday
-bucket representative: newest valid backup in bucket
+bucket key: received timestamp, and producer timestamp where admissible
+bucket representative: newest valid backup in bucket, per bucket key
 ```
 
 Calendar semantics, DST, leap years and year boundaries SHALL be tested,
 for every granularity the chain admits, including the calendar half-year
 and calendar-year boundaries semi-annual and annual tiers depend on.
+
+### Which timestamp puts an artifact in a bucket
+
+A tier's buckets are calendar buckets, so something has to place an
+artifact on a calendar. Two timestamps could, and they are not the same
+thing:
+
+-   the **received timestamp**: the moment this manager first observed the
+    artifact on the remote. It comes from this manager's own clock and
+    nothing outside the manager can move it.
+-   the **producer timestamp**: the remote object's own modification time
+    as captured at discovery. It describes when the backup was actually
+    taken, and FR-8 requires it to be treated as untrusted input.
+
+Neither one alone is the answer, and this document used to pick neither,
+which is the ambiguity this section closes.
+
+Bucketing on the received timestamp alone collapses an ingested backlog. A
+new backup set pointed at a directory that already holds a year of dumps,
+a manager that was down for a week and catches up, a NAS restored from
+elsewhere and re-reconciled: in each of those the artifacts have genuinely
+different backup dates, and a received-only key puts every one of them in
+the same daily bucket, the same weekly bucket and the same monthly bucket.
+Each tier then selects a single representative, FR-19 saves one more, and
+everything else is a DELETE candidate on the very first retention pass.
+That is the situation GFS retention exists to protect an operator from,
+and it is the situation where a received-only key does the opposite.
+
+Bucketing on the producer timestamp alone is worse. It hands a producer
+with a wrong clock, or a hostile one, the power to move artifacts *out* of
+every tier window: back-date a set to 1990 and every artifact in it
+becomes a DELETE candidate on the next pass, with only FR-19's single
+protected artifact left standing. Refusing a future-dated producer
+timestamp does not help, because the direction that deletes is the past
+one. This is the ordinary accident as much as the attack: a NAS with a
+dead clock, a backend that reports no modification time, a copy that did
+not preserve times.
+
+**Each tier is therefore evaluated twice over the same artifacts, and KEEP
+is the union.** One pass places every artifact by its received timestamp.
+The other places it by its producer timestamp, and selects among the
+artifacts that have an admissible one. Both passes use the same windows,
+the same buckets and the same "newest valid backup in the bucket" rule;
+they differ only in which timestamp puts an artifact where.
+
+A producer timestamp is **admissible** only when all three hold:
+
+-   the backend reported one at all (many do not);
+-   it is not the zero time (a missing value, not a date);
+-   it is **not after** the received timestamp.
+
+The third is a refusal, not a clamp. A completed artifact cannot have been
+produced after the moment this manager first observed it, so a timestamp
+in that range is a wrong or forged clock, and clamping it to the received
+timestamp would manufacture a date this manager has no evidence for. An
+artifact whose producer timestamp is refused is placed by the received
+pass alone, which is exactly where an artifact with no usable producer
+timestamp belongs.
+
+Nothing bounds how far into the *past* a producer timestamp may reach, and
+nothing needs to. One that is absurdly old simply lands outside every
+window and contributes no selection, while the artifact's received
+placement is untouched.
+
+Three properties follow, and SHALL hold:
+
+-   **The producer term may only add.** For any set of artifacts, and for
+    every tier, every artifact the received pass selects is still selected
+    when producer timestamps are read. No producer timestamp, absent or
+    wrong or hostile, can take a tier away from an artifact or move one
+    from KEEP to DELETE. This is what makes it safe for retention to read
+    a value FR-8 calls untrusted at all: being wrong about a producer
+    timestamp costs disk, never a backup.
+-   **The most recently received artifact is always kept.** It is placed
+    by the received pass on today's date, today falls inside every enabled
+    tier's window by construction, so it is always some bucket's
+    representative whatever any producer claims.
+-   **Each bucket still selects at most one artifact per pass.** Two
+    passes mean one bucket can contribute up to two artifacts to KEEP, so
+    a chain can retain up to twice what its bucket count nominally
+    implies. That is bounded, and it is in the fail-safe direction.
+
+The two passes SHALL NOT be merged into a single selection per bucket.
+Merged, an artifact produced late on Monday but received on Tuesday
+competes for Monday's bucket against an artifact received early on Monday
+and can win it, which takes a tier away from an artifact the received-only
+calculation kept, and the first property above is lost.
+
+#### What an operator sees
+
+In ordinary running the two timestamps agree to within minutes, both
+passes select the same artifact, and the union changes nothing. They
+diverge in exactly the cases described above, and there the divergence is
+the point.
+
+An ingested backlog therefore keeps its real shape: artifacts dated days
+apart land in different daily buckets, artifacts dated months apart land
+in different monthly buckets, and an artifact older than the longest
+configured window is still a DELETE candidate, which this document has
+always said it is. An operator who wants such an artifact kept extends the
+chain rather than relying on the ingest that happened to bring it in.
+
+An operator who does not trust a remote's clock needs no setting for it.
+There is deliberately no configuration key here, because the producer term
+can never make retention keep less than it would without it; distrusting
+it is a capacity question, not a safety one.
 
 ### Backward compatibility
 
@@ -1113,6 +1223,22 @@ it exceeds normal retention age.
 
 A backup is eligible as known-good only if it is a valid
 committed/complete restore point satisfying required verification.
+
+"Newest" here means newest by the artifact's own retention date, resolved
+exactly as FR-18's producer pass resolves it: the producer's own timestamp
+when the backend reported an admissible one, and the received timestamp
+otherwise. It does **not** mean the most recently ingested artifact. A
+backlog ingested in one cycle therefore protects the most recent backup in
+it rather than whichever artifact happens to sort last by name, and the
+reason an operator is shown SHALL carry the resolved date and say which of
+the two timestamps produced it.
+
+A producer that back-dates its newest artifact can move this protection
+onto an older one. It cannot move the newest artifact out of KEEP, because
+FR-18's received pass places a recently received artifact on today's date
+and today falls inside every enabled tier's window, so the manipulation
+costs a label rather than a restore point. A forward-dated producer
+timestamp is refused before it reaches this calculation at all.
 
 `FAILED`, `QUARANTINED` and `.partial` artifacts cannot satisfy this
 protection.
