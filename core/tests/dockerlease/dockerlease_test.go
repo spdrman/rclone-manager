@@ -1,6 +1,7 @@
 package dockerlease
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -42,11 +43,19 @@ func exists(t *testing.T, id string) bool {
 	return exec.Command("docker", "inspect", id).Run() == nil
 }
 
+// Every test here sweeps its OWN ids and nothing else. sweepOlderThan with
+// a cutoff in the future is not an option: it lists every labelled container
+// on the daemon, and under `go test ./...` those include live SFTP fixtures
+// held by tests/sftpintegration, tests/crashmatrix, core/service and
+// core/internal/transport/rclone, running in parallel with this package, plus
+// every other worktree sharing this machine's daemon. See
+// TestNoSweepTestReapsAContainerItDoesNotOwn.
+
 func TestSweepLeavesAContainerYoungerThanTheCutoff(t *testing.T) {
 	requireDocker(t)
 	id := create(t, true)
 
-	sweepOlderThan(time.Now().Add(-time.Hour))
+	sweepIDs([]string{id}, time.Now().Add(-time.Hour))
 
 	if !exists(t, id) {
 		t.Fatal("swept a labelled container created after the cutoff; a threshold that " +
@@ -59,28 +68,43 @@ func TestSweepRemovesALabelledContainerOlderThanTheCutoff(t *testing.T) {
 	id := create(t, true)
 
 	// Cutoff in the future, so a container created a moment ago is stale.
-	sweepOlderThan(time.Now().Add(time.Hour))
+	sweepIDs([]string{id}, time.Now().Add(time.Hour))
 
 	if exists(t, id) {
 		t.Fatal("left a labelled container older than the cutoff; this is the leak in #150")
 	}
 }
 
+// TestSweepNeverTouchesAnUnlabelledContainer asks the question through
+// listLabelled rather than by sweeping, because the label filter IS
+// listLabelled: sweepIDs removes whatever it is handed. Asserting on the
+// candidate list proves the same boundary and, unlike a sweep with a future
+// cutoff, cannot take a live container in another package down with it.
 func TestSweepNeverTouchesAnUnlabelledContainer(t *testing.T) {
 	requireDocker(t)
 	mine := create(t, false)
 	labelled := create(t, true)
 
-	// Same future cutoff: both are old enough, only one is ours.
-	sweepOlderThan(time.Now().Add(time.Hour))
+	candidates := listLabelled()
 
-	if !exists(t, mine) {
-		t.Fatal("removed a container this repo does not own; the label filter is the only " +
+	if !containsID(candidates, labelled) {
+		t.Fatal("listLabelled did not offer up a labelled container at all, so the absence of the unlabelled one below would prove nothing")
+	}
+	if containsID(candidates, mine) {
+		t.Fatal("listLabelled offered up a container this repo does not own; the label filter is the only " +
 			"thing standing between Sweep and somebody else's work")
 	}
-	if exists(t, labelled) {
-		t.Fatal("did not remove the labelled container, so the previous assertion proves nothing")
+}
+
+// containsID compares by prefix because `docker ps -q` answers in short ids
+// while `docker create` returns the full one.
+func containsID(ids []string, id string) bool {
+	for _, got := range ids {
+		if got != "" && (strings.HasPrefix(id, got) || strings.HasPrefix(got, id)) {
+			return true
+		}
 	}
+	return false
 }
 
 // TestSweepStillReapsWhenAListedContainerVanishedFromUnderIt is issue #161's
@@ -109,5 +133,59 @@ func TestSweepStillReapsWhenAListedContainerVanishedFromUnderIt(t *testing.T) {
 	sweepIDs([]string{live, vanished}, time.Now().Add(time.Hour))
 	if exists(t, live) {
 		t.Fatal("one already-vanished id in the batch made the whole sweep a no-op; on a machine where several worktrees share one docker daemon that race is routine, and a sweeper that silently sweeps nothing is exactly the class of bug #161 is about")
+	}
+}
+
+// --- this package must not reap other packages' live containers -----------
+
+// runSelf re-runs some of this package's own tests in a child process, so
+// the parent can watch what they did to a container they never created.
+func runSelf(t *testing.T, pattern string) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run="+pattern, "-test.v=true", "-test.timeout=2m")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %s in a child process failed:\n%s", pattern, out)
+	}
+	return string(out)
+}
+
+// TestNoSweepTestReapsAContainerItDoesNotOwn is the #161 root cause, and it
+// is this package's own tests doing it.
+//
+// `go test ./...` runs packages in parallel. While tests/dockerlease is
+// running, tests/sftpintegration, tests/crashmatrix, core/service and
+// core/internal/transport/rclone are each holding a LIVE, labelled SFTP
+// fixture container, and so is every other worktree on this machine running
+// its own gate against the same docker daemon. A sweep here with a cutoff in
+// the future matches every labelled container in existence, not just this
+// test's own, so it kills healthy fixtures belonging to tests that have
+// nothing to do with it.
+//
+// That is exactly the signature in the issue: the container vanishes
+// mid-suite, everything after it gets connection refused, and the victim is
+// a different test on every run, because the victim is simply whichever
+// fixture happened to be alive when this package ran. Captured from the
+// daemon's own event stream during a run of this branch: `kill signal=9`,
+// `die exitCode=137` and `destroy` on a two-second-old SFTP fixture, in the
+// same instant as this package's own throwaway containers were being created
+// and destroyed around it.
+func TestNoSweepTestReapsAContainerItDoesNotOwn(t *testing.T) {
+	requireDocker(t)
+
+	// A labelled container this package does not own, standing in for the
+	// live fixture another package is holding at the same moment.
+	bystander := create(t, true)
+	if !exists(t, bystander) {
+		t.Fatal("the bystander is not there before the sweep tests run, so the assertion after them would be about nothing")
+	}
+	if exists(t, "0000000000000000000000000000000000000000000000000000000000000000") {
+		t.Fatal("exists() says yes to an id that cannot be there, so it can never report a reaping")
+	}
+
+	runSelf(t, "^TestSweep")
+
+	if !exists(t, bystander) {
+		t.Fatalf("this package's own sweep tests destroyed a labelled container (%s) they never created. Under `go test ./...` that container is somebody else's live SFTP fixture, which is the container death in #161", bystander)
 	}
 }
