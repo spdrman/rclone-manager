@@ -56,6 +56,7 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/apps/common/platform/notify"
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+	"github.com/spdrman/rclone-manager/apps/common/webhost"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/apps/generic/webui"
 	"github.com/spdrman/rclone-manager/core/service"
@@ -73,6 +74,17 @@ var (
 // /etc/backup-manager/config (issue #196) and config.yaml lives inside
 // it; --config also accepts that directory.
 const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
+
+// defaultStateDatabase is where a FIRST-RUN configuration will point its
+// SQLite journal (issue #176). It matches what
+// scripts/deploy/deploy_generic.py's render_config_yaml has always
+// written and what container/compose.yaml already mounts (STATE_DIR ->
+// /data/state), so an instance an administrator sets up through the web
+// UI lands in exactly the same place as one deployed by that script.
+//
+// It is a deployment fact, never something an API caller supplies: see
+// core/service.FirstRunDefaults' own doc for why that boundary matters.
+const defaultStateDatabase = "/data/state/state.db"
 
 // defaultAuthStorePath lives inside the SAME already-writable state
 // volume container/compose.yaml already mounts for the SQLite journal
@@ -156,7 +168,17 @@ commands:
 
 serve flags:
   --config PATH               path to the manager's YAML config file
-                               (default /etc/backup-manager/config/config.yaml)
+                               (default /etc/backup-manager/config/config.yaml).
+                               If this file does not exist, serve starts
+                               anyway and offers the first-run setup flow
+                               instead of refusing to start (issue #176);
+                               a file that exists and does not validate is
+                               still a hard startup failure
+  --state-database PATH        SQLite journal path written into a
+                               first-run configuration (default
+                               $STATE_DATABASE, or /data/state/state.db).
+                               Ignored once a config file exists, which
+                               names its own
   --listen ADDR                address to listen on
                                (default $LISTEN_ADDR, or :8080)
   --profile NAME               runtime profile: generic or ugos
@@ -167,9 +189,23 @@ serve flags:
                                and nothing else - it can never change
                                lifecycle, retention or validation
                                behaviour
-  --trusted-gateway CIDR[,...] the network ranges a profile's platform
-                               authentication gateway may be believed
-                               from (default $TRUSTED_GATEWAY_CIDRS).
+  --trusted-upstream CIDR[,...]
+                               the network ranges THIS container may
+                               believe a provider-native identity header
+                               from (default $TRUSTED_UPSTREAM_CIDRS).
+                               Deliberately not the same variable
+                               serve-ui reads: this container's only
+                               possible peer is serve-ui itself, so this
+                               range names the internal network and
+                               serve-ui's range names the platform
+                               GATEWAY, and the two are mutually
+                               exclusive values. One variable feeding
+                               both hops has exactly one value that lets
+                               a gateway deployment authenticate, and
+                               that value also makes serve-ui believe
+                               anything on the internal network, which is
+                               the LAN-forgery bug restated as
+                               configuration (issue #87).
                                Required by a gateway profile: without it
                                there is no gateway, only an identity
                                header anyone on the LAN can set, so the
@@ -203,19 +239,29 @@ serve flags:
 
 serve-ui flags:
   --listen ADDR    address to listen on (default $LISTEN_ADDR, or :8080)
+  --trusted-gateway CIDR[,...]
+                   the network ranges this container may believe a
+                   provider-native identity header from (default
+                   $TRUSTED_GATEWAY_CIDRS). THIS is the hop the boundary
+                   is actually on: this is the only container with a
+                   LAN-facing published port, so it is the only place
+                   where "did the platform gateway send this, or did
+                   somebody on the LAN" is still a question the network
+                   can answer. Left unset, every provider-native identity
+                   header is stripped from every inbound request, which
+                   is the right default and is why a gateway profile
+                   refuses to start without it rather than serving a
+                   console that can never sign anyone in. This range
+                   names the GATEWAY and never the internal network; the
+                   engine's own peer set is a separate variable
+                   (serve --trusted-upstream) precisely because a value
+                   correct for one hop is wrong for the other
   --upstream URL   the engine's base URL, reachable over the internal
                     Docker network (default $UPSTREAM_ADDR, or
                     http://rclone-manager:8080)
   --profile NAME   runtime profile (default $RUNTIME_PROFILE, or
                     generic). Selects which bundle under --ui-root is
                     served
-  --trusted-gateway CIDR[,CIDR]
-                   CIDR ranges the platform authentication gateway may be
-                    believed from (default $TRUSTED_GATEWAY_CIDRS).
-                    Required by a gateway profile: this process publishes
-                    the only port, so it is the hop that strips a
-                    client-supplied identity header before the engine,
-                    which trusts this hop, can believe it
   --ui-root PATH   a directory of per-profile UI bundles (default
                     $UI_ROOT). The bundle served is <PATH>/<profile>
   --ui-dir PATH    one explicit UI bundle directory (default $UI_DIR),
@@ -243,14 +289,23 @@ func cmdServe(args []string) int {
 	configPath := fset.String("config", defaultConfigPath, "path to the manager's YAML config file")
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
 	profileName := fset.String("profile", envOrDefault("RUNTIME_PROFILE", defaultProfile), "runtime profile (generic or ugos)")
-	trustedGateway := fset.String("trusted-gateway", envOrDefault("TRUSTED_GATEWAY_CIDRS", ""),
-		"comma-separated CIDR ranges a platform authentication gateway may be believed from; required by a gateway profile")
+	trustedUpstream := fset.String("trusted-upstream", envOrDefault("TRUSTED_UPSTREAM_CIDRS", ""),
+		"comma-separated CIDR ranges THIS container may believe a provider-native identity header from (the proxy in front of it); required by a gateway profile")
+	// Accepted only to refuse it by name. serve used to read
+	// TRUSTED_GATEWAY_CIDRS, which is serve-ui's variable and means
+	// something else here (issue #87's review, M1), and an operator who
+	// carries the old flag over would otherwise get "flag provided but
+	// not defined" and no idea which of the two hops they are looking at.
+	legacyTrustedGateway := fset.String("trusted-gateway", "",
+		"rejected: this hop's peer set is --trusted-upstream; --trusted-gateway names the platform gateway and belongs to serve-ui")
 	authStorePath := fset.String("auth-store", defaultAuthStorePath, "path to the local-auth administrator record")
 	authMode := fset.String("auth-mode", "", "authentication mode (\"local\" or \"gateway\"); follows the profile when unset")
 	trustForwardedHeaders := fset.Bool("trust-forwarded-headers", envBoolOrDefault("TRUST_FORWARDED_HEADERS", false),
 		"trust X-Forwarded-For/X-Forwarded-Proto from the immediate caller - only safe behind serve-ui's own reverse proxy over an isolated network (see this command's own --help)")
 	publicBaseURL := fset.String("public-base-url", envOrDefault("PUBLIC_BASE_URL", ""),
 		"externally-reachable base URL for the one-time enrollment link (default: print just the raw token, since this process's own --listen address is never externally reachable)")
+	stateDatabase := fset.String("state-database", envOrDefault("STATE_DATABASE", defaultStateDatabase),
+		"SQLite journal path written into a first-run configuration; ignored once a config file exists, which names its own")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}
@@ -264,12 +319,16 @@ func cmdServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
 		return 2
 	}
-	if *trustedGateway != "" {
+	if *legacyTrustedGateway != "" {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: serve does not take --trusted-gateway. The two hops trust different peers: --trusted-upstream (TRUSTED_UPSTREAM_CIDRS) is this container's own peer, the reverse proxy in front of it, while --trusted-gateway (TRUSTED_GATEWAY_CIDRS) names the platform gateway and belongs to serve-ui. A single value for both is the one configuration that cannot be correct.")
+		return 2
+	}
+	if *trustedUpstream != "" {
 		if runtimeProfile.Gateway == nil {
-			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-gateway was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
+			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-upstream was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
 			return 2
 		}
-		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedGateway)
+		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedUpstream)
 	}
 	if err := checkAuthMode(*authMode, runtimeProfile); err != nil {
 		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
@@ -294,17 +353,22 @@ func cmdServe(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	backend, cleanup, err := service.Open(ctx, *configPath)
-	if err != nil {
-		return fail(err)
-	}
-	defer func() { _ = cleanup() }()
-
-	// Local authentication is opened only for a profile that actually
-	// uses it. A gateway profile has no login surface of its own, so
-	// creating an administrator record it would never consult, and
-	// printing an enrolment token nobody can redeem, would be two
-	// misleading artifacts rather than a harmless extra.
+	// Local authentication is built BEFORE the configuration is loaded,
+	// and that ordering is deliberate (issue #176). Enrollment needs no
+	// configuration of its own, and on a fresh install it is what has to
+	// happen first: an unconfigured instance reachable on a LAN must not
+	// be configurable by whoever reaches the port first, so the operator
+	// enrolls with the single-use token printed below and only then sees
+	// a setup flow. Before this, the process exited at service.Open and
+	// none of this was reachable at all.
+	//
+	// It is still opened only for a profile that actually uses it. A
+	// gateway profile has no login surface of its own, so creating an
+	// administrator record it would never consult, and printing an
+	// enrolment token nobody can redeem, would be two misleading
+	// artifacts rather than a harmless extra. Such a profile reaches the
+	// setup flow already authenticated by its platform gateway, which is
+	// the same boundary it will use afterwards.
 	var (
 		authSvc    *local.Service
 		authRoutes http.Handler
@@ -346,41 +410,104 @@ func cmdServe(args []string) int {
 	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q (%s), authentication: %s\n",
 		runtimeProfile.ID, runtimeProfile.DisplayName, authModeOf(runtimeProfile))
 
-	// Work Package 3.5's proactive alerting (docs/EPIC-B-multi-nas.md
-	// §71). Both halves have to agree before a single notification goes
-	// out: the administrator opted in through the config file's alerts
-	// block, and this platform actually offers a local notification
-	// capability to deliver through. The generic Docker/Linux adapter
-	// declares none (apps/generic/platform reports every capability
-	// false, never emulated), so on this provider the sink refuses at
-	// wiring time and alerting stays visibly off, printed once here
-	// rather than discovered as silence later. A provider that DOES
-	// declare NativeNotifications gets its alerts through exactly this
-	// wiring with no further change.
-	if sink, err := notify.NewPlatformSink(platformAdapter); err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off:", err)
-	} else if !backend.EnableAlerts(sink) {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off: the configuration has not set alerts.enabled")
-	}
-
-	handler := serve.NewEngine(serve.EngineConfig{
+	engineConfig := serve.EngineConfig{
 		Platform:              platformAdapter,
 		AuthRoutes:            authRoutes,
 		TrustForwardedHeaders: trustFwd,
-		Backend:               backend,
 		BinaryVersion:         version,
 		Commit:                commit,
-	})
+	}
+
+	var handler http.Handler
+	var scheduler serve.Scheduler
+
+	backend, cleanup, err := service.Open(ctx, *configPath)
+	switch {
+	case err == nil:
+		defer func() { _ = cleanup() }()
+		enableAlerts(backend, platformAdapter)
+		engineConfig.Backend = backend
+		handler = serve.NewEngine(engineConfig)
+		scheduler = backend
+
+	case errors.Is(err, service.ErrConfigAbsent):
+		// Issue #176: no configuration on disk is a fresh install, not a
+		// misconfiguration. Serve the setup flow rather than exiting, so
+		// an administrator who installed this from an app store can
+		// finish the job in the web UI they installed it to reach. A
+		// config file that EXISTS and does not validate falls to the
+		// default branch below and is still fatal.
+		fmt.Fprintf(os.Stderr, "backup-manager-web: no configuration at %s yet; serving the first-run setup flow\n", *configPath)
+
+		firstRun, frErr := service.NewFirstRun(service.FirstRunDefaults{
+			ConfigPath:    *configPath,
+			StateDatabase: *stateDatabase,
+		})
+		if frErr != nil {
+			return fail(frErr)
+		}
+		engineConfig.FirstRun = firstRun
+		engineConfig.Activate = func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
+			opened, closeFn, openErr := service.Open(ctx, *configPath)
+			if openErr != nil {
+				return nil, nil, openErr
+			}
+			// Alerting is decided from the configuration setup just
+			// wrote, exactly as it is for a process that started with
+			// one, so a first-run instance is not silently the one
+			// deployment shape where the alerts block does nothing until
+			// a restart.
+			enableAlerts(opened, platformAdapter)
+			return opened, closeFn, nil
+		}
+
+		engine, engErr := serve.NewFirstRunEngine(engineConfig)
+		if engErr != nil {
+			return fail(engErr)
+		}
+		defer func() { _ = engine.Close() }()
+		// The same value is both the HTTP surface and the scheduler: it
+		// serves setup now, the application after activation, and its
+		// scheduler loop simply waits for a backend to exist rather than
+		// this process ending up with no scheduler for its whole life.
+		handler = engine
+		scheduler = engine
+
+	default:
+		return fail(err)
+	}
 
 	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
 	// serve.RunEngine owns the §9.3 orchestration (HTTP server + scheduler
 	// share ctx) - see that function's own doc for exactly what each
 	// branch does and why.
-	if err := serve.RunEngine(ctx, httpServer, backend, shutdownGrace, os.Stderr); err != nil {
+	if err := serve.RunEngine(ctx, httpServer, scheduler, shutdownGrace, os.Stderr); err != nil {
 		return fail(err)
 	}
 	return 0
+}
+
+// enableAlerts is Work Package 3.5's proactive alerting wiring
+// (docs/EPIC-B-multi-nas.md §71), factored out of cmdServe because it now
+// runs from two places: a process that started with a configuration, and
+// one that gained its first configuration through the setup flow.
+//
+// Both halves have to agree before a single notification goes out: the
+// administrator opted in through the config file's alerts block, and this
+// platform actually offers a local notification capability to deliver
+// through. The generic Docker/Linux adapter declares none
+// (apps/generic/platform reports every capability false, never emulated),
+// so on this provider the sink refuses at wiring time and alerting stays
+// visibly off, printed once here rather than discovered as silence later.
+// A provider that DOES declare NativeNotifications gets its alerts
+// through exactly this wiring with no further change.
+func enableAlerts(backend *service.BackupService, platformAdapter capabilities.PlatformAdapter) {
+	if sink, err := notify.NewPlatformSink(platformAdapter); err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off:", err)
+	} else if !backend.EnableAlerts(sink) {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off: the configuration has not set alerts.enabled")
+	}
 }
 
 // cmdServeUI runs the UI-host container's whole job: serve the shared
@@ -395,7 +522,7 @@ func cmdServeUI(args []string) int {
 	upstream := fset.String("upstream", envOrDefault("UPSTREAM_ADDR", defaultUpstream), "the engine's base URL, reachable over the internal Docker network")
 	profileName := fset.String("profile", envOrDefault("RUNTIME_PROFILE", defaultProfile), "runtime profile (generic or ugos)")
 	trustedGateway := fset.String("trusted-gateway", envOrDefault("TRUSTED_GATEWAY_CIDRS", ""),
-		"comma-separated CIDR ranges a platform authentication gateway may be believed from; required by a gateway profile, and the range this process strips the identity header outside of")
+		"comma-separated CIDR ranges this LAN-facing container may believe a provider-native identity header from; required by a gateway profile")
 	uiRoot := fset.String("ui-root", envOrDefault("UI_ROOT", ""), "a directory of per-profile UI bundles; the bundle served is <ui-root>/<profile>")
 	uiDir := fset.String("ui-dir", envOrDefault("UI_DIR", ""), "one explicit UI bundle directory, which wins over --ui-root")
 	if err := fset.Parse(args); err != nil {
@@ -408,37 +535,20 @@ func cmdServeUI(args []string) int {
 		return 2
 	}
 
-	// The identity strip's trust boundary, resolved before anything
-	// opens a listener and on exactly the same terms `serve` resolves
-	// it: this process is the hop with the published port, so it is the
-	// one that can tell a header the platform gateway set from one a
-	// client on the LAN set against that port. A gateway profile with no
-	// declared range is refused here rather than started with the strip
-	// silently off, which is the shape that made a client-supplied
-	// X-Ugos-User reach the engine believed.
-	var identity serve.IdentitySanitizer
-	if runtimeProfile.Gateway != nil {
-		if *trustedGateway != "" {
-			runtimeProfile.Gateway.TrustedPeers = splitList(*trustedGateway)
-		}
-		gateway, err := runtimeProfile.Gateway.Compile()
-		switch {
-		case err == nil:
-			identity = gateway
-		case errors.Is(err, profile.ErrNoTrustedPeer):
-			// No declared boundary means no gateway, so nothing may
-			// carry an identity through this hop. Said out loud rather
-			// than left as silence, since an operator who meant to
-			// configure one has to find out here.
-			identity = serve.StripAll(runtimeProfile.Gateway.UsernameHeader)
-			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q declares a gateway but no --trusted-gateway range, so %s is stripped from every request\n",
-				runtimeProfile.ID, runtimeProfile.Gateway.UsernameHeader)
-		default:
-			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q: %v\n", runtimeProfile.ID, err)
-			return 2
-		}
-	} else if *trustedGateway != "" {
-		fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-gateway was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
+	// The trust boundary is resolved before anything opens a listener, and
+	// it is resolved HERE rather than only in `serve` because this is the
+	// hop that faces the LAN (issue #87). An engine behind this proxy
+	// trusts this proxy by necessity — it is the engine's only possible
+	// peer — so a provider-native identity header this container forwards
+	// unexamined is a header the engine believes, whoever set it.
+	//
+	// A gateway profile with no range configured is refused rather than
+	// silently stripped: stripping is the safe behaviour, but a UGOS
+	// console nobody can sign in to, with no message saying why, is an
+	// operator debugging the wrong thing for an afternoon.
+	edgeGateway, err := compileEdgeGateway(runtimeProfile, *trustedGateway)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
 		return 2
 	}
 
@@ -482,7 +592,7 @@ func cmdServeUI(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: bundle.FS, Identity: identity})
+	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: bundle.FS, Gateway: edgeGateway})
 	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
 	if err := serve.RunEngine(ctx, httpServer, nil, shutdownGrace, os.Stderr); err != nil {
@@ -617,6 +727,28 @@ func checkAuthMode(mode string, p profile.Profile) error {
 	default:
 		return fmt.Errorf("--auth-mode %q contradicts profile %q, which authenticates through the %s mode", mode, p.ID, want)
 	}
+}
+
+// compileEdgeGateway resolves the LAN-facing container's own trust
+// boundary from the selected profile and --trusted-gateway.
+//
+// nil, nil is the answer for a profile with no gateway, and it means "no
+// peer is trusted at this hop", not "no check": serve.NewUI reads a nil
+// gateway as strip-everything. A gateway profile with no range is an
+// error, matching `serve`'s own refusal, because that combination is
+// somebody expecting a native session that will never arrive.
+func compileEdgeGateway(p profile.Profile, trusted string) (*profile.CompiledGateway, error) {
+	if p.Gateway == nil {
+		if trusted != "" {
+			return nil, fmt.Errorf("--trusted-gateway was given but profile %q has no platform authentication gateway to trust", p.ID)
+		}
+		return nil, nil
+	}
+	peers := splitList(trusted)
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("profile %q: %w (serve-ui is the container with the LAN-facing port, so this is the hop the gateway actually connects to)", p.ID, profile.ErrNoTrustedPeer)
+	}
+	return (&profile.Gateway{TrustedPeers: peers, UsernameHeader: p.Gateway.UsernameHeader}).Compile()
 }
 
 // bundleNameFor is which subdirectory of --ui-root this profile serves.

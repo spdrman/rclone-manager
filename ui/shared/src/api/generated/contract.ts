@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "bc3cf7e50ad1f25d66e7454c2ef6dbafded3c5c8dc849cf1c8dd27e8bbb6f481";
+export const CONTRACT_SHA256 = "f22e17eda9b4c64363847ab93f21b5141560babdee764f41b943f1b62a1c075d";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -40,6 +40,8 @@ export const WIRE_ERROR_CODES = [
   "HOST_KEY_PROBE_FAILED",
   "DESTRUCTIVE_OPERATIONS_DISABLED",
   "INTERNAL",
+  "ALREADY_CONFIGURED",
+  "NOT_CONFIGURED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -92,6 +94,8 @@ export const API_ERROR_CODES = [
   "HOST_KEY_PROBE_FAILED",
   "DESTRUCTIVE_OPERATIONS_DISABLED",
   "INTERNAL",
+  "ALREADY_CONFIGURED",
+  "NOT_CONFIGURED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -101,10 +105,11 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
+  "unavailable": ["NOT_CONFIGURED"],
   "validation": ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND", "HOST_KEY_PROBE_FAILED"],
 } as const satisfies Record<string, readonly ApiErrorCode[]>;
 
@@ -247,6 +252,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -266,6 +272,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -303,6 +310,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -324,6 +332,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       404: ["BACKUP_SET_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND"],
       409: ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -343,6 +352,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -363,6 +373,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
       409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -381,6 +392,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       404: ["OPERATION_NOT_FOUND"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -398,6 +410,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -417,6 +430,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -474,6 +488,42 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "getFirstRunStatus",
+    method: "GET",
+    path: "/system/first-run",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "FirstRunStatusResponse",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+    }
+  },
+  {
+    id: "completeFirstRun",
+    method: "POST",
+    path: "/system/first-run",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "BackupSetSpec",
+    responseSchema: "CompleteFirstRunResponse",
+    successStatus: 201,
+    errorCodes: {
+      400: ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      409: ["ALREADY_CONFIGURED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "listStorageStatus",
     method: "GET",
     path: "/system/storage",
@@ -488,6 +538,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -557,6 +608,35 @@ export interface WireBackupSet {
   validator_id: string;
 }
 
+/** Everything it takes to DESCRIBE one backup set: where it reads
+ *  from, where it writes to, how it decides a file is complete, and
+ *  whether it starts enabled. ssh_key_id and known_hosts_line carry
+ *  REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never
+ *  key material. Nothing here asks for anything to be RUN, which is
+ *  what makes it the body of two different operations: POST
+ *  /backup-sets folds a set into a configuration that already exists,
+ *  and POST /system/first-run writes the first configuration there
+ *  has ever been. Those two share this base rather than restating it,
+ *  so the wizard that collects these answers can never be right about
+ *  one operation and wrong about the other. */
+export interface WireBackupSetSpec {
+  completion_strategy: "rename" | "marker" | "stable";
+  disabled?: boolean;
+  host: string;
+  include?: string[];
+  known_hosts_line: string;
+  local_path: string;
+  name: string;
+  port: number;
+  remote_path: string;
+  source_name?: string;
+  ssh_key_id: string;
+  stable_for_seconds?: number;
+  stale_after_seconds?: number;
+  user: string;
+  validator_id?: string;
+}
+
 /** GET /system/capabilities. The API expression of the
  *  PlatformCapabilities contract (apps/common/platform/capabilities).
  *  A capability says what a platform CAN do; it never says who MAY do
@@ -570,6 +650,21 @@ export interface WireCapabilitiesResponse {
   storage_picker: boolean;
 }
 
+/** POST /system/first-run. The backup set the first configuration was
+ *  written around, NESTED rather than flattened, which is the one
+ *  place this contract deliberately differs from
+ *  CreateBackupSetResponse beside it. What this operation creates is
+ *  a whole configuration; the set is its first member, and
+ *  restart_required is a fact about the instance, not about the set.
+ *  Keeping backup_set as exactly a BackupSet means a later v1
+ *  addition describing the configuration lands beside it instead of
+ *  becoming indistinguishable from a backup-set field, and can never
+ *  collide with a field BackupSet itself grows. */
+export interface WireCompleteFirstRunResponse {
+  backup_set: WireBackupSet;
+  restart_required: boolean;
+}
+
 /** The CONFIG_REVISION_STALE 409 body. It carries the current
  *  revision as a structured field so a client retries against a value
  *  it can rely on rather than one parsed out of prose. */
@@ -578,26 +673,10 @@ export interface WireConfigRevisionStaleResponse {
   error: WireErrorBody;
 }
 
-/** POST /backup-sets. ssh_key_id and known_hosts_line carry
- *  REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never
- *  key material. */
-export interface WireCreateBackupSetRequest {
-  completion_strategy: "rename" | "marker" | "stable";
-  disabled?: boolean;
-  host: string;
-  include?: string[];
-  known_hosts_line: string;
-  local_path: string;
-  name: string;
-  port: number;
-  remote_path: string;
+/** POST /backup-sets. The backup-set spec, plus the one thing only a
+ *  create can ask for: that the new set also runs at once. */
+export interface WireCreateBackupSetRequest extends WireBackupSetSpec {
   run_immediately?: boolean;
-  source_name?: string;
-  ssh_key_id: string;
-  stable_for_seconds?: number;
-  stale_after_seconds?: number;
-  user: string;
-  validator_id?: string;
 }
 
 /** POST /backup-sets. The created set, plus at most one of operation
@@ -630,6 +709,14 @@ export interface WireErrorBody {
  *  correlation id travels in the X-Correlation-Id response header. */
 export interface WireErrorResponse {
   error: WireErrorBody;
+}
+
+/** GET /system/first-run. The one question a client asks before it
+ *  decides whether to render the setup flow or the application.
+ *  Deliberately one field: a client that has just been handed a 503
+ *  NOT_CONFIGURED needs to know which screen to show, not why. */
+export interface WireFirstRunStatusResponse {
+  configured: boolean;
 }
 
 /** POST /ssh/host-key-probe. Opens a real outbound connection, trusts
@@ -841,6 +928,7 @@ export interface WireVersionResponse {
   api_version: string;
   commit: string;
   config_revision: string;
+  configured: boolean;
   core_version: string;
   engine_version: string;
   go_version: string;

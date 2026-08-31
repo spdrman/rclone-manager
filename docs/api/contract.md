@@ -240,6 +240,39 @@ neither binding generates a type: both represent an error response by its status
 and `x-error-codes`. A named schema using `oneOf` would be dropped from both
 bindings in silence, so the generator now fails on one rather than emitting it.
 
+## Recorded decision: the two shapes `POST /system/first-run` declares
+
+Issue #176 adds the first-run setup pair, `GET` and `POST /system/first-run`.
+Both shapes below were settled when they were declared rather than after,
+because a shape in this document is fixed until `v2`, and the two questions
+had answers that were not obvious.
+
+**The response is an envelope, not a flattened set.** `CompleteFirstRunResponse`
+carries `backup_set` nested, which is deliberately not what
+`CreateBackupSetResponse` beside it does: that one flattens `BackupSet` and adds
+`operation`/`run_error` on top. The two operations take the same body, so the
+divergence needs a reason, and it is this. What a first run creates is a whole
+CONFIGURATION; the backup set is its first member, and `restart_required` is a
+fact about the instance rather than about the set. Keeping `backup_set` as
+exactly a `BackupSet` means a later `v1` addition describing the configuration
+lands beside it instead of arriving as something a reader cannot tell from a
+backup-set field, and it can never collide with a field `BackupSet` itself
+grows. Flattening was the alternative, and it buys one decoder shared with
+`createBackupSet` at the cost of both of those.
+
+**The request omits `run_immediately`, by carrying a different schema.** The
+create request is now `allOf(BackupSetSpec, { run_immediately })`, and
+`POST /system/first-run` declares `BackupSetSpec` alone. The field cannot be
+honoured on a first run: there is no service to submit a run to until the
+configuration this call writes has been opened, which happens after the write.
+Two alternatives were rejected. Declaring the shared `CreateBackupSetRequest`
+and ignoring the field is the worst of them, because a request field the
+contract declares and the endpoint drops is invisible to the client that sent
+it. Giving the operation a standalone copy of the fifteen other fields would
+work and would go stale, since nothing would hold the two lists together. The
+shared base holds them together by construction: a field added to a backup set
+appears on both operations or on neither.
+
 ## Migration record: what was removed and what replaced it
 
 | removed | replaced by |

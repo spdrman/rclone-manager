@@ -48,7 +48,27 @@ function completionSummaryLabel(method: CompletionMethod): string {
   return "completion marker";
 }
 
-export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
+/** Issue #176: the same wizard, run on an instance that has no
+ *  configuration yet.
+ *
+ *  Only two things change, and both are consequences of there being
+ *  nothing on disk rather than of a different flow. The save goes to POST
+ *  /api/v1/system/first-run instead of POST /api/v1/backup-sets, because
+ *  there is no configuration to fold a set into. And "Save, enable & run"
+ *  is not offered: an unconfigured instance has no service to submit a
+ *  run to until the configuration it is about to write has been opened,
+ *  so a button promising an immediate run would be promising something
+ *  the backend deliberately does not do (core/service's
+ *  CreateInitialConfig ignores run_immediately, and says why). */
+export interface BackupSetWizardPageProps {
+  readOnly: boolean;
+  firstRun?: boolean;
+  /** Called with the wizard's own persisted result instead of navigating
+   *  to /sets, which does not exist yet on an unconfigured instance. */
+  onFirstRunComplete?: (restartRequired: boolean) => void;
+}
+
+export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComplete }: BackupSetWizardPageProps) {
   const navigate = useNavigate();
   const { bridge } = usePlatform();
   const caps = bridge.capabilities();
@@ -302,7 +322,7 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
     setSaving(true);
     setSaveError(null);
     try {
-      const created = await api.createBackupSet({
+      const request = {
         name: source.name,
         host: source.host,
         port: Number(source.port) || 22,
@@ -322,8 +342,14 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
         validatorId: validatorId || undefined,
         stableForSeconds: completion === "stable-size" ? 3600 : undefined,
         disabled,
-        runImmediately
-      });
+        runImmediately: firstRun ? false : runImmediately
+      };
+      if (firstRun) {
+        const result = await api.completeFirstRun(request);
+        onFirstRunComplete?.(result.restartRequired);
+        return;
+      }
+      const created = await api.createBackupSet(request);
       fetchResource(setsNode, () => api.listSets());
       if (created.runError) {
         // Deliberately no navigate: the sets list shows the set, which is
@@ -336,7 +362,9 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
       }
       navigate("/sets");
     } catch (e) {
-      setSaveError(errorMessage(e, "Could not save this backup set."));
+      setSaveError(
+        errorMessage(e, firstRun ? "Could not save this configuration." : "Could not save this backup set.")
+      );
     } finally {
       setSaving(false);
     }
@@ -879,19 +907,21 @@ export function BackupSetWizardPage({ readOnly }: { readOnly: boolean }) {
               ) : null}
 
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 18 }}>
+                {firstRun ? null : (
+                  <button
+                    className="btn btn--primary"
+                    disabled={saveDisabled || saving || runNotStarted !== null}
+                    onClick={() => void handleSave(false, true)}
+                  >
+                    {saving ? "Saving…" : "Save, enable & run"}
+                  </button>
+                )}
                 <button
-                  className="btn btn--primary"
-                  disabled={saveDisabled || saving || runNotStarted !== null}
-                  onClick={() => void handleSave(false, true)}
-                >
-                  {saving ? "Saving…" : "Save, enable & run"}
-                </button>
-                <button
-                  className="btn"
+                  className={firstRun ? "btn btn--primary" : "btn"}
                   disabled={saveDisabled || saving || runNotStarted !== null}
                   onClick={() => void handleSave(false, false)}
                 >
-                  {saving ? "Saving…" : "Save & enable"}
+                  {saving ? "Saving…" : firstRun ? "Finish setup" : "Save & enable"}
                 </button>
                 <button
                   className="btn btn--quiet"

@@ -33,6 +33,44 @@ func newFlagSet(name string) (*flag.FlagSet, *string) {
 	return fs, cfgPath
 }
 
+// parseFlagsAroundOperands parses args into fs and returns the operands
+// that were not flags, in the order they appeared, accepting flags on
+// either side of them.
+//
+// flag.Parse on its own stops at the first argument that is not a flag,
+// which makes `validate <artifact-id> --config <path>` two extra operands
+// rather than one operand and one flag. Both of those forms are what this
+// binary's own usage text describes (one line gives validate an operand,
+// another says every command except version accepts --config, and neither
+// puts them in an order), and command-then-subject-then-options is the
+// order most CLIs take, so the parse accommodates the operator here
+// instead of the message explaining the parser to them (issue #188).
+//
+// This is the ordinary repeated-Parse loop: parse, take the operand that
+// stopped the parse, parse what is left, until nothing is left. An
+// explicit "--" keeps its usual meaning, ending flag parsing for good, so
+// an operand that looks like a flag can still be written after one.
+func parseFlagsAroundOperands(fs *flag.FlagSet, args []string) ([]string, error) {
+	var operands []string
+	rest := args
+	for {
+		if err := fs.Parse(rest); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return operands, nil
+		}
+		// Whatever Parse consumed out of rest, which ends in "--" when it
+		// stopped at an explicit terminator rather than at an operand.
+		consumed := rest[:len(rest)-fs.NArg()]
+		if len(consumed) > 0 && consumed[len(consumed)-1] == "--" {
+			return append(operands, fs.Args()...), nil
+		}
+		operands = append(operands, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
+}
+
 // openService loads and validates configPath, opens its state journal
 // (both via core/service.OpenConfigAndJournal — see that function's own
 // doc for why this no longer reimplements that sequence itself), and
