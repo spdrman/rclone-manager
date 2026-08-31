@@ -474,6 +474,41 @@ go vet ./...
 go test ./...
 ```
 
+### The local gate
+
+`scripts/ci-local.sh` is the gate for this repository. `.github/workflows/ci.yml` and
+`rclone-upgrade-gate.yml` are `workflow_dispatch`-only, so nothing runs on push, and
+`.husky/pre-commit` runs this script on every commit instead. It mirrors those workflows
+job for job, which makes it slow: the whole `core/` suite including the Docker-backed
+crash matrix and the SFTP integration tests, both cross-compiles, the frontend
+lint/typecheck/eslint/vitest/build set, the cross-provider conformance suite, and the
+repository-structure dependency proofs.
+
+Install the JS workspaces before the first full run in a new clone or `git worktree`:
+
+```bash
+(cd ui/shared && npm ci)
+(cd apps/common/tests && npm ci)
+```
+
+`node_modules/` is gitignored, so a fresh checkout has none. A full run refuses to start
+until every JS workspace present in the tree is installed, and prints the exact command
+for each one that is not. It used to skip those checks and still print
+`==> ci-local: ok`, which is what made the gate's own success line unreliable (#160).
+
+Two environment variables change what runs, and both stop the run claiming success:
+
+| Variable | Effect |
+|---|---|
+| `CI_LOCAL_FAST=1` | Fast iteration loop: skips the Docker-backed suites, the cross-compiles, the production builds, the conformance suite and the structure proofs. |
+| `CI_LOCAL_SKIP_JS=1` | Leaves uninstalled JS workspaces out on purpose rather than failing, for a change that only touches Go. |
+
+A run that skipped anything ends with `==> ci-local: INCOMPLETE` and lists what did not
+run. Only a run that performed every applicable check ends with `==> ci-local: ok`, which
+is what makes that one line readable as merge evidence. A component that is not in the
+tree at all (`apps/generic`, `apps/ugos/backend`, `apps/ugos/frontend/upk-proof`) is not a
+skip: its checks are inapplicable, and the run can still be `ok`.
+
 CI (`.github/workflows/ci.yml`) runs the same three commands on every push and pull
 request, with the Go module cache preserved between runs, and separately cross-compiles the
 whole module (`go build ./...`, not just `core/cmd/backup-manager`) for both UGREEN targets

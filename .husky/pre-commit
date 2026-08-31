@@ -12,6 +12,16 @@
 # GitHub Actions: see scripts/ci-local.sh's own header for the CI_LOCAL_FAST
 # escape hatch for iteration, and never rely on it before a merge.
 #
+# In a fresh clone or a new `git worktree`, the first commit stops before it
+# runs anything: node_modules/ is gitignored, and since #160 the gate refuses
+# to report on frontend and conformance checks it cannot perform instead of
+# skipping them and printing "ci-local: ok" anyway. It names every
+# uninstalled workspace and the command that fixes it. Run those, or set
+# CI_LOCAL_SKIP_JS=1 to leave them out on purpose. This hook needs no rule of
+# its own for any of that: everything it enforces comes from
+# scripts/ci-local.sh, and a run that skipped anything now ends with
+# INCOMPLETE rather than ok.
+#
 # Playwright e2e is still not here, matching nightly-e2e.yml's own reasoning
 # (too slow, too flaky to sit in front of every commit) — run it by hand
 # (`cd ui/shared && npm run e2e`) or via workflow_dispatch before a release.
