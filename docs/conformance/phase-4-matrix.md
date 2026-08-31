@@ -127,7 +127,7 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | Core binary hash parity (this provider's own shipped bytes) | BLOCKED | N/A | N/A | N/A | N/A | N/A | N/A |
 | This provider's own architecture claim matches the build | BLOCKED | PASS | N/A | N/A | N/A | N/A | N/A |
 | State path persists outside the container | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
-| Backup root constrained | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
+| Backup root constrained | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
 | Auth mode explicit and honest | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | No bundled secrets | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | No provider-specific lifecycle implementation | PASS | N/A | PASS | PASS | N/A | PASS | PASS |
@@ -140,33 +140,26 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | Removal does not delete retained backups | BLOCKED | OPERATOR | OPERATOR | OPERATOR | N/A | OPERATOR | OPERATOR |
 | Native authentication | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
 | Native notifications | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| Embedded window | BLOCKED | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
-| App-store packaging | BLOCKED | BLOCKED | BLOCKED | BLOCKED | UNSUP | UNSUP | UNSUP |
+| Embedded window | BLOCKED | PASS | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
+| App-store packaging | BLOCKED | PASS | PASS | PASS | UNSUP | UNSUP | UNSUP |
 | Storage picker | BLOCKED | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP | UNSUP |
 
 ### Totals
 
 | Outcome | Cells |
 |---|---|
-| PASS | 73 |
+| PASS | 78 |
 | PENDING_OPERATOR | 20 |
 | UNSUPPORTED | 26 |
-| NOT_APPLICABLE | 22 |
-| BLOCKED | 20 |
+| NOT_APPLICABLE | 21 |
+| BLOCKED | 16 |
 | FAIL | 0 |
 
 ### Phase 4 Exit Gate
 
 Computed over the 6 providers EPIC B claims, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
 
-**Not met.** 0 cell(s) failed and 4 could not be decided, every one of them in a column EPIC B claims:
-
-| Provider | Capability | Outcome | Tracked by |
-|---|---|---|---|
-| Synology DSM | Embedded window | BLOCKED | #180 |
-| Synology DSM | App-store packaging | BLOCKED | #180 |
-| TrueNAS | App-store packaging | BLOCKED | #180 |
-| Unraid | App-store packaging | BLOCKED | #180 |
+**Met.** Every cell of every one of those columns was decided, and none of them failed.
 
 **UGOS Pro is EPIC D's column** (work package 4.2).
 All 23 of its cells are decided by the same runner, on the same terms as every
@@ -208,7 +201,6 @@ why.
 | Uses the exact canonical image | N/A | Synology is the one Phase 4 provider that cannot consume the OCI image: DSM's Package Center installs a native .spk. Section 3.7 makes the SPK a sibling of the image carrying the same core binary digest, so parity here is binary parity, not image parity. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. distribution/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here. |
 | State path persists outside the container | N/A | DSM fixes the persistent location: /var/packages/<pkg>/var under the package FHS, not a bind mount this repository declares. |
-| Backup root constrained | N/A | The backup root is a DSM shared folder the operator picks at install time: conf/resource's data-share worker declares the share by name and carries no path, so there is no checked-in host path pair for this check to compare. What IS decided in this repository is the other side of the same rule, that the package places no key material or auth state anywhere (no-bundled-secrets) and that its lifecycle scripts delete nothing outside the package footprint. The containment itself is step 5 of the procedure, which puts a canary in the share and diffs a listing across the uninstall. |
 | No provider-specific lifecycle implementation | N/A | DSM's package format MANDATES preinst/postinst/preuninst/postuninst/preupgrade/postupgrade and start-stop-status. Those scripts are the platform's contract, not a lifecycle engine of our own, and apps/synology holds them to wrapper-only behaviour. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
 | UI launches | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
@@ -216,8 +208,6 @@ why.
 | Removal does not delete retained backups | OPERATOR | covered by docs/acceptance/synology-dsm-package-lifecycle.md, not yet executed |
 | Native authentication | UNSUP | Tier B. Section 4A makes DSM SSO a follow-on capability; the initial package uses section 13A local auth. |
 | Native notifications | UNSUP | Tier B. No DSM notification adapter in v1; webhooks instead. |
-| Embedded window | BLOCKED | #180 — apps/synology/frontend/platform.ts opts in, but the .spk serves the same go:embed'ed bundle the canonical image does, and ui/shared/vite.config.ts defaults that bundle to the generic shell. apps/synology/README.md's first known gap says it outright and step 3.6 of the acceptance procedure tells the operator to expect the generic bridge, so recording PASS here contradicted two documents in the same tree. #180 tracks the missing serve-side selection. |
-| App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. The shared folder is chosen once at install time through DSM, not browsed from inside the app. |
 
 #### TrueNAS (Tier B, gated by EPIC B's Phase 4)
@@ -233,7 +223,6 @@ why.
 | Native authentication | UNSUP | Tier B. Section 4A gives TrueNAS the generic local auth; no middleware session adapter in v1. |
 | Native notifications | UNSUP | Tier B. Webhooks instead of TrueNAS alerts. |
 | Embedded window | UNSUP | Tier B. The Apps portal link opens the UI in a normal browser tab. |
-| App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. questions.yaml asks for the dataset paths at install time; the running app does not browse pools. |
 
 #### Unraid (Tier B, gated by EPIC B's Phase 4)
@@ -249,7 +238,6 @@ why.
 | Native authentication | UNSUP | Tier B. Section 4A gives Unraid the generic local auth; no plugin is required for v1. |
 | Native notifications | UNSUP | Tier B. Webhooks instead of Unraid notifications, which would need a plugin. |
 | Embedded window | UNSUP | Tier B. The WebUI link opens a normal browser tab. |
-| App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. Community Applications collects the paths at install time; the app does not browse shares. |
 
 #### Generic Docker (Tier C, gated by EPIC B's Phase 4)

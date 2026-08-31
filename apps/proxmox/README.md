@@ -14,6 +14,31 @@ So this directory is documentation plus two metadata files, not a package
 format. There is no builder, no installer and no lifecycle code here, and
 `distribution/packaging` fails the build if any appears.
 
+
+## Converted to a thin adapter (issue #169)
+
+Everything here is now **derived** from the one authoritative Compose runtime
+definition rather than authored beside it. `distribution/packaging`'s
+derivation gate holds this platform's image reference, runtime profile,
+mounts, published port, health check and architectures to `canonical.json`,
+and a deliberate mismatch fails the build naming the field that drifted. What
+that means in practice for this directory:
+
+- both services select the `proxmox` runtime profile with `--profile=`, so
+  the platform this deployment reports itself as is a selection rather than a
+  build-time constant;
+- the Web UI container sets `UI_ROOT=/ui/bundles`, so it serves this
+  platform's own frontend bridge out of the canonical image rather than the
+  generic one (issue #180). A missing bundle is a hard start failure, never a
+  silent fall back;
+- the configuration mount is a writable **directory** holding `config.yaml`
+  instead of a read-only single file (issue #196).
+
+The upgrade path from the Phase 4 packaging, including the one renamed mount,
+is in
+[docs/runtime-contract.md](../../docs/runtime-contract.md#migrating-a-phase-4-installation).
+No state or backup data moves.
+
 ## The supported deployment model
 
 **A dedicated guest acts as the container host and runs the canonical OCI
@@ -74,7 +99,7 @@ directories that are four different things:
 | --- | --- | --- |
 | `/mnt/backup-manager/state` | SQLite catalog, administrator record | Private application state (§19.2) |
 | `/mnt/backup-manager/backups` | Retained artifacts | The user backup root, a separate security domain |
-| `/mnt/backup-manager/config` | `config.yaml`, mounted read-only | Validated before the listener opens |
+| `/mnt/backup-manager/config` | `config.yaml`, mounted writable | Validated before the listener opens; the engine also creates `ssh_keys/` and `known_hosts.d/` here |
 | `/mnt/backup-manager/secrets` | SSH key, pinned `known_hosts`, read-only | Never inside the backup root, never in this repository |
 
 `distribution/packaging` enforces the containment rule in the last column

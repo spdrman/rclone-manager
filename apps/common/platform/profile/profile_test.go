@@ -28,9 +28,18 @@ func TestLookup(t *testing.T) {
 	}{
 		{name: "generic", id: "generic", wantID: profile.Generic},
 		{name: "ugos", id: "ugos", wantID: profile.UGOS},
+		{name: "truenas", id: "truenas", wantID: profile.TrueNAS},
+		{name: "unraid", id: "unraid", wantID: profile.Unraid},
+		{name: "openmediavault", id: "openmediavault", wantID: profile.OpenMediaVault},
+		{name: "proxmox", id: "proxmox", wantID: profile.Proxmox},
+		{name: "synology", id: "synology", wantID: profile.Synology},
 		{
+			// "synology" used to be the unknown token here, and issue
+			// #169 made it a real profile. The refusal still has to be
+			// exercised, so this is a token nothing will ever implement
+			// rather than the next platform someone adds.
 			name:       "unknown profile is refused, and the refusal names what is known",
-			id:         "synology",
+			id:         "not-a-platform",
 			wantErr:    profile.ErrUnknownProfile,
 			wantDetail: "generic",
 		},

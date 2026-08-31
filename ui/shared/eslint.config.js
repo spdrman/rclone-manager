@@ -11,7 +11,12 @@ import reactRefresh from "eslint-plugin-react-refresh";
 // specifically written to avoid — see src/state/useCausl.ts), unused
 // code, and Fast Refresh boundary violations Vite's dev server depends on.
 export default tseslint.config(
-  { ignores: ["dist/**", "coverage/**", "playwright-report/**", "test-results/**"] },
+  // dist-bundles/ is `npm run build:bundles`'s output, one built bundle
+  // per provider (issue #180). Same kind of artifact as dist/ and ignored
+  // for the same reason: linting minified vendor output produces a
+  // thousand errors about code nobody in this repository wrote, which is
+  // how a lint step stops being run at all.
+  { ignores: ["dist/**", "dist-bundles/**", "coverage/**", "playwright-report/**", "test-results/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

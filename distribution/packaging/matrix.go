@@ -145,11 +145,28 @@ type Metadata struct {
 	// them today, and that is the point: core-binary-hash-parity cannot
 	// go green without a file here to hash.
 	BinaryArtifacts map[string]string `json:"binaryArtifacts"`
+	// PackageUIBundle names where to read whether this provider's own
+	// NATIVE package carries a UI bundle and serves it. Empty for a
+	// provider with no such package, which is every provider whose
+	// adapter is metadata only, and empty matters: without it a provider
+	// would inherit another one's evidence for the one claim that is
+	// hardest to check by reading.
+	PackageUIBundle PackageUIBundle `json:"packageUIBundle"`
 	// ArchitectureClaim is this provider's OWN statement about which
 	// architectures its package supports. Empty for a provider that
 	// makes no claim of its own, which is what stops the repository-wide
 	// release manifest standing in for seven per-provider answers.
 	ArchitectureClaim ArchitectureClaim `json:"architectureClaim"`
+}
+
+// PackageUIBundle points at the two files that decide whether a native
+// package ships its own UI bridge: the layout declaring which provider's
+// bundle it carries, and the start script that has to actually serve it.
+// Two files, because carrying a bundle nothing points --ui-dir at is a
+// package that installs cleanly and shows the wrong interface.
+type PackageUIBundle struct {
+	Layout      string `json:"layout"`
+	StartScript string `json:"startScript"`
 }
 
 // ArchitectureClaim is where a provider states which architectures its

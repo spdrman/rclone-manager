@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -595,6 +596,63 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 	return DefaultTierChain(r.DailyDays, r.WeeklyMonths, r.MonthlyMonths)
 }
 
+// DefaultFileName is the configuration file's name inside the
+// configuration DIRECTORY. Packaging mounts the directory, not the file
+// (distribution/packaging/canonical.json's config role, issue #196),
+// because the engine creates and atomically replaces this file and keeps
+// two on-demand stores beside it, and because a directory is the only
+// shape that can honestly be empty on a fresh install.
+const DefaultFileName = "config.yaml"
+
+// ResolvePath turns a configuration path an operator supplied into the
+// file to read or write. A path naming an existing DIRECTORY resolves to
+// DefaultFileName inside it; anything else is returned unchanged.
+//
+// It exists because #196 made the packaged mount a directory, so
+// `--config /etc/backup-manager/config` is now the natural thing for an
+// operator to type. Without this, that spelling fails with "is a
+// directory" from deep inside the YAML reader, which says nothing about
+// what to do instead.
+//
+// A path that does not exist is returned unchanged rather than guessed
+// at: the caller is about to create it, and turning a not-yet-existing
+// file path into a directory path would create the file in the wrong
+// place.
+func ResolvePath(path string) string {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return path
+	}
+	return filepath.Join(path, DefaultFileName)
+}
+
+// ExplainConfigMountShape names the one failure an operator cannot read out
+// of the error the filesystem gives them, and returns "" for every other.
+//
+// #196 turned the configuration mount from a read-only FILE into a writable
+// DIRECTORY. Two platforms carry an operator's old answer forward across an
+// upgrade rather than re-asking for it: TrueNAS stores an installed
+// application's answers, and Unraid keeps the mappings already in the user's
+// own template copy. On both, an upgrade can end up bind-mounting the old
+// config.yaml FILE at the new directory path. The engine then resolves
+// --config to <that file>/config.yaml, which is ENOTDIR, and crash-loops on
+// "reading config ...: not a directory" — a message that names neither the
+// mount nor the migration, on a deployment that was working ten minutes ago.
+//
+// So the check is on the shape rather than on the errno: the parent of the
+// configuration file exists and is not a directory. That is only ever a mount
+// mistake, it is decidable without guessing at platform-specific error text,
+// and it is the one case where a reader needs to be told about an issue
+// number rather than about a path.
+func ExplainConfigMountShape(configFile string) string {
+	dir := filepath.Dir(configFile)
+	info, err := os.Stat(dir)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return fmt.Sprintf("%s is a file, not a directory: issue #196 made the configuration mount a writable DIRECTORY holding %s, so a deployment upgraded from a mount of the config FILE has to point that mount at the directory instead. See docs/runtime-contract.md", dir, DefaultFileName)
+}
+
 // Load reads and parses the YAML file at path. It does not validate the
 // result: call Validate, or use LoadAndValidate, before acting on it.
 //
@@ -602,8 +660,12 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 // "pol_interval" should be reported as exactly that, not surface later as a
 // mysteriously-zero poll_interval.
 func Load(path string) (*Config, error) {
+	path = ResolvePath(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if hint := ExplainConfigMountShape(path); hint != "" {
+			return nil, fmt.Errorf("reading config %q: %w (%s)", path, err, hint)
+		}
 		return nil, fmt.Errorf("reading config %q: %w", path, err)
 	}
 

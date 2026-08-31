@@ -78,6 +78,47 @@ type platformFixture struct {
 	// paths it touches is not defeated by "$DISK".
 	acceptance       string
 	docSubstitutions map[string]string
+	// scanRoots are the directories the structural scanners walk,
+	// relative to apps/<name>/. Empty means the whole platform
+	// directory, which is what four of the five want.
+	//
+	// Synology is the exception and it is a real one rather than an
+	// exemption: apps/synology also holds the .spk builder, whose DSM
+	// lifecycle scripts are shell by mandate (see conformance.json's
+	// no-provider-lifecycle cell). Scanning them under the container
+	// packaging rules would report the platform's own required format as
+	// a violation, which is a check that has stopped meaning anything.
+	// The Container Manager project this issue adds IS held to those
+	// rules, which is why the roots are named rather than the platform
+	// skipped.
+	scanRoots []string
+	// runtimeArtifacts are the deployable definitions this platform
+	// ships, each a complete two-role runtime on its own. Separate from
+	// `services` because that one flattens every artifact into one list
+	// for the rules that are about the platform as a whole, and the
+	// derivation gate is about each deployable definition individually:
+	// TrueNAS ships two, and flattening them makes one adapter look like
+	// it declares two engines.
+	runtimeArtifacts func(t *testing.T) []derivationArtifact
+}
+
+// derivationArtifact is one deployable runtime definition and the file it
+// came from.
+type derivationArtifact struct {
+	name string
+	svcs []Service
+}
+
+// scanDirs resolves a fixture's scan roots to real paths.
+func (p platformFixture) scanDirs() []string {
+	if len(p.scanRoots) == 0 {
+		return []string{PlatformDir(p.name)}
+	}
+	out := make([]string, 0, len(p.scanRoots))
+	for _, r := range p.scanRoots {
+		out = append(out, filepath.Join(PlatformDir(p.name), r))
+	}
+	return out
 }
 
 type composeProfile struct {
@@ -144,6 +185,17 @@ func allPlatforms() []platformFixture {
 			},
 			acceptance:       "truenas-provider-acceptance.md",
 			docSubstitutions: map[string]string{"/mnt/POOL": "/mnt/tank"},
+			runtimeArtifacts: func(t *testing.T) []derivationArtifact {
+				t.Helper()
+				svcs, err := ReadCompose(filepath.Join(PlatformDir("truenas"), "compose", "backup-manager.yaml"), nil)
+				if err != nil {
+					t.Fatalf("read TrueNAS custom-app compose: %v", err)
+				}
+				return []derivationArtifact{
+					{"compose/backup-manager.yaml", svcs},
+					{"catalog/templates/docker-compose.yaml (rendered)", renderedTrueNASCatalog(t)},
+				}
+			},
 		},
 		{
 			name: "unraid",
@@ -170,6 +222,22 @@ func allPlatforms() []platformFixture {
 			hardening:        extraParamsHardening,
 			acceptance:       "unraid-provider-acceptance.md",
 			docSubstitutions: map[string]string{},
+			runtimeArtifacts: func(t *testing.T) []derivationArtifact {
+				t.Helper()
+				var out []Service
+				for _, f := range []string{"backup-manager.xml", "backup-manager-ui.xml"} {
+					tpl, err := ReadUnraidTemplate(filepath.Join(PlatformDir("unraid"), "template", f))
+					if err != nil {
+						t.Fatalf("read Unraid template %s: %v", f, err)
+					}
+					out = append(out, tpl.AsService(f))
+				}
+				// One artifact, not two: an Unraid template describes one
+				// container, and the deployable runtime is the pair. A
+				// per-template artifact would report every template as
+				// missing the other role.
+				return []derivationArtifact{{"template/backup-manager{,-ui}.xml", out}}
+			},
 		},
 		{
 			name: "openmediavault",
@@ -200,6 +268,7 @@ func allPlatforms() []platformFixture {
 			},
 			acceptance:       "openmediavault-provider-acceptance.md",
 			docSubstitutions: map[string]string{"$DISK": "/srv/dev-disk-by-uuid"},
+			runtimeArtifacts: composeArtifact("openmediavault", "compose/backup-manager.yml", "compose/backup-manager.env"),
 		},
 		{
 			// WP4.5. Proxmox VE has no app store to package into, so
@@ -241,7 +310,71 @@ func allPlatforms() []platformFixture {
 			// the profile derives the rest from it, so there is no
 			// machine-specific placeholder to expand.
 			docSubstitutions: map[string]string{},
+			runtimeArtifacts: composeArtifact("proxmox", "compose/backup-manager.yml", "compose/backup-manager.env"),
 		},
+		{
+			// Issue #169. Synology's Container Manager project: the path
+			// EPIC B #81's support table gives DSM, deploying the
+			// canonical runtime without a separate Synology application
+			// build. It does NOT replace the .spk #85 shipped, and
+			// retiring shipped packaging is the owner's call rather than
+			// this issue's; apps/synology/README.md records the decision.
+			//
+			// It joins this table by adding a row, with one new field
+			// and no new checker, which is the same evidence Proxmox's
+			// row was: the deployment target changed and none of the
+			// packaging rules did.
+			name: "synology",
+			requiredFiles: []string{
+				"README.md",
+				"compose/backup-manager.yml",
+				"compose/backup-manager.env",
+			},
+			services: func(t *testing.T) []Service {
+				t.Helper()
+				dir := filepath.Join(PlatformDir("synology"), "compose")
+				env, err := ReadEnvFile(filepath.Join(dir, "backup-manager.env"))
+				if err != nil {
+					t.Fatalf("read Synology env file: %v", err)
+				}
+				svcs, err := ReadCompose(filepath.Join(dir, "backup-manager.yml"), env)
+				if err != nil {
+					t.Fatalf("read Synology Container Manager compose: %v", err)
+				}
+				return svcs
+			},
+			engineService: "backup-manager",
+			uiService:     "backup-manager-ui",
+			uiHealthcheck: overrideHealthcheck,
+			hardening:     composeHardening,
+			composeProfiles: []composeProfile{
+				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+			},
+			acceptance:       "synology-dsm-package-lifecycle.md",
+			docSubstitutions: map[string]string{},
+			// apps/synology also holds the .spk builder. See scanRoots'
+			// own doc for why the roots are named here rather than the
+			// platform skipped.
+			scanRoots:        []string{"compose", "frontend"},
+			runtimeArtifacts: composeArtifact("synology", "compose/backup-manager.yml", "compose/backup-manager.env"),
+		},
+	}
+}
+
+// composeArtifact is the runtimeArtifacts function for a platform that
+// ships exactly one compose file plus its env file.
+func composeArtifact(platform, compose, env string) func(t *testing.T) []derivationArtifact {
+	return func(t *testing.T) []derivationArtifact {
+		t.Helper()
+		e, err := ReadEnvFile(filepath.Join(PlatformDir(platform), env))
+		if err != nil {
+			t.Fatalf("read %s env file: %v", platform, err)
+		}
+		svcs, err := ReadCompose(filepath.Join(PlatformDir(platform), compose), e)
+		if err != nil {
+			t.Fatalf("read %s compose: %v", platform, err)
+		}
+		return []derivationArtifact{{compose, svcs}}
 	}
 }
 
@@ -372,12 +505,14 @@ func TestEveryPlatformShipsItsRequiredMetadata(t *testing.T) {
 func TestNoLifecycleCodeInAnyContainerPackage(t *testing.T) {
 	for _, p := range allPlatforms() {
 		t.Run(p.name, func(t *testing.T) {
-			violations, err := ScanLifecycle(PlatformDir(p.name))
-			if err != nil {
-				t.Fatalf("ScanLifecycle: %v", err)
-			}
-			if len(violations) > 0 {
-				t.Errorf("apps/%s implements lifecycle behaviour beyond metadata and templates:\n%s", p.name, format(violations))
+			for _, root := range p.scanDirs() {
+				violations, err := ScanLifecycle(root)
+				if err != nil {
+					t.Fatalf("ScanLifecycle(%s): %v", root, err)
+				}
+				if len(violations) > 0 {
+					t.Errorf("%s implements lifecycle behaviour beyond metadata and templates:\n%s", root, format(violations))
+				}
 			}
 		})
 	}
@@ -388,12 +523,14 @@ func TestNoLifecycleCodeInAnyContainerPackage(t *testing.T) {
 func TestNoBundledSecrets(t *testing.T) {
 	for _, p := range allPlatforms() {
 		t.Run(p.name, func(t *testing.T) {
-			violations, err := ScanSecrets(PlatformDir(p.name))
-			if err != nil {
-				t.Fatalf("ScanSecrets: %v", err)
-			}
-			if len(violations) > 0 {
-				t.Errorf("apps/%s bundles credential material:\n%s", p.name, format(violations))
+			for _, root := range p.scanDirs() {
+				violations, err := ScanSecrets(root)
+				if err != nil {
+					t.Fatalf("ScanSecrets(%s): %v", root, err)
+				}
+				if len(violations) > 0 {
+					t.Errorf("%s bundles credential material:\n%s", root, format(violations))
+				}
 			}
 		})
 	}
@@ -693,12 +830,14 @@ func TestEveryPlatformUsesLocalAuthOnly(t *testing.T) {
 				t.Error("the frontend bridge claims native auth; only UGOS has a native session adapter")
 			}
 
-			findings, err := ScanForBespokeAuth(PlatformDir(p.name))
-			if err != nil {
-				t.Fatalf("ScanForBespokeAuth: %v", err)
-			}
-			if len(findings) > 0 {
-				t.Errorf("apps/%s wires an authentication mechanism of its own:\n%s", p.name, format(findings))
+			for _, root := range p.scanDirs() {
+				findings, err := ScanForBespokeAuth(root)
+				if err != nil {
+					t.Fatalf("ScanForBespokeAuth(%s): %v", root, err)
+				}
+				if len(findings) > 0 {
+					t.Errorf("%s wires an authentication mechanism of its own:\n%s", root, format(findings))
+				}
 			}
 		})
 	}
@@ -978,7 +1117,7 @@ func TestTrueNASCatalogDefaultsArePinnedToCanonical(t *testing.T) {
 		"image.reference":             c.Image.Reference,
 		"storage.state.hostPath":      platform.HostPaths.State,
 		"storage.backups.hostPath":    platform.HostPaths.Backups,
-		"storage.config.hostPath":     platform.HostPaths.Config,
+		"storage.configDir.hostPath":  platform.HostPaths.Config,
 		"storage.sshKey.hostPath":     platform.HostPaths.SSHKey,
 		"storage.knownHosts.hostPath": platform.HostPaths.KnownHosts,
 		"network.webPort":             strconv.Itoa(c.ListenPort),

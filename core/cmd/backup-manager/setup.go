@@ -15,8 +15,11 @@ import (
 )
 
 // defaultConfigPath matches container/compose.yaml's mount point and
-// docs/deployment.md's documented layout: /etc/backup-manager/config.yaml.
-const defaultConfigPath = "/etc/backup-manager/config.yaml"
+// docs/deployment.md's documented layout. The packaged mount is the
+// DIRECTORY /etc/backup-manager/config (issue #196) and config.yaml lives
+// inside it; --config also accepts that directory, which
+// config.ResolvePath turns into this same file.
+const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
 
 // newFlagSet builds a flag.FlagSet every subcommand but `version` shares:
 // a name (for its own usage/error output) and the one flag they all take,
@@ -26,7 +29,7 @@ const defaultConfigPath = "/etc/backup-manager/config.yaml"
 // os.Exit out from under a subcommand that has already opened a journal.
 func newFlagSet(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "path to the manager's YAML config file")
+	cfgPath := fs.String("config", defaultConfigPath, "path to the manager's YAML config file, or to the directory holding it")
 	return fs, cfgPath
 }
 

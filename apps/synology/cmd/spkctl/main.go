@@ -59,6 +59,12 @@ build flags:
   --version VERSION    INFO's version, e.g. 1.0.0-1 (required)
   --binaries DIR       directory holding backup-manager and
                         backup-manager-web for --arch (required)
+  --ui-bundle DIR      the built shared UI bundle for this provider,
+                        i.e. ui/shared/dist-bundles/synology, produced by
+                        "npm run build:bundles synology" (required). The
+                        package carries it and serves it with serve-ui
+                        --ui-dir, because section 3.7 forbids choosing the
+                        bridge at compile time (issue #180)
   --out DIR            where to write the .spk (default .)
 
 verify flags:
@@ -73,6 +79,7 @@ func cmdBuild(args []string) int {
 	arch := fset.String("arch", "", "release architecture (amd64 or arm64)")
 	version := fset.String("version", "", "package version written into INFO")
 	binaries := fset.String("binaries", "", "directory holding the already-built release binaries")
+	uiBundle := fset.String("ui-bundle", "", "the built shared UI bundle for this provider (ui/shared/dist-bundles/synology)")
 	out := fset.String("out", ".", "directory to write the .spk into")
 	if err := fset.Parse(args); err != nil {
 		return 2
@@ -82,6 +89,7 @@ func cmdBuild(args []string) int {
 		GOARCH:      *arch,
 		Version:     *version,
 		BinariesDir: *binaries,
+		UIBundleDir: *uiBundle,
 		OutDir:      *out,
 	})
 	if err != nil {

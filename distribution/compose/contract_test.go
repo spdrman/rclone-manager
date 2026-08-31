@@ -25,11 +25,13 @@ func env() map[string]string {
 	return map[string]string{
 		"STATE_DIR":        "/srv/backup-manager/state",
 		"BACKUP_DIR":       "/srv/backup-manager/backups",
-		"CONFIG_FILE":      "/srv/backup-manager/config/config.yaml",
+		"CONFIG_DIR":       "/srv/backup-manager/config",
 		"SSH_KEY_FILE":     "/srv/backup-manager/secrets/id_ed25519",
 		"KEY_FILE":         "/srv/backup-manager/secrets/id_ed25519",
 		"KNOWN_HOSTS_FILE": "/srv/backup-manager/secrets/known_hosts",
 		"DISK":             "/srv/dev-disk-by-uuid-11111111-2222-3333-4444-555555555555",
+		"APPDATA":          "/volume1/docker/backup-manager",
+		"BACKUP_ROOT":      "/volume1/backup-manager",
 	}
 }
 
@@ -99,6 +101,207 @@ func TestRequiredFieldCheckFailsWhenAFieldIsRemoved(t *testing.T) {
 				t.Errorf("the finding %q does not name the rule %q that produced it", joined, field.ID)
 			}
 		})
+	}
+}
+
+// TestEveryMountFieldDeclaresExactlyOneWriteMode is the completeness rule
+// this contract was missing, and it is the rule the PR that added the
+// write-mode booleans applied to canonical.json and not to itself.
+//
+// Both directions fail. Setting both booleans makes checkServiceMount's
+// verdict depend on which branch runs first. Setting NEITHER is worse and
+// is what actually shipped: /data/state and /data/backups declared no
+// write mode at all, so the check verified they were mounted and said
+// nothing about `:ro`. A read-only backup destination in the canonical
+// Compose file, the one file every adapter derives from, passed every
+// gate in this repository. That is #196's shape with a worse blast
+// radius: #196 broke three write paths, this breaks the backup itself.
+func TestEveryMountFieldDeclaresExactlyOneWriteMode(t *testing.T) {
+	t.Parallel()
+
+	if findings := compose.CheckFieldPolicies(compose.MustLoadContract()); len(findings) != 0 {
+		t.Errorf("the runtime contract does not hold to its own field policy:\n%s", findingText(findings))
+	}
+}
+
+// TestTheFieldPolicyCheckFiresOnAFieldThatDeclaresNothing is its positive
+// control. A completeness rule that has never been watched refuse anything
+// is a comment, and this one is asserting the absence of a declaration,
+// which is the easiest kind of rule to write so that it can only pass.
+func TestTheFieldPolicyCheckFiresOnAFieldThatDeclaresNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name  string
+		field compose.Field
+		want  string
+	}{
+		{
+			name:  "a mount declaring neither write mode, which is what /data/backups did",
+			field: compose.Field{ID: "control-mount", Scope: "service-mount", ContainerPath: "/data/backups", Derived: compose.DerivedChecked},
+			want:  "declares neither readOnly nor writable",
+		},
+		{
+			name:  "a mount declaring both",
+			field: compose.Field{ID: "control-mount", Scope: "service-mount", ContainerPath: "/data/backups", ReadOnly: true, Writable: true, Derived: compose.DerivedChecked},
+			want:  "declares both readOnly and writable",
+		},
+		{
+			name:  "a field with no derived policy at all, which is where five of them sat",
+			field: compose.Field{ID: "control-field", Scope: "service", Key: "restart"},
+			want:  "declares derived policy",
+		},
+		{
+			name:  "a field excused from the derived check without saying why",
+			field: compose.Field{ID: "control-field", Scope: "service", Key: "restart", Derived: compose.DerivedCanonicalOnly},
+			want:  "states no derivedWhy",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			findings := compose.CheckFieldPolicies(compose.Contract{Fields: []compose.Field{tc.field}})
+			if len(findings) == 0 {
+				t.Fatalf("the field policy check accepted %+v, so it cannot detect the thing it exists for", tc.field)
+			}
+			if joined := findingText(findings); !strings.Contains(joined, tc.want) {
+				t.Errorf("the refusal is %q, which never says %q", joined, tc.want)
+			}
+		})
+	}
+
+	// The negative half: a fully declared field is accepted, so the four
+	// refusals above are about the omission and not about a checker that
+	// refuses everything.
+	ok := compose.Field{ID: "control-mount", Scope: "service-mount", ContainerPath: "/data/backups", Writable: true, Derived: compose.DerivedChecked}
+	if findings := compose.CheckFieldPolicies(compose.Contract{Fields: []compose.Field{ok}}); len(findings) != 0 {
+		t.Errorf("a field that declares one write mode and a derived policy was refused: %s", findingText(findings))
+	}
+}
+
+// TestEveryDerivedArtifactDeclaresEveryCheckedField is the other half of
+// the same finding: five contract fields were checked on no adapter at
+// all, because CheckField only ever ran against the canonical definition
+// and derive.go's seven derived fields did not include them. Four of the
+// five converted platforms shipped without TZ as a result, which is the
+// field the contract's own reasoning says decides retention's calendar
+// boundaries.
+func TestEveryDerivedArtifactDeclaresEveryCheckedField(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	checked := c.DerivedCheckedFields()
+	if len(checked) == 0 {
+		t.Fatal("no field is checked on derived artifacts, so this suite would run zero assertions")
+	}
+	if len(c.Derived) == 0 {
+		t.Fatal("the contract lists no derived artifact, so this suite would run zero assertions")
+	}
+
+	for _, rel := range c.Derived {
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+			doc, err := compose.Read(compose.Path(rel), env())
+			if err != nil {
+				t.Fatalf("read %s: %v", rel, err)
+			}
+			for _, field := range checked {
+				if findings := doc.CheckField(field); len(findings) != 0 {
+					for _, f := range findings {
+						t.Errorf("%s: %s\n  why the contract requires it: %s", f.Rule, f.Detail, field.Why)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestTheDerivedFieldCheckFailsWhenADerivedArtifactDropsAField is its
+// positive control, one mutation per checked field, on a real derived
+// artifact rather than on the canonical file. Without it, a suite that
+// happens to hold could be a suite that checks nothing: that is precisely
+// the state the derived artifacts were in before this test existed.
+func TestTheDerivedFieldCheckFailsWhenADerivedArtifactDropsAField(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	rel := c.Derived[0]
+	data, err := os.ReadFile(compose.Path(rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+
+	for _, field := range c.DerivedCheckedFields() {
+		t.Run(field.ID, func(t *testing.T) {
+			t.Parallel()
+			doc, err := compose.Parse(data, rel, env())
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			mutated, what := doc.WithoutField(field)
+			if what == "" {
+				t.Fatalf("nothing to remove for %q, so this control proves nothing", field.ID)
+			}
+			if findings := mutated.CheckField(field); len(findings) == 0 {
+				t.Fatalf("removing %s from %s did not fail the %q check, so that field is not checked on derived artifacts", what, rel, field.ID)
+			}
+		})
+	}
+}
+
+// TestWriteModeCheckFailsWhenAMountCarriesTheWrongOne is the positive
+// control for the write-mode half of checkServiceMount, which the
+// removal control above cannot reach: removing a mount proves the
+// presence branch works and says nothing about whether :ro is inspected
+// at all.
+//
+// It is what stops issue #196's defect returning. The configuration mount
+// was `:ro` for the whole of Phase 4, and no check anywhere read that
+// flag against a declared intent, so three merged write paths were inert
+// in every packaged container while the suite stayed green.
+func TestWriteModeCheckFailsWhenAMountCarriesTheWrongOne(t *testing.T) {
+	t.Parallel()
+
+	c := compose.MustLoadContract()
+	data, err := os.ReadFile(compose.Path(c.Canonical))
+	if err != nil {
+		t.Fatalf("read canonical: %v", err)
+	}
+
+	controlled := 0
+	for _, field := range c.Fields {
+		if field.Scope != "service-mount" || (!field.ReadOnly && !field.Writable) {
+			continue
+		}
+		controlled++
+		t.Run(field.ID, func(t *testing.T) {
+			t.Parallel()
+
+			doc, err := compose.Parse(data, c.Canonical, env())
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if findings := doc.CheckField(field); len(findings) != 0 {
+				t.Fatalf("the unmutated definition already fails %q (%s), so this control would pass for the wrong reason", field.ID, findingText(findings))
+			}
+			mutated, what, ok := doc.WithWrongWriteMode(field)
+			if !ok {
+				t.Fatalf("nothing to flip for %q, so this control proves nothing", field.ID)
+			}
+			findings := mutated.CheckField(field)
+			if len(findings) == 0 {
+				t.Fatalf("making %s did not fail the %q check, so the write mode of that mount is not checked at all", what, field.ID)
+			}
+			joined := findingText(findings)
+			if !strings.Contains(joined, field.ID) {
+				t.Errorf("the finding %q does not name the rule %q that produced it", joined, field.ID)
+			}
+		})
+	}
+
+	// A loop over an empty list is a passing test that checked nothing,
+	// and the contract is a JSON file anyone can edit.
+	if controlled == 0 {
+		t.Fatal("no mount field declares a write mode, so this control ran zero mutations")
 	}
 }
 

@@ -29,30 +29,131 @@
     ]
   },
 
-  "architectures": ["amd64", "arm64"],
+  "architectures": [
+    "amd64",
+    "arm64"
+  ],
+
+  "runtimeContract": "1.1.0",
+
+  "_derivation_comment": [
+    "Issue #169's derivation contract. Every platform below is a THIN ADAPTER:",
+    "its runtime fields are derived from the authoritative Compose definition",
+    "(distribution/compose/runtime-contract.json's `canonical`) rather than",
+    "authored next to it, and derive.go fails the build naming the field that",
+    "drifted.",
+    "",
+    "runtimeContract is that contract's version, pinned here as well as in",
+    "runtime-contract.json so distribution/compose can hold the two together;",
+    "every platform repeats it in its own derivesFrom block, ON PURPOSE. A",
+    "contract change then fails every adapter until someone has re-derived it and",
+    "said so, which is the difference between a version number and a version",
+    "check."
+  ],
+
+  "profiles": [
+    "generic",
+    "ugos",
+    "truenas",
+    "unraid",
+    "openmediavault",
+    "proxmox",
+    "synology"
+  ],
+
+  "healthchecks": {
+    "engine": [
+      "CMD",
+      "/backup-manager",
+      "status"
+    ],
+    "webUI": [
+      "CMD",
+      "/backup-manager-web",
+      "healthcheck"
+    ]
+  },
 
   "listenPort": 8080,
 
   "authMode": "local-account",
 
+  "_healthcheck_comment": [
+    "The engine's test is container/Dockerfile's own HEALTHCHECK instruction, so an",
+    "adapter that declares nothing for the engine inherits exactly this and is",
+    "derived rather than silent. The Web UI's is not: `/backup-manager status` needs",
+    "a config file and a state database that container does not have, so every",
+    "adapter has to either override it with the Web UI test or disable it outright",
+    "(Unraid, whose only seam is `docker run --health-cmd`, which is shell form the",
+    "distroless image cannot run)."
+  ],
+
   "commands": {
-    "engine": ["/backup-manager-web", "serve"],
-    "webUI": ["/backup-manager-web", "serve-ui"],
-    "headless": ["/backup-manager", "daemon"],
-    "healthcheck": ["/backup-manager-web", "healthcheck"]
+    "engine": [
+      "/backup-manager-web",
+      "serve"
+    ],
+    "webUI": [
+      "/backup-manager-web",
+      "serve-ui"
+    ],
+    "headless": [
+      "/backup-manager",
+      "daemon"
+    ],
+    "healthcheck": [
+      "/backup-manager-web",
+      "healthcheck"
+    ]
   },
 
-  "binaries": ["/backup-manager", "/backup-manager-web"],
+  "binaries": [
+    "/backup-manager",
+    "/backup-manager-web"
+  ],
 
   "containerPaths": {
     "state": "/data/state",
     "backups": "/data/backups",
-    "config": "/etc/backup-manager/config.yaml",
+    "config": "/etc/backup-manager/config",
     "sshKey": "/etc/backup-manager/id_ed25519",
     "knownHosts": "/etc/backup-manager/known_hosts"
   },
 
-  "readOnlyContainerPaths": ["/etc/backup-manager/config.yaml", "/etc/backup-manager/id_ed25519", "/etc/backup-manager/known_hosts"],
+  "configFileName": "config.yaml",
+
+  "_config_role_comment": [
+    "The config role is a WRITABLE DIRECTORY the application owns, with",
+    "config.yaml inside it (issue #196). It used to be a read-only single-file",
+    "mount, and that shape made three merged features inert inside a packaged",
+    "container: CreateBackupSet (#146), the settings write path (#140) and",
+    "first-run setup (#176) all replace config.yaml through one temp-file-plus-",
+    "rename, which needs to create a sibling temp file in the file's own",
+    "directory. On a read-only single-file mount that directory is the image's",
+    "read-only rootfs, so every one of them failed at the write however correct",
+    "the code above it was. ImportSSHKey and the known-hosts store write into",
+    "two more siblings of the same directory (ssh_keys/ and known_hosts.d/) and",
+    "were inert for the same reason.",
+    "",
+    "A directory also lets the mount be EMPTY, which is what an app-store",
+    "install actually starts from. A bind mount cannot express \"not there yet\"",
+    "for a file: Docker creates a directory at a source path that does not",
+    "exist, so the absent-config case was not even representable.",
+    "",
+    "Key material stays a read-only single-file mount. Nothing writes it, the",
+    "engine only ever reads it, and the shapes are different claims."
+  ],
+
+  "readOnlyContainerPaths": [
+    "/etc/backup-manager/id_ed25519",
+    "/etc/backup-manager/known_hosts"
+  ],
+
+  "writableContainerPaths": [
+    "/data/state",
+    "/data/backups",
+    "/etc/backup-manager/config"
+  ],
 
   "platforms": {
     "truenas": {
@@ -62,13 +163,18 @@
       "hostPaths": {
         "state": "/mnt/tank/backup-manager/state",
         "backups": "/mnt/tank/backup-manager/backups",
-        "config": "/mnt/tank/backup-manager/config/config.yaml",
+        "config": "/mnt/tank/backup-manager/config",
         "sshKey": "/mnt/tank/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/tank/backup-manager/secrets/known_hosts"
       },
       "hostPathNote": "tank is the pool name the defaults assume; docs/acceptance/truenas-provider-acceptance.md step 0.2 covers substituting a real pool.",
       "trustForwardedHeaders": true,
-      "trustForwardedHeadersNote": "The catalog entry and the paste-in compose both declare their own project network, created and destroyed with the deployment, whose only two members are these two containers. The Web UI container is the engine's sole possible direct TCP peer by topology, which is what apps/common/auth/local requires."
+      "trustForwardedHeadersNote": "The catalog entry and the paste-in compose both declare their own project network, created and destroyed with the deployment, whose only two members are these two containers. The Web UI container is the engine's sole possible direct TCP peer by topology, which is what apps/common/auth/local requires.",
+      "profile": "truenas",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
     },
     "unraid": {
       "displayName": "Unraid",
@@ -77,13 +183,18 @@
       "hostPaths": {
         "state": "/mnt/user/appdata/backup-manager/state",
         "backups": "/mnt/user/backups/backup-manager",
-        "config": "/mnt/user/appdata/backup-manager/config/config.yaml",
+        "config": "/mnt/user/appdata/backup-manager/config",
         "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
       },
       "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; §19.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
       "trustForwardedHeaders": false,
-      "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so."
+      "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
+      "profile": "unraid",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
     },
     "openmediavault": {
       "displayName": "OpenMediaVault",
@@ -92,13 +203,18 @@
       "hostPaths": {
         "state": "/srv/dev-disk-by-uuid/appdata/backup-manager/state",
         "backups": "/srv/dev-disk-by-uuid/backups/backup-manager",
-        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config/config.yaml",
+        "config": "/srv/dev-disk-by-uuid/appdata/backup-manager/config",
         "sshKey": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/srv/dev-disk-by-uuid/appdata/backup-manager/secrets/known_hosts"
       },
       "hostPathNote": "dev-disk-by-uuid is a placeholder, deliberately matching what apps/openmediavault/frontend/platform.ts already declares: a real OMV system mounts data filesystems at /srv/dev-disk-by-uuid-<UUID>/, which differs per machine. The profile funnels every host path through the one DISK variable so the UUID is substituted exactly once, and the compose file derives the rest. Retained artifacts land in a dedicated child of the backups directory rather than in the directory itself, so step 0 of the acceptance procedure only ever creates and owns paths it created.",
       "trustForwardedHeaders": true,
-      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers."
+      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers.",
+      "profile": "openmediavault",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
     },
     "proxmox": {
       "displayName": "Proxmox VE",
@@ -107,13 +223,38 @@
       "hostPaths": {
         "state": "/mnt/backup-manager/state",
         "backups": "/mnt/backup-manager/backups",
-        "config": "/mnt/backup-manager/config/config.yaml",
+        "config": "/mnt/backup-manager/config",
         "sshKey": "/mnt/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/backup-manager/secrets/known_hosts"
       },
       "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backup-manager. That share root is not the backup root: storageMount is its backups child, so private state, config and key material are siblings of the retained artifacts rather than parents of them, and step 0.6 of the acceptance procedure only ever recurses over the paths it created. How the sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here.",
       "trustForwardedHeaders": true,
-      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers. The guest is dedicated to being the container host, so nothing else on the PVE cluster shares that network: the engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention."
+      "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers. The guest is dedicated to being the container host, so nothing else on the PVE cluster shares that network: the engine's sole possible direct TCP peer is the Web UI container, by topology rather than by convention.",
+      "profile": "proxmox",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      }
+    },
+    "synology": {
+      "displayName": "Synology DSM",
+      "tier": "B",
+      "storageMount": "/volume1/backup-manager",
+      "hostPaths": {
+        "state": "/volume1/docker/backup-manager/state",
+        "backups": "/volume1/backup-manager",
+        "config": "/volume1/docker/backup-manager/config",
+        "sshKey": "/volume1/docker/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/volume1/docker/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "These are the CONTAINER MANAGER project's paths (issue #169), not the .spk's. The .spk keeps its state under the DSM package FHS at /var/packages/BackupManager/{etc,var} and is untouched by this entry; the two are alternative ways to install the same release on the same NAS, and apps/synology/README.md says which to pick. /volume1/docker is Container Manager's own default project location and /volume1/backup-manager is the shared folder the .spk's data-share worker already asks DSM for, so an operator who has run either one recognises both. Substitute your own volume number.",
+      "profile": "synology",
+      "derivesFrom": {
+        "source": "container/compose.yaml",
+        "contract": "1.1.0"
+      },
+      "trustForwardedHeaders": true,
+      "trustForwardedHeadersNote": "The Container Manager project declares its own project network, created and destroyed with the project, whose only two members are these two containers. This is the same topology the other compose profiles have, and it is why the Container Manager path can trust forwarded headers where the .spk cannot: the .spk's engine binds loopback on the NAS itself, which any local process can reach."
     }
   }
 }

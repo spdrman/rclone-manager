@@ -55,15 +55,31 @@ docker cp "${cid}:/backup-manager-web" release/amd64/backup-manager-web
 docker rm "${cid}"
 ```
 
+The package also carries this provider's own UI bundle (issue #180,
+packaged by #169), which is built from the shared UI rather than extracted
+from the image:
+
+```sh
+cd ui/shared && npm ci && npm run build:bundles synology
+```
+
 Then:
 
 ```sh
 cd apps/synology
 go run ./cmd/spkctl build --arch amd64 --version 1.0.0-1 \
-    --binaries ../../release/amd64 --out ../../dist
+    --binaries ../../release/amd64 \
+    --ui-bundle ../../ui/shared/dist-bundles/synology \
+    --out ../../dist
 go run ./cmd/spkctl verify --spk ../../dist/BackupManager-x86_64-1.0.0-1.spk \
     --manifest ../../container/release-manifest.json
 ```
+
+`--ui-bundle` is required, not optional. A package built without one would
+install, run, and show the generic Docker bridge on a Synology NAS, and
+nothing about the finished package would say so. `build` also refuses a
+bundle whose `bundle.json` names another provider, and one with no
+`index.html` in it.
 
 `verify` exits non-zero unless all ten checks pass. Run it before handing
 anyone a package, and keep its output with the release: it is the evidence
@@ -74,7 +90,36 @@ exists to detect, and it will detect it - a build of the same source at a
 different commit, or with different flags, produces a different digest and
 fails the parity check.
 
-## Installing
+## Two ways to install this release on DSM, and how to choose
+
+Since issue #169 there are two, and neither replaces the other.
+
+| | `.spk` (this directory's `spk/`) | Container Manager project (`compose/`) |
+|---|---|---|
+| What it installs | the two native release binaries | the canonical OCI image, two containers |
+| Where it appears | Package Center, with a DSM desktop launcher | Container Manager → Project |
+| State lives in | `/var/packages/BackupManager/{etc,var}` | host paths you choose under `/volume1` |
+| Engine isolation | loopback bind, enforced by `start-stop-status` | a compose project network, enforced by topology |
+| Trusts forwarded headers | no, because any local process can reach loopback | yes, because only the Web UI container can reach the engine |
+| Needs Container Manager installed | no | yes |
+| Signed | no (Trust Level must allow any publisher) | not applicable |
+
+Take the `.spk` if you want the DSM desktop launcher and Package Center
+lifecycle. Take the Container Manager project if you would rather run the
+same image every other platform runs, or you already keep your containers
+there. The Container Manager path is also the one EPIC B's support table
+names for Synology; the `.spk` predates it and is not being retired, which
+is a product decision and not this issue's to make.
+
+`compose/backup-manager.yml` and `compose/backup-manager.env` are the
+project. Container Manager → Project → Create → "Create docker-compose.yml"
+takes the first, and the environment field takes the second. Read
+`compose/backup-manager.env` before pasting: two paths in it are yours to
+set, and the compose file refuses to start rather than inventing either.
+The two installs can run side by side while you compare them, because the
+`.spk` publishes 8477 and the project defaults to 8080.
+
+## Installing the `.spk`
 
 Manual install only, through Package Center → Manual Install.
 
@@ -154,15 +199,17 @@ scan reads every file in both archives on every build.
 
 ## Known gaps
 
-1. **The embedded UI is the generic provider bridge, not this
-   directory's `frontend/` bridge.** `serve-ui` serves a bundle compiled
-   into the release binary through `go:embed`, and there is no flag to
-   serve one from disk. Shipping the Synology bridge would therefore mean
-   a Synology-specific binary, which is exactly what §3.7 forbids. Closing
-   this needs a `--ui-dir` option on the shared Web host - a change to the
-   release binary itself, so it belongs to whoever owns that binary, not
-   here. The launcher still opens the shared Web UI, which is what the
-   acceptance criterion asks for; only the provider treatment is generic.
+1. ~~**The embedded UI is the generic provider bridge.**~~ **Closed by
+   issues #167 and #169.** It used to be true, and it used to be
+   unavoidable: `serve-ui` served a bundle compiled into the release
+   binary through `go:embed` with no flag to serve one from disk, so
+   shipping the Synology bridge would have meant a Synology-specific
+   binary, which §3.7 forbids. #167 made the bundle a run-time choice
+   (`--ui-dir`), and #169 packaged it: the `.spk` now carries
+   `ui/shared/dist-bundles/synology` in its payload and
+   `start-stop-status` serves it, with the release binary unchanged.
+   `spk.Build` refuses a package built without that bundle, or with one
+   built for another provider, so the failure cannot come back quietly.
 2. **No `port-config` in `conf/resource`.** The package's ports therefore
    do not appear in DSM's firewall application selector. It is a
    convenience, and a wrong resource-worker spec fails an install in a way
@@ -189,6 +236,7 @@ scan reads every file in both archives on every build.
 ```
 apps/synology/
 ├── cmd/spkctl/       build and verify commands
+├── compose/          the Container Manager project (#169) and its environment
 ├── frontend/         the Synology platform bridge for ui/shared (pre-existing)
 └── spk/
     ├── arch.go       the claimed architectures and their DSM platforms

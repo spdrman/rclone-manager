@@ -60,6 +60,25 @@ func stagedBinaries(t *testing.T, flavour string) string {
 	return dir
 }
 
+// stagedUIBundle writes a minimal valid bundle for this provider: the
+// marker naming it and an app shell. `spkctl build` requires one, because
+// a package without it would serve the generic bridge on a Synology NAS
+// (issue #180).
+func stagedUIBundle(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		spk.UIBundleMarkerName: `{"schema":"rclone-manager/ui-bundle/1","platform":"` + spk.UIBundlePlatform + `"}`,
+		"index.html":           "<!doctype html><title>Backup Manager</title>",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return dir
+}
+
 func writeManifest(t *testing.T, binariesDir string) string {
 	t.Helper()
 	entry := spk.ArchEntry{Architecture: "amd64", BinarySHA256: map[string]string{}}
@@ -121,7 +140,7 @@ func buildFixture(t *testing.T, binariesDir string) string {
 	out := t.TempDir()
 	printed, code := capture(t, func() int {
 		return run([]string{"build", "--arch", "amd64", "--version", "1.0.0-1",
-			"--binaries", binariesDir, "--out", out})
+			"--binaries", binariesDir, "--ui-bundle", stagedUIBundle(t), "--out", out})
 	})
 	if code != 0 {
 		t.Fatalf("spkctl build exited %d:\n%s", code, printed)

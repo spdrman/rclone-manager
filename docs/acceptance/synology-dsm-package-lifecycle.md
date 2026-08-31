@@ -245,10 +245,15 @@ this criterion is the one most likely to differ between the two.
 5. Complete enrollment with the token from step 2, choose an
    administrator password, and log in.
 6. Expect: the shared UI loads and `GET /api/v1/system/capabilities`
-   succeeds. Record which provider bridge the UI reports. It will report
-   the generic bridge, not the Synology one; see the "Known gap" note in
-   `apps/synology/README.md`. That is expected here and is not a failure
-   of this step.
+   succeeds, and it reports the **Synology** bridge. Since issue #169 the
+   package carries this provider's own UI bundle in its payload and
+   `start-stop-status` serves it with `--ui-dir`, so a generic bridge here
+   is now a failure of this step rather than the documented gap it used to
+   be. If you see "Docker Compose" as the deployment, the bundle did not
+   reach `${SYNOPKG_PKGDEST}/ui-bundle`, or the start script stopped
+   passing `--ui-dir`; record which, because `serve-ui` fails closed on an
+   unusable `--ui-dir` and a running package with the wrong bridge means
+   something served the compiled-in bundle instead.
 7. Also open Package Center → Backup Manager → Open, and confirm it
    reaches the same UI. Two documented routes exist (`dsmuidir` plus a
    `.url` desktop entry, and INFO's `adminport`/`adminurl`); record which

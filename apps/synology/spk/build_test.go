@@ -28,9 +28,10 @@ func TestBuild_NamesTheArtifactTheWayTheToolkitDoes(t *testing.T) {
 // nobody downstream can re-check.
 func TestBuild_IsDeterministic(t *testing.T) {
 	bins := stagedBinaries(t, "amd64", "release")
+	bundle := stagedUIBundle(t, UIBundlePlatform)
 	build := func() []byte {
 		path, err := Build(BuildOptions{
-			GOARCH: "amd64", Version: "1.0.0-1", BinariesDir: bins, OutDir: t.TempDir(),
+			GOARCH: "amd64", Version: "1.0.0-1", BinariesDir: bins, UIBundleDir: bundle, OutDir: t.TempDir(),
 		})
 		if err != nil {
 			t.Fatalf("Build: %v", err)
@@ -130,4 +131,131 @@ func TestBuild_PayloadCarriesTheDSMLauncher(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	requireFail(t, rep, CheckLauncher, "config")
+}
+
+// TestBuild_RequiresTheProvidersOwnUIBundle is issue #180's control on
+// this side, and every row of it is a package that would install cleanly
+// and show the wrong user interface.
+//
+// The .spk carries the release binary unchanged, so the UI bridge cannot
+// be chosen at compile time (§3.7), which is why the bundle is a build
+// input at all. What makes it a REQUIRED input is that the alternative
+// failure is silent: a package built without one starts, serves, and
+// tells a Synology operator they are running a generic Docker deployment.
+func TestBuild_RequiresTheProvidersOwnUIBundle(t *testing.T) {
+	bins := stagedBinaries(t, "amd64", "release")
+
+	build := func(t *testing.T, bundleDir string) (string, error) {
+		t.Helper()
+		return Build(BuildOptions{
+			GOARCH: "amd64", Version: "1.0.0-1",
+			BinariesDir: bins, UIBundleDir: bundleDir, OutDir: t.TempDir(),
+		})
+	}
+
+	// Positive control first: the correct bundle builds, and the payload
+	// really carries it. Without this the refusals below would pass just
+	// as happily against a Build that refused everything.
+	path, err := build(t, stagedUIBundle(t, UIBundlePlatform))
+	if err != nil {
+		t.Fatalf("Build with this provider's own bundle: %v", err)
+	}
+	carried := map[string]bool{}
+	mutateInnerPayload(t, path, func(inner []tarEntry) []tarEntry {
+		for _, e := range inner {
+			carried[e.hdr.Name] = true
+		}
+		return inner
+	})
+	for _, want := range []string{
+		PayloadUIBundleDir + "/index.html",
+		PayloadUIBundleDir + "/" + UIBundleMarkerName,
+		PayloadUIBundleDir + "/assets/app.js",
+	} {
+		if !carried[want] {
+			t.Errorf("the package does not carry %s; serve-ui --ui-dir would have nothing to serve", want)
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		bundle  func(t *testing.T) string
+		wantMsg string
+	}{
+		{
+			name:    "no bundle at all",
+			bundle:  func(*testing.T) string { return "" },
+			wantMsg: "#180",
+		},
+		{
+			name: "a bundle built for another provider",
+			bundle: func(t *testing.T) string {
+				return stagedUIBundle(t, "truenas")
+			},
+			wantMsg: "built for \"truenas\"",
+		},
+		{
+			name: "a directory with no marker, so nothing says what it is",
+			bundle: func(t *testing.T) string {
+				dir := stagedUIBundle(t, UIBundlePlatform)
+				if err := os.Remove(filepath.Join(dir, UIBundleMarkerName)); err != nil {
+					t.Fatalf("remove marker: %v", err)
+				}
+				return dir
+			},
+			wantMsg: UIBundleMarkerName,
+		},
+		{
+			name: "a marker but no app shell, which is what an unmounted bundle looks like",
+			bundle: func(t *testing.T) string {
+				dir := stagedUIBundle(t, UIBundlePlatform)
+				if err := os.Remove(filepath.Join(dir, "index.html")); err != nil {
+					t.Fatalf("remove index.html: %v", err)
+				}
+				return dir
+			},
+			wantMsg: "index.html",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := build(t, tc.bundle(t))
+			if err == nil {
+				t.Fatalf("Build accepted %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("Build refused %s with %q, which never mentions %q, so the refusal does not say what is wrong", tc.name, err, tc.wantMsg)
+			}
+		})
+	}
+}
+
+// TestStartStopStatusServesThePackagedBundle pins the other half. Build
+// can carry the bundle perfectly and the package still serve the generic
+// bridge, because what decides that is one flag in a shell script DSM
+// runs.
+func TestStartStopStatusServesThePackagedBundle(t *testing.T) {
+	scripts, err := LifecycleScripts()
+	if err != nil {
+		t.Fatalf("LifecycleScripts: %v", err)
+	}
+	body := scripts["start-stop-status"]
+	shared, err := SharedScript()
+	if err != nil {
+		t.Fatalf("SharedScript: %v", err)
+	}
+
+	if !strings.Contains(shared, `UI_BUNDLE_DIR="${SYNOPKG_PKGDEST}/`+PayloadUIBundleDir+`"`) {
+		t.Errorf("common.sh does not derive the bundle directory from the documented package target and %s", PayloadUIBundleDir)
+	}
+	if !strings.Contains(shared, `RUNTIME_PROFILE="`+UIBundlePlatform+`"`) {
+		t.Errorf("common.sh does not select the %s runtime profile", UIBundlePlatform)
+	}
+	if !strings.Contains(body, `--ui-dir "${UI_BUNDLE_DIR}"`) {
+		t.Errorf("start-stop-status does not point serve-ui at the packaged bundle, so an installed package serves the bridge compiled into the binary, which is the generic one (#180):\n%s", body)
+	}
+	// Both processes, not just the UI: the engine's profile is what
+	// GET /api/v1/system/capabilities reports the platform as.
+	if got := strings.Count(body, `--profile="${RUNTIME_PROFILE}"`); got != 2 {
+		t.Errorf("start-stop-status names the runtime profile %d time(s), want 2 (the engine and the UI host)", got)
+	}
 }

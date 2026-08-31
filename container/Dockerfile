@@ -138,6 +138,32 @@ RUN --mount=type=cache,target=/root/.npm \
 
 COPY ui/shared/ ./ui/shared/
 COPY apps/ ./apps/
+
+# The per-provider bundles the runtime stage carries (issue #180, packaged
+# by #169). One directory per platform whose distribution adapter has no
+# file payload of its own to ship a bundle in: a TrueNAS catalog entry, an
+# Unraid template, an OMV or Proxmox compose profile and a Synology
+# Container Manager project are all metadata, so the image is the only
+# carrier they have. `serve-ui --ui-root /ui/bundles --profile=<name>`
+# then serves the right bridge from the identical binary, which is what
+# section 3.7 requires.
+#
+# Five, not seven. `generic` is compiled into the binary already and
+# duplicating it here would buy nothing; `ugos` is EPIC D's, and its UPK
+# carries its own. Seven at roughly 347 KB each would be about 2.4 MB
+# against a gated 5% image budget of about 2.15 MB, so "ship them all" was
+# never available; five is 1.74 MB, which is inside it with room, and
+# docs/perf/ records the measurement rather than the estimate.
+RUN cd ui/shared && npm run build:bundles truenas unraid openmediavault proxmox synology
+
+# LAST, and the order is load-bearing. `build:bundles` runs `npm run
+# build` once per provider, so it leaves dist/ holding whichever provider
+# it built last; this rebuild puts the generic bundle back, and that is
+# the one the build-web stage embeds. Reversing these two lines would ship
+# a canonical image whose compiled-in UI is a NAS provider's bridge, which
+# nothing downstream would notice.
+# distribution/packaging's TestTheCanonicalImageCarriesEachAdapterBundle
+# fails the build if the order is swapped.
 RUN cd ui/shared && npm run build
 
 # ---- generic Web host builder ------------------------------------------
@@ -205,6 +231,15 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 
 COPY --from=build /out/backup-manager /backup-manager
 COPY --from=build-web /out/backup-manager-web /backup-manager-web
+
+# The per-provider UI bundles (issue #180). Read-only content, served by
+# `serve-ui --ui-root /ui/bundles`, which resolves <root>/<profile>. Each
+# converted distribution adapter sets UI_ROOT to this path and selects its
+# own profile, so an operator installing through the TrueNAS catalog,
+# Community Applications, an OMV or Proxmox compose profile or a Synology
+# Container Manager project gets that platform's bridge instead of being
+# told this is a generic Docker deployment.
+COPY --from=frontend-build /src/ui/shared/dist-bundles/ /ui/bundles/
 
 # Documentary only - EXPOSE does not itself publish anything (see
 # container/compose.yaml's own `ports:` for what actually does): this is

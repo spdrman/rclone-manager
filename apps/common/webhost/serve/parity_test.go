@@ -70,14 +70,26 @@ func newProfileHarnesses(t *testing.T) []*profileHarness {
 		}
 	})
 
-	authSvc, err := local.New(local.Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})
-	if err != nil {
-		t.Fatalf("local.New: %v", err)
-	}
-
 	var out []*profileHarness
 	for _, id := range profile.IDs() {
 		p := profileFor(t, string(id))
+
+		// One authentication store per profile, and one shared backend
+		// for all of them. That split is the whole design of this suite:
+		// what has to be identical across profiles is the backup domain,
+		// so every engine reads the same journal and the same config,
+		// while authentication is one of the four things a profile is
+		// allowed to change and gets its own state accordingly.
+		//
+		// It also has to be per profile to work at all. Local enrolment
+		// is single-use by design, so six local-account profiles sharing
+		// one store would enrol once and then find no bootstrap token,
+		// which is what happened the moment issue #169 took the profile
+		// table from two rows to seven.
+		authSvc, err := local.New(local.Config{StorePath: filepath.Join(t.TempDir(), "auth.json")})
+		if err != nil {
+			t.Fatalf("local.New for profile %q: %v", id, err)
+		}
 		adapter, err := p.Adapter(profile.AdapterConfig{LocalAuth: authSvc.Authenticator()})
 		if err != nil {
 			t.Fatalf("profile %q Adapter: %v", id, err)

@@ -55,6 +55,37 @@ func stagedBinaries(t *testing.T, goarch, payloadSuffix string) string {
 	return dir
 }
 
+// stagedUIBundle writes a minimal but valid provider UI bundle into a
+// fresh directory and returns it: an app shell, one asset, and the marker
+// naming the provider it was built for.
+//
+// Synthesised rather than built with vite, for the same reason fakeELF is
+// synthesised rather than cross-compiled: what stageUIBundle reads is the
+// SHAPE (a marker naming this provider, and an index.html), and running a
+// real frontend build would put a node toolchain into a suite that
+// otherwise finishes in under a second. platform lets a caller stage a
+// bundle for the wrong provider, which is the control the marker exists
+// for.
+func stagedUIBundle(t *testing.T, platform string) string {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		UIBundleMarkerName: `{"schema":"rclone-manager/ui-bundle/1","platform":"` + platform + `"}`,
+		"index.html":       "<!doctype html><title>Backup Manager</title><script src=/assets/app.js></script>",
+		"assets/app.js":    "// " + platform + " bridge\n",
+	}
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("MkdirAll %s: %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+	return dir
+}
+
 // manifestFor hashes whatever stagedBinaries just wrote and returns a
 // ReleaseManifest that agrees with it. A test that wants a mismatch builds
 // the manifest from one directory and the package from another.
@@ -86,6 +117,7 @@ func buildFixture(t *testing.T, goarch string) (string, ReleaseManifest) {
 		GOARCH:      goarch,
 		Version:     manifest.Version,
 		BinariesDir: bins,
+		UIBundleDir: stagedUIBundle(t, UIBundlePlatform),
 		OutDir:      out,
 	})
 	if err != nil {

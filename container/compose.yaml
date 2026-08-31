@@ -54,7 +54,7 @@ x-canonical-runtime:
   # The contract version this definition was written against, so a
   # contract change is a visible edit here rather than a silent
   # divergence.
-  contract: "1.0.0"
+  contract: "1.1.0"
 
   # The architectures this release claims. Checked against
   # distribution/packaging/canonical.json and against
@@ -70,6 +70,16 @@ x-canonical-runtime:
   profiles:
     - generic
     - ugos
+    # The five Phase 4 platforms, converted to thin adapters over this
+    # runtime by issue #169. Each one selects a profile here instead of
+    # carrying a code path of its own; what the profile changes is the
+    # platform identity the API reports, the deployment description, and
+    # which UI bridge the Web UI host serves.
+    - truenas
+    - unraid
+    - openmediavault
+    - proxmox
+    - synology
 
   # How an operator pins a release. The tag in `image:` is mutable and is
   # a convenience; the immutable reference is the digest, recorded per
@@ -254,10 +264,27 @@ services:
       # the NAS backup volume/share itself, so it's writable, not :ro.
       - ${BACKUP_DIR:?set BACKUP_DIR in .env to the host backup storage path}:/data/backups
 
-      # Configuration and credentials: read-only, per the container
-      # requirements. Nothing here is baked into the image or into this
-      # file — only host paths, resolved at `docker compose up` time.
-      - ${CONFIG_FILE:?set CONFIG_FILE in .env to the manager's config.yaml}:/etc/backup-manager/config.yaml:ro
+      # Configuration: a WRITABLE DIRECTORY the application owns, with
+      # config.yaml inside it (issue #196). Not a read-only single-file
+      # mount, which is what this line used to be and what made three
+      # merged write paths inert in a packaged container: adding a backup
+      # set, saving settings and first-run setup all replace config.yaml
+      # through a temp file created in its own directory, and on a
+      # single-file mount that directory is this image's read-only
+      # rootfs. The engine's two on-demand stores, ssh_keys/ and
+      # known_hosts.d/, are siblings of config.yaml and were unwritable
+      # for the same reason.
+      #
+      # A directory is also the only shape that can honestly be EMPTY. A
+      # bind mount cannot say "not configured yet" about a file: Docker
+      # creates a directory at a source path that does not exist, so the
+      # state a fresh install actually starts in was not representable.
+      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backup-manager/config
+
+      # Credentials stay read-only single files. Nothing in this
+      # container writes them, and the shapes are two different claims.
+      # Nothing here is baked into the image or into this file — only
+      # host paths, resolved at `docker compose up` time.
       - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
       - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
 

@@ -62,6 +62,32 @@ const (
 	// issue has to prove about it is provable against a synthetic
 	// gateway, and no part of it needs a UGREEN device.
 	UGOS ID = "ugos"
+
+	// The five platforms Phase 4 shipped, converted to thin adapters
+	// over this runtime by issue #169.
+	//
+	// None of them declares a capability or a gateway, and that is the
+	// finding rather than an omission. Every one of them uses §13A local
+	// authentication, none has a server-side notification channel, and
+	// the three remaining capabilities their frontend bridges declare
+	// (the embedded window, the storage picker, app-store packaging) are
+	// browser-host capabilities this Go process cannot deliver; §22
+	// forbids declaring a capability that would have to be emulated. So
+	// what a profile changes for these five is exactly what legitimately
+	// differs: which platform the runtime reports itself as, how the
+	// deployment is described, and which UI bridge the Web UI host
+	// serves.
+	//
+	// That is not nothing. Before this, a user who installed through the
+	// TrueNAS catalog or Community Applications was told by the running
+	// application that this was a generic Docker Compose deployment,
+	// because the platform identity was a build-time constant and the
+	// build never set it.
+	TrueNAS        ID = "truenas"
+	Unraid         ID = "unraid"
+	OpenMediaVault ID = "openmediavault"
+	Proxmox        ID = "proxmox"
+	Synology       ID = "synology"
 )
 
 // ErrUnknownProfile is returned by Lookup for a selector nothing
@@ -146,6 +172,39 @@ func registry() map[ID]Profile {
 			},
 			UIBundle: "ugos",
 		},
+
+		// The five converted Phase 4 platforms. Each one is a row and
+		// nothing else: no gateway, no capability, no code path. A
+		// platform that needed more than a row would not be a thin
+		// adapter, which is the whole test issue #169 applies.
+		TrueNAS:        containerProfile(TrueNAS, capabilities.PlatformTrueNAS, "TrueNAS", "TrueNAS Apps"),
+		Unraid:         containerProfile(Unraid, capabilities.PlatformUnraid, "Unraid", "Unraid Docker template"),
+		OpenMediaVault: containerProfile(OpenMediaVault, capabilities.PlatformOpenMediaVault, "OpenMediaVault", "OpenMediaVault Compose deployment"),
+		Proxmox:        containerProfile(Proxmox, capabilities.PlatformProxmox, "Proxmox VE", "Proxmox VE container-host guest"),
+		Synology:       containerProfile(Synology, capabilities.PlatformSynology, "Synology DSM", "Synology Container Manager project"),
+	}
+}
+
+// containerProfile is one converted platform's row: an identity, a
+// description and its own UI bundle, over the same runtime as every other
+// one.
+//
+// A constructor rather than five literals, because five near-identical
+// literals is precisely how one of them silently acquires a capability
+// nobody meant to grant. Anything a platform genuinely needs beyond an
+// identity is a deliberate edit that stops using this.
+func containerProfile(id ID, platform capabilities.PlatformID, displayName, deployment string) Profile {
+	return Profile{
+		ID:          id,
+		PlatformID:  platform,
+		DisplayName: displayName,
+		Deployment:  deployment,
+		// Every capability false, never emulated (§22). Local
+		// authentication is this profile's own fallback, not a
+		// platform-provided session, so it is deliberately NOT
+		// NativeAuth.
+		Capabilities: capabilities.PlatformCapabilities{},
+		UIBundle:     string(id),
 	}
 }
 

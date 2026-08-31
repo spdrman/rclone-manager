@@ -95,6 +95,7 @@ func TestVerify_BinaryHashParity(t *testing.T) {
 					GOARCH:      "amd64",
 					Version:     manifest.Version,
 					BinariesDir: rebuild,
+					UIBundleDir: stagedUIBundle(t, UIBundlePlatform),
 					OutDir:      t.TempDir(),
 				})
 				if err != nil {
@@ -171,6 +172,7 @@ func TestVerify_RejectsWrongELFMachine(t *testing.T) {
 		GOARCH:      "amd64",
 		Version:     manifest.Version,
 		BinariesDir: bins,
+		UIBundleDir: stagedUIBundle(t, UIBundlePlatform),
 		OutDir:      t.TempDir(),
 	})
 	if err != nil {

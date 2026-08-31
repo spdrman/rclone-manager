@@ -29,6 +29,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -61,8 +62,15 @@ type Image struct {
 // (apps/generic/cmd/backup-manager-web's defaultConfigPath and
 // defaultAuthStorePath) rather than chosen per platform.
 type ContainerPaths struct {
-	State      string `json:"state"`
-	Backups    string `json:"backups"`
+	State   string `json:"state"`
+	Backups string `json:"backups"`
+	// Config is a DIRECTORY the application owns, not the file inside it
+	// (issue #196). config.yaml lives in it, under ConfigFileName, and so
+	// do the two sibling stores the engine creates on demand (ssh_keys/
+	// and known_hosts.d/). It was a read-only single-file mount until
+	// #196, which is what made three merged write paths inert inside a
+	// packaged container; canonical.json's own _config_role_comment
+	// carries the full reasoning.
 	Config     string `json:"config"`
 	SSHKey     string `json:"sshKey"`
 	KnownHosts string `json:"knownHosts"`
@@ -79,6 +87,30 @@ type HostPaths struct {
 	Config     string `json:"config"`
 	SSHKey     string `json:"sshKey"`
 	KnownHosts string `json:"knownHosts"`
+}
+
+// Derivation records which authoritative definition, at which contract
+// version, a platform's runtime fields were derived from (issue #169).
+//
+// Contract is repeated per platform rather than read once from
+// RuntimeContract on purpose. A derivation check that only compares
+// VALUES keeps passing after the contract grows a field nobody applied,
+// because there is no value to disagree with yet. Repeating the version
+// makes a contract change fail every adapter until someone has re-derived
+// it and said so.
+type Derivation struct {
+	Source   string `json:"source"`
+	Contract string `json:"contract"`
+}
+
+// Healthchecks are the canonical health-check tests, one per role. The
+// engine's is container/Dockerfile's own HEALTHCHECK instruction, which
+// is why an adapter that declares nothing for the engine is still
+// derived; the Web UI's is not, because that container has no config file
+// and no state database for the engine's check to read.
+type Healthchecks struct {
+	Engine []string `json:"engine"`
+	WebUI  []string `json:"webUI"`
 }
 
 // Platform is one packaged target.
@@ -108,6 +140,14 @@ type Platform struct {
 	StorageMount string    `json:"storageMount"`
 	HostPaths    HostPaths `json:"hostPaths"`
 	HostPathNote string    `json:"hostPathNote"`
+	// Profile is the runtime profile this platform's services select
+	// with `--profile=`. Host-dependent behaviour is selected from the
+	// one canonical executable's profile table, never branched to in a
+	// platform's own code path (#169).
+	Profile string `json:"profile"`
+	// DerivesFrom is the authoritative definition and contract version
+	// this platform's runtime fields were derived from.
+	DerivesFrom Derivation `json:"derivesFrom"`
 	// TrustForwardedHeaders records whether this platform's engine
 	// container may set TRUST_FORWARDED_HEADERS=true.
 	//
@@ -145,15 +185,72 @@ type Commands struct {
 
 // Canonical is canonical.json.
 type Canonical struct {
-	Image                  Image               `json:"image"`
-	Architectures          []string            `json:"architectures"`
-	ListenPort             int                 `json:"listenPort"`
-	AuthMode               string              `json:"authMode"`
-	Commands               Commands            `json:"commands"`
-	Binaries               []string            `json:"binaries"`
-	ContainerPaths         ContainerPaths      `json:"containerPaths"`
-	ReadOnlyContainerPaths []string            `json:"readOnlyContainerPaths"`
+	Image         Image    `json:"image"`
+	Architectures []string `json:"architectures"`
+	// RuntimeContract is distribution/compose/runtime-contract.json's
+	// version, pinned here too so every adapter can be held to it without
+	// this package reaching across into that one.
+	RuntimeContract string `json:"runtimeContract"`
+	// Profiles are the runtime profiles the canonical definition declares
+	// and the executable implements. An adapter may select one of these
+	// and nothing else.
+	Profiles       []string       `json:"profiles"`
+	Healthchecks   Healthchecks   `json:"healthchecks"`
+	ListenPort     int            `json:"listenPort"`
+	AuthMode       string         `json:"authMode"`
+	Commands       Commands       `json:"commands"`
+	Binaries       []string       `json:"binaries"`
+	ContainerPaths ContainerPaths `json:"containerPaths"`
+	// ConfigFileName is the file the engine reads inside the config
+	// directory.
+	ConfigFileName         string   `json:"configFileName"`
+	ReadOnlyContainerPaths []string `json:"readOnlyContainerPaths"`
+	// WritableContainerPaths is the other half of the same claim, and it
+	// is a separate list rather than "everything not read-only" on
+	// purpose. A path that is in neither list is an omission, and an
+	// omission read as "writable by default" is how a mount whose write
+	// mode nobody decided ends up read-only in production and writable in
+	// every test fixture, which is exactly the shape #196 was filed
+	// about.
+	WritableContainerPaths []string            `json:"writableContainerPaths"`
 	Platforms              map[string]Platform `json:"platforms"`
+}
+
+// ConfigFilePath is where config.yaml lands inside the container: the
+// config role's directory plus ConfigFileName. Callers that need the file
+// rather than the directory ask for it here instead of re-joining the two
+// themselves.
+func (c Canonical) ConfigFilePath() string {
+	return path.Join(c.ContainerPaths.Config, c.ConfigFileName)
+}
+
+// WriteMode is what a container path's mount has to be. Every canonical
+// container path resolves to exactly one of these, and a path that
+// resolves to neither is a declaration nobody made.
+type WriteMode string
+
+const (
+	// WriteModeReadOnly: mounted :ro. Nothing in the container writes it.
+	WriteModeReadOnly WriteMode = "read-only"
+	// WriteModeWritable: mounted writable, because the application
+	// creates, replaces or extends what is under it.
+	WriteModeWritable WriteMode = "writable"
+	// WriteModeUndeclared: neither list names it.
+	WriteModeUndeclared WriteMode = "undeclared"
+)
+
+// WriteModeFor answers what a container path's mount must be.
+func (c Canonical) WriteModeFor(containerPath string) WriteMode {
+	if contains(c.ReadOnlyContainerPaths, containerPath) {
+		if contains(c.WritableContainerPaths, containerPath) {
+			return WriteModeUndeclared
+		}
+		return WriteModeReadOnly
+	}
+	if contains(c.WritableContainerPaths, containerPath) {
+		return WriteModeWritable
+	}
+	return WriteModeUndeclared
 }
 
 // Load parses the embedded canonical.json.

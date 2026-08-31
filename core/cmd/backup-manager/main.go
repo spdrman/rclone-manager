@@ -77,6 +77,7 @@ commands:
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
   version                                        report version information
 
-every command except version accepts --config (default /etc/backup-manager/config.yaml)
+every command except version accepts --config (default /etc/backup-manager/config/config.yaml;
+a directory resolves to config.yaml inside it, which is what packaging mounts)
 `)
 }

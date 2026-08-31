@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/testenv"
 )
 
 func TestValidateStateDir_CreatesMissingDirectory(t *testing.T) {
@@ -48,9 +50,7 @@ func TestValidateStateDir_RefusesWhenParentIsAPlainFile(t *testing.T) {
 }
 
 func TestValidateStateDir_RefusesWhenDirectoryIsNotWritable(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("running as root: permission bits do not block root, this check is meaningless here")
-	}
+	testenv.RequirePermissionBitsApply(t)
 
 	root := t.TempDir()
 	readOnlyDir := filepath.Join(root, "read-only-state")

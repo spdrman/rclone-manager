@@ -277,27 +277,107 @@ func TestBridgeFlagsOnlyCountWhereABundleLoadsThem(t *testing.T) {
 		t.Fatalf("%s is the bundle the build selects and must be reachable: %s", shipped, detail)
 	}
 
-	// Synology's bridge opts in to embeddedWindow, and nothing ships it.
+	// Second control, and a different mechanism: Synology's bridge is
+	// reached through the .spk's own payload rather than through the
+	// image, so accepting it proves the check has more than one way to
+	// say yes. It used to be this test's NEGATIVE case, on the grounds
+	// that nothing shipped that bridge, and issue #169 made it false.
+	//
+	// The else is not decoration. This premise has already flipped once
+	// inside this function, and a premise that stops holding must fail
+	// rather than quietly leave the branch asserting nothing.
 	syn := providerUnderTest{id: "synology", spec: conf.Providers["synology"], canonical: canonical}
-	on, err := BridgeDeclaresCapability(syn.bridgePath(), "embeddedWindow")
+	if on, err := BridgeDeclaresCapability(syn.bridgePath(), "embeddedWindow"); err != nil {
+		t.Fatal(err)
+	} else if on {
+		if ok, detail := bridgeFlag("embeddedWindow")(syn); !ok {
+			t.Errorf("synology embedded-window was refused, and the .spk carries and serves that bridge: %s", detail)
+		}
+	} else {
+		t.Errorf("apps/synology/frontend/platform.ts no longer opts in to embeddedWindow, so this test's only proof that a package-carried bundle can be accepted has gone. Re-point it at whatever now carries a bundle, or delete the claim")
+	}
+
+	// The refusal case, built from a bridge planted here rather than from
+	// one in the tree.
+	//
+	// It used to read apps/ugos/frontend/platform.ts and t.Skip when that
+	// file stopped opting in to embeddedWindow. apps/ugos belongs to EPIC
+	// D (#83), so the validity of a control on an EPIC B rule sat in
+	// another epic's file, and its retirement would have been a skip line
+	// nobody sees: `go test` prints nothing for a skip without -v. #204
+	// already fixed this exact pattern in scripts/architecture/selftest.sh
+	// by moving planted fixtures out of a real provider's directory, and
+	// this is the same move. The control's job is to prove the rule CAN
+	// fire; for that, a fixture nobody else can invalidate is strictly
+	// better than a real one.
+	unreachable := providerUnderTest{
+		id:        "selftest-unreachable-bridge",
+		spec:      Provider{Metadata: Metadata{Kind: "none"}},
+		canonical: canonical,
+		bridge:    plantBridge(t, "selftest-unreachable-bridge", true),
+	}
+	on, err := BridgeDeclaresCapability(unreachable.bridgePath(), "embeddedWindow")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !on {
-		t.Skip("apps/synology/frontend/platform.ts no longer opts in to embeddedWindow")
+		t.Fatal("the planted bridge does not read as opting in to embeddedWindow, so this control cannot exercise the refusal it exists for")
 	}
-	ok, detail := bridgeFlag("embeddedWindow")(syn)
+	ok, detail := bridgeFlag("embeddedWindow")(unreachable)
 	if ok {
-		t.Errorf("synology embedded-window passed on a bridge no shipped artifact loads")
+		t.Errorf("embedded-window passed on a bridge no shipped artifact loads: %s", detail)
 	}
-	if !strings.Contains(detail, "no shipped artifact loads it") || !strings.Contains(detail, "#180") {
-		t.Errorf("the refusal should name the gap and its issue, got: %s", detail)
+	if !strings.Contains(detail, "ships no deployable artifact") {
+		t.Errorf("the refusal should say that nothing is shipped at all, got: %s", detail)
+	}
+
+	// And the same shape on the real tree, kept because a synthetic
+	// fixture proves the rule can fire and says nothing about UGOS. Its
+	// premise is a Fatal rather than a Skip: if apps/ugos stops declaring
+	// the flag, that is a fact this test has to surface, and the planted
+	// control above means surfacing it costs no coverage.
+	ugos := providerUnderTest{id: "ugos", spec: conf.Providers["ugos"], canonical: canonical}
+	ugosOn, err := BridgeDeclaresCapability(ugos.bridgePath(), "embeddedWindow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ugosOn {
+		t.Fatal("apps/ugos/frontend/platform.ts no longer opts in to embeddedWindow (EPIC D #83 owns that file). The planted control above still proves the rule fires; update or drop these UGOS assertions deliberately rather than leaving them asserting nothing")
+	}
+	if ok, detail := bridgeFlag("embeddedWindow")(ugos); ok {
+		t.Errorf("ugos embedded-window passed on a bridge no shipped artifact loads: %s", detail)
 	}
 
 	// Store artifacts present plus the flag on is still not a pass while
-	// the bundle serving that flag is somebody else's.
-	if ok, detail := checkAppStorePackaging(syn); ok {
-		t.Errorf("synology app-store-packaging passed with an unreachable bridge: %s", detail)
+	// nothing loads the bridge that flag describes.
+	if ok, detail := checkAppStorePackaging(ugos); ok {
+		t.Errorf("ugos app-store-packaging passed with an unreachable bridge: %s", detail)
+	}
+
+	// The negative half of the planted control: the same fixture with the
+	// flag OFF must be refused for the flag rather than for reachability,
+	// so the refusal above is attributable to the artifact being missing
+	// and not to this checker refusing everything it is handed.
+	off := unreachable
+	off.bridge = plantBridge(t, "selftest-unreachable-bridge", false)
+	if ok, detail := bridgeFlag("embeddedWindow")(off); ok {
+		t.Errorf("a bridge that declares embeddedWindow: false passed: %s", detail)
+	} else if !strings.Contains(detail, "does not opt in") {
+		t.Errorf("a bridge with the flag off was refused for the wrong reason: %s", detail)
+	}
+
+	// And the sharp one: an adapter that DOES select a bundle from the
+	// image, but somebody else's. This is the shape a copy-pasted
+	// compose file takes, it produces a container that starts and serves
+	// a working-looking UI, and neither the store artifacts nor the
+	// bridge flag would notice.
+	wrong := SelectUIBundle(&Service{
+		Name:        "backup-manager-ui",
+		Command:     []string{"/backup-manager-web", "serve-ui", "--profile=truenas"},
+		Environment: map[string]string{"UI_ROOT": "/ui/bundles"},
+	}, UIBundleSelection{Mechanism: UIBundleNone}, "unraid")
+	if wrong.Provider != "truenas" {
+		t.Errorf("a Web UI selecting --profile=truenas resolved to %q; the selector reads the artifact, not the platform it was found under", wrong.Provider)
 	}
 }
 
@@ -551,7 +631,7 @@ func TestProxmoxProfileRefusesToStartWithAnUnsetHostPath(t *testing.T) {
 	}
 	compose := string(body)
 
-	hostPaths := []string{"STATE_DIR", "BACKUP_DIR", "CONFIG_FILE", "KEY_FILE", "KNOWN_HOSTS_FILE"}
+	hostPaths := []string{"STATE_DIR", "BACKUP_DIR", "CONFIG_DIR", "KEY_FILE", "KNOWN_HOSTS_FILE"}
 
 	// With nothing set, every host path must stop the deployment. A
 	// ${VAR:-default} would quietly resolve here, which is how a bind
@@ -871,4 +951,33 @@ func TestAcceptanceReadmeDoesNotContradictTheMatrix(t *testing.T) {
 	if findings := auditProseAgainstMatrix(honest, m); len(findings) > 0 {
 		t.Errorf("the audit read an explicit disclaimer as a claim: %s", strings.Join(findings, "; "))
 	}
+}
+
+// plantBridge writes a platform.ts under t.TempDir() in the shape
+// BridgeDeclaresCapability reads, and returns its path.
+//
+// It exists so a control over a bridge-derived rule owns its own fixture.
+// A control anchored on a real provider's bridge is only valid while that
+// provider keeps declaring the flag, and when the provider belongs to a
+// different epic that is a premise this repository does not control.
+func plantBridge(t *testing.T, id string, embeddedWindow bool) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "platform.ts")
+	body := fmt.Sprintf(`import { capabilities } from "@shared/platform/capabilities";
+import type { PlatformBridge } from "@shared/types/platform";
+
+/** Planted by distribution/packaging's own tests. Not a provider: nothing
+ *  builds, ships or installs this, which is exactly the property the
+ *  control needs. */
+export const plantedBridge: PlatformBridge = {
+  id: %q,
+  name: "planted fixture",
+  integration: "native",
+  capabilities: () => capabilities({ embeddedWindow: %t, appStorePackaging: true })
+};
+`, id, embeddedWindow)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("plant a bridge: %v", err)
+	}
+	return path
 }

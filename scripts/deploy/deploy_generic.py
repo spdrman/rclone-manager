@@ -62,7 +62,11 @@ COMPOSE_FILE = REPO_ROOT / "container" / "compose.yaml"
 
 # Fixed, in-container mount points - never a host path. Matches
 # container/compose.yaml's own documented volume shape exactly.
-CONTAINER_CONFIG_PATH = "/etc/backup-manager/config.yaml"
+# The configuration mount is the DIRECTORY, not the file inside it
+# (issue #196): the engine creates and atomically replaces config.yaml and
+# keeps ssh_keys/ and known_hosts.d/ beside it.
+CONTAINER_CONFIG_DIR = "/etc/backup-manager/config"
+CONTAINER_CONFIG_PATH = CONTAINER_CONFIG_DIR + "/config.yaml"
 CONTAINER_KEY_PATH = "/etc/backup-manager/id_ed25519"
 CONTAINER_KNOWN_HOSTS_PATH = "/etc/backup-manager/known_hosts"
 CONTAINER_STATE_DIR = "/data/state"
@@ -277,13 +281,13 @@ def render_env_file(args: argparse.Namespace) -> str:
     matching .env.example's own documented convention that this file
     "is not a secret: it only points at where secrets live on the
     host."""
-    config_path = str((Path(args.deploy_dir) / "config.yaml").resolve())
+    config_dir = str((Path(args.deploy_dir) / "config").resolve())
     lines = [
         f"PUID={args.puid}",
         f"PGID={args.pgid}",
         f"STATE_DIR={args.state_dir}",
         f"BACKUP_DIR={args.backup_dir}",
-        f"CONFIG_FILE={config_path}",
+        f"CONFIG_DIR={config_dir}",
         f"SSH_KEY_FILE={args.ssh_key}",
         f"KNOWN_HOSTS_FILE={args.known_hosts}",
         f"LISTEN_PORT={args.listen_port}",
@@ -331,7 +335,7 @@ def main(argv: list[str]) -> int:
         validate_known_hosts(args.known_hosts)
 
         deploy_dir = Path(args.deploy_dir)
-        config_path = deploy_dir / "config.yaml"
+        config_path = deploy_dir / "config" / "config.yaml"
         env_path = deploy_dir / ".env"
 
         _write_if_changed(config_path, render_config_yaml(args))

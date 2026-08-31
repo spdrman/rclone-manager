@@ -32,7 +32,7 @@ services:
   # network.
   backup-manager:
     image: ghcr.io/spdrman/backup-manager:1.0.0
-    command: ["/backup-manager-web", "serve"]
+    command: ["/backup-manager-web", "serve", "--profile=truenas"]
 
     user: "568:568"
     read_only: true
@@ -46,6 +46,11 @@ services:
 
     environment:
       TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so this is
+      # not cosmetic: leaving it at the image's UTC default means the
+      # days an operator reasons about and the ones the engine applies
+      # are silently different.
+      TZ: "UTC"
       LISTEN_ADDR: ":8080"
       # What the Web UI container's published port looks like from
       # outside this NAS. The engine prints the one-time enrollment link
@@ -63,11 +68,23 @@ services:
     volumes:
       - /mnt/tank/backup-manager/state:/data/state
       - /mnt/tank/backup-manager/backups:/data/backups
-      - /mnt/tank/backup-manager/config/config.yaml:/etc/backup-manager/config.yaml:ro
+      # A writable directory, with config.yaml inside it (issue
+      # #196). A read-only single-file mount is what this line used
+      # to be, and it made adding a backup set, saving settings and
+      # first-run setup fail at the write: all three replace
+      # config.yaml through a temp file created in its own
+      # directory, which on that shape is the image's read-only
+      # rootfs.
+      - /mnt/tank/backup-manager/config:/etc/backup-manager/config
       - /mnt/tank/backup-manager/secrets/id_ed25519:/etc/backup-manager/id_ed25519:ro
       - /mnt/tank/backup-manager/secrets/known_hosts:/etc/backup-manager/known_hosts:ro
 
     restart: unless-stopped
+    # The grace period the runtime shuts down inside, declared rather
+    # than left at Docker's own 10s default: the engine finishes the
+    # transfer or the delete it is in the middle of, and a default is not
+    # a contract.
+    stop_grace_period: 30s
     networks:
       - internal
 
@@ -76,7 +93,7 @@ services:
   # TrueNAS's Web Portal button should ever open.
   backup-manager-ui:
     image: ghcr.io/spdrman/backup-manager:1.0.0
-    command: ["/backup-manager-web", "serve-ui"]
+    command: ["/backup-manager-web", "serve-ui", "--profile=truenas"]
 
     depends_on:
       backup-manager:
@@ -94,8 +111,19 @@ services:
 
     environment:
       TMPDIR: "/tmp"
+      # Retention is evaluated against calendar boundaries, so this is
+      # not cosmetic: leaving it at the image's UTC default means the
+      # days an operator reasons about and the ones the engine applies
+      # are silently different.
+      TZ: "UTC"
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://backup-manager:8080"
+      # The per-provider UI bundles the canonical image carries. With
+      # `--profile=truenas` selected above, the bundle served is
+      # /ui/bundles/truenas, so an operator who installed through this
+      # platform's own mechanism sees that platform's bridge rather than
+      # being told this is a generic Docker deployment (issue #180).
+      UI_ROOT: "/ui/bundles"
 
     # No volumes at all. This container never reads config.yaml, the SSH
     # key, known_hosts, or either data directory: it serves its own
@@ -117,6 +145,9 @@ services:
       - "8080:8080"
 
     restart: unless-stopped
+    # Shorter than the engine's: the Web UI holds no state and has
+    # nothing to finish.
+    stop_grace_period: 15s
     networks:
       - internal
 

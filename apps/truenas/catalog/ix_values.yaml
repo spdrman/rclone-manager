@@ -9,8 +9,8 @@ storage:
     hostPath: "/mnt/tank/backup-manager/state"
   backups:
     hostPath: "/mnt/tank/backup-manager/backups"
-  config:
-    hostPath: "/mnt/tank/backup-manager/config/config.yaml"
+  configDir:
+    hostPath: "/mnt/tank/backup-manager/config"
   sshKey:
     hostPath: "/mnt/tank/backup-manager/secrets/id_ed25519"
   knownHosts:
@@ -22,3 +22,4 @@ network:
 runtime:
   puid: 568
   pgid: 568
+  timezone: "UTC"

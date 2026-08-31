@@ -134,14 +134,21 @@ func TestAnotherEpicsColumnCannotMovePhaseFoursVerdict(t *testing.T) {
 
 	// The positive control. The same change to a column EPIC B claims has
 	// to move the verdict, or the assertions above are satisfied by a
-	// verdict that measures nothing at all. Synology's embedded-window is
-	// blocked on #180 for the same shape of reason, so this is the
-	// identical flip one column over. It used to be Proxmox's
-	// release-manifest-integrity, blocked on #174; that one is fixed and
-	// now passes, which would have made this control silently prove
-	// nothing had it been left alone.
-	control := runMatrix(withCell(base, "synology", "embedded-window", Cell{Declared: DeclSupported}))
-	if got := control.Results["synology"]["embedded-window"].Outcome; got != OutcomeFail {
+	// verdict that measures nothing at all.
+	//
+	// The cell has moved twice, and for the same reason both times: a
+	// control planted on a cell that is blocked on an open issue stops
+	// proving anything the day that issue is fixed, silently, because the
+	// flip then resolves PASS and every assertion below it is satisfied
+	// by a check that no longer fails. It was Proxmox's
+	// release-manifest-integrity until #174 was fixed, then Synology's
+	// embedded-window until #169 shipped the provider bundles that made
+	// it real. Proxmox's app-store-packaging is the end of that road:
+	// unsupported not because nobody has built it yet, but because
+	// Proxmox VE has no third-party application store to package into at
+	// all, which is not a thing a later issue can close.
+	control := runMatrix(withCell(base, "proxmox", "app-store-packaging", Cell{Declared: DeclSupported}))
+	if got := control.Results["proxmox"]["app-store-packaging"].Outcome; got != OutcomeFail {
 		t.Fatalf("the control flip resolved %s, not %s, so the control proves nothing either", got, OutcomeFail)
 	}
 	controlled := control.Verdict(PhaseFourEpic)

@@ -43,10 +43,11 @@
   <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg</Icon>
   <Requires>Run `docker network create backup-manager` and install the backup-manager engine template before this one.</Requires>
   <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=16m,mode=1777,uid=99,gid=100 --user 99:100 --no-healthcheck</ExtraParams>
-  <PostArgs>/backup-manager-web serve-ui</PostArgs>
+  <PostArgs>/backup-manager-web serve-ui --profile=unraid</PostArgs>
   <DonateText/>
   <DonateLink/>
   <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="The only published port in this deployment. The engine container publishes nothing." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="UI bundle root" Target="UI_ROOT" Default="/ui/bundles" Mode="" Description="The per-provider UI bundles the canonical image carries. With --profile=unraid in PostArgs, the bundle served is /ui/bundles/unraid, so an app installed from Community Applications shows the Unraid bridge rather than telling you this is a generic Docker deployment (issue #180). Leave it as it is." Type="Variable" Display="advanced" Required="true" Mask="false">/ui/bundles</Config>
   <Config Name="TMPDIR" Target="TMPDIR" Default="/tmp" Mode="" Description="Go's temp directory. The rootfs is read-only, so this has to point at the tmpfs in ExtraParams." Type="Variable" Display="advanced" Required="true" Mask="false">/tmp</Config>
   <Config Name="Listen address" Target="LISTEN_ADDR" Default=":8080" Mode="" Description="This container's own bind address, always :8080 regardless of the host port above." Type="Variable" Display="advanced" Required="true" Mask="false">:8080</Config>
   <Config Name="Engine address" Target="UPSTREAM_ADDR" Default="http://backup-manager:8080" Mode="" Description="The engine container, by name, on the shared user-defined network. Docker's embedded DNS resolves this; the default bridge network would not." Type="Variable" Display="advanced" Required="true" Mask="false">http://backup-manager:8080</Config>

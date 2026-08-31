@@ -336,7 +336,7 @@ services:
     volumes:
       - "/host/state:/data/state"
       - "/host/backups:/data/backups"
-      - "/host/config.yaml:/etc/backup-manager/config.yaml:ro"
+      - "/host/config:/etc/backup-manager/config"
       - "/host/id_ed25519:/etc/backup-manager/id_ed25519:ro"
       - "/host/known_hosts:/etc/backup-manager/known_hosts:ro"
   backup-manager-ui:
