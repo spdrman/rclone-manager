@@ -78,6 +78,15 @@ type Journal interface {
 	ListByState(ctx context.Context, st string) ([]state.Record, error)
 	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
+
+	// ArtifactsWithAnyTransition is the set-wide form of LastTransition:
+	// which artifacts in one backup set have any of a given set of edges
+	// in the append-only log. BuildHealthReport needs it to report how
+	// many artifacts were reinstated out of quarantine and are therefore
+	// holding a remote source this manager will never delete (issue #227),
+	// once per backup set rather than once per artifact per edge on every
+	// status call and dashboard load.
+	ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error)
 }
 
 var _ Journal = (*state.Journal)(nil)

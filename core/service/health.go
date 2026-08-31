@@ -41,6 +41,23 @@ type BackupSetHealth struct {
 	QuarantinedCount     int
 	QuarantinedLostCount int
 
+	// ReinstatedRemoteRetainedCount is how many artifacts in this set were
+	// returned to service out of quarantine and still hold a remote source
+	// this manager has undertaken never to delete (issue #227). It only
+	// ever grows: the forfeiture is permanent by design, and releasing
+	// those remote copies is an operator decision made outside this
+	// manager.
+	//
+	// There is no bytes figure beside it, and that absence is deliberate
+	// rather than unfinished. See internal/health's own field doc: the
+	// only size this manager ever recorded for a remote object is what it
+	// measured at discovery, the object may since have been removed or
+	// replaced by its producer, and re-reading every one of them on every
+	// health call would be a network round trip per artifact against a
+	// source that may be unreachable. The honest answer is the count, and
+	// that the size is not known.
+	ReinstatedRemoteRetainedCount int
+
 	// FreeBytes is a live reading of the local destination's free space,
 	// and FreeBytesKnown is false when that reading could not be taken
 	// (the path does not exist yet, or the platform refused). A zero with
@@ -138,6 +155,8 @@ func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 		Failures:             bs.Failures,
 		QuarantinedCount:     bs.QuarantinedCount,
 		QuarantinedLostCount: bs.QuarantinedLostCount,
+
+		ReinstatedRemoteRetainedCount: bs.ReinstatedRemoteRetainedCount,
 	}
 	if bs.NewestGoodBackupAt != nil {
 		out.NewestGoodBackupAt = *bs.NewestGoodBackupAt

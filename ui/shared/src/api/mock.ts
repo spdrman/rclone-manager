@@ -3,7 +3,6 @@ import type {
   BackupManagerApi,
   CatalogScanPreview,
   ConnectionTestOutcome,
-  ConnectionTestParams,
   CreateBackupSetRequest,
   CreatedBackupSet,
   FirstRunResult,
@@ -533,7 +532,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       delay({ id: "key_mock_" + Math.random().toString(36).slice(2, 10), algorithm: "ssh-ed25519", fingerprint: mockImportedKeyFingerprint }),
     probeHostKey: (): Promise<HostKeyProbeResult> =>
       delay({ algorithm: "ssh-ed25519", fingerprint: mockProbedFingerprint, knownHostsLine: "mock-host.internal ssh-ed25519 AAAAC3NzaC1lZDI1NTE5mock" }),
-    testCandidateConnection: (_params: ConnectionTestParams): Promise<ConnectionTestOutcome> => delay({ ok: true }),
+    testCandidateConnection: (): Promise<ConnectionTestOutcome> => delay({ ok: true }),
 
     listArtifacts: (setId) =>
       delay(empty ? [] : ARTIFACTS.filter((a) => !a.quarantine && (!setId || a.setId === setId))),

@@ -108,6 +108,51 @@ type aggregate struct {
 	quarantinedLostCount  int
 }
 
+// countReinstatedRemoteRetained is issue #227's join: of the artifacts the
+// append-only transition log says were reinstated out of quarantine, how
+// many still have a remote source this manager has undertaken never to
+// delete.
+//
+// The two halves come from two different reads, and each is the only place
+// its half of the answer lives. Whether an artifact was reinstated is a
+// fact about its history, which only state_transitions holds (a re-trusted
+// artifact and one that was never distrusted both simply read COMMITTED),
+// and reinstated arrives here already answered by
+// lifecycle.ReinstatedArtifacts. Whether this manager has released the
+// remote source is a fact about the artifact's current row, which records
+// remote_deleted_at at the moment the delete was confirmed.
+//
+// An id with no record in this set is skipped rather than counted. The two
+// reads are separate queries against a live database, so a row can go
+// between them (a catalog rebuild, a retention pass), and a count of
+// something this pass cannot otherwise describe is worse than a count
+// that is one lower.
+func countReinstatedRemoteRetained(records []state.Record, reinstated []model.ArtifactID) int {
+	if len(reinstated) == 0 {
+		return 0
+	}
+	byID := make(map[model.ArtifactID]state.Record, len(records))
+	for _, r := range records {
+		byID[r.Artifact] = r
+	}
+
+	count := 0
+	for _, id := range reinstated {
+		r, ok := byID[id]
+		if !ok {
+			continue
+		}
+		// RemoteDeletedAt set means this manager confirmed the remote
+		// object gone and wrote the moment down. There is no source left
+		// for the forfeiture to preserve, so it is not being held.
+		if r.RemoteDeletedAt != nil {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 // parseRecordState converts a journal row's plain state string to a
 // lifecycle.State, per state.Record's contract that lifecycle owns that
 // vocabulary. A string the lifecycle package does not recognize (schema
@@ -197,11 +242,25 @@ func ageOf(at *time.Time, now time.Time) *time.Duration {
 
 // ComputeBackupSetHealth computes the backup-freshness half of FR-24 for
 // one backup set from its already-loaded journal rows (typically
-// state.Journal.ListByBackupSet), the set's configured stale_after
-// threshold, and the injected facts this package cannot derive on its own
-// (see BackupSetInputs). now is the caller's clock reading; pass the same
-// clock the journal timestamps were written against.
-func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, staleThreshold time.Duration, in BackupSetInputs, now time.Time) BackupSetHealth {
+// state.Journal.ListByBackupSet), the set's already-loaded reinstatement
+// history, the set's configured stale_after threshold, and the injected
+// facts this package cannot derive on its own (see BackupSetInputs). now
+// is the caller's clock reading; pass the same clock the journal
+// timestamps were written against.
+//
+// reinstated is every artifact in this set whose append-only transition
+// log contains one of lifecycle.ReinstatementEdges(), which is what
+// lifecycle.ReinstatedArtifacts returns and is the same population FR-15's
+// delete gate refuses. It is a parameter rather than a field on
+// BackupSetInputs on purpose: BackupSetInputs holds readings that can
+// legitimately be unavailable, where nil means "unknown" and the report
+// says so, but this one is a plain journal read the health pass already
+// has the database open for. There is no honest "unknown" for it, so a
+// caller that cannot make the read must fail its report rather than pass
+// nil (see internal/app's BuildHealthReport, which propagates the error) —
+// and making it a positional argument means a new call site has to say
+// something about it rather than silently inheriting a zero.
+func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reinstated []model.ArtifactID, staleThreshold time.Duration, in BackupSetInputs, now time.Time) BackupSetHealth {
 	agg := buildAggregate(records, staleThreshold, now)
 	st, reason := decideState(agg.evidence)
 
@@ -223,6 +282,8 @@ func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, stale
 
 		QuarantinedCount:     agg.quarantinedCount,
 		QuarantinedLostCount: agg.quarantinedLostCount,
+
+		ReinstatedRemoteRetainedCount: countReinstatedRemoteRetained(records, reinstated),
 
 		LastRetentionRunAt: in.LastRetentionRunAt,
 		FreeBytes:          in.FreeBytes,

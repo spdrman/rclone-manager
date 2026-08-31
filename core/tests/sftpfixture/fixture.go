@@ -51,6 +51,28 @@ const User = "backupuser"
 
 const containerUID = "1001"
 
+// serverImage is the SFTP server this fixture runs. Every place that names
+// the image reads it from here, so the presence check, the pull and the
+// `docker run` can never drift apart and start talking about two different
+// images.
+//
+// Deliberately a tag and not a digest, which #243 asked about. Pinning
+// atmoz/sftp@sha256:... would make the reference reproducible, and it would
+// also mean that every machine already holding the `alpine` tag has to go
+// back to Docker Hub once to fetch the pinned one: the registry round trip
+// this change exists to remove, arriving everywhere on the same day. What
+// it would buy is reproducibility this suite does not lean on. The fixture
+// never trusts the image's contents; it verifies the properties it needs
+// directly (that both host keys are the ones it mounted, that the chroot
+// and key-only login behave, that an unknown host key is refused), so a
+// moved tag surfaces as a red test rather than as a silent change of
+// behaviour. And the presence check below settles the tag in practice
+// anyway: whatever a machine pulled once is what it goes on using, because
+// nothing asks the registry again. If a genuinely fixed input is ever
+// wanted, the honest way to get it is to mirror the image somewhere we
+// control, not to pin a digest against a registry we do not.
+const serverImage = "atmoz/sftp:alpine"
+
 // Every subprocess this fixture starts gets a timeout, because the
 // deadline-bounded retry loops further down only re-read their deadline
 // BETWEEN attempts. One `docker` that never returns outruns all of them,
@@ -62,8 +84,14 @@ const (
 	// because answering it is the daemon's first job after a cold start.
 	dockerInfoTimeout = 60 * time.Second
 	// dockerPullTimeout is generous for the same reason a cold machine
-	// really does have to download the image.
+	// really does have to download the image. It bounds ONE attempt;
+	// pullBudget below bounds the retries together.
 	dockerPullTimeout = 5 * time.Minute
+	// imageInspectTimeout bounds the "is this image already here?" probe.
+	// That is a purely local question and the daemon answers it in
+	// milliseconds, so the allowance is for a busy daemon, never for a
+	// network round trip: nothing in this step is allowed to need one.
+	imageInspectTimeout = 30 * time.Second
 	// dockerRunTimeout covers creating and starting the container.
 	dockerRunTimeout = 90 * time.Second
 	// dockerProbeTimeout bounds the small, frequent calls (port, inspect,
@@ -82,6 +110,37 @@ const (
 	// only the first of them.
 	sshDialTimeout      = 2 * time.Second
 	sshHandshakeTimeout = 5 * time.Second
+)
+
+// What happens when the image is genuinely missing (#243). The registry
+// failures this fixture hit were all transient (a TLS handshake timeout
+// twice, an auth-token context deadline once), and all three fail an
+// attempt in well under a minute, so a couple of retries turn them into a
+// slightly slower run instead of a red gate.
+const (
+	// pullAttempts is how many times the fixture asks for the image before
+	// it gives up. Three, because the point is to ride out a blip and not
+	// to sit through a registry outage: a run that is going to fail should
+	// fail while somebody is still watching it.
+	pullAttempts = 3
+	// defaultPullBackoff is the base wait between attempts, multiplied by
+	// the attempt number, so the gaps are 3s and then 6s. Long enough for
+	// a TLS handshake or a token endpoint to recover, short enough that a
+	// doomed pull is done inside ten seconds of waiting.
+	defaultPullBackoff = 3 * time.Second
+	// pullBackoffEnv overrides defaultPullBackoff, as a Go duration, the
+	// same way budgetEnv and graceEnv override the watchdog. The fixture's
+	// own tests use it to keep a deliberate retry loop short; nothing else
+	// should.
+	pullBackoffEnv = "RCLONE_MANAGER_SFTP_PULL_BACKOFF"
+	// pullBudget bounds the retries TOGETHER, which is the part retrying a
+	// five-minute timeout three times would otherwise get wrong: fifteen
+	// minutes of silence is not a fix for a gate that fails on network
+	// weather, it is a worse version of it. One legitimately slow first
+	// download still gets its full dockerPullTimeout and simply leaves no
+	// room for a retry it does not need, while a registry that is timing
+	// out burns a few seconds per attempt and fits three of them easily.
+	pullBudget = 6 * time.Minute
 )
 
 // The mid-test watchdog. Setup was never the gap: the gap is that once
@@ -248,21 +307,18 @@ func Start(t *testing.T) *Fixture {
 	must(t, os.Chmod(uploadDir, 0o777), "chmod upload dir")
 	f.UploadDir = uploadDir
 
-	// Pull explicitly, before "docker run -d", so the run step itself is
-	// quiet regardless of whether the image was already cached on this
-	// machine. Belt and braces alongside dockerCapture's stdout/stderr
-	// separation above: a quiet run has nothing to accidentally mix into the
-	// container ID even if some future docker version starts writing
-	// something else to stdout during "run".
 	// Reclaim anything a previously KILLED run left behind (#150) before
 	// adding one more. Once per test binary, best effort, never fatal.
 	f.setStage("dockerlease.Sweep (reclaiming containers a killed run left behind)")
 	dockerlease.Sweep()
 
-	f.setStage("docker pull atmoz/sftp:alpine")
-	if _, err := dockerCapture(t, dockerPullTimeout, "pull", "atmoz/sftp:alpine"); err != nil {
-		t.Fatalf("sftpfixture: docker pull atmoz/sftp:alpine: %v", err)
-	}
+	// Get the image in hand before "docker run -d", so the run step itself
+	// is quiet regardless of whether this machine had it already. Belt and
+	// braces alongside dockerCapture's stdout/stderr separation above: a
+	// quiet run has nothing to accidentally mix into the container ID even
+	// if some future docker version starts writing something else to
+	// stdout during "run".
+	f.ensureImage(t, serverImage)
 
 	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
 	f.mu.Lock()
@@ -279,10 +335,10 @@ func Start(t *testing.T) *Fixture {
 		"-v", hostKeyRSA + ".pub:/etc/ssh/ssh_host_rsa_key.pub:ro",
 		"-v", authorizedDir + ":/home/" + User + "/.ssh/keys:ro",
 		"-v", uploadDir + ":/home/" + User + "/upload",
-		"atmoz/sftp:alpine",
+		serverImage,
 		User + "::" + containerUID + ":" + containerUID + ":upload",
 	}
-	f.setStage("docker run atmoz/sftp:alpine")
+	f.setStage("docker run " + serverImage)
 	containerID, err := dockerCapture(t, dockerRunTimeout, args...)
 	if err != nil {
 		t.Fatalf("sftpfixture: docker run: %v", err)
@@ -382,6 +438,79 @@ func (e *ContainerDiedError) Error() string {
 		logs = "\ncontainer logs (tail):\n" + e.Logs
 	}
 	return fmt.Sprintf("the fixture container %s (%s) died mid-test: docker status %q, exit code %d%s%s", e.Name, e.ID, e.Status, e.ExitCode, oom, logs)
+}
+
+// --- the image ------------------------------------------------------------
+
+// ensureImage puts ref on the local daemon before anything tries to run a
+// container from it, and refuses the run when it cannot.
+//
+// The shape here is the whole of #243. Until this existed the fixture ran
+// `docker pull` unconditionally on every start, so every gate run on every
+// branch, on a machine that already held the image, still needed Docker Hub
+// to answer right then. Three runs in one campaign died on that: twice a
+// TLS handshake timeout, once an auth token that never came. None of them
+// had anything to do with the change under test, and each surfaced at the
+// verdict line as a repository-structure dependency failure, because the
+// deletion proof re-runs core's suite with apps/ removed and this fixture
+// is inside it. A gate that fails on network weather teaches its readers to
+// re-run rather than read, and that is how a genuine failure eventually
+// gets waved through.
+//
+// So: ask the daemon first, and skip the pull when the image is already
+// there. A pinned tag sitting on a local daemon does not need re-fetching
+// to start a container from it.
+//
+// The other half matters more than the first. When the image is genuinely
+// missing and cannot be fetched, this FAILS, and it must keep failing. The
+// obliging version of this function skips instead, on the reasoning that a
+// machine without the image cannot be expected to run the suite, and that
+// version is strictly worse than the bug it replaces: it converts a loud
+// environmental failure into silently missing coverage, with the gate still
+// printing ok. That is the exact hole issue #160 was opened about and the
+// reason `docker info` timing out a few lines above is fatal rather than a
+// skip. A fixture that cannot stand up refuses.
+func (f *Fixture) ensureImage(t *testing.T, ref string) {
+	t.Helper()
+
+	f.setStage("docker image inspect " + ref)
+	if _, _, err := dockerRun(imageInspectTimeout, "image", "inspect", ref); err == nil {
+		f.setStage(ref + " is already on this daemon, so nothing is pulled")
+		return
+	}
+
+	backoff := durationFromEnv(pullBackoffEnv, defaultPullBackoff)
+	deadline := time.Now().Add(pullBudget)
+	started := time.Now()
+
+	var lastErr error
+	made := 0
+	for attempt := 1; attempt <= pullAttempts; attempt++ {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		timeout := dockerPullTimeout
+		if remaining < timeout {
+			timeout = remaining
+		}
+
+		f.setStage(fmt.Sprintf("docker pull %s (attempt %d of %d)", ref, attempt, pullAttempts))
+		made++
+		_, stderr, err := dockerRun(timeout, "pull", ref)
+		if err == nil {
+			return
+		}
+		lastErr = fmt.Errorf("attempt %d of %d: %w\n%s", attempt, pullAttempts, err, stderr)
+
+		if attempt < pullAttempts {
+			time.Sleep(time.Duration(attempt) * backoff)
+		}
+	}
+
+	t.Fatalf("sftpfixture: %s is not on this daemon and %d pull attempt(s) over %s could not fetch it, so this suite cannot run here.\n"+
+		"That is a FAILURE and deliberately not a skip: skipping would take the whole SFTP suite out of the gate while the gate went on reporting ok, which is the silent hole #160 exists to close. Put the image on this daemon, or fix the registry access, and run again.\n"+
+		"last error: %v", ref, made, time.Since(started).Round(time.Second), lastErr)
 }
 
 // --- the mid-test watchdog ------------------------------------------------

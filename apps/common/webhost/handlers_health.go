@@ -44,6 +44,22 @@ type backupSetHealthResponse struct {
 	QuarantinedCount     int `json:"quarantined_count"`
 	QuarantinedLostCount int `json:"quarantined_lost_count"`
 
+	// ReinstatedRemoteRetainedCount is how many backups here were
+	// re-trusted after quarantine and still hold a remote source this
+	// manager has undertaken never to delete (issue #227). It is NOT
+	// omitempty: a zero is a real reading here, and an absent field would
+	// read as "this build does not know", which is the state this issue
+	// exists to end.
+	//
+	// There is no bytes figure beside it on purpose. This manager measured
+	// those remote objects once, at discovery, and FR-8 treats remote
+	// metadata as untrusted precisely because it may have changed since;
+	// the reason the delete gate refuses at all is that the remote's
+	// identity usually cannot be re-established with confidence. So the
+	// count is served and the size is not, rather than a plausible sum
+	// nobody has looked at.
+	ReinstatedRemoteRetainedCount int `json:"reinstated_remote_retained_count"`
+
 	// FreeBytes is omitted when the reading could not be taken, and
 	// FreeBytesKnown says which case a zero is. A bare 0 would read as
 	// "the disk is full", which is the one thing an unavailable reading
@@ -104,9 +120,11 @@ func toBackupSetHealthResponse(bs service.BackupSetHealth) backupSetHealthRespon
 		Failures:              bs.Failures,
 		QuarantinedCount:      bs.QuarantinedCount,
 		QuarantinedLostCount:  bs.QuarantinedLostCount,
-		FreeBytes:             bs.FreeBytes,
-		FreeBytesKnown:        bs.FreeBytesKnown,
-		TotalBytes:            bs.TotalBytes,
-		StorageLevel:          bs.StorageLevel,
+
+		ReinstatedRemoteRetainedCount: bs.ReinstatedRemoteRetainedCount,
+		FreeBytes:                     bs.FreeBytes,
+		FreeBytesKnown:                bs.FreeBytesKnown,
+		TotalBytes:                    bs.TotalBytes,
+		StorageLevel:                  bs.StorageLevel,
 	}
 }

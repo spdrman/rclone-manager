@@ -14,6 +14,54 @@ import (
 // anything. If one of them ever needs an `if` about thresholds, freshness
 // or trust, that logic belongs in the package that owns the fact (see
 // this package's doc).
+//
+// # Why reinstated-remote retention is NOT a fifth condition (issue #227)
+//
+// health.BackupSetHealth now carries ReinstatedRemoteRetainedCount: how
+// many artifacts were re-trusted out of quarantine and therefore hold a
+// remote source internal/lifecycle's FR-15 gate will refuse to delete for
+// as long as the deployment lives. It has the shape of something alertable
+// (it is storage pressure, and CriticalStoragePressure already exists),
+// and it is deliberately not one. Four reasons, in the order they decide
+// it:
+//
+//  1. An alert asks a question this manager cannot answer. The pressure is
+//     on the SOURCE machine's disk, and nothing here measures that:
+//     internal/capacity assesses the backup set's local DESTINATION,
+//     against thresholds an operator set for that filesystem. Any
+//     threshold on the count alone would be a number of artifacts standing
+//     in for an amount of storage nobody has measured, on a volume of
+//     unknown size. That is a threshold with no reasoning behind it, which
+//     is worse than no alert.
+//
+//  2. It can never resolve, so this package's model does not fit it.
+//     Dispatcher's whole contract is that a condition fires once, stays
+//     silent while it remains true, and is forgotten when it stops being
+//     observed so a genuine recurrence alerts again. The forfeiture is
+//     permanent by design and the count is monotone, so such a condition
+//     would fire exactly once, per backup set, for the life of the
+//     process, and then be silent forever. That is no better than the
+//     sentence the operator already reads at the moment they reinstate,
+//     which is precisely the gap issue #227 opened against.
+//
+//  3. It fires at the wrong moment. The operator learns nothing at
+//     reinstatement time that the reinstatement response did not already
+//     tell them; what they lack is the answer a month later, and an
+//     interruption is not how you serve a question asked later. FR-24's
+//     report, the `status` command and the Prometheus gauge all are: a
+//     scrape in particular is the one surface that shows the SLOPE, which
+//     is the actual signal here ("this population is growing and nobody is
+//     watching") rather than "it is non-zero".
+//
+//  4. §71 says do not add a broad notification framework in v1, and
+//     mechanism_test.go pins the vocabulary to exactly four conditions so
+//     a fifth takes a deliberate edit. This is the kind of signal that
+//     edit exists to stop: real, worth surfacing, and not an incident.
+//
+// If a later change gives this manager a genuine reading of source-side
+// capacity, the threshold argument in (1) changes and this is worth
+// revisiting. Until then the count belongs in the report, not in a
+// notification.
 
 // BackupSetConditions returns the conditions h implies. h comes straight
 // from internal/health.ComputeBackupSetHealth, so the four FR-24 states
