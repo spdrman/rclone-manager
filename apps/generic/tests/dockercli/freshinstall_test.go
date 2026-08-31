@@ -14,6 +14,15 @@
 // seeded HEALTHY (workingRemoteConfig, and its own doc says why it has
 // to be).
 //
+// # What "a fresh install" means here
+//
+// Literally what an app-store install produces and nothing softened: an
+// EMPTY configuration directory with no config.yaml in it, an empty state
+// directory, an empty backup directory, and no backup ever run. The
+// engine serves the first-run setup flow in that state and
+// `backup-manager status` exits non-zero in it, which is the pair the
+// defect lived in.
+//
 // Two tests, and the second is what gives the first its meaning. The
 // first brings up a genuinely fresh install and requires the web UI to
 // serve. The second puts the old health verdict back as the engine's
@@ -29,29 +38,33 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// freshInstallConfig is a fresh install exactly as the shipped
-// acceptance procedures leave one: step 0 writes config.yaml into the
-// configuration DIRECTORY (issue #196), the state directory is empty,
-// the backup directory is empty, and no backup set has ever run.
+// freshInstall lays out the host side of a fresh install: an EMPTY
+// configuration directory, an empty state directory and an empty backup
+// directory, with the two key files the canonical definition mounts
+// read-only present but empty.
 //
-// `backup-manager status` is non-zero in that state and is supposed to
-// be: nothing has been backed up, so nothing is fresh. That is the whole
-// of #206. The fixture deliberately does NOT seed an artifact the way
-// workingRemoteConfig does, because seeding one is what hid the defect.
-func freshInstallConfig(t *testing.T) (dir string) {
+// No config.yaml, deliberately. A bind mount cannot express "not there
+// yet" for a file (Docker creates a directory at a source path that does
+// not exist), which is why the configuration mount is a directory at all,
+// and an empty directory is the only honest shape for an install nobody
+// has configured. The engine serves the first-run setup flow from it, and
+// `backup-manager status` exits non-zero, which every test below reads
+// back rather than assumes.
+func freshInstall(t *testing.T) (dir string) {
 	t.Helper()
 	dir = t.TempDir()
-	// 0o777 for the same reason degradedConfig uses it: the runtime
-	// image runs as a fixed non-root uid that does not own a
-	// t.TempDir() subdirectory, and on a Linux daemon that is a hard
-	// permission failure rather than the leniency a macOS Docker Desktop
-	// daemon shows. See degradedConfig's own comment.
-	for _, sub := range []string{"state", "backups", filepath.Join("backups", "remote"), filepath.Join("backups", "local"), "config"} {
+	// 0o777 for the same reason degradedConfig uses it: the runtime image
+	// runs as a fixed non-root uid that does not own a t.TempDir()
+	// subdirectory, and on a Linux daemon that is a hard permission
+	// failure rather than the leniency a macOS Docker Desktop daemon
+	// shows. See degradedConfig's own comment.
+	for _, sub := range []string{"state", "backups", "config"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o777); err != nil {
 			t.Fatalf("MkdirAll %s: %v", sub, err)
 		}
@@ -59,37 +72,35 @@ func freshInstallConfig(t *testing.T) (dir string) {
 			t.Fatalf("Chmod %s: %v", sub, err)
 		}
 	}
-
-	// The same shape workingRemoteConfig writes, minus the seeded
-	// artifact, plus a one-second staleness window so the set is
-	// unambiguously not fresh the moment the engine reads it rather than
-	// eventually. remote_path and local_path both live under
-	// /data/backups because that is the one writable directory
-	// container/compose.yaml actually mounts.
-	config := "" +
-		"poll_interval: 1h\n" +
-		"state:\n" +
-		"  database: /data/state/state.db\n" +
-		"sources:\n" +
-		"  - id: production\n" +
-		"    backup_sets:\n" +
-		"      - id: never-backed-up\n" +
-		"        remote:\n" +
-		"          type: local\n" +
-		"        remote_path: /data/backups/remote\n" +
-		"        local_path: /data/backups/local\n" +
-		"        include:\n" +
-		"          - \"*.dump\"\n" +
-		"        completion:\n" +
-		"          strategy: rename\n" +
-		"        stale_after: 1s\n" +
-		"retention:\n" +
-		"  timezone: UTC\n" +
-		"  week_starts_on: monday\n"
-	if err := os.WriteFile(filepath.Join(dir, "config", "config.yaml"), []byte(config), 0o644); err != nil {
-		t.Fatalf("WriteFile config.yaml: %v", err)
+	// The engine only ever reads these two, and the canonical definition
+	// mounts them read-only as single files, so they have to exist as
+	// files or Docker creates directories in their place. Empty is right:
+	// this suite's stacks never open an SFTP connection.
+	for _, f := range []string{"id_ed25519", "known_hosts"} {
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o644); err != nil {
+			t.Fatalf("WriteFile %s: %v", f, err)
+		}
 	}
 	return dir
+}
+
+// freshInstallEnvFile is composeEnvFile pointed at a fixture with no
+// config.yaml in it. Separate rather than a parameter because the two
+// fixtures differ in exactly one claim: whether the deployment has been
+// configured at all.
+func freshInstallEnvFile(t *testing.T, dir string, listenPort int) string {
+	t.Helper()
+	envPath := filepath.Join(dir, ".env")
+	content := "STATE_DIR=" + filepath.Join(dir, "state") + "\n" +
+		"BACKUP_DIR=" + filepath.Join(dir, "backups") + "\n" +
+		"CONFIG_DIR=" + filepath.Join(dir, "config") + "\n" +
+		"SSH_KEY_FILE=" + filepath.Join(dir, "id_ed25519") + "\n" +
+		"KNOWN_HOSTS_FILE=" + filepath.Join(dir, "known_hosts") + "\n" +
+		"LISTEN_PORT=" + strconv.Itoa(listenPort) + "\n"
+	if err := os.WriteFile(envPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile .env: %v", err)
+	}
+	return envPath
 }
 
 // statusExitCode runs `backup-manager status` inside a running container
@@ -137,9 +148,12 @@ func containerState(t *testing.T, id string) string {
 // serves.
 func TestComposeStack_FreshInstallBringsUpTheWebUI(t *testing.T) {
 	image := buildImage(t)
-	dir := freshInstallConfig(t)
+	dir := freshInstall(t)
 
-	project := mustStartComposeStack(t, image, 0, dir)
+	project, out, err := upComposeFiles(t, image, freshInstallEnvFile(t, dir, 0), canonicalComposeFiles(t))
+	if err != nil {
+		t.Fatalf("docker compose up on a fresh install: %v\n%s", err, out)
+	}
 
 	engineID := project.containerID(t, "rclone-manager")
 
@@ -258,10 +272,10 @@ func statusGateOverride(t *testing.T, dir string) string {
 // asking about backup freshness.
 func TestComposeStack_TheBackupFreshnessVerdictAsAStartGateKeepsTheWebUIDown(t *testing.T) {
 	image := buildImage(t)
-	dir := freshInstallConfig(t)
+	dir := freshInstall(t)
 	override := statusGateOverride(t, dir)
 
-	project, out, err := upComposeStack(t, image, 0, dir, override)
+	project, out, err := upComposeFiles(t, image, freshInstallEnvFile(t, dir, 0), canonicalComposeFiles(t, override))
 	if err == nil {
 		t.Fatalf("`docker compose up -d` succeeded with `backup-manager status` as the engine's start gate on a fresh install, so this control cannot see the defect it exists to reproduce:\n%s", out)
 	}

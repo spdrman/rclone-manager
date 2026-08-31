@@ -755,16 +755,21 @@ func mustStartComposeStack(t *testing.T, image string, listenPort int, dir strin
 // leak a container per run.
 func upComposeStack(t *testing.T, image string, listenPort int, dir string, extraComposeFiles ...string) (*composeProject, string, error) {
 	t.Helper()
-	files := append([]string{filepath.Join(repoRoot(t), "container", "compose.yaml")}, extraComposeFiles...)
-	return upComposeFiles(t, image, listenPort, dir, files)
+	return upComposeFiles(t, image, composeEnvFile(t, dir, listenPort), canonicalComposeFiles(t, extraComposeFiles...))
 }
 
-// upComposeFiles is upComposeStack over an explicit `-f` list, for the
-// tests that drive an adapter's own runtime definition rather than the
-// canonical one.
-func upComposeFiles(t *testing.T, image string, listenPort int, dir string, files []string) (*composeProject, string, error) {
+// canonicalComposeFiles is the `-f` list for the canonical runtime
+// definition, with any override files appended in the order given.
+func canonicalComposeFiles(t *testing.T, overrides ...string) []string {
 	t.Helper()
-	envFile := composeEnvFile(t, dir, listenPort)
+	return append([]string{filepath.Join(repoRoot(t), "container", "compose.yaml")}, overrides...)
+}
+
+// upComposeFiles is upComposeStack over an explicit `-f` list and an
+// explicit env file, for the tests whose fixture is not the seeded,
+// already-healthy one composeEnvFile assumes.
+func upComposeFiles(t *testing.T, image, envFile string, files []string) (*composeProject, string, error) {
+	t.Helper()
 
 	p := &composeProject{
 		name:    "backup-manager-dockercli-" + sanitizeProjectName(t.Name()),

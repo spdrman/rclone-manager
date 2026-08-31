@@ -181,6 +181,47 @@ func TestTheBackupFreshnessVerdictIsRefusedAsAnEngineStartGate(t *testing.T) {
 	}
 }
 
+// TestTheStartOrderingGateIsActuallySeenInTheAdaptersThatDeclareIt is the
+// parse's own control, and without it the rule above is inert.
+//
+// The engine's inherited-check refusal only fires when something waits on
+// the engine's health. A depends_on parse that quietly returned nothing
+// would leave every adapter passing for the reason Unraid passes, with no
+// symptom anywhere: a rule that fires on nothing looks exactly like a rule
+// nothing violates. So this asserts the gate is really seen, in every
+// adapter that really declares one.
+//
+// The discriminator is the FORMAT, not a platform name. An Unraid Docker
+// template has no start-ordering key at all, so there is nothing there to
+// read; every Compose artifact has one and uses it.
+func TestTheStartOrderingGateIsActuallySeenInTheAdaptersThatDeclareIt(t *testing.T) {
+	c := canonicalForTest(t)
+
+	seen := 0
+	for _, p := range allPlatforms() {
+		for _, art := range adapterRuntimes(t, p, c) {
+			a := art.rt
+			waits := waitingOnHealthOf(a, a.Engine.Name)
+			isCompose := strings.Contains(a.WebUI.Source, ".yml") || strings.Contains(a.WebUI.Source, ".yaml")
+			switch {
+			case isCompose && len(waits) == 0:
+				t.Errorf("%s (%s) is a Compose runtime definition whose Web UI declares no `depends_on: %s: condition: service_healthy`; either the adapter dropped the start gate or the parse cannot see it, and both make the engine health rule fire on nothing",
+					p.name, art.name, a.Engine.Name)
+			case isCompose:
+				seen++
+				if len(waits) != 1 || waits[0] != a.WebUI.Name {
+					t.Errorf("%s (%s): %v waits on the engine's health, want exactly the Web UI service %q", p.name, art.name, waits, a.WebUI.Name)
+				}
+			case len(waits) != 0:
+				t.Errorf("%s (%s) is not a Compose definition and yet %v was read as waiting on the engine's health; that key does not exist in this format", p.name, art.name, waits)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no adapter was seen to gate its Web UI start on the engine's health, so the rule that makes an inherited engine check a defect can never fire")
+	}
+}
+
 // TestTheEngineMayInheritTheImageCheckOnlyWhereNothingWaitsOnIt is the
 // negative assertion's positive control, on one fixture, in both
 // directions.
