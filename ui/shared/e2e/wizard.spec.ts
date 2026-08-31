@@ -109,7 +109,29 @@ test.describe("add backup set wizard", () => {
     await page.getByRole("button", { name: "Storage & retention" }).click();
     await expect(page.getByRole("checkbox", { name: /Transfer verification/ })).toBeChecked();
     await expect(page.getByRole("checkbox", { name: /Checksum verification/ })).toBeChecked();
-    await expect(page.getByRole("checkbox", { name: /Application validation/ })).not.toBeChecked();
+
+    // The third layer stopped being a checkbox in #164, which replaced the
+    // decorative "Application validation" toggle with a real picklist over
+    // the backend's registered catalog (GET /api/v1/validators). It is a
+    // combobox now, so the old getByRole("checkbox") matched nothing and
+    // this assertion could only ever time out.
+    const validator = page.getByRole("combobox", { name: /Application validation/ });
+    // Enabled is the real signal that the catalog fetch settled:
+    // BackupSetWizardPage disables the picklist while validatorCatalog is
+    // null and leaves it disabled if the fetch failed. Waiting on that
+    // instead of a sleep also means a catalog that never loads fails here
+    // rather than passing on an empty list.
+    await expect(validator).toBeEnabled();
+    // Off by default, same contract the removed toggle carried: transfer and
+    // checksum verification are on, application validation is opt-in.
+    await expect(validator).toHaveValue("");
+    const options = validator.getByRole("option");
+    await expect(options.first()).toHaveText("None (transfer and checksum verification only)");
+    // ...and the choices below it come from the backend's catalog rather than
+    // a hardcoded list. Counted, not enumerated, so adding a validator to the
+    // mock fixture does not turn this red. Safe to read without retrying:
+    // toBeEnabled() above already proved the fetch settled.
+    expect(await options.count()).toBeGreaterThan(1);
   });
 
   test("step 6 summarises source, destination, retention and validation", async ({ page }) => {

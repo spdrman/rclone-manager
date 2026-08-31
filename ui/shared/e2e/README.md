@@ -37,3 +37,11 @@ npm run e2e:all-providers       # provider treatment across all seven
   there, not inline in specs.
 - Provider specs assert *capability honesty* — that the UI never presents an
   unsupported capability as available — not visual difference.
+- Wait on a real signal (an element, a settled fetch, a control leaving its
+  disabled state), never on `waitForTimeout`. See #142, and see the
+  `toBeEnabled()` gate in `wizard.spec.ts`'s validator picklist assertion.
+- The suite starts its own Vite server on port 5273 and never adopts one it
+  did not start, so a `npm run dev` you already have open on 5173 is left
+  alone and can never be what the suite tests. Two checkouts running the suite
+  at once need `E2E_PORT` set on one of them; without it the second run fails
+  to bind and says so, which is the point (#172).
