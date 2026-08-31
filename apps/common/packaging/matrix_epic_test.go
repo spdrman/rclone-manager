@@ -134,11 +134,14 @@ func TestAnotherEpicsColumnCannotMovePhaseFoursVerdict(t *testing.T) {
 
 	// The positive control. The same change to a column EPIC B claims has
 	// to move the verdict, or the assertions above are satisfied by a
-	// verdict that measures nothing at all. Proxmox's
-	// release-manifest-integrity is blocked on #174 for the same shape of
-	// reason, so this is the identical flip one column over.
-	control := runMatrix(withCell(base, "proxmox", "release-manifest-integrity", Cell{Declared: DeclSupported}))
-	if got := control.Results["proxmox"]["release-manifest-integrity"].Outcome; got != OutcomeFail {
+	// verdict that measures nothing at all. Synology's embedded-window is
+	// blocked on #180 for the same shape of reason, so this is the
+	// identical flip one column over. It used to be Proxmox's
+	// release-manifest-integrity, blocked on #174; that one is fixed and
+	// now passes, which would have made this control silently prove
+	// nothing had it been left alone.
+	control := runMatrix(withCell(base, "synology", "embedded-window", Cell{Declared: DeclSupported}))
+	if got := control.Results["synology"]["embedded-window"].Outcome; got != OutcomeFail {
 		t.Fatalf("the control flip resolved %s, not %s, so the control proves nothing either", got, OutcomeFail)
 	}
 	controlled := control.Verdict(PhaseFourEpic)

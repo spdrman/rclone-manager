@@ -26,10 +26,11 @@ import (
 // NOT claimed here: core binary HASH parity. Nothing in this package
 // derives a hash from anything. TestArchitectureParityAndRecordedBinaryHashes
 // checks that container/release-manifest.json records a non-empty SHA-256
-// for each binary on each architecture, which cannot detect a stale hash,
-// a mismatch, or a manifest describing a build nobody can reach, and issue
-// #174 records that the manifest currently pins a commit that is not an
-// ancestor of main. A gate item marked as covered by a check that cannot
+// for each binary on each architecture, which cannot detect a stale hash
+// or a mismatch. It no longer covers for a manifest describing a build
+// nobody can reach: issue #174 fixed that, and release-manifest-integrity
+// now decides reachability on every run. Reachable is not compared,
+// though. A gate item marked as covered by a check that cannot
 // fail for the reason the item names is worse than an unclaimed gap,
 // because it stops anyone looking. The only place binary hashes are
 // verified against real bytes is `spkctl verify` against a built .spk in

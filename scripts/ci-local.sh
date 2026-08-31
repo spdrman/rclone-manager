@@ -222,6 +222,9 @@ if [ "$FAST" != "1" ]; then
 fi
 
 if [ "$FAST" != "1" ]; then
+  gate_step "release-manifest generator guards (#174)"
+  bash scripts/tests/record-release-hashes-guards.test.sh
+
   # The self-test runs this very script against synthetic checkouts, so
   # without a marker the recursion terminates only by whatever the fixture
   # happens to lack. CI_LOCAL_SELFTEST makes that an enforced invariant

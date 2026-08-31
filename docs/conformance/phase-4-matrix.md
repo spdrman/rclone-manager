@@ -58,18 +58,23 @@ fix. What it is not is a Phase 4 result.
 
 ## What is blocking today
 
-- **#174** — `container/release-manifest.json` pins commit `c51a07f`, which is not
-  an ancestor of `main` after the squash-merge rewrite, so its hashes describe a
-  build that is not in this history. That is what `release-manifest-integrity`
-  reports, for all seven providers, because it is a repository-wide fact and this
-  table says so rather than dressing it up as seven measurements. The separate
-  per-provider row, `core-binary-hash-parity`, asks a different question: do the
-  binaries THIS provider ships hash to what the manifest recorded? No provider
-  checks a binary into this repository, so that row is `N/A` everywhere except
-  Synology, whose `.spk` really is hashed against the manifest by
-  `TestVerify_BinaryHashParity` in `apps/synology`'s own module, and UGOS, which
-  is meant to ship an artifact and does not yet. Neither row can go green without
-  the comparison it names actually happening.
+- **#174 is fixed.** `container/release-manifest.json` used to pin `c51a07f`, a
+  feature-branch commit a squash merge had rewritten out of `main`, so its hashes
+  described a build nobody could reproduce and `release-manifest-integrity` was
+  `BLOCKED` in all seven columns. The manifest was regenerated from a real
+  two-architecture build of `container/Dockerfile` at `8ad3100`, which is on
+  `main`, so that row is now `PASS` everywhere. Two things keep it that way:
+  `scripts/release/record-release-hashes.sh` refuses to record a commit that is
+  not already an ancestor of `origin/main`, and
+  `TestReleaseManifestPinsACommitThisHistoryCanReach` asks the ancestry question
+  outside the declaration machinery, so the row cannot be re-declared `BLOCKED`
+  back into silence. The separate per-provider row, `core-binary-hash-parity`,
+  asks a different question: do the binaries THIS provider ships hash to what the
+  manifest recorded? No provider checks a binary into this repository, so that row
+  is `N/A` everywhere except Synology, whose `.spk` really is hashed against the
+  manifest by `TestVerify_BinaryHashParity` in `apps/synology`'s own module, and
+  UGOS, which is meant to ship an artifact and does not yet. That row still
+  needs the comparison it names to actually happen.
 - **#180** — `ui/shared/vite.config.ts` picks the frontend shell at build time
   from `VITE_PLATFORM`, defaulting to `generic`, and `serve-ui` serves one
   `go:embed`ed bundle. Nothing in the release build selects a provider, so every
@@ -83,8 +88,8 @@ fix. What it is not is a Phase 4 result.
   cells are `BLOCKED` rather than passing. Those blockers are EPIC D's, and the
   Phase 4 Exit Gate below is not computed over them.
 
-What holds the Phase 4 Exit Gate open, then, is `#174` and `#180`, and both are
-EPIC B's own work. No cell of the six providers EPIC B claims fails: the suite
+What holds the Phase 4 Exit Gate open, then, is `#180`, and it is EPIC B's own
+work. No cell of the six providers EPIC B claims fails: the suite
 reddens the build if one does, so a `FAIL` in the table below cannot survive
 long enough to be read here. The generated **Phase 4 Exit Gate** section states
 the verdict over those six, and lists every cell holding it open with the issue
@@ -118,7 +123,7 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | Provider identified correctly | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Provider package metadata present | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
 | Uses the exact canonical image | BLOCKED | N/A | PASS | PASS | N/A | PASS | PASS |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| Release manifest well-formed and reachable (repository-wide) | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Core binary hash parity (this provider's own shipped bytes) | BLOCKED | N/A | N/A | N/A | N/A | N/A | N/A |
 | This provider's own architecture claim matches the build | BLOCKED | PASS | N/A | N/A | N/A | N/A | N/A |
 | State path persists outside the container | BLOCKED | N/A | PASS | PASS | PASS | PASS | PASS |
@@ -143,35 +148,29 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 
 | Outcome | Cells |
 |---|---|
-| PASS | 66 |
+| PASS | 73 |
 | PENDING_OPERATOR | 20 |
 | UNSUPPORTED | 26 |
 | NOT_APPLICABLE | 22 |
-| BLOCKED | 27 |
+| BLOCKED | 20 |
 | FAIL | 0 |
 
 ### Phase 4 Exit Gate
 
 Computed over the 6 providers EPIC B claims, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
 
-**Not met.** 0 cell(s) failed and 10 could not be decided, every one of them in a column EPIC B claims:
+**Not met.** 0 cell(s) failed and 4 could not be decided, every one of them in a column EPIC B claims:
 
 | Provider | Capability | Outcome | Tracked by |
 |---|---|---|---|
-| Synology DSM | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
 | Synology DSM | Embedded window | BLOCKED | #180 |
 | Synology DSM | App-store packaging | BLOCKED | #180 |
-| TrueNAS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
 | TrueNAS | App-store packaging | BLOCKED | #180 |
-| Unraid | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
 | Unraid | App-store packaging | BLOCKED | #180 |
-| Generic Docker | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| OpenMediaVault | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
-| Proxmox VE | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
 
 **UGOS Pro is EPIC D's column** (work package 4.2).
 All 23 of its cells are decided by the same runner, on the same terms as every
-other column, and reported in full below; 17 are blocked today, on #174 and #83.
+other column, and reported in full below; 16 are blocked today, on #83.
 None of them is in the verdict above. A capability EPIC D owns cannot hold
 EPIC B's Phase 4 open, and an EPIC D column that goes green cannot close it.
 
@@ -187,7 +186,6 @@ why.
 |---|---|---|
 | Provider package metadata present | BLOCKED | #83 — Work package 4.2's UPK was moved out of this EPIC into EPIC D and is still open as #83. apps/ugos/ contains the frontend bridge and nothing else: no project.yaml, no compose, no icon, no image tar. Until #83 lands, UGOS is the one Phase 4 Exit Gate provider with no package in this repository. |
 | Uses the exact canonical image | BLOCKED | #83 — Nothing in apps/ugos/ references an image yet, so there is no reference to compare. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | BLOCKED | #83 — The UPK is what would carry the architecture image tars (section 41), and there is no UPK, so there is no shipped byte to hash. Unlike the six providers that consume the OCI image by reference, this one is not not-applicable: UGOS is meant to ship its own artifact, so the cell stays blocked until #83 produces one. |
 | This provider's own architecture claim matches the build | BLOCKED | #83 — The UPK declares the architecture image tars (section 41); no UPK, no claim of its own to check. |
 | State path persists outside the container | BLOCKED | #83 — The UPK's compose declares the storage mapping (section 22); it does not exist yet. |
@@ -208,7 +206,6 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Uses the exact canonical image | N/A | Synology is the one Phase 4 provider that cannot consume the OCI image: DSM's Package Center installs a native .spk. Section 3.7 makes the SPK a sibling of the image carrying the same core binary digest, so parity here is binary parity, not image parity. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | The .spk is not in this repository; cmd/spkctl builds it. The byte comparison this row demands is real and it does run: spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json, and TestVerify_BinaryHashParity is the test that proves it, including the negative case. apps/common/packaging cannot execute it without importing across the apps/synology module boundary that scripts/architecture/*.sh enforces, so this cell records where the comparison happens instead of pretending to do it here. |
 | State path persists outside the container | N/A | DSM fixes the persistent location: /var/packages/<pkg>/var under the package FHS, not a bind mount this repository declares. |
 | Backup root constrained | N/A | The backup root is a DSM shared folder the operator picks at install time: conf/resource's data-share worker declares the share by name and carries no path, so there is no checked-in host path pair for this check to compare. What IS decided in this repository is the other side of the same rule, that the package places no key material or auth state anywhere (no-bundled-secrets) and that its lifecycle scripts delete nothing outside the package footprint. The containment itself is step 5 of the procedure, which puts a canary in the share and diffs a listing across the uninstall. |
@@ -227,7 +224,6 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
 | This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/truenas-provider-acceptance.md, not yet executed |
@@ -244,7 +240,6 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
 | This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/unraid-provider-acceptance.md, not yet executed |
@@ -262,7 +257,6 @@ why.
 | Capability | Outcome | Why |
 |---|---|---|
 | Uses the exact canonical image | N/A | container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than pulling a published reference. It is the source of the image the other six profiles consume, so pinning it to its own output would be circular. |
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | container/ BUILDS the canonical image from container/Dockerfile rather than consuming a published one, so its binaries are compiled during the build and nothing here is a checked-in artifact to hash. The bytes are decided by the build itself, and apps/generic/tests/dockercli drives the real image the build produces. |
 | This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | No provider-specific lifecycle implementation | N/A | Two reasons, both structural. apps/generic IS the canonical web host (section 37), not a wrapper around it, so there is no wrapper for a second implementation to hide in. And container/compose.yaml carries a build: key, which the scanner treats as a violation everywhere else precisely because a Tier B/C package must reuse the canonical image rather than build one; here it is the file the canonical image is built FROM. |
@@ -281,7 +275,6 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
 | This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/openmediavault-provider-acceptance.md, not yet executed |
@@ -298,7 +291,6 @@ why.
 
 | Capability | Outcome | Why |
 |---|---|---|
-| Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so its hashes describe a build that is not in this history. This row is repository-wide by design: it reads no provider metadata and returns the same verdict in all seven columns, which is why it is named for what it decides rather than for the per-provider parity claim it used to be mistaken for. |
 | Core binary hash parity (this provider's own shipped bytes) | N/A | This provider consumes the canonical OCI image by reference and checks in no core binary of its own, so there is no second copy of the bytes here to hash against the release manifest. Parity for a provider of this shape is the image reference it names, which canonical-image-parity decides. A cell here can only go green once a provider declares a binaryArtifacts entry and the file behind it hashes to what the manifest recorded. |
 | This provider's own architecture claim matches the build | N/A | This provider makes no architecture claim of its own: it names one multi-arch canonical image and lets the runtime pick. The claim that the built architecture set matches canonical.json is repository-wide and is release-manifest-integrity's row, not seven copies of itself. |
 | Install / update / remove semantics | OPERATOR | covered by docs/acceptance/proxmox-ve-deployment.md, not yet executed |
