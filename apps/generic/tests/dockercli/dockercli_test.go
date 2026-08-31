@@ -729,9 +729,42 @@ func TestComposeStack_WebUIProxiesToTheEngineEndToEnd(t *testing.T) {
 	// Seed the CSRF cookie exactly as a browser's first page load would -
 	// served entirely by web-ui's own static handler, never touching the
 	// engine.
-	seedResp, err := client.Get(base + "/")
-	if err != nil {
-		t.Fatalf("GET %s/: %v", base, err)
+	//
+	// Retried, because `docker compose up -d` returns once web-ui's
+	// container has STARTED, not once the process inside it is accepting
+	// HTTP, while Docker's published-port proxy accepts the TCP
+	// connection from the moment the port is published and then resets it
+	// because nothing is listening behind it yet. The result is a
+	// `read: connection reset by peer` on this one request. Not a
+	// mysterious flake: it reproduces on origin/main with none of this
+	// change on it, once in five runs, at this exact line, and
+	// TestServeCommandExposesTheEngineAPIOnly above already retries its
+	// own first request against the identical race.
+	//
+	// Only the transport error is retried, never a response. Whatever
+	// finally answers still has to answer 200 below, so a web-ui that is
+	// genuinely serving the wrong thing fails here exactly as before
+	// rather than being retried into passing.
+	seedDeadline := time.Now().Add(15 * time.Second)
+	var seedResp *http.Response
+	attempts := 0
+	for {
+		attempts++
+		seedResp, err = client.Get(base + "/")
+		if err == nil {
+			break
+		}
+		if time.Now().After(seedDeadline) {
+			logs, _ := exec.Command("docker", "logs", project.containerID(t, "web-ui")).CombinedOutput()
+			t.Fatalf("GET %s/ never succeeded after %d attempts: %v; web-ui logs:\n%s", base, attempts, err, logs)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if attempts > 1 {
+		// Logged so the retry can be seen doing something rather than
+		// merely believed to: a run that prints this is a run that would
+		// have failed at this line before.
+		t.Logf("web-ui was not accepting HTTP when `docker compose up -d` returned; GET / succeeded on attempt %d", attempts)
 	}
 	seedResp.Body.Close()
 	if seedResp.StatusCode != http.StatusOK {
