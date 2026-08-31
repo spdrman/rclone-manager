@@ -38,8 +38,13 @@ it. If you skip it, the UI container starts, serves the static bundle, and then
 
 ### 0.1 Make the canonical image resolvable
 
-No registry is configured for this repository yet. Until one is, `<Repository>` in
-the templates resolves to nothing. Either push to your own registry:
+The registry is settled and nothing has been pushed to it yet. The reference is
+`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the
+single source of truth for it), and that file records `image.published: false`;
+`container/release-manifest.json` records the same fact as a `registry_digest` of
+`null` on every architecture. So `<Repository>` in the templates resolves to
+nothing today, not because no registry exists but because the first push has not
+happened (issue #88). Until it does, either push to your own registry:
 
 ```bash
 docker buildx build \
