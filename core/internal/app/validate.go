@@ -107,7 +107,7 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		return ValidateResult{}, fmt.Errorf("app: validate: %s has no configured backup set", id.Set)
 	}
 
-	checked, passed, reason, err := s.runValidationChecks(ctx, rec, bs.Validation.Command)
+	checked, passed, reason, err := s.runValidationChecks(ctx, rec, bs.Validation)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
 	}
@@ -135,9 +135,33 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 	return result, nil
 }
 
-// runValidationChecks runs the local-file check (always) and cmd (only
-// when non-nil) against rec, and reports a combined verdict.
-func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, cmd *config.Command) (checked, passed bool, reason string, err error) {
+// runValidationChecks runs the local-file check (always) and the backup
+// set's application validator (only when one is configured) against rec,
+// and reports a combined verdict.
+//
+// It takes the whole config.Validation, not the *config.Command, so that
+// the one combination that must never be read as "no validator
+// configured" -- a ValidatorID that nothing resolved into a runnable
+// Command -- is refused here too and not only in internal/lifecycle's
+// verify path. FR-14's operator-triggered `validate` would otherwise
+// report an artifact as passing without ever running the validator its
+// backup set names, which is the same fail-open outcome FR-13 exists to
+// prevent, reached through the other door. The rule itself lives on
+// config.Validation (ResolvedCommand), so both consumers get it from one
+// place rather than each re-implementing it.
+//
+// An unresolved validator is an error, not a failed verdict: it says
+// nothing about the artifact, and quarantining a durable restore point
+// over what is an infrastructure or wiring problem would be its own kind
+// of damage. The caller gets a refusal and the artifact is left exactly
+// as it was, which is how the restore-test hook's own error is already
+// handled below.
+func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation) (checked, passed bool, reason string, err error) {
+	cmd, err := validation.ResolvedCommand()
+	if err != nil {
+		return false, false, "", err
+	}
+
 	var reasons []string
 	passed = true
 

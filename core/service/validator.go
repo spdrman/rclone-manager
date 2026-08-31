@@ -60,13 +60,31 @@
 //
 // Every resolve re-checks the scripts and rewrites any that is missing or
 // has drifted from the embedded copy, rather than materializing once and
-// trusting the result forever, so a reaped or edited script repairs
-// itself on the next call instead of failing every artifact until a
-// restart. Nothing latches: a materialization failure is returned, not
-// cached, so one transient full or read-only filesystem does not disable
-// every validator for the rest of the process's life.
+// trusting the result forever. Nothing latches: a materialization failure
+// is returned, not cached, so one transient full or read-only filesystem
+// does not disable every validator for the rest of the process's life.
 //
-// BackupService.Close removes the directory again.
+// That re-check only repairs anything if it runs at the moment the script
+// is about to be used, so BackupService re-materializes at the start of
+// every run cycle (refreshValidatorScripts, called by executeRunCycle and
+// by the scheduler's tick) as well as at load and create time. Both
+// directions of "the file on disk is not the embedded script" matter, and
+// they fail in opposite ways: a reaped script is fail-closed and merely
+// wedges the backup set, while a script that was replaced or truncated is
+// fail-OPEN -- a two-line "exit 0" passes every artifact, and passing is
+// exactly what authorizes deleting the remote source. A per-cycle rewrite
+// is what closes that, and a failure to rewrite refuses the cycle rather
+// than running it with whatever is on disk.
+//
+// Nothing removes the directory. It is deployment state, shared by every
+// process that opens this state database (the journal lock is a SHARED
+// one, and a container restart racing an old process's shutdown against a
+// new one's start is a supported case), so a process that deleted it on
+// its way out would be deleting a running successor's resolved scripts.
+// The scripts are rewritten from the embedded copies whenever they are
+// needed, and what is left behind is one directory per deployment rather
+// than one per process start, which is what the old os.MkdirTemp
+// implementation leaked.
 //
 // # Casing
 //
@@ -89,7 +107,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -230,12 +247,16 @@ func validatorScriptDir(cfg *config.Config) string {
 // creating dir if it is missing and rewriting any script that is missing
 // or whose content has drifted from the embedded copy.
 //
-// It is called on every resolution, not once per process. That is the
-// point: the previous implementation cached its result (and its error)
-// under a sync.Once, so a script removed after the fact was never noticed
-// and one transient failure disabled every validator until a restart. The
-// cost of checking is a stat and a read per script, against a catalog
-// that has one entry.
+// It is called on every resolution AND at the start of every run cycle
+// (BackupService.refreshValidatorScripts), not once per process. That is
+// the point: the previous implementation cached its result (and its
+// error) under a sync.Once, so a script removed or edited after the fact
+// was never noticed and one transient failure disabled every validator
+// until a restart. Resolution alone would not have fixed that, since
+// nothing on the run path re-resolves -- internal/lifecycle execs the
+// command it was handed at load time -- which is why the cycle calls this
+// directly. The cost of checking is a stat and a read per script, against
+// a catalog that has one entry.
 //
 // A rewrite goes through a temp file and a rename rather than truncating
 // in place, so a validator that happens to be executing while this runs
@@ -309,58 +330,46 @@ func writeScriptAtomically(path string, data []byte) error {
 	return os.Rename(tmpPath, path)
 }
 
-// removeValidatorScripts deletes a materialized script directory. Called
-// by BackupService.Close: the scripts are a running process's own
-// scaffolding, not deployment data, and leaving one behind on every exit
-// is how the previous TMPDIR implementation leaked a directory per
-// process start.
-//
-// The basename check is a guard on the one destructive line in this file.
-// dir only ever comes from validatorScriptDir, which appends
-// validatorScriptDirName itself, so this can never fire in practice --
-// which is exactly why it is cheap insurance against a future caller
-// passing the state directory itself, whose other occupant is the
-// journal.
-//
-// A directory that is not there is not an error. Close logs anything
-// else rather than failing on it: this runs during shutdown, and a
-// failure to tidy up is not something the caller can act on.
-func removeValidatorScripts(dir string) error {
-	if dir == "" || filepath.Base(dir) != validatorScriptDirName {
-		return nil
-	}
-	if err := os.RemoveAll(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("service: removing validator script directory %s: %w", dir, err)
-	}
-	return nil
-}
-
-// applyValidatorCatalog resolves every backup set's
+// planValidatorCatalog resolves every backup set's
 // Validation.ValidatorID into the Validation.Command
-// internal/lifecycle/verify.go actually runs, in place, and is the ONE
-// place a persisted id becomes a runnable path. Open (via
-// OpenConfigAndJournal) calls it at load time and CreateBackupSet calls
-// it after each hot reload, which is what keeps config.yaml holding an id
-// while the running process holds a command.
+// internal/lifecycle/verify.go actually runs, and is the ONE place a
+// persisted id becomes a runnable path. It does every fallible part of
+// that (the catalog lookup and materializing the scripts) and returns the
+// in-memory assignment as a func that cannot fail, so a caller that is
+// about to write cfg back to disk can prove the whole resolution works
+// BEFORE the write and assign afterwards (CreateBackupSet, backupsets.go).
+// applyValidatorCatalog below is the same thing in one call, for a caller
+// with nothing to write.
 //
-// Call it AFTER config.Validate and after any write back to disk, never
-// before: Validate refuses a Validation that names both a validator_id
-// and a command, which is exactly the shape this function produces, and a
-// config written back out after this ran would persist the resolved path
-// this whole design exists to keep out of the file.
+// Call it AFTER config.Validate, never before: Validate refuses a
+// Validation that names both a validator_id and a command, which is
+// exactly the shape the returned func produces. And write cfg out BEFORE
+// applying, never after: a config written back out with the resolved
+// command in it would persist the path this whole design exists to keep
+// out of the file.
 //
 // A config with no backup set using a registered validator does nothing
 // at all here -- no directory is created -- so a deployment that has
 // never selected one never grows the scaffolding for it.
-func applyValidatorCatalog(cfg *config.Config) error {
+func planValidatorCatalog(cfg *config.Config) (func(), error) {
+	noop := func() {}
 	if cfg == nil || !usesRegisteredValidator(cfg) {
-		return nil
+		return noop, nil
 	}
 
 	dir := validatorScriptDir(cfg)
 	if err := materializeValidators(dir); err != nil {
-		return err
+		return nil, err
 	}
+
+	// Indices, not *config.BackupSet pointers: the plan outlives this
+	// loop, and a pointer into a slice a caller may still append to is
+	// how the assignment would silently land on the wrong backup set.
+	type resolution struct {
+		source, set int
+		cmd         config.Command
+	}
+	var plan []resolution
 
 	for i := range cfg.Sources {
 		for j := range cfg.Sources[i].BackupSets {
@@ -370,16 +379,93 @@ func applyValidatorCatalog(cfg *config.Config) error {
 				continue
 			}
 			if bs.Validation.Command != nil {
-				return fmt.Errorf("service: backup set %q/%q names both a validator_id and a command", cfg.Sources[i].Name, bs.Name)
+				return nil, fmt.Errorf("service: backup set %q/%q names both a validator_id and a command", cfg.Sources[i].Name, bs.Name)
 			}
 			cmd, err := lookupValidator(dir, id)
 			if err != nil {
-				return fmt.Errorf("service: backup set %q/%q: %w", cfg.Sources[i].Name, bs.Name, err)
+				return nil, fmt.Errorf("service: backup set %q/%q: %w", cfg.Sources[i].Name, bs.Name, err)
 			}
-			bs.Validation.Command = &cmd
+			plan = append(plan, resolution{source: i, set: j, cmd: cmd})
+		}
+	}
+
+	return func() {
+		for _, r := range plan {
+			cmd := r.cmd
+			cfg.Sources[r.source].BackupSets[r.set].Validation.Command = &cmd
+		}
+	}, nil
+}
+
+// applyValidatorCatalog is planValidatorCatalog plus its assignment, for
+// the callers that are not writing cfg back to disk: Open (via
+// OpenConfigAndJournal) at load time. See planValidatorCatalog for the
+// ordering rules, which apply here unchanged.
+func applyValidatorCatalog(cfg *config.Config) error {
+	apply, err := planValidatorCatalog(cfg)
+	if err != nil {
+		return err
+	}
+	apply()
+	return nil
+}
+
+// checkValidatorCatalogMembership refuses a config naming a validator id
+// this build does not know. It reads nothing but cfg -- no directory is
+// created, no script is written, no journal is touched -- which is the
+// whole reason it exists separately from planValidatorCatalog: startup
+// runs it BEFORE §46.1's sequence, so a typo'd or retired validator_id
+// can never abort a process that has already applied a schema migration
+// on its way past. A migration that has been applied cannot be walked
+// back by downgrading the binary (state.ErrUnknownSchemaVersion), so the
+// one refusal that needs nothing from disk belongs in front of it.
+func checkValidatorCatalogMembership(cfg *config.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	for i := range cfg.Sources {
+		for j := range cfg.Sources[i].BackupSets {
+			bs := &cfg.Sources[i].BackupSets[j]
+			id := ValidatorID(bs.Validation.ValidatorID)
+			if id == "" {
+				continue
+			}
+			if !isRegisteredValidator(id) {
+				return fmt.Errorf("service: backup set %q/%q: %w: %q", cfg.Sources[i].Name, bs.Name, errUnregisteredValidator, id)
+			}
 		}
 	}
 	return nil
+}
+
+// refreshValidatorScripts rewrites this BackupService's registered
+// validator scripts from the embedded copies, and is called at the start
+// of every run cycle (executeRunCycle in operations.go, runScheduledCycle
+// in scheduler.go) before anything execs one.
+//
+// Resolution happens at load and create time, and internal/lifecycle
+// execs the Command it was handed then, so without this nothing would
+// ever re-check the file between one process start and the next. That
+// gap is not symmetric. A script that was reaped fails closed: every
+// artifact in the set fails at exec and no remote is deleted. A script
+// that was replaced or truncated fails OPEN: "#!/bin/sh\nexit 0" passes
+// every artifact, and a passing validator is precisely what authorizes
+// deleting the remote source. Rewriting once per cycle closes both.
+//
+// The directory is derived from the live config at each call rather than
+// cached on the BackupService, so there is exactly one source for it and
+// a hot reload cannot leave this pointing somewhere the resolution does
+// not.
+//
+// A config where no backup set selects a validator does nothing here, so
+// the overwhelmingly common deployment pays a map walk per cycle and
+// nothing else.
+func (b *BackupService) refreshValidatorScripts() error {
+	cfg := b.state.Load().inner.Config
+	if cfg == nil || !usesRegisteredValidator(cfg) {
+		return nil
+	}
+	return materializeValidators(validatorScriptDir(cfg))
 }
 
 // usesRegisteredValidator reports whether any backup set in cfg selects a

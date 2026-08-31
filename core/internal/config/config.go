@@ -287,6 +287,40 @@ type Validation struct {
 	Command *Command `yaml:"command"`
 }
 
+// ErrValidatorNotResolved reports a Validation that names a ValidatorID
+// nothing ever turned into a runnable Command. See ResolvedCommand.
+var ErrValidatorNotResolved = errors.New("config: the configured application validator was never resolved to a runnable command")
+
+// ResolvedCommand is how every consumer of a Validation must ask for its
+// application validator, rather than reading the Command field directly.
+// It returns nil, nil for "no validator configured", the command for one
+// that was resolved, and ErrValidatorNotResolved for the one combination
+// that must never be read as either: a ValidatorID with no Command.
+//
+// core/service resolves every id at load time and refuses to start on one
+// it does not recognize, so a nil Command beside a non-empty id means some
+// path skipped resolution entirely -- and the one thing that must never
+// do is read as "no validator was configured, carry on". The operator
+// asked for one; transferring and then deleting the remote source without
+// it is exactly the outcome FR-13 exists to prevent.
+//
+// The rule lives here, where a Validation is interpreted, instead of at
+// each place one is consumed, because it was previously enforced in
+// internal/lifecycle's verify path and not in internal/app's
+// operator-triggered revalidation path, which reported an artifact as
+// passing without ever running the validator its backup set names. An
+// invariant that has to be re-implemented per consumer gets missed by
+// exactly one consumer.
+func (v Validation) ResolvedCommand() (*Command, error) {
+	if v.Command == nil {
+		if v.ValidatorID != "" {
+			return nil, fmt.Errorf("%w: %q", ErrValidatorNotResolved, v.ValidatorID)
+		}
+		return nil, nil
+	}
+	return v.Command, nil
+}
+
 // Command is an optional external validator, e.g. something that opens a
 // database dump and confirms it actually restores. It is a pointer field on
 // Validation so that "no validator configured" (command: null, or the key

@@ -279,22 +279,6 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, fmt.Errorf("service: re-reading configuration: %w", err)
 	}
 
-	// Materialize the catalog's scripts, and prove this request's id
-	// resolves against them, BEFORE anything is written. validateCreateRequest
-	// above already refused an unregistered id, so what this adds is the
-	// filesystem half: if the state directory cannot hold the scripts, the
-	// honest outcome is a refusal with nothing persisted, not a backup set
-	// on disk that the running process was never able to hot-reload. Same
-	// fail-early reasoning as resolveSSHKeyFile above, and it is what
-	// leaves applyValidatorCatalog (after the write, below) with nothing
-	// left to fail on but a config file hand-edited between these two
-	// lines.
-	if req.ValidatorID != "" {
-		if _, err := resolveValidator(validatorScriptDir(cfg), req.ValidatorID); err != nil {
-			return CreateBackupSetResult{}, err
-		}
-	}
-
 	newSet := config.BackupSet{
 		Name: req.Name,
 		Remote: config.Remote{
@@ -327,12 +311,12 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		// posture when hash capability is absent, which for this
 		// account shape is always.
 		// ValidatorID is persisted; the config.Command it resolves to is
-		// NOT, and applyValidatorCatalog below only fills it in AFTER this
-		// cfg has been written back to disk. That ordering is the whole
-		// point: the resolved path is this deployment's own materialized
-		// script directory, and a config.yaml holding a stale copy of it
-		// would fail every artifact in this backup set after the next
-		// restart, with an error naming a directory rather than the cause.
+		// NOT, and the plan below only fills it in AFTER this cfg has been
+		// written back to disk. That ordering is the whole point: the
+		// resolved path is this deployment's own materialized script
+		// directory, and a config.yaml holding a stale copy of it would
+		// fail every artifact in this backup set after the next restart,
+		// with an error naming a directory rather than the cause.
 		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
 	}
@@ -368,6 +352,31 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
+	// Every fallible part of validator resolution happens HERE, before the
+	// write: the catalog lookup for every id in the whole re-read config
+	// (not only this request's, since a set someone else added, or a
+	// hand-edited file, can carry one too) and materializing the scripts
+	// once. What comes back is a pure in-memory assignment, applied after
+	// the write, that cannot fail.
+	//
+	// The ordering is the point. A failure after writeConfigAtomically
+	// returns an error with an empty Set.ID, which the API layer correctly
+	// reads as "creation never happened", for a backup set that is
+	// durably in config.yaml -- the same split state #155's M6 fixed for
+	// the run-immediately branch. And a config.yaml hand-edited to name an
+	// unregistered id passes config.Load and cfg.Validate (neither can see
+	// the catalog), so writing first would persist a file the next startup
+	// refuses to come up on. This runs after cfg.Validate() above, both
+	// because Validate is what refuses a Validation naming an id and a
+	// command at once, and because it is what has just checked
+	// state.database is an absolute, traversal-free path -- materializing
+	// 0755 scripts under a directory derived from an unvalidated one is
+	// exactly the guessed-location write validator.go exists to stop.
+	applyValidators, err := planValidatorCatalog(cfg)
+	if err != nil {
+		return CreateBackupSetResult{}, err
+	}
+
 	if err := writeConfigAtomically(b.configPath, cfg); err != nil {
 		return CreateBackupSetResult{}, fmt.Errorf("service: persisting configuration: %w", err)
 	}
@@ -381,16 +390,13 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// the swap, purely to carry the already-wired Transport forward —
 	// this method is the only writer of b.state while configMu is held,
 	// so this read cannot itself race the swap below.
-	// Now, and only now that the file on disk holds the id, resolve every
-	// id in this config into the config.Command internal/lifecycle
-	// actually runs. cfg is this process's in-memory copy from here on and
-	// is never written back out again, so the resolved path stays out of
-	// config.yaml (see the Validation literal above). req.ValidatorID was
-	// already checked against the catalog by validateCreateRequest, so the
-	// only way this fails is the filesystem refusing to hold the scripts.
-	if err := applyValidatorCatalog(cfg); err != nil {
-		return CreateBackupSetResult{}, err
-	}
+	// Now, and only now that the file on disk holds the id, put the
+	// resolved commands into this process's in-memory copy. cfg is never
+	// written back out again from here, so the resolved path stays out of
+	// config.yaml (see the Validation literal above). This is assignment
+	// and nothing else: everything that could have failed already did,
+	// above, while nothing had been persisted yet.
+	applyValidators()
 
 	prevInner := b.state.Load().inner
 	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)

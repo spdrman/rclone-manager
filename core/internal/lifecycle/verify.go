@@ -298,41 +298,38 @@ func decide(ctx context.Context, d Deps, source transport.Source, rec state.Reco
 	}
 
 	// Layer 3: application validation, gated by an optional validator.
-	if cfg.Command == nil {
-		if cfg.ValidatorID != "" {
-			// The backup set names a registered validator
-			// (config.Validation.ValidatorID) that nothing resolved into a
-			// runnable Command. core/service resolves every id at load time
-			// and refuses to start on one it does not recognize, so
-			// reaching here means some path skipped that step entirely --
-			// and the one thing this must never do is read as "no
-			// validator was configured, carry on". The operator asked for
-			// one; transferring and then deleting the remote source
-			// without it is exactly the outcome FR-13 exists to prevent.
-			//
-			// Failed, not Quarantined, for the same reason runValidator's
-			// own "could not be run at all" branch below is: this is an
-			// infrastructure condition, not the validator forming an
-			// opinion about the artifact's content. Neither state can
-			// reach Committed (machine.go's Transitions table), so remote
-			// deletion is blocked either way.
-			return verifyOutcome{
-				to:     Failed,
-				detail: fmt.Sprintf("application validator %q was never resolved to a runnable command; refusing to treat a configured validator as absent", cfg.ValidatorID),
-				hashes: hashes,
-			}, nil
-		}
+	//
+	// ResolvedCommand, never cfg.Command directly: a ValidatorID with no
+	// Command is the one combination that must not read as "no validator
+	// was configured, carry on", and that rule belongs to config.Validation
+	// so both this path and internal/app's operator-triggered revalidation
+	// get it from the same place (see the accessor's own doc).
+	//
+	// Failed, not Quarantined, for the same reason runValidator's own
+	// "could not be run at all" branch below is: this is an infrastructure
+	// condition, not the validator forming an opinion about the artifact's
+	// content. Neither state can reach Committed (machine.go's Transitions
+	// table), so remote deletion is blocked either way.
+	command, err := cfg.ResolvedCommand()
+	if err != nil {
+		return verifyOutcome{
+			to:     Failed,
+			detail: fmt.Sprintf("%v; refusing to treat a configured validator as absent", err),
+			hashes: hashes,
+		}, nil
+	}
+	if command == nil {
 		return verifyOutcome{to: Verified, detail: "transfer and configured checks passed", hashes: hashes}, nil
 	}
 
-	passed, detail, err := runValidator(ctx, *cfg.Command, rec.LocalPath)
+	passed, detail, err := runValidator(ctx, *command, rec.LocalPath)
 	if err != nil {
 		if isCancellation(err) {
 			return verifyOutcome{}, err
 		}
 		return verifyOutcome{
 			to:     Failed,
-			detail: fmt.Sprintf("application validator %q: %v", cfg.Command.Executable, err),
+			detail: fmt.Sprintf("application validator %q: %v", command.Executable, err),
 			hashes: hashes,
 		}, nil
 	}

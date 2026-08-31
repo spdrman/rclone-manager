@@ -272,3 +272,48 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 		t.Fatalf("error %q does not mention the unknown field", err.Error())
 	}
 }
+
+// TestValidation_ResolvedCommand covers all three shapes a Validation can
+// be in, in the one place that decides what they mean. The rule used to
+// be re-implemented per consumer, and internal/app's operator-triggered
+// revalidation path is the consumer that was missed (issue #164's review,
+// finding M4): it read the Command field directly and reported an
+// artifact as passing without ever running the validator its backup set
+// named.
+func TestValidation_ResolvedCommand(t *testing.T) {
+	cmd := &Command{Executable: "/opt/validators/trailer-marker.sh"}
+
+	t.Run("no validator configured", func(t *testing.T) {
+		got, err := Validation{}.ResolvedCommand()
+		if err != nil || got != nil {
+			t.Fatalf("ResolvedCommand() = %v, %v; want nil, nil", got, err)
+		}
+	})
+
+	t.Run("resolved", func(t *testing.T) {
+		got, err := Validation{ValidatorID: "trailer-marker", Command: cmd}.ResolvedCommand()
+		if err != nil || got != cmd {
+			t.Fatalf("ResolvedCommand() = %v, %v; want the command, nil", got, err)
+		}
+	})
+
+	t.Run("a command the trusted config path named directly", func(t *testing.T) {
+		got, err := Validation{Command: cmd}.ResolvedCommand()
+		if err != nil || got != cmd {
+			t.Fatalf("ResolvedCommand() = %v, %v; want the command, nil", got, err)
+		}
+	})
+
+	t.Run("an id nothing resolved", func(t *testing.T) {
+		got, err := Validation{ValidatorID: "trailer-marker"}.ResolvedCommand()
+		if !errors.Is(err, ErrValidatorNotResolved) {
+			t.Fatalf("ResolvedCommand() error = %v, want ErrValidatorNotResolved", err)
+		}
+		if got != nil {
+			t.Errorf("ResolvedCommand() = %v, want nil alongside the error", got)
+		}
+		if !strings.Contains(err.Error(), "trailer-marker") {
+			t.Errorf("error %q does not name the unresolved id", err)
+		}
+	})
+}

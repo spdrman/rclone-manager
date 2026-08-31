@@ -314,6 +314,22 @@ func (b *BackupService) executeRunCycle(operationID string) {
 		return
 	}
 
+	// Rewrite the registered validators before anything execs one
+	// (validator.go's refreshValidatorScripts), and refuse the whole cycle
+	// if that cannot be done. Nothing else on this path re-checks them:
+	// resolution happened at load or create time and internal/lifecycle
+	// execs the Command it was handed then, so a script replaced with one
+	// that exits 0 would pass every artifact in the set and authorize
+	// deleting every remote source behind it.
+	if err := b.refreshValidatorScripts(); err != nil {
+		b.logger.Error(context.Background(), "refresh-validator-scripts", err)
+		if failErr := b.journal.FailOperation(context.Background(), operationID, now(),
+			"refusing to run: "+err.Error()); failErr != nil {
+			b.logger.Error(context.Background(), "fail-operation", failErr)
+		}
+		return
+	}
+
 	report := runCycle(b.state.Load().inner, b.ctx)
 
 	var failed string
