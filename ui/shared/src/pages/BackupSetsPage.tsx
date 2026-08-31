@@ -71,9 +71,29 @@ export function BackupSetsPage({
           " sets \u00b7 " + healthy + " healthy \u00b7 " + stale + " stale \u00b7 " + failing + " failing"
         }
         actions={
-          <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/sets/new")}>
-            Add backup set
-          </button>
+          <>
+            {/* The one run control on this page, and it is page-level
+                rather than per-card because that is the scope it has: a
+                run cycle walks every enabled backup set in one pass and
+                there is no per-set run to call (#211, #214). Each card
+                used to carry its own copy of exactly this action under
+                the label "Run now", so clicking it on one set started
+                all of them (#231). The tooltip is the same sentence
+                BackupSetDetailPage's button carries, for the same
+                reason: the label alone cannot say how wide the action
+                reaches. */}
+            <button
+              className="btn"
+              disabled={readOnly}
+              title="Runs one pass over every enabled backup set, not only this one."
+              onClick={() => api.runCycle(version.data?.configRevision ?? "").then(sets.reload)}
+            >
+              Run all due sets
+            </button>
+            <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/sets/new")}>
+              Add backup set
+            </button>
+          </>
         }
       />
 
@@ -116,7 +136,6 @@ export function BackupSetsPage({
               set={set}
               currentOperation={currentOperation}
               onOpen={() => navigate("/sets/" + set.id)}
-              onRun={() => api.runCycle(version.data?.configRevision ?? "").then(sets.reload)}
               onTest={() => api.testConnection(set.id)}
               actionsDisabled={readOnly}
             />

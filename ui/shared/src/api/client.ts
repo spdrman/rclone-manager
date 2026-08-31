@@ -311,7 +311,6 @@ function fromWireBackupSet(bs: WireBackupSet): BackupSet {
     state: "stale",
     stateNote: "Health details are not yet reported by the server for this backup set.",
     enabled: !bs.disabled,
-    halted: false,
     newestKnownGoodAt: null,
     lastRunAt: null,
     lastValidation: "not-run",

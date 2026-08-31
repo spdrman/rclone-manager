@@ -63,7 +63,30 @@ export interface BackupSet {
   /** Human sentence explaining the state. Never rely on colour alone. */
   stateNote: string;
   enabled: boolean;
-  halted: boolean;
+  /**
+   * Why the manager has stopped running this set, when it knows of a
+   * reason. Optional, and absent is the honest answer for "no reason is
+   * known", which is what a real service says today: nothing computes
+   * this yet.
+   *
+   * A required `halted: boolean` sat beside it until #231. That one could
+   * not stay: a required field has to be filled in by every mapper, so
+   * api/client.ts filled it with a literal `false` on every set it
+   * returned, and a fabricated `false` is a claim, not a gap. It drove a
+   * per-card button's disabled state and the word a card printed for its
+   * current activity, so against a real service a set the transport layer
+   * had refused to connect to (FR-6's changed host key) rendered as
+   * "idle" with a live run button. Two fields for one concept could also
+   * disagree; this one carries it alone.
+   *
+   * The concept behind it is real. core/internal/alert/conditions.go
+   * raises HOST_KEY_CHANGED for exactly this and says the connection was
+   * refused, but it raises it into a notification sink during a cycle's
+   * alert pass: nothing persists it and no read endpoint reports it, so
+   * there is no per-set halt fact for this field to read yet. Giving it
+   * one is #245, and until then the two host-key banners keyed on this
+   * field simply do not render.
+   */
   haltReason?: "host-key-changed" | "storage-critical" | "manual";
   newestKnownGoodAt: string | null;
   lastRunAt: string | null;

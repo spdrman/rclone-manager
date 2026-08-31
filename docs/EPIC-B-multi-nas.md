@@ -2128,12 +2128,22 @@ Actions:
 
 ```text
 Open
-Run now
+Run all due sets
 Test connection
 Edit
 Disable
 Retention preview
 ```
+
+`Run all due sets` is the page's action, not a card's, and it is named for the
+scope it actually has. There is no per-set run: one run cycle walks every
+enabled backup set in a single pass, and core exposes no operation that runs one
+set on its own. This line read `Run now` and sat among the per-set actions
+around it, which is how the shipped page came to render one such button per
+card, each starting the whole deployment (#231). A control rendered inside a
+backup set's card SHALL NOT submit a deployment-wide action, whatever its label
+says, and any control that does SHALL carry a tooltip stating how far it
+reaches.
 
 Destructive configuration removal SHALL be separated from deleting stored files.
 
