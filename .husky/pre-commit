@@ -17,10 +17,20 @@
 # to report on frontend and conformance checks it cannot perform instead of
 # skipping them and printing "ci-local: ok" anyway. It names every
 # uninstalled workspace and the command that fixes it. Run those, or set
-# CI_LOCAL_SKIP_JS=1 to leave them out on purpose. This hook needs no rule of
-# its own for any of that: everything it enforces comes from
-# scripts/ci-local.sh, and a run that skipped anything now ends with
-# INCOMPLETE rather than ok.
+# CI_LOCAL_SKIP_JS=1 to leave them out on purpose. The same now goes for a
+# stopped Docker daemon and CI_LOCAL_SKIP_DOCKER=1.
+#
+# Three outcomes, and this hook has to make its own decision about the
+# middle one rather than inherit it by accident:
+#
+#   0  the gate performed every applicable check          -> commit
+#   3  the gate ran but skipped something (INCOMPLETE)    -> commit, loudly
+#   *  something actually failed                          -> block
+#
+# Tolerating 3 is the policy that keeps CI_LOCAL_FAST=1 usable for iteration,
+# and it belongs here, where a human reads the warning, rather than inside
+# the gate where it would look like success. Anything that merges on this
+# gate's word must require 0.
 #
 # Playwright e2e is still not here, matching nightly-e2e.yml's own reasoning
 # (too slow, too flaky to sit in front of every commit) — run it by hand
@@ -31,4 +41,20 @@
 
 set -e
 
-bash scripts/ci-local.sh
+gate_status=0
+bash scripts/ci-local.sh || gate_status=$?
+
+if [ "$gate_status" -eq 0 ]; then
+  exit 0
+fi
+
+if [ "$gate_status" -eq 3 ]; then
+  echo "" >&2
+  echo "==> pre-commit: allowing this commit on an INCOMPLETE gate run." >&2
+  echo "    The checks listed above did not run, so this commit is not backed by" >&2
+  echo "    merge evidence. Run scripts/ci-local.sh with CI_LOCAL_FAST," >&2
+  echo "    CI_LOCAL_SKIP_JS and CI_LOCAL_SKIP_DOCKER unset before you merge." >&2
+  exit 0
+fi
+
+exit "$gate_status"

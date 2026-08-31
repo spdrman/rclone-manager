@@ -496,18 +496,36 @@ until every JS workspace present in the tree is installed, and prints the exact 
 for each one that is not. It used to skip those checks and still print
 `==> ci-local: ok`, which is what made the gate's own success line unreliable (#160).
 
-Two environment variables change what runs, and both stop the run claiming success:
+The Docker daemon is the same rule with a bigger blast radius. With it stopped, the crash
+matrix, the SFTP integration suite and the whole `apps/generic/tests/dockercli` package
+call `t.Skip`, `go test` still exits 0, and nothing would reach the ledger. A full run
+refuses to start without a reachable daemon.
+
+Three environment variables change what runs:
 
 | Variable | Effect |
 |---|---|
-| `CI_LOCAL_FAST=1` | Fast iteration loop: skips the Docker-backed suites, the cross-compiles, the production builds, the conformance suite and the structure proofs. |
-| `CI_LOCAL_SKIP_JS=1` | Leaves uninstalled JS workspaces out on purpose rather than failing, for a change that only touches Go. |
+| `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix and the SFTP integration tests), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
+| `CI_LOCAL_SKIP_JS=1` | Proceeds past the preflight with uninstalled JS workspaces instead of failing, for a change that only touches Go. Ends INCOMPLETE whenever it actually left a workspace out; with everything installed it changes nothing and the run can still be `ok`. |
+| `CI_LOCAL_SKIP_DOCKER=1` | Proceeds past the preflight with the daemon down instead of failing. Ends INCOMPLETE, because the Docker-backed suites will have reported `ok` without running. |
 
-A run that skipped anything ends with `==> ci-local: INCOMPLETE` and lists what did not
-run. Only a run that performed every applicable check ends with `==> ci-local: ok`, which
-is what makes that one line readable as merge evidence. A component that is not in the
-tree at all (`apps/generic`, `apps/ugos/backend`, `apps/ugos/frontend/upk-proof`) is not a
-skip: its checks are inapplicable, and the run can still be `ok`.
+A run that skipped anything ends with `==> ci-local: INCOMPLETE`, lists what did not run,
+and exits 3. A run that performed every check it invoked ends with `==> ci-local: ok` and
+exits 0, and that pair is what makes the gate readable as merge evidence by a human and by
+a script. A run that failed ends with `==> ci-local: FAILED` naming the step, and exits
+with whatever failed. `.husky/pre-commit` allows 3 and says so out loud, so the fast
+iteration loop still commits; nothing that merges on this gate's word may accept anything
+but 0.
+
+One qualification on `ok`: Playwright e2e is not in the gate at all (it matches
+`nightly-e2e.yml`'s own reasoning, too slow and too flaky in front of every commit), so
+`ok` means every check the gate invokes ran, not every test in the repository. Run
+`cd ui/shared && npm run e2e` by hand before a release.
+
+A component that is not in the tree at all is not a skip: its checks are inapplicable, and
+the run can still be `ok`. Today `apps/ugos/backend` and `apps/ugos/frontend/upk-proof`
+are the absent ones; `apps/generic` and `apps/synology` are present and are built, vetted,
+tested and linted on every run.
 
 CI (`.github/workflows/ci.yml`) runs the same three commands on every push and pull
 request, with the Go module cache preserved between runs, and separately cross-compiles the
