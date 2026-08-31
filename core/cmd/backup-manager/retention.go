@@ -80,6 +80,16 @@ func cmdRetention(args []string) int {
 			if v.Keep {
 				decision = "KEEP"
 			}
+			// Each entry of Tiers is a retention.GFSTierSelection, whose
+			// String renders the tier and the placement that selected it,
+			// so this line reads `tiers=[DAILY(discovery) MONTHLY(both)]`
+			// (issue #218). The rendering deliberately lives on that type
+			// rather than here: FR-20's own KEEP reason sentence spells a
+			// selection the same way, and two renderers would eventually
+			// spell it differently. This line is pinned by the black-box
+			// contract suite in spdrman/rclone-manager-tests
+			// (suites/cli/cases/retention/), so changing its shape means
+			// moving those cases in lockstep.
 			fmt.Printf("  %-6s %-40s tiers=%v\n", decision, v.Artifact.Name, v.Tiers)
 		}
 		fmt.Printf("  last-known-good: %s\n", r.LastKnownGood.Reason)

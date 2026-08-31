@@ -80,7 +80,7 @@ const PLAN: RetentionPlan = {
   deleteCount: 1,
   reclaimBytes: 1024,
   verdicts: [
-    { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: ["DAILY"] },
+    { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }] },
     { artifact: "b.dump", action: "DELETE", reason: "Not selected by current retention policy", tiers: [] }
   ]
 };

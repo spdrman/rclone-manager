@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "3fdd5398e87c582995b050c7160f9f95ac26a75fce0e5971ec186f324c0f9257"
+const ContractSHA256 = "370e221519baeb4e700cbe68b6b4ebe3a46b54d5ff26fb85665c0e3bd9a12b12"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1000,12 +1000,26 @@ type RetentionTier struct {
 	WindowUnit  string `json:"window_unit,omitempty"`
 }
 
+// RetentionTierSelection is one tier's claim on an artifact, and which of the two placements
+// made it. FR-18 places every artifact twice, once by the timestamp
+// this manager discovered it and once by the producer's own
+// timestamp on the remote object, and KEEP is the union. FR-8 treats
+// the second as untrusted, so which pass selected a tier is a
+// different fact with different consequences and travels with the
+// tier rather than with the verdict: one artifact can be selected by
+// DAILY through one placement and by MONTHLY through the other.
+type RetentionTierSelection struct {
+	SelectedBy string `json:"selected_by"`
+	Tier       string `json:"tier"`
+}
+
 // RetentionVerdict is what the plan decided for one artifact, and why.
 type RetentionVerdict struct {
-	Action   string   `json:"action"`
-	Artifact string   `json:"artifact"`
-	Reason   string   `json:"reason"`
-	Tiers    []string `json:"tiers,omitempty"`
+	Action         string                   `json:"action"`
+	Artifact       string                   `json:"artifact"`
+	Reason         string                   `json:"reason"`
+	TierSelections []RetentionTierSelection `json:"tier_selections,omitempty"`
+	Tiers          []string                 `json:"tiers,omitempty"`
 }
 
 // RotatePasswordRequest is POST /auth/password. Requires an already-authenticated session AND
@@ -1163,6 +1177,7 @@ var SchemaTypes = map[string]any{
 	"RetentionSchema":             RetentionSchema{},
 	"RetentionSettings":           RetentionSettings{},
 	"RetentionTier":               RetentionTier{},
+	"RetentionTierSelection":      RetentionTierSelection{},
 	"RetentionVerdict":            RetentionVerdict{},
 	"RotatePasswordRequest":       RotatePasswordRequest{},
 	"SessionResponse":             SessionResponse{},

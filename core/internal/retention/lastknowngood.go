@@ -78,6 +78,12 @@ import (
 // than silently absent.
 const TierLastKnownGood GFSTier = "LAST_KNOWN_GOOD"
 
+// lkgSelection is the single entry FR-19's protection ever contributes to
+// a verdict's tier list. It exists as one value rather than being built at
+// each of ApplyLastKnownGood's two call sites so the two cannot come to
+// disagree about how protection is attributed.
+var lkgSelection = GFSTierSelection{Tier: TierLastKnownGood, By: GFSSelectedByProtection}
+
 // LastKnownGoodResult is FR-19's answer for one backup set: whether
 // protection is active, and if so, which single artifact currently holds
 // it.
@@ -255,6 +261,11 @@ func (c lkgCandidate) provenance() string {
 // so a verdict can honestly show more than one reason it survived. When it
 // sits outside every tier, this is the only mechanism that keeps it: Keep
 // flips to true and Tiers becomes exactly [TierLastKnownGood].
+//
+// The entry it appends is attributed to GFSSelectedByProtection, which is
+// the one member of that type that is not a placement (issue #218). FR-19
+// protection is not a bucket selection at all, so neither of FR-18's two
+// timestamps produced it and neither may be named for it.
 func ApplyLastKnownGood(verdicts []GFSVerdict, lkg LastKnownGoodResult) []GFSVerdict {
 	if !lkg.Protected {
 		return verdicts
@@ -266,7 +277,7 @@ func ApplyLastKnownGood(verdicts []GFSVerdict, lkg LastKnownGoodResult) []GFSVer
 	for i := range out {
 		if out[i].Artifact == lkg.Artifact {
 			out[i].Keep = true
-			out[i].Tiers = append(append([]GFSTier(nil), out[i].Tiers...), TierLastKnownGood)
+			out[i].Tiers = append(append([]GFSTierSelection(nil), out[i].Tiers...), lkgSelection)
 			return out
 		}
 	}
@@ -281,7 +292,7 @@ func ApplyLastKnownGood(verdicts []GFSVerdict, lkg LastKnownGoodResult) []GFSVer
 	out = append(out, GFSVerdict{
 		Artifact: lkg.Artifact,
 		Keep:     true,
-		Tiers:    []GFSTier{TierLastKnownGood},
+		Tiers:    []GFSTierSelection{lkgSelection},
 	})
 	sortGFSVerdicts(out)
 	return out

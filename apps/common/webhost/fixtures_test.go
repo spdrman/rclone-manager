@@ -202,6 +202,15 @@ func (f *syncFakeBackend) PreviewRetention(_ context.Context, source, set string
 		DeleteCount:       1,
 		ReclaimBytes:      1024,
 		Verdicts: []service.RetentionArtifactVerdict{
+			// One KEEP whose tiers were selected by DIFFERENT placements
+			// (issue #218), so the wire shape cannot be satisfied by a
+			// single per-verdict attribution, and one DELETE, which
+			// carries no tiers and so no attribution either.
+			{Artifact: "kept.dump", Action: "KEEP", Reason: "kept by the DAILY and MONTHLY tiers (test fixture)", Tiers: []service.RetentionTierSelection{
+				{Tier: "DAILY", SelectedBy: "DISCOVERY"},
+				{Tier: "MONTHLY", SelectedBy: "PRODUCER"},
+				{Tier: "LAST_KNOWN_GOOD", SelectedBy: "PROTECTION"},
+			}},
 			{Artifact: "backup.dump", Action: "DELETE", Reason: "no GFS tier selects this artifact (test fixture)"},
 		},
 	}

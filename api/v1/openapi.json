@@ -502,6 +502,31 @@
           "artifacts_done"
         ]
       },
+      "RetentionTierSelection": {
+        "type": "object",
+        "description": "One tier's claim on an artifact, and which of the two placements made it. FR-18 places every artifact twice, once by the timestamp this manager discovered it and once by the producer's own timestamp on the remote object, and KEEP is the union. FR-8 treats the second as untrusted, so which pass selected a tier is a different fact with different consequences and travels with the tier rather than with the verdict: one artifact can be selected by DAILY through one placement and by MONTHLY through the other.",
+        "additionalProperties": false,
+        "properties": {
+          "tier": {
+            "type": "string",
+            "description": "A configured tier name upper-cased, or the reserved LAST_KNOWN_GOOD. The value set is OPEN: the retention chain is operator-defined, so SEMI_ANNUAL or any other name a config file spells arrives here."
+          },
+          "selected_by": {
+            "type": "string",
+            "description": "DISCOVERY when only the discovery placement selected this artifact for this tier, PRODUCER when only the producer's own timestamp did, BOTH when both did. PROTECTION is not a placement at all: it is FR-19's last-known-good term, which is not a bucket selection and so names neither timestamp.",
+            "enum": [
+              "DISCOVERY",
+              "PRODUCER",
+              "BOTH",
+              "PROTECTION"
+            ]
+          }
+        },
+        "required": [
+          "tier",
+          "selected_by"
+        ]
+      },
       "RetentionVerdict": {
         "type": "object",
         "description": "What the plan decided for one artifact, and why.",
@@ -518,8 +543,17 @@
           },
           "tiers": {
             "type": "array",
+            "description": "Which tiers kept this artifact, in the order the configured chain lists them. Empty for a DELETE or REFUSE verdict. tier_selections lists the same tiers in the same order and says which placement selected each; read that one to answer why an artifact was kept.",
             "items": {
               "type": "string"
+            },
+            "x-go-omitempty": true
+          },
+          "tier_selections": {
+            "type": "array",
+            "description": "The same tiers as `tiers`, in the same order, each paired with the placement that selected it. Empty for a DELETE or REFUSE verdict.",
+            "items": {
+              "$ref": "#/components/schemas/RetentionTierSelection"
             },
             "x-go-omitempty": true
           }

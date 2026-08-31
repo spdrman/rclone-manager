@@ -1263,6 +1263,34 @@ There is deliberately no configuration key here, because the producer term
 can never make retention keep less than it would without it; distrusting
 it is a capacity question, not a safety one.
 
+Because a KEEP can now come from either pass, the retention preview SHALL
+say which one selected the artifact, **per tier**. FR-20 requires the
+dry-run to explain every KEEP/DELETE decision, and a bare tier name no
+longer explains one: `DAILY` on its own does not say whether this
+manager's own record of when it first saw the artifact put it in that
+bucket, or a timestamp FR-8 calls untrusted did, and those two have
+different consequences for an operator deciding whether to trust the
+verdict. So the placement is named beside each tier:
+
+``` text
+KEEP   pg-2026-08-28.dump    tiers=[DAILY(discovery) MONTHLY(producer)]
+```
+
+Per tier rather than per artifact, because the two passes can disagree
+tier by tier. An artifact whose discovery placement wins its own daily
+bucket outright, but loses this month's monthly bucket to a newer
+arrival, while its own producer timestamp wins a monthly bucket months
+back, is selected by `DAILY` through one placement and by `MONTHLY`
+through the other. One answer for the whole artifact would be wrong in
+exactly the case an operator is reading the preview to understand.
+
+The placements are `discovery` (only the discovery pass selected this
+artifact for this tier), `producer` (only the producer pass did) and
+`both`. FR-19's protected term carries none of them and is reported
+without a placement: it is not a bucket selection at all, so neither
+timestamp produced it, and dressing it as a placement would report a
+calendar decision this manager never made.
+
 ### Backward compatibility
 
 `daily_days`, `weekly_months` and `monthly_months` remain valid

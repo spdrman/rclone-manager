@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -249,5 +250,62 @@ func TestApplyRetention_BusyServiceGetsItsOwnCode(t *testing.T) {
 	errObj, _ := body["error"].(map[string]any)
 	if errObj["code"] != "RETENTION_APPLY_BUSY" {
 		t.Errorf("error.code = %v, want %q", errObj["code"], "RETENTION_APPLY_BUSY")
+	}
+}
+
+// TestPreviewRetention_VerdictsSayWhichPlacementSelectedEachTier is issue
+// #218 at the HTTP boundary. Since #215 a tier can have selected an
+// artifact through either of FR-18's two placements, and FR-8 trusts one
+// of them and not the other, so the wire has to carry that per tier. A
+// single attribution on the verdict would be wrong for exactly the
+// artifact this fixture holds, whose DAILY and MONTHLY came from
+// different passes.
+func TestPreviewRetention_VerdictsSayWhichPlacementSelectedEachTier(t *testing.T) {
+	tr := newOperationsTestRouter(t, alwaysPassGate{})
+	rec := previewRetention(t, tr.router, "production", "postgres-primary")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var body struct {
+		Verdicts []struct {
+			Artifact       string   `json:"artifact"`
+			Action         string   `json:"action"`
+			Tiers          []string `json:"tiers"`
+			TierSelections []struct {
+				Tier       string `json:"tier"`
+				SelectedBy string `json:"selected_by"`
+			} `json:"tier_selections"`
+		} `json:"verdicts"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	var kept, deleted int
+	for _, v := range body.Verdicts {
+		switch v.Action {
+		case "KEEP":
+			kept++
+			got := map[string]string{}
+			for _, sel := range v.TierSelections {
+				got[sel.Tier] = sel.SelectedBy
+			}
+			want := map[string]string{"DAILY": "DISCOVERY", "MONTHLY": "PRODUCER", "LAST_KNOWN_GOOD": "PROTECTION"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s tier_selections = %v, want %v", v.Artifact, got, want)
+			}
+			if len(v.Tiers) != len(v.TierSelections) {
+				t.Errorf("%s: tiers (%v) and tier_selections (%v) describe different numbers of tiers", v.Artifact, v.Tiers, v.TierSelections)
+			}
+		case "DELETE":
+			deleted++
+			if len(v.TierSelections) != 0 {
+				t.Errorf("%s is a DELETE candidate but carries tier attribution %v", v.Artifact, v.TierSelections)
+			}
+		}
+	}
+	if kept == 0 || deleted == 0 {
+		t.Fatalf("the fixture produced %d KEEP and %d DELETE verdicts; this test needs one of each or it proves nothing", kept, deleted)
 	}
 }
