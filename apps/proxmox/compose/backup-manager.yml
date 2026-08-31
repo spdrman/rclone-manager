@@ -1,0 +1,116 @@
+# Proxmox VE deployment profile for Backup Manager
+# (WP4.5, deliverable D-9).
+#
+# This file runs INSIDE the guest, never on the Proxmox VE host. §4A and
+# WP4.5 both rule out installing Docker or an application daemon into the
+# PVE host OS as a default design, so the supported model is a dedicated
+# guest acting as the container host: a VM by default, or an unprivileged
+# LXC with nesting=1,keyctl=1 if you accept the caveats in README.md.
+#
+# The PVE host contributes exactly one thing: a directory or dataset it
+# shares into the guest at /mnt/backup-manager. Everything persistent is a
+# bind mount under that one path, which is what makes recovery work —
+# destroy the guest, rebuild it, re-point it at the same host path, and
+# the state is still there.
+#
+# Tier C (§4A): a supported deployment profile, not an app-store package.
+# Proxmox VE has no third-party application store to package into, and
+# §4A defers any Web UI plugin, so there is deliberately no PVE menu
+# entry, no /etc/pve content, no hook script and no host package.
+# apps/common/packaging fails the build if any of that appears here.
+#
+# This is the same two-container shape container/compose.yaml already
+# ships for the generic Docker app, using the exact same canonical image.
+# Nothing here is Proxmox-specific behaviour.
+services:
+  # The engine: local authentication, the versioned /api/v1 API and the
+  # backup scheduler, one process sharing one shutdown context. Holds the
+  # state database and the credentials. Publishes no port; reachable only
+  # from backup-manager-ui over this project's own network.
+  backup-manager:
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:1.0.0}
+    command: ["/backup-manager-web", "serve"]
+
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=${PUID:-1000},gid=${PGID:-100}
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8080}"
+      # Safe here specifically because this container joins only the
+      # private network below, whose only other member is the Web UI
+      # container, so a forwarded header can only have come from that
+      # proxy. Never set this on the Web UI container, which is the edge.
+      TRUST_FORWARDED_HEADERS: "true"
+
+    volumes:
+      - ${STATE_DIR:-/mnt/backup-manager/state}:/data/state
+      - ${BACKUP_DIR:-/mnt/backup-manager/backups}:/data/backups
+      - ${CONFIG_FILE:-/mnt/backup-manager/config/config.yaml}:/etc/backup-manager/config.yaml:ro
+      - ${KEY_FILE:-/mnt/backup-manager/secrets/id_ed25519}:/etc/backup-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:-/mnt/backup-manager/secrets/known_hosts}:/etc/backup-manager/known_hosts:ro
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # The Web UI: the shared static bundle plus a reverse proxy to the
+  # engine. The only container with a published port, and the only URL an
+  # operator ever opens. Proxmox has no navigation entry for it, by
+  # design; see README.md.
+  backup-manager-ui:
+    image: ${IMAGE:-ghcr.io/spdrman/backup-manager:1.0.0}
+    command: ["/backup-manager-web", "serve-ui"]
+
+    depends_on:
+      backup-manager:
+        condition: service_healthy
+
+    user: "${PUID:-1000}:${PGID:-100}"
+    read_only: true
+    privileged: false
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=${PUID:-1000},gid=${PGID:-100}
+
+    environment:
+      TMPDIR: "/tmp"
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://backup-manager:8080"
+
+    # No volumes at all: this container never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory. Every persistent path in
+    # this profile is a bind mount to a host path you chose, so there is
+    # no named volume for `docker compose down -v` to reach.
+
+    # Overrides the image's own HEALTHCHECK, which runs
+    # `/backup-manager status` and needs a config file and a state
+    # database this container does not have. Without this override the
+    # container runs correctly and reports unhealthy forever.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+    restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:

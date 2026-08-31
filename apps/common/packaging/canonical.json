@@ -97,6 +97,19 @@
       "hostPathNote": "dev-disk-by-uuid is a placeholder, deliberately matching what apps/openmediavault/frontend/platform.ts already declares: a real OMV system mounts data filesystems at /srv/dev-disk-by-uuid-<UUID>/, which differs per machine. The profile funnels every host path through the one DISK variable so the UUID is substituted exactly once, and the compose file derives the rest. Retained artifacts land in a dedicated child of the backups directory rather than in the directory itself, so step 0 of the acceptance procedure only ever creates and owns paths it created.",
       "trustForwardedHeaders": true,
       "trustForwardedHeadersNote": "The compose file declares its own project network, created and destroyed with the deployment, whose only two members are these two containers."
+    },
+    "proxmox": {
+      "displayName": "Proxmox VE",
+      "tier": "C",
+      "storageMount": "/mnt/backup-manager",
+      "hostPaths": {
+        "state": "/mnt/backup-manager/state",
+        "backups": "/mnt/backup-manager/backups",
+        "config": "/mnt/backup-manager/config/config.yaml",
+        "sshKey": "/mnt/backup-manager/secrets/id_ed25519",
+        "knownHosts": "/mnt/backup-manager/secrets/known_hosts"
+      },
+      "hostPathNote": "These are paths inside the GUEST, not on the Proxmox VE host. WP4.5 rules out running the app on the host, so the supported model is a dedicated container-host guest (a VM by default) with one PVE host directory or dataset shared into it at /mnt/backup-manager. How that sharing is configured is the operator's choice (virtiofs, NFS, or pct --mp0 for the LXC variant) and is therefore documented rather than declared here."
     }
   }
 }
