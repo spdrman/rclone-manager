@@ -199,6 +199,7 @@ describe("every request the shared client makes is a declared operation", () => 
       ["listQuarantine", () => httpApi.listQuarantine()],
       ["revalidate", () => httpApi.revalidate("artifact-1")],
       ["retryIngestion", () => httpApi.retryIngestion("artifact-1")],
+      ["reinstate", () => httpApi.reinstate("artifact-1")],
       ["previewRetention", () => httpApi.previewRetention("src", "set-1")],
       ["applyRetention", () => httpApi.applyRetention("src", "set-1", "plan-1")],
       ["getSettings", () => httpApi.getSettings()],

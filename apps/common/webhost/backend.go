@@ -146,13 +146,18 @@ type BackupServiceClient interface {
 	ListArtifacts(ctx context.Context, filter service.ArtifactFilter) ([]service.Artifact, error)
 	GetArtifact(ctx context.Context, id string) (service.Artifact, error)
 
-	// RevalidateArtifact and RetryArtifactIngestion back the two
-	// quarantine actions. Revalidate reports a verdict and writes
-	// nothing; retry takes the lifecycle graph's one recovery edge out of
-	// quarantine. See core/internal/app for why a passing revalidate may
-	// not rehabilitate an artifact on its own.
+	// RevalidateArtifact, RetryArtifactIngestion and ReinstateArtifact
+	// back the three quarantine actions. Revalidate reports a verdict and
+	// writes nothing; retry takes the re-ingest edge out of quarantine and
+	// re-fetches from the remote; reinstate keeps the durable local copy
+	// and returns the artifact to the state it already held, which is the
+	// answer when the remote is gone or the quarantine was the mistake
+	// (issue #220). Reinstating permanently forfeits the artifact's remote
+	// delete, which is what makes it safe to offer at all; see
+	// core/internal/lifecycle.
 	RevalidateArtifact(ctx context.Context, id string) (service.ArtifactCheck, error)
 	RetryArtifactIngestion(ctx context.Context, id string) error
+	ReinstateArtifact(ctx context.Context, id, note string) (service.ArtifactReinstatement, error)
 
 	// ListActivity backs GET /api/v1/activity: a read of the durable,
 	// append-only lifecycle record, not a second event stream.

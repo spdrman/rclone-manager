@@ -146,6 +146,7 @@ type syncFakeBackend struct {
 	catalog       service.CatalogReport
 
 	revalidateResult          service.ArtifactCheck
+	reinstateResult           service.ArtifactReinstatement
 	persistedConnectionResult service.ConnectionTestResult
 
 	errOnArtifacts      error
@@ -155,6 +156,7 @@ type syncFakeBackend struct {
 	errOnCatalog        error
 	errOnRevalidate     error
 	errOnRetry          error
+	errOnReinstate      error
 	errOnSetEnabled     error
 	errOnTestPersisted  error
 
@@ -163,6 +165,7 @@ type syncFakeBackend struct {
 	lastOperationsLimit   int
 	lastRevalidated       string
 	lastRetried           string
+	lastReinstated        string
 	lastSetEnabled        setEnabledCall
 	lastTestedBackupSetID string
 }
@@ -393,6 +396,16 @@ func (f *syncFakeBackend) RetryArtifactIngestion(_ context.Context, id string) e
 	return nil
 }
 
+func (f *syncFakeBackend) ReinstateArtifact(_ context.Context, id, _ string) (service.ArtifactReinstatement, error) {
+	if f.errOnReinstate != nil {
+		return service.ArtifactReinstatement{}, f.errOnReinstate
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastReinstated = id
+	return f.reinstateResult, nil
+}
+
 func (f *syncFakeBackend) ListActivity(_ context.Context, limit int) ([]service.ActivityEvent, error) {
 	if f.errOnActivity != nil {
 		return nil, f.errOnActivity
@@ -588,6 +601,10 @@ func (f *asyncFakeBackend) RevalidateArtifact(context.Context, string) (service.
 }
 
 func (f *asyncFakeBackend) RetryArtifactIngestion(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) ReinstateArtifact(context.Context, string, string) (service.ArtifactReinstatement, error) {
+	return service.ArtifactReinstatement{}, nil
+}
 
 func (f *asyncFakeBackend) ListActivity(context.Context, int) ([]service.ActivityEvent, error) {
 	return nil, nil

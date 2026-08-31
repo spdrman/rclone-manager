@@ -134,11 +134,20 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//     is. core/service pins that directly
 	//     (TestSetBackupSetEnabled_DisablingDeletesNothing).
 	//   - revalidate: re-reads a quarantined backup's local copy and
-	//     reports a verdict. It writes nothing at all, and cannot: the
-	//     lifecycle graph has no edge out of quarantine except back into
-	//     the pipeline, which is the next route.
+	//     reports a verdict. It writes nothing at all.
 	//   - retry: moves a journal row from QUARANTINED to DISCOVERED. No
 	//     local file and no remote object is touched.
+	//   - reinstate (issue #220): moves a journal row from a quarantine
+	//     state back to the durable state that same row already held. No
+	//     local file and no remote object is touched, and unlike every
+	//     other entry here it needs a second sentence, because it is the
+	//     one route that changes what this manager believes about a
+	//     backup's trustworthiness. It still cannot reach a deletion, and
+	//     the direction is the opposite of the one this list guards
+	//     against: an artifact that takes this edge is refused by FR-15's
+	//     delete gate permanently afterwards (core/internal/lifecycle's
+	//     DeleteRemote), so calling it strictly SHRINKS the set of remote
+	//     objects this manager will ever delete.
 	//   - catalog scan and rebuild: rebuild only ADDS journal rows whose
 	//     recovery manifests are already on disk and whose rows are
 	//     missing. It never removes or overwrites an existing row, never
@@ -149,6 +158,7 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/backup-sets/{source}/{set}/enabled":          true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,
 	"POST /api/v1/catalog/scan":                                true,
 	"POST /api/v1/catalog/rebuild":                             true,
 }

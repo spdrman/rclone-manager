@@ -107,13 +107,13 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		return ValidateResult{}, fmt.Errorf("app: validate: %s has no configured backup set", id.Set)
 	}
 
-	checked, passed, reason, err := s.runValidationChecks(ctx, rec, bs.Validation)
+	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
 	if err != nil {
 		return ValidateResult{}, fmt.Errorf("app: validate: %w", err)
 	}
 
-	result := ValidateResult{Artifact: id, Checked: checked, Passed: passed, Reason: reason}
-	if passed {
+	result := ValidateResult{Artifact: id, Checked: checks.Checked, Passed: checks.Passed, Reason: checks.Reason}
+	if checks.Passed {
 		return result, nil
 	}
 
@@ -126,7 +126,7 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 		Key:      fmt.Sprintf("app:validate:%s:%s", id, s.now().Format(time.RFC3339Nano)),
 		From:     string(cur),
 		To:       string(to),
-		Detail:   "operator-triggered validate: " + reason,
+		Detail:   "operator-triggered validate: " + checks.Reason,
 	})
 	if err != nil {
 		return result, fmt.Errorf("app: validate: quarantining %s: %w", id, err)
@@ -156,38 +156,39 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 // of damage. The caller gets a refusal and the artifact is left exactly
 // as it was, which is how the restore-test hook's own error is already
 // handled below.
-func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation) (checked, passed bool, reason string, err error) {
+func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, validation config.Validation) (checkOutcome, error) {
 	cmd, err := validation.ResolvedCommand()
 	if err != nil {
-		return false, false, "", err
+		return checkOutcome{}, err
 	}
 
 	var reasons []string
-	passed = true
+	out := checkOutcome{Passed: true}
 
 	if rec.LocalPath == "" {
-		return true, false, "no local final path is recorded in the journal", nil
+		return checkOutcome{Checked: true, Reason: "no local final path is recorded in the journal"}, nil
 	}
 	info, statErr := os.Stat(rec.LocalPath)
 	if statErr != nil {
-		return true, false, fmt.Sprintf("local final file %s: %v", rec.LocalPath, statErr), nil
+		return checkOutcome{Checked: true, Reason: fmt.Sprintf("local final file %s: %v", rec.LocalPath, statErr)}, nil
 	}
-	checked = true
+	out.Checked = true
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
-			return true, false, fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg), nil
+			return checkOutcome{Checked: true, Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}, nil
 		}
 		sum, hashErr := sha256File(rec.LocalPath)
 		if hashErr != nil {
-			return true, false, fmt.Sprintf("hashing %s: %v", rec.LocalPath, hashErr), nil
+			return checkOutcome{Checked: true, Reason: fmt.Sprintf("hashing %s: %v", rec.LocalPath, hashErr)}, nil
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
-			passed = false
+			out.Passed = false
 			reasons = append(reasons, fmt.Sprintf(
 				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
 				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash))
 		} else {
+			out.HashMatched = true
 			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
 		}
 	} else {
@@ -197,17 +198,58 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	if cmd != nil {
 		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, rec.LocalPath)
 		if hookErr != nil {
-			return checked, false, "", fmt.Errorf("restore-test hook: %w", hookErr)
+			return checkOutcome{Checked: out.Checked}, fmt.Errorf("restore-test hook: %w", hookErr)
 		}
 		if !result.Passed {
-			passed = false
+			out.Passed = false
 			reasons = append(reasons, "restore-test hook failed: "+result.Detail)
 		} else {
+			out.ValidatorPassed = true
 			reasons = append(reasons, "restore-test hook passed")
 		}
 	}
 
-	return checked, passed, strings.Join(reasons, "; "), nil
+	out.Reason = strings.Join(reasons, "; ")
+	return out, nil
+}
+
+// checkOutcome is one runValidationChecks call's full result.
+//
+// Checked, Passed and Reason are the combined verdict every caller has
+// always used. HashMatched and ValidatorPassed are the per-tier verdicts
+// underneath it, and they exist because the combined Passed is not enough
+// to decide whether an artifact may be trusted AGAIN after quarantine
+// (issue #220): the local-file check runs unconditionally, so an artifact
+// with no recorded hash baseline and no configured validator "passes" on
+// nothing more than the file still being present, which is a pass that
+// could not have failed on content. See
+// lifecycle.ReinstatementEvidence, which is what these two feed.
+type checkOutcome struct {
+	Checked bool
+	Passed  bool
+	Reason  string
+
+	// HashMatched is true when a hash baseline recorded at VERIFIED
+	// existed, the durable local copy was re-hashed now, and the two
+	// still agree.
+	HashMatched bool
+
+	// ValidatorPassed is true when the backup set's configured
+	// application validator actually ran in this call and passed. It is
+	// false both when no validator is configured and when one ran and
+	// failed, which is exactly right for its one use: only a validator
+	// that ran and passed is evidence.
+	ValidatorPassed bool
+}
+
+// evidence renders o as what lifecycle.ReinstateFromQuarantine takes.
+func (o checkOutcome) evidence() lifecycle.ReinstatementEvidence {
+	return lifecycle.ReinstatementEvidence{
+		HashMatched:     o.HashMatched,
+		ValidatorPassed: o.ValidatorPassed,
+		AnyCheckFailed:  !o.Passed,
+		Summary:         o.Reason,
+	}
 }
 
 // sha256File duplicates the small (open, io.Copy into a hasher, hex-encode)

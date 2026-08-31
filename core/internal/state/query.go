@@ -246,6 +246,52 @@ func (j *Journal) LastEnteredAt(ctx context.Context, artifact model.ArtifactID, 
 	return at, true, nil
 }
 
+// LastTransition reports when artifact most recently recorded the exact
+// from -> to edge in the append-only transition log, and whether it ever
+// did.
+//
+// LastEnteredAt above answers "when did this artifact last become X".
+// This answers the strictly narrower "did it become X by coming from Y",
+// and the difference is load-bearing for issue #220's audit requirement:
+// an artifact re-trusted after quarantine and one that was never
+// distrusted are both simply COMMITTED on the artifacts row, and the only
+// place that still distinguishes them is this table. A column would not
+// do: the artifacts row is overwritten by every later write, while
+// state_transitions is append-only and idempotency-keyed, so a replayed
+// transition reuses its original row rather than adding a second one (see
+// RecordTransition).
+//
+// It is what internal/lifecycle's FR-15 delete gate reads to refuse a
+// remote delete for an artifact that was reinstated out of quarantine, so
+// "no evidence" has to be unmistakably distinguishable from "an answer":
+// ok is false, with a nil error, when the edge was never recorded, and a
+// caller deciding anything destructive must treat that as no evidence
+// rather than as a zero time.
+func (j *Journal) LastTransition(ctx context.Context, artifact model.ArtifactID, from, to string) (time.Time, bool, error) {
+	var occurred string
+	err := j.db.QueryRowContext(ctx,
+		`SELECT t.occurred_at
+		   FROM state_transitions t
+		   JOIN artifacts a ON a.id = t.artifact_id
+		  WHERE a.source = ? AND a.backup_set = ? AND a.artifact_name = ?
+		    AND t.from_state = ? AND t.to_state = ?
+		  ORDER BY t.id DESC
+		  LIMIT 1`,
+		artifact.Set.Source, artifact.Set.Set, artifact.Name, from, to,
+	).Scan(&occurred)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("state: last %s -> %s for %s: %w", from, to, artifact, err)
+	}
+	at, err := parseTime(occurred)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("state: last %s -> %s for %s: parsing occurred_at %q: %w", from, to, artifact, occurred, err)
+	}
+	return at, true, nil
+}
+
 // ListByState returns every artifact currently recorded in the given state.
 // Reconciliation (FR-17) and retry scheduling are the expected callers.
 func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, error) {

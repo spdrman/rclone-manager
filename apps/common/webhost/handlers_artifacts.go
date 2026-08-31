@@ -1,5 +1,6 @@
 // This file is issue #211's read surface over the backups a deployment
-// actually holds, plus the two operator actions a quarantined one has.
+// actually holds, plus the three operator actions a quarantined one has
+// (the third, reinstate, is issue #220's).
 //
 // Nothing here computes anything. Every value comes from
 // core/service.BackupService's own read models, which in turn read the
@@ -72,6 +73,23 @@ type artifactCheckResponse struct {
 	Checked bool   `json:"checked"`
 	Passed  bool   `json:"passed"`
 	Reason  string `json:"reason,omitempty"`
+}
+
+// artifactReinstateResponse is POST /api/v1/quarantine/{id}/reinstate's
+// body.
+//
+// Reinstated and Passed are separate fields rather than one. A caller told
+// only "it did not work" cannot tell "the durable local copy is bad", which
+// no configuration change fixes, from "the copy is fine but nothing that
+// could have failed was actually checked", which the operator can fix by
+// repairing the validator the backup set names. Those call for opposite
+// next steps, so the wire shape says both.
+type artifactReinstateResponse struct {
+	Reinstated bool   `json:"reinstated"`
+	Checked    bool   `json:"checked"`
+	Passed     bool   `json:"passed"`
+	State      string `json:"state,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 func toArtifactResponse(a service.Artifact) artifactResponse {
@@ -195,6 +213,44 @@ func (h *handlers) revalidateArtifact(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// reinstateArtifact is POST /api/v1/quarantine/{id}/reinstate: re-check
+// one quarantined backup and, if what is found is enough to trust it
+// again, return it to the state it already held (issue #220).
+//
+// It carries requireCSRF and NOT requireDestructiveGate, and the second
+// half of that is worth spelling out, because this is the one quarantine
+// action that changes what the manager believes about a backup's
+// trustworthiness.
+//
+// The destructive gate exists for operations that can destroy backup data.
+// This one destroys nothing: it touches no local file and no remote
+// object, and it moves a journal row from a quarantine state back to the
+// durable state that same row already held. What it CANNOT do is make the
+// backup's remote source deletable, which is the thing the gate is there
+// to stand in front of. The opposite is true: a reinstated artifact is
+// refused by FR-15's delete gate forever afterwards (see
+// core/internal/lifecycle's DeleteRemote), so taking this action strictly
+// reduces the set of remote objects this manager will ever delete.
+//
+// A verdict of "the checks did not pass" comes back 200 with reinstated
+// false, exactly like revalidate reports a failing verdict: that is a fact
+// about the backup, not a failed request. Only a refusal the operator has
+// to change something to clear is a 409.
+func (h *handlers) reinstateArtifact(w http.ResponseWriter, r *http.Request) {
+	result, err := h.backend.ReinstateArtifact(r.Context(), artifactIDFrom(r), "")
+	if err != nil {
+		writeArtifactActionError(w, err, "failed to reinstate the backup")
+		return
+	}
+	writeJSON(w, http.StatusOK, artifactReinstateResponse{
+		Reinstated: result.Reinstated,
+		Checked:    result.Checked,
+		Passed:     result.Passed,
+		State:      result.State,
+		Reason:     result.Reason,
+	})
+}
+
 // retryArtifactIngestion is POST /api/v1/quarantine/{id}/retry: return one
 // quarantined backup to the pipeline so it is attempted again.
 //
@@ -250,6 +306,14 @@ func writeArtifactActionError(w http.ResponseWriter, err error, fallback string)
 	case errors.Is(err, service.ErrArtifactNotQuarantined):
 		writeError(w, http.StatusConflict, "ARTIFACT_NOT_QUARANTINED",
 			"this backup is not quarantined")
+	case errors.Is(err, service.ErrReinstatementRefused):
+		// The one refusal whose text an operator genuinely needs: it says
+		// which evidence was missing, and repairing that is the whole
+		// remedy. It is safe to pass through because core/service builds
+		// it from this project's own typed lifecycle refusals, never from
+		// a filesystem or transport error, which is exactly the case the
+		// default arm below exists for.
+		writeError(w, http.StatusConflict, "REINSTATEMENT_REFUSED", err.Error())
 	default:
 		// Deliberately not err.Error(): an unclassified error here can
 		// carry filesystem text, the same reason writeBackupSetError's own
