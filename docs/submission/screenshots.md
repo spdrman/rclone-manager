@@ -18,6 +18,8 @@ below is of a real installation against a real SFTP source.
 | TrueNAS Apps catalog | 3 | Referenced from `apps/truenas/catalog/app.yaml`'s `screenshots` list, which stays empty until they exist. |
 | Unraid Community Applications | 2 | Community Applications shows the template's icon and overview prominently and screenshots secondarily; two is the useful number. |
 | UGREEN App Center | 4 | EPIC D's submission. The count is recorded here so the material is ready when #83 produces the package; nothing about it is this work package's to capture. |
+| CasaOS AppStore | 2 | The store renders one compose file's `x-casaos` block as the whole listing, so the tile and the install dialogue carry most of the presentation and two screenshots are what is left to show. |
+| ZimaOS app store | 2 | The same two, captured again on ZimaOS. It is one runtime and two store registrations, and the two are submitted and certified separately, so a screenshot taken on CasaOS is not a screenshot of this listing. |
 
 ## What to capture, in this order
 

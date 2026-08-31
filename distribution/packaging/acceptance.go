@@ -34,6 +34,9 @@ const (
 	// RuleBaselineInsideBackupRoot is a canary hash or file listing
 	// recorded inside the very tree it is meant to vouch for.
 	RuleBaselineInsideBackupRoot = "baseline-inside-the-backup-root"
+	// RuleMissingConfigPrecondition is an install procedure that never
+	// asks for a config.yaml before the step that starts the engine.
+	RuleMissingConfigPrecondition = "missing-config-precondition"
 )
 
 var (
@@ -45,6 +48,11 @@ var (
 	recursiveChownRe = regexp.MustCompile(`(?m)^\s*(?:(?:sudo|doas)\s+)?chown\s+(?:-[a-zA-Z]*R[a-zA-Z]*|--recursive)\b(.*)$`)
 	teeTargetRe      = regexp.MustCompile(`(?:\|\s*tee\s+|>\s*)("?[$/][^\s"'|]*"?)`)
 	untouchedClaimRe = regexp.MustCompile(`(?i)untouched,?\s+byte\s+for\s+byte`)
+
+	installStepRe     = regexp.MustCompile(`(?m)^##\s+Step\s+1\b`)
+	configRefusalRe   = regexp.MustCompile(`(?i)hard start(?:up)? failure|refuses? to start`)
+	configIssueRe     = regexp.MustCompile(`#176\b`)
+	configChecklistRe = regexp.MustCompile(`(?mi)^\s*-\s*\[[ x]\][^\n]*config\.yaml`)
 )
 
 // AcceptanceEvidence are the markers of a procedure that recorded
@@ -135,4 +143,81 @@ func ReadAcceptanceProcedure(path, backupRoot string, subs map[string]string) ([
 		return nil, err
 	}
 	return CheckAcceptanceProcedure(string(data), backupRoot, subs), nil
+}
+
+// A third instruction is checkable from here, and what it decides has
+// changed twice under it, which is the reason it is worth restating
+// carefully rather than deleting.
+//
+// It used to be the instruction a fresh install failed on first. Every
+// adapter gave the engine `healthcheck: ["CMD", "/backup-manager",
+// "status"]` and gated the only container that publishes a port on it
+// with `depends_on: condition: service_healthy`. `status` opens the
+// service, `core/service.Open` loaded and validated config.yaml, and with
+// no config file on disk it exits non-zero: the engine never turned
+// healthy and the UI container never started. Two changes since:
+// #176/#195 made the engine serve a first-run setup flow instead of
+// refusing to start, and #206/#210 made the engine's start gate a
+// liveness probe rather than the freshness verdict. A fresh install now
+// reaches the web UI, and this rule is no longer what stands between an
+// operator and step 1.
+//
+// What remains true is the part worth checking. `status` is still the
+// image's own baked-in HEALTHCHECK and still the operator-facing verdict,
+// and a config file that EXISTS and does not validate is still a hard
+// startup failure rather than a first-run wizard, so an invalid one is
+// worse than none at all. A procedure that reaches its install step
+// without ever naming config.yaml, saying what an invalid one does, or
+// giving the operator a box for it, is a procedure that leaves the one
+// remaining hard failure undocumented. That is what this rule holds, and
+// it is the same four requirements #175 wrote into the five procedures
+// #202 converted, so the rule still describes the repository's own
+// settled handling rather than wording invented for the new four.
+
+// CheckConfigPrecondition holds an install procedure to the config.yaml
+// precondition: before the install step, in the prerequisites where an
+// operator still has a shell, the procedure has to name the file, say why
+// an invalid one is a startup failure rather than a first-run wizard,
+// name #176 as the issue that decided which half of this is still
+// required, and carry a checklist box the operator can tick.
+//
+// The rule fails closed on a document with no `## Step 1` heading, rather
+// than reporting a clean prelude that is the whole file.
+func CheckConfigPrecondition(text string) []Violation {
+	var out []Violation
+	add := func(detail string) {
+		out = append(out, Violation{"step 0", RuleMissingConfigPrecondition, detail})
+	}
+
+	loc := installStepRe.FindStringIndex(text)
+	if loc == nil {
+		add("has no `## Step 1` heading, so nothing in it can be shown to come before the install")
+		return out
+	}
+	prelude := text[:loc[0]]
+
+	if !strings.Contains(prelude, "config.yaml") {
+		add("never names `config.yaml` before the install step, and a config file that exists and does not validate is still a hard startup failure: the stack cannot reach the running and healthy state this procedure then asks the operator to confirm, and the operator was never told which file decides that")
+	}
+	if !configRefusalRe.MatchString(prelude) {
+		add("does not say that an invalid config is a hard startup failure rather than a first-run wizard, which is the one sentence that separates the state the engine serves a setup flow from (no file at all) from the state it refuses to start in (a file that does not parse or does not validate)")
+	}
+	if !configIssueRe.MatchString(prelude) {
+		add("does not cite #176 as the issue that decided this step's shape, so nobody reading it later can tell which half of it the first-run flow made optional and which half is still a hard failure")
+	}
+	if !configChecklistRe.MatchString(prelude) {
+		add("has no checklist box naming `config.yaml`, so the precondition is prose an operator can read past rather than a step they tick")
+	}
+
+	sortViolations(out)
+	return out
+}
+
+// ReadConfigPrecondition is CheckConfigPrecondition over a file.
+func ReadConfigPrecondition(path string) ([]Violation, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return CheckConfigPrecondition(string(data)), nil
 }

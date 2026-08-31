@@ -250,7 +250,7 @@ are exactly three kinds of thing that can hold a bundle.
 
 | Carrier | Who uses it | How the bundle is selected |
 |---|---|---|
-| the binary | generic | nothing configured; the compiled-in bundle |
+| the binary | generic, Portainer, Dockge, CasaOS, ZimaOS | nothing configured; the compiled-in bundle |
 | the canonical image, at `/ui/bundles` | TrueNAS, Unraid, OpenMediaVault, Proxmox, Synology's Container Manager project | `UI_ROOT=/ui/bundles` plus the adapter's own `--profile=` |
 | the package's own payload | Synology's `.spk` | `--ui-dir <target>/ui-bundle` |
 
@@ -286,6 +286,30 @@ The third line is the one worth reading twice. A missing bundle is a hard
 start failure, never a silent fall back to the generic bridge, which is why
 carrying too FEW bundles is a loud failure and not a quiet reappearance of
 #180.
+
+**The four adapters #170 adds share the first row with `generic`, and the
+arithmetic above is why.** 347,956 bytes of headroom is less than one 352 KB
+bundle, so the image that carries five cannot carry six, let alone nine.
+Portainer, Dockge, CasaOS and ZimaOS therefore ship no frontend bridge at all:
+they select the `generic` runtime profile, serve the bundle compiled into the
+binary, and the shared UI describes them as the Docker Compose deployments they
+are.
+
+That is not only a budget decision, and it would be the same decision with room
+to spare. A bridge for any of the four would need its platform id in the
+`/api/v1` contract, the capability table, the profile table and the bundle list,
+which is core and shared-UI code in four adapters whose own contract forbids
+exactly that: #170 states it for two of them as "no CasaOS or ZimaOS import
+appears in either". None of the four has host-dependent behaviour for a profile
+to select, either. No native identity gateway, no notification bridge, no launch
+bridge, so a profile per platform would be four rows that change nothing but the
+name in a capability report, which is how a platform-specific code path starts.
+
+`canonical.json` records the choice per platform as `uiBridge: "none"` with the
+reason, and the rule on that field is two-sided: a platform that declares a
+bridge has its `storageMount` pinned to what the bridge says, and a platform
+that declares none must have no `frontend/` directory either, so "none" cannot
+become the cheap way out of the pin.
 
 ## Deriving an adapter instead of authoring one
 

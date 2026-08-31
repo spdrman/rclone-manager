@@ -712,6 +712,359 @@
         }
       }
     },
+    "portainer": {
+      "store": {
+        "kind": "none",
+        "name": "",
+        "checklist": "docs/submission/portainer.md",
+        "reference": "https://docs.portainer.io/advanced/app-templates",
+        "screenshots": 0
+      },
+      "artifactFiles": [
+        "apps/portainer/compose",
+        "apps/portainer/templates.json"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-icon": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-screenshots": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-release-notes": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-privacy-disclosure": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-permission-rationale": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-support-source-license": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "dockge": {
+      "store": {
+        "kind": "none",
+        "name": "",
+        "checklist": "docs/submission/dockge.md",
+        "reference": "https://github.com/louislam/dockge",
+        "screenshots": 0
+      },
+      "artifactFiles": [
+        "container/compose.yaml",
+        "container/.env.example"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: this target deploys container/compose.yaml itself, and that file BUILDS the canonical image from container/Dockerfile rather than pulling a published reference, so pinning it to its own output would be circular. Identical to the generic column's answer, and for the identical reason. See distribution/packaging/conformance.json."
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "not-applicable",
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-icon": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-screenshots": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-release-notes": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-privacy-disclosure": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-permission-rationale": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-support-source-license": {
+          "declared": "not-applicable",
+          "reason": "This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "casaos": {
+      "store": {
+        "kind": "catalog",
+        "name": "CasaOS AppStore",
+        "checklist": "docs/submission/casaos.md",
+        "reference": "https://github.com/IceWhaleTech/CasaOS-AppStore",
+        "screenshots": 2
+      },
+      "artifactFiles": [
+        "apps/casaos/compose"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "supported"
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "supported"
+        },
+        "materials-icon": {
+          "declared": "supported"
+        },
+        "materials-screenshots": {
+          "declared": "supported"
+        },
+        "materials-release-notes": {
+          "declared": "supported"
+        },
+        "materials-privacy-disclosure": {
+          "declared": "supported"
+        },
+        "materials-permission-rationale": {
+          "declared": "supported"
+        },
+        "materials-support-source-license": {
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
+    "zimaos": {
+      "store": {
+        "kind": "catalog",
+        "name": "ZimaOS app store",
+        "checklist": "docs/submission/zimaos.md",
+        "reference": "https://www.zimaspace.com/docs/developer/app-store-compose-x-casaos",
+        "screenshots": 2
+      },
+      "artifactFiles": [
+        "apps/zimaos/compose"
+      ],
+      "cells": {
+        "no-self-update": {
+          "declared": "supported"
+        },
+        "no-floating-tag": {
+          "declared": "supported"
+        },
+        "no-privileged-mode": {
+          "declared": "supported"
+        },
+        "no-mandatory-telemetry": {
+          "declared": "supported"
+        },
+        "drift-image-reference": {
+          "declared": "supported"
+        },
+        "drift-required-mounts": {
+          "declared": "supported"
+        },
+        "drift-expected-ports": {
+          "declared": "supported"
+        },
+        "drift-health-check": {
+          "declared": "supported"
+        },
+        "drift-runtime-profile": {
+          "declared": "supported"
+        },
+        "drift-architecture-support": {
+          "declared": "supported"
+        },
+        "drift-forbidden-privileges": {
+          "declared": "supported"
+        },
+        "drift-api-compatibility": {
+          "declared": "supported"
+        },
+        "materials-description": {
+          "declared": "supported"
+        },
+        "materials-icon": {
+          "declared": "supported"
+        },
+        "materials-screenshots": {
+          "declared": "supported"
+        },
+        "materials-release-notes": {
+          "declared": "supported"
+        },
+        "materials-privacy-disclosure": {
+          "declared": "supported"
+        },
+        "materials-permission-rationale": {
+          "declared": "supported"
+        },
+        "materials-support-source-license": {
+          "declared": "supported",
+          "reason": "The repository now ships a LICENSE (Apache-2.0) plus the licence inventory and SBOM that B5.2 added, so the support, source and licence materials this listing needs all exist and are checked against the tree rather than asserted."
+        },
+        "materials-submission-checklist": {
+          "declared": "supported"
+        },
+        "proactive-alert-delivery": {
+          "declared": "supported"
+        },
+        "recovery-docs-no-terminal": {
+          "declared": "supported"
+        },
+        "artifact-provenance": {
+          "declared": "supported"
+        }
+      }
+    },
     "ugos": {
       "store": {
         "kind": "catalog",

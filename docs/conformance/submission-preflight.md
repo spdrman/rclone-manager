@@ -70,9 +70,13 @@ these checks.
 | Target | Store or catalog | Gated by | Verdict | Undecided, tracked by | Needs the real platform |
 |---|---|---|---|---|---|
 | UGOS Pro | UGREEN App Center | EPIC D (reported here, gated there) | **NOT_YET_APPLICABLE** | none | nothing |
+| CasaOS | CasaOS AppStore | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
+| Portainer CE | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | Synology DSM | Synology Package Center | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
 | TrueNAS | TrueNAS Apps catalog | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
 | Unraid | Unraid Community Applications | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
+| ZimaOS | ZimaOS app store | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 2 step(s) |
+| Dockge | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | Generic Docker | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | OpenMediaVault | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 | Proxmox VE | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
@@ -80,55 +84,59 @@ these checks.
 Why each target reads the way it does:
 
 - **UGOS Pro** — UGOS Pro declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet; its shared listing materials are recorded on their own merits above
+- **CasaOS** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
+- **Portainer CE** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **Synology DSM** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
 - **TrueNAS** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
 - **Unraid** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
+- **ZimaOS** — every rule this repository can decide held; 2 step(s) need the real platform: materials-screenshots, proactive-alert-delivery
+- **Dockge** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **Generic Docker** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **OpenMediaVault** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 - **Proxmox VE** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 
 ### Per-rule results
 
-| Rule | UGOS Pro (EPIC D) | Synology DSM | TrueNAS | Unraid | Generic Docker | OpenMediaVault | Proxmox VE |
-|---|---|---|---|---|---|---|---|
-| No self-update mechanism in the shipped package | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
-| No floating image tag | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
-| No privileged mode requested by the package | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
-| No mandatory telemetry endpoint | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: image reference | N/A | N/A | PASS | PASS | N/A | PASS | PASS |
-| Drift gate: required mounts | N/A | N/A | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: expected ports | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: health check | N/A | N/A | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: runtime profile | N/A | N/A | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: declared architecture support | N/A | PASS | N/A | N/A | N/A | N/A | N/A |
-| Drift gate: forbidden-privilege set | N/A | N/A | PASS | PASS | PASS | PASS | PASS |
-| Drift gate: /api/v1 compatibility | N/A | N/A | PASS | PASS | PASS | PASS | PASS |
-| Store description | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Store icon | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Store screenshots | N/A | OPERATOR | OPERATOR | OPERATOR | N/A | N/A | N/A |
-| Release notes | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Privacy disclosure | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Permission rationale | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Support, source and licence materials | PASS | PASS | PASS | PASS | N/A | N/A | N/A |
-| Submission checklist complete against the tree | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Proactive alerts reach the administrator | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR |
-| Recovery documented without a terminal | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Submitted bytes traceable to a recorded build | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
+| Rule | UGOS Pro (EPIC D) | CasaOS (P6) | Portainer CE (P6) | Synology DSM | TrueNAS | Unraid | ZimaOS (P6) | Dockge (P6) | Generic Docker | OpenMediaVault | Proxmox VE |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| No self-update mechanism in the shipped package | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No floating image tag | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No privileged mode requested by the package | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| No mandatory telemetry endpoint | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: image reference | N/A | PASS | PASS | N/A | PASS | PASS | PASS | N/A | N/A | PASS | PASS |
+| Drift gate: required mounts | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: expected ports | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: health check | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: runtime profile | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: declared architecture support | N/A | PASS | N/A | PASS | N/A | N/A | PASS | N/A | N/A | N/A | N/A |
+| Drift gate: forbidden-privilege set | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Drift gate: /api/v1 compatibility | N/A | PASS | PASS | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Store description | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
+| Store icon | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
+| Store screenshots | N/A | OPERATOR | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | N/A | N/A | N/A | N/A |
+| Release notes | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
+| Privacy disclosure | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
+| Permission rationale | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
+| Support, source and licence materials | PASS | PASS | N/A | PASS | PASS | PASS | PASS | N/A | N/A | N/A | N/A |
+| Submission checklist complete against the tree | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Proactive alerts reach the administrator | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR |
+| Recovery documented without a terminal | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
+| Submitted bytes traceable to a recorded build | N/A | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 
 ### Totals
 
 | Outcome | Cells |
 |---|---|
-| PASS | 104 |
-| PENDING_OPERATOR | 9 |
+| PASS | 173 |
+| PENDING_OPERATOR | 15 |
 | UNSUPPORTED | 0 |
-| NOT_APPLICABLE | 48 |
+| NOT_APPLICABLE | 65 |
 | BLOCKED | 0 |
 | FAIL | 0 |
 
 ### Phase 5 submission gate
 
-Computed over the 6 targets EPIC B ships, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
+Computed over the 10 targets EPIC B ships, and over nothing else: CasaOS, Portainer CE, Synology DSM, TrueNAS, Unraid, ZimaOS, Dockge, Generic Docker, OpenMediaVault, Proxmox VE.
 
 **Met.** Every rule that applies to every one of those targets was decided here and held.
 External store approval stays outside this repository's control (§75).
@@ -163,6 +171,27 @@ below, with why.
 | Proactive alerts reach the administrator | N/A | Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet. |
 | Submitted bytes traceable to a recorded build | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 
+#### CasaOS (Tier B, CasaOS AppStore, gated by EPIC B's Phase 5)
+
+| Rule | Outcome | Why |
+|---|---|---|
+| Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's CasaOS section covers "screenshot"; the hardware run has not happened |
+| Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's CasaOS section exercises all four; the hardware run has not happened |
+
+#### Portainer CE (Tier B, no store (documented workflow), gated by EPIC B's Phase 5)
+
+| Rule | Outcome | Why |
+|---|---|---|
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
+| Store description | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Store icon | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Store screenshots | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Release notes | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Privacy disclosure | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Permission rationale | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Support, source and licence materials | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/portainer.md is it. |
+| Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Portainer CE section exercises all four; the hardware run has not happened |
+
 #### Synology DSM (Tier B, Synology Package Center, gated by EPIC B's Phase 5)
 
 | Rule | Outcome | Why |
@@ -191,6 +220,28 @@ below, with why.
 | Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's Unraid section covers "screenshot"; the hardware run has not happened |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Unraid section exercises all four; the hardware run has not happened |
+
+#### ZimaOS (Tier B, ZimaOS app store, gated by EPIC B's Phase 5)
+
+| Rule | Outcome | Why |
+|---|---|---|
+| Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's ZimaOS section covers "screenshot"; the hardware run has not happened |
+| Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's ZimaOS section exercises all four; the hardware run has not happened |
+
+#### Dockge (Tier C, no store (documented workflow), gated by EPIC B's Phase 5)
+
+| Rule | Outcome | Why |
+|---|---|---|
+| Drift gate: image reference | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: this target deploys container/compose.yaml itself, and that file BUILDS the canonical image from container/Dockerfile rather than pulling a published reference, so pinning it to its own output would be circular. Identical to the generic column's answer, and for the identical reason. See distribution/packaging/conformance.json. |
+| Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json. |
+| Store description | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Store icon | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Store screenshots | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Release notes | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Privacy disclosure | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Permission rationale | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Support, source and licence materials | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/dockge.md is it. |
+| Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Dockge section exercises all four; the hardware run has not happened |
 
 #### Generic Docker (Tier C, no store (documented workflow), gated by EPIC B's Phase 5)
 

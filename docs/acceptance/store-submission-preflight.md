@@ -331,6 +331,203 @@ regardless of everything above.
 
 ---
 
+## Portainer CE
+
+**Hardware:** A Linux host running a current Portainer CE release, with a second machine on the same LAN
+**Deliverable:** `docs/submission/portainer.md` (no store (documented workflow))
+
+Portainer has no vendor-run store to submit to. What this section decides is that the App Template and the stack it points at deploy on a real Portainer CE release, that the form Portainer renders asks for every value the stack needs, and that the deployment inherits none of Portainer's own Docker socket access.
+
+### Portainer CE: install
+
+1. Follow `docs/submission/portainer.md` exactly as written, from a machine that is not the
+   Portainer host, and record any step whose wording did not survive contact with the real
+   platform. A workflow document that needs interpreting is a defect in the document.
+2. Add this repository's `apps/portainer/templates.json` as an App Template URL, deploy the
+   entry, and record every field the form asked for. A stack variable the form never offered
+   is the defect this step exists to find.
+3. Sign in through the enrollment link the engine prints, from the second machine.
+4. Configure the real backup set and let it succeed at least once.
+5. Inspect the deployed containers and record that neither of them mounts
+   `/var/run/docker.sock`, neither is privileged, and neither uses host networking.
+
+### Portainer CE: proactive alerts
+
+Run all four conditions from the list above, in this order, recording the evidence the
+preamble asks for:
+
+- `STALE_BACKUP`
+- `REPEATED_FAILURE`
+- `HOST_KEY_CHANGED`
+- `CRITICAL_STORAGE_PRESSURE`
+
+Then answer the question this section exists for, in one sentence: **through which surface
+did the administrator find out?** The expected answer on this target is the application's
+own dashboard health summary, because the platform's native notification capability is
+unsupported at its §4A tier. If the answer is "a log line", that is a reject, and it is the
+finding the whole procedure was written to produce.
+
+### Portainer CE: screenshots
+
+No screenshot is needed: this target has no listing. Capture the App Template form anyway if the workflow document would be clearer with one.
+
+### Portainer CE: removal
+
+Remove the application through the platform's own mechanism and confirm the retained
+artifacts in the backup root are untouched, byte for byte, against the baseline that
+target's own acceptance procedure records. Removal that takes backups with it is a reject
+regardless of everything above.
+
+
+---
+
+## Dockge
+
+**Hardware:** A Linux host running a current Dockge release, with a second machine on the same LAN
+**Deliverable:** `docs/submission/dockge.md` (no store (documented workflow))
+
+Dockge ships no stack of its own on purpose: it imports `container/compose.yaml`, the canonical definition, unmodified. What this section decides is that the import and deploy workflow is followable and that the canonical stack really does deploy through Dockge with no fork of it.
+
+### Dockge: install
+
+1. Follow `docs/submission/dockge.md` exactly as written, from a machine that is not the
+   Dockge host, and record any step whose wording did not survive contact with the real
+   platform. A workflow document that needs interpreting is a defect in the document.
+2. Import `container/compose.yaml` into a Dockge stack directory, drop the `build:` block as
+   `apps/dockge/README.md` describes, and deploy. Record any edit beyond that one: a second
+   required edit is a real incompatibility, and it gets written down here before any code is
+   written for it.
+3. Sign in through the enrollment link the engine prints, from the second machine.
+4. Configure the real backup set and let it succeed at least once.
+
+### Dockge: proactive alerts
+
+Run all four conditions from the list above, in this order, recording the evidence the
+preamble asks for:
+
+- `STALE_BACKUP`
+- `REPEATED_FAILURE`
+- `HOST_KEY_CHANGED`
+- `CRITICAL_STORAGE_PRESSURE`
+
+Then answer the question this section exists for, in one sentence: **through which surface
+did the administrator find out?** The expected answer on this target is the application's
+own dashboard health summary, because the platform's native notification capability is
+unsupported at its §4A tier. If the answer is "a log line", that is a reject, and it is the
+finding the whole procedure was written to produce.
+
+### Dockge: screenshots
+
+No screenshot is needed: this target has no listing. Capture the Dockge stack view anyway if the workflow document would be clearer with one.
+
+### Dockge: removal
+
+Remove the application through the platform's own mechanism and confirm the retained
+artifacts in the backup root are untouched, byte for byte, against the baseline that
+target's own acceptance procedure records. Removal that takes backups with it is a reject
+regardless of everything above.
+
+
+---
+
+## CasaOS
+
+**Hardware:** A machine running a current CasaOS release, with a second machine on the same LAN
+**Deliverable:** `docs/submission/casaos.md` (CasaOS AppStore)
+
+What this section decides is that the store compose file installs from the CasaOS AppStore, that the install dialogue presents every mount and port the runtime actually uses, and that the app tile opens the web UI rather than the engine.
+
+### CasaOS: install
+
+1. Create the four host directories `apps/casaos/README.md` names, owned by uid 1000 and
+   gid 1000, before installing. The runtime image is distroless and cannot create or chown
+   them.
+2. Install from the store entry and record every field the install dialogue asked for and
+   every mount it showed. A mount the dialogue hides is a mount the administrator was never
+   told to create.
+3. Sign in through the enrollment link the engine prints, from the second machine.
+4. Configure the real backup set and let it succeed at least once.
+5. Click the app tile and record which container answered. It has to be the web UI.
+
+### CasaOS: proactive alerts
+
+Run all four conditions from the list above, in this order, recording the evidence the
+preamble asks for:
+
+- `STALE_BACKUP`
+- `REPEATED_FAILURE`
+- `HOST_KEY_CHANGED`
+- `CRITICAL_STORAGE_PRESSURE`
+
+Then answer the question this section exists for, in one sentence: **through which surface
+did the administrator find out?** The expected answer on this target is the application's
+own dashboard health summary, because the platform's native notification capability is
+unsupported at its §4A tier. If the answer is "a log line", that is a reject, and it is the
+finding the whole procedure was written to produce.
+
+### CasaOS: screenshots
+
+Capture the 2 screenshots `docs/submission/screenshots.md` lists for CasaOS AppStore, from this installation, at this version.
+
+### CasaOS: removal
+
+Remove the application through the platform's own mechanism and confirm the retained
+artifacts in the backup root are untouched, byte for byte, against the baseline that
+target's own acceptance procedure records. Removal that takes backups with it is a reject
+regardless of everything above.
+
+
+---
+
+## ZimaOS
+
+**Hardware:** A machine running a current ZimaOS release, with a second machine on the same LAN
+**Deliverable:** `docs/submission/zimaos.md` (ZimaOS app store)
+
+One runtime, a second store registration. This section is the same procedure run again on the other platform, and it is a separate section because the two are submitted and certified separately: a run on the other one is not evidence for this listing.
+
+### ZimaOS: install
+
+1. Create the four host directories `apps/zimaos/README.md` names, owned by uid 1000 and
+   gid 1000, before installing. The runtime image is distroless and cannot create or chown
+   them.
+2. Install from the store entry and record every field the install dialogue asked for and
+   every mount it showed. A mount the dialogue hides is a mount the administrator was never
+   told to create.
+3. Sign in through the enrollment link the engine prints, from the second machine.
+4. Configure the real backup set and let it succeed at least once.
+5. Click the app tile and record which container answered. It has to be the web UI.
+
+### ZimaOS: proactive alerts
+
+Run all four conditions from the list above, in this order, recording the evidence the
+preamble asks for:
+
+- `STALE_BACKUP`
+- `REPEATED_FAILURE`
+- `HOST_KEY_CHANGED`
+- `CRITICAL_STORAGE_PRESSURE`
+
+Then answer the question this section exists for, in one sentence: **through which surface
+did the administrator find out?** The expected answer on this target is the application's
+own dashboard health summary, because the platform's native notification capability is
+unsupported at its §4A tier. If the answer is "a log line", that is a reject, and it is the
+finding the whole procedure was written to produce.
+
+### ZimaOS: screenshots
+
+Capture the 2 screenshots `docs/submission/screenshots.md` lists for ZimaOS app store, from this installation, at this version.
+
+### ZimaOS: removal
+
+Remove the application through the platform's own mechanism and confirm the retained
+artifacts in the backup root are untouched, byte for byte, against the baseline that
+target's own acceptance procedure records. Removal that takes backups with it is a reject
+regardless of everything above.
+
+
+---
+
 ## UGOS Pro
 
 **Hardware:** A UGREEN NAS running UGOS Pro
