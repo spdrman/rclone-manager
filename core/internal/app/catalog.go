@@ -125,12 +125,16 @@ type CatalogRebuildReport struct {
 //
 // # Why DiscoveredAt (and UpdatedAt) become the manifest's RetentionTimestamp
 //
-// internal/retention's GFS and last-known-good calculations both key
-// every decision off state.Record.DiscoveredAt (see
-// internal/retention/gfs.go and lastknowngood.go). A rebuilt row's
-// DiscoveredAt is set to exactly the manifest's RetentionTimestamp, so a
-// rebuilt catalog reaches the identical GFS/last-known-good verdicts the
-// lost journal would have, matching issue #102's own dependency note: "a
+// internal/retention's GFS and last-known-good calculations read two
+// timestamps off a record, not one: state.Record.DiscoveredAt, which that
+// package calls the received timestamp, and Remote.ModTime, the
+// producer's own timestamp, which FR-18 places an artifact by as well
+// whenever it is admissible (see internal/retention/bucketkey.go). A
+// rebuilt row's DiscoveredAt is set to exactly the manifest's
+// RetentionTimestamp, and its Remote.ModTime to the manifest's
+// ProducerTimestamp (see rebuildOne), so a rebuilt catalog reaches the
+// identical GFS/last-known-good verdicts the lost journal would have,
+// matching issue #102's own dependency note: "a
 // rebuilt row has to carry whatever fields internal/retention's GFS and
 // last-known-good decisions actually consume, or a rebuilt catalog would
 // silently make different retention decisions than the journal it

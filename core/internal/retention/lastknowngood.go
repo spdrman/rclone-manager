@@ -132,11 +132,7 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 		return result, nil
 	}
 
-	type candidate struct {
-		artifact model.ArtifactID
-		occurred time.Time
-	}
-	var newest *candidate
+	var newest *lkgCandidate
 
 	for _, rec := range records {
 		if rec.Artifact.Set != set {
@@ -149,8 +145,10 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 			// keeps the quarantined-newest trap from succeeding.
 			continue
 		}
-		if newest == nil || gfsIsNewerRepresentative(rec.Artifact, rec.DiscoveredAt, newest.artifact, newest.occurred) {
-			newest = &candidate{artifact: rec.Artifact, occurred: rec.DiscoveredAt}
+		cand := newLKGCandidate(rec)
+		if newest == nil || cand.newerThan(*newest) {
+			c := cand
+			newest = &c
 		}
 	}
 
@@ -161,8 +159,86 @@ func LastKnownGoodDecide(cfg config.Retention, set model.BackupSetID, records []
 
 	result.Protected = true
 	result.Artifact = newest.artifact
-	result.Reason = fmt.Sprintf("artifact %q is the newest eligible restore point in this backup set and holds FR-19 last-known-good protection", newest.artifact.Name)
+	result.Reason = fmt.Sprintf("artifact %q is the newest eligible restore point in this backup set, dated %s %s, and holds FR-19 last-known-good protection",
+		newest.artifact.Name, newest.retention.UTC().Format(time.RFC3339), newest.provenance())
 	return result, nil
+}
+
+// lkgCandidate is one eligible artifact as FR-19 orders it.
+//
+// retention is the artifact's own retention date, resolved exactly the way
+// FR-18's producer pass resolves it (bucketkey.go's gfsRetentionInstant):
+// the producer's own timestamp when the backend reported an admissible
+// one, and the discovery timestamp otherwise. Ordering on that rather than
+// on the discovery timestamp is what makes "the newest eligible restore
+// point" mean the newest backup instead of the newest arrival, which is
+// the whole of issue #192 as it reaches FR-19: an ingested backlog whose
+// six artifacts all arrived in the same cycle used to resolve entirely on
+// the artifact-name tie-break, and cheerfully described the oldest file in
+// the set as the newest restore point.
+//
+// # Why an untrusted producer timestamp is safe to order on here
+//
+// A producer can back-date its newest artifact so that an older one looks
+// newest and takes the protection. What it cannot do is take the newest
+// artifact out of KEEP: an artifact this manager discovered recently is
+// placed by FR-18's discovery pass on today's date, today falls inside
+// every enabled tier's window by construction, and so it is always some
+// bucket's representative. The attack therefore costs a label, not a
+// restore point. A forward-dated timestamp is refused outright before it
+// gets this far (gfsProducerInstant), so a producer cannot simply claim
+// tomorrow and take the protection that way.
+type lkgCandidate struct {
+	artifact     model.ArtifactID
+	retention    time.Time
+	discovered   time.Time
+	fromProducer bool
+	refusal      gfsProducerRefusal
+}
+
+func newLKGCandidate(rec state.Record) lkgCandidate {
+	ts, fromProducer, refusal := gfsRetentionInstant(rec)
+	return lkgCandidate{
+		artifact:     rec.Artifact,
+		retention:    ts,
+		discovered:   gfsDiscoveryInstant(rec),
+		fromProducer: fromProducer,
+		refusal:      refusal,
+	}
+}
+
+// newerThan orders two candidates: retention date first, then the
+// discovery timestamp, then the artifact name. The name is last and is what makes
+// the answer independent of the order records arrived in; the discovery
+// timestamp sits ahead of it so that two artifacts sharing a retention
+// date (a backend that reports whole-second or whole-day mtimes, say)
+// still resolve on something meaningful before falling back to
+// alphabetical order.
+func (c lkgCandidate) newerThan(other lkgCandidate) bool {
+	if !c.retention.Equal(other.retention) {
+		return c.retention.After(other.retention)
+	}
+	if !c.discovered.Equal(other.discovered) {
+		return c.discovered.After(other.discovered)
+	}
+	return c.artifact.Name > other.artifact.Name
+}
+
+// provenance says which of the two timestamps produced this candidate's
+// date, and when it was not the producer's, why not. An operator reading
+// a retention preview has to be able to tell those apart: "newest" means
+// something different under each, and issue #192 was filed because the
+// line said neither.
+func (c lkgCandidate) provenance() string {
+	if c.fromProducer {
+		return "by the producer's own timestamp on the remote object"
+	}
+	switch c.refusal {
+	case gfsProducerAfterDiscovery:
+		return "by the time this manager discovered it (the remote's own timestamp is later than that, which a completed artifact cannot be, so it was refused as untrustworthy)"
+	default:
+		return "by the time this manager discovered it (the remote reported no usable modification time)"
+	}
 }
 
 // ApplyLastKnownGood folds lkg into verdicts, producing the FR-18 ∪ FR-19
