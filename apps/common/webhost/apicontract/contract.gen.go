@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "370e221519baeb4e700cbe68b6b4ebe3a46b54d5ff26fb85665c0e3bd9a12b12"
+const ContractSHA256 = "1d62e9f764d3a5ecbafdcb3cb26ee248fa1e92c3427549331a2629a4916b3c8e"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -678,23 +678,24 @@ type BackupSet struct {
 // health, and it deliberately carries no process or build fact: a
 // running service is not evidence that backups are landing.
 type BackupSetHealth struct {
-	BackupSetID           string `json:"backup_set_id"`
-	CurrentTransfers      int    `json:"current_transfers"`
-	Failures              int    `json:"failures"`
-	FreeBytes             uint64 `json:"free_bytes,omitempty"`
-	FreeBytesKnown        bool   `json:"free_bytes_known"`
-	LastCompletedBackupAt string `json:"last_completed_backup_at,omitempty"`
-	NewestGoodBackupAt    string `json:"newest_good_backup_at,omitempty"`
-	PendingDeletes        int    `json:"pending_deletes"`
-	QuarantinedCount      int    `json:"quarantined_count"`
-	QuarantinedLostCount  int    `json:"quarantined_lost_count"`
-	Reason                string `json:"reason"`
-	SetName               string `json:"set_name"`
-	SourceName            string `json:"source_name"`
-	StaleAfterSeconds     int64  `json:"stale_after_seconds"`
-	State                 string `json:"state"`
-	StorageLevel          string `json:"storage_level,omitempty"`
-	TotalBytes            uint64 `json:"total_bytes,omitempty"`
+	BackupSetID                   string `json:"backup_set_id"`
+	CurrentTransfers              int    `json:"current_transfers"`
+	Failures                      int    `json:"failures"`
+	FreeBytes                     uint64 `json:"free_bytes,omitempty"`
+	FreeBytesKnown                bool   `json:"free_bytes_known"`
+	LastCompletedBackupAt         string `json:"last_completed_backup_at,omitempty"`
+	NewestGoodBackupAt            string `json:"newest_good_backup_at,omitempty"`
+	PendingDeletes                int    `json:"pending_deletes"`
+	QuarantinedCount              int    `json:"quarantined_count"`
+	QuarantinedLostCount          int    `json:"quarantined_lost_count"`
+	Reason                        string `json:"reason"`
+	ReinstatedRemoteRetainedCount int    `json:"reinstated_remote_retained_count"`
+	SetName                       string `json:"set_name"`
+	SourceName                    string `json:"source_name"`
+	StaleAfterSeconds             int64  `json:"stale_after_seconds"`
+	State                         string `json:"state"`
+	StorageLevel                  string `json:"storage_level,omitempty"`
+	TotalBytes                    uint64 `json:"total_bytes,omitempty"`
 }
 
 // BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads

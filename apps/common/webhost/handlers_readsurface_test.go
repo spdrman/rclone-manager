@@ -667,6 +667,58 @@ func TestSystemHealth_ReportsNoProcessOrBuildFact(t *testing.T) {
 	}
 }
 
+// Issue #227. A reinstated backup's remote source is preserved forever,
+// and the count of them has to reach the API, not only the CLI: the Web UI
+// and any scraper read this endpoint, and "how many remote sources am I
+// holding" is a question asked months after the reinstatement, not at the
+// moment of it.
+//
+// Two sets with different counts, and a zero that must be PRESENT rather
+// than omitted. Unlike free_bytes, zero here is a real reading: the count
+// comes from the journal the health pass already holds open, and a read
+// that fails makes the whole report a 500 (the test below) instead of a
+// reassuring zero.
+func TestSystemHealth_ReportsReinstatedRemoteRetainedCount(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.health = service.HealthReport{
+		GeneratedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+		BackupSets: []service.BackupSetHealth{
+			{
+				BackupSetID: "production/postgres", SourceName: "production", SetName: "postgres",
+				State: "HEALTHY", Reason: "fresh", StaleAfter: 24 * time.Hour,
+				ReinstatedRemoteRetainedCount: 3,
+			},
+			{
+				BackupSetID: "production/media", SourceName: "production", SetName: "media",
+				State: "HEALTHY", Reason: "fresh", StaleAfter: 24 * time.Hour,
+			},
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/system/health")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body healthResponse
+	decodeInto(t, rec, &body)
+	if len(body.BackupSets) != 2 {
+		t.Fatalf("len = %d, want 2", len(body.BackupSets))
+	}
+	if body.BackupSets[0].ReinstatedRemoteRetainedCount != 3 {
+		t.Errorf("ReinstatedRemoteRetainedCount = %d, want 3", body.BackupSets[0].ReinstatedRemoteRetainedCount)
+	}
+	if body.BackupSets[1].ReinstatedRemoteRetainedCount != 0 {
+		t.Errorf("second set ReinstatedRemoteRetainedCount = %d, want 0", body.BackupSets[1].ReinstatedRemoteRetainedCount)
+	}
+
+	second, err := json.Marshal(body.BackupSets[1])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(second), `"reinstated_remote_retained_count":0`) {
+		t.Errorf("a set holding no reinstated remote sources omitted the count instead of reporting 0; an absent field reads as \"this build does not know\": %s", second)
+	}
+}
+
 func TestSystemHealth_AFailedComputationIs500Internal(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
 	rt.backend.errOnHealth = errors.New("statfs: no such file or directory")

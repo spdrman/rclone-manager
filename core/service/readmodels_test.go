@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/spdrman/rclone-manager/core/internal/health"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 )
 
 // TestListArtifacts_ReportsWhatARealCycleProduced is GET /api/v1/backups.
@@ -552,4 +555,53 @@ func TestHealth_CarriesTheCapacityAssessmentForEachSet(t *testing.T) {
 	if bs.StorageLevel == "" {
 		t.Error("StorageLevel is empty for a readable destination, so an unreadable one would be indistinguishable")
 	}
+}
+
+// TestToServiceBackupSetHealth_CarriesEveryCountThrough. This layer is a
+// pure translation from internal/health's value to the provider-agnostic
+// one the API renders, and the way a translation breaks is by silently
+// dropping a field: the result still compiles, still serialises, and
+// reports a confident zero for something the core computed correctly.
+//
+// Issue #227's reinstated-remote count is the one that matters most here,
+// because zero is its resting value: a dropped field looks exactly like a
+// deployment that has never reinstated anything, which is the reassuring
+// answer. Every other count is asserted alongside it with a distinct
+// value, so a mapping that crossed two fields fails rather than passing on
+// a pair that happened to match.
+func TestToServiceBackupSetHealth_CarriesEveryCountThrough(t *testing.T) {
+	got := toServiceBackupSetHealth(health.BackupSetHealth{
+		Set:                           mustBackupSetID(t, "production", "postgres-primary"),
+		State:                         health.Degraded,
+		Reason:                        "a known-good backup exists but the newest artifact is quarantined",
+		PendingDeletes:                2,
+		Failures:                      3,
+		QuarantinedCount:              4,
+		QuarantinedLostCount:          1,
+		ReinstatedRemoteRetainedCount: 5,
+	})
+
+	for _, c := range []struct {
+		name      string
+		got, want int
+	}{
+		{"PendingDeletes", got.PendingDeletes, 2},
+		{"Failures", got.Failures, 3},
+		{"QuarantinedCount", got.QuarantinedCount, 4},
+		{"QuarantinedLostCount", got.QuarantinedLostCount, 1},
+		{"ReinstatedRemoteRetainedCount", got.ReinstatedRemoteRetainedCount, 5},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+func mustBackupSetID(t *testing.T, source, set string) model.BackupSetID {
+	t.Helper()
+	id, err := model.NewBackupSetID(source, set)
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	return id
 }

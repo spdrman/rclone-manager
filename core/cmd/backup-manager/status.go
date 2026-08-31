@@ -56,6 +56,18 @@ func cmdStatus(args []string) int {
 		fmt.Printf("  stale threshold: %s\n", bs.StaleThreshold)
 		fmt.Printf("  current transfers: %d, pending deletes: %d, failures: %d\n", len(bs.CurrentTransfers), bs.PendingDeletes, bs.Failures)
 		fmt.Printf("  quarantined: %d (of which unrecoverable: %d)\n", bs.QuarantinedCount, bs.QuarantinedLostCount)
+		// Issue #227. Printed only when there are any, because for most
+		// deployments this is permanently zero and a line that always
+		// reads zero is a line an operator stops seeing. When it is not
+		// zero it needs a sentence, not a number: the count means storage
+		// is accumulating on a machine this manager does not measure, and
+		// the reader has to be told both that this manager will never
+		// reclaim it and that nobody here knows how much it is.
+		if bs.ReinstatedRemoteRetainedCount > 0 {
+			fmt.Printf("  reinstated, remote source kept: %d\n", bs.ReinstatedRemoteRetainedCount)
+			fmt.Printf("    these were re-trusted after quarantine, so this manager will never delete their remote copies.\n")
+			fmt.Printf("    how much they occupy on the source is not known here; releasing them is your decision, made there.\n")
+		}
 		if bs.FreeBytes != nil {
 			fmt.Printf("  free space: %d bytes\n", *bs.FreeBytes)
 		}

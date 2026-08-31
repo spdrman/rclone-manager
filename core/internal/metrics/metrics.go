@@ -123,6 +123,20 @@ func Render(report health.Report) string {
 			return float64(s.QuarantinedLostCount), true
 		})
 
+	// Issue #227. A reinstated artifact never authorises deleting its
+	// remote source again, so this number only ever grows, and a scrape is
+	// the surface that answers "is it growing" over the months an operator
+	// would actually notice it in. There is deliberately no companion
+	// bytes metric: see health.BackupSetHealth's own field doc for why the
+	// size of those preserved remote objects is not a fact this manager
+	// has. Unlike free_bytes below, a zero here is a real reading rather
+	// than a missing one, so the sample always renders.
+	writeGauge(&b, sets, "reinstated_remote_retained",
+		"Artifacts reinstated out of quarantine that still hold a remote source this manager will never delete. The bytes those remote objects occupy are deliberately not reported: this manager cannot see them.",
+		func(s health.BackupSetHealth) (float64, bool) {
+			return float64(s.ReinstatedRemoteRetainedCount), true
+		})
+
 	writeGauge(&b, sets, "current_transfers",
 		"Artifacts currently TRANSFERRING for this backup set.",
 		func(s health.BackupSetHealth) (float64, bool) {

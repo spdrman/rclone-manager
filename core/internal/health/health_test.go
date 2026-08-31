@@ -78,7 +78,7 @@ func TestNewReportBundlesWithoutRecomputing(t *testing.T) {
 	now := time.Now().UTC()
 	process := NewProcessHealth(ProcessInputs{BinaryVersion: "dev", RcloneVersion: "v1.75.0"})
 	sets := []BackupSetHealth{
-		ComputeBackupSetHealth(testSet, nil, day, BackupSetInputs{}, now),
+		ComputeBackupSetHealth(testSet, nil, nil, day, BackupSetInputs{}, now),
 	}
 
 	report := NewReport(process, sets, now)

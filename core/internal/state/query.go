@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
@@ -406,6 +407,88 @@ func (j *Journal) RecentActivity(ctx context.Context, limit int) ([]ActivityReco
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("state: recent activity: %w", err)
+	}
+	return out, nil
+}
+
+// TransitionEdge names one exact from -> to move in the append-only
+// transition log. It is the plain-string pair LastTransition takes two
+// arguments for, lifted into a value so a caller can ask about several
+// edges in one query.
+//
+// The state names are strings rather than a typed vocabulary because this
+// package does not own that vocabulary: internal/lifecycle does (see
+// Record.State), and it imports this package.
+type TransitionEdge struct {
+	From string
+	To   string
+}
+
+// ArtifactsWithAnyTransition returns every artifact in set whose
+// append-only transition log contains at least one of edges, in journal
+// row order, each artifact once however many matching rows it has.
+//
+// This is the set-wide form of LastTransition above, and it exists for one
+// reason: FR-24's health pass reports on a whole backup set, and asking
+// LastTransition once per artifact per edge is a round trip per artifact
+// per edge on every status call, every dashboard load and every scrape,
+// against a table that only ever grows. The per-artifact read stays where
+// it is, because internal/lifecycle's delete gate decides one artifact's
+// fate and must ask about exactly that artifact.
+//
+// It answers about the LOG, not about current state, which is the whole
+// value of it: an artifact that was reinstated out of quarantine and one
+// that was never distrusted both simply read COMMITTED on the artifacts
+// row, and this table is the only place that still tells them apart.
+//
+// An empty edges is refused rather than answered. A caller that names no
+// edges has asked nothing, and returning an empty slice for that would be
+// indistinguishable from "no artifact in this set has taken any of the
+// edges you care about", which is the reassuring answer and exactly the
+// one a reporting caller must never be handed by accident.
+func (j *Journal) ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []TransitionEdge) ([]model.ArtifactID, error) {
+	if len(edges) == 0 {
+		return nil, fmt.Errorf("state: artifacts with any transition: no edges named; an empty edge set asks nothing and must not be answered with an empty result")
+	}
+
+	args := []any{set.Source, set.Set}
+	var conditions strings.Builder
+	for i, e := range edges {
+		if i > 0 {
+			conditions.WriteString(" OR ")
+		}
+		conditions.WriteString("(t.from_state = ? AND t.to_state = ?)")
+		args = append(args, e.From, e.To)
+	}
+
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT a.artifact_name
+		   FROM artifacts a
+		  WHERE a.source = ? AND a.backup_set = ?
+		    AND EXISTS (
+		          SELECT 1 FROM state_transitions t
+		           WHERE t.artifact_id = a.id AND (`+conditions.String()+`)
+		    )
+		  ORDER BY a.id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("state: artifacts with any transition for %s: %w", set, err)
+	}
+	defer rows.Close()
+
+	var out []model.ArtifactID
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("state: artifacts with any transition for %s: %w", set, err)
+		}
+		artifact, err := model.NewArtifactID(set, name)
+		if err != nil {
+			return nil, fmt.Errorf("state: artifacts with any transition for %s: stored artifact %q is invalid: %w", set, name, err)
+		}
+		out = append(out, artifact)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state: artifacts with any transition for %s: %w", set, err)
 	}
 	return out, nil
 }

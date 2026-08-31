@@ -49,7 +49,7 @@ const day = 24 * time.Hour
 
 func TestNoRecordsIsDegradedNotStale(t *testing.T) {
 	now := time.Now().UTC()
-	got := ComputeBackupSetHealth(testSet, nil, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, nil, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (a set with no backups yet must never read as STALE, which implies backups stopped)", got.State, Degraded)
@@ -67,7 +67,7 @@ func TestRecentFirstAttemptInProgressIsDegradedNotStale(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Transferring, now.Add(-time.Hour), now.Add(-time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (first backup still in flight, well within the stale window)", got.State, Degraded)
@@ -81,7 +81,7 @@ func TestNoGoodBackupAndNoRecentActivityIsStale(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Discovered, now.Add(-10*day), now.Add(-9*day)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Stale {
 		t.Fatalf("State = %s, want %s (no known-good backup, and nothing has happened in days)", got.State, Stale)
@@ -93,7 +93,7 @@ func TestFreshKnownGoodBackupIsHealthy(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Healthy {
 		t.Fatalf("State = %s, want %s", got.State, Healthy)
@@ -116,7 +116,7 @@ func TestCommittedButNotYetRemoteDeletedCountsAsKnownGood(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Committed, now.Add(-2*day), now.Add(-time.Hour)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Healthy {
 		t.Fatalf("State = %s, want %s", got.State, Healthy)
@@ -134,7 +134,7 @@ func TestExactlyAtStaleThresholdIsStillFresh(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-day)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Healthy {
 		t.Fatalf("State = %s, want %s (age == threshold should be inclusive-fresh)", got.State, Healthy)
@@ -146,7 +146,7 @@ func TestOneNanosecondPastStaleThresholdIsStale(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-day-time.Nanosecond)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Stale {
 		t.Fatalf("State = %s, want %s", got.State, Stale)
@@ -159,7 +159,7 @@ func TestFreshGoodBackupWithQuarantinedNewestArrivalIsDegradedNotHealthy(t *test
 		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 		rec("b.dump", lifecycle.Quarantined, now.Add(-time.Minute), now.Add(-time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (something arrived but isn't trustworthy, so this is not HEALTHY)", got.State, Degraded)
@@ -180,7 +180,7 @@ func TestQuarantinedLostAlwaysFailsEvenWithFreshGoodBackup(t *testing.T) {
 		// ...but a newer one is a perfectly good, fresh restore point.
 		rec("new.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Failing {
 		t.Fatalf("State = %s, want %s: QUARANTINED_LOST must never read as merely DEGRADED, no matter how fresh other backups are", got.State, Failing)
@@ -198,7 +198,7 @@ func TestQuarantinedLostOutweighsStale(t *testing.T) {
 	records := []state.Record{
 		rec("old.dump", lifecycle.QuarantinedLost, now.Add(-30*day), now.Add(-29*day)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Failing {
 		t.Fatalf("State = %s, want %s", got.State, Failing)
@@ -211,7 +211,7 @@ func TestStuckFailureIsFailingEvenWithFreshGoodBackup(t *testing.T) {
 		rec("good.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 		rec("stuck.dump", lifecycle.Failed, now.Add(-time.Minute), now.Add(-time.Minute)), // no NextRetryAt: exhausted
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Failing {
 		t.Fatalf("State = %s, want %s (a FAILED artifact with no retry scheduled needs a human)", got.State, Failing)
@@ -227,7 +227,7 @@ func TestRetryingFailureWithFreshGoodBackupIsDegradedNotFailing(t *testing.T) {
 		rec("good.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
 		withRetry(rec("retrying.dump", lifecycle.Failed, now.Add(-time.Minute), now.Add(-time.Minute)), now.Add(5*time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.State != Degraded {
 		t.Fatalf("State = %s, want %s (a scheduled retry is not yet a FAILING condition)", got.State, Degraded)
@@ -241,7 +241,7 @@ func TestPendingDeletesAndCurrentTransfersAreCounted(t *testing.T) {
 		rec("deleting.dump", lifecycle.RemoteDeletePending, now.Add(-3*day), now.Add(-2*day)),
 		rec("transferring.dump", lifecycle.Transferring, now.Add(-time.Minute), now.Add(-time.Minute)),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.PendingDeletes != 1 {
 		t.Fatalf("PendingDeletes = %d, want 1", got.PendingDeletes)
@@ -270,7 +270,7 @@ func TestInjectedInputsPassThroughUnchangedAndNeverAffectState(t *testing.T) {
 		LastRetentionRunAt:   &retention,
 		FreeBytes:            &free,
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, in, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, in, now)
 
 	if got.State != Stale {
 		t.Fatalf("State = %s, want %s: a recent successful poll must not paper over a stale backup (invariant 14)", got.State, Stale)
@@ -296,7 +296,7 @@ func TestUnknownJournalStateStringDoesNotCrashOrCountAsGood(t *testing.T) {
 			UpdatedAt:    now.Add(-time.Minute),
 		},
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 
 	if got.NewestGoodBackupAt != nil {
 		t.Fatalf("an unrecognized state must never be counted as known-good, got %v", got.NewestGoodBackupAt)
@@ -313,7 +313,7 @@ func TestZeroOrNegativeStaleThresholdDoesNotPanic(t *testing.T) {
 		rec("a.dump", lifecycle.Complete, now.Add(-time.Hour), now.Add(-time.Second)),
 	}
 	for _, threshold := range []time.Duration{0, -time.Hour} {
-		got := ComputeBackupSetHealth(testSet, records, threshold, BackupSetInputs{}, now)
+		got := ComputeBackupSetHealth(testSet, records, nil, threshold, BackupSetInputs{}, now)
 		if got.State == Healthy {
 			t.Fatalf("threshold %s: State = %s, a non-positive stale threshold should never read as HEALTHY", threshold, got.State)
 		}
@@ -334,7 +334,7 @@ func TestMultipleBackupSetsInputsStayIndependent(t *testing.T) {
 	records := []state.Record{
 		rec("a.dump", lifecycle.Complete, now.Add(-time.Hour), now),
 	}
-	got := ComputeBackupSetHealth(testSet, records, day, BackupSetInputs{}, now)
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
 	if got.Set != testSet {
 		t.Fatalf("Set = %v, want %v", got.Set, testSet)
 	}
