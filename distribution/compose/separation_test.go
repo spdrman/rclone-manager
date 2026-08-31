@@ -47,13 +47,13 @@ const backupDataPath = "/data/backups"
 // separationEnv is contract_test.go's env() plus every other variable a
 // registered artifact interpolates into a host path.
 //
-// Supplying them is not cosmetic. compose.Document.Mounts splits a short
-// -syntax volume on ":", so an unexpanded ${DISK:?set DISK in ...} — whose
-// default-message half contains colons of its own — parses into a host
-// path that matches no container path at all, and every mount rule keyed
-// on a container path then finds nothing and reports nothing. That is a
-// silent fail-open, which is why the suite below FAILS rather than skips
-// when an artifact yields no backup destination.
+// Supplying them is not cosmetic. compose.Document.Mounts splits a
+// short-syntax volume on ":", so an unexpanded ${DISK:?set DISK in ...},
+// whose default-message half contains colons of its own, parses into a
+// host path that matches no container path at all, and every mount rule
+// keyed on a container path then finds nothing and reports nothing. That
+// is a silent fail-open, which is why the suite below FAILS rather than
+// skips when an artifact yields no backup destination.
 func separationEnv() map[string]string {
 	out := map[string]string{
 		"DISK":     "/srv/dev-disk-by-uuid-0000",

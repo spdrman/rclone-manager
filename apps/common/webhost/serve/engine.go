@@ -5,6 +5,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 )
 
@@ -76,24 +77,37 @@ func NewEngine(cfg EngineConfig) http.Handler {
 	mux.Handle("/health/", apiRouter)
 	mux.Handle("/api/v1/", apiRouter)
 
-	handler := local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)
+	// Order matters and is the whole point of doing this here rather than
+	// inside the router. StripUntrustedIdentity is outermost, so a forged
+	// identity header is gone before the CSRF middleware, the auth routes,
+	// the /api/v1 router or anything either of them logs has a chance to
+	// read it: "refused" and "never observed" are different claims, and
+	// issue #87 asks for the second.
+	return StripUntrustedIdentity(gatewayOf(cfg.Platform))(
+		SecurityHeaders(
+			local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)))
+}
 
-	// The identity strip, on the request path rather than described in a
-	// doc comment. A gateway Authenticator decides whether to BELIEVE the
-	// header; this deletes it outright for an untrusted peer, so nothing
-	// downstream - a handler, a log line, a future middleware - can read
-	// a value that was never trusted. serve.NewUI runs the same strip one
-	// hop out, where the client's own address is still visible; see
-	// IdentitySanitizer's doc for why both hops do it.
-	if cfg.Platform != nil {
-		if s, ok := cfg.Platform.Authenticator().(IdentitySanitizer); ok {
-			inner := handler
-			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				s.Sanitize(r.Header, r.RemoteAddr)
-				inner.ServeHTTP(w, r)
-			})
-		}
+// gatewayOf reports the trusted-peer boundary the running profile
+// authenticates against, or nil for a profile that has none.
+//
+// It is READ OFF the adapter's own Authenticator rather than configured
+// separately, and that is the point: the thing that decides whether to
+// believe an identity header and the thing that decides whether to strip
+// one have to be the same object, or a deployment eventually ends up with
+// an engine stripping against one peer list and authenticating against
+// another. A second EngineConfig field would have made that drift
+// possible; there is nothing here to set inconsistently.
+//
+// nil is never "skip the check". StripUntrustedIdentity reads nil as "no
+// peer is trusted at this hop", which for a profile with no gateway is
+// exactly right: a generic-profile engine has no reason to forward a UGOS
+// identity header inwards, and every reason not to on the day somebody
+// restarts it with --profile=ugos.
+func gatewayOf(platform capabilities.PlatformAdapter) *profile.CompiledGateway {
+	if platform == nil {
+		return nil
 	}
-
-	return handler
+	gw, _ := platform.Authenticator().(*profile.CompiledGateway)
+	return gw
 }

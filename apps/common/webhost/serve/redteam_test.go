@@ -77,11 +77,19 @@ type stack struct {
 	profile   profile.Profile
 }
 
-// newStack builds the composition. engineTrusts is the trusted-peer range
-// the ENGINE is configured with; in the shipped topology that range has
-// to contain the UI host, which is why loopbackCIDRs is the realistic
+// newStack builds the composition with NO gateway configured at the edge,
+// which is the shipped default: the UI host faces the LAN and can prove
+// nothing about who it is talking to. engineTrusts is the trusted-peer
+// range the ENGINE is configured with; in the shipped topology that range
+// has to contain the UI host, which is why loopbackCIDRs is the realistic
 // value and not a weakened one.
 func newStack(t *testing.T, engineTrusts []string) *stack {
+	return newStackWithEdgeGateway(t, engineTrusts, nil)
+}
+
+// newStackWithEdgeGateway is newStack with the edge told where its
+// platform gateway is. edgeTrusts nil means the edge trusts nobody.
+func newStackWithEdgeGateway(t *testing.T, engineTrusts, edgeTrusts []string) *stack {
 	t.Helper()
 
 	configPath := writeTestConfig(t)
@@ -110,10 +118,18 @@ func newStack(t *testing.T, engineTrusts []string) *stack {
 	if err != nil {
 		t.Fatalf("parse engine URL: %v", err)
 	}
-	edge := httptest.NewServer(serve.NewUI(serve.UIConfig{
+	uiCfg := serve.UIConfig{
 		Upstream: upstream,
 		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("<!doctype html><title>ui</title>")}},
-	}))
+	}
+	if edgeTrusts != nil {
+		compiled, cErr := (&profile.Gateway{TrustedPeers: edgeTrusts, UsernameHeader: p.Gateway.UsernameHeader}).Compile()
+		if cErr != nil {
+			t.Fatalf("compile edge gateway: %v", cErr)
+		}
+		uiCfg.Gateway = compiled
+	}
+	edge := httptest.NewServer(serve.NewUI(uiCfg))
 	t.Cleanup(edge.Close)
 
 	return &stack{edgeURL: edge.URL, engineURL: engine.URL, header: p.Gateway.UsernameHeader, profile: p}
@@ -453,7 +469,7 @@ func TestASmuggledPipelinedRequestIsStrippedToo(t *testing.T) {
 		if dialErr != nil {
 			t.Fatalf("dial edge: %v", dialErr)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 		if _, wErr := io.WriteString(conn, raw); wErr != nil {
 			t.Fatalf("write: %v", wErr)
@@ -662,5 +678,84 @@ func TestTheAPISurfaceIsAlsoNosniff(t *testing.T) {
 	}
 	if got := headers.Get("X-Content-Type-Options"); !strings.EqualFold(got, "nosniff") {
 		t.Errorf("X-Content-Type-Options = %q on an /api/v1 response, want nosniff", got)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The positive control for the whole boundary
+// ---------------------------------------------------------------------
+
+// TestTheTrustedGatewayPathStillWorksThroughTheEdge is issue #87's
+// required positive control: with the edge told where its platform
+// gateway is, a request from that gateway authenticates end to end,
+// through both hops, on the same composition every attack above ran
+// against.
+//
+// Without this, every refusal in this file could equally be explained by
+// the identity path having been broken outright, and "refused" and
+// "nothing works" would be the same green.
+func TestTheTrustedGatewayPathStillWorksThroughTheEdge(t *testing.T) {
+	s := newStackWithEdgeGateway(t, loopbackCIDRs, loopbackCIDRs)
+
+	req := mustRequest(t, http.MethodGet, s.edgeURL+"/api/v1/backup-sets")
+	req.Header.Set(s.header, "operator")
+	code, _, body := do(t, req)
+	if code != http.StatusOK {
+		t.Fatalf("the trusted-gateway path returned %d, want 200: %s\n"+
+			"the boundary now refuses the gateway it is configured to believe, so every refusal in this file proves nothing", code, body)
+	}
+	if !strings.Contains(string(body), "backup_sets") {
+		t.Errorf("the trusted-gateway response is not the backup-set list: %s", body)
+	}
+
+	// The same edge, same listener, same request shape, from a peer the
+	// edge does not trust: the whole point of configuring a gateway is
+	// that it is a boundary and not a switch.
+	untrustedEdge := newStackWithEdgeGateway(t, loopbackCIDRs, untrustedCIDRs)
+	req2 := mustRequest(t, http.MethodGet, untrustedEdge.edgeURL+"/api/v1/backup-sets")
+	req2.Header.Set(untrustedEdge.header, "operator")
+	if code, _, body := do(t, req2); code != http.StatusUnauthorized {
+		t.Fatalf("an edge configured to trust a range this request did not come from answered %d, want 401: %s", code, body)
+	}
+}
+
+// TestTheTrustedGatewayStillCannotSetAnotherProfilesIdentity. A gateway
+// is trusted to assert the identity of the profile it belongs to, and
+// nothing else. A header belonging to a profile this process is not
+// running has no provenance even coming from the right peer, and letting
+// it through would make the next profile added to the table a change in
+// what today's deployments believe.
+func TestTheTrustedGatewayStillCannotSetAnotherProfilesIdentity(t *testing.T) {
+	const foreign = "X-Some-Other-Platform-User"
+
+	compiled, err := (&profile.Gateway{TrustedPeers: loopbackCIDRs, UsernameHeader: profile.UGOS.Profile().Gateway.UsernameHeader}).Compile()
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	h := http.Header{}
+	h.Set(profile.UGOS.Profile().Gateway.UsernameHeader, "operator")
+	h.Set(foreign, "operator")
+	h.Set("X-Benign-Passthrough", "keep-me")
+	compiled.Sanitize(h, "127.0.0.1:5000")
+
+	if h.Get(profile.UGOS.Profile().Gateway.UsernameHeader) != "operator" {
+		t.Error("the trusted gateway's own identity header was stripped, so the gateway path cannot work at all")
+	}
+	if h.Get("X-Benign-Passthrough") != "keep-me" {
+		t.Error("Sanitize removed a header that is none of its business")
+	}
+	// Only meaningful once a second profile declares a header; today the
+	// table has one, so this asserts the rule on the shape rather than on
+	// a second live profile.
+	if len(profile.IdentityHeaders()) > 1 {
+		for _, name := range profile.IdentityHeaders() {
+			if name == compiled.UsernameHeader() {
+				continue
+			}
+			if h.Get(name) != "" {
+				t.Errorf("%s survived a request from a gateway that does not own it", name)
+			}
+		}
 	}
 }

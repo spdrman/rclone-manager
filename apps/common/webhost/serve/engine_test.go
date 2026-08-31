@@ -586,7 +586,7 @@ func TestUI_StripsAClientSuppliedIdentityHeader(t *testing.T) {
 	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
 		Upstream: upstream,
 		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}},
-		Identity: mustCompileGateway(t, "192.0.2.0/24"),
+		Gateway:  mustCompileGateway(t, "192.0.2.0/24"),
 	}))
 	t.Cleanup(ui.Close)
 
@@ -624,7 +624,7 @@ func TestUI_ForwardsTheIdentityHeaderFromTheTrustedGateway(t *testing.T) {
 	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
 		Upstream: upstream,
 		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}},
-		Identity: mustCompileGateway(t, "127.0.0.0/8", "::1/128"),
+		Gateway:  mustCompileGateway(t, "127.0.0.0/8", "::1/128"),
 	}))
 	t.Cleanup(ui.Close)
 

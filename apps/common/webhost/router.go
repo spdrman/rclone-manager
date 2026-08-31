@@ -198,11 +198,26 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// calls a materially more dangerous configuration. It is
 		// dangerous because it widens what a LATER retention apply may
 		// delete, and that apply is POST /backup-sets/{source}/{set}/
-		// retention/apply, which already carries requireDestructiveGate
-		// and already re-reads the policy at plan time. So the gate still
-		// stands between this deployment and every deletion; putting a
-		// second copy of it here would move nothing except the settings
-		// form, which would be permanently inert until #92 lands.
+		// retention/apply, which already re-reads the policy at plan
+		// time. Putting a copy of the destructive gate here would move
+		// nothing except the settings form, which would be permanently
+		// inert until #92 lands.
+		//
+		// Issue #87 (B5.1) red-teamed that argument and kept the
+		// conclusion while replacing the reason. This route used to be
+		// justified by "the gate still stands between this deployment and
+		// every deletion", and the gate cannot carry that: DestructiveGate
+		// is a static, deployment-wide attestation (gate.go) that #92
+		// flips to true once and for good, after which it stands between
+		// nothing and nothing. What actually holds, before and after #92,
+		// is that a retention plan is bound to the configuration revision
+		// it was computed against, so any settings write in between makes
+		// the plan the operator approved stale, and the preview they
+		// re-confirm afterwards is computed under the new policy with the
+		// widened DELETE list visible in it. That mechanism is what makes
+		// this route unable to widen an already-approved deletion, and it
+		// is pinned at THIS boundary by settings_gate_test.go, not only a
+		// layer down.
 		//
 		// That argument is a chain, not a claim, so it is pinned by tests
 		// rather than by this comment: core/service's
@@ -210,7 +225,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// drives a settings write in between a preview and its apply and
 		// asserts the apply is refused with ErrRetentionPlanStale and
 		// nothing is deleted, with a control proving the same plan applies
-		// when no settings write intervenes. If a later change made this
+		// when no settings write intervenes, and
+		// TestAnUngatedSettingsWriteCannotApplyAnAlreadyApprovedPlan
+		// (settings_gate_test.go) drives the identical sequence through
+		// these two routes over a real BackupService. If a later change made this
 		// route reuse the previous config revision, or made plan staleness
 		// tolerant of a config move, that test fails rather than this
 		// route quietly becoming an ungated way to widen an

@@ -77,3 +77,47 @@ func TestUsageDocumentsEveryModeTheBinaryCarries(t *testing.T) {
 		}
 	}
 }
+
+// TestCmdServeUI_RejectsAGatewayProfileWithNoTrustedPeer is issue #87's
+// half of the fail-closed rule. `serve` has refused this since #167, and
+// refusing it there alone was the gap: the engine's only possible peer in
+// the shipped two-container topology IS the UI host, so the engine's
+// trusted range has to contain the UI host for the deployment to
+// authenticate at all, and every identity header the UI host forwards
+// unexamined then arrives from a peer the engine trusts.
+//
+// The boundary therefore has to be declared on the hop that faces the
+// LAN. Left undeclared, serve.NewUI strips every identity header, which
+// is safe but produces a console nobody can sign in to and no reason why,
+// so this refuses at startup instead.
+func TestCmdServeUI_RejectsAGatewayProfileWithNoTrustedPeer(t *testing.T) {
+	if got := run([]string{"serve-ui", "--profile", "ugos"}); got != 2 {
+		t.Errorf("serve-ui --profile=ugos with no --trusted-gateway = %d, want 2", got)
+	}
+
+	// Positive control: the same command with a range declared gets past
+	// this check, so the refusal is about the missing boundary and not
+	// about the ugos profile being unusable in serve-ui at all. It still
+	// fails, on the NEXT check (an unusable --ui-dir), which is what
+	// proves it got past this one.
+	if got := run([]string{"serve-ui", "--profile", "ugos", "--trusted-gateway", "10.0.0.0/8", "--ui-dir", "/does/not/exist"}); got != 1 {
+		t.Errorf("serve-ui with a declared gateway and an unusable --ui-dir = %d, want 1 (a 2 means it never got past the gateway check)", got)
+	}
+}
+
+// TestCmdServeUI_RejectsATrustedGatewayOnAProfileWithoutOne. Naming a
+// trusted range for a profile that has no gateway is somebody expecting a
+// native identity path that does not exist, exactly as it is on `serve`.
+func TestCmdServeUI_RejectsATrustedGatewayOnAProfileWithoutOne(t *testing.T) {
+	if got := run([]string{"serve-ui", "--profile", "generic", "--trusted-gateway", "10.0.0.0/8"}); got != 2 {
+		t.Errorf("serve-ui --profile=generic --trusted-gateway = %d, want 2", got)
+	}
+}
+
+// TestCmdServeUI_RejectsAMalformedTrustedGateway. A range that does not
+// parse is not a weaker boundary, it is none.
+func TestCmdServeUI_RejectsAMalformedTrustedGateway(t *testing.T) {
+	if got := run([]string{"serve-ui", "--profile", "ugos", "--trusted-gateway", "not-a-cidr"}); got != 2 {
+		t.Errorf("serve-ui with an unparsable --trusted-gateway = %d, want 2", got)
+	}
+}

@@ -238,12 +238,55 @@ describe("every request the shared client makes is a declared operation", () => 
     expect(unmatched.sort()).toEqual(UNIMPLEMENTED_CLIENT_PATHS);
   });
 
-  it("would notice a client method that nothing in the list drives", () => {
-    // The positive control for the coverage assertion above. Without it,
-    // `toEqual([])` passing would be equally consistent with
-    // undrivenMethods always returning an empty array.
-    expect(undrivenMethods(["a"], { a: () => undefined, b: () => undefined })).toEqual(["b"]);
-    expect(undrivenMethods(["a", "b"], { a: () => undefined, b: () => undefined })).toEqual([]);
+  /**
+   * The reverse direction (issue #87, B5.1): a route the SERVER declares
+   * and the client never calls.
+   *
+   * A dead client path 404s and somebody notices. A dead SERVER route is
+   * silent: it is reachable, authenticated, and exercised by nothing but
+   * its own Go unit tests, so nothing the shared UI does can ever
+   * discover that it drifted. That matters most for the two operations
+   * the contract marks `destructiveGate: true`, because the gate's
+   * behaviour in front of a real browser is only observable through a
+   * client that actually calls the route.
+   *
+   * `submitOperation` is the sharpest case and the reason this assertion
+   * exists. POST /api/v1/operations is the most destructive route in the
+   * API; the shared UI's own "run now" calls POST
+   * /api/v1/backup-sets/{id}/run, which the runtime does not serve (it is
+   * on UNIMPLEMENTED_CLIENT_PATHS above). So the destructive gate has
+   * never refused anything a browser asked for, and never could.
+   *
+   * Asserted EXACTLY, like its counterpart, so the list can only shrink.
+   */
+  const UNREACHED_SERVER_OPERATIONS = [
+    "getOperation",
+    "getSession",
+    "getSystemCapabilities",
+    "getSystemVersion",
+    "listStorageStatus",
+    "submitOperation"
+  ];
+
+  it("pins the contract operations no client call reaches", () => {
+    if (observed.length === 0) {
+      throw new Error(
+        "no client calls were recorded, so this assertion would report every operation as unreached for the wrong reason"
+      );
+    }
+    const matchers = API_OPERATIONS.map((op) => ({ op, re: matcherFor(op) }));
+    const unreached = matchers
+      .filter(
+        ({ op, re }) =>
+          !observed.some((call) => {
+            const [method, url] = call.split(" ");
+            return op.method === method && re.test(url.split("?")[0]);
+          })
+      )
+      .map(({ op }) => op.id)
+      .sort();
+
+    expect(unreached).toEqual(UNREACHED_SERVER_OPERATIONS);
   });
 
   it("would notice a path the contract does not declare", () => {
