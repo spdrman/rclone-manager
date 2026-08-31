@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "f210470dc218a1f57c973be33b4056c20d871c743059762b24d1fd6d4014026e",
+    "sha256": "979c360dff58bdc99b56287b76caaad734523d392bbb388a5d1c6058f72bc73c",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -68,7 +68,7 @@
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.yml",
-      "sha256": "fa7702470cd6af35adfcdb2ea0b4fe9d1897c876f0f32a45c333b0b4ebc4141e"
+      "sha256": "715a88f8fdbc15368b10e39fb706a9e1a37efa03ea880b5e0d4662a59e4eb86a"
     },
     {
       "target": "proxmox",
@@ -78,7 +78,7 @@
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.yml",
-      "sha256": "e910fd971c3e958f17bdb275e0ee6ff1c9db434fccef7c793fd0f1db9415542b"
+      "sha256": "f18ed98fa9fd346af8ea548ed223fc572168815babc69d48cfd43bba918bb60e"
     },
     {
       "target": "truenas",
@@ -98,12 +98,12 @@
     {
       "target": "truenas",
       "path": "apps/truenas/catalog/templates/docker-compose.yaml",
-      "sha256": "852e93723009ad71d889b4fe303807d15476efbc281e69889daccad228a68284"
+      "sha256": "9262c23adcd281dbf2aaead6dae88f296f5207b183dab95eaafcb20a87fbbe10"
     },
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "0bc38f44fcfc94cfe9a9b11d444e86e96e3b5810ee081fbd04e0426c577076a5"
+      "sha256": "8a6fca1181c6dd7d68232ee08e257984601534a62cc294f0adf2490d78b46e2c"
     },
     {
       "target": "unraid",
@@ -128,7 +128,7 @@
     {
       "target": "generic",
       "path": "container/compose.yaml",
-      "sha256": "99a4abf0a330f5620f33adeb6911d5d6863ffd7b1f305bdeb6941d81d98388e3"
+      "sha256": "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
     }
   ],
   "unbuiltTargets": [

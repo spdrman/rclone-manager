@@ -77,6 +77,19 @@ type Service struct {
 	// whose --health-cmd would run through a shell the distroless image
 	// does not contain, disables it instead.
 	HealthcheckDisabled bool
+	// WaitsForHealthy is every service this one refuses to start before,
+	// naming the ones it waits on for HEALTH specifically
+	// (`depends_on: <svc>: condition: service_healthy`), never the bare
+	// ordering form.
+	//
+	// Modelled because it is half of a defect neither half can show on
+	// its own (issue #206). A health check is only ever a report until
+	// something waits on it; the moment a service does, whatever that
+	// check asks stands between the operator and the container behind
+	// it. Every adapter waited on the engine, the engine's check was the
+	// backup-freshness verdict, and no rule in this package could see
+	// the pair because this field did not exist.
+	WaitsForHealthy []string
 	// UnresolvedVars lists ${VAR} references with no default. A packaging
 	// profile whose image reference or storage path only resolves when an
 	// operator happens to have set an environment variable is a profile
@@ -109,6 +122,37 @@ type rawService struct {
 		Test    []string `yaml:"test"`
 		Disable bool     `yaml:"disable"`
 	} `yaml:"healthcheck"`
+	// DependsOn is deliberately `any`: compose allows the short list
+	// form and the long mapping form, and only the mapping form can
+	// carry a condition. A []string field would parse the short form and
+	// fail the long one, which is the form every adapter in this
+	// repository actually uses.
+	DependsOn any `yaml:"depends_on"`
+}
+
+// waitsForHealthy reads the long `depends_on` mapping form and returns
+// the services named with `condition: service_healthy`.
+//
+// The short list form returns nothing, and that is the point rather than
+// a limitation: `depends_on: [engine]` waits for the container to have
+// been created and asks the health check nothing at all.
+func waitsForHealthy(dependsOn any) []string {
+	m, ok := dependsOn.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for name, raw := range m {
+		spec, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond, ok := spec["condition"].(string); ok && cond == "service_healthy" {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 var composeVarRe = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([-?])([^}]*))?\}`)
@@ -270,6 +314,7 @@ func ParseCompose(data []byte, source string, env map[string]string) ([]Service,
 			svc.HealthcheckTest = rs.Healthcheck.Test
 			svc.HealthcheckDisabled = rs.Healthcheck.Disable
 		}
+		svc.WaitsForHealthy = waitsForHealthy(rs.DependsOn)
 		for _, vol := range rs.Volumes {
 			m, err := parseComposeVolume(vol, expand(vol), rel, canonical)
 			if err != nil {

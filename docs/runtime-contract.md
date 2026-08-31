@@ -28,7 +28,7 @@ prove the check can actually see it go.
 | `command-and-runtime-profile` | both services | the command **and** `--profile=<name>`, standardised as one field |
 | `listen-port` | web UI | the one published port; the engine deliberately publishes none |
 | `health-check` | both services | declared here, not inherited from the image and described in a comment |
-| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it |
+| `start-gate-liveness` | engine | the engine's healthcheck asks `/health/live`, never backup freshness: `web-ui` waits on it. Checked on every derived artifact too, not only here (issue #206) |
 | `graceful-shutdown-period` | both services | `stop_grace_period`: 30s for the engine, 15s for the UI host |
 | `restart-policy` | both services | `unless-stopped` |
 | `ownership` | both services | explicit `user: PUID:PGID` |
@@ -305,7 +305,7 @@ fields, one authoritative value each, and a mismatch that names the field:
 | `runtime-profile` | `x-canonical-runtime.profiles`, and the platform's own declared profile |
 | `storage-mounts` | `canonical.json`'s `containerPaths`, all of them, and none besides |
 | `published-port` | `canonical.json`'s `listenPort`, on the Web UI role only |
-| `health-check` | `canonical.json`'s per-role tests |
+| `health-check` | `container/compose.yaml`'s per-role tests, restated in `canonical.json` so four metadata formats can be held to them |
 | `supported-architectures` | the release, once; an adapter states none of its own |
 
 `contract-version` is the one that keeps the other six honest over time. A
@@ -313,6 +313,38 @@ derivation check that only compares values keeps passing after the contract
 grows a field nobody applied, because there is no value to disagree with yet.
 Repeating the version in each adapter makes a contract change fail every one
 of them until somebody has re-derived it and said so.
+
+### Where the engine's health check is decided
+
+`container/compose.yaml`, and nowhere else. `canonical.json` restates both
+per-role tests so `derive.go` can hold four metadata formats to them, including
+an Unraid XML template no Compose parser can read, and
+`TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided` fails the build
+when the restatement stops matching. Nothing compared those two before issue
+#206, which is how the canonical definition came to declare a liveness probe
+while every adapter derived the backup-freshness verdict from a copy nobody
+had changed, for three work packages, with every suite green.
+
+The engine's check is a liveness question. Every adapter's web UI declares
+`depends_on: <engine>: condition: service_healthy`, so whatever it asks stands
+between an operator and the only LAN-facing container in the deployment.
+`backup-manager status` is FR-24's verdict and exits non-zero on a fresh
+install by design, which made "install the app" and "reach the app" mutually
+exclusive on all nine adapters.
+
+Backup freshness is unchanged and unweakened. `status` is still the
+operator-facing verdict, still `container/Dockerfile`'s own baked-in
+`HEALTHCHECK` (so a plain `docker run` reports it, and so does the headless
+`daemon` command, which serves no HTTP and has no liveness endpoint to ask),
+and still what the alerts block delivers. What no longer depends on it is
+container startup ordering.
+
+Because the image's instruction and the canonical start gate now deliberately
+differ, an adapter that declares no engine health check inherits the verdict
+rather than the gate. `derive.go` allows that only where nothing waits on the
+engine's health, which is Unraid and only Unraid: its template schema has no
+health-check seam, and it declares no start-ordering dependency either, so the
+badge it produces is the freshness report it is meant to be.
 
 Every field has a positive control that breaks it deliberately, run against
 every adapter rather than against one, because the five are read out of four

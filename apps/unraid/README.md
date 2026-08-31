@@ -142,6 +142,17 @@ override the test with `/backup-manager-web healthcheck`. Unraid's only seam is
 distroless with no shell, so an override there would be a healthcheck that can
 never pass. Turning it off is honest; a permanently failing one is not.
 
+The engine container keeps the image's baked-in healthcheck, and here that is the
+right answer rather than the same limitation twice. On the compose profiles the
+engine has to override it, because their Web UI will not start until the engine
+reports healthy and `backup-manager status` is non-zero on a fresh install by
+design. An Unraid template declares no start-ordering dependency at all, so
+nothing here waits on that verdict and the badge Unraid shows for the engine is
+exactly the backup-freshness report FR-24 means it to be: red until the first
+backup lands, and red again if one goes stale. The derivation gate allows the
+inherited check on this adapter for that reason and refuses it on every adapter
+where something waits.
+
 ## Authentication
 
 Local accounts only (§13A), the same reusable local authentication the generic Web

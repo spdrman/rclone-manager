@@ -269,7 +269,10 @@ ssh admin@<guest> 'cd /opt/backup-manager && docker compose -f backup-manager.ym
 ```
 
 - [ ] Both containers reach `running`
-- [ ] `backup-manager` reports healthy
+- [ ] `backup-manager` reports healthy (it declares the liveness probe
+      `/backup-manager-web healthcheck --url http://127.0.0.1:8080/health/live`,
+      not the image's own `/backup-manager status`: the Web UI waits on this, and
+      the backup-freshness verdict is non-zero on a fresh install)
 - [ ] `backup-manager-ui` reports healthy (it overrides the image's own healthcheck)
 - [ ] `docker compose logs` shows no repeated restart
 

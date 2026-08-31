@@ -171,15 +171,23 @@ func TestTheContractVersionAgreesWithTheCanonicalMetadata(t *testing.T) {
 	}
 }
 
-// TestTheImageHealthcheckIsTheCanonicalEngineCheck is what makes an
-// adapter that declares NO engine health check derived rather than
-// merely silent.
+// TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided is the tie
+// that was missing, and its absence is the whole of issue #206.
 //
-// The derivation gate accepts an absent engine health check on the
-// grounds that the image's own HEALTHCHECK instruction applies and is the
-// canonical check. That is only true while it is true, and it is stated
-// in two files nobody would think to compare.
-func TestTheImageHealthcheckIsTheCanonicalEngineCheck(t *testing.T) {
+// The engine's health check is written down in three places:
+// container/compose.yaml declares it, canonical.json restates it so
+// derive.go can hold four metadata formats to it, and every adapter
+// declares it again. Nothing compared the first two. #167 changed the
+// canonical definition to a liveness probe in a late review commit and
+// left canonical.json saying `backup-manager status`, so for three work
+// packages the nine adapters derived a start gate that a fresh install
+// cannot pass while every suite in the tree stayed green.
+//
+// The direction is not arbitrary. runtime-contract.json names
+// container/compose.yaml as `canonical` and every platform's derivesFrom
+// block names it as its source, so that file decides and this test says
+// so by pointing the failure at the restatement.
+func TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided(t *testing.T) {
 	t.Parallel()
 
 	c := packaging.MustLoad()
@@ -187,26 +195,79 @@ func TestTheImageHealthcheckIsTheCanonicalEngineCheck(t *testing.T) {
 		t.Fatal("canonical.json declares no per-role health checks, so the derivation gate has nothing to compare against")
 	}
 
+	doc := canonical(t)
+	for _, tc := range []struct {
+		role     compose.Role
+		restated []string
+	}{
+		{compose.RoleEngine, c.Healthchecks.Engine},
+		{compose.RoleWebUI, c.Healthchecks.WebUI},
+	} {
+		declared, ok := doc.HealthcheckTest(tc.role)
+		if !ok {
+			t.Errorf("the canonical runtime definition declares no %s health check, so there is nothing for canonical.json's %v to be a restatement OF", tc.role, tc.restated)
+			continue
+		}
+		if !sameHealthTest(declared, tc.restated) {
+			t.Errorf("container/compose.yaml declares the %s health check %v and distribution/packaging/canonical.json restates it as %v; the canonical definition decides, and every adapter is held to the restatement, so a difference here is a start gate nine adapters derive from a file nobody changed",
+				tc.role, declared, tc.restated)
+		}
+	}
+}
+
+// sameHealthTest compares two compose healthcheck vectors, tolerating
+// the CMD prefix being present on one side only, because that is a
+// spelling and not a difference in what runs. distribution/packaging's
+// derive.go tolerates the same thing for the same reason.
+func sameHealthTest(a, b []string) bool {
+	strip := func(in []string) []string {
+		if len(in) > 0 && (in[0] == "CMD" || in[0] == "CMD-SHELL") {
+			return in[1:]
+		}
+		return in
+	}
+	return strings.Join(strip(a), " ") == strings.Join(strip(b), " ")
+}
+
+// TestTheImageHealthcheckIsDeliberatelyNotTheStartGate is the other side
+// of the same coin, and it is a check rather than a comment because the
+// two commands being different is what makes "an adapter that declares
+// nothing inherits the canonical check" false.
+//
+// container/Dockerfile bakes in `backup-manager status`: FR-24's
+// backup-freshness verdict, the right default for a plain `docker run`
+// and for the headless `daemon` command, which serves no HTTP and so has
+// no liveness endpoint to ask. The canonical start gate is a liveness
+// probe. An adapter that declares no engine health check therefore
+// inherits the verdict, not the gate, which is why derive.go refuses
+// that wherever anything waits on the engine's health.
+func TestTheImageHealthcheckIsDeliberatelyNotTheStartGate(t *testing.T) {
+	t.Parallel()
+
+	c := packaging.MustLoad()
 	dockerfile, err := os.ReadFile(compose.Path(filepath.Join("container", "Dockerfile")))
 	if err != nil {
 		t.Fatalf("read the Dockerfile: %v", err)
 	}
-	// The instruction is written as an exec-form CMD, so every argument
-	// after the canonical "CMD" prefix has to appear in it verbatim.
-	for _, arg := range c.Healthchecks.Engine[1:] {
-		if !strings.Contains(string(dockerfile), arg) {
-			t.Errorf("canonical.json's engine health check is %v, and container/Dockerfile's HEALTHCHECK never mentions %q; an adapter that declares no engine check inherits the Dockerfile's, so these two disagreeing means the gate is accepting the wrong thing", c.Healthchecks.Engine, arg)
+	text := string(dockerfile)
+
+	if len(c.Commands.ImageHealthcheck) == 0 {
+		t.Fatal("canonical.json declares no imageHealthcheck, so nothing records what an adapter that declares no health check actually inherits")
+	}
+
+	// The image still reports backup freshness, and canonical.json still
+	// says which command that is. Losing either silently would be a real
+	// regression, and nothing else in this package would notice.
+	for _, arg := range c.Commands.ImageHealthcheck {
+		if !strings.Contains(text, arg) {
+			t.Errorf("canonical.json records the image's HEALTHCHECK as %v and container/Dockerfile never mentions %q; FR-24's verdict is what a plain `docker run` and the headless daemon report through, and an adapter that declares nothing inherits whatever is really there", c.Commands.ImageHealthcheck, arg)
 		}
 	}
 
-	// The canonical runtime definition declares the same check
-	// explicitly, which is the contract's `health-check` field. If those
-	// two ever differ, "inherited" and "declared" stop meaning the same
-	// thing and the gate's engine branch becomes a hole.
-	doc := canonical(t)
-	if findings := doc.CheckField(compose.Field{
-		ID: "health-check", Scope: "service", Roles: []string{"engine"}, Key: "healthcheck",
-	}); len(findings) != 0 {
-		t.Fatalf("the canonical definition declares no engine health check: %s", findingText(findings))
+	// And it is not the start gate. If these two ever became the same
+	// command again, "inherited" would silently start meaning "derived"
+	// and the engine branch of the derivation gate would go quiet.
+	if sameHealthTest(c.Commands.ImageHealthcheck, c.Healthchecks.Engine) {
+		t.Errorf("the image's HEALTHCHECK and the canonical engine start gate are both %v; that makes an adapter that declares nothing look derived again, which is the shape issue #206 came out of", c.Healthchecks.Engine)
 	}
 }

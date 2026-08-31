@@ -102,10 +102,20 @@ it mounts nothing at all.
 Same image, different argv. The image ships no `ENTRYPOINT` and no `CMD` on
 purpose, because no single default would be right for both of its binaries.
 
-The Web UI container overrides the image's baked-in healthcheck. The image runs
-`/backup-manager status`, which needs a config file and a state database that
-container does not have, so left inherited it would report unhealthy forever while
-working perfectly.
+Both containers override the image's baked-in healthcheck, for two different
+reasons. The image runs `/backup-manager status`, which needs a config file and a
+state database the Web UI container does not have, so left inherited there it
+would report unhealthy forever while working perfectly.
+
+The engine's override is the one that decides whether you get a page at all. The
+Web UI will not start until the engine reports healthy, and `backup-manager
+status` is FR-24's backup-freshness verdict: it exits non-zero on any DEGRADED,
+STALE or FAILING set, and on a fresh install, which has backed nothing up yet. So
+the engine asks `/health/live` instead, a liveness probe that needs no
+configuration. Backup freshness is still reported, by the image's own HEALTHCHECK
+for a plain `docker run`, by the alerts block, and by
+`docker exec backup-manager /backup-manager status`; it just no longer decides
+whether a container starts.
 
 ## Storage
 

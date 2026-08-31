@@ -54,7 +54,7 @@ x-canonical-runtime:
   # The contract version this definition was written against, so a
   # contract change is a visible edit here rather than a silent
   # divergence.
-  contract: "1.1.0"
+  contract: "1.2.0"
 
   # The architectures this release claims. Checked against
   # distribution/packaging/canonical.json and against
@@ -360,6 +360,15 @@ services:
     # "healthy" means out of this file without also reading the
     # Dockerfile, and distribution/compose fails the build if this key
     # goes missing or stops naming a liveness probe.
+    #
+    # This line is the ONE place the engine's start gate is decided
+    # (issue #206). distribution/packaging/canonical.json restates it so
+    # derive.go can hold four metadata formats to it, and
+    # TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided fails
+    # the build if the restatement stops matching this. Every adapter
+    # declares it too, and must: the image's own instruction is the
+    # freshness verdict, so inheriting it here would be inheriting the
+    # wrong question.
     healthcheck:
       test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
       interval: 30s
