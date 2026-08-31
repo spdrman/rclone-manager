@@ -199,6 +199,16 @@ type RetentionSchemaInfo struct {
 	ReservedTierName string
 	KeepMax          int
 	PeriodDaysMax    int
+	// DefaultTiers is the chain a config that configures NEITHER
+	// spelling resolves to (config.DefaultRetentionTiers), served so a
+	// form's "restore the default chain" affordance fills itself from the
+	// product's actual default instead of a copy of those numbers
+	// transcribed into a client. A stale copy there does not merely
+	// display the wrong thing: saving it writes an explicit tiers list,
+	// which permanently migrates a legacy config off the default it would
+	// otherwise have tracked, possibly onto a NARROWER policy. Every other
+	// closed value set in this struct is served for the same reason.
+	DefaultTiers []RetentionTier
 }
 
 // RetentionSchema reports the rules a retention chain is validated
@@ -213,6 +223,7 @@ func RetentionSchema() RetentionSchemaInfo {
 		ReservedTierName: config.TierLastKnownGoodName,
 		KeepMax:          config.RetentionTierKeepMax,
 		PeriodDaysMax:    config.RetentionTierPeriodDaysMax,
+		DefaultTiers:     toRetentionTiers(config.DefaultRetentionTiers()),
 	}
 }
 
@@ -230,9 +241,9 @@ func (b *BackupService) Settings(_ context.Context) (Settings, error) {
 
 // UpdateSettings validates req against the config file's current content,
 // persists the result atomically, and hot-reloads this BackupService so
-// the new policy is immediately in effect — the same sequence, in the same
-// order, and for the same reasons as CreateBackupSet (backupsets.go's
-// package doc), validator-catalog resolution included.
+// the new policy is immediately in effect, following the same sequence, in
+// the same order, and for the same reasons as CreateBackupSet
+// (backupsets.go's package doc), validator-catalog resolution included.
 //
 // It returns the settings that are now IN EFFECT, so a caller renders the
 // policy this process is actually deciding with (defaults resolved,
@@ -400,15 +411,13 @@ func applyRetentionUpdate(r *config.Retention, u RetentionUpdate) {
 	}
 }
 
-// toRetentionSettings projects a validated config.Retention into the
-// provider-agnostic shape above, resolving the chain through
-// EffectiveTiers so the caller always sees the tiers actually deciding
-// rather than whichever of the two spellings the file happens to use.
-func toRetentionSettings(r config.Retention) RetentionSettings {
-	effective := r.EffectiveTiers()
-	tiers := make([]RetentionTier, 0, len(effective))
-	for _, t := range effective {
-		tiers = append(tiers, RetentionTier{
+// toRetentionTiers projects internal/config's tier shape into the
+// provider-agnostic one, for the two callers that need it (the policy in
+// effect, and the schema's default chain).
+func toRetentionTiers(in []config.RetentionTier) []RetentionTier {
+	out := make([]RetentionTier, 0, len(in))
+	for _, t := range in {
+		out = append(out, RetentionTier{
 			Name:        t.Name,
 			Granularity: t.Granularity,
 			PeriodDays:  t.PeriodDays,
@@ -416,6 +425,15 @@ func toRetentionSettings(r config.Retention) RetentionSettings {
 			WindowUnit:  t.WindowUnit,
 		})
 	}
+	return out
+}
+
+// toRetentionSettings projects a validated config.Retention into the
+// provider-agnostic shape above, resolving the chain through
+// EffectiveTiers so the caller always sees the tiers actually deciding
+// rather than whichever of the two spellings the file happens to use.
+func toRetentionSettings(r config.Retention) RetentionSettings {
+	tiers := toRetentionTiers(r.EffectiveTiers())
 	return RetentionSettings{
 		Timezone:     r.Timezone,
 		WeekStartsOn: r.WeekStartsOn,

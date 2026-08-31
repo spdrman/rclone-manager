@@ -901,3 +901,64 @@ func TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile(t *tes
 		t.Errorf("running delete_safety_delay = %s, want the resolved default %s", live.Completion.DeleteSafetyDelay, config.DefaultDeleteSafetyDelay)
 	}
 }
+
+// TestRetentionSchema_DefaultTiersIsWhatAnUnconfiguredPolicyResolvesTo is
+// mandatory review finding M5's server half. The Web UI's "Restore default
+// chain" button used to fill its form from a literal 7/3/12 chain written
+// into RetentionPolicyCard.tsx, a second spelling of something
+// config.DefaultTierChain's own doc says has exactly one. That is not a
+// display string: saving it writes an explicit tiers list, which clears
+// the legacy scalars and permanently migrates a config that would have
+// tracked the product's default onto a frozen, possibly narrower, copy of
+// it. The schema now serves the default chain, and this pins the served
+// value to the one an unconfigured policy actually resolves to, so the two
+// cannot drift.
+func TestRetentionSchema_DefaultTiersIsWhatAnUnconfiguredPolicyResolvesTo(t *testing.T) {
+	// A retention block spelling neither a chain nor a legacy scalar, put
+	// through the very same config.Validate a config file goes through, so
+	// this compares against the resolution rather than against a literal.
+	cfg, err := config.LoadAndValidate(writeTestConfigFileWithRetention(t, defaultChainRetentionBlock))
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+
+	resolved := toRetentionTiers(cfg.Retention.EffectiveTiers())
+	if len(resolved) == 0 {
+		t.Fatal("precondition failed: an unconfigured retention policy resolved to no tiers at all")
+	}
+	assertTiersEqual(t, RetentionSchema().DefaultTiers, resolved)
+}
+
+// TestSettings_DefaultTiersDoesNotTrackTheRunningPolicy keeps the two
+// halves of the settings response distinct: `retention.tiers` is what this
+// deployment is deciding with, `schema.retention.default_tiers` is what
+// the product's default is. A form that restored "the default" and got
+// back the policy it was already running would silently do nothing, and a
+// test comparing them on a default-configured deployment would pass either
+// way, which is why this one runs against a deliberately non-default
+// chain.
+func TestSettings_DefaultTiersDoesNotTrackTheRunningPolicy(t *testing.T) {
+	configPath := writeTestConfigFileWithRetention(t, "retention:\n"+
+		"  timezone: UTC\n"+
+		"  week_starts_on: monday\n"+
+		"  tiers:\n"+
+		"    - name: annual\n"+
+		"      granularity: year\n"+
+		"      keep: 2\n")
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	got, err := svc.Settings(context.Background())
+	if err != nil {
+		t.Fatalf("Settings: %v", err)
+	}
+	assertTiersEqual(t, got.Retention.Tiers, []RetentionTier{{Name: "annual", Granularity: GranularityYear, Keep: 2}})
+	assertTiersEqual(t, RetentionSchema().DefaultTiers, []RetentionTier{
+		{Name: "daily", Granularity: GranularityDay, Keep: config.DefaultDailyDays},
+		{Name: "weekly", Granularity: GranularityWeek, Keep: config.DefaultWeeklyMonths, WindowUnit: GranularityMonth},
+		{Name: "monthly", Granularity: GranularityMonth, Keep: config.DefaultMonthlyMonths},
+	})
+}

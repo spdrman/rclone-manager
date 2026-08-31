@@ -378,7 +378,16 @@ function defaultSettings(): AppSettings {
         tierNamePattern: "^[a-z][a-z0-9_]*$",
         reservedTierName: "last_known_good",
         keepMax: 10000,
-        periodDaysMax: 3650
+        periodDaysMax: 3650,
+        // The chain core/internal/config.DefaultRetentionTiers resolves to
+        // when a config configures neither spelling. Served, not
+        // hardcoded in the form, so "Restore default chain" cannot write a
+        // stale copy of the product's default into a config file.
+        defaultTiers: [
+          { name: "daily", granularity: "day", keep: 7 },
+          { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
+          { name: "monthly", granularity: "month", keep: 12 }
+        ]
       }
     }
   };
@@ -505,6 +514,26 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getSettings: () => delay(structuredClone(settings)),
     updateSettings: (req: UpdateSettingsRequest) => {
       const r = req.retention;
+      // The real backend refuses a write that names no setting, in both
+      // layers and structurally: an absent retention section and a
+      // present-but-empty one are the same request, and honouring either
+      // would rewrite the config file and move the config revision for a
+      // body with no content (PR #171, mandatory finding M3). A fixture
+      // that resolved with the current settings instead would let a
+      // component that sends an empty body pass here and fail against the
+      // server.
+      const namesNothing =
+        !r ||
+        (r.timezone === undefined &&
+          r.weekStartsOn === undefined &&
+          r.tiers === undefined &&
+          r.protectLastKnownGood === undefined);
+      if (namesNothing)
+        return Promise.reject(new BackupManagerError({
+          code: "INVALID_REQUEST",
+          message: "a settings write must name at least one setting to change",
+          correlationId: "cid_mocksettings400"
+        }));
       if (r) {
         // Only the named fields move, exactly like the PATCH contract
         // (and like core/service's own applyRetentionUpdate): a mock that

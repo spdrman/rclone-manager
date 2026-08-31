@@ -541,17 +541,17 @@ func (v *validator) validateRetention(r *Retention) {
 		// in this spelling, by design. The explicit tiers list is the way
 		// to run fewer than three tiers.
 		if r.DailyDays == 0 {
-			r.DailyDays = 7
+			r.DailyDays = DefaultDailyDays
 		} else if r.DailyDays < 0 {
 			v.addf("retention.daily_days: must not be negative (got %d)", r.DailyDays)
 		}
 		if r.WeeklyMonths == 0 {
-			r.WeeklyMonths = 3
+			r.WeeklyMonths = DefaultWeeklyMonths
 		} else if r.WeeklyMonths < 0 {
 			v.addf("retention.weekly_months: must not be negative (got %d)", r.WeeklyMonths)
 		}
 		if r.MonthlyMonths == 0 {
-			r.MonthlyMonths = 12
+			r.MonthlyMonths = DefaultMonthlyMonths
 		} else if r.MonthlyMonths < 0 {
 			v.addf("retention.monthly_months: must not be negative (got %d)", r.MonthlyMonths)
 		}

@@ -97,6 +97,18 @@ func TestGetSettings_ReturnsTheRunningPolicyAndTheSchemaItIsValidatedAgainst(t *
 	if schema.KeepMax != service.RetentionTierKeepMax || schema.PeriodDaysMax != service.RetentionTierPeriodDaysMax {
 		t.Errorf("schema ceilings = %d/%d, want %d/%d", schema.KeepMax, schema.PeriodDaysMax, service.RetentionTierKeepMax, service.RetentionTierPeriodDaysMax)
 	}
+	if len(schema.DefaultTiers) == 0 {
+		t.Error("schema.default_tiers is empty; the form's \"restore the default chain\" button would have to hardcode one")
+	}
+	for i, want := range service.RetentionSchema().DefaultTiers {
+		if i >= len(schema.DefaultTiers) {
+			break
+		}
+		got := schema.DefaultTiers[i]
+		if got.Name != want.Name || got.Granularity != want.Granularity || got.Keep != want.Keep || got.WindowUnit != want.WindowUnit || got.PeriodDays != want.PeriodDays {
+			t.Errorf("schema.default_tiers[%d] = %+v, want %+v", i, got, want)
+		}
+	}
 	if schema.TierNamePattern == "" {
 		t.Error("schema.tier_name_pattern is empty; a client has nothing to validate a tier name against")
 	}

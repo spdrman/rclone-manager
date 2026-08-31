@@ -35,10 +35,18 @@ const SCHEMA = {
   tierNamePattern: "^[a-z][a-z0-9_]*$",
   reservedTierName: "last_known_good",
   keepMax: 10000,
-  periodDaysMax: 3650
+  periodDaysMax: 3650,
+  defaultTiers: [
+    { name: "daily", granularity: "day", keep: 7 },
+    { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
+    { name: "monthly", granularity: "month", keep: 12 }
+  ]
 };
 
-function settingsFixture(overrides: Partial<AppSettings["retention"]> = {}): AppSettings {
+function settingsFixture(
+  overrides: Partial<AppSettings["retention"]> = {},
+  schema: AppSettings["schema"]["retention"] = SCHEMA
+): AppSettings {
   return {
     retention: {
       timezone: "Europe/Berlin",
@@ -51,7 +59,7 @@ function settingsFixture(overrides: Partial<AppSettings["retention"]> = {}): App
       protectLastKnownGood: true,
       ...overrides
     },
-    schema: { retention: SCHEMA }
+    schema: { retention: schema }
   };
 }
 
@@ -231,6 +239,45 @@ describe("SettingsPage retention policy form", () => {
       ["daily", 7, undefined],
       ["weekly", 3, "month"],
       ["monthly", 12, undefined]
+    ]);
+  });
+
+  it("restores the default chain the SERVER serves, not one written into this file", async () => {
+    // Mandatory review finding M5 on PR #171: defaultChain() used to
+    // return a literal 7/3/12 chain, a second spelling of something
+    // config.DefaultTierChain's own doc says has exactly one. A stale copy
+    // there does not merely display the wrong thing. Saving it writes an
+    // explicit tiers list, which clears the legacy scalars and permanently
+    // migrates a config that would have tracked the product's default onto
+    // a frozen, possibly NARROWER, policy.
+    //
+    // The served default here is deliberately unreal, so a component that
+    // still hardcoded 7/3/12 fails this and the assertion above passes for
+    // both. That is what makes the pair a measurement: the previous test
+    // proves the real default round-trips, this one proves the value came
+    // from the schema.
+    const { updateSettings } = await renderSettings({
+      settings: settingsFixture({ tiers: [{ name: "annual", granularity: "year", keep: 5 }] }, {
+        ...SCHEMA,
+        defaultTiers: [
+          { name: "hourly", granularity: "days", periodDays: 1, keep: 48 },
+          { name: "biennial", granularity: "year", keep: 2, windowUnit: "year" }
+        ]
+      })
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore default chain" }));
+
+    expect(screen.queryByRole("group", { name: "Tier 3" })).toBeNull();
+    expect((tier(1).getByLabelText("Name") as HTMLInputElement).value).toBe("hourly");
+    expect((tier(1).getByLabelText("Keep") as HTMLInputElement).value).toBe("48");
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    const req = updateSettings.mock.calls[0][0] as UpdateSettingsRequest;
+    expect(req.retention?.tiers?.map((t) => [t.name, t.keep, t.periodDays, t.windowUnit])).toEqual([
+      ["hourly", 48, 1, undefined],
+      ["biennial", 2, undefined, "year"]
     ]);
   });
 

@@ -387,6 +387,7 @@ interface WireSettings {
       reserved_tier_name: string;
       keep_max: number;
       period_days_max: number;
+      default_tiers: WireRetentionTier[];
     };
   };
 }
@@ -434,7 +435,8 @@ function fromWireSettings(body: WireSettings): AppSettings {
         tierNamePattern: body.schema.retention.tier_name_pattern,
         reservedTierName: body.schema.retention.reserved_tier_name,
         keepMax: body.schema.retention.keep_max,
-        periodDaysMax: body.schema.retention.period_days_max
+        periodDaysMax: body.schema.retention.period_days_max,
+        defaultTiers: (body.schema.retention.default_tiers ?? []).map(fromWireTier)
       }
     }
   };

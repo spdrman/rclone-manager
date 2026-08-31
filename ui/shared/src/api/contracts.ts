@@ -281,6 +281,17 @@ export interface RetentionSchema {
   reservedTierName: string;
   keepMax: number;
   periodDaysMax: number;
+  /** The chain a configuration that spells neither the explicit tier list
+   *  nor the legacy scalars resolves to, straight from
+   *  core/internal/config.DefaultRetentionTiers.
+   *
+   *  Served rather than written into this UI because "restore the default
+   *  chain" is not a display string: saving it writes an explicit tiers
+   *  list, which clears the legacy scalars and permanently migrates a
+   *  config that would have tracked the product's default onto a frozen
+   *  copy of it. A stale copy here could therefore narrow a real retention
+   *  window, silently and in the dangerous direction. */
+  defaultTiers: RetentionTierSetting[];
 }
 
 export interface AppSettings {

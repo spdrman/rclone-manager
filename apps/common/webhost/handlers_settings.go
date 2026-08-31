@@ -135,6 +135,14 @@ type retentionSchemaBody struct {
 	ReservedTierName string   `json:"reserved_tier_name"`
 	KeepMax          int      `json:"keep_max"`
 	PeriodDaysMax    int      `json:"period_days_max"`
+	// DefaultTiers is the chain a config that configures neither
+	// spelling resolves to. Served so the form's "restore the default
+	// chain" affordance fills itself from the product's own default
+	// (core/internal/config.DefaultRetentionTiers) rather than from a
+	// second copy of those numbers living in the frontend, where a
+	// narrowed window could be saved as an explicit chain and
+	// permanently migrate a legacy config onto it.
+	DefaultTiers []retentionTierBody `json:"default_tiers"`
 }
 
 // getSettings is GET /api/v1/settings: read-only (docs/
@@ -244,17 +252,7 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 }
 
 func toSettingsResponse(s service.Settings) settingsResponse {
-	tiers := make([]retentionTierBody, 0, len(s.Retention.Tiers))
-	for _, t := range s.Retention.Tiers {
-		tiers = append(tiers, retentionTierBody{
-			Name:        t.Name,
-			Granularity: t.Granularity,
-			PeriodDays:  t.PeriodDays,
-			Keep:        t.Keep,
-			WindowUnit:  t.WindowUnit,
-		})
-	}
-
+	tiers := toTierBodies(s.Retention.Tiers)
 	schema := service.RetentionSchema()
 	return settingsResponse{
 		Retention: retentionSettingsBody{
@@ -271,9 +269,27 @@ func toSettingsResponse(s service.Settings) settingsResponse {
 				ReservedTierName: schema.ReservedTierName,
 				KeepMax:          schema.KeepMax,
 				PeriodDaysMax:    schema.PeriodDaysMax,
+				DefaultTiers:     toTierBodies(schema.DefaultTiers),
 			},
 		},
 	}
+}
+
+// toTierBodies projects a chain onto the wire, shared by the policy in
+// effect and by the schema's default chain so the two cannot be spelled
+// differently.
+func toTierBodies(tiers []service.RetentionTier) []retentionTierBody {
+	out := make([]retentionTierBody, 0, len(tiers))
+	for _, t := range tiers {
+		out = append(out, retentionTierBody{
+			Name:        t.Name,
+			Granularity: t.Granularity,
+			PeriodDays:  t.PeriodDays,
+			Keep:        t.Keep,
+			WindowUnit:  t.WindowUnit,
+		})
+	}
+	return out
 }
 
 // writeSettingsDecodeError extends writeDecodeError

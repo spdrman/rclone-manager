@@ -34,10 +34,14 @@ import { WarningBanner } from "@shared/components/WarningBanner";
  * # Every rule it enforces comes from the server
  *
  * The granularity list, the window-unit list, the tier-name pattern, the
- * reserved name and both ceilings arrive in the same response as the
- * values (`schema` on AppSettings). Nothing in this file hardcodes a
- * closed value set, so a granularity added to core/internal/config
- * reaches this picker without a second copy here going stale. Client-side
+ * reserved name, both ceilings and the default chain arrive in the same
+ * response as the values (`schema` on AppSettings). Nothing in this file
+ * hardcodes a closed value set, so a granularity added to
+ * core/internal/config reaches this picker without a second copy here
+ * going stale. The default chain joined that list late (PR #171's
+ * mandatory finding M5): it was the one value the form did spell for
+ * itself, and it is the one where a stale copy writes a policy rather
+ * than merely displaying one. Client-side
  * validation is a courtesy that keeps a doomed request off the wire; the
  * server validates the whole config regardless, and its refusal is what
  * is displayed if the two ever disagree.
@@ -119,17 +123,21 @@ function toDraft(t: RetentionTierSetting): TierDraft {
 
 const CUSTOM_PERIOD = "days";
 
-/** The 7/3/12 chain config.DefaultTierChain builds, spelled here because
- *  "Restore default chain" has to fill a form, not ask the server for a
- *  policy it is not currently running. The weekly tier's window unit is
- *  part of the default, not an embellishment: it buckets by week and
- *  looks back over calendar months. */
-function defaultChain(): TierDraft[] {
-  return [
-    { name: "daily", granularity: "day", keep: 7 },
-    { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
-    { name: "monthly", granularity: "month", keep: 12 }
-  ].map(toDraft);
+/** The chain "Restore default chain" fills the form with, taken from the
+ *  schema the server already serves alongside the values rather than
+ *  written out here.
+ *
+ *  This used to be a literal 7/3/12 chain, which was a second spelling of
+ *  something config.DefaultTierChain's own doc says has exactly one, and
+ *  not a harmless one: restoring the default and saving writes an EXPLICIT
+ *  tiers list, which clears the legacy scalars and permanently migrates a
+ *  config that would have tracked the product's default onto whatever this
+ *  file happened to say. A stale copy could therefore narrow a real
+ *  retention window, silently, in the dangerous direction, with nothing
+ *  comparing the two. Every other closed value set in this card is already
+ *  served by the schema for the same reason. */
+function defaultChain(schema: RetentionSchema): TierDraft[] {
+  return schema.defaultTiers.map(toDraft);
 }
 
 const GRANULARITY_LABELS: Record<string, string> = {
@@ -329,7 +337,7 @@ function RetentionPolicyEditor({
           disabled={readOnly}
           onClick={() => {
             setSaved(false);
-            setTiers(defaultChain());
+            setTiers(defaultChain(schema));
           }}
         >
           Restore default chain
@@ -383,7 +391,10 @@ function RetentionPolicyEditor({
       {saved ? (
         <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
           <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"✓"}</span>
-          <span>Retention policy saved. It is in effect now, with no restart.</span>
+          <span>
+            Retention policy saved. It is in effect now, with no restart. Saving rewrites the
+            server&rsquo;s configuration file, which does not preserve comments in it.
+          </span>
         </div>
       ) : null}
 
