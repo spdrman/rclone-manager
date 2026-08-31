@@ -16,7 +16,8 @@
 # Tier C (§4A): a supported deployment profile, not an app-store package.
 # Proxmox VE has no third-party application store to package into, and
 # §4A defers any Web UI plugin, so there is deliberately no PVE menu
-# entry, no /etc/pve content, no hook script and no host package.
+# entry, nothing written into the cluster configuration filesystem, no
+# hook script and no host package.
 # apps/common/packaging fails the build if any of that appears here.
 #
 # This is the same two-container shape container/compose.yaml already

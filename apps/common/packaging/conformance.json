@@ -1,0 +1,316 @@
+{
+  "_comment": [
+    "The Phase 4 cross-provider conformance declaration (issue #86 / WP4.5,",
+    "docs/EPIC-B-multi-nas.md section 63A and the section 72 Phase 4 TDD Gate).",
+    "",
+    "Section 63A is explicit that a conformance suite must distinguish SUPPORTED,",
+    "UNSUPPORTED and NOT_APPLICABLE 'rather than silently skipping missing provider",
+    "features'. A capability that is merely absent from a result set is the failure",
+    "mode this file exists to prevent: absence reads as passing.",
+    "",
+    "So every provider declares an outcome for EVERY capability. matrix_test.go",
+    "fails if a provider omits one, if a declaration names a capability that does",
+    "not exist, if a non-supported declaration carries no reason, if a blocked one",
+    "carries no tracked blocker, if a verifiedBy points at a path that is not there,",
+    "or if the repository has quietly started satisfying something declared",
+    "unsupported. The last of those is what stops this file rotting into fiction.",
+    "",
+    "This file holds DECLARATIONS only. The checks that decide each cell live in",
+    "matrix_test.go, keyed by capability id, and the two lists have to agree",
+    "exactly."
+  ],
+
+  "capabilities": [
+    { "id": "provider-identity", "title": "Provider identified correctly", "spec": "63A", "mode": "repo" },
+    { "id": "package-metadata", "title": "Provider package metadata present", "spec": "72 gate", "mode": "repo" },
+    { "id": "canonical-image-parity", "title": "Uses the exact canonical image", "spec": "72 gate, 8", "mode": "repo" },
+    { "id": "core-binary-hash-parity", "title": "Core binary hash parity", "spec": "72 gate, 61", "mode": "repo" },
+    { "id": "architecture-parity", "title": "Architecture claims match the build", "spec": "72 gate, 40", "mode": "repo" },
+    { "id": "state-persistence", "title": "State path persists outside the container", "spec": "72 gate, 63A", "mode": "repo" },
+    { "id": "backup-root-containment", "title": "Backup root constrained", "spec": "72 gate, 19.2", "mode": "repo" },
+    { "id": "auth-mode-explicit", "title": "Auth mode explicit and honest", "spec": "72 gate, 13A", "mode": "repo" },
+    { "id": "no-bundled-secrets", "title": "No bundled secrets", "spec": "72 gate, 19", "mode": "repo" },
+    { "id": "no-provider-lifecycle", "title": "No provider-specific lifecycle implementation", "spec": "72 gate", "mode": "repo" },
+    { "id": "api-path-isolation", "title": "API reachable only through the intended path", "spec": "63A, 17", "mode": "repo" },
+    { "id": "provider-removal-preserves-core", "title": "Provider removal does not alter core", "spec": "63A, 7.1", "mode": "repo" },
+    { "id": "host-management-plane-untouched", "title": "Host management plane not modified", "spec": "4A, 75", "mode": "repo" },
+    { "id": "install-update-remove", "title": "Install / update / remove semantics", "spec": "72 gate, 68", "mode": "operator" },
+    { "id": "ui-launch", "title": "UI launches", "spec": "63A", "mode": "operator" },
+    { "id": "upgrade-preserves-state", "title": "Upgrade preserves state", "spec": "63A, 46", "mode": "operator" },
+    { "id": "remove-preserves-backups", "title": "Removal does not delete retained backups", "spec": "63A, 48", "mode": "operator" },
+    { "id": "native-auth", "title": "Native authentication", "spec": "63A conditional", "mode": "repo" },
+    { "id": "native-notifications", "title": "Native notifications", "spec": "63A conditional", "mode": "repo" },
+    { "id": "embedded-window", "title": "Embedded window", "spec": "63A conditional", "mode": "repo" },
+    { "id": "app-store-packaging", "title": "App-store packaging", "spec": "63A conditional", "mode": "repo" },
+    { "id": "storage-picker", "title": "Storage picker", "spec": "63A conditional", "mode": "repo" }
+  ],
+
+  "providers": {
+    "generic": {
+      "displayName": "Generic Docker",
+      "tier": "C",
+      "workPackage": "4.1",
+      "metadata": { "kind": "compose", "root": "container", "compose": "compose.yaml", "env": ".env.example", "files": ["compose.yaml", "Dockerfile", ".env.example", "release-manifest.json"], "storeArtifacts": [] },
+      "scanRoots": ["container"],
+      "acceptance": "",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "supported" },
+        "canonical-image-parity": {
+          "declared": "not-applicable",
+          "reason": "container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than pulling a published reference. It is the source of the image the other six profiles consume, so pinning it to its own output would be circular.",
+          "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go"
+        },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against." },
+        "architecture-parity": { "declared": "supported" },
+        "state-persistence": { "declared": "supported" },
+        "backup-root-containment": { "declared": "supported" },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": {
+          "declared": "not-applicable",
+          "reason": "Two reasons, both structural. apps/generic IS the canonical web host (section 37), not a wrapper around it, so there is no wrapper for a second implementation to hide in. And container/compose.yaml carries a build: key, which the scanner treats as a violation everywhere else precisely because a Tier B/C package must reuse the canonical image rather than build one; here it is the file the canonical image is built FROM.",
+          "verifiedBy": "scripts/architecture/verify-core-without-apps.sh"
+        },
+        "api-path-isolation": { "declared": "supported" },
+        "provider-removal-preserves-core": {
+          "declared": "not-applicable",
+          "reason": "scripts/architecture/verify-ui-shared-without-provider-sdks.sh says it directly: apps/generic is the vendor-neutral baseline the default Vite build targets, so it is not a provider SDK directory and ui/shared's own tests import its bridge on purpose. The rule applies to the six vendor providers.",
+          "verifiedBy": "scripts/architecture/verify-ui-shared-without-provider-sdks.sh"
+        },
+        "host-management-plane-untouched": { "declared": "supported", "reason": "A plain Docker host has no vendor management plane, but the rule that a package installs no host unit, cron entry or config-database write still applies, and container/ is held to it like every other profile." },
+        "install-update-remove": {
+          "declared": "not-applicable",
+          "reason": "Automated rather than operator-verified: apps/generic/tests/dockercli drives the real docker CLI against the real image (section 67), so there is no hardware step to write a procedure for.",
+          "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go"
+        },
+        "ui-launch": { "declared": "not-applicable", "reason": "Same as install-update-remove: covered by the Docker CLI suite and ui/shared's own tests, not by a hardware procedure.", "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go" },
+        "upgrade-preserves-state": { "declared": "not-applicable", "reason": "No vendor updater to exercise; container replacement is what the Docker CLI suite already does.", "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go" },
+        "remove-preserves-backups": { "declared": "not-applicable", "reason": "No vendor uninstaller to exercise. The compose profile declares no named volume, so there is nothing for `down -v` to reach.", "verifiedBy": "apps/generic/tests/dockercli/dockercli_test.go" },
+        "native-auth": { "declared": "unsupported", "reason": "Tier C. No identity provider on a plain Docker host; section 13A local auth is the whole story." },
+        "native-notifications": { "declared": "unsupported", "reason": "Tier C. Webhook notifications instead." },
+        "embedded-window": { "declared": "unsupported", "reason": "Tier C. Opens in a standalone browser." },
+        "app-store-packaging": { "declared": "unsupported", "reason": "Tier C. There is no store; this is the raw compose deployment." },
+        "storage-picker": { "declared": "unsupported", "reason": "Tier C. Manual path entry, because no host volume API exists to browse." }
+      }
+    },
+
+    "ugos": {
+      "displayName": "UGOS Pro",
+      "tier": "A",
+      "workPackage": "4.2",
+      "metadata": { "kind": "none", "root": "apps/ugos", "storeArtifacts": [] },
+      "scanRoots": ["apps/ugos"],
+      "acceptance": "docs/acceptance/ugos-local-notification.md",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "blocked", "blocker": "#83", "reason": "Work package 4.2's UPK was moved out of this EPIC into EPIC D and is still open as #83. apps/ugos/ contains the frontend bridge and nothing else: no project.yaml, no compose, no icon, no image tar. Until #83 lands, UGOS is the one Phase 4 Exit Gate provider with no package in this repository." },
+        "canonical-image-parity": { "declared": "blocked", "blocker": "#83", "reason": "Nothing in apps/ugos/ references an image yet, so there is no reference to compare." },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "Same unreachable release manifest as every other provider, and #83 on top of it." },
+        "architecture-parity": { "declared": "blocked", "blocker": "#83", "reason": "The UPK declares the architecture image tars (section 41); no UPK, no claim to check." },
+        "state-persistence": { "declared": "blocked", "blocker": "#83", "reason": "The UPK's compose declares the storage mapping (section 22); it does not exist yet." },
+        "backup-root-containment": { "declared": "blocked", "blocker": "#83", "reason": "BACKUP_ROOT comes from the UPK's install parameters (section 20); they do not exist yet." },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": { "declared": "supported", "reason": "True but thin: apps/ugos/ is four bridge files today. It will need re-reading when #83 adds the UPK." },
+        "api-path-isolation": { "declared": "blocked", "blocker": "#83", "reason": "The UPK's compose decides which container publishes a port; it does not exist yet." },
+        "provider-removal-preserves-core": { "declared": "supported" },
+        "host-management-plane-untouched": { "declared": "supported" },
+        "install-update-remove": { "declared": "blocked", "blocker": "#83", "reason": "docs/acceptance/ugos-local-notification.md covers notifications only. The install/update/disable/uninstall/reinstall procedure is work package 4.2's, and belongs with #83." },
+        "ui-launch": { "declared": "blocked", "blocker": "#83", "reason": "Section 12's embedded provider window is delivered by the UPK." },
+        "upgrade-preserves-state": { "declared": "blocked", "blocker": "#83", "reason": "Section 46's upgrade behaviour needs the package that gets upgraded." },
+        "remove-preserves-backups": { "declared": "blocked", "blocker": "#83", "reason": "Section 48's uninstall behaviour needs the package that gets uninstalled." },
+        "native-auth": { "declared": "supported" },
+        "native-notifications": { "declared": "supported" },
+        "embedded-window": { "declared": "supported" },
+        "app-store-packaging": { "declared": "blocked", "blocker": "#83", "reason": "The bridge claims it, and section 4A promises it, but no UPK exists in this repository yet. Passing on the bridge flag alone would be exactly the kind of claim the store-artifact half of this check exists to refuse." },
+        "storage-picker": { "declared": "supported" }
+      }
+    },
+
+    "synology": {
+      "displayName": "Synology DSM",
+      "tier": "B",
+      "workPackage": "4.4",
+      "metadata": { "kind": "spk", "root": "apps/synology", "files": ["README.md", "spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config", "cmd/spkctl/main.go"], "storeArtifacts": ["spk/assets/conf/privilege", "spk/assets/conf/resource", "spk/assets/ui/config"] },
+      "scanRoots": ["apps/synology/spk/assets"],
+      "acceptance": "docs/acceptance/synology-dsm-package-lifecycle.md",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "supported" },
+        "canonical-image-parity": {
+          "declared": "not-applicable",
+          "reason": "Synology is the one Phase 4 provider that cannot consume the OCI image: DSM's Package Center installs a native .spk. Section 3.7 makes the SPK a sibling of the image carrying the same core binary digest, so parity here is binary parity, not image parity.",
+          "verifiedBy": "apps/synology/spk/verify.go"
+        },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "spkctl verify re-derives each binary's SHA-256 out of a finished package and compares it against container/release-manifest.json. The manifest pins a commit that is not an ancestor of main, so the comparison has nothing real on the other side." },
+        "architecture-parity": { "declared": "supported" },
+        "state-persistence": {
+          "declared": "not-applicable",
+          "reason": "DSM fixes the persistent location: /var/packages/<pkg>/var under the package FHS, not a bind mount this repository declares.",
+          "verifiedBy": "apps/synology/spk/lifecycle_test.go"
+        },
+        "backup-root-containment": {
+          "declared": "not-applicable",
+          "reason": "The backup root is a DSM shared folder the operator picks at install time, so there is no checked-in host path pair to compare. The separation itself is proven by the package never placing key material or auth state under it.",
+          "verifiedBy": "apps/synology/spk/verify.go"
+        },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": {
+          "declared": "not-applicable",
+          "reason": "DSM's package format MANDATES preinst/postinst/preuninst/postuninst/preupgrade/postupgrade and start-stop-status. Those scripts are the platform's contract, not a lifecycle engine of our own, and apps/synology holds them to wrapper-only behaviour.",
+          "verifiedBy": "apps/synology/spk/lifecycle_test.go"
+        },
+        "api-path-isolation": {
+          "declared": "not-applicable",
+          "reason": "There is no two-container split to check: the SPK runs one process behind DSM's own reverse proxy, and the port comes from conf/resource rather than a compose ports list.",
+          "verifiedBy": "apps/synology/spk/assets/conf/resource"
+        },
+        "provider-removal-preserves-core": { "declared": "supported" },
+        "host-management-plane-untouched": { "declared": "supported" },
+        "install-update-remove": { "declared": "supported" },
+        "ui-launch": { "declared": "supported" },
+        "upgrade-preserves-state": { "declared": "supported" },
+        "remove-preserves-backups": { "declared": "supported" },
+        "native-auth": { "declared": "unsupported", "reason": "Tier B. Section 4A makes DSM SSO a follow-on capability; the initial package uses section 13A local auth." },
+        "native-notifications": { "declared": "unsupported", "reason": "Tier B. No DSM notification adapter in v1; webhooks instead." },
+        "embedded-window": { "declared": "supported" },
+        "app-store-packaging": { "declared": "supported" },
+        "storage-picker": { "declared": "unsupported", "reason": "Tier B. The shared folder is chosen once at install time through DSM, not browsed from inside the app." }
+      }
+    },
+
+    "truenas": {
+      "displayName": "TrueNAS",
+      "tier": "B",
+      "workPackage": "4.3",
+      "metadata": { "kind": "compose", "root": "apps/truenas", "compose": "compose/backup-manager.yaml", "files": ["README.md", "catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"], "storeArtifacts": ["catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"] },
+      "scanRoots": ["apps/truenas"],
+      "acceptance": "docs/acceptance/truenas-provider-acceptance.md",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "supported" },
+        "canonical-image-parity": { "declared": "supported" },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against." },
+        "architecture-parity": { "declared": "supported" },
+        "state-persistence": { "declared": "supported" },
+        "backup-root-containment": { "declared": "supported" },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": { "declared": "supported" },
+        "api-path-isolation": { "declared": "supported" },
+        "provider-removal-preserves-core": { "declared": "supported" },
+        "host-management-plane-untouched": { "declared": "supported" },
+        "install-update-remove": { "declared": "supported" },
+        "ui-launch": { "declared": "supported" },
+        "upgrade-preserves-state": { "declared": "supported" },
+        "remove-preserves-backups": { "declared": "supported" },
+        "native-auth": { "declared": "unsupported", "reason": "Tier B. Section 4A gives TrueNAS the generic local auth; no middleware session adapter in v1." },
+        "native-notifications": { "declared": "unsupported", "reason": "Tier B. Webhooks instead of TrueNAS alerts." },
+        "embedded-window": { "declared": "unsupported", "reason": "Tier B. The Apps portal link opens the UI in a normal browser tab." },
+        "app-store-packaging": { "declared": "supported" },
+        "storage-picker": { "declared": "unsupported", "reason": "Tier B. questions.yaml asks for the dataset paths at install time; the running app does not browse pools." }
+      }
+    },
+
+    "unraid": {
+      "displayName": "Unraid",
+      "tier": "B",
+      "workPackage": "4.3",
+      "metadata": { "kind": "unraid-template", "root": "apps/unraid", "templates": ["template/backup-manager.xml", "template/backup-manager-ui.xml"], "files": ["README.md", "frontend/webui.json"], "storeArtifacts": ["template/backup-manager.xml", "template/backup-manager-ui.xml"] },
+      "scanRoots": ["apps/unraid"],
+      "acceptance": "docs/acceptance/unraid-provider-acceptance.md",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "supported" },
+        "canonical-image-parity": { "declared": "supported" },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against." },
+        "architecture-parity": { "declared": "supported" },
+        "state-persistence": { "declared": "supported" },
+        "backup-root-containment": { "declared": "supported" },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": { "declared": "supported" },
+        "api-path-isolation": { "declared": "supported" },
+        "provider-removal-preserves-core": { "declared": "supported" },
+        "host-management-plane-untouched": { "declared": "supported" },
+        "install-update-remove": { "declared": "supported" },
+        "ui-launch": { "declared": "supported" },
+        "upgrade-preserves-state": { "declared": "supported" },
+        "remove-preserves-backups": { "declared": "supported" },
+        "native-auth": { "declared": "unsupported", "reason": "Tier B. Section 4A gives Unraid the generic local auth; no plugin is required for v1." },
+        "native-notifications": { "declared": "unsupported", "reason": "Tier B. Webhooks instead of Unraid notifications, which would need a plugin." },
+        "embedded-window": { "declared": "unsupported", "reason": "Tier B. The WebUI link opens a normal browser tab." },
+        "app-store-packaging": { "declared": "supported" },
+        "storage-picker": { "declared": "unsupported", "reason": "Tier B. Community Applications collects the paths at install time; the app does not browse shares." }
+      }
+    },
+
+    "openmediavault": {
+      "displayName": "OpenMediaVault",
+      "tier": "C",
+      "workPackage": "4.3",
+      "metadata": { "kind": "compose", "root": "apps/openmediavault", "compose": "compose/backup-manager.yml", "env": "compose/backup-manager.env", "files": ["README.md"], "storeArtifacts": [] },
+      "scanRoots": ["apps/openmediavault"],
+      "acceptance": "docs/acceptance/openmediavault-provider-acceptance.md",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "supported" },
+        "canonical-image-parity": { "declared": "supported" },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against." },
+        "architecture-parity": { "declared": "supported" },
+        "state-persistence": { "declared": "supported" },
+        "backup-root-containment": { "declared": "supported" },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": { "declared": "supported" },
+        "api-path-isolation": { "declared": "supported" },
+        "provider-removal-preserves-core": { "declared": "supported" },
+        "host-management-plane-untouched": { "declared": "supported" },
+        "install-update-remove": { "declared": "supported" },
+        "ui-launch": { "declared": "supported" },
+        "upgrade-preserves-state": { "declared": "supported" },
+        "remove-preserves-backups": { "declared": "supported" },
+        "native-auth": { "declared": "unsupported", "reason": "Tier C. A native Workbench plugin is deferred by section 4A, and auth would come with it." },
+        "native-notifications": { "declared": "unsupported", "reason": "Tier C. Webhooks; OMV notifications would need the deferred plugin." },
+        "embedded-window": { "declared": "unsupported", "reason": "Tier C. There is no Workbench navigation entry, by design; the UI is reached on its own port." },
+        "app-store-packaging": { "declared": "unsupported", "reason": "Tier C. A Compose deployment profile, not an omv-extras package. Section 4A defers the Debian plugin." },
+        "storage-picker": { "declared": "unsupported", "reason": "Tier C. Paths are set once in the env file; the app does not browse OMV filesystems." }
+      }
+    },
+
+    "proxmox": {
+      "displayName": "Proxmox VE",
+      "tier": "C",
+      "workPackage": "4.5",
+      "metadata": { "kind": "compose", "root": "apps/proxmox", "compose": "compose/backup-manager.yml", "env": "compose/backup-manager.env", "files": ["README.md"], "storeArtifacts": [] },
+      "scanRoots": ["apps/proxmox"],
+      "acceptance": "docs/acceptance/proxmox-ve-deployment.md",
+      "cells": {
+        "provider-identity": { "declared": "supported" },
+        "package-metadata": { "declared": "supported" },
+        "canonical-image-parity": { "declared": "supported" },
+        "core-binary-hash-parity": { "declared": "blocked", "blocker": "#174", "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main after the squash-merge rewrite, so there is no build to compare a hash against." },
+        "architecture-parity": { "declared": "supported" },
+        "state-persistence": { "declared": "supported" },
+        "backup-root-containment": { "declared": "supported" },
+        "auth-mode-explicit": { "declared": "supported" },
+        "no-bundled-secrets": { "declared": "supported" },
+        "no-provider-lifecycle": { "declared": "supported" },
+        "api-path-isolation": { "declared": "supported" },
+        "provider-removal-preserves-core": { "declared": "supported" },
+        "host-management-plane-untouched": { "declared": "supported" },
+        "install-update-remove": { "declared": "supported" },
+        "ui-launch": { "declared": "supported" },
+        "upgrade-preserves-state": { "declared": "supported" },
+        "remove-preserves-backups": { "declared": "supported" },
+        "native-auth": { "declared": "unsupported", "reason": "Tier C. No PVE realm, PAM hook or API token; section 13A local auth only." },
+        "native-notifications": { "declared": "unsupported", "reason": "Tier C. Webhooks. PVE notification targets would mean touching the host management plane." },
+        "embedded-window": { "declared": "unsupported", "reason": "Tier C. Section 4A defers the PVE Web UI plugin indefinitely, so there is no window to embed in." },
+        "app-store-packaging": { "declared": "unsupported", "reason": "Tier C, and structurally so: Proxmox VE has no third-party application store to package into. That is why this provider is a deployment profile at all." },
+        "storage-picker": { "declared": "unsupported", "reason": "Tier C. One host directory is shared into the guest and the paths under it are fixed in the env file." }
+      }
+    }
+  }
+}

@@ -363,6 +363,16 @@ func TestExpandCompose(t *testing.T) {
 		{"${DISK:?set DISK}/backups", nil, "${DISK:?set DISK}/backups", 1},
 		{"${DISK:?set DISK}/backups", map[string]string{"DISK": "/srv/d"}, "/srv/d/backups", 0},
 		{"${DISK:?set DISK}/backups", map[string]string{"DISK": ""}, "${DISK:?set DISK}/backups", 1},
+		// The ${VAR:?message} form, which container/compose.yaml uses
+		// for every host path so an unset one stops the deployment
+		// instead of landing somewhere surprising. It carries a message
+		// rather than a default, so an unset variable is exactly as
+		// unresolved as a bare ${VAR} - which is the case that matters,
+		// because before this form was understood at all the reference
+		// was left in place AND reported as resolved, so a profile with
+		// an unset required path looked clean.
+		{"${STATE_DIR:?set STATE_DIR in .env}", nil, "${STATE_DIR:?set STATE_DIR in .env}", 1},
+		{"${STATE_DIR:?set STATE_DIR in .env}", map[string]string{"STATE_DIR": "/srv/state"}, "/srv/state", 0},
 	}
 	for _, tc := range tests {
 		got, unresolved := ExpandCompose(tc.in, tc.env)
