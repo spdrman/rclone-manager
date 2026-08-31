@@ -46,9 +46,10 @@
 #
 # For a release signed by hand off CI, cosign reads a key from the
 # environment (`--key env://COSIGN_PRIVATE_KEY`) and this script requires
-# that form. A key file on disk is refused by guard 5, which greps the
-# working tree, because "I will delete it afterwards" is how key material
-# ends up in a commit.
+# that form. A key file on disk is refused by guard 5, which asks git for
+# every path in the working tree matching a key-shaped name, tracked,
+# untracked or ignored, because "I will delete it afterwards" is how key
+# material ends up somewhere it cannot be taken back from.
 #
 # Registry authentication is `docker login ghcr.io` in the operator's own
 # session, or GITHUB_TOKEN in the workflow. This script never reads, echoes
@@ -143,15 +144,47 @@ fi
 #
 # The one hard rule this script has. Keyless signing needs no key at all,
 # and a hand-signed release supplies one through the environment; a file
-# is neither, and a key file in the working tree is one `git add -A` from
-# being permanent. Checked against the tree rather than against a
+# is neither, and a key file sitting in the working tree is one careless
+# `git add` (or one `git add -f`, or one archive of the directory) from
+# leaving the machine. Checked against the tree rather than against a
 # convention, because the convention is what fails.
-keyfiles=$(git ls-files --cached --others --exclude-standard \
-  -- '*.key' '*.pem' 'cosign.key' '*cosign*.key' '*.p12' '*.pfx' 'id_rsa' 'id_ed25519' 2>/dev/null || true)
+#
+# Two passes, because one cannot see the whole tree. .gitignore ignores
+# *.key, *.pem, *.p12, *.pfx and cosign.key, and --exclude-standard
+# suppresses exactly those, so the single --cached --others pass this
+# guard used to run went blind to the untracked ignored key that is the
+# case it exists for: `cosign generate-key-pair` drops cosign.key in the
+# working directory, ignored, invisible, and the guard passed beside it.
+# The second pass asks for the ignored files by name and the two are
+# unioned.
+#
+# node_modules and the built frontend bundle are excluded rather than
+# scanned. Once ignored files are in scope a vendored test fixture named
+# *.pem turns the guard into a false-positive generator, and a guard that
+# cries wolf on every release is a guard somebody switches off.
+#
+# id_rsa and id_ed25519 carry no wildcard, and a git pathspec with no
+# wildcard anchors at the repository root, so those two matched only a
+# key sitting in the top directory. The product mounts its SSH key at
+# /etc/backup-manager/id_ed25519, so a developer generating one for a
+# test puts it in a subdirectory, which is precisely where the guard was
+# not looking. The */ forms cover the rest of the tree.
+key_pathspecs=(
+  '*.key' '*.pem' 'cosign.key' '*cosign*.key' '*.p12' '*.pfx'
+  'id_rsa' '*/id_rsa' 'id_ed25519' '*/id_ed25519'
+  ':(exclude)*node_modules/*' ':(exclude)ui/shared/dist/*'
+)
+keyfiles=$(
+  {
+    git ls-files --cached --others --exclude-standard -- "${key_pathspecs[@]}" 2>/dev/null || true
+    git ls-files --others --ignored --exclude-standard -- "${key_pathspecs[@]}" 2>/dev/null || true
+  } | sed '/^$/d' | sort -u
+)
 if [ -n "$keyfiles" ]; then
   echo "refusing: private key material is present in the working tree, and this script will not run beside it:" >&2
   echo "$keyfiles" >&2
   echo "Keyless signing needs no key file at all. A hand-signed release passes its key through the environment (cosign --key env://COSIGN_PRIVATE_KEY) and never writes it down." >&2
+  echo "Being listed in .gitignore is not an answer: this scan looks at ignored files too, because ignored is where a generated key lands." >&2
   exit 2
 fi
 if [ -n "${COSIGN_KEY_FILE:-}" ]; then
@@ -164,6 +197,23 @@ fi
 # The SBOM is attested alongside the image, so an out-of-date bundle
 # attaches a document describing a different tree to bytes that will
 # outlive the correction.
+#
+# SKIP_PROVENANCE_CHECK=1 exists only so the guard suite can drive the
+# five refusals above without a Go toolchain and a real module in every
+# fixture. Unlike GUARDS_ONLY, which exits before the first Docker
+# command and therefore cannot publish anything, this one REMOVES a
+# refusal, so it is only ever safe on a run that cannot publish. Setting
+# it on a run that would push is itself a refusal: an attestation is a
+# signed claim, and a stale one attached to bytes that outlive the
+# correction is worse than no attestation at all.
+if [ "${SKIP_PROVENANCE_CHECK:-0}" = "1" ] && [ "${GUARDS_ONLY:-0}" != "1" ]; then
+  echo "refusing: SKIP_PROVENANCE_CHECK=1 removes the check that the SBOM about to be attested describes this tree, and this run is not a guards-only run, so it could push and sign." >&2
+  echo "It is a test-only seam: set GUARDS_ONLY=1 alongside it, or unset it and regenerate the bundle with (cd apps/common && go run ./cmd/provenance -write)." >&2
+  exit 2
+fi
+if [ "${SKIP_PROVENANCE_CHECK:-0}" = "1" ]; then
+  echo "==> SKIP_PROVENANCE_CHECK=1: guard 6 is not being run. Only reachable on a GUARDS_ONLY=1 run, which stops before the push." >&2
+fi
 if [ "${SKIP_PROVENANCE_CHECK:-0}" != "1" ]; then
   if [ ! -r "$SBOM" ]; then
     echo "refusing: ${SBOM} is not in the tree, so there is no SBOM to attest. Generate it with: (cd apps/common && go run ./cmd/provenance -write)" >&2

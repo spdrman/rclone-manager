@@ -246,6 +246,19 @@ func TestLicensePolicyComplaints(t *testing.T) {
 		{"an AGPL component", base(Component{Name: "example.com/a", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "AGPL-3.0-only"}), "which is copyleft"},
 		{"an MPL component", base(Component{Name: "example.com/m", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "MPL-2.0"}), "which is copyleft"},
 		{"a component whose licence could not be identified", base(Component{Name: "example.com/u", Version: "v1", Ecosystem: EcosystemGo}), "not evidence of a permissive one"},
+
+		// The rows a denylist cannot reach. Each of these is
+		// non-empty, so the unidentified-licence rule above lets it
+		// through, and none of them is on copyleftIds, so an
+		// exact-match denylist lets it through as well. They are what
+		// npm registry metadata is actually full of.
+		{"npm's deprecated bare GPL id", base(Component{Name: "leftpad", Version: "1.0.0", Ecosystem: EcosystemNPM, LicenseID: "GPL-3.0"}), "not on the permissive allowlist"},
+		{"npm's deprecated bare LGPL id", base(Component{Name: "rightpad", Version: "1.0.0", Ecosystem: EcosystemNPM, LicenseID: "LGPL-2.1"}), "not on the permissive allowlist"},
+		{"a dual-licence choice", base(Component{Name: "eitheror", Version: "1.0.0", Ecosystem: EcosystemNPM, LicenseID: "(MIT OR GPL-3.0)"}), "an expression rather than a decided licence"},
+		{"a licence with an exception", base(Component{Name: "example.com/x", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "GPL-2.0-or-later WITH Classpath-exception-2.0"}), "an expression rather than a decided licence"},
+		{"npm's read-the-file placeholder", base(Component{Name: "opaque", Version: "1.0.0", Ecosystem: EcosystemNPM, LicenseID: "SEE LICENSE IN LICENSE"}), "an expression rather than a decided licence"},
+		{"a recognised licence nobody has decided about", base(Component{Name: "example.com/e", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "EUPL-1.2"}), "not on the permissive allowlist"},
+		{"a permissive npm component", base(Component{Name: "react", Version: "19.0.0", Ecosystem: EcosystemNPM, LicenseID: "MIT"}), ""},
 		{"a component with no version", base(Component{Name: "example.com/n", Ecosystem: EcosystemGo, LicenseID: "MIT"}), "no version"},
 		{"an inventory that lists nothing", base(), "passes by default"},
 		{"an inventory generated against a different licence", Inventory{ProjectLicense: "MIT", Components: []Component{ok}}, "discharges nothing"},
@@ -268,12 +281,115 @@ func TestLicensePolicyComplaints(t *testing.T) {
 		})
 	}
 
-	// And the switch itself: turning the policy off has to be what stops
-	// it firing, or the rows above prove only that the fixture is clean.
+	// The switch. It used to decide whether a copyleft component was
+	// refused at all, which made the whole premise behind Apache-2.0
+	// editable from a data file: one character in compliance.json and
+	// the refusal became a note, with every test still green because
+	// the real inventory has nothing to complain about either way.
+	//
+	// Now it decides the wording and not the verdict. Both halves are
+	// asserted, because "the refusal survived" and "the message still
+	// explains itself" fail in different directions.
+	gpl := base(Component{Name: "example.com/g", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "GPL-3.0-only"})
 	off := c
 	off.License.CopyleftBlocksTheLicenseChoice = false
-	if got := LicensePolicyComplaints(off, base(Component{Name: "example.com/g", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "GPL-3.0-only"})); len(got) != 0 {
-		t.Errorf("with copyleftBlocksTheLicenseChoice off, a GPL component still complains: %v", got)
+	got := LicensePolicyComplaints(off, gpl)
+	if len(got) != 1 {
+		t.Fatalf("with copyleftBlocksTheLicenseChoice off, a GPL component produced %d complaints; turning a boolean off in a data file must not be able to admit a GPL dependency: %v", len(got), got)
+	}
+	if !strings.Contains(got[0], "refused regardless") {
+		t.Errorf("the complaint does not say the refusal outlived the switch: %q", got[0])
+	}
+
+	// And the allowlist is what does the refusing, so emptying it
+	// refuses everything rather than accepting everything.
+	empty := c
+	empty.License.PermissiveIDs = nil
+	if got := LicensePolicyComplaints(empty, base(ok)); len(got) != 1 || !strings.Contains(got[0], "empty reading is a refusal") {
+		t.Errorf("an empty permissive allowlist passes a component instead of refusing it: %v", got)
+	}
+}
+
+// TestTheCopyleftSwitchIsOnInTheShippedFile pins the declaration itself.
+//
+// The test above proves the refusal no longer depends on this boolean.
+// This one proves the boolean is still true, because it decides whether
+// a reader of provenance/ is told "GPL, which is copyleft" or the vaguer
+// allowlist wording, and because a false here is somebody having tried.
+func TestTheCopyleftSwitchIsOnInTheShippedFile(t *testing.T) {
+	c := MustLoadCompliance()
+	if !c.License.CopyleftBlocksTheLicenseChoice {
+		t.Error("compliance.json has copyleftBlocksTheLicenseChoice false; the Apache-2.0 choice rests on the linked graph being permissive, and turning this off removes the sentence that says so from every complaint")
+	}
+	if len(c.License.PermissiveIDs) == 0 {
+		t.Fatal("compliance.json declares no permissive allowlist, so the licence policy has nothing to admit against and would refuse the whole inventory")
+	}
+	// The allowlist is the refusal, so a copyleft id appearing on both
+	// lists would be admitted with a copyleft complaint's wording and
+	// no complaint at all.
+	for _, id := range c.License.PermissiveIDs {
+		if c.IsCopyleft(id) {
+			t.Errorf("%s is on both permissiveIds and copyleftIds, so it is admitted by the list that decides and named by the list that only explains", id)
+		}
+		if LicenseExpressionIsUndecided(id) {
+			t.Errorf("permissiveIds carries %q, which is an expression rather than a decided licence, so it can never match a component id anyway", id)
+		}
+	}
+}
+
+// TestTheLicencePolicyJudgesTheNPMHalfAsItIsDerived runs a synthetic
+// lockfile through the real derivation and then through the real policy.
+//
+// The table above builds Components by hand, so every planted violation
+// in it travels a path no production component takes. The npm half is
+// derived from package-lock.json by NPMProductionComponents, which sets
+// LicenseID verbatim from the lockfile's own metadata, and that metadata
+// is where deprecated bare ids and compound expressions live. This is the
+// same violation, planted where it actually arrives from.
+func TestTheLicencePolicyJudgesTheNPMHalfAsItIsDerived(t *testing.T) {
+	lockfile := []byte(`{
+	  "lockfileVersion": 3,
+	  "packages": {
+	    "": { "name": "ui-shared", "version": "0.0.0" },
+	    "node_modules/permissive": { "version": "1.2.3", "license": "MIT", "integrity": "sha512-aaa" },
+	    "node_modules/copyleft": { "version": "4.5.6", "license": "GPL-3.0", "integrity": "sha512-bbb" },
+	    "node_modules/dual": { "version": "7.8.9", "license": "(MIT OR GPL-2.0)", "integrity": "sha512-ccc" },
+	    "node_modules/devonly": { "version": "1.0.0", "license": "GPL-3.0", "dev": true, "integrity": "sha512-ddd" }
+	  }
+	}`)
+	comps, err := NPMProductionComponents(lockfile)
+	if err != nil {
+		t.Fatalf("NPMProductionComponents: %v", err)
+	}
+	if len(comps) != 3 {
+		t.Fatalf("expected the three production packages and not the dev one, got %d: %v", len(comps), comps)
+	}
+
+	c := MustLoadCompliance()
+	inv := Inventory{ProjectLicense: c.License.SPDXID, Components: comps}
+	complaints := LicensePolicyComplaints(c, inv)
+	if len(complaints) != 2 {
+		t.Fatalf("expected the bare GPL-3.0 and the dual-licence expression to be refused and the MIT package to pass, got %d complaints: %v", len(complaints), complaints)
+	}
+	joined := strings.Join(complaints, "\n")
+	for _, want := range []string{"copyleft@4.5.6", "dual@7.8.9"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the policy never names %s: %s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "permissive@1.2.3") {
+		t.Errorf("the policy refuses an MIT package, so it refuses everything and these assertions mean nothing: %s", joined)
+	}
+	// The control for the pair: the same lockfile with the two bad ids
+	// corrected has to produce nothing, or the two complaints above are
+	// the policy refusing whatever it is handed.
+	clean := []byte(strings.ReplaceAll(strings.ReplaceAll(string(lockfile), "(MIT OR GPL-2.0)", "MIT"), `"license": "GPL-3.0", "integrity": "sha512-bbb"`, `"license": "Apache-2.0", "integrity": "sha512-bbb"`))
+	cleanComps, err := NPMProductionComponents(clean)
+	if err != nil {
+		t.Fatalf("NPMProductionComponents (clean): %v", err)
+	}
+	if got := LicensePolicyComplaints(c, Inventory{ProjectLicense: c.License.SPDXID, Components: cleanComps}); len(got) != 0 {
+		t.Errorf("a lockfile carrying only permissive ids still complains, so the refusals above are not about the licences: %v", got)
 	}
 }
 

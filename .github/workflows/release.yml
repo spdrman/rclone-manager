@@ -121,12 +121,22 @@ jobs:
       # script's own guards, which check a different thing: those ask
       # whether this tree may be published at all, this asks whether the
       # person dispatching meant to publish this version.
+      #
+      # The dispatcher's string arrives through env, never through a
+      # ${{ }} expansion inside the script. An expansion is textual: it
+      # is pasted into the shell source before bash parses it, so the
+      # value being compared would be shell syntax rather than data, in
+      # the one job that holds id-token: write (the Sigstore identity
+      # Fulcio certifies) and packages: write. A confirmation step whose
+      # input can rewrite the step is not a confirmation.
       - name: Refuse an unconfirmed publish
         if: inputs.publish
+        env:
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           tag="$(sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' apps/common/packaging/canonical.json | head -n1)"
-          if [ "${{ inputs.confirm }}" != "$tag" ]; then
-            echo "::error::publish is true and confirm is '${{ inputs.confirm }}', which is not the tag canonical.json declares ('${tag}'). Type the tag to confirm."
+          if [ "$CONFIRM" != "$tag" ]; then
+            echo "::error::publish is true and confirm is '${CONFIRM}', which is not the tag canonical.json declares ('${tag}'). Type the tag to confirm."
             exit 1
           fi
 

@@ -91,12 +91,34 @@ COSIGN_PRIVATE_KEY="$(pass show backup-manager/cosign)" \
   cosign sign --key env://COSIGN_PRIVATE_KEY ghcr.io/spdrman/backup-manager@<digest>
 ```
 
-`scripts/release/publish-image.sh` enforces that. Guard 5 greps the working tree
-for `*.key`, `*.pem`, `cosign.key`, `*.p12`, `*.pfx` and SSH private keys,
-tracked or untracked, and refuses to run beside any of them, and it refuses
-`COSIGN_KEY_FILE` outright. "I will delete it afterwards" is how key material
-ends up in a commit, and a signing key in git history is not recoverable from by
-deleting the file.
+`scripts/release/publish-image.sh` enforces that. Guard 5 asks git for every path
+in the working tree matching `*.key`, `*.pem`, `cosign.key`, `*.p12`, `*.pfx` or
+an SSH private key name, and refuses to run beside any of them. It refuses
+`COSIGN_KEY_FILE` outright as well. "I will delete it afterwards" is how key
+material ends up somewhere it cannot be taken back from, and a signing key in git
+history is not recoverable from by deleting the file.
+
+Three details in that scan are load-bearing, and two of them were wrong when the
+guard was first written:
+
+* It looks at **ignored** files as well as tracked and untracked ones. The
+  `.gitignore` block covering `*.key` and `*.pem` is the outer net, and
+  `git ls-files --exclude-standard` hides exactly what that net catches, so a
+  single pass went blind to the case the guard exists for:
+  `cosign generate-key-pair` drops `cosign.key` in the working directory, ignored
+  and invisible. Two passes are run and unioned.
+* `node_modules/` and `ui/shared/dist/` are excluded. With ignored files in
+  scope, one vendored `*.pem` test fixture would refuse every release, and a
+  guard that cries wolf is a guard somebody switches off.
+* `id_rsa` and `id_ed25519` are matched as `*/id_rsa` and `*/id_ed25519` too. A
+  git pathspec with no wildcard anchors at the repository root, so the bare forms
+  only ever saw a key in the top directory, and this product mounts its SSH key
+  at `/etc/backup-manager/id_ed25519`.
+
+`scripts/tests/publish-image-guards.test.sh` builds every fixture with this
+repository's real `.gitignore` in it, because the guard's answer depends on the
+exclusion configuration and a fixture without it passes for a reason that does
+not hold where the script runs.
 
 ## Publishing
 
@@ -128,6 +150,13 @@ after the guard block and before the first Docker command, and asserts the
 distinct message rather than only the exit code. All six exit 2, so an
 exit-code-only assertion could not tell "the tree is dirty" from "there is a
 private key sitting in it".
+
+Those fixtures set `SKIP_PROVENANCE_CHECK=1` so they need no Go toolchain, and
+that variable removes guard 6 rather than stopping before it, so it is only safe
+on a run that cannot publish. Setting it on a run that would push is itself a
+refusal: it is combinable with `GUARDS_ONLY=1` and with nothing else. An
+attestation is a signed claim, and a stale one attached to bytes that outlive the
+correction is worse than no attestation at all.
 
 ### After a successful push
 

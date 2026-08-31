@@ -69,8 +69,23 @@ type ComplianceLicense struct {
 	// the test that proves the refusal fires can also prove that turning
 	// it off is what stops it firing, which is the difference between a
 	// policy and a comment.
-	CopyleftBlocksTheLicenseChoice bool     `json:"copyleftBlocksTheLicenseChoice"`
-	CopyleftIDs                    []string `json:"copyleftIds"`
+	CopyleftBlocksTheLicenseChoice bool `json:"copyleftBlocksTheLicenseChoice"`
+	// PermissiveIDs is the allowlist, and it is the allowlist that
+	// makes the policy a refusal. CopyleftIDs is a denylist, and a
+	// denylist answers "is this one of the licences somebody thought
+	// of?", which is not the question: a bare GPL-3.0 out of npm
+	// registry metadata, a compound expression, or a recognised but
+	// unlisted id such as EUPL-1.2 is on nobody's list and would land
+	// in the inventory as an accepted permissive component. So an id
+	// is permitted only by being named here, and adding one is a data
+	// change somebody has to make while reading the licence.
+	PermissiveIDs []string `json:"permissiveIds"`
+	// CopyleftIDs no longer decides anything. It makes the complaint
+	// say "which is copyleft" instead of "which is not on the
+	// allowlist", which is a better message and nothing more. Keeping
+	// the two jobs apart is deliberate: editing this list must not be
+	// able to turn a refusal into a pass.
+	CopyleftIDs []string `json:"copyleftIds"`
 }
 
 // SourceRepository is where the source lives and who can see it.
@@ -199,9 +214,41 @@ func (c Compliance) TargetIDs() []string {
 }
 
 // IsCopyleft reports whether an SPDX id is on the declared copyleft list.
+// It decides the wording of a complaint, never whether there is one.
 func (c Compliance) IsCopyleft(spdxID string) bool {
-	for _, id := range c.License.CopyleftIDs {
-		if strings.EqualFold(id, spdxID) {
+	return containsFold(c.License.CopyleftIDs, spdxID)
+}
+
+// IsPermissive reports whether an SPDX id is on the declared permissive
+// allowlist. This is the one that decides.
+func (c Compliance) IsPermissive(spdxID string) bool {
+	return containsFold(c.License.PermissiveIDs, spdxID)
+}
+
+func containsFold(list []string, want string) bool {
+	want = strings.TrimSpace(want)
+	for _, id := range list {
+		if strings.EqualFold(strings.TrimSpace(id), want) {
+			return true
+		}
+	}
+	return false
+}
+
+// undecidedLicenseMarkers are the substrings that make an SPDX string a
+// question rather than an answer. A choice ("(MIT OR GPL-3.0)"), a
+// conjunction, an exception ("GPL-2.0-or-later WITH
+// Classpath-exception-2.0") and npm's "SEE LICENSE IN LICENSE" all
+// describe terms nobody has decided between, and every one of them is
+// non-empty, so the unidentified-licence rule below does not catch them.
+var undecidedLicenseMarkers = []string{" OR ", " AND ", " WITH ", "(", ")", "SEE LICENSE"}
+
+// LicenseExpressionIsUndecided reports whether an SPDX string states a
+// licence or only the range of licences something might be under.
+func LicenseExpressionIsUndecided(spdxID string) bool {
+	upper := strings.ToUpper(spdxID)
+	for _, marker := range undecidedLicenseMarkers {
+		if strings.Contains(upper, marker) {
 			return true
 		}
 	}
@@ -304,16 +351,33 @@ func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 		out = append(out, fmt.Sprintf("the inventory says the project is under %q and compliance.json says %q; a NOTICE generated against the wrong licence discharges nothing",
 			inv.ProjectLicense, c.License.SPDXID))
 	}
+	if len(c.License.PermissiveIDs) == 0 {
+		return []string{"compliance.json declares no permissive licence allowlist, so every component would be judged against an empty list; an empty reading is a refusal, not a pass"}
+	}
 	for _, comp := range inv.Components {
 		switch {
 		case comp.Version == "":
 			out = append(out, fmt.Sprintf("%s (%s) is listed with no version, so nobody can tell which release's terms were read", comp.Name, comp.Ecosystem))
 		case comp.LicenseID == "":
 			out = append(out, fmt.Sprintf("%s@%s has no identified licence; an unidentified licence is not evidence of a permissive one", comp.Name, comp.Version))
-		case c.IsCopyleft(comp.LicenseID) && c.License.CopyleftBlocksTheLicenseChoice:
-			out = append(out, fmt.Sprintf("%s@%s is %s, which is copyleft: the project's %s choice rests on the whole linked graph being permissive, and this component is the counter-example",
-				comp.Name, comp.Version, comp.LicenseID, c.License.SPDXID))
+		case LicenseExpressionIsUndecided(comp.LicenseID):
+			out = append(out, fmt.Sprintf("%s@%s is listed as %q, which is an expression rather than a decided licence; a choice between licences is not evidence that the permissive branch is the one this project takes",
+				comp.Name, comp.Version, comp.LicenseID))
+		case !c.IsPermissive(comp.LicenseID):
+			out = append(out, fmt.Sprintf("%s@%s is %s, %s", comp.Name, comp.Version, comp.LicenseID, c.whyNotPermitted(comp.LicenseID)))
 		}
 	}
 	return out
+}
+
+// whyNotPermitted explains a refusal that has already been decided.
+func (c Compliance) whyNotPermitted(spdxID string) string {
+	if c.IsCopyleft(spdxID) {
+		if c.License.CopyleftBlocksTheLicenseChoice {
+			return fmt.Sprintf("which is copyleft: the project's %s choice rests on the whole linked graph being permissive, and this component is the counter-example", c.License.SPDXID)
+		}
+		return fmt.Sprintf("which is copyleft. copyleftBlocksTheLicenseChoice is off in compliance.json and it is refused regardless, because the %s choice rests on the allowlist rather than on a boolean in a data file", c.License.SPDXID)
+	}
+	return fmt.Sprintf("which is not on the permissive allowlist compliance.json declares (%s); an id nobody has read the terms of is not evidence of a permissive one",
+		strings.Join(c.License.PermissiveIDs, ", "))
 }
