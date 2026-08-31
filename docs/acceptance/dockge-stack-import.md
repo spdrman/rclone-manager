@@ -103,10 +103,12 @@ already has the SFTP details: a config file that EXISTS and does not validate is
 a hard startup failure rather than a first-run wizard, so an invalid one is worse than
 none at all. Either finish setup in the browser and skip the file, or write it here.
 
-**Write it before you press Start.** Dockge's editor edits the stack's `compose.yaml`
-and `.env`, and nothing under the config mount, so `config.yaml` has to be on the host
-before the stack starts. Step 1 already puts you in a shell on that host: do it there,
-and do it before **Start**.
+**If you take the file route, take it before Start.** Dockge's editor edits the
+stack's `compose.yaml` and `.env`, and nothing under the config mount, so a hand-written
+`config.yaml` has to be on the host before the stack starts or it is not the file the
+engine reads on its first start. Step 1 already puts you in a shell on that host: do it
+there, and do it before **Start**. Skip this block entirely to use the first-run flow
+instead.
 
 ```bash
 $EDITOR /volume1/backup-manager/config/config.yaml
@@ -122,7 +124,10 @@ annotated example is this same file with another platform's host paths, and
 **Never commit the config or paste one into the evidence table:** it names the SFTP
 host and user.
 
-- [ ] `config.yaml` written into `/volume1/backup-manager/config` **before** the install, and valid
+- [ ] Either `config.yaml` is written into `/volume1/backup-manager/config` **before** the install
+      and is valid, or that directory is left empty and the first-run flow writes it.
+      A file that exists and does not validate is the one state that refuses the start,
+      so record which of the two routes this run took
 - [ ] It is owned by the app's uid and gid and readable by them
 - [ ] It was written after 0.3's ownership fix-up, or chowned afterwards
 - [ ] The engine reported healthy on the first start, rather than restarting

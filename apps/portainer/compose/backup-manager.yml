@@ -81,8 +81,9 @@ services:
     # container with a published port. `/backup-manager status` is
     # FR-24's backup-freshness verdict and exits non-zero on any
     # DEGRADED, STALE or FAILING set, and on a fresh install, which has
-    # backed nothing up yet: gating the Web UI on it means a stack an operator
-    # just deployed from the App Template never gets a page at all.
+    # backed nothing up yet: gating the Web UI on it means a stack an
+    # operator just deployed from the App Template never gets a page at
+    # all.
     #
     # Declared here rather than inherited from the image, because the
     # image's own HEALTHCHECK is deliberately the freshness verdict: it

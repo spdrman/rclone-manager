@@ -105,10 +105,12 @@ already has the SFTP details: a config file that EXISTS and does not validate is
 a hard startup failure rather than a first-run wizard, so an invalid one is worse than
 none at all. Either finish setup in the browser and skip the file, or write it here.
 
-**The stack form places no files.** Every field Portainer shows is one environment
-variable of `apps/portainer/compose/backup-manager.env`, and the stack deploys as soon
-as you press Deploy, so `config.yaml` has to be on the host before that press. Write it
-over SSH on the host running the Docker engine, not inside the Portainer container.
+**If you take the file route, take it before Deploy.** Every field Portainer shows is
+one environment variable of `apps/portainer/compose/backup-manager.env`, and the stack
+deploys as soon as you press Deploy, so a hand-written `config.yaml` has to be on the
+host before that press or it is not the file the engine reads on its first start. Write
+it over SSH on the host running the Docker engine, not inside the Portainer container.
+Skip this block entirely to use the first-run flow instead.
 
 ```bash
 $EDITOR /opt/backup-manager/config/config.yaml
@@ -124,7 +126,10 @@ annotated example is this same file with another platform's host paths, and
 **Never commit the config or paste one into the evidence table:** it names the SFTP
 host and user.
 
-- [ ] `config.yaml` written into `/opt/backup-manager/config` **before** the install, and valid
+- [ ] Either `config.yaml` is written into `/opt/backup-manager/config` **before** the install
+      and is valid, or that directory is left empty and the first-run flow writes it.
+      A file that exists and does not validate is the one state that refuses the start,
+      so record which of the two routes this run took
 - [ ] It is owned by the app's uid and gid and readable by them
 - [ ] It was written after 0.3's ownership fix-up, or chowned afterwards
 - [ ] The engine reported healthy on the first start, rather than restarting
