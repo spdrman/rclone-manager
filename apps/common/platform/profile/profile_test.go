@@ -1,0 +1,459 @@
+package profile_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+)
+
+// ---------------------------------------------------------------------
+// Selection
+// ---------------------------------------------------------------------
+
+func TestLookup(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		id         string
+		wantID     profile.ID
+		wantErr    error
+		wantDetail string
+	}{
+		{name: "generic", id: "generic", wantID: profile.Generic},
+		{name: "ugos", id: "ugos", wantID: profile.UGOS},
+		{
+			name:       "unknown profile is refused, and the refusal names what is known",
+			id:         "synology",
+			wantErr:    profile.ErrUnknownProfile,
+			wantDetail: "generic",
+		},
+		{
+			name:    "an empty selector is refused rather than defaulted",
+			id:      "",
+			wantErr: profile.ErrUnknownProfile,
+		},
+		{
+			name:    "case is not normalised away: a profile id is an exact token",
+			id:      "Generic",
+			wantErr: profile.ErrUnknownProfile,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := profile.Lookup(tc.id)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Lookup(%q) error = %v, want %v", tc.id, err, tc.wantErr)
+				}
+				if tc.wantDetail != "" && !strings.Contains(err.Error(), tc.wantDetail) {
+					t.Errorf("Lookup(%q) error %q does not mention %q, so it does not say what IS valid", tc.id, err, tc.wantDetail)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Lookup(%q): %v", tc.id, err)
+			}
+			if got.ID != tc.wantID {
+				t.Errorf("Lookup(%q).ID = %q, want %q", tc.id, got.ID, tc.wantID)
+			}
+		})
+	}
+}
+
+// TestEveryDeclaredProfileIsLookupable is the completeness half: IDs() and
+// the table behind Lookup cannot drift apart, so adding a profile without
+// registering it fails here rather than at a customer's first start.
+func TestEveryDeclaredProfileIsLookupable(t *testing.T) {
+	t.Parallel()
+
+	ids := profile.IDs()
+	if len(ids) < 2 {
+		t.Fatalf("IDs() = %v, want at least generic and ugos", ids)
+	}
+	for _, id := range ids {
+		if _, err := profile.Lookup(string(id)); err != nil {
+			t.Errorf("IDs() advertises %q but Lookup rejects it: %v", id, err)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
+// A profile is semantically inert with respect to the backup domain
+// ---------------------------------------------------------------------
+
+// allowedProfileFields is the complete list of what EPIC B #81 and issue
+// #167 permit a runtime profile to carry: an identity, platform capability
+// reporting, a trusted native authentication gateway, a notification
+// bridge, and the launch/presentation bridge (which UI bundle this profile
+// serves). Anything else is the beginning of a fork.
+var allowedProfileFields = map[string]string{
+	"ID":           "the profile's own selector token",
+	"PlatformID":   "the stable platform identifier the API reports",
+	"DisplayName":  "presentation only",
+	"Deployment":   "presentation only",
+	"Capabilities": "platform capability reporting",
+	"Gateway":      "the trusted native authentication gateway",
+	"UIBundle":     "which UI bundle this profile's launch bridge serves",
+}
+
+// corePolicyMarkers are the backup-domain words a profile may never
+// declare. They mirror scripts/architecture/ownership.go's rule set, which
+// does not reach this package: layers.conf classifies apps/common/platform
+// as core-layer, and that script only scans the platform and distribution
+// layers. This test is what covers the gap for the one core-layer type
+// whose whole job is to describe host-dependent behaviour.
+var corePolicyMarkers = []string{"retention", "lifecycle", "validat", "catalog", "backupset", "backuppolicy", "schedule", "prune", "quarantine"}
+
+func policyFields(typ reflect.Type, allowed map[string]string) []string {
+	var found []string
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if _, ok := allowed[f.Name]; !ok {
+			found = append(found, f.Name+" (not in the allow-list)")
+			continue
+		}
+		lower := strings.ToLower(f.Name)
+		for _, marker := range corePolicyMarkers {
+			if strings.Contains(lower, marker) {
+				found = append(found, f.Name+" (names core-owned "+marker+")")
+			}
+		}
+	}
+	return found
+}
+
+func TestProfileCarriesNoBackupDomainPolicy(t *testing.T) {
+	t.Parallel()
+
+	if got := policyFields(reflect.TypeOf(profile.Profile{}), allowedProfileFields); len(got) != 0 {
+		t.Errorf("profile.Profile declares %v; a runtime profile may only carry %v", got, sortedKeys(allowedProfileFields))
+	}
+
+	// Both directions. An allow-list entry naming a field that no longer
+	// exists means the list has stopped describing the type, and a stale
+	// allow-list is how this check quietly stops checking.
+	typ := reflect.TypeOf(profile.Profile{})
+	for name := range allowedProfileFields {
+		if _, ok := typ.FieldByName(name); !ok {
+			t.Errorf("the allow-list permits %q but profile.Profile has no such field, so the list is stale", name)
+		}
+	}
+}
+
+// TestPolicyFieldCheckerWouldNoticeAFork is the positive control for the
+// test above. Without it, a checker that returned nil unconditionally
+// would report a clean Profile forever.
+func TestPolicyFieldCheckerWouldNoticeAFork(t *testing.T) {
+	t.Parallel()
+
+	type forkedProfile struct {
+		ID              profile.ID
+		Capabilities    capabilities.PlatformCapabilities
+		RetentionTiers  int
+		LifecycleStates []string
+	}
+
+	got := policyFields(reflect.TypeOf(forkedProfile{}), allowedProfileFields)
+	if len(got) != 2 {
+		t.Fatalf("the checker found %v on a deliberately forked profile, want both RetentionTiers and LifecycleStates", got)
+	}
+	joined := strings.Join(got, " ")
+	for _, want := range []string{"RetentionTiers", "LifecycleStates"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the checker missed %s: %v", want, got)
+		}
+	}
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------
+// A profile never declares a capability it cannot deliver (§22)
+// ---------------------------------------------------------------------
+
+func TestNoProfileDeclaresACapabilityItCannotDeliver(t *testing.T) {
+	t.Parallel()
+
+	for _, id := range profile.IDs() {
+		t.Run(string(id), func(t *testing.T) {
+			t.Parallel()
+			p := mustLookup(t, string(id))
+			if p.Gateway != nil {
+				p.Gateway.TrustedPeers = []string{"127.0.0.1/32"}
+			}
+			adapter, err := p.Adapter(profile.AdapterConfig{LocalAuth: stubAuthenticator{}})
+			if err != nil {
+				t.Fatalf("Adapter: %v", err)
+			}
+			if got := profile.UndeliverableCapabilities(adapter); len(got) != 0 {
+				t.Errorf("profile %q declares %v but cannot deliver them", id, got)
+			}
+		})
+	}
+}
+
+// TestUndeliverableCapabilityCheckWouldNoticeAnEmulatedClaim is the
+// positive control: a profile that claims native notifications with no
+// notifier behind it has to be caught, or the assertion above is vacuous.
+func TestUndeliverableCapabilityCheckWouldNoticeAnEmulatedClaim(t *testing.T) {
+	t.Parallel()
+
+	got := profile.UndeliverableCapabilities(overclaimingAdapter{})
+	if len(got) != 2 {
+		t.Fatalf("UndeliverableCapabilities on an over-claiming adapter = %v, want both native auth and native notifications", got)
+	}
+	joined := strings.Join(got, " ")
+	for _, want := range []string{"native_auth", "native_notifications"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the check missed %s: %v", want, got)
+		}
+	}
+}
+
+type overclaimingAdapter struct {
+	capabilities.BasePlatformAdapter
+}
+
+func (overclaimingAdapter) ID() capabilities.PlatformID { return capabilities.PlatformUGOS }
+func (overclaimingAdapter) Capabilities() capabilities.PlatformCapabilities {
+	return capabilities.PlatformCapabilities{NativeAuth: true, NativeNotifications: true}
+}
+func (overclaimingAdapter) PlatformInfo(context.Context) (capabilities.PlatformInfo, error) {
+	return capabilities.PlatformInfo{ID: capabilities.PlatformUGOS}, nil
+}
+
+type stubAuthenticator struct{}
+
+func (stubAuthenticator) Authenticate(context.Context, capabilities.AuthRequest) (capabilities.AuthContext, error) {
+	return capabilities.AuthContext{Authenticated: true, Username: "local", Mode: capabilities.AuthModeLocalAccount}, nil
+}
+
+func mustLookup(t *testing.T, id string) profile.Profile {
+	t.Helper()
+	p, err := profile.Lookup(id)
+	if err != nil {
+		t.Fatalf("Lookup(%q): %v", id, err)
+	}
+	return p
+}
+
+// ---------------------------------------------------------------------
+// Fail-closed wiring
+// ---------------------------------------------------------------------
+
+func TestAdapterFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		id      string
+		mutate  func(*profile.Profile)
+		cfg     profile.AdapterConfig
+		wantErr error
+	}{
+		{
+			name:    "a gateway profile with no trusted peer refuses to wire at all",
+			id:      "ugos",
+			cfg:     profile.AdapterConfig{LocalAuth: stubAuthenticator{}},
+			wantErr: profile.ErrNoTrustedPeer,
+		},
+		{
+			name:    "a local-auth profile with no authenticator refuses to wire",
+			id:      "generic",
+			cfg:     profile.AdapterConfig{},
+			wantErr: profile.ErrNoAuthenticator,
+		},
+		{
+			name:   "a gateway profile with a trusted peer wires",
+			id:     "ugos",
+			mutate: func(p *profile.Profile) { p.Gateway.TrustedPeers = []string{"10.0.0.0/8"} },
+			cfg:    profile.AdapterConfig{LocalAuth: stubAuthenticator{}},
+		},
+		{
+			name: "a local-auth profile with an authenticator wires",
+			id:   "generic",
+			cfg:  profile.AdapterConfig{LocalAuth: stubAuthenticator{}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := mustLookup(t, tc.id)
+			if tc.mutate != nil {
+				tc.mutate(&p)
+			}
+			_, err := p.Adapter(tc.cfg)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("Adapter: unexpected error %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Adapter error = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestGatewayRejectsAMalformedTrustedPeer(t *testing.T) {
+	t.Parallel()
+
+	p := mustLookup(t, "ugos")
+	p.Gateway.TrustedPeers = []string{"not-a-cidr"}
+	_, err := p.Adapter(profile.AdapterConfig{LocalAuth: stubAuthenticator{}})
+	if err == nil {
+		t.Fatal("a malformed trusted-peer range wired successfully; a gateway that cannot parse its own trust boundary must refuse")
+	}
+	if !strings.Contains(err.Error(), "not-a-cidr") {
+		t.Errorf("the refusal %q does not name the value it could not parse", err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The trusted-gateway boundary
+// ---------------------------------------------------------------------
+
+func gatewayAuthenticator(t *testing.T, peers ...string) capabilities.Authenticator {
+	t.Helper()
+	p := mustLookup(t, "ugos")
+	p.Gateway.TrustedPeers = peers
+	adapter, err := p.Adapter(profile.AdapterConfig{LocalAuth: stubAuthenticator{}})
+	if err != nil {
+		t.Fatalf("Adapter: %v", err)
+	}
+	return adapter.Authenticator()
+}
+
+func TestTrustedGatewayIdentity(t *testing.T) {
+	t.Parallel()
+
+	const spoofed = "attacker-as-admin"
+
+	cases := []struct {
+		name       string
+		remoteAddr string
+		headers    map[string]string
+		wantUser   string
+		wantErr    error
+	}{
+		{
+			name:       "the positive control: a genuinely gateway-authenticated request succeeds",
+			remoteAddr: "10.4.0.9:41000",
+			headers:    map[string]string{"X-Ugos-User": "operator"},
+			wantUser:   "operator",
+		},
+		{
+			name:       "a direct-LAN request carrying forged identity headers is refused",
+			remoteAddr: "192.168.1.50:52000",
+			headers:    map[string]string{"X-Ugos-User": spoofed},
+			wantErr:    profile.ErrUntrustedPeer,
+		},
+		{
+			name:       "a trusted peer that sends no identity at all is refused, distinguishably",
+			remoteAddr: "10.4.0.9:41000",
+			headers:    map[string]string{},
+			wantErr:    profile.ErrNoGatewayIdentity,
+		},
+		{
+			name:       "a trusted peer sending an empty identity is refused, not treated as anonymous-but-allowed",
+			remoteAddr: "10.4.0.9:41000",
+			headers:    map[string]string{"X-Ugos-User": "   "},
+			wantErr:    profile.ErrNoGatewayIdentity,
+		},
+		{
+			name:       "an unparsable remote address is untrusted, never trusted by accident",
+			remoteAddr: "garbage",
+			headers:    map[string]string{"X-Ugos-User": spoofed},
+			wantErr:    profile.ErrUntrustedPeer,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			auth := gatewayAuthenticator(t, "10.4.0.0/16")
+			h := http.Header{}
+			for k, v := range tc.headers {
+				h.Set(k, v)
+			}
+
+			got, err := auth.Authenticate(context.Background(), capabilities.AuthRequest{
+				Headers:    h,
+				RemoteAddr: tc.remoteAddr,
+			})
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Authenticate error = %v, want %v", err, tc.wantErr)
+				}
+				if got.Authenticated {
+					t.Error("a refused request came back Authenticated")
+				}
+				if strings.Contains(got.Username, spoofed) {
+					t.Errorf("the refused AuthContext carries the spoofed username %q", got.Username)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Authenticate: %v", err)
+			}
+			if !got.Authenticated || got.Username != tc.wantUser {
+				t.Errorf("Authenticate = %+v, want an authenticated %q", got, tc.wantUser)
+			}
+			if got.Mode != capabilities.AuthModeNativeSession {
+				t.Errorf("Mode = %q, want %q", got.Mode, capabilities.AuthModeNativeSession)
+			}
+		})
+	}
+}
+
+// TestSanitizeStripsIdentityFromAnUntrustedPeer proves the "stripped or
+// ignored" half literally: a handler downstream of the gateway boundary
+// must not even be able to read the forged header.
+func TestSanitizeStripsIdentityFromAnUntrustedPeer(t *testing.T) {
+	t.Parallel()
+
+	p := mustLookup(t, "ugos")
+	p.Gateway.TrustedPeers = []string{"10.4.0.0/16"}
+	g, err := p.Gateway.Compile()
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	untrusted := http.Header{"X-Ugos-User": []string{"attacker"}, "Accept": []string{"application/json"}}
+	g.Sanitize(untrusted, "192.168.1.50:52000")
+	if v := untrusted.Get("X-Ugos-User"); v != "" {
+		t.Errorf("the identity header survived an untrusted peer: %q", v)
+	}
+	if untrusted.Get("Accept") != "application/json" {
+		t.Error("Sanitize removed a header that is none of its business")
+	}
+
+	// Positive control: from the trusted peer the same header is left
+	// alone, so the assertion above is about trust and not about the
+	// function deleting everything it sees.
+	trusted := http.Header{"X-Ugos-User": []string{"operator"}}
+	g.Sanitize(trusted, "10.4.0.9:41000")
+	if v := trusted.Get("X-Ugos-User"); v != "operator" {
+		t.Errorf("Sanitize stripped the identity header from the TRUSTED peer too (got %q), so it is deleting rather than deciding", v)
+	}
+}
