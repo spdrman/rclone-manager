@@ -4078,6 +4078,10 @@ Implement:
 
 ## Work Package 4.2 — UGOS Provider App / UPK
 
+> Re-homed. This work package left EPIC B in the UGOS split and is EPIC D's #83
+> (D1.2). It is not a Phase 4 deliverable and the Phase 4 Exit Gate below is not
+> computed over it. The requirements here still stand; they are answered there.
+
 Implement only under:
 
 ```text
@@ -4226,7 +4230,6 @@ The same core behavior is deployable through:
 
 ```text
 Generic Docker
-UGOS
 TrueNAS
 Unraid
 OpenMediaVault
@@ -4235,6 +4238,14 @@ Proxmox VE
 ```
 
 at the support tier defined by this EPIC.
+
+Six targets, and UGOS is deliberately not one of them. UGOS deployability is EPIC
+D's gate against the shipped `.UPK` in #83 (D1.2), which is where work package 4.2
+went. Nothing was dropped: the cross-provider conformance matrix still carries a
+UGOS column, checked on the same terms as every other one and reported with its
+blockers in `docs/conformance/phase-4-matrix.md`. It is read here as information,
+and this gate closes with EPIC C and EPIC D untouched. #86 and #81 both state the
+same six.
 
 ---
 

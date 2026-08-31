@@ -2,16 +2,25 @@ import { capabilities } from "@shared/platform/capabilities";
 import type { AuthContext, PlatformBridge } from "@shared/types/platform";
 
 /** Proxmox is a deployment environment, not an app store. We do not mimic or
- *  modify the Proxmox management UI; the host management plane stays separate (§29). */
+ *  modify the Proxmox management UI; the host management plane stays separate (§29).
+ *
+ *  The supported model (WP4.5, apps/proxmox/README.md) is a dedicated guest
+ *  acting as the container host, running the canonical OCI image: a VM by
+ *  default, or an unprivileged LXC with nesting if you accept the caveats.
+ *  Never the PVE host itself. The guest sees the shared host directory or
+ *  dataset at /mnt/backup-manager; `storageMount` is its `backups` child, the
+ *  backup root the wizard seeds a destination from, which is deliberately not
+ *  the share root that also holds state, config and key material.
+ *  apps/common/packaging pins it to canonical.json. */
 export const proxmoxBridge: PlatformBridge = {
   id: "proxmox",
   name: "Proxmox VE",
   integration: "standalone",
 
   deployment: {
-    label: "Unprivileged LXC",
-    storageMount: "/mnt/backup-manager",
-    adapterVersion: "proxmox 1.0.1"
+    label: "Dedicated container host",
+    storageMount: "/mnt/backup-manager/backups",
+    adapterVersion: "proxmox 1.1.0"
   },
 
   capabilities: () => capabilities({}),

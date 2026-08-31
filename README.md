@@ -525,24 +525,33 @@ pages, components, the `PlatformBridge` contract (`ui/shared/src/platform/`,
 `ui/shared/src/types/platform.ts`), and the single causl-ts state graph
 (`ui/shared/src/state/graph.ts`). A provider app under `apps/<provider>/frontend/`
 supplies a `PlatformBridge` implementation and, for five of the seven that exist today
-(`ugos`, `truenas`, `unraid`, `openmediavault`, `proxmox`), nothing else — `ui/shared`
+(`ugos`, `truenas`, `unraid`, `openmediavault`, `proxmox`), no code beyond it — `ui/shared`
 never imports a provider, only the reverse. Two carry more: `apps/generic/` is the
 generic Web host's own Go module (#82/B4.1), and `apps/synology/` is the DSM `.spk`
 packaging and conformance module (#85/B4.4), which ships no product binary of its own —
 it wraps the release binaries unchanged and checks their digest against
 `container/release-manifest.json`.
 
-Three of those providers also carry packaging metadata next to their bridge:
+Four of those providers also carry packaging metadata next to their bridge:
 `apps/truenas/` (a custom-app Compose file plus a TrueNAS Apps catalog entry),
-`apps/unraid/` (two Community Applications Docker templates) and
-`apps/openmediavault/` (a Compose deployment profile). All three are metadata and
-templates only, wrapping the exact canonical OCI image with no lifecycle code of their
-own, and `apps/common/packaging/` holds them to that on every commit: one shared source
-of truth in `canonical.json`, plus scanners for the Phase 4 gate checks that are
-decidable from the repository alone. The half that is not decidable here — installing,
-updating and removing on the real platform — lives in [`docs/acceptance/`](docs/acceptance/)
-as prewritten operator procedures, and until one is executed its provider is
-build-supported and uncertified.
+`apps/unraid/` (two Community Applications Docker templates),
+`apps/openmediavault/` (a Compose deployment profile) and `apps/proxmox/` (the same
+Compose profile again, for a dedicated container-host guest, because Proxmox VE has no
+application store to package into at all). All four are metadata and templates only,
+wrapping the exact canonical OCI image with no lifecycle code of their own, and
+`apps/common/packaging/` holds them to that on every commit: one shared source of truth
+in `canonical.json`, plus scanners for the Phase 4 gate checks that are decidable from
+the repository alone.
+
+The same package runs the cross-provider conformance matrix (§63A) across all seven
+providers at once, reporting an outcome per provider per capability rather than one
+verdict per run, with `UNSUPPORTED`, `NOT_APPLICABLE` and `BLOCKED` as first-class
+results a provider has to declare rather than reach by omission. The recorded run is
+[`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md), generated and
+then checked, so it cannot drift from what the suite actually finds. The half that is
+not decidable here — installing, updating and removing on the real platform — lives in
+[`docs/acceptance/`](docs/acceptance/) as prewritten operator procedures, and until one
+is executed its provider is build-supported and uncertified.
 
 This project was originally scoped as `tools/backup-manager/` inside `iasbuilt/iac`. It
 lives here instead; nothing in the design depended on the location.
@@ -556,5 +565,7 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`docs/deployment.md`](docs/deployment.md) – UGREEN container packaging (issue #27; check it exists yet)
 - [`apps/synology/README.md`](apps/synology/README.md) – the Synology DSM `.spk`: supported architectures/models, how to build and verify one, and what is still uncertified
-- [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written before execution and run on real NAS hardware
+- [`apps/proxmox/README.md`](apps/proxmox/README.md) – the Proxmox VE deployment profile: the one supported model, what the PVE host contributes, and what is deliberately absent
+- [`docs/conformance/phase-4-matrix.md`](docs/conformance/phase-4-matrix.md) – the cross-provider conformance matrix (§63A), per provider and per capability, including what is blocked and on what
+- [`docs/acceptance/`](docs/acceptance/) – the provider acceptance procedures (§68), written before execution and run on real NAS hardware or a real host
 - [`docs/EPIC.md`](docs/EPIC.md) – the full specification this project is built against, including where it and the code have since diverged

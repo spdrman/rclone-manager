@@ -277,11 +277,24 @@ This is the criterion that most often fails silently, so do it on a system that
 already has real state from step 4.
 
 1. Note the current app version and image reference.
-2. Push or side-load a newer image tag.
-3. In TrueNAS, **Apps → Installed → backup-manager → Edit**, change the image tag,
+2. Capture a baseline first, from a shell on the TrueNAS host, so the checks
+   below are a comparison rather than an impression:
+   ```bash
+   sha256sum <state dataset>/state.db | tee /tmp/before-update.sha256
+   find <backups dataset> -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
+   ```
+3. Push or side-load a newer image tag.
+4. In TrueNAS, **Apps → Installed → backup-manager → Edit**, change the image tag,
    and save. TrueNAS recreates both containers.
+5. Compare afterwards:
+   ```bash
+   find <backups dataset> -type f -printf '%p %s\n' | sort > /tmp/after-update.txt
+   diff /tmp/before-update.txt /tmp/after-update.txt
+   ```
 
 - [ ] Update completes and both containers return to healthy
+- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+      backup data
 - [ ] The administrator account still exists (no re-enrollment prompt)
 - [ ] The session cookie may be invalidated by the restart; logging back in with
       the same password works
@@ -311,6 +324,11 @@ Then let TrueNAS restart the app (or **Stop** then **Start** it in the UI).
 ---
 
 ## Step 7 — Remove
+
+This is the destructive-safety step. Its evidence was captured back in the
+storage step, because after the delete there is nothing left to compare against,
+"the dataset looks fine" is not a result, and any deletion the comparison turns
+up is a release blocker rather than a finding to triage.
 
 1. **Apps → Installed → backup-manager → Delete**.
 2. When TrueNAS asks, do **not** tick anything that deletes the app's datasets.

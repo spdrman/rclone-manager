@@ -1206,10 +1206,10 @@ const PLATFORMS = {
   generic: { name: "Generic Docker / Linux", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Docker Compose", mount: "/data/backups", adapter: "generic 1.3.0" },
   ugos: { name: "UGREEN UGOS Pro", integration: "Native app", auth: "UGOS session", chrome: true, picker: true, nativeNotify: true, deployment: "UGOS package", mount: "/volume1/backup-manager", adapter: "ugos 1.3.0" },
   synology: { name: "Synology DSM", integration: "Embedded web app", auth: "Backup Manager local account", chrome: true, picker: false, nativeNotify: false, deployment: "DSM package", mount: "/volume1/backup-manager", adapter: "synology 1.2.4" },
-  truenas: { name: "TrueNAS", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "TrueNAS app (container)", mount: "/mnt/tank/backup-manager", adapter: "truenas 1.1.0" },
-  unraid: { name: "Unraid", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Community Applications", mount: "/mnt/user/backups", adapter: "unraid 1.1.0" },
+  truenas: { name: "TrueNAS", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "TrueNAS app (container)", mount: "/mnt/tank/backup-manager", adapter: "truenas 1.2.0" },
+  unraid: { name: "Unraid", integration: "Container app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Community Applications", mount: "/mnt/user/backups", adapter: "unraid 1.2.0" },
   openmediavault: { name: "OpenMediaVault", integration: "Compose plugin container", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "omv-compose", mount: "/srv/dev-disk-by-uuid/backups", adapter: "omv 1.0.2" },
-  proxmox: { name: "Proxmox VE", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Unprivileged LXC", mount: "/mnt/backup-manager", adapter: "proxmox 1.0.1" }
+  proxmox: { name: "Proxmox VE", integration: "Standalone web app", auth: "Backup Manager local account", chrome: false, picker: false, nativeNotify: false, deployment: "Dedicated container host", mount: "/mnt/backup-manager", adapter: "proxmox 1.1.0" }
 };
 
 const NAV = [

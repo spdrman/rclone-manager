@@ -17,7 +17,7 @@ export const unraidBridge: PlatformBridge = {
     adapterVersion: "unraid 1.2.0"
   },
 
-  capabilities: () => capabilities({}),
+  capabilities: () => capabilities({ appStorePackaging: true }),
 
   async getAuthContext(): Promise<AuthContext> {
     // No native identity provider on this platform: the service's own session

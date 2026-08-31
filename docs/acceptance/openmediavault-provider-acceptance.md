@@ -279,10 +279,23 @@ sets. Record only that it was taken, and the canary's hash, in the evidence tabl
 
 ## Step 6 — Update
 
-1. Push or side-load a newer image tag and change `IMAGE` in the env file.
-2. **Services → Compose → Files → backup-manager → Pull**, then **Up**.
+1. Capture a baseline first, over SSH to the OMV box, so the checks below are a
+   comparison rather than an impression:
+   ```bash
+   sha256sum $DISK/appdata/backup-manager/state/state.db | tee /tmp/before-update.sha256
+   find $DISK/backups -type f -printf '%p %s\n' | sort > /tmp/before-update.txt
+   ```
+2. Push or side-load a newer image tag and change `IMAGE` in the env file.
+3. **Services → Compose → Files → backup-manager → Pull**, then **Up**.
+4. Compare afterwards:
+   ```bash
+   find $DISK/backups -type f -printf '%p %s\n' | sort > /tmp/after-update.txt
+   diff /tmp/before-update.txt /tmp/after-update.txt
+   ```
 
 - [ ] Pull and Up both complete, and both services return to healthy
+- [ ] `diff` of the retained-artifact listing is empty: the update moved no
+      backup data
 - [ ] The administrator account still exists (no re-enrollment prompt)
 - [ ] Logging back in with the same password works
 - [ ] Every backup set is still configured
@@ -309,6 +322,11 @@ docker compose -p backup-manager up -d
 ---
 
 ## Step 8 — Remove
+
+This is the destructive-safety step. Its evidence was captured back in the
+storage step, because after the removal there is nothing left to compare
+against, and any deletion the comparison turns up is a release blocker rather
+than a finding to triage.
 
 1. **Services → Compose → Files → backup-manager → Down**.
 2. Then **Delete** the file entry.

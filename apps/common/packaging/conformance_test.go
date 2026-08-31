@@ -200,6 +200,47 @@ func allPlatforms() []platformFixture {
 			acceptance:       "openmediavault-provider-acceptance.md",
 			docSubstitutions: map[string]string{"$DISK": "/srv/dev-disk-by-uuid"},
 		},
+		{
+			// WP4.5. Proxmox VE has no app store to package into, so
+			// its Tier C profile is the same two-container Compose
+			// shape as OpenMediaVault's, run inside a dedicated
+			// container-host guest rather than on the PVE host. That
+			// it joins this table by adding a row, with no new
+			// checker, is the point: the deployment target changed
+			// and none of the packaging rules did.
+			name: "proxmox",
+			requiredFiles: []string{
+				"README.md",
+				"compose/backup-manager.yml",
+				"compose/backup-manager.env",
+			},
+			services: func(t *testing.T) []Service {
+				t.Helper()
+				dir := filepath.Join(PlatformDir("proxmox"), "compose")
+				env, err := ReadEnvFile(filepath.Join(dir, "backup-manager.env"))
+				if err != nil {
+					t.Fatalf("read Proxmox env file: %v", err)
+				}
+				svcs, err := ReadCompose(filepath.Join(dir, "backup-manager.yml"), env)
+				if err != nil {
+					t.Fatalf("read Proxmox compose: %v", err)
+				}
+				return svcs
+			},
+			engineService: "backup-manager",
+			uiService:     "backup-manager-ui",
+			uiHealthcheck: overrideHealthcheck,
+			hardening:     composeHardening,
+			composeProfiles: []composeProfile{
+				{compose: "compose/backup-manager.yml", env: "compose/backup-manager.env"},
+			},
+			acceptance: "proxmox-ve-deployment.md",
+			// Every path the Proxmox procedure names is literal: the
+			// share root is /mnt/backup-manager inside the guest, and
+			// the profile derives the rest from it, so there is no
+			// machine-specific placeholder to expand.
+			docSubstitutions: map[string]string{},
+		},
 	}
 }
 
