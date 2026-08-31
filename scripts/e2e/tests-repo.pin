@@ -1,0 +1,13 @@
+# The rclone-manager-tests commit this repository's gate runs its browser
+# e2e suite and its CLI smoke slice from. Moved by
+# scripts/e2e/bump-tests-pin.sh, and the commit that moves it is itself
+# gated against the new pin, so a bad bump cannot land unnoticed.
+#
+# Why this repository pins that one, and that one pins a build of this one:
+# pinning the tests repository means a new or changed test cannot break
+# unrelated in-flight work here until someone bumps this line, and the bump
+# is itself gated. Pinning the product build over there means a release
+# cannot silently change what those suites certify. Each is one line, in one
+# file, reviewable on its own.
+TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
+TESTS_REPO_SHA=3a49a2aae39b40800bab28526133cb37ad730973

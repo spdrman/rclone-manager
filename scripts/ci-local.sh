@@ -39,6 +39,13 @@
 # the daemon; CI_LOCAL_SKIP_DOCKER=1 is the out-loud opt-out and ends
 # INCOMPLETE.
 #
+# A missing Playwright Chromium is the third instance of the same shape,
+# and gets the same answer: the browser e2e step refuses and names the
+# install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that
+# ledgers. See scripts/e2e/run-tests-repo-gate.sh, which is where that
+# suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
+# is why it runs at all).
+#
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
 # failed for "ci-local: FAILED".
@@ -99,7 +106,7 @@ if [ "$FAST" != "1" ]; then
 fi
 
 if [ "$FAST" = "1" ]; then
-  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix and the SFTP integration tests), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
+  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix and the SFTP integration tests), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
 fi
 
 gate_step "core/ go build"
@@ -225,6 +232,34 @@ if [ "$FAST" != "1" ]; then
       gate_note_skip "apps/common/tests lint, eslint and the cross-provider conformance suite ($(gate_install_hint apps/common/tests))"
       ;;
   esac
+fi
+
+# The browser e2e signal (#158, #197). Until this step existed, the
+# Playwright suite had no automated execution anywhere: nightly-e2e.yml's
+# schedule is commented out, every workflow here is workflow_dispatch-only,
+# and this script never invoked it. So it ran when somebody remembered to,
+# which is how a deterministically red spec sat on main through four merges
+# and was dismissed twice as an ordering flake.
+#
+# The suite itself no longer lives in this repository; it is Suite B of
+# spdrman/rclone-manager-tests, pinned by scripts/e2e/tests-repo.pin. What
+# it runs against is not the pin's own build, it is THIS working tree's
+# ui/shared, on a port the harness picks and proves free. The same step
+# also runs that repository's CLI smoke slice against a backup-manager
+# built from this tree, which is a black-box signal this repository has
+# never had at all.
+#
+# Non-FAST only, so CI_LOCAL_FAST=1 skips it under the existing
+# never-merge-on-FAST rule. CI_LOCAL_SKIP_E2E=1 is the separate out-loud
+# opt-out for a machine with no browser, and it ledgers, so that run ends
+# INCOMPLETE and says which check it left out.
+if [ "$FAST" != "1" ]; then
+  if [ "${CI_LOCAL_SKIP_E2E:-0}" = "1" ]; then
+    gate_note_skip "the browser e2e suite and the CLI smoke slice from rclone-manager-tests, which are the only automated execution either of them gets (CI_LOCAL_SKIP_E2E=1)"
+  else
+    gate_step "browser e2e + CLI smoke, from rclone-manager-tests at the pinned sha (#197)"
+    bash scripts/e2e/run-tests-repo-gate.sh
+  fi
 fi
 
 # The static layer checks (issue #165) run even in FAST mode: none of them
