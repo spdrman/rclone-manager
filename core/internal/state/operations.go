@@ -355,3 +355,39 @@ func scanOperation(row scanRow) (Operation, error) {
 
 	return op, nil
 }
+
+// ListOperations returns the most recent limit durable operation records,
+// newest first.
+//
+// Ordered by created_at then rowid: created_at is what a reader means by
+// "most recent", and the rowid tiebreak totally orders two operations
+// created inside the same clock tick, which the timestamp alone does not.
+//
+// A limit of zero or less is refused rather than read as "everything": the
+// operations table is append-only and never pruned, so an unbounded read
+// grows with the deployment's whole history.
+func (j *Journal) ListOperations(ctx context.Context, limit int) ([]Operation, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("state: list operations: limit must be positive, got %d", limit)
+	}
+
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT `+operationSelectColumns+` FROM operations ORDER BY created_at DESC, rowid DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("state: list operations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, fmt.Errorf("state: list operations: %w", err)
+		}
+		out = append(out, op)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state: list operations: %w", err)
+	}
+	return out, nil
+}
