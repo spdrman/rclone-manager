@@ -1,6 +1,7 @@
 package retention
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -232,16 +233,23 @@ func TestDecideKeepOnTheReportedBacklogNamesTheRealNewestRestorePoint(t *testing
 // --- the FR-8 invariant: untrusted input may only add ---
 
 // TestGFSDecideProducerTimestampOnlyEverAddsToKeep is the safety property
-// the whole design rests on: for any set of records, KEEP computed with
-// producer timestamps is a superset of KEEP computed without them. No
-// producer timestamp, wrong, absent or hostile, can move an artifact out
-// of KEEP, which is what lets FR-18 read an untrusted value at all.
+// the whole design rests on, and it is asserted per artifact and per tier
+// rather than only over the set of names: for any records, every (artifact,
+// tier) pair the received-only calculation produces is still produced when
+// producer timestamps are read. No producer timestamp, absent or wrong or
+// hostile, can take a tier away from an artifact, which is what lets FR-18
+// read an untrusted value at all.
+//
+// Name-level monotonicity alone would be too weak to see the failure that
+// matters: a merged or replacing implementation can leave an artifact in
+// KEEP while silently moving it out of the tier that was actually holding
+// it, and the next config change to that tier then deletes it.
 //
 // The last assertion is the positive control this test needs to be worth
-// running: without it a calculation that ignored producer timestamps
-// entirely would satisfy the superset check trivially. At least one of
-// the cases below has to be a strict superset, proving the producer term
-// is actually observable through this channel.
+// running. Without it a calculation that ignored producer timestamps
+// entirely would satisfy every superset check trivially, so at least one
+// case has to keep strictly more, proving the producer term is observable
+// through this channel at all.
 func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 	now := bkAt(t, "2026-08-31T12:00:00Z")
 	cfg := bkDefaultChain()
@@ -252,9 +260,55 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 	receivedOffsets := []int{0, 0, 0, 1, 2, 9, 40, 40, 120, 400}
 	producerLag := []int{0, 3, 500, 0, 20, 1, 200, 0, 7, 95}
 
+	pairs := func(verdicts []GFSVerdict) map[string]map[GFSTier]bool {
+		out := map[string]map[GFSTier]bool{}
+		for _, v := range verdicts {
+			set := map[GFSTier]bool{}
+			for _, tier := range v.Tiers {
+				set[tier] = true
+			}
+			out[v.Artifact.Name] = set
+		}
+		return out
+	}
+	count := func(m map[string]map[GFSTier]bool) int {
+		n := 0
+		for _, tiers := range m {
+			n += len(tiers)
+		}
+		return n
+	}
+
 	strictlyLarger := 0
-	for caseIdx, batch := range [][]int{{0, 1, 2, 3, 4}, {5, 6, 7, 8, 9}, {0, 2, 4, 6, 8}, {1, 3, 5, 7, 9}, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}} {
+	check := func(caseName string, specs []bkRecSpec) {
+		t.Helper()
 		set := gfsMustSet(t, "monotone", "case")
+		records := bkBuildRecords(t, set, specs)
+
+		withProducer, err := GFSDecide(now, cfg, set, records)
+		if err != nil {
+			t.Fatalf("%s: GFSDecide with producer timestamps: %v", caseName, err)
+		}
+		withoutProducer, err := GFSDecide(now, cfg, set, bkStripProducer(records))
+		if err != nil {
+			t.Fatalf("%s: GFSDecide without producer timestamps: %v", caseName, err)
+		}
+
+		with, without := pairs(withProducer), pairs(withoutProducer)
+		for name, tiers := range without {
+			for tier := range tiers {
+				if !with[name][tier] {
+					t.Errorf("%s: artifact %q is kept by %s without producer timestamps but not with them; an untrusted producer timestamp must never take a tier away from an artifact",
+						caseName, name, tier)
+				}
+			}
+		}
+		if count(with) > count(without) {
+			strictlyLarger++
+		}
+	}
+
+	for caseIdx, batch := range [][]int{{0, 1, 2, 3, 4}, {5, 6, 7, 8, 9}, {0, 2, 4, 6, 8}, {1, 3, 5, 7, 9}, {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}} {
 		var specs []bkRecSpec
 		for _, i := range batch {
 			received := now.AddDate(0, 0, -receivedOffsets[i]).Add(-time.Duration(i) * time.Hour)
@@ -266,33 +320,60 @@ func TestGFSDecideProducerTimestampOnlyEverAddsToKeep(t *testing.T) {
 				producer: bkPtr(producer),
 			})
 		}
-		records := bkBuildRecords(t, set, specs)
-
-		withProducer, err := GFSDecide(now, cfg, set, records)
-		if err != nil {
-			t.Fatalf("case %d: GFSDecide with producer timestamps: %v", caseIdx, err)
-		}
-		withoutProducer, err := GFSDecide(now, cfg, set, bkStripProducer(records))
-		if err != nil {
-			t.Fatalf("case %d: GFSDecide without producer timestamps: %v", caseIdx, err)
-		}
-
-		with := map[string]bool{}
-		for _, n := range bkKeptNames(withProducer) {
-			with[n] = true
-		}
-		for _, n := range bkKeptNames(withoutProducer) {
-			if !with[n] {
-				t.Errorf("case %d: artifact %q is kept without producer timestamps but not with them; an untrusted producer timestamp must never remove an artifact from KEEP", caseIdx, n)
-			}
-		}
-		if len(bkKeptNames(withProducer)) > len(bkKeptNames(withoutProducer)) {
-			strictlyLarger++
-		}
+		check(fmt.Sprintf("table case %d", caseIdx), specs)
 	}
 
+	// The table above cannot generate the one shape that separates a
+	// union from a single merged champion map: an artifact whose producer
+	// placement lands late in a day another artifact was received into
+	// early. Written out by hand so this property covers it too.
+	check("late producer, early arrival, same bucket", []bkRecSpec{
+		{"q-early.dump", lifecycle.Complete, bkAt(t, "2026-08-30T09:00:00Z"), nil},
+		{"p-late.dump", lifecycle.Complete, bkAt(t, "2026-08-31T11:00:00Z"), bkPtr(bkAt(t, "2026-08-30T23:00:00Z"))},
+		{"r-newest.dump", lifecycle.Complete, bkAt(t, "2026-08-31T11:30:00Z"), nil},
+	})
+
 	if strictlyLarger == 0 {
-		t.Error("no case kept more with producer timestamps than without: the producer term is not observable through this channel at all, so the superset assertion above proves nothing")
+		t.Error("no case kept more with producer timestamps than without: the producer term is not observable through this channel at all, so the superset assertions above prove nothing")
+	}
+}
+
+// TestGFSDecideProducerPlacementNeverDisplacesAReceivedRepresentative is
+// the structural reason the two passes are kept separate instead of being
+// folded into one champion map per bucket.
+//
+// "p-late.dump" was produced at 23:00 on the 30th and received at 12:00 on
+// the 31st, so its producer placement lands in the 30th's bucket, the same
+// bucket "q-early.dump" was received into at 09:00. In a single merged
+// map p's producer placement is the later instant and takes that bucket,
+// and q, which the received-only calculation kept, silently stops being
+// kept. Two passes unioned afterwards make that impossible.
+//
+// "r-newest.dump" is here so that p is kept by nothing but its own
+// producer placement, which makes this test RED against a calculation
+// that ignores producer timestamps as well as against a merged one.
+func TestGFSDecideProducerPlacementNeverDisplacesAReceivedRepresentative(t *testing.T) {
+	set := gfsMustSet(t, "displace", "bucket")
+	now := bkAt(t, "2026-08-31T13:00:00Z")
+	cfg := bkDefaultChain()
+
+	records := bkBuildRecords(t, set, []bkRecSpec{
+		{"q-early.dump", lifecycle.Complete, bkAt(t, "2026-08-30T09:00:00Z"), nil},
+		{"p-late.dump", lifecycle.Complete, bkAt(t, "2026-08-31T12:00:00Z"), bkPtr(bkAt(t, "2026-08-30T23:00:00Z"))},
+		{"r-newest.dump", lifecycle.Complete, bkAt(t, "2026-08-31T12:30:00Z"), nil},
+	})
+
+	verdicts, err := GFSDecide(now, cfg, set, records)
+	if err != nil {
+		t.Fatalf("GFSDecide: %v", err)
+	}
+	want := map[string][]GFSTier{
+		"q-early.dump":  {GFSDaily, GFSWeekly},
+		"p-late.dump":   {GFSDaily, GFSWeekly, GFSMonthly},
+		"r-newest.dump": {GFSDaily, GFSWeekly, GFSMonthly},
+	}
+	if got := bkTierMap(verdicts); !reflect.DeepEqual(got, want) {
+		t.Errorf("GFSDecide verdicts:\n got  %v\n want %v", got, want)
 	}
 }
 
@@ -358,58 +439,63 @@ func TestGFSDecideBackDatedProducerTimestampsChangeNothing(t *testing.T) {
 // outright rather than clamped: clamping would manufacture a date this
 // manager has no evidence for.
 //
-// The second half is the positive control. The identical timestamp moved
-// to before the received timestamp is admitted and does place the
-// artifact, so the refusal above is a refusal and not a channel that
-// never worked.
+// Both artifacts arrive in the same cycle, and "z-arrival.dump" carries
+// the larger name, so the received pass keeps it and only it. Whether
+// "m-backdated.dump" survives at all is therefore decided entirely by
+// whether its producer timestamp was admitted, which is what makes this
+// fixture able to see the gate.
+//
+// The second half is the positive control. The refused timestamp moved to
+// before the received timestamp is admitted, and "m-backdated.dump"
+// appears in KEEP, so the refusal above is a refusal and not a channel
+// that never worked.
 func TestGFSDecideRefusesAProducerTimestampAfterTheReceivedTimestamp(t *testing.T) {
 	set := gfsMustSet(t, "future", "clock")
 	now := bkAt(t, "2026-08-31T12:00:00Z")
 	cfg := bkDefaultChain()
-
 	received := bkAt(t, "2026-08-31T09:00:00Z")
-	// Both artifacts arrive in the same cycle. Only "b" carries a
-	// producer timestamp, and in the refused case it is one second after
-	// its own received timestamp.
-	refused := bkBuildRecords(t, set, []bkRecSpec{
-		{"a.dump", lifecycle.Complete, received, nil},
-		{"b.dump", lifecycle.Complete, received, bkPtr(received.Add(time.Second))},
-	})
-	noProducer := bkBuildRecords(t, set, []bkRecSpec{
-		{"a.dump", lifecycle.Complete, received, nil},
-		{"b.dump", lifecycle.Complete, received, nil},
-	})
 
-	gotRefused, err := GFSDecide(now, cfg, set, refused)
-	if err != nil {
-		t.Fatalf("GFSDecide with a future-dated producer timestamp: %v", err)
+	specs := func(producer *time.Time) []bkRecSpec {
+		return []bkRecSpec{
+			{"m-backdated.dump", lifecycle.Complete, received, producer},
+			{"z-arrival.dump", lifecycle.Complete, received, nil},
+		}
 	}
-	gotNone, err := GFSDecide(now, cfg, set, noProducer)
+
+	gotNone, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, specs(nil)))
 	if err != nil {
 		t.Fatalf("GFSDecide with no producer timestamps: %v", err)
 	}
-	if !reflect.DeepEqual(bkTierMap(gotRefused), bkTierMap(gotNone)) {
-		t.Errorf("a producer timestamp after the received timestamp was not refused:\n got  %v\n want %v",
-			bkTierMap(gotRefused), bkTierMap(gotNone))
+	wantNone := map[string][]GFSTier{
+		"m-backdated.dump": nil,
+		"z-arrival.dump":   {GFSDaily, GFSWeekly, GFSMonthly},
+	}
+	if got := bkTierMap(gotNone); !reflect.DeepEqual(got, wantNone) {
+		t.Fatalf("baseline without producer timestamps:\n got  %v\n want %v", got, wantNone)
 	}
 
-	// Positive control: one second *before* the received timestamp, but
-	// on the previous calendar day, is admissible and does place "b" in
-	// its own daily bucket, so "b" survives alongside "a".
-	admitted := bkBuildRecords(t, set, []bkRecSpec{
-		{"a.dump", lifecycle.Complete, received, nil},
-		{"b.dump", lifecycle.Complete, received, bkPtr(bkAt(t, "2026-08-30T09:00:00Z"))},
-	})
-	gotAdmitted, err := GFSDecide(now, cfg, set, admitted)
+	// One second after its own received timestamp: refused, so the
+	// verdicts have to be the baseline's exactly.
+	gotRefused, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, specs(bkPtr(received.Add(time.Second)))))
+	if err != nil {
+		t.Fatalf("GFSDecide with a future-dated producer timestamp: %v", err)
+	}
+	if got := bkTierMap(gotRefused); !reflect.DeepEqual(got, wantNone) {
+		t.Errorf("a producer timestamp after the received timestamp was not refused:\n got  %v\n want %v", got, wantNone)
+	}
+
+	// Positive control: the previous day is admissible, and places
+	// "m-backdated.dump" in its own daily, weekly and monthly buckets.
+	gotAdmitted, err := GFSDecide(now, cfg, set, bkBuildRecords(t, set, specs(bkPtr(bkAt(t, "2026-08-30T09:00:00Z")))))
 	if err != nil {
 		t.Fatalf("GFSDecide with an admissible producer timestamp: %v", err)
 	}
-	want := map[string][]GFSTier{
-		"a.dump": {GFSDaily, GFSWeekly, GFSMonthly},
-		"b.dump": {GFSDaily},
+	wantAdmitted := map[string][]GFSTier{
+		"m-backdated.dump": {GFSDaily, GFSWeekly, GFSMonthly},
+		"z-arrival.dump":   {GFSDaily, GFSWeekly, GFSMonthly},
 	}
-	if got := bkTierMap(gotAdmitted); !reflect.DeepEqual(got, want) {
-		t.Errorf("an admissible producer timestamp did not place the artifact:\n got  %v\n want %v", got, want)
+	if got := bkTierMap(gotAdmitted); !reflect.DeepEqual(got, wantAdmitted) {
+		t.Errorf("an admissible producer timestamp did not place the artifact:\n got  %v\n want %v", got, wantAdmitted)
 	}
 }
 
@@ -461,6 +547,20 @@ func TestGFSDecideIgnoresAZeroProducerTimestamp(t *testing.T) {
 	if reflect.DeepEqual(bkTierMap(withReal), bkTierMap(withNone)) {
 		t.Errorf("a real producer timestamp on the same artifact changed nothing (%v): the observation channel does not work, so the zero-time assertion above proves nothing",
 			bkTierMap(withReal))
+	}
+
+	// FR-19 is where a zero producer timestamp does real damage if it is
+	// admitted: it resolves as the artifact's retention date, sorts as
+	// the oldest thing in the universe, and prints as "dated
+	// 0001-01-01T00:00:00Z by the producer's own timestamp".
+	lkg, err := LastKnownGoodDecide(config.Retention{}, set, bkBuildRecords(t, set, []bkRecSpec{
+		{"a.dump", lifecycle.Complete, early, &zero},
+	}))
+	if err != nil {
+		t.Fatalf("LastKnownGoodDecide with a zero producer timestamp: %v", err)
+	}
+	if !strings.Contains(lkg.Reason, early.UTC().Format(time.RFC3339)) || !strings.Contains(lkg.Reason, "received") {
+		t.Errorf("Reason %q: a zero producer timestamp must fall back to the received timestamp, not be reported as a date", lkg.Reason)
 	}
 }
 
