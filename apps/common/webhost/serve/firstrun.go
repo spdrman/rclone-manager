@@ -93,6 +93,12 @@ func NewFirstRunEngine(cfg EngineConfig) (*FirstRunEngine, error) {
 		return nil, fmt.Errorf("serve: a first-run engine must start with no backend")
 	}
 
+	// Same refusal NewEngine makes, for the same reason: a NativeAuth
+	// adapter whose boundary does not resolve strips every identity
+	// header, and an unconfigured instance is the worst place to discover
+	// that nobody can sign in.
+	mustIdentityBoundary(cfg)
+
 	e := &FirstRunEngine{cfg: cfg, ready: make(chan struct{})}
 	h := newEngineHandler(cfg, nil, e.activate)
 	e.handler.Store(&h)
@@ -207,29 +213,24 @@ func newEngineHandler(cfg EngineConfig, backend webhost.BackupServiceClient, onC
 	mux.Handle("/health/", apiRouter)
 	mux.Handle("/api/v1/", apiRouter)
 
-	handler := local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)
-
-	// The identity strip, on the request path rather than described in a
-	// doc comment. A gateway Authenticator decides whether to BELIEVE the
-	// header; this deletes it outright for an untrusted peer, so nothing
-	// downstream - a handler, a log line, a future middleware - can read
-	// a value that was never trusted. serve.NewUI runs the same strip one
-	// hop out, where the client's own address is still visible; see
-	// IdentitySanitizer's doc for why both hops do it.
+	// Order matters and is the whole point of doing this here rather than
+	// inside the router. StripUntrustedIdentity is outermost, so a forged
+	// identity header is gone before the CSRF middleware, the auth routes,
+	// the /api/v1 router or anything either of them logs has a chance to
+	// read it: "refused" and "never observed" are different claims, and
+	// issue #87 asks for the second.
 	//
 	// It wraps the whole composition, so it covers the setup surface as
-	// well as the application: an unconfigured instance is exactly when
-	// an unauthenticated caller must not be able to name itself an admin
+	// well as the application: an unconfigured instance is exactly when an
+	// unauthenticated caller must not be able to name itself an admin
 	// through a header nobody has decided to trust yet.
-	if cfg.Platform != nil {
-		if s, ok := cfg.Platform.Authenticator().(IdentitySanitizer); ok {
-			inner := handler
-			handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				s.Sanitize(r.Header, r.RemoteAddr)
-				inner.ServeHTTP(w, r)
-			})
-		}
-	}
-
-	return handler
+	//
+	// The boundary is resolved here rather than passed in so that the
+	// handler activation builds later cannot drift from the one
+	// construction checked; mustIdentityBoundary (engine.go) is the
+	// construction-time refusal that makes a nil here mean "this profile
+	// has no gateway" and never "the boundary went missing".
+	return StripUntrustedIdentity(gatewayOf(cfg.Platform))(
+		SecurityHeaders(
+			local.EnsureCSRFCookie(cfg.TrustForwardedHeaders)(mux)))
 }

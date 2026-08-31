@@ -111,8 +111,25 @@ func serveAndFetch(t *testing.T, bin string, args ...string) string {
 	// timeout and is not one.
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	// reaped records that the loop below already took the value off
+	// exited, so this cleanup does not wait for a second one that is
+	// never coming (issue #87). Both run on the test's own goroutine -
+	// t.Fatalf calls runtime.Goexit, which runs cleanups - so this needs
+	// no synchronisation of its own.
+	//
+	// Without it a serve-ui that refuses to start deadlocks: the loop
+	// receives the exit status, reports it with t.Fatalf, and the
+	// cleanup then blocks forever on a channel nothing will send to
+	// again, so the whole package dies on the 10-minute go test timeout
+	// instead of printing the exit status the loop had already worked
+	// out. Ten minutes of nothing in place of one line, which is how it
+	// was found.
+	reaped := false
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
+		if reaped {
+			return
+		}
 		<-exited
 	})
 
@@ -121,6 +138,7 @@ func serveAndFetch(t *testing.T, bin string, args ...string) string {
 	for {
 		select {
 		case err := <-exited:
+			reaped = true
 			t.Fatalf("serve-ui %v exited before answering: %v", full, err)
 		default:
 		}
@@ -178,8 +196,15 @@ func TestOneBinaryServesEveryProviderBridge(t *testing.T) {
 			marker: "bridge:generic-from-root",
 		},
 		{
+			// --trusted-gateway is not decoration here (issue #87):
+			// serve-ui is the container with the LAN-facing port, so a
+			// gateway profile has to declare where its platform gateway
+			// is at this hop or the process refuses to start rather than
+			// serve a console that can never sign anyone in. Selecting
+			// the ugos BUNDLE and declaring the ugos TRUST BOUNDARY are
+			// one command now, which is what this line records.
 			name:   "a different profile, same binary, same root",
-			args:   []string{"--ui-root", bundleRoot, "--profile", "ugos"},
+			args:   []string{"--ui-root", bundleRoot, "--profile", "ugos", "--trusted-gateway", "10.0.0.0/8"},
 			marker: "bridge:ugos",
 		},
 		{

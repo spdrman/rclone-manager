@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 )
 
 // UIConfig is everything NewUI needs to build the UI-host container's
@@ -27,13 +28,25 @@ type UIConfig struct {
 	// fs.Sub it down to "dist" (see e.g. apps/generic/webui's own doc).
 	StaticFS fs.FS
 
-	// Identity, when non-nil, is the trust boundary this proxy sanitizes
-	// the platform identity header against before forwarding a request
-	// upstream: the header survives only for a request that arrived from
-	// a configured gateway peer. A gateway profile MUST supply one -
-	// see IdentitySanitizer's own doc for why this hop is the one that
-	// owns the strip.
-	Identity IdentitySanitizer
+	// Gateway is the peer set THIS hop may believe a provider-native
+	// identity header from. It is the actual trust boundary of the whole
+	// product: this is the only service with a LAN-facing published port,
+	// so this is the only hop where "did a gateway send this, or did a
+	// LAN client" is still a question the network can answer.
+	//
+	// nil means nothing is trusted here, so every identity header any
+	// profile declares is removed from every inbound request. That is the
+	// right default and it is what the shipped topology gets: an engine
+	// behind this proxy trusts this proxy by necessity, so a header this
+	// proxy passes through unexamined is a header the engine believes.
+	// A deployment that really does sit behind a platform gateway sets
+	// this to that gateway's range, HERE, at the hop the gateway actually
+	// connects to — not one hop further in, where every request looks
+	// like it came from this container.
+	//
+	// See StripUntrustedIdentity (security.go) for what peer-based trust
+	// does and does not settle under Docker port publishing.
+	Gateway *profile.CompiledGateway
 
 	// ProxyResponseHeaderTimeout overrides defaultProxyResponseHeaderTimeout
 	// below. Zero means use the default; this only exists so a test can
@@ -42,12 +55,6 @@ type UIConfig struct {
 	ProxyResponseHeaderTimeout time.Duration
 }
 
-// IdentitySanitizer removes a platform identity header from a request
-// that did not arrive from a trusted gateway peer, and leaves it alone
-// for one that did. *apps/common/platform/profile.CompiledGateway is the
-// implementation; this interface exists so this package depends on the
-// behaviour rather than on the profile table.
-//
 // # Which hop owns the strip
 //
 // This one, and the engine as well. The two are not redundant, they
@@ -65,28 +72,15 @@ type UIConfig struct {
 // here; a request the platform's gateway actually proxied arrives from
 // the gateway's own address and keeps it.
 //
-// Stripping unconditionally instead would be wrong for the deployment
-// this defends: on UGOS the platform gateway sits UPSTREAM of this
-// process, so an unconditional delete removes the legitimate identity
-// and native authentication stops working entirely. That is why this
-// carries the same trust boundary the engine does rather than a bare
-// header name.
-type IdentitySanitizer interface {
-	Sanitize(h http.Header, remoteAddr string)
-}
-
-// StripAll is the IdentitySanitizer for a gateway profile with no
-// declared trust boundary: it removes the named header from every
-// request, whoever sent it. That is the fail-closed reading of "there is
-// no gateway here", and it is deliberately not a refusal to start,
-// because this process's other job is serving the right UI bundle and
-// nothing about a bundle depends on the identity header. Native
-// authentication does not work in that configuration, which is correct:
-// the engine refuses to start on the same profile with no range, so the
-// deployment was never going to authenticate anyone anyway.
-type StripAll string
-
-func (h StripAll) Sanitize(header http.Header, _ string) { header.Del(string(h)) }
+// Stripping unconditionally at this hop instead would be wrong for the
+// deployment this defends: on UGOS the platform gateway sits UPSTREAM of
+// this process, so an unconditional delete removes the legitimate
+// identity and native authentication stops working entirely. That is why
+// UIConfig.Gateway carries a trust boundary rather than a bare header
+// name, and why the boundary is a *profile.CompiledGateway rather than
+// an interface: exactly one thing decides which peers may be believed,
+// and both hops read it. See StripUntrustedIdentity (security.go) for the
+// strip itself, and for the one shape peer-based trust does not settle.
 
 // defaultProxyResponseHeaderTimeout bounds how long the reverse proxy
 // below waits for the engine to even START responding (send response
@@ -150,18 +144,30 @@ func NewUI(cfg UIConfig) http.Handler {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(cfg.Upstream)
 			pr.Out.Header.Del("X-Forwarded-For")
-			// Same reasoning as the delete above, one header along: a
-			// client-supplied identity header reaching the engine is
-			// believed there, because the engine trusts this hop. The
-			// trust test runs against pr.In.RemoteAddr, the address of
-			// whoever actually connected to this process, never against
-			// anything the request carried.
-			if cfg.Identity != nil {
-				cfg.Identity.Sanitize(pr.Out.Header, pr.In.RemoteAddr)
-			}
+			// The identity header gets the same treatment one layer
+			// out, and deliberately not here as well. It is deleted
+			// from r.Header by StripUntrustedIdentity before this
+			// proxy is reached at all (see the return below), so by
+			// the time pr.Out is copied from it there is nothing left
+			// to sanitize, and a second strip on pr.Out would be a
+			// second place for the two to disagree about which peers
+			// are trusted.
 			pr.SetXForwarded()
 		},
 		Transport: transport,
+		// The engine sets the same browser response headers this
+		// container does, so without this an /api/v1 response would carry
+		// each of them twice once ReverseProxy has ADDED the upstream's
+		// copy to the one already set here. Deleting the upstream's copy
+		// makes this container the single authority for what a browser
+		// is told, which is also the honest arrangement: it is the one
+		// talking to the browser.
+		ModifyResponse: func(res *http.Response) error {
+			for _, h := range []string{"X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Content-Security-Policy"} {
+				res.Header.Del(h)
+			}
+			return nil
+		},
 	}
 
 	mux := http.NewServeMux()
@@ -175,7 +181,13 @@ func NewUI(cfg UIConfig) http.Handler {
 	// from just anyone hitting its published port the way the engine (on
 	// the OTHER side of this exact proxy) is allowed to trust headers
 	// THIS proxy itself sets.
-	return local.EnsureCSRFCookie(false)(mux)
+	// StripUntrustedIdentity is outermost, so the identity header is gone
+	// from r.Header before the proxy's Rewrite ever copies headers into
+	// the outbound request. It runs per request, so a pipelined follow-on
+	// is scrubbed exactly like the request in front of it.
+	return StripUntrustedIdentity(cfg.Gateway)(
+		SecurityHeaders(
+			local.EnsureCSRFCookie(false)(mux)))
 }
 
 // staticHandler serves fsys, falling back to index.html for any path

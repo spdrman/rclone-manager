@@ -142,6 +142,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// answer, and so a setup submission arriving after setup already
 		// completed is refused with a 409 that says why rather than a 404
 		// that does not. See firstrun.go.
+		//
+		// The POST is deliberately NOT behind requireDestructiveGate: a
+		// gated setup route is an instance that can never be configured
+		// through its own UI, since turning the gate on is itself part of
+		// the configuration it would be blocking. What keeps it safe is
+		// the 409 above, not the gate. Full argument, and the test that
+		// pins it, at destructiveGateExemptRoutes (router_test.go).
 		r.Get("/system/first-run", h.firstRunStatus)
 		r.With(requireCSRF).Post("/system/first-run", h.completeFirstRun)
 		// Issue #104 (B3.4): FR-21's existing capacity refusal, surfaced
@@ -245,11 +252,39 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// calls a materially more dangerous configuration. It is
 		// dangerous because it widens what a LATER retention apply may
 		// delete, and that apply is POST /backup-sets/{source}/{set}/
-		// retention/apply, which already carries requireDestructiveGate
-		// and already re-reads the policy at plan time. So the gate still
-		// stands between this deployment and every deletion; putting a
-		// second copy of it here would move nothing except the settings
-		// form, which would be permanently inert until #92 lands.
+		// retention/apply, which already re-reads the policy at plan
+		// time. Putting a copy of the destructive gate here would move
+		// nothing except the settings form, which would be permanently
+		// inert until #92 lands.
+		//
+		// Issue #87 (B5.1) red-teamed that argument and kept the
+		// conclusion while replacing the reason. This route used to be
+		// justified by "the gate still stands between this deployment and
+		// every deletion", and the gate cannot carry that: DestructiveGate
+		// is a static, deployment-wide attestation (gate.go) that #92
+		// flips to true once and for good, after which it stands between
+		// nothing and nothing.
+		//
+		// What actually holds, before and after #92, is one enforced
+		// rule: a retention plan is bound to the configuration revision it
+		// was computed against, so any settings write in between makes the
+		// plan the operator approved stale and the apply is refused by
+		// name (RETENTION_PLAN_STALE). That is what makes this route
+		// unable to widen an ALREADY-APPROVED deletion, and it is pinned
+		// at THIS boundary by settings_gate_test.go, not only a layer
+		// down. Obtaining a wider plan after the write is one more call:
+		// a fresh preview, whose body carries the widened DELETE list.
+		//
+		// Deliberately NOT claimed here, because the API does not enforce
+		// it (issue #87's review, M6): that a human re-confirms that
+		// preview. ApplyRetentionRequest carries only plan_id, nothing
+		// binds an apply to a preview anybody looked at, and an API caller
+		// can PATCH here, GET the preview and POST the apply with no human
+		// in the sequence. The re-confirmation is a property of the
+		// shipped UI flow (ui/shared/src/pages/SettingsPage.tsx), which is
+		// where #140's operator-facing confirmation lives, and whoever
+		// tiers the next mutating route should not inherit it as though it
+		// were part of the HTTP contract.
 		//
 		// That argument is a chain, not a claim, so it is pinned by tests
 		// rather than by this comment: core/service's
@@ -257,14 +292,16 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// drives a settings write in between a preview and its apply and
 		// asserts the apply is refused with ErrRetentionPlanStale and
 		// nothing is deleted, with a control proving the same plan applies
-		// when no settings write intervenes. If a later change made this
+		// when no settings write intervenes, and
+		// TestAnUngatedSettingsWriteCannotApplyAnAlreadyApprovedPlan
+		// (settings_gate_test.go) drives the identical sequence through
+		// these two routes over a real BackupService. If a later change made this
 		// route reuse the previous config revision, or made plan staleness
 		// tolerant of a config move, that test fails rather than this
 		// route quietly becoming an ungated way to widen an
-		// already-approved deletion. The
-		// operator-facing confirmation that #140 requires before that
-		// particular change takes effect lives in the UI, in front of the
-		// human who can answer it (ui/shared/src/pages/SettingsPage.tsx).
+		// already-approved deletion. Both of those drive a plan that
+		// carries a real DELETE and assert the refused apply removed
+		// nothing, so neither can pass over an empty verdict list.
 		//
 		// This mirrors, rather than contradicts, createBackupSet's own
 		// conditional gate check: that branch is gated because

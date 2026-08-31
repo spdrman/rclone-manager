@@ -24,9 +24,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 	"github.com/spdrman/rclone-manager/apps/common/webhost"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/core/service"
@@ -338,5 +340,90 @@ func TestExistingInstall_StillRefusesToStartOnAnInvalidConfig(t *testing.T) {
 	}
 	if errors.Is(err, service.ErrConfigAbsent) {
 		t.Errorf("service.Open reported an invalid config as absent (%v); a first-run flow would then offer to overwrite it", err)
+	}
+}
+
+// TestTheSetupSurfaceStripsAnUntrustedIdentityToo pins the half of issue
+// #87's strip that only #176 could put at risk.
+//
+// #87 wrapped NewEngine's composition in StripUntrustedIdentity. #176
+// then moved that composition into newEngineHandler so a FirstRunEngine
+// could build the same surface twice, once unconfigured and once
+// activated. Merging the two is exactly where the strip can be left
+// behind on the setup path, and it would be invisible: every existing
+// forge-and-replay test in redteam_test.go builds through NewEngine, so
+// all of them would stay green while an UNCONFIGURED instance handed a
+// forged identity header straight to its authenticator. That is the worst
+// moment for it, because an instance with no configuration yet is one
+// where naming yourself an admin has nothing to be refused by.
+//
+// The two cases share one request and differ only in whether the peer
+// that sent it is inside the adapter's trusted set, which is what makes
+// the negative meaningful: the trusted case proves this path reaches the
+// authenticator with the header intact, so the untrusted case's absence
+// is the strip and not a route that never authenticated.
+func TestTheSetupSurfaceStripsAnUntrustedIdentityToo(t *testing.T) {
+	forge := func(t *testing.T, trusted []string) (http.Header, string) {
+		t.Helper()
+		adapter, _, log, header := engineParts(t, string(profile.UGOS), trusted)
+
+		root := t.TempDir()
+		configPath := filepath.Join(root, "config", "config.yaml")
+		if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		firstRun, err := service.NewFirstRun(service.FirstRunDefaults{
+			ConfigPath:    configPath,
+			StateDatabase: filepath.Join(root, "state", "state.db"),
+		})
+		if err != nil {
+			t.Fatalf("service.NewFirstRun: %v", err)
+		}
+
+		engine, err := serve.NewFirstRunEngine(serve.EngineConfig{
+			Platform: adapter,
+			FirstRun: firstRun,
+			Activate: func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
+				return service.Open(ctx, configPath)
+			},
+			BinaryVersion: "test",
+			Commit:        "testcommit",
+		})
+		if err != nil {
+			t.Fatalf("serve.NewFirstRunEngine: %v", err)
+		}
+		t.Cleanup(func() { _ = engine.Close() })
+
+		srv := httptest.NewServer(engine)
+		t.Cleanup(srv.Close)
+
+		// Deliberately NOT the first-run route: an authenticated route, so
+		// the adapter's authenticator is what sees (or does not see) the
+		// header. The instance is unconfigured, so this cannot succeed;
+		// what it can do is reach the auth boundary, which is the whole
+		// question.
+		req := mustRequest(t, http.MethodGet, srv.URL+"/api/v1/backup-sets")
+		req.Header[strings.ToLower(header)] = []string{"admin"}
+		req.Header.Set("X-Benign-Passthrough", "keep-me")
+		do(t, req)
+		return log.observed(t), header
+	}
+
+	// The oracle first: with the caller's own address inside the trusted
+	// set, the header MUST arrive. If this ever stops holding, the
+	// assertion below is proving nothing.
+	seen, header := forge(t, loopbackCIDRs)
+	if v := seen.Values(header); len(v) == 0 {
+		t.Fatalf("a %s from a TRUSTED peer never reached the setup surface's authenticator, so this test cannot tell a working strip from a route that simply does not authenticate", header)
+	}
+
+	// untrustedCIDRs excludes loopback, which is what httptest connects
+	// from, so the same request is now a direct-LAN forgery.
+	seen, header = forge(t, untrustedCIDRs)
+	if v := seen.Values(header); len(v) != 0 {
+		t.Errorf("the setup surface handed its authenticator %s = %q; an unconfigured instance is exactly where a forged identity must be gone rather than merely refused (issue #87 via #176)", header, v)
+	}
+	if seen.Get("X-Benign-Passthrough") != "keep-me" {
+		t.Error("X-Benign-Passthrough did not survive either, so the assertion above would pass on a setup surface that wiped every header")
 	}
 }

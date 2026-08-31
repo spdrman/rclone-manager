@@ -440,6 +440,15 @@ func TestCompleteFirstRun_RefusesOnceConfigured(t *testing.T) {
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 once configured (%s)", rec.Code, rec.Body.String())
 	}
+	// The typed code as well as the status, because this refusal is what
+	// justifies the route's entry in destructiveGateExemptRoutes
+	// (router_test.go): the gate is not what stops a setup submission
+	// from touching a live configuration, THIS is, and an exemption
+	// resting on an untested claim is how a gate walk gets defeated
+	// rather than satisfied.
+	if got := responseErrorCode(rec.Body.String()); got != "ALREADY_CONFIGURED" {
+		t.Fatalf("error code = %q, want ALREADY_CONFIGURED (%s)", got, rec.Body.String())
+	}
 }
 
 // TestCompleteFirstRun_MapsAnInvalidRequestTo400 proves the handler
