@@ -36,9 +36,13 @@ reach.
 
 ### 0.1 Make the canonical image resolvable
 
-No registry is configured for this repository yet (`container/release-manifest.json`
-says so, and so does `apps/common/packaging/canonical.json`). Until one is, the
-reference in the metadata resolves to nothing. Pick one:
+The registry is settled and nothing has been pushed to it yet. The reference is
+`ghcr.io/spdrman/backup-manager` (`apps/common/packaging/canonical.json` is the single
+source of truth for it), and that file records `image.published: false`;
+`container/release-manifest.json` records the same fact as a `registry_digest` of
+`null` on every architecture. So the reference resolves to nothing today, not because
+no registry exists but because the first push has not happened (issue #88). Until it
+does, pick one:
 
 **Option A, your own registry.** Build and push both architectures, then override
 the image reference at install time:

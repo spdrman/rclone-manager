@@ -703,8 +703,23 @@ func ImportsProviderRe(provider string) *regexp.Regexp {
 // verdict change, which is the acceptance bar a parity claim has to
 // clear.
 type ReleaseManifest struct {
-	Commit        string                `json:"commit"`
-	Architectures []ReleaseArchitecture `json:"architectures"`
+	Commit string `json:"commit"`
+	// UnsafeLocalBuild is the stamp
+	// scripts/release/record-release-hashes.sh writes when it was run
+	// with UNSAFE_LOCAL_BUILD=1, which waives every guard that makes a
+	// manifest reproducible: the recorded commit need not be HEAD, the
+	// tree it was built from may be dirty, and the commit need not be on
+	// main at all.
+	//
+	// A waived manifest is otherwise indistinguishable from a good one,
+	// which is the whole problem: it pins a reachable commit and records
+	// hashes for bytes no commit produced, so every check downstream
+	// passes while comparing against nothing. The stamp is how it
+	// announces itself, and the generator also defaults a waived run to
+	// a gitignored path so it takes deliberate effort to get here.
+	// Absent means false, which is what every honest run writes.
+	UnsafeLocalBuild bool                  `json:"unsafe_local_build"`
+	Architectures    []ReleaseArchitecture `json:"architectures"`
 }
 
 // ReleaseArchitecture is one architecture's recorded build.
@@ -812,6 +827,51 @@ func CommitReachableFrom(repoDir, commit, ref string) (bool, error) {
 		return false, nil
 	}
 	return false, err
+}
+
+// AncestryRef is the ref a reachability check should be asked against,
+// and the reason that one answered.
+type AncestryRef struct {
+	Ref string
+	Why string
+}
+
+// ancestryRefPreference is the order to ask in, strongest question
+// first. Asking HEAD is the weakest form: a commit that exists only on
+// the current branch is reachable from HEAD and disappears from the
+// history the moment the branch is squash merged, which is #174 exactly.
+// Asking origin/main is the same question the generator refuses on.
+var ancestryRefPreference = []string{"origin/main", "main", "HEAD"}
+
+var ancestryRefWhy = map[string]string{
+	"origin/main": "the branch a squash merge lands on, which is the question scripts/release/record-release-hashes.sh refuses on",
+	"main":        "origin/main is not in this checkout, so the local main is the strongest ref available",
+	"HEAD":        "neither origin/main nor main is in this checkout, so this is the weakest form of the question: a commit that only this branch has still passes",
+}
+
+// ResolveAncestryRef picks the strongest ref this checkout actually has
+// to ask a reachability question against.
+//
+// The generator asks whether the recorded commit is an ancestor of
+// origin/main; the checks downstream used to ask only whether it is an
+// ancestor of HEAD. That gap is not academic. Anything that reaches the
+// manifest without going through the generator (a hand edit, a waived
+// run, future tooling) passes on the feature branch and fails only once
+// the squash merge has landed it on main, which is #174's timeline
+// restated: green on the branch, broken on main, found late. Asking the
+// strongest available ref closes it, and naming which ref answered keeps
+// a fallback from looking like the full-strength check.
+//
+// Requires git on PATH and repoDir inside a repository, the same
+// prerequisite CommitReachableFrom carries.
+func ResolveAncestryRef(repoDir string) (AncestryRef, error) {
+	for _, ref := range ancestryRefPreference {
+		cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+		if err := cmd.Run(); err == nil {
+			return AncestryRef{Ref: ref, Why: ancestryRefWhy[ref]}, nil
+		}
+	}
+	return AncestryRef{}, fmt.Errorf("none of %v resolves to a commit in %s, so there is nothing to check reachability against", ancestryRefPreference, repoDir)
 }
 
 // SHA256File returns the lowercase hex SHA-256 of a file.

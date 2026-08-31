@@ -192,17 +192,7 @@ func TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo(t *testing.
 	p := providerUnderTest{id: "generic", spec: conf.Providers["generic"], canonical: MustLoad()}
 	fx := newSquashMergeFixture(t)
 
-	manifestAt := func(commit string) ReleaseManifest {
-		arches := make([]ReleaseArchitecture, 0, len(p.canonical.Architectures))
-		for _, arch := range p.canonical.Architectures {
-			hashes := map[string]string{}
-			for _, b := range p.canonical.Binaries {
-				hashes[strings.TrimPrefix(b, "/")] = strings.Repeat("a", 64)
-			}
-			arches = append(arches, ReleaseArchitecture{Architecture: arch, BinarySHA256: hashes})
-		}
-		return ReleaseManifest{Commit: commit, Architectures: arches}
-	}
+	manifestAt := func(commit string) ReleaseManifest { return fixtureManifest(p, commit) }
 
 	// The positive control, and it has to come first: if a manifest
 	// pinning a commit the history really has cannot pass, then the two
@@ -219,7 +209,7 @@ func TestReleaseManifestIntegrity_SeparatesGitFailingFromGitSayingNo(t *testing.
 	if strings.Contains(detail, "git could not decide") {
 		t.Fatalf("git itself failed here, so this run cannot tell the two apart: %s", detail)
 	}
-	if !strings.Contains(detail, "is not an ancestor of HEAD") {
+	if !strings.Contains(detail, "is not an ancestor of main") {
 		t.Errorf("expected the ancestry refusal, got: %s", detail)
 	}
 

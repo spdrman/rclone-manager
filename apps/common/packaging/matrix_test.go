@@ -293,12 +293,19 @@ func releaseManifestIntegrity(p providerUnderTest, manifest ReleaseManifest, rep
 	if manifest.Commit == "" {
 		return false, "the release manifest pins no commit"
 	}
-	reachable, err := CommitReachableFrom(repoDir, manifest.Commit, "HEAD")
+	if manifest.UnsafeLocalBuild {
+		return false, "the release manifest is stamped unsafe_local_build, so it was generated with UNSAFE_LOCAL_BUILD=1 and every guard that makes it reproducible was waived: the commit it pins need not be HEAD, the tree may have been dirty, and its hashes need not describe any commit at all"
+	}
+	ancestry, err := ResolveAncestryRef(repoDir)
 	if err != nil {
-		return false, fmt.Sprintf("git could not decide whether %s is an ancestor of HEAD: %v", short(manifest.Commit), err)
+		return false, fmt.Sprintf("git could not decide what to check %s against: %v", short(manifest.Commit), err)
+	}
+	reachable, err := CommitReachableFrom(repoDir, manifest.Commit, ancestry.Ref)
+	if err != nil {
+		return false, fmt.Sprintf("git could not decide whether %s is an ancestor of %s: %v", short(manifest.Commit), ancestry.Ref, err)
 	}
 	if !reachable {
-		return false, fmt.Sprintf("release manifest pins commit %s, which is not an ancestor of HEAD, so its hashes describe a build that is not in this history", short(manifest.Commit))
+		return false, fmt.Sprintf("release manifest pins commit %s, which is not an ancestor of %s (%s), so its hashes describe a build that is not in this history", short(manifest.Commit), ancestry.Ref, ancestry.Why)
 	}
 	if ok, detail := manifest.RecordsEveryBinary(p.canonical.Binaries); !ok {
 		return false, detail
@@ -308,7 +315,7 @@ func releaseManifestIntegrity(p providerUnderTest, manifest ReleaseManifest, rep
 	if strings.Join(claimed, ",") != strings.Join(manifest.ArchitectureSet(), ",") {
 		return false, fmt.Sprintf("canonical.json claims %v, the release manifest records %v", claimed, manifest.ArchitectureSet())
 	}
-	return true, fmt.Sprintf("manifest commit %s is reachable and records every binary on %v", short(manifest.Commit), manifest.ArchitectureSet())
+	return true, fmt.Sprintf("manifest commit %s is reachable from %s and records every binary on %v", short(manifest.Commit), ancestry.Ref, manifest.ArchitectureSet())
 }
 
 func short(commit string) string {
