@@ -47,13 +47,15 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spdrman/rclone-manager/apps/common/auth/local"
+	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/apps/common/platform/notify"
+	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
-	"github.com/spdrman/rclone-manager/apps/generic/platform"
 	"github.com/spdrman/rclone-manager/apps/generic/webui"
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -79,6 +81,14 @@ const defaultAuthStorePath = "/data/state/local-auth.json"
 // is set; container/compose.yaml always sets LISTEN_ADDR explicitly for
 // both the `serve` and `serve-ui` containers.
 const defaultListenAddr = ":8080"
+
+// defaultProfile is the runtime profile a deployment gets when it does
+// not select one (issue #167). Generic is the right default and not a
+// guess: it is the profile with no host integration at all, so defaulting
+// to it can only ever under-claim. Defaulting the other way — inferring a
+// platform from the environment — is how a deployment ends up trusting an
+// identity header nobody configured a gateway for.
+const defaultProfile = string(profile.Generic)
 
 // defaultUpstream matches container/compose.yaml's engine service name
 // (`rclone-manager`) on its own internal default port - resolved through
@@ -146,10 +156,26 @@ serve flags:
                                (default /etc/backup-manager/config.yaml)
   --listen ADDR                address to listen on
                                (default $LISTEN_ADDR, or :8080)
+  --profile NAME               runtime profile: generic or ugos
+                               (default $RUNTIME_PROFILE, or generic). A
+                               profile changes the authentication
+                               gateway, the notification bridge, the
+                               launch bridge and reported capabilities,
+                               and nothing else - it can never change
+                               lifecycle, retention or validation
+                               behaviour
+  --trusted-gateway CIDR[,...] the network ranges a profile's platform
+                               authentication gateway may be believed
+                               from (default $TRUSTED_GATEWAY_CIDRS).
+                               Required by a gateway profile: without it
+                               there is no gateway, only an identity
+                               header anyone on the LAN can set, so the
+                               process refuses to start
   --auth-store PATH            path to the local-auth administrator record
                                (default /data/state/local-auth.json)
-  --auth-mode MODE             authentication mode; only "local" is
-                               implemented today (default local)
+  --auth-mode MODE             authentication mode: "local" or "gateway".
+                               Left unset it follows the profile, and it
+                               is refused when it contradicts one
   --trust-forwarded-headers    trust X-Forwarded-For/X-Forwarded-Proto
                                from the immediate caller (default
                                $TRUST_FORWARDED_HEADERS, or false) - only
@@ -177,6 +203,24 @@ serve-ui flags:
   --upstream URL   the engine's base URL, reachable over the internal
                     Docker network (default $UPSTREAM_ADDR, or
                     http://rclone-manager:8080)
+  --profile NAME   runtime profile (default $RUNTIME_PROFILE, or
+                    generic). Selects which bundle under --ui-root is
+                    served
+  --ui-root PATH   a directory of per-profile UI bundles (default
+                    $UI_ROOT). The bundle served is <PATH>/<profile>
+  --ui-dir PATH    one explicit UI bundle directory (default $UI_DIR),
+                    which wins over --ui-root. Both exist so a provider
+                    package can ship its own bridge WITHOUT a
+                    provider-specific binary: the bundle is chosen at run
+                    time, so the binary's digest is identical whichever
+                    bridge is served (issue #180, section 3.7's
+                    one-binary rule)
+
+  With neither --ui-dir nor --ui-root, the bundle compiled into this
+  binary is served. A --ui-dir or --ui-root that turns out to be unusable
+  is a hard start failure, never a silent fall back to that bundle: a UI
+  that looks like it works while running the wrong provider bridge is the
+  exact defect this mechanism exists to remove.
 
 healthcheck flags:
   --url URL   URL to GET (default $LISTEN_ADDR turned into
@@ -188,8 +232,11 @@ func cmdServe(args []string) int {
 	fset := flag.NewFlagSet("serve", flag.ContinueOnError)
 	configPath := fset.String("config", defaultConfigPath, "path to the manager's YAML config file")
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
+	profileName := fset.String("profile", envOrDefault("RUNTIME_PROFILE", defaultProfile), "runtime profile (generic or ugos)")
+	trustedGateway := fset.String("trusted-gateway", envOrDefault("TRUSTED_GATEWAY_CIDRS", ""),
+		"comma-separated CIDR ranges a platform authentication gateway may be believed from; required by a gateway profile")
 	authStorePath := fset.String("auth-store", defaultAuthStorePath, "path to the local-auth administrator record")
-	authMode := fset.String("auth-mode", "local", "authentication mode (only \"local\" is implemented)")
+	authMode := fset.String("auth-mode", "", "authentication mode (\"local\" or \"gateway\"); follows the profile when unset")
 	trustForwardedHeaders := fset.Bool("trust-forwarded-headers", envBoolOrDefault("TRUST_FORWARDED_HEADERS", false),
 		"trust X-Forwarded-For/X-Forwarded-Proto from the immediate caller - only safe behind serve-ui's own reverse proxy over an isolated network (see this command's own --help)")
 	publicBaseURL := fset.String("public-base-url", envOrDefault("PUBLIC_BASE_URL", ""),
@@ -198,9 +245,35 @@ func cmdServe(args []string) int {
 		return 2
 	}
 
-	if *authMode != "local" {
-		fmt.Fprintf(os.Stderr, "backup-manager-web: unsupported --auth-mode %q (only \"local\" is implemented; a native-platform mode is a later work package)\n", *authMode)
+	// Profile resolution happens before anything opens a file or a
+	// listener: an unrecognised profile is a configuration error, and
+	// finding it out after the state database is open only makes the
+	// message harder to read.
+	runtimeProfile, err := profile.Lookup(*profileName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
 		return 2
+	}
+	if *trustedGateway != "" {
+		if runtimeProfile.Gateway == nil {
+			fmt.Fprintf(os.Stderr, "backup-manager-web: --trusted-gateway was given but profile %q has no platform authentication gateway to trust\n", runtimeProfile.ID)
+			return 2
+		}
+		runtimeProfile.Gateway.TrustedPeers = splitList(*trustedGateway)
+	}
+	if err := checkAuthMode(*authMode, runtimeProfile); err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		return 2
+	}
+	// Fail closed before anything opens a file or a listener. A gateway
+	// profile whose trust boundary does not parse, or is not there at
+	// all, is not a deployment with a weaker boundary: it is one with
+	// none, where every identity header on the LAN is believed.
+	if runtimeProfile.Gateway != nil {
+		if _, err := runtimeProfile.Gateway.Compile(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager-web: profile %q: %v\n", runtimeProfile.ID, err)
+			return 2
+		}
 	}
 
 	// The one signal handler in this binary, matching
@@ -217,30 +290,51 @@ func cmdServe(args []string) int {
 	}
 	defer func() { _ = cleanup() }()
 
-	authSvc, err := local.New(local.Config{
-		StorePath:             *authStorePath,
-		TrustForwardedHeaders: *trustForwardedHeaders,
-	})
-	if err != nil {
-		return fail(fmt.Errorf("open local-auth store: %w", err))
-	}
-	// *publicBaseURL is empty unless an operator explicitly set
-	// --public-base-url/$PUBLIC_BASE_URL: this process's OWN --listen
-	// address (the fallback issue #119's review flagged) is never
-	// externally reachable in the shipped topology
-	// (container/compose.yaml gives the engine no published port at
-	// all), so PrintBootstrapNotice prints just the raw token in that
-	// case, per its own doc, rather than a clickable but wrong link.
-	if err := authSvc.PrintBootstrapNotice(os.Stdout, *publicBaseURL); err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: printing bootstrap notice:", err)
+	// Local authentication is opened only for a profile that actually
+	// uses it. A gateway profile has no login surface of its own, so
+	// creating an administrator record it would never consult, and
+	// printing an enrolment token nobody can redeem, would be two
+	// misleading artifacts rather than a harmless extra.
+	var (
+		authSvc    *local.Service
+		authRoutes http.Handler
+		localAuth  capabilities.Authenticator
+		trustFwd   = *trustForwardedHeaders
+	)
+	if runtimeProfile.Gateway == nil {
+		authSvc, err = local.New(local.Config{
+			StorePath:             *authStorePath,
+			TrustForwardedHeaders: *trustForwardedHeaders,
+		})
+		if err != nil {
+			return fail(fmt.Errorf("open local-auth store: %w", err))
+		}
+		// *publicBaseURL is empty unless an operator explicitly set
+		// --public-base-url/$PUBLIC_BASE_URL: this process's OWN --listen
+		// address (the fallback issue #119's review flagged) is never
+		// externally reachable in the shipped topology
+		// (container/compose.yaml gives the engine no published port at
+		// all), so PrintBootstrapNotice prints just the raw token in that
+		// case, per its own doc, rather than a clickable but wrong link.
+		if err := authSvc.PrintBootstrapNotice(os.Stdout, *publicBaseURL); err != nil {
+			fmt.Fprintln(os.Stderr, "backup-manager-web: printing bootstrap notice:", err)
+		}
+		authRoutes = authSvc.Handler()
+		localAuth = authSvc.Authenticator()
+		trustFwd = authSvc.TrustForwardedHeaders()
 	}
 
-	// platform.New(authSvc) is this provider's own capabilities.PlatformAdapter
-	// (apps/generic/platform - no native auth, no native anything: every
-	// capability false, local authentication as the fallback) - a future
-	// TrueNAS/Synology/etc. binary builds its own analogous adapter and
-	// hands it to the exact same serve.NewEngine.
-	platformAdapter := platform.New(authSvc)
+	// One adapter, built from the selected profile's row of the table.
+	// A future TrueNAS/Synology/UGOS deployment adds a row rather than a
+	// binary: that is what makes this a runtime profile rather than a
+	// build.
+	platformAdapter, err := runtimeProfile.Adapter(profile.AdapterConfig{LocalAuth: localAuth})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
+		return 2
+	}
+	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q (%s), authentication: %s\n",
+		runtimeProfile.ID, runtimeProfile.DisplayName, authModeOf(runtimeProfile))
 
 	// Work Package 3.5's proactive alerting (docs/EPIC-B-multi-nas.md
 	// §71). Both halves have to agree before a single notification goes
@@ -261,8 +355,8 @@ func cmdServe(args []string) int {
 
 	handler := serve.NewEngine(serve.EngineConfig{
 		Platform:              platformAdapter,
-		AuthRoutes:            authSvc.Handler(),
-		TrustForwardedHeaders: authSvc.TrustForwardedHeaders(),
+		AuthRoutes:            authRoutes,
+		TrustForwardedHeaders: trustFwd,
 		Backend:               backend,
 		BinaryVersion:         version,
 		Commit:                commit,
@@ -289,7 +383,16 @@ func cmdServeUI(args []string) int {
 	fset := flag.NewFlagSet("serve-ui", flag.ContinueOnError)
 	listenAddr := fset.String("listen", envOrDefault("LISTEN_ADDR", defaultListenAddr), "address to listen on")
 	upstream := fset.String("upstream", envOrDefault("UPSTREAM_ADDR", defaultUpstream), "the engine's base URL, reachable over the internal Docker network")
+	profileName := fset.String("profile", envOrDefault("RUNTIME_PROFILE", defaultProfile), "runtime profile (generic or ugos)")
+	uiRoot := fset.String("ui-root", envOrDefault("UI_ROOT", ""), "a directory of per-profile UI bundles; the bundle served is <ui-root>/<profile>")
+	uiDir := fset.String("ui-dir", envOrDefault("UI_DIR", ""), "one explicit UI bundle directory, which wins over --ui-root")
 	if err := fset.Parse(args); err != nil {
+		return 2
+	}
+
+	runtimeProfile, err := profile.Lookup(*profileName)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web:", err)
 		return 2
 	}
 
@@ -303,7 +406,7 @@ func cmdServeUI(args []string) int {
 		return 2
 	}
 
-	staticFS, err := fs.Sub(webui.Assets, "dist")
+	embedded, err := fs.Sub(webui.Assets, "dist")
 	if err != nil {
 		// webui.Assets is a compile-time go:embed of this module's own
 		// webui/dist directory: this can only fail if that package was
@@ -312,10 +415,28 @@ func cmdServeUI(args []string) int {
 		panic(fmt.Sprintf("backup-manager-web: webui.Assets has no \"dist\" subtree: %v", err))
 	}
 
+	// Issue #180, owned by #167. The bundle is chosen HERE, at run time,
+	// rather than by whatever VITE_PLATFORM happened to be set to when
+	// the binary was built. That is what lets a provider package ship its
+	// own bridge while carrying the exact same core binary digest section
+	// 3.7 requires, and apps/generic/tests/uibundle proves it against a
+	// real built artifact rather than against this function.
+	bundle, err := serve.ResolveUIBundle(serve.UIBundleSource{
+		Dir:      *uiDir,
+		Root:     *uiRoot,
+		Profile:  bundleNameFor(runtimeProfile, *uiRoot),
+		Embedded: embedded,
+	})
+	if err != nil {
+		return fail(err)
+	}
+	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q, UI bundle %s (%s)\n",
+		runtimeProfile.ID, bundle.Origin, bundle.Detail)
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: staticFS})
+	handler := serve.NewUI(serve.UIConfig{Upstream: upstreamURL, StaticFS: bundle.FS})
 	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
 	if err := serve.RunEngine(ctx, httpServer, nil, shutdownGrace, os.Stderr); err != nil {
@@ -407,4 +528,61 @@ func envBoolOrDefault(key string, def bool) bool {
 		return def
 	}
 	return parsed
+}
+
+// splitList turns a comma-separated flag value into a trimmed,
+// empty-free list. Used by --trusted-gateway, where a stray space around
+// a CIDR range would otherwise become a parse failure an operator has to
+// squint at.
+func splitList(v string) []string {
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// authModeOf names how the selected profile authenticates, for the one
+// startup line that says what this process is actually doing.
+func authModeOf(p profile.Profile) string {
+	if p.Gateway != nil {
+		return "trusted platform gateway (" + p.Gateway.UsernameHeader + ")"
+	}
+	return "local account"
+}
+
+// checkAuthMode holds --auth-mode to the profile. Leaving it unset is the
+// normal case and follows the profile; naming a mode the profile does not
+// have is refused rather than silently ignored, because "--auth-mode
+// local on a gateway profile" is somebody expecting a login form that
+// will never appear.
+func checkAuthMode(mode string, p profile.Profile) error {
+	want := "local"
+	if p.Gateway != nil {
+		want = "gateway"
+	}
+	switch mode {
+	case "":
+		return nil
+	case want:
+		return nil
+	default:
+		return fmt.Errorf("--auth-mode %q contradicts profile %q, which authenticates through the %s mode", mode, p.ID, want)
+	}
+}
+
+// bundleNameFor is which subdirectory of --ui-root this profile serves.
+// It returns "" when no root is configured, so ResolveUIBundle reports
+// the honest "no --ui-root" case rather than a confusing "no bundle for
+// profile generic" against a root nobody set.
+func bundleNameFor(p profile.Profile, root string) string {
+	if root == "" {
+		return ""
+	}
+	if p.UIBundle != "" {
+		return p.UIBundle
+	}
+	return string(p.ID)
 }

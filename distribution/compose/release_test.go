@@ -66,6 +66,16 @@ func TestDigestPolicyPointsAtSomethingReal(t *testing.T) {
 	if policy.Manifest == "" {
 		t.Fatal("the digest policy names no manifest, so an operator has nowhere to read a digest from")
 	}
+	// The policy has to name the manifest the parity checks actually
+	// read, not merely a manifest. A policy pointing somewhere plausible
+	// but unread would be prose with a file path in it.
+	const readByTheParityChecks = "container/release-manifest.json"
+	if policy.Manifest != readByTheParityChecks {
+		t.Errorf("the digest policy names %q but every parity check in this repository reads %q", policy.Manifest, readByTheParityChecks)
+	}
+	if policy.Pin == "" {
+		t.Error("the digest policy says nothing about how an operator pins a release")
+	}
 	manifest, err := packaging.ReadReleaseManifest()
 	if err != nil {
 		t.Fatalf("the digest policy names %q, which does not read back as a release manifest: %v", policy.Manifest, err)

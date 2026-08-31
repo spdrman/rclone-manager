@@ -5,6 +5,20 @@ This documents the container packaging for `core/cmd/backup-manager` (A3.9): wha
 than just asserting it. It's meant to be read next to `container/Dockerfile` and
 `container/compose.yaml`, which carry the same reasoning inline as comments.
 
+## The authoritative runtime contract lives next door
+
+Since issue #167, `container/compose.yaml` is not just the shape a generic Docker
+deployment happens to take: it is the **authoritative runtime definition** every other
+deployment artifact derives from, held to a machine-checkable contract by
+`distribution/compose`. Read [`docs/runtime-contract.md`](runtime-contract.md) for the
+standardised field set, the prohibition list and how each is proven, the runtime-profile
+selector (`--profile=generic|ugos`) and what a profile may and may not change, the
+trusted-gateway boundary, runtime-selected UI bundles (`--ui-dir` / `--ui-root`), the
+digest policy, and the measured cost of the engine-plus-web-ui hop.
+
+This file stays what it always was: the reasoning behind the container image and how each
+requirement was verified rather than asserted. The two are meant to be read together.
+
 ## Status
 
 `core/cmd/backup-manager` implements every execution mode this deployment shape was

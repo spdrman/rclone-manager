@@ -172,8 +172,16 @@
   "_prohibited_comment": [
     "EPIC B #81 and issue #167's prohibition list. An absent setting and an",
     "unnecessary setting are different claims, so these rules are only half the",
-    "evidence: distribution/compose/updown_test.go brings the canonical stack up",
-    "with none of them and completes real work, which is the other half."
+    "evidence. The other half is a deployment that does real work without any of",
+    "them, and that already exists: apps/generic/tests/dockercli runs the real",
+    "built image with none of these settings, reaches health, and completes real",
+    "work. The static rules here prove the settings are absent; that suite proves",
+    "they are unnecessary.",
+    "",
+    "Each rule below has its own positive control in contract_test.go: the real",
+    "definition is mutated to require the setting, and the rule has to fire AND",
+    "name the service and the value. Three preflight rules in this repository have",
+    "already failed open, so a rule nobody has watched fail is a comment."
   ],
   "prohibited": [
     { "id": "privileged", "kind": "key-value", "key": "privileged", "value": "true", "why": "privileged mode disables the container boundary entirely." },

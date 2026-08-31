@@ -271,6 +271,17 @@ jobs:
         working-directory: core
         run: go build ./...
 
+      # The canonical runtime's OTHER half (issue #167). core/ alone proves
+      # the engine library cross-compiles; it says nothing about the binary
+      # that actually carries `serve`, `serve-ui` and the runtime-profile
+      # selector, which lives in apps/generic and is a different module with
+      # a different dependency set. "The same source revision produces
+      # linux/amd64 and linux/arm64" is a claim about the whole image, so
+      # both modules have to hold for both architectures.
+      - name: Compile the web host for linux/${{ matrix.goarch }}, CGO_ENABLED=0
+        working-directory: apps/generic
+        run: go build ./...
+
   frontend:
     name: ui/shared typecheck, test, build
     runs-on: ubuntu-latest

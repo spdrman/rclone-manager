@@ -105,14 +105,25 @@ func serveAndFetch(t *testing.T, bin string, args ...string) string {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start %v: %v", full, err)
 	}
+	// exited closes as soon as the process is gone, so a start failure
+	// reports the exit status straight away instead of being reported
+	// twenty seconds later as "never answered", which reads like a
+	// timeout and is not one.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		<-exited
 	})
 
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
+		select {
+		case err := <-exited:
+			t.Fatalf("serve-ui %v exited before answering: %v", full, err)
+		default:
+		}
 		resp, err := client.Get("http://" + addr + "/")
 		if err == nil {
 			body, readErr := io.ReadAll(resp.Body)
@@ -141,10 +152,15 @@ func TestOneBinaryServesEveryProviderBridge(t *testing.T) {
 	bin := buildWebHost(t, root)
 	before := sha256File(t, bin)
 
+	// A bundle root holds one directory per runtime profile, which is the
+	// route a deployment of the canonical image takes. --ui-dir is the
+	// other route, and it is the one a provider PACKAGE takes: a .spk or
+	// a .UPK ships its own bridge beside the binary and names it, without
+	// needing a profile row of its own.
 	bundleRoot := t.TempDir()
-	writeBundle(t, filepath.Join(bundleRoot, "synology"), "synology")
+	writeBundle(t, filepath.Join(bundleRoot, "generic"), "generic-from-root")
 	writeBundle(t, filepath.Join(bundleRoot, "ugos"), "ugos")
-	explicit := writeBundle(t, filepath.Join(t.TempDir(), "operator"), "operator")
+	explicit := writeBundle(t, filepath.Join(t.TempDir(), "synology"), "synology")
 
 	cases := []struct {
 		name   string
@@ -158,8 +174,8 @@ func TestOneBinaryServesEveryProviderBridge(t *testing.T) {
 		},
 		{
 			name:   "a profile-selected bundle out of a bundle root",
-			args:   []string{"--ui-root", bundleRoot, "--profile", "synology"},
-			marker: "bridge:synology",
+			args:   []string{"--ui-root", bundleRoot, "--profile", "generic"},
+			marker: "bridge:generic-from-root",
 		},
 		{
 			name:   "a different profile, same binary, same root",
@@ -167,9 +183,9 @@ func TestOneBinaryServesEveryProviderBridge(t *testing.T) {
 			marker: "bridge:ugos",
 		},
 		{
-			name:   "an explicitly supplied directory",
+			name:   "a package-supplied bundle for a platform with no profile row of its own",
 			args:   []string{"--ui-dir", explicit},
-			marker: "bridge:operator",
+			marker: "bridge:synology",
 		},
 	}
 

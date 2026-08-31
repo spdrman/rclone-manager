@@ -148,16 +148,59 @@ func (h *profileHarness) get(t *testing.T, path string) (int, []byte) {
 
 // parityRoutes are the lifecycle, retention and validation reads whose
 // answers may not depend on the profile.
+//
+// volatile names the top-level JSON fields a route regenerates on every
+// call regardless of who asked. Only the retention preview has any: it
+// mints a fresh single-use plan (#96's stale-plan rejection depends on
+// that), so its plan_id and expires_at differ between two consecutive
+// calls to the SAME profile. Normalising them is not leniency about the
+// profile boundary — normalizeVolatile below fails if a named field is
+// absent or empty, so the list cannot quietly grow into "ignore the
+// interesting part", and every verdict, count and revision in that same
+// response is still compared byte for byte.
 var parityRoutes = []struct {
-	name string
-	path string
+	name     string
+	path     string
+	volatile []string
 }{
 	{name: "lifecycle: the backup-set list", path: "/api/v1/backup-sets"},
 	{name: "lifecycle: one backup set's detail", path: "/api/v1/backup-sets/production/postgres-primary"},
 	{name: "retention: the settings that drive it", path: "/api/v1/settings"},
-	{name: "retention: an immutable preview", path: "/api/v1/backup-sets/production/postgres-primary/retention/preview"},
+	{
+		name:     "retention: an immutable preview",
+		path:     "/api/v1/backup-sets/production/postgres-primary/retention/preview",
+		volatile: []string{"plan_id", "expires_at"},
+	},
 	{name: "validation: the registered validator catalog", path: "/api/v1/validators"},
 	{name: "storage pressure", path: "/api/v1/system/storage"},
+}
+
+// normalizeVolatile blanks the named top-level fields and returns the
+// re-encoded document, refusing if a named field is missing or empty.
+func normalizeVolatile(t *testing.T, body []byte, fields []string) string {
+	t.Helper()
+	if len(fields) == 0 {
+		return string(body)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("unmarshal: %v (body %s)", err, body)
+	}
+	for _, f := range fields {
+		v, ok := doc[f]
+		if !ok {
+			t.Fatalf("%q is listed as volatile but the response does not carry it, so the normalisation is describing a field that no longer exists: %s", f, body)
+		}
+		if s, isString := v.(string); isString && s == "" {
+			t.Fatalf("%q is listed as volatile but came back empty, so blanking it hides nothing and proves nothing: %s", f, body)
+		}
+		doc[f] = "<volatile>"
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(out)
 }
 
 func TestProfileSelectionIsInertForTheBackupDomain(t *testing.T) {
@@ -173,15 +216,16 @@ func TestProfileSelectionIsInertForTheBackupDomain(t *testing.T) {
 				t.Fatalf("%s under profile %q returned %d, so this route contributes nothing to the parity proof: %s",
 					route.path, harnesses[0].profile.ID, wantCode, wantBody)
 			}
+			want := normalizeVolatile(t, wantBody, route.volatile)
 			for _, h := range harnesses[1:] {
 				gotCode, gotBody := h.get(t, route.path)
 				if gotCode != wantCode {
 					t.Errorf("%s: profile %q answered %d, profile %q answered %d",
 						route.path, harnesses[0].profile.ID, wantCode, h.profile.ID, gotCode)
 				}
-				if string(gotBody) != string(wantBody) {
+				if got := normalizeVolatile(t, gotBody, route.volatile); got != want {
 					t.Errorf("%s differs between profiles %q and %q\n  %s\n  %s",
-						route.path, harnesses[0].profile.ID, h.profile.ID, wantBody, gotBody)
+						route.path, harnesses[0].profile.ID, h.profile.ID, want, got)
 				}
 			}
 		})

@@ -578,6 +578,34 @@ func checkAuthModeExplicit(p providerUnderTest) (bool, string) {
 // the shape that matters is: exactly one published port in the whole
 // profile, and it belongs to the container running the Web UI command,
 // never the engine that holds the state database and the credentials.
+// runsCanonicalCommand reports whether got is want, optionally followed
+// by runtime flags.
+//
+// Exact equality was right until issue #167 standardised "command and
+// runtime profile" as one contract field, which appends
+// `--profile=<name>` to both canonical commands. What this check exists
+// to catch is a deployment that publishes the ENGINE on its edge port, or
+// runs the wrong subcommand entirely, and neither of those is a flag. So
+// the binary and every positional argument still have to match exactly,
+// and only leading-dash arguments may follow: `serve-ui --profile=ugos`
+// passes, `serve` does not, and neither does `serve-ui something-else`.
+func runsCanonicalCommand(got, want []string) bool {
+	if len(got) < len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	for _, extra := range got[len(want):] {
+		if !strings.HasPrefix(extra, "-") {
+			return false
+		}
+	}
+	return true
+}
+
 func checkAPIPathIsolation(p providerUnderTest) (bool, string) {
 	if p.spec.Metadata.Kind == "spk" {
 		return checkSPKPortIsolation(p)
@@ -606,7 +634,7 @@ func checkAPIPathIsolation(p providerUnderTest) (bool, string) {
 	if len(edge.Ports) != 1 {
 		return false, fmt.Sprintf("service %q publishes %v, want exactly one port", edge.Name, edge.Ports)
 	}
-	if strings.Join(edge.Command, " ") != strings.Join(p.canonical.Commands.WebUI, " ") {
+	if !runsCanonicalCommand(edge.Command, p.canonical.Commands.WebUI) {
 		return false, fmt.Sprintf("the published service %q runs %v, not the Web UI command %v, so the engine is on the edge",
 			edge.Name, edge.Command, p.canonical.Commands.WebUI)
 	}

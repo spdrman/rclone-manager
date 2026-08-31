@@ -1,0 +1,801 @@
+// Package compose is the authoritative Compose runtime contract (issue
+// #167, EPIC B #81 Phase 6).
+//
+// # What "authoritative" means here, and what it does not
+//
+// Before this package, the canonical compose file was documentation
+// shaped. It was correct, carefully reasoned and thoroughly commented,
+// and none of that was checkable: its security posture was asserted in a
+// header comment, its field set was whatever had accumulated, and an
+// adapter agreeing with it was a matter of review. Authority in this
+// package is a check, not a path. runtime-contract.json names every field
+// the canonical runtime definition must declare and every host privilege
+// the deployment must not need, and the tests next to it fail the build
+// when either list is not satisfied.
+//
+// # Why the parse is generic rather than a struct
+//
+// distribution/packaging already parses compose into a Service struct,
+// and that is the right shape for the questions it asks (mount roles,
+// image references, forwarded-header trust). It is the wrong shape for
+// this one. A prohibition check reading a struct can only ever see keys
+// the struct has fields for, so `privileged: true` on a service nobody
+// modelled reads as clean: the check fails open, silently, in exactly the
+// case it exists for. This package walks the whole document instead, and
+// TestProhibitionScanSeesKeysTheParserHasNoFieldFor is the control that
+// says so.
+package compose
+
+import (
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/spdrman/rclone-manager/distribution/packaging"
+)
+
+//go:embed runtime-contract.json
+var contractJSON []byte
+
+// Contract is runtime-contract.json.
+type Contract struct {
+	Schema     string           `json:"schema"`
+	Version    string           `json:"version"`
+	Canonical  string           `json:"canonical"`
+	Derived    []string         `json:"derived"`
+	Fields     []Field          `json:"fields"`
+	Prohibited []ProhibitedRule `json:"prohibited"`
+}
+
+// Field is one entry of the standardised field set.
+type Field struct {
+	ID    string   `json:"id"`
+	Scope string   `json:"scope"`
+	Roles []string `json:"roles"`
+	Key   string   `json:"key"`
+	// MustContain, for a command field, is a substring the declared
+	// command has to carry.
+	MustContain string `json:"mustContain"`
+	// ContainerPath and ReadOnly describe a mount field.
+	ContainerPath string `json:"containerPath"`
+	ReadOnly      bool   `json:"readOnly"`
+	Why           string `json:"why"`
+}
+
+// ProhibitedRule is one entry of the prohibition list.
+type ProhibitedRule struct {
+	ID       string   `json:"id"`
+	Kind     string   `json:"kind"`
+	Key      string   `json:"key"`
+	Value    string   `json:"value"`
+	Paths    []string `json:"paths"`
+	Prefixes []string `json:"prefixes"`
+	Why      string   `json:"why"`
+}
+
+// LoadContract parses the embedded contract.
+func LoadContract() (Contract, error) {
+	var c Contract
+	if err := json.Unmarshal(contractJSON, &c); err != nil {
+		return Contract{}, fmt.Errorf("compose: parse runtime-contract.json: %w", err)
+	}
+	return c, nil
+}
+
+// MustLoadContract is LoadContract for callers that cannot proceed.
+func MustLoadContract() Contract {
+	c, err := LoadContract()
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
+// Path resolves a repository-relative path from this package's directory,
+// which is where `go test` runs.
+func Path(rel string) string { return filepath.Join(packaging.RepoRoot, rel) }
+
+// Contains reports whether child is parent or sits underneath it. It is
+// packaging's own textual containment check, re-exported so a reader of
+// this package's tests does not have to know that two modules' worth of
+// path reasoning agree.
+func Contains(parent, child string) bool { return packaging.Contains(parent, child) }
+
+// ---------------------------------------------------------------------
+// The document
+// ---------------------------------------------------------------------
+
+// Role is what a service does, derived from the command it runs.
+type Role string
+
+const (
+	// RoleEngine is the core service, scheduler, local authentication and
+	// the versioned /api/v1 API.
+	RoleEngine Role = "engine"
+	// RoleWebUI serves the shared UI and reverse-proxies to the engine.
+	RoleWebUI Role = "web-ui"
+	// RoleUnknown is a service whose command matches neither.
+	RoleUnknown Role = ""
+)
+
+// Document is one parsed compose file, held as the generic tree it
+// actually is.
+type Document struct {
+	Source string
+	root   map[string]any
+	env    map[string]string
+}
+
+// Read parses the compose file at path, expanding ${VAR} references from
+// env the way `docker compose` would.
+func Read(path string, env map[string]string) (Document, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Document{}, err
+	}
+	rel, relErr := filepath.Rel(Path("."), path)
+	if relErr != nil {
+		rel = path
+	}
+	return Parse(data, filepath.ToSlash(rel), env)
+}
+
+// Parse is Read over bytes.
+func Parse(data []byte, source string, env map[string]string) (Document, error) {
+	var root map[string]any
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return Document{}, fmt.Errorf("%s: %w", source, err)
+	}
+	if root == nil {
+		root = map[string]any{}
+	}
+	return Document{Source: source, root: root, env: env}, nil
+}
+
+func (d Document) clone() Document {
+	return Document{Source: d.Source, root: deepCopy(d.root).(map[string]any), env: d.env}
+}
+
+func deepCopy(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, val := range t {
+			out[k] = deepCopy(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, val := range t {
+			out[i] = deepCopy(val)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+// services returns the services map, or an empty one.
+func (d Document) services() map[string]any {
+	svc, _ := d.root["services"].(map[string]any)
+	if svc == nil {
+		return map[string]any{}
+	}
+	return svc
+}
+
+// ServiceNames lists the declared services, sorted.
+func (d Document) ServiceNames() []string {
+	out := make([]string, 0)
+	for name := range d.services() {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Roles maps each service name to its role.
+//
+// The role comes from the command, never from the name. apps/truenas
+// calls its two services backup-manager and backup-manager-ui and the
+// canonical file calls them rclone-manager and web-ui; a check keyed on
+// the name would silently stop checking the moment someone renamed one.
+func (d Document) Roles() map[string]Role {
+	out := map[string]Role{}
+	for name, raw := range d.services() {
+		out[name] = roleOf(stringList(mapOf(raw)["command"]))
+	}
+	return out
+}
+
+func roleOf(command []string) Role {
+	for _, arg := range command {
+		switch arg {
+		case "serve-ui":
+			return RoleWebUI
+		case "serve":
+			return RoleEngine
+		}
+	}
+	return RoleUnknown
+}
+
+// serviceFor returns the one service filling role, and whether there was
+// exactly one.
+func (d Document) serviceFor(role Role) (string, map[string]any, bool) {
+	var name string
+	found := 0
+	for svc, r := range d.Roles() {
+		if r == role {
+			name = svc
+			found++
+		}
+	}
+	if found != 1 {
+		return "", nil, false
+	}
+	return name, mapOf(d.services()[name]), true
+}
+
+// Mount is one declared volume, container side and host side.
+type Mount struct {
+	HostPath      string
+	ContainerPath string
+	ReadOnly      bool
+}
+
+// Mounts lists a service's declared volumes with ${VAR} references
+// expanded.
+func (d Document) Mounts(service map[string]any) []Mount {
+	var out []Mount
+	for _, raw := range stringList(service["volumes"]) {
+		expanded, _ := packaging.ExpandCompose(raw, d.env)
+		parts := strings.Split(expanded, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		m := Mount{HostPath: parts[0], ContainerPath: parts[1]}
+		if len(parts) > 2 && strings.Contains(parts[2], "ro") {
+			m.ReadOnly = true
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// MountFor finds a role's mount at containerPath.
+func (d Document) MountFor(role Role, containerPath string) (Mount, bool) {
+	_, svc, ok := d.serviceFor(role)
+	if !ok {
+		return Mount{}, false
+	}
+	for _, m := range d.Mounts(svc) {
+		if m.ContainerPath == containerPath {
+			return m, true
+		}
+	}
+	return Mount{}, false
+}
+
+// ---------------------------------------------------------------------
+// Findings
+// ---------------------------------------------------------------------
+
+// Finding is one contract violation. Rule is the id from
+// runtime-contract.json, so a failure names the rule that produced it
+// rather than only the symptom.
+type Finding struct {
+	Rule    string
+	Service string
+	Detail  string
+	Why     string
+}
+
+// ---------------------------------------------------------------------
+// Required fields
+// ---------------------------------------------------------------------
+
+// CheckField reports every way this document fails to declare field.
+func (d Document) CheckField(field Field) []Finding {
+	switch field.Scope {
+	case "service":
+		return d.checkServiceKey(field)
+	case "service-env":
+		return d.checkServiceEnv(field)
+	case "service-mount":
+		return d.checkServiceMount(field)
+	case "document":
+		return d.checkDocumentKey(field)
+	default:
+		return []Finding{{Rule: field.ID, Detail: fmt.Sprintf("unknown field scope %q", field.Scope), Why: field.Why}}
+	}
+}
+
+func (d Document) checkServiceKey(field Field) []Finding {
+	var out []Finding
+	for _, roleName := range field.Roles {
+		role := Role(roleName)
+		name, svc, ok := d.serviceFor(role)
+		if !ok {
+			out = append(out, Finding{Rule: field.ID, Detail: fmt.Sprintf("%s declares no single service in the %q role, so %q cannot be checked", d.Source, role, field.Key), Why: field.Why})
+			continue
+		}
+		v, present := svc[field.Key]
+		if !present || isEmpty(v) {
+			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) declares no %q", name, role, field.Key), Why: field.Why})
+			continue
+		}
+		if field.MustContain != "" {
+			joined := strings.Join(stringList(v), " ")
+			if !strings.Contains(joined, field.MustContain) {
+				out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) declares %s %q, which never contains %q", name, role, field.Key, joined, field.MustContain), Why: field.Why})
+			}
+		}
+	}
+	return out
+}
+
+func (d Document) checkServiceEnv(field Field) []Finding {
+	var out []Finding
+	for _, roleName := range field.Roles {
+		role := Role(roleName)
+		name, svc, ok := d.serviceFor(role)
+		if !ok {
+			out = append(out, Finding{Rule: field.ID, Detail: fmt.Sprintf("%s declares no single service in the %q role", d.Source, role), Why: field.Why})
+			continue
+		}
+		env := mapOf(svc["environment"])
+		if v, present := env[field.Key]; !present || isEmpty(v) {
+			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) sets no %s environment variable", name, role, field.Key), Why: field.Why})
+		}
+	}
+	return out
+}
+
+func (d Document) checkServiceMount(field Field) []Finding {
+	var out []Finding
+	for _, roleName := range field.Roles {
+		role := Role(roleName)
+		name, svc, ok := d.serviceFor(role)
+		if !ok {
+			out = append(out, Finding{Rule: field.ID, Detail: fmt.Sprintf("%s declares no single service in the %q role", d.Source, role), Why: field.Why})
+			continue
+		}
+		var found *Mount
+		for _, m := range d.Mounts(svc) {
+			if m.ContainerPath == field.ContainerPath {
+				found = &m
+				break
+			}
+		}
+		if found == nil {
+			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) mounts nothing at %s", name, role, field.ContainerPath), Why: field.Why})
+			continue
+		}
+		if field.ReadOnly && !found.ReadOnly {
+			out = append(out, Finding{Rule: field.ID, Service: name, Detail: fmt.Sprintf("service %q (%s) mounts %s writable; the contract requires it read-only", name, role, field.ContainerPath), Why: field.Why})
+		}
+	}
+	return out
+}
+
+func (d Document) checkDocumentKey(field Field) []Finding {
+	v, ok := lookupDotted(d.root, field.Key)
+	if !ok || isEmpty(v) {
+		return []Finding{{Rule: field.ID, Detail: fmt.Sprintf("%s declares no %s", d.Source, field.Key), Why: field.Why}}
+	}
+	return nil
+}
+
+// WithoutField returns a copy of this document with field removed, and a
+// description of what was removed. It exists for the positive controls:
+// a required-field check nobody has watched fail is a check that may not
+// work at all.
+func (d Document) WithoutField(field Field) (Document, string) {
+	out := d.clone()
+	switch field.Scope {
+	case "service":
+		for _, roleName := range field.Roles {
+			name, svc, ok := out.serviceFor(Role(roleName))
+			if !ok {
+				continue
+			}
+			if field.MustContain != "" {
+				// Removing the key outright would also trip the
+				// "present" half, which would let a MustContain rule
+				// that never actually inspects the value still pass its
+				// own control. Strip only the required substring.
+				svc[field.Key] = withoutArg(stringList(svc[field.Key]), field.MustContain)
+				return out, fmt.Sprintf("%s's %q from service %q", field.MustContain, field.Key, name)
+			}
+			delete(svc, field.Key)
+			return out, fmt.Sprintf("%q from service %q", field.Key, name)
+		}
+	case "service-env":
+		for _, roleName := range field.Roles {
+			name, svc, ok := out.serviceFor(Role(roleName))
+			if !ok {
+				continue
+			}
+			delete(mapOf(svc["environment"]), field.Key)
+			return out, fmt.Sprintf("environment %s from service %q", field.Key, name)
+		}
+	case "service-mount":
+		for _, roleName := range field.Roles {
+			name, svc, ok := out.serviceFor(Role(roleName))
+			if !ok {
+				continue
+			}
+			var kept []any
+			for _, raw := range stringList(svc["volumes"]) {
+				expanded, _ := packaging.ExpandCompose(raw, out.env)
+				if strings.Contains(expanded, ":"+field.ContainerPath) {
+					continue
+				}
+				kept = append(kept, raw)
+			}
+			svc["volumes"] = kept
+			return out, fmt.Sprintf("the %s mount from service %q", field.ContainerPath, name)
+		}
+	case "document":
+		parts := strings.Split(field.Key, ".")
+		parent := out.root
+		for _, p := range parts[:len(parts)-1] {
+			parent = mapOf(parent[p])
+			if parent == nil {
+				return out, ""
+			}
+		}
+		delete(parent, parts[len(parts)-1])
+		return out, field.Key
+	}
+	return out, ""
+}
+
+func withoutArg(args []string, contains string) []any {
+	out := make([]any, 0, len(args))
+	for _, a := range args {
+		if strings.Contains(a, contains) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------
+// Prohibitions
+// ---------------------------------------------------------------------
+
+// CheckProhibited reports every prohibited host privilege this document
+// requires, wherever in the tree it appears.
+func (d Document) CheckProhibited(c Contract) []Finding {
+	var out []Finding
+	for _, rule := range c.Prohibited {
+		out = append(out, d.checkRule(rule)...)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Rule != out[j].Rule {
+			return out[i].Rule < out[j].Rule
+		}
+		return out[i].Detail < out[j].Detail
+	})
+	return out
+}
+
+func (d Document) checkRule(rule ProhibitedRule) []Finding {
+	var out []Finding
+	add := func(service, detail string) {
+		out = append(out, Finding{Rule: rule.ID, Service: service, Detail: detail, Why: rule.Why})
+	}
+
+	switch rule.Kind {
+	case "key-value":
+		walk(d.root, "", func(owner, key string, value any) {
+			if key != rule.Key {
+				return
+			}
+			if strings.EqualFold(scalarString(value), rule.Value) {
+				add(owner, fmt.Sprintf("service %q declares %s=%s", owner, rule.Key, rule.Value))
+			}
+		})
+	case "key-present":
+		walk(d.root, "", func(owner, key string, value any) {
+			if key == rule.Key && !isEmpty(value) {
+				add(owner, fmt.Sprintf("service %q declares %s: %v", owner, rule.Key, value))
+			}
+		})
+	case "mount-host-path":
+		for name, raw := range d.services() {
+			for _, m := range d.Mounts(mapOf(raw)) {
+				for _, p := range rule.Paths {
+					if hostPathMatches(m.HostPath, p) {
+						add(name, fmt.Sprintf("service %q mounts the host path %s (at %s)", name, p, m.ContainerPath))
+					}
+				}
+			}
+		}
+	case "list-value-prefix":
+		walk(d.root, "", func(owner, key string, value any) {
+			if key != rule.Key {
+				return
+			}
+			for _, entry := range stringList(value) {
+				for _, prefix := range rule.Prefixes {
+					if strings.HasPrefix(entry, prefix) {
+						add(owner, fmt.Sprintf("service %q declares %s %s", owner, rule.Key, prefix))
+					}
+				}
+			}
+		})
+	}
+	return out
+}
+
+// hostPathMatches decides whether a declared host path is the prohibited
+// one. "/" matches only itself, because every absolute path starts with
+// it; every other entry matches itself and anything beneath it.
+func hostPathMatches(hostPath, prohibited string) bool {
+	clean := filepath.Clean(hostPath)
+	if prohibited == "/" {
+		return clean == "/"
+	}
+	return clean == prohibited || strings.HasPrefix(clean, prohibited+"/")
+}
+
+// walk visits every key/value pair in the tree, carrying the name of the
+// nearest enclosing service so a finding can say where it was found. It
+// descends into maps this package has no type for on purpose: that is the
+// whole difference between this and a struct-based scan.
+func walk(node any, owner string, visit func(owner, key string, value any)) {
+	switch t := node.(type) {
+	case map[string]any:
+		for k, v := range t {
+			next := owner
+			if owner == "" {
+				if k == "services" {
+					if services, ok := v.(map[string]any); ok {
+						for name, svc := range services {
+							walk(svc, name, visit)
+						}
+						continue
+					}
+				}
+			}
+			visit(next, k, v)
+			walk(v, next, visit)
+		}
+	case []any:
+		for _, v := range t {
+			walk(v, owner, visit)
+		}
+	}
+}
+
+// WithProhibited returns a copy of this document that requires rule's
+// prohibited setting, and a description of what was injected. The tests
+// use it to prove each rule actually fires.
+func (d Document) WithProhibited(rule ProhibitedRule) (Document, string) {
+	out := d.clone()
+	name, svc, ok := out.serviceFor(RoleEngine)
+	if !ok {
+		for _, n := range out.ServiceNames() {
+			name, svc = n, mapOf(out.services()[n])
+			break
+		}
+	}
+	if svc == nil {
+		return out, ""
+	}
+	_ = name
+
+	switch rule.Kind {
+	case "key-value":
+		svc[rule.Key] = parseScalar(rule.Value)
+		return out, fmt.Sprintf("%s=%s", rule.Key, rule.Value)
+	case "key-present":
+		svc[rule.Key] = []any{"SYS_ADMIN"}
+		return out, rule.Key
+	case "mount-host-path":
+		if len(rule.Paths) == 0 {
+			return out, ""
+		}
+		p := rule.Paths[len(rule.Paths)-1]
+		svc["volumes"] = append(stringListAny(svc["volumes"]), p+":/mnt/injected:ro")
+		return out, p
+	case "list-value-prefix":
+		if len(rule.Prefixes) == 0 {
+			return out, ""
+		}
+		p := rule.Prefixes[len(rule.Prefixes)-1]
+		svc[rule.Key] = append(stringListAny(svc[rule.Key]), p)
+		return out, p
+	}
+	return out, ""
+}
+
+// ---------------------------------------------------------------------
+// The document-level runtime declarations
+// ---------------------------------------------------------------------
+
+// Architectures reads x-canonical-runtime.architectures.
+func (d Document) Architectures() ([]string, error) {
+	v, ok := lookupDotted(d.root, "x-canonical-runtime.architectures")
+	if !ok {
+		return nil, fmt.Errorf("%s declares no x-canonical-runtime.architectures", d.Source)
+	}
+	out := stringList(v)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s declares an empty x-canonical-runtime.architectures", d.Source)
+	}
+	return out, nil
+}
+
+// Profiles reads x-canonical-runtime.profiles.
+func (d Document) Profiles() ([]string, error) {
+	v, ok := lookupDotted(d.root, "x-canonical-runtime.profiles")
+	if !ok {
+		return nil, fmt.Errorf("%s declares no x-canonical-runtime.profiles", d.Source)
+	}
+	out := stringList(v)
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s declares an empty x-canonical-runtime.profiles", d.Source)
+	}
+	return out, nil
+}
+
+// Policy is the declared digest policy.
+type Policy struct {
+	Manifest string
+	Pin      string
+}
+
+// DigestPolicy reads x-canonical-runtime.digest_policy.
+func (d Document) DigestPolicy() (Policy, error) {
+	v, ok := lookupDotted(d.root, "x-canonical-runtime.digest_policy")
+	if !ok {
+		return Policy{}, fmt.Errorf("%s declares no x-canonical-runtime.digest_policy", d.Source)
+	}
+	m := mapOf(v)
+	return Policy{
+		Manifest: scalarString(m["manifest"]),
+		Pin:      scalarString(m["pin"]),
+	}, nil
+}
+
+// ---------------------------------------------------------------------
+// What the executable actually implements
+// ---------------------------------------------------------------------
+
+// profileConstRe matches one row of the profile table's ID constants.
+var profileConstRe = regexp.MustCompile(`(?m)^\t([A-Z][A-Za-z0-9]*)\s+ID\s*=\s*"([a-z0-9-]+)"`)
+
+// ImplementedProfiles reads the runtime profile table's selector tokens
+// out of apps/common/platform/profile.
+//
+// Read as source rather than linked, because distribution/ is its own
+// module and the layer rules forbid it importing the application layer. A
+// profile constant is a declaration, and reading a declaration across
+// that boundary is exactly what the boundary permits; importing the
+// package to run its code is what it does not.
+func ImplementedProfiles() ([]string, error) {
+	path := Path(filepath.Join("apps", "common", "platform", "profile", "profile.go"))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	matches := profileConstRe.FindAllStringSubmatch(string(data), -1)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("compose: found no runtime profile constants in %s, so this check would compare against an empty list", path)
+	}
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, m[2])
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// ---------------------------------------------------------------------
+// Small helpers over the generic tree
+// ---------------------------------------------------------------------
+
+func mapOf(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+// stringList reads a YAML scalar, sequence or mapping as a list of
+// strings. A mapping (compose's alternative `environment:` form) yields
+// "KEY=VALUE" entries.
+func stringList(v any) []string {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			out = append(out, scalarString(e))
+		}
+		return out
+	case string:
+		return []string{t}
+	default:
+		return []string{scalarString(v)}
+	}
+}
+
+func stringListAny(v any) []any {
+	if l, ok := v.([]any); ok {
+		return l
+	}
+	if v == nil {
+		return nil
+	}
+	return []any{v}
+}
+
+func scalarString(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	default:
+		return fmt.Sprintf("%v", t)
+	}
+}
+
+func parseScalar(v string) any {
+	switch strings.ToLower(v) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return v
+	}
+}
+
+func isEmpty(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(t) == ""
+	case []any:
+		return len(t) == 0
+	case map[string]any:
+		return len(t) == 0
+	default:
+		return false
+	}
+}
+
+func lookupDotted(root map[string]any, dotted string) (any, bool) {
+	cur := any(root)
+	for _, part := range strings.Split(dotted, ".") {
+		m := mapOf(cur)
+		if m == nil {
+			return nil, false
+		}
+		v, ok := m[part]
+		if !ok {
+			return nil, false
+		}
+		cur = v
+	}
+	return cur, true
+}

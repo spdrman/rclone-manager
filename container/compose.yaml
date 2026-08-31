@@ -36,6 +36,68 @@
 # other network. This does NOT block `web-ui`'s own outbound internet
 # access (e.g. via a `internal: true` network or firewall rules) - that
 # is a further hardening step beyond what was asked for here.
+# ---------------------------------------------------------------------
+# THE CANONICAL RUNTIME CONTRACT (issue #167)
+#
+# This block is what makes this file authoritative rather than merely
+# canonical. distribution/compose holds the whole definition to
+# runtime-contract.json: every field the contract names has to be
+# declared here, and none of the prohibited host privileges may be
+# needed. Adapters derive from this file; distribution/packaging holds
+# them to its image reference, mount points, port and security posture.
+#
+# Nothing here is decoration. Deleting a line below fails
+# distribution/compose's own suite by name, with the reason the contract
+# gives for requiring it.
+# ---------------------------------------------------------------------
+x-canonical-runtime:
+  # The contract version this definition was written against, so a
+  # contract change is a visible edit here rather than a silent
+  # divergence.
+  contract: "1.0.0"
+
+  # The architectures this release claims. Checked against
+  # distribution/packaging/canonical.json and against
+  # container/release-manifest.json, so the three cannot drift.
+  architectures:
+    - amd64
+    - arm64
+
+  # The profiles `--profile=` below may name. Checked against the profile
+  # table the executable actually implements
+  # (apps/common/platform/profile), so a value nothing implements cannot
+  # be declared here.
+  profiles:
+    - generic
+    - ugos
+
+  # How an operator pins a release. The tag in `image:` is mutable and is
+  # a convenience; the immutable reference is the digest, recorded per
+  # architecture in the manifest named here.
+  digest_policy:
+    manifest: container/release-manifest.json
+    pin: >-
+      Deploy by digest, not by tag: replace image: backup-manager:<tag>
+      with the registry reference plus the @sha256:... digest recorded for
+      your architecture in the manifest above, and verify the binary
+      SHA-256 recorded alongside it. A tag can be moved; a digest cannot.
+
+  # Documented resource expectations, measured rather than guessed: the
+  # engine's idle RSS on the Phase 6 benchmark host is ~99 MB (see
+  # docs/perf/baselines/), and the UI host is a static file server plus
+  # one reverse proxy. These are what an operator should provision, not a
+  # limit this file imposes: a hard `deploy.resources.limits` here would
+  # turn a large catalogue into an OOM kill mid-backup.
+  resources:
+    engine:
+      memory_idle: 128Mi
+      memory_recommended: 512Mi
+      cpu_recommended: "1"
+    web-ui:
+      memory_idle: 32Mi
+      memory_recommended: 128Mi
+      cpu_recommended: "0.25"
+
 networks:
   internal:
 
@@ -75,7 +137,13 @@ services:
     # compose run --rm rclone-manager /backup-manager version` / `... check`
     # for a one-shot check; see the `restart` note below, which assumes
     # the default `serve` command specifically.
-    command: ["/backup-manager-web", "serve"]
+    # `command` carries the runtime profile, which is one contract field
+    # and not two: a deployment that does not name its profile is a
+    # deployment whose host-dependent behaviour is implicit. `generic` is
+    # the profile with no host integration at all, so defaulting to it can
+    # only ever under-claim; RUNTIME_PROFILE in .env selects another one
+    # out of x-canonical-runtime.profiles above.
+    command: ["/backup-manager-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
 
     <<: *security
 
@@ -127,6 +195,15 @@ services:
       # temp-file code falls back to (SQLITE_TMPDIR, then TMPDIR, then a
       # hardcoded list ending in /tmp) — see docs/deployment.md.
       TMPDIR: /tmp
+
+      # Retention is evaluated against calendar boundaries (FR-18's
+      # daily/weekly/monthly tiers), so the timezone is not cosmetic: left
+      # to the image's UTC default, the day an operator thinks a restore
+      # point belongs to and the day retention assigns it to are silently
+      # different for most of the world. The engine's own
+      # retention.timezone config setting is the authority; this makes the
+      # process-level default match the host rather than the image.
+      TZ: ${TZ:-UTC}
 
       # `/backup-manager-web serve`'s own `--listen` flag defaults to this
       # variable when set (falling back to :8080 otherwise), so it binds
@@ -193,14 +270,36 @@ services:
     # `up -d`, which bypasses `restart` entirely.
     restart: unless-stopped
 
-    # `backup-manager status` (issue #26), tracked by the image's own
-    # HEALTHCHECK instruction since issue #82/B4.1: see container/Dockerfile
-    # for exactly what it checks and docs/deployment.md for how that was
-    # verified against a running container. Real backup-freshness evidence
+    # `backup-manager status` (issue #26). Real backup-freshness evidence
     # (HEALTHY/DEGRADED/STALE/FAILING), appropriate here since this is the
     # container that actually holds the state database - web-ui's own
-    # healthcheck below is deliberately a different, narrower check.
-    # healthcheck: inherited from the image's HEALTHCHECK instruction.
+    # healthcheck below is deliberately a different, narrower check. See
+    # core/cmd/backup-manager/status.go for the exact contract and
+    # docs/deployment.md for how it was verified against a running
+    # container.
+    #
+    # Declared here rather than inherited from the image's own HEALTHCHECK
+    # instruction, even though the two are identical (issue #167): the
+    # runtime contract requires an operator to be able to read what
+    # "healthy" means out of this file, without also reading the
+    # Dockerfile. The values match container/Dockerfile's instruction
+    # exactly, and distribution/compose fails the build if this key goes
+    # missing.
+    healthcheck:
+      test: ["CMD", "/backup-manager", "status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # The declared graceful shutdown period (issue #167). `serve` cancels
+    # one shared shutdown context on SIGTERM and gives the HTTP server and
+    # the scheduler loop apps/common/webhost/serve.DefaultShutdownGrace to
+    # wind down; this is that budget plus room for the journal's final
+    # write, so Docker's own SIGKILL always arrives after the process has
+    # finished rather than during it. Without this line the value is
+    # Docker's 10s default, which is a default and not a contract.
+    stop_grace_period: 30s
 
     # Deliberately NO ports: here: mapping this to a network is now
     # web-ui's job, over `internal`, never to the host directly. This is
@@ -234,7 +333,7 @@ services:
     # below), set explicitly here via UPSTREAM_ADDR anyway so the
     # dependency is visible in this file, not just in the binary's own
     # default.
-    command: ["/backup-manager-web", "serve-ui"]
+    command: ["/backup-manager-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
 
     <<: *security
 
@@ -250,11 +349,29 @@ services:
 
     environment:
       TMPDIR: /tmp
+      TZ: ${TZ:-UTC}
       # Published to the host (see `ports:` below); LISTEN_ADDR is this
       # container's own internal bind address, always :8080 regardless of
       # what host port LISTEN_PORT maps it to.
       LISTEN_ADDR: ":8080"
       UPSTREAM_ADDR: "http://rclone-manager:8080"
+
+      # Runtime UI bundle selection (issue #180, owned by #167). Left
+      # unset, this container serves the bundle compiled into the binary,
+      # which is the shared UI's generic bridge. Set UI_DIR to a bundle
+      # directory mounted into this container, or UI_ROOT to a directory
+      # of per-profile bundles (the one served is <UI_ROOT>/<profile>), to
+      # serve a provider's own bridge instead.
+      #
+      # The reason this is an environment variable rather than a build
+      # argument is the whole point: section 3.7 requires every provider
+      # package to carry the exact same core binary, so the bridge has to
+      # be chosen at run time. apps/generic/tests/uibundle proves one
+      # built binary serves three different bridges with an unchanged
+      # sha256. An unusable UI_DIR/UI_ROOT is a hard start failure, never
+      # a silent fall back to the embedded bundle.
+      UI_DIR: ${UI_DIR:-}
+      UI_ROOT: ${UI_ROOT:-}
 
     # No volumes at all: this service never reads config.yaml, the SSH
     # key, known_hosts, or either data directory - it only ever serves
@@ -275,6 +392,11 @@ services:
       timeout: 5s
       start_period: 5s
       retries: 3
+
+    # Shorter than the engine's: this container holds no state and has
+    # nothing to flush, so all it has to finish is whatever request is
+    # already in flight through its reverse proxy.
+    stop_grace_period: 15s
 
     # The generic Web UI/API listener (docs/EPIC-B-multi-nas.md §9.2) -
     # the ONLY published port in this file. Bind to a loopback-only host

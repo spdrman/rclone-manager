@@ -1,0 +1,280 @@
+# The canonical runtime contract
+
+Issue #167 (B6.3), EPIC B #81 Phase 6.
+
+`container/compose.yaml` is the authoritative definition of how this product
+runs. Every other deployment artifact in this repository derives from it, and
+`distribution/compose` fails the build when one of them stops agreeing.
+
+"Authoritative" here means a check, not a path. Before this issue the file was
+correct, carefully reasoned and thoroughly commented, and none of that was
+mechanically true: its security posture was asserted in a header comment, its
+field set was whatever had accumulated, and an adapter agreeing with it was a
+matter of review. `distribution/compose/runtime-contract.json` is the
+contract-shaped version, and the suite next to it is what makes the file
+authoritative.
+
+## The standardised field set
+
+Every field below must be declared. Deleting one fails
+`TestCanonicalDefinitionDeclaresEveryRequiredField` by name, with the reason
+the contract gives for requiring it, and
+`TestRequiredFieldCheckFailsWhenAFieldIsRemoved` removes each one in turn to
+prove the check can actually see it go.
+
+| field | where | what it is |
+|---|---|---|
+| `image-reference` | both services | one canonical image, named identically by both, so `command` is the only difference between them |
+| `command-and-runtime-profile` | both services | the command **and** `--profile=<name>`, standardised as one field |
+| `listen-port` | web UI | the one published port; the engine deliberately publishes none |
+| `health-check` | both services | declared here, not inherited from the image and described in a comment |
+| `graceful-shutdown-period` | both services | `stop_grace_period`: 30s for the engine, 15s for the UI host |
+| `restart-policy` | both services | `unless-stopped` |
+| `ownership` | both services | explicit `user: PUID:PGID` |
+| `explicit-writable-paths` | both services | `read_only: true`, which is what makes the writable paths explicit |
+| `timezone` | engine | `TZ`, because retention is evaluated against calendar boundaries |
+| `private-state-mount` | engine | `/data/state` |
+| `backup-data-mount` | engine | `/data/backups` |
+| `configuration-mount` | engine | `/etc/backup-manager/config.yaml`, read-only |
+| `secret-file-mount` | engine | `/etc/backup-manager/id_ed25519`, read-only |
+| `resource-expectations` | document | `x-canonical-runtime.resources` |
+| `supported-architectures` | document | `x-canonical-runtime.architectures` |
+| `digest-policy` | document | `x-canonical-runtime.digest_policy` |
+| `contract-version` | document | `x-canonical-runtime.contract` |
+| `runtime-profiles` | document | `x-canonical-runtime.profiles` |
+
+### The two mounts that must never contain one another
+
+`/data/state` holds the lifecycle journal, the local-authentication
+administrator record and nothing an operator would ever hand to somebody else.
+`/data/backups` is a share people are given access to. Putting either inside
+the other puts the state database and the Argon2id password hash into a
+directory whose whole purpose is to be shared, so
+`TestPrivateStateAndBackupDataAreSeparateMounts` checks containment both ways,
+and checks that its own containment helper is not vacuous.
+
+## The prohibition list
+
+The canonical definition and every derived artifact are checked against all of
+these. None may be required:
+
+```text
+privileged: true
+network_mode: host
+host PID namespace
+host IPC namespace
+/var/run/docker.sock (or /run/docker.sock)
+unbounded host filesystem access (/, /etc, /usr, /var, /boot, /proc, /sys, /root, /home)
+cap_add
+seccomp / AppArmor unconfined
+```
+
+An absent setting and an unnecessary setting are different claims, so the
+prohibition list is checked two ways. Statically,
+`TestProhibitionCheckFiresOnEveryProhibitedSetting` injects each prohibited
+setting into a copy of the real definition and requires the matching rule to
+fire and to name the service and the value: a rule nobody has watched fail is a
+comment. And `TestProhibitionScanSeesKeysTheParserHasNoFieldFor` covers the
+specific way a check like this fails open, which is parsing compose into a
+struct that has no field for `privileged` on a service nobody modelled.
+
+At runtime, the existing `apps/generic/tests/dockercli` suite runs the real
+built image with none of them and completes real work.
+
+Any future exception needs its own security review. A thin distribution adapter
+cannot introduce one: the prohibition rules run against every registered
+artifact, and `TestEveryComposeArtifactInTheTreeIsRegistered` fails when a
+compose file exists in the tree that nothing registered.
+
+## Runtime profiles
+
+A runtime profile is how one executable changes host-dependent behaviour
+without becoming a second build.
+
+```
+backup-manager-web serve    --profile=generic
+backup-manager-web serve    --profile=ugos --trusted-gateway=10.0.0.0/8
+backup-manager-web serve-ui --profile=ugos --ui-root=/usr/share/backup-manager/ui
+```
+
+A profile may change exactly four things:
+
+- a trusted native authentication gateway,
+- a provider notification bridge,
+- a platform launch or navigation bridge (which UI bundle is served),
+- platform capability reporting.
+
+It may never change backup lifecycle, retention or validation semantics, and it
+may never change authorization semantics either. A profile can supply an
+identity; it cannot decide what that identity may do.
+
+That is enforced two ways. Structurally, `profile.Profile` may declare no field
+outside an allow-list, and the checker is proved non-vacuous against a
+deliberately forked profile carrying `RetentionTiers` and `LifecycleStates`.
+Behaviourally, `apps/common/webhost/serve/parity_test.go` stands up one engine
+per profile over **one shared backend** and compares whole response bodies on
+the lifecycle, retention, validation and storage reads. Its own positive
+control is `/api/v1/system/capabilities`, which must differ, because reporting
+what the host can do is one of the four things a profile is allowed to change.
+
+Profile dispatch is startup-time configuration. There is no per-request
+profile indirection to pay for, and the parity suite would show one if there
+were: it drives every route through a real listener rather than calling a
+handler.
+
+Selecting an unknown profile is refused with exit code 2, before anything opens
+a file or a listener. There is no fallback to `generic`: a deployment that
+asked for `ugos` and silently got the generic authentication story is the
+outcome that refusal exists to prevent.
+
+### The trusted-gateway boundary
+
+`--profile=ugos` declares that an identity header set by the platform gateway
+may be believed. It is believed **only** from a network source the deployment
+declared:
+
+- a request from outside `--trusted-gateway` is refused with
+  `ErrUntrustedPeer`, its identity header is never read, and the refused
+  `AuthContext` never carries the forged username;
+- a request from inside it with no identity is refused with
+  `ErrNoGatewayIdentity`, which is a different error on purpose: one is an
+  attack and the other is a misconfigured gateway;
+- a remote address that does not parse is untrusted, never trusted by accident;
+- `--profile=ugos` with **no** `--trusted-gateway` refuses to start at all,
+  because without a declared peer there is no gateway, only a header anyone on
+  the LAN can set.
+
+`CompiledGateway.Sanitize` strips the identity header from an untrusted
+request, so "stripped or ignored" is literally true rather than a description
+of the authenticator's behaviour. Its positive control checks that the same
+header from the *trusted* peer survives, so the test is about trust and not
+about a function that deletes everything it sees.
+
+EPIC C's #92 proves the same boundary against the real UGOS gateway on real
+hardware. This side needs no UGREEN device: the synthetic trusted peer is
+loopback and the synthetic untrusted peer is everything else.
+
+## Runtime-selected UI bundles
+
+Issue #180. `serve-ui` used to embed one bundle with `go:embed` and offer no
+alternative, and `ui/shared/vite.config.ts` picks the provider shell at build
+time from `VITE_PLATFORM`. Together those meant shipping Synology's bridge
+required compiling a Synology-specific binary, and section 3.7 requires every
+provider package to carry the exact same core binary. The choice was between
+the wrong bridge and a forbidden build.
+
+The bundle is now resolved at run time, in this order:
+
+1. `--ui-dir PATH` (`$UI_DIR`), an explicit directory. Wins outright.
+2. `--ui-root PATH` (`$UI_ROOT`) plus the selected profile: the bundle served
+   is `PATH/<profile>`.
+3. the bundle compiled into the binary.
+
+A configured `--ui-dir` or `--ui-root` that turns out to be unusable is a hard
+start failure, never a silent fall back to the embedded bundle. "Unusable"
+means missing, not a directory, or without an `index.html` — an empty directory
+is exactly what a bind mount that did not mount produces, and serving it would
+answer every route with 404 instead of saying what went wrong.
+
+`ui/shared/scripts/build-bundles.mjs` (`npm run build:bundles`) builds one
+bundle per provider into `dist-bundles/<provider>/`, which is what a package
+ships beside the binary.
+
+`apps/generic/tests/uibundle` proves the property that matters against a real
+built artifact rather than against a function: one binary serves the embedded
+bundle, two different profile-selected bundles and one package-supplied
+bundle, and its sha256 is unchanged afterwards. A second test builds the same
+source twice with a provider named in the environment and requires the two
+digests to be identical, with a control proving the comparison can see a real
+change.
+
+**What this does not yet do.** The canonical image still carries only the
+generic bundle. Shipping all seven would add roughly 2.1 MB to a 43 MB image
+against a gated 5% budget of about 2.15 MB, which is inside by roughly 12 KB
+and therefore not a margin. Converting each adapter to ship its own bundle,
+and re-arguing the image-size budget with a real measurement, is #169's work.
+The blocking constraint is gone; the packaging is #169's to do.
+
+## Digest policy
+
+`x-canonical-runtime.digest_policy` names `container/release-manifest.json`,
+which records the image digest and the binary SHA-256 per architecture. Deploy
+by digest, not by tag: a tag can be moved, a digest cannot.
+
+`TestArchitecturesAgreeAcrossTheThreePlacesTheyAreWrittenDown` holds the
+architectures declared here, in `distribution/packaging/canonical.json` and in
+the release manifest to one value, so "the same source revision produces
+linux/amd64 and linux/arm64" is checkable rather than asserted.
+
+## The engine plus web-ui deviation, and what it costs
+
+`container/compose.yaml` runs two services from one image. The engine has no
+published port; `web-ui` serves the static UI and reverse-proxies `/api/v1` and
+`/health` to the engine over a private bridge network. It is the only service
+with a LAN-facing port.
+
+That is a project-owner requirement, adopted for network isolation, and it is
+in tension with the refactor's "one production application process wherever
+practical". The tension was resolved in favour of keeping it: the split is
+already shipped, it is not a new proxy, it runs the same binary from the same
+image with no second runtime, and it satisfies both absolute rules (one
+canonical Go executable per architecture, no production Node server). The
+performance contract prohibits **adding** a data-path hop, and "one process
+wherever practical" is explicitly qualified.
+
+What #167 owed was the measurement, because an already-shipped hop whose cost
+nobody has measured is indistinguishable from one that is fine.
+
+`apps/generic/tests/perfbaseline/proxycost_test.go` (`PERF_PROXY_COST=1`) runs
+the same read the Phase 6 baseline times, twice against the same engine
+process: once directly, once through a real `serve-ui` process proxying to it
+exactly as compose wires them.
+
+Measured on `darwin-arm64-mac17-2`, workload `phase6-baseline-v1`,
+`GET /api/v1/backup-sets` (6,438-byte response, 400 timed samples after 40
+warmups), five runs:
+
+| | direct p50 | proxied p50 | direct p95 | proxied p95 | hop p50 | hop p95 |
+|---|---|---|---|---|---|---|
+| median of 5 | 0.062 ms | 0.087 ms | 0.082 ms | 0.128 ms | **0.025 ms** | **0.047 ms** |
+| range | 0.061-0.063 | 0.085-0.088 | 0.080-0.082 | 0.128-0.135 | 0.023-0.026 | 0.046-0.055 |
+
+So the hop costs about **25 microseconds at p50 and 47 microseconds at p95** on
+this host, on a read that itself takes 62 to 82 microseconds. In relative terms
+that is a real cost — roughly 40% of a very fast loopback read — and in
+absolute terms it is well under a tenth of a millisecond on a request whose
+end-to-end budget is dominated by the browser and the network in front of it.
+
+Two things worth noting rather than burying:
+
+- The number lines up with `docs/perf/gate.json`'s own reasoning. #165 set the
+  API-read noise floor at 0.05 ms and justified it as "below the cost of the
+  cheapest structural regression this gate exists to catch, an added loopback
+  proxy hop." The measured hop is 0.047 ms, which is just under that floor. The
+  floor was set from measurement and it turns out to be tight against the
+  thing it was sized for, which is worth knowing before anyone adds a second
+  hop.
+- The harness has one assertion, and it is there because the most misleading
+  result it could produce is a hop cost of roughly zero from a misconfigured
+  upstream answering out of the UI host's own static handler. It fails unless
+  both paths return the same number of bytes.
+
+**The line this holds.** No further hop, no sidecar, no second runtime. A
+second proxy would double a cost that is already about half the read.
+
+## Migration from the previous definition
+
+Nothing was renamed and nothing was removed, so an existing deployment keeps
+working with no change. What is new is additive:
+
+| addition | effect on an existing deployment |
+|---|---|
+| `--profile=${RUNTIME_PROFILE:-generic}` on both commands | none; `generic` is what the previous build did |
+| `TZ: ${TZ:-UTC}` | none; UTC is what the image defaulted to |
+| `stop_grace_period` | the engine now gets 30s instead of Docker's 10s default, so a shutdown during a journal write is less likely to be killed mid-write |
+| explicit `healthcheck` on the engine | none; identical to the image's own HEALTHCHECK instruction |
+| `UI_DIR` / `UI_ROOT` on `web-ui` | none when unset, which is the default |
+| `x-canonical-runtime` | none at runtime; compose ignores unknown `x-` keys |
+
+No mount, environment variable or host path changed, so there is no migration
+path to test and nothing to roll back.

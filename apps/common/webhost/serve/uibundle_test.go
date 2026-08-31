@@ -20,8 +20,8 @@ import (
 // this never has to change to serve a different bridge.
 func embedded() fs.FS {
 	return fstest.MapFS{
-		"index.html":     &fstest.MapFile{Data: []byte(`<!doctype html><title>generic</title>`)},
-		"assets/app.js":  &fstest.MapFile{Data: []byte(`export const bridge = "generic";`)},
+		"index.html":    &fstest.MapFile{Data: []byte(`<!doctype html><title>generic</title>`)},
+		"assets/app.js": &fstest.MapFile{Data: []byte(`export const bridge = "generic";`)},
 	}
 }
 
