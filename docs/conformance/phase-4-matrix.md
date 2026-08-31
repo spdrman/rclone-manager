@@ -5,8 +5,12 @@ of a real run of `apps/common/packaging`'s conformance suite, and the suite fail
 if what is checked in differs from what a fresh run produces. To regenerate:
 
 ```bash
-cd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -run TestCrossProviderConformanceMatrix
+cd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix
 ```
+
+`-count=1` is not decoration. The checks read files all over the tree and the test
+cache keys on this module's own inputs, so a run after editing a provider can be
+served from the cache and quietly regenerate nothing.
 
 This is the record section 68's INTEGRATION step asks for, and the answer to
 issue #86's fourth acceptance criterion, "unsupported capabilities are explicitly
@@ -32,6 +36,26 @@ trusting them: every one of them still has its check run, and a declaration the
 repository has outgrown fails the build. A provider cannot quietly drop a
 capability by omitting it either, because omission is itself a failure.
 
+## Whose gate a column counts towards
+
+Every column also declares the EPIC whose gate consumes it. Six of them are EPIC
+B's, and the Phase 4 Exit Gate is computed over those six and over nothing else:
+Generic Docker, TrueNAS, Unraid, OpenMediaVault, Synology DSM and Proxmox VE, the
+same six #86 and #81 name.
+
+UGOS is EPIC D's. Its packaging is #83 (D1.2) since the UGOS split, so it cannot
+be part of an EPIC B gate: an EPIC B phase that waits on a package built on
+hardware nobody in this repository owns is a phase that cannot close. It is still
+a column here, and still checked on exactly the same terms as every other one,
+because the alternative was deleting it. A deleted column reports no blockers, it
+reports nothing, and nothing reads as clean. The two-directional store-packaging
+check is the concrete case: it is what caught UGOS claiming app-store packaging
+with no UPK behind it, and it only works while there is a UGOS column for it to
+read.
+
+So drift in a UGOS declaration is still a red build, and it is still EPIC D's to
+fix. What it is not is a Phase 4 result.
+
 ## What is blocking today
 
 - **#174** — `container/release-manifest.json` pins commit `c51a07f`, which is not
@@ -55,10 +79,16 @@ capability by omitting it either, because omission is itself a failure.
   every cell resolved from one is `BLOCKED` on this rather than `PASS`.
 - **#83** — work package 4.2's UGOS UPK moved out of this EPIC into EPIC D and is
   still open. `apps/ugos/` holds the frontend bridge and nothing else: no
-  `project.yaml`, no Compose, no icon, no architecture image tar. So UGOS is the
-  one Phase 4 Exit Gate provider with no package in this repository, and its
-  packaging cells are `BLOCKED` rather than passing. **The Phase 4 Exit Gate is
-  not met while that is true**, whatever the rest of this table says.
+  `project.yaml`, no Compose, no icon, no architecture image tar, so its packaging
+  cells are `BLOCKED` rather than passing. Those blockers are EPIC D's, and the
+  Phase 4 Exit Gate below is not computed over them.
+
+What holds the Phase 4 Exit Gate open, then, is `#174` and `#180`, and both are
+EPIC B's own work. No cell of the six providers EPIC B claims fails: the suite
+reddens the build if one does, so a `FAIL` in the table below cannot survive
+long enough to be read here. The generated **Phase 4 Exit Gate** section states
+the verdict over those six, and lists every cell holding it open with the issue
+tracking it.
 
 ## Nothing here is a certification
 
@@ -71,19 +101,19 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 
 ### Support tiers (§4A)
 
-| Provider | Tier | Work package | Acceptance procedure |
-|---|---|---|---|
-| UGOS Pro | A | 4.2 | `docs/acceptance/ugos-local-notification.md` |
-| Synology DSM | B | 4.4 | `docs/acceptance/synology-dsm-package-lifecycle.md` |
-| TrueNAS | B | 4.3 | `docs/acceptance/truenas-provider-acceptance.md` |
-| Unraid | B | 4.3 | `docs/acceptance/unraid-provider-acceptance.md` |
-| Generic Docker | C | 4.1 | `none (automated instead)` |
-| OpenMediaVault | C | 4.3 | `docs/acceptance/openmediavault-provider-acceptance.md` |
-| Proxmox VE | C | 4.5 | `docs/acceptance/proxmox-ve-deployment.md` |
+| Provider | Tier | Gated by | Work package | Acceptance procedure |
+|---|---|---|---|---|
+| UGOS Pro | A | EPIC D (reported here, gated there) | 4.2 | `docs/acceptance/ugos-local-notification.md` |
+| Synology DSM | B | EPIC B (Phase 4) | 4.4 | `docs/acceptance/synology-dsm-package-lifecycle.md` |
+| TrueNAS | B | EPIC B (Phase 4) | 4.3 | `docs/acceptance/truenas-provider-acceptance.md` |
+| Unraid | B | EPIC B (Phase 4) | 4.3 | `docs/acceptance/unraid-provider-acceptance.md` |
+| Generic Docker | C | EPIC B (Phase 4) | 4.1 | `none (automated instead)` |
+| OpenMediaVault | C | EPIC B (Phase 4) | 4.3 | `docs/acceptance/openmediavault-provider-acceptance.md` |
+| Proxmox VE | C | EPIC B (Phase 4) | 4.5 | `docs/acceptance/proxmox-ve-deployment.md` |
 
 ### Per-capability results
 
-| Capability | UGOS Pro | Synology DSM | TrueNAS | Unraid | Generic Docker | OpenMediaVault | Proxmox VE |
+| Capability | UGOS Pro (EPIC D) | Synology DSM | TrueNAS | Unraid | Generic Docker | OpenMediaVault | Proxmox VE |
 |---|---|---|---|---|---|---|---|
 | Provider identified correctly | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Provider package metadata present | BLOCKED | PASS | PASS | PASS | PASS | PASS | PASS |
@@ -120,13 +150,38 @@ platforms behaves. `docs/acceptance/` is where that gets decided.
 | BLOCKED | 27 |
 | FAIL | 0 |
 
+### Phase 4 Exit Gate
+
+Computed over the 6 providers EPIC B claims, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
+
+**Not met.** 0 cell(s) failed and 10 could not be decided, every one of them in a column EPIC B claims:
+
+| Provider | Capability | Outcome | Tracked by |
+|---|---|---|---|
+| Synology DSM | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Synology DSM | Embedded window | BLOCKED | #180 |
+| Synology DSM | App-store packaging | BLOCKED | #180 |
+| TrueNAS | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| TrueNAS | App-store packaging | BLOCKED | #180 |
+| Unraid | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Unraid | App-store packaging | BLOCKED | #180 |
+| Generic Docker | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| OpenMediaVault | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+| Proxmox VE | Release manifest well-formed and reachable (repository-wide) | BLOCKED | #174 |
+
+**UGOS Pro is EPIC D's column** (work package 4.2).
+All 23 of its cells are decided by the same runner, on the same terms as every
+other column, and reported in full below; 17 are blocked today, on #174 and #83.
+None of them is in the verdict above. A capability EPIC D owns cannot hold
+EPIC B's Phase 4 open, and an EPIC D column that goes green cannot close it.
+
 ### Every cell that is not a plain PASS
 
 Section 63A's requirement in full: an unsupported capability is reported, with a
 reason, rather than skipped. Every row below is a cell this run did not pass, and
 why.
 
-#### UGOS Pro (Tier A)
+#### UGOS Pro (Tier A, reported here, gated by EPIC D)
 
 | Capability | Outcome | Why |
 |---|---|---|
@@ -148,7 +203,7 @@ why.
 | App-store packaging | BLOCKED | #83 — The bridge claims it, and section 4A promises it, but no UPK exists in this repository yet. Passing on the bridge flag alone would be exactly the kind of claim the store-artifact half of this check exists to refuse. |
 | Storage picker | BLOCKED | #83 — Same as native-auth: declared in a bridge no shipped artifact loads. |
 
-#### Synology DSM (Tier B)
+#### Synology DSM (Tier B, gated by EPIC B's Phase 4)
 
 | Capability | Outcome | Why |
 |---|---|---|
@@ -168,7 +223,7 @@ why.
 | App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. The shared folder is chosen once at install time through DSM, not browsed from inside the app. |
 
-#### TrueNAS (Tier B)
+#### TrueNAS (Tier B, gated by EPIC B's Phase 4)
 
 | Capability | Outcome | Why |
 |---|---|---|
@@ -185,7 +240,7 @@ why.
 | App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. questions.yaml asks for the dataset paths at install time; the running app does not browse pools. |
 
-#### Unraid (Tier B)
+#### Unraid (Tier B, gated by EPIC B's Phase 4)
 
 | Capability | Outcome | Why |
 |---|---|---|
@@ -202,7 +257,7 @@ why.
 | App-store packaging | BLOCKED | #180 — The store artifacts are real and checked in, and the bridge opts in, but no artifact this repository produces loads that bridge: ui/shared/vite.config.ts picks the shell at build time and defaults to generic, and serve-ui serves one go:embed'ed bundle with no flag to serve another. So a user who installs through the platform's own store is still told this is a Docker Compose deployment, which is the defect this check was written to catch. #180 tracks giving serve-ui a way to select a bundle. |
 | Storage picker | UNSUP | Tier B. Community Applications collects the paths at install time; the app does not browse shares. |
 
-#### Generic Docker (Tier C)
+#### Generic Docker (Tier C, gated by EPIC B's Phase 4)
 
 | Capability | Outcome | Why |
 |---|---|---|
@@ -222,7 +277,7 @@ why.
 | App-store packaging | UNSUP | Tier C. There is no store; this is the raw compose deployment. |
 | Storage picker | UNSUP | Tier C. Manual path entry, because no host volume API exists to browse. |
 
-#### OpenMediaVault (Tier C)
+#### OpenMediaVault (Tier C, gated by EPIC B's Phase 4)
 
 | Capability | Outcome | Why |
 |---|---|---|
@@ -239,7 +294,7 @@ why.
 | App-store packaging | UNSUP | Tier C. A Compose deployment profile, not an omv-extras package. Section 4A defers the Debian plugin. |
 | Storage picker | UNSUP | Tier C. Paths are set once in the env file; the app does not browse OMV filesystems. |
 
-#### Proxmox VE (Tier C)
+#### Proxmox VE (Tier C, gated by EPIC B's Phase 4)
 
 | Capability | Outcome | Why |
 |---|---|---|

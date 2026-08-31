@@ -15,8 +15,11 @@ import (
 )
 
 // This file is issue #86 (B4.5)'s half of the Phase 4 TDD Gate: one
-// conformance run across all seven providers, reporting pass/fail per
-// capability rather than a single opaque result.
+// conformance run across every provider this matrix declares, reporting
+// pass/fail per capability rather than a single opaque result. Six of
+// those columns are the Phase 4 Exit Gate's own; the UGOS column is EPIC
+// D's #83 (D1.2), run and reported here on the same terms and gated
+// there, which is what Provider.Epic records.
 //
 // The shape is the design work, not the checks. Work package 4.3 already
 // made most of the individual rules executable (conformance_test.go), and
@@ -909,22 +912,51 @@ func bridgeReachesAShippedArtifact(p providerUnderTest) (bool, string) {
 // ---------------------------------------------------------------------
 
 // phaseFourExitGateProviders is the §72 Phase 4 Exit Gate list, verbatim
-// and in its own order. Hard-coded rather than derived from
-// conformance.json on purpose: a list derived from the file it is meant
-// to check cannot catch a provider being dropped from it.
+// and in its own order, and the same six #86 and #81 name. Hard-coded
+// rather than derived from conformance.json on purpose, and for two
+// reasons now. A list derived from the file it is meant to check cannot
+// catch a provider being dropped from that file; and since a column also
+// declares whose gate it counts towards, a list derived from the file
+// could not catch a claimed provider being quietly re-homed to another
+// epic either, which is a cheaper way to make a gate green than fixing
+// the provider.
+//
+// Six, not seven. UGOS was the seventh until the UGOS split moved its
+// packaging to EPIC D's #83 (D1.2), and an EPIC B gate that waits on a
+// package built on hardware nobody in this repository owns is a gate that
+// cannot close. It is still a column of this matrix, declared to EPIC D:
+// checked, resolved and reported like every other one, and in nobody's
+// Phase 4 verdict.
 var phaseFourExitGateProviders = []string{
-	"generic", "ugos", "truenas", "unraid", "openmediavault", "synology", "proxmox",
+	"generic", "truenas", "unraid", "openmediavault", "synology", "proxmox",
 }
 
 func TestTheMatrixCoversEveryPhaseFourExitGateProvider(t *testing.T) {
 	c := MustLoadConformance()
 	for _, want := range phaseFourExitGateProviders {
-		if _, ok := c.Providers[want]; !ok {
+		p, ok := c.Providers[want]
+		if !ok {
 			t.Errorf("the Phase 4 Exit Gate names %s and conformance.json declares nothing for it", want)
+			continue
+		}
+		if p.Epic != PhaseFourEpic {
+			t.Errorf("the Phase 4 Exit Gate names %s and conformance.json declares it to EPIC %s, so the gate would not be computed over it", want, p.Epic)
 		}
 	}
-	if len(c.Providers) != len(phaseFourExitGateProviders) {
-		t.Errorf("conformance.json declares %d providers, the exit gate names %d", len(c.Providers), len(phaseFourExitGateProviders))
+	claimed := c.ProviderIDsFor(PhaseFourEpic)
+	if len(claimed) != len(phaseFourExitGateProviders) {
+		t.Errorf("conformance.json declares %d providers to EPIC %s (%v), the exit gate names %d (%v)", len(claimed), PhaseFourEpic, claimed, len(phaseFourExitGateProviders), phaseFourExitGateProviders)
+	}
+
+	// A column another epic owns is allowed, and is the point of the
+	// epic field, but it has to say which epic rather than defaulting
+	// into one: an empty epic would silently leave a column in nobody's
+	// gate at all.
+	epicRe := regexp.MustCompile(`^[A-Z]$`)
+	for _, id := range c.ProviderIDs() {
+		if !epicRe.MatchString(string(c.Providers[id].Epic)) {
+			t.Errorf("%s declares epic %q, want a single EPIC letter such as %q", id, c.Providers[id].Epic, PhaseFourEpic)
+		}
 	}
 }
 
@@ -955,60 +987,80 @@ func TestEveryCapabilityHasACheck(t *testing.T) {
 	}
 }
 
+// auditDeclarations is the completeness guard's body, returning findings
+// rather than reporting them, so it can be pointed at a provider a test
+// built as easily as at one conformance.json declares. Every guard in
+// this package that can fail is worth being able to prove still fires,
+// and this one is worth it twice over: it is the guard the whole design
+// rests on, and it has to keep applying to a column another epic owns.
+func auditDeclarations(p Provider, caps []string) []string {
+	var findings []string
+	add := func(format string, args ...any) { findings = append(findings, fmt.Sprintf(format, args...)) }
+
+	for _, id := range caps {
+		cell, ok := p.Cells[id]
+		if !ok {
+			add("declares no outcome for %q; an undeclared capability reads as passing, which is exactly what §63A forbids", id)
+			continue
+		}
+		switch cell.Declared {
+		case DeclSupported:
+		case DeclUnsupported, DeclNotApplicable:
+			if strings.TrimSpace(cell.Reason) == "" {
+				add("%q is declared %q with no reason; an unexplained exemption is indistinguishable from an oversight", id, cell.Declared)
+			}
+		case DeclBlocked:
+			if strings.TrimSpace(cell.Reason) == "" {
+				add("%q is declared blocked with no reason", id)
+			}
+			if !regexp.MustCompile(`^#\d+$`).MatchString(cell.Blocker) {
+				add("%q is declared blocked with blocker %q, want a tracked issue like #174", id, cell.Blocker)
+			}
+			if strings.TrimSpace(cell.ExpectedDetail) == "" {
+				add("%q is declared blocked on %s with no expectedDetail; without one the blocker excuses ANY failure of that check, including one that has nothing to do with it", id, cell.Blocker)
+			}
+		default:
+			add("%q is declared %q, which is not one of supported/unsupported/not-applicable/blocked", id, cell.Declared)
+		}
+		if cell.VerifiedBy != "" {
+			if err := VerifiedByReachable(cell.VerifiedBy); err != nil {
+				add("%q points verifiedBy at %s, which does not hold up: %v", id, cell.VerifiedBy, err)
+			}
+		}
+	}
+	for id := range p.Cells {
+		if _, ok := capabilityChecks[id]; !ok {
+			add("declares an outcome for %q, which is not a capability", id)
+		}
+	}
+	if p.Acceptance != "" {
+		if _, err := os.Stat(Path(p.Acceptance)); err != nil {
+			add("names acceptance procedure %s, which does not exist: %v", p.Acceptance, err)
+		}
+	}
+	if p.Tier != "A" && p.Tier != "B" && p.Tier != "C" {
+		add("declares §4A tier %q, want A, B or C", p.Tier)
+	}
+	sort.Strings(findings)
+	return findings
+}
+
 // TestEveryProviderDeclaresEveryCapability is the guard that makes the
 // whole design work. §63A's failure mode is a capability that is silently
 // missing from a result set, because absence reads as passing; the only
 // way to stop that is to make omission itself a failure.
+//
+// It runs over every column, including the ones another epic's gate
+// consumes. Which gate counts a column decides nothing about how hard the
+// column is checked.
 func TestEveryProviderDeclaresEveryCapability(t *testing.T) {
 	c := MustLoadConformance()
 	caps := c.CapabilityIDs()
 
 	for _, pid := range c.ProviderIDs() {
 		t.Run(pid, func(t *testing.T) {
-			p := c.Providers[pid]
-			for _, id := range caps {
-				cell, ok := p.Cells[id]
-				if !ok {
-					t.Errorf("declares no outcome for %q; an undeclared capability reads as passing, which is exactly what §63A forbids", id)
-					continue
-				}
-				switch cell.Declared {
-				case DeclSupported:
-				case DeclUnsupported, DeclNotApplicable:
-					if strings.TrimSpace(cell.Reason) == "" {
-						t.Errorf("%q is declared %q with no reason; an unexplained exemption is indistinguishable from an oversight", id, cell.Declared)
-					}
-				case DeclBlocked:
-					if strings.TrimSpace(cell.Reason) == "" {
-						t.Errorf("%q is declared blocked with no reason", id)
-					}
-					if !regexp.MustCompile(`^#\d+$`).MatchString(cell.Blocker) {
-						t.Errorf("%q is declared blocked with blocker %q, want a tracked issue like #174", id, cell.Blocker)
-					}
-					if strings.TrimSpace(cell.ExpectedDetail) == "" {
-						t.Errorf("%q is declared blocked on %s with no expectedDetail; without one the blocker excuses ANY failure of that check, including one that has nothing to do with it", id, cell.Blocker)
-					}
-				default:
-					t.Errorf("%q is declared %q, which is not one of supported/unsupported/not-applicable/blocked", id, cell.Declared)
-				}
-				if cell.VerifiedBy != "" {
-					if err := VerifiedByReachable(cell.VerifiedBy); err != nil {
-						t.Errorf("%q points verifiedBy at %s, which does not hold up: %v", id, cell.VerifiedBy, err)
-					}
-				}
-			}
-			for id := range p.Cells {
-				if _, ok := capabilityChecks[id]; !ok {
-					t.Errorf("declares an outcome for %q, which is not a capability", id)
-				}
-			}
-			if p.Acceptance != "" {
-				if _, err := os.Stat(Path(p.Acceptance)); err != nil {
-					t.Errorf("names acceptance procedure %s, which does not exist: %v", p.Acceptance, err)
-				}
-			}
-			if p.Tier != "A" && p.Tier != "B" && p.Tier != "C" {
-				t.Errorf("declares §4A tier %q, want A, B or C", p.Tier)
+			for _, finding := range auditDeclarations(c.Providers[pid], caps) {
+				t.Error(finding)
 			}
 		})
 	}
@@ -1025,13 +1077,25 @@ func TestCrossProviderConformanceMatrix(t *testing.T) {
 
 	for _, pid := range conf.ProviderIDs() {
 		put := providerUnderTest{id: pid, spec: conf.Providers[pid], canonical: canonical}
+		epic := conf.Providers[pid].Epic
 		t.Run(pid, func(t *testing.T) {
 			for _, cap := range conf.Capabilities {
 				t.Run(cap.ID, func(t *testing.T) {
 					r := resolve(put, cap, conf.Providers[pid].Cells[cap.ID])
 					m.Record(r)
 					t.Logf("%s: %s", r.Outcome, r.Detail)
-					if r.Outcome == OutcomeFail {
+					switch {
+					case r.Outcome != OutcomeFail:
+					case epic != PhaseFourEpic:
+						// Still a failure, and deliberately still red.
+						// A column another epic gates is not a column
+						// nobody checks: this is where the drift shows
+						// up when EPIC D ships #83 and half of these
+						// declarations stop being true. What it is NOT
+						// is a Phase 4 result, and the verdict below is
+						// computed so that it cannot become one.
+						t.Errorf("%s / %s: %s\n\nThis column is EPIC %s's, and the Phase 4 Exit Gate is not computed over it. It is checked here on the same terms as every other column, so this is a real failure and it is EPIC %s's to fix: update conformance.json's declaration rather than the check.", pid, cap.ID, r.Detail, epic, epic)
+					default:
 						t.Errorf("%s / %s: %s", pid, cap.ID, r.Detail)
 					}
 				})
@@ -1049,6 +1113,20 @@ func TestCrossProviderConformanceMatrix(t *testing.T) {
 			t.Errorf("%s produced %d results for %d capabilities", pid, len(m.Results[pid]), len(conf.Capabilities))
 		}
 	}
+
+	// The Phase 4 Exit Gate, computed over the columns EPIC B claims and
+	// over nothing else. A claimed target with no recorded result counts
+	// as a failure here rather than as an absence, because an unrun
+	// target reads as a passing one otherwise (#170).
+	v := m.Verdict(PhaseFourEpic)
+	if len(v.Providers) != len(phaseFourExitGateProviders) {
+		t.Errorf("the Phase 4 verdict was computed over %v, want the %d providers the exit gate names", v.Providers, len(phaseFourExitGateProviders))
+	}
+	for _, r := range v.Failures {
+		t.Errorf("Phase 4 Exit Gate: %s / %s failed: %s", r.Provider, r.Capability, r.Detail)
+	}
+	t.Logf("Phase 4 Exit Gate over %v: %d failed, %d blocked, met=%v. Informational columns, gated by another epic: %v",
+		v.Providers, len(v.Failures), len(v.Blocked), v.Met(), v.Informational)
 
 	compareOrUpdateReport(t, m)
 }
@@ -1145,5 +1223,5 @@ func compareOrUpdateReport(t *testing.T, m *Matrix) {
 		t.Logf("rewrote %s", MatrixReportPath)
 		return
 	}
-	t.Errorf("%s is out of date with a real run. Regenerate it with:\n\n\tcd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -run TestCrossProviderConformanceMatrix\n", MatrixReportPath)
+	t.Errorf("%s is out of date with a real run. Regenerate it with:\n\n\tcd apps/common && CONFORMANCE_UPDATE=1 GOWORK=off go test ./packaging/ -count=1 -run TestCrossProviderConformanceMatrix\n", MatrixReportPath)
 }

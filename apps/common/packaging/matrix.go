@@ -163,11 +163,39 @@ type ArchitectureClaim struct {
 	Architectures []string `json:"architectures"`
 }
 
+// Epic names the EPIC whose gate consumes a provider's column: the one
+// that has to be satisfied before that EPIC can close. It is not a
+// statement about who wrote the checks or where the column is reported.
+// Every column is decided by the same checks, on the same terms, whoever
+// owns it; this field only says whose gate the answer counts towards.
+//
+// It exists because those two things came apart. UGOS packaging is EPIC
+// D's #83 (D1.2) since the UGOS split, so a UGOS cell must not be able to
+// hold EPIC B's Phase 4 open, and #86 and #81 both now name six Phase 4
+// targets rather than seven. Dropping the column instead would have
+// thrown away a check that works: the two-directional store-packaging
+// rule is what caught UGOS claiming app-store packaging with no UPK
+// behind it, and a column that is simply absent reads as a clean one.
+//
+// Deliberately a free string rather than a checked set of epic names.
+// #170 asks for a matrix that accepts a target registered by another
+// EPIC without being modified, and an enum of the epics that exist today
+// is exactly the modification it asks to avoid.
+type Epic string
+
+// PhaseFourEpic is the EPIC whose gate the §72 Phase 4 Exit Gate is.
+// A column declared to any other epic is checked here, reported here,
+// and gated there.
+const PhaseFourEpic Epic = "B"
+
 // Provider is one column of the matrix.
 type Provider struct {
 	DisplayName string `json:"displayName"`
 	// Tier is the §4A support tier.
-	Tier        string   `json:"tier"`
+	Tier string `json:"tier"`
+	// Epic is the EPIC whose gate consumes this column. Every column is
+	// checked; only PhaseFourEpic's columns decide Phase 4.
+	Epic        Epic     `json:"epic"`
 	WorkPackage string   `json:"workPackage"`
 	Metadata    Metadata `json:"metadata"`
 	// ScanRoots are the directories the structural scanners run over,
@@ -220,6 +248,41 @@ func (c Conformance) ProviderIDs() []string {
 		return ids[i] < ids[j]
 	})
 	return ids
+}
+
+// ProviderIDsFor returns the providers whose gate is epic's, in the same
+// order as ProviderIDs. This is the set an epic's gate is computed over,
+// and it is a subset rather than the whole file on purpose: a column
+// another epic owns is reported alongside these and decides nothing here.
+func (c Conformance) ProviderIDsFor(epic Epic) []string {
+	var out []string
+	for _, id := range c.ProviderIDs() {
+		if c.Providers[id].Epic == epic {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// DisplayNames maps provider ids to their display names, in the order
+// given.
+func (c Conformance) DisplayNames(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, c.Providers[id].DisplayName)
+	}
+	return out
+}
+
+// CapabilityTitle returns a capability's human title, or its id when the
+// matrix has no such capability.
+func (c Conformance) CapabilityTitle(id string) string {
+	for _, cap := range c.Capabilities {
+		if cap.ID == id {
+			return cap.Title
+		}
+	}
+	return id
 }
 
 // CapabilityIDs returns the capability ids in declaration order.
@@ -281,6 +344,133 @@ func (m *Matrix) Count(o Outcome) int {
 	return n
 }
 
+// ---------------------------------------------------------------------
+// The gate
+// ---------------------------------------------------------------------
+
+// Verdict is one EPIC's gate over a finished matrix: the columns it was
+// computed over, the columns it deliberately was not, and every cell that
+// stops it being met.
+//
+// The exclusion is the whole point of the type. Before this existed the
+// gate was "did any cell anywhere fail", which quietly made EPIC B's
+// Phase 4 answerable to a column EPIC B does not own and cannot deliver:
+// UGOS packaging is #83, in EPIC D, on hardware nobody in this repository
+// has. Excluding a column from a verdict is not the same as excluding it
+// from the run, and it must not become that: an informational column is
+// checked, resolved and reported exactly like every other one.
+type Verdict struct {
+	Epic Epic
+	// Providers are the columns this epic claims, in report order.
+	Providers []string
+	// Informational are the columns another epic claims. They are
+	// reported and checked, and they never appear in Failures or Blocked
+	// however their cells resolve.
+	Informational []string
+	// Failures are the claimed cells that failed, plus any claimed cell
+	// the run never recorded at all. An unrun target must never read as a
+	// passing one (#170).
+	Failures []Result
+	// Blocked are the claimed cells that could not be decided. Not a
+	// pass, so the gate is not met while one stands, and not a failure
+	// either.
+	Blocked []Result
+}
+
+// Met reports whether the gate holds: every claimed cell decided, and
+// none of them failed.
+func (v Verdict) Met() bool { return len(v.Failures) == 0 && len(v.Blocked) == 0 }
+
+// Verdict computes epic's gate over this matrix.
+func (m *Matrix) Verdict(epic Epic) Verdict {
+	c := m.Conformance
+	v := Verdict{Epic: epic}
+	for _, pid := range c.ProviderIDs() {
+		if c.Providers[pid].Epic != epic {
+			v.Informational = append(v.Informational, pid)
+			continue
+		}
+		v.Providers = append(v.Providers, pid)
+		for _, cap := range c.Capabilities {
+			r, ok := m.Results[pid][cap.ID]
+			if !ok {
+				v.Failures = append(v.Failures, Result{
+					Provider:   pid,
+					Capability: cap.ID,
+					Outcome:    OutcomeFail,
+					Detail:     "no result recorded for a target this EPIC claims, so the run never decided it",
+				})
+				continue
+			}
+			switch r.Outcome {
+			case OutcomeFail:
+				v.Failures = append(v.Failures, r)
+			case OutcomeBlocked:
+				v.Blocked = append(v.Blocked, r)
+			}
+		}
+	}
+	return v
+}
+
+// Blockers returns the distinct blocker issues one provider's blocked
+// cells name, sorted.
+func (m *Matrix) Blockers(provider string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, cap := range m.Conformance.Capabilities {
+		if m.Results[provider][cap.ID].Outcome != OutcomeBlocked {
+			continue
+		}
+		b := m.Conformance.Providers[provider].Cells[cap.ID].Blocker
+		if b == "" || seen[b] {
+			continue
+		}
+		seen[b] = true
+		out = append(out, b)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CountFor is Count restricted to one provider.
+func (m *Matrix) CountFor(provider string, o Outcome) int {
+	n := 0
+	for _, r := range m.Results[provider] {
+		if r.Outcome == o {
+			n++
+		}
+	}
+	return n
+}
+
+// gateLabel says whose gate a column counts towards, for a reader of the
+// report rather than for the runner.
+func gateLabel(e Epic) string {
+	if e == PhaseFourEpic {
+		return "EPIC " + string(e) + " (Phase 4)"
+	}
+	return "EPIC " + string(e) + " (reported here, gated there)"
+}
+
+// gatedBy is gateLabel in the short form a heading can carry.
+func gatedBy(e Epic) string {
+	if e == PhaseFourEpic {
+		return "gated by EPIC " + string(e) + "'s Phase 4"
+	}
+	return "reported here, gated by EPIC " + string(e)
+}
+
+// columnLabel is a provider's heading in the report, marked with its epic
+// when that is not Phase 4's, so a reader of the widest table can see at a
+// glance which column is not part of the gate.
+func columnLabel(pr Provider) string {
+	if pr.Epic == PhaseFourEpic {
+		return pr.DisplayName
+	}
+	return fmt.Sprintf("%s (EPIC %s)", pr.DisplayName, pr.Epic)
+}
+
 var outcomeAbbrev = map[Outcome]string{
 	OutcomePass:            "PASS",
 	OutcomeFail:            "FAIL",
@@ -301,20 +491,20 @@ func (m *Matrix) Render() string {
 	var b strings.Builder
 
 	b.WriteString("### Support tiers (§4A)\n\n")
-	b.WriteString("| Provider | Tier | Work package | Acceptance procedure |\n|---|---|---|---|\n")
+	b.WriteString("| Provider | Tier | Gated by | Work package | Acceptance procedure |\n|---|---|---|---|---|\n")
 	for _, p := range providers {
 		pr := c.Providers[p]
 		acc := pr.Acceptance
 		if acc == "" {
 			acc = "none (automated instead)"
 		}
-		fmt.Fprintf(&b, "| %s | %s | %s | `%s` |\n", pr.DisplayName, pr.Tier, pr.WorkPackage, acc)
+		fmt.Fprintf(&b, "| %s | %s | %s | %s | `%s` |\n", pr.DisplayName, pr.Tier, gateLabel(pr.Epic), pr.WorkPackage, acc)
 	}
 
 	b.WriteString("\n### Per-capability results\n\n")
 	b.WriteString("| Capability |")
 	for _, p := range providers {
-		fmt.Fprintf(&b, " %s |", c.Providers[p].DisplayName)
+		fmt.Fprintf(&b, " %s |", columnLabel(c.Providers[p]))
 	}
 	b.WriteString("\n|---|")
 	for range providers {
@@ -333,6 +523,34 @@ func (m *Matrix) Render() string {
 	b.WriteString("| Outcome | Cells |\n|---|---|\n")
 	for _, o := range []Outcome{OutcomePass, OutcomePendingOperator, OutcomeUnsupported, OutcomeNotApplicable, OutcomeBlocked, OutcomeFail} {
 		fmt.Fprintf(&b, "| %s | %d |\n", o, m.Count(o))
+	}
+
+	b.WriteString("\n### Phase 4 Exit Gate\n\n")
+	v := m.Verdict(PhaseFourEpic)
+	fmt.Fprintf(&b, "Computed over the %d providers EPIC B claims, and over nothing else: %s.\n\n",
+		len(v.Providers), strings.Join(c.DisplayNames(v.Providers), ", "))
+	if v.Met() {
+		b.WriteString("**Met.** Every cell of every one of those columns was decided, and none of them failed.\n")
+	} else {
+		fmt.Fprintf(&b, "**Not met.** %d cell(s) failed and %d could not be decided, every one of them in a column EPIC B claims:\n\n", len(v.Failures), len(v.Blocked))
+		b.WriteString("| Provider | Capability | Outcome | Tracked by |\n|---|---|---|---|\n")
+		for _, r := range append(append([]Result{}, v.Failures...), v.Blocked...) {
+			tracked := c.Providers[r.Provider].Cells[r.Capability].Blocker
+			if tracked == "" {
+				tracked = "not tracked anywhere yet"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s |\n", c.Providers[r.Provider].DisplayName, c.CapabilityTitle(r.Capability), outcomeAbbrev[r.Outcome], tracked)
+		}
+	}
+	for _, pid := range v.Informational {
+		pr := c.Providers[pid]
+		blockers := m.Blockers(pid)
+		tracked := "nothing"
+		if len(blockers) > 0 {
+			tracked = strings.Join(blockers, " and ")
+		}
+		fmt.Fprintf(&b, "\n**%s is EPIC %s's column** (work package %s).\nAll %d of its cells are decided by the same runner, on the same terms as every\nother column, and reported in full below; %d are blocked today, on %s.\nNone of them is in the verdict above. A capability EPIC %s owns cannot hold\nEPIC %s's Phase 4 open, and an EPIC %s column that goes green cannot close it.\n",
+			pr.DisplayName, pr.Epic, pr.WorkPackage, len(c.Capabilities), m.CountFor(pid, OutcomeBlocked), tracked, pr.Epic, PhaseFourEpic, pr.Epic)
 	}
 
 	b.WriteString("\n### Every cell that is not a plain PASS\n\n")
@@ -357,7 +575,7 @@ func (m *Matrix) Render() string {
 		if len(rows) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\n#### %s (Tier %s)\n\n", pr.DisplayName, pr.Tier)
+		fmt.Fprintf(&b, "\n#### %s (Tier %s, %s)\n\n", pr.DisplayName, pr.Tier, gatedBy(pr.Epic))
 		b.WriteString("| Capability | Outcome | Why |\n|---|---|---|\n")
 		for _, r := range rows {
 			b.WriteString(r)

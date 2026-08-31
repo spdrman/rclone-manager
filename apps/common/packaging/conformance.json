@@ -15,6 +15,14 @@
     "or if the repository has quietly started satisfying something declared",
     "unsupported. The last of those is what stops this file rotting into fiction.",
     "",
+    "Every provider also declares the EPIC whose gate consumes its column. Six of",
+    "them are EPIC B's, which is what the section 72 Phase 4 Exit Gate is computed",
+    "over. UGOS is EPIC D's: its packaging is #83 (D1.2) since the UGOS split, so a",
+    "UGOS cell cannot hold Phase 4 open. It is still declared, still checked and",
+    "still reported here, on exactly the same terms as every other column, because",
+    "the check that caught UGOS claiming app-store packaging with no UPK behind it",
+    "only works while the column exists.",
+    "",
     "This file holds DECLARATIONS only. The checks that decide each cell live in",
     "matrix_test.go, keyed by capability id, and the two lists have to agree",
     "exactly."
@@ -50,6 +58,7 @@
     "generic": {
       "displayName": "Generic Docker",
       "tier": "C",
+      "epic": "B",
       "workPackage": "4.1",
       "metadata": { "kind": "compose", "root": "container", "compose": "compose.yaml", "env": ".env.example", "files": ["compose.yaml", "Dockerfile", ".env.example", "release-manifest.json"], "storeArtifacts": [] },
       "scanRoots": ["container"],
@@ -100,6 +109,7 @@
     "ugos": {
       "displayName": "UGOS Pro",
       "tier": "A",
+      "epic": "D",
       "workPackage": "4.2",
       "metadata": { "kind": "none", "root": "apps/ugos", "storeArtifacts": [] },
       "scanRoots": ["apps/ugos"],
@@ -134,6 +144,7 @@
     "synology": {
       "displayName": "Synology DSM",
       "tier": "B",
+      "epic": "B",
       "workPackage": "4.4",
       "metadata": {
         "kind": "spk", "root": "apps/synology",
@@ -193,6 +204,7 @@
     "truenas": {
       "displayName": "TrueNAS",
       "tier": "B",
+      "epic": "B",
       "workPackage": "4.3",
       "metadata": { "kind": "compose", "root": "apps/truenas", "compose": "compose/backup-manager.yaml", "files": ["README.md", "catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"], "storeArtifacts": ["catalog/app.yaml", "catalog/questions.yaml", "catalog/ix_values.yaml", "catalog/templates/docker-compose.yaml"] },
       "scanRoots": ["apps/truenas"],
@@ -227,6 +239,7 @@
     "unraid": {
       "displayName": "Unraid",
       "tier": "B",
+      "epic": "B",
       "workPackage": "4.3",
       "metadata": { "kind": "unraid-template", "root": "apps/unraid", "templates": ["template/backup-manager.xml", "template/backup-manager-ui.xml"], "files": ["README.md", "frontend/webui.json"], "storeArtifacts": ["template/backup-manager.xml", "template/backup-manager-ui.xml"] },
       "scanRoots": ["apps/unraid"],
@@ -261,6 +274,7 @@
     "openmediavault": {
       "displayName": "OpenMediaVault",
       "tier": "C",
+      "epic": "B",
       "workPackage": "4.3",
       "metadata": { "kind": "compose", "root": "apps/openmediavault", "compose": "compose/backup-manager.yml", "env": "compose/backup-manager.env", "files": ["README.md"], "storeArtifacts": [] },
       "scanRoots": ["apps/openmediavault"],
@@ -295,6 +309,7 @@
     "proxmox": {
       "displayName": "Proxmox VE",
       "tier": "C",
+      "epic": "B",
       "workPackage": "4.5",
       "metadata": { "kind": "compose", "root": "apps/proxmox", "compose": "compose/backup-manager.yml", "env": "compose/backup-manager.env", "files": ["README.md"], "storeArtifacts": [] },
       "scanRoots": ["apps/proxmox"],
