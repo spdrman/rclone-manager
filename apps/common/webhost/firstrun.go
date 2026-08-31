@@ -174,11 +174,13 @@ type completeFirstRunResponse struct {
 // it would make a brand-new instance permanently unconfigurable until
 // #92 lands, which is the opposite of this issue.
 //
-// It takes the same body POST /api/v1/backup-sets does, because the
-// operator is answering the same questions in the same wizard. What
-// differs is what happens underneath: a create folds a set into an
-// existing configuration, this one writes the first configuration there
-// has ever been.
+// It takes the backup-set SPEC that POST /api/v1/backup-sets also takes,
+// because the operator is answering the same questions in the same
+// wizard. Two things differ. Underneath, a create folds a set into an
+// existing configuration while this one writes the first configuration
+// there has ever been. On the wire, the create's body carries one field
+// this one's does not, run_immediately, because there is nothing running
+// to run it: see the decode below.
 func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 	if h.firstRun == nil || h.configured() {
 		writeError(w, http.StatusConflict, "ALREADY_CONFIGURED",
@@ -188,16 +190,21 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
 
-	var body backupSetRequest
+	var body backupSetSpec
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDecodeError(w, err, maxCreateBackupSetBodyBytes)
 		return
 	}
 
-	// RunImmediately is deliberately not forwarded: there is no
-	// BackupService to submit an operation to until activation below has
-	// happened, so honouring it here is not something this handler can
-	// promise. See core/service.FirstRun.CreateInitialConfig's own doc.
+	// The body is backupSetSpec, not backupSetRequest, and that is the
+	// contract's own shape rather than a convenience here: this operation
+	// takes api/v1/openapi.json's BackupSetSpec, which carries no
+	// run_immediately at all. There is no BackupService to submit an
+	// operation to until activation below has happened, so honouring the
+	// field is not something this handler can promise -- and a request
+	// field a contract declares and an endpoint ignores is worse than one
+	// it never declared, because a client has no way to find out. See
+	// core/service.FirstRun.CreateInitialConfig's own doc.
 	set, err := h.firstRun.CreateInitialConfig(r.Context(), service.CreateBackupSetRequest{
 		SourceName:         body.SourceName,
 		Name:               body.Name,

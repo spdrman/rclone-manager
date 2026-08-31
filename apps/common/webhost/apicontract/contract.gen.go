@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "bc3cf7e50ad1f25d66e7454c2ef6dbafded3c5c8dc849cf1c8dd27e8bbb6f481"
+const ContractSHA256 = "f22e17eda9b4c64363847ab93f21b5141560babdee764f41b943f1b62a1c075d"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -66,6 +66,8 @@ const (
 	ErrorCodeHostKeyProbeFailed            ErrorCode = "HOST_KEY_PROBE_FAILED"
 	ErrorCodeDestructiveOperationsDisabled ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
 	ErrorCodeInternal                      ErrorCode = "INTERNAL"
+	ErrorCodeAlreadyConfigured             ErrorCode = "ALREADY_CONFIGURED"
+	ErrorCodeNotConfigured                 ErrorCode = "NOT_CONFIGURED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -90,6 +92,8 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeHostKeyProbeFailed,
 	ErrorCodeDestructiveOperationsDisabled,
 	ErrorCodeInternal,
+	ErrorCodeAlreadyConfigured,
+	ErrorCodeNotConfigured,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -138,6 +142,8 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeHostKeyProbeFailed,
 	ErrorCodeDestructiveOperationsDisabled,
 	ErrorCodeInternal,
+	ErrorCodeAlreadyConfigured,
+	ErrorCodeNotConfigured,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -145,10 +151,11 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound},
 	"throttling":     {ErrorCodeRateLimited},
+	"unavailable":    {ErrorCodeNotConfigured},
 	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed},
 }
 
@@ -234,6 +241,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -245,6 +253,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -266,6 +275,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -279,6 +289,7 @@ var Endpoints = []Endpoint{
 			404: {ErrorCodeBackupSetNotFound, ErrorCodeRetentionPlanNotFound},
 			409: {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -290,6 +301,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -302,6 +314,7 @@ var Endpoints = []Endpoint{
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
 			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -312,6 +325,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			404: {ErrorCodeOperationNotFound},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -321,6 +335,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -332,6 +347,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -365,12 +381,33 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "getFirstRunStatus", Method: "GET", Path: "/system/first-run",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "FirstRunStatusResponse", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+		},
+	},
+	{
+		ID: "completeFirstRun", Method: "POST", Path: "/system/first-run",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "BackupSetSpec", ResponseSchema: "CompleteFirstRunResponse", SuccessStatus: 201,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			409: {ErrorCodeAlreadyConfigured},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "listStorageStatus", Method: "GET", Path: "/system/storage",
 		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "", ResponseSchema: "ListStorageStatusResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -435,6 +472,35 @@ type BackupSet struct {
 	ValidatorID        string   `json:"validator_id"`
 }
 
+// BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads
+// from, where it writes to, how it decides a file is complete, and
+// whether it starts enabled. ssh_key_id and known_hosts_line carry
+// REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never
+// key material. Nothing here asks for anything to be RUN, which is
+// what makes it the body of two different operations: POST
+// /backup-sets folds a set into a configuration that already exists,
+// and POST /system/first-run writes the first configuration there
+// has ever been. Those two share this base rather than restating it,
+// so the wizard that collects these answers can never be right about
+// one operation and wrong about the other.
+type BackupSetSpec struct {
+	CompletionStrategy string   `json:"completion_strategy"`
+	Disabled           bool     `json:"disabled"`
+	Host               string   `json:"host"`
+	Include            []string `json:"include"`
+	KnownHostsLine     string   `json:"known_hosts_line"`
+	LocalPath          string   `json:"local_path"`
+	Name               string   `json:"name"`
+	Port               int      `json:"port"`
+	RemotePath         string   `json:"remote_path"`
+	SourceName         string   `json:"source_name"`
+	SSHKeyID           string   `json:"ssh_key_id"`
+	StableForSeconds   int      `json:"stable_for_seconds"`
+	StaleAfterSeconds  int      `json:"stale_after_seconds"`
+	User               string   `json:"user"`
+	ValidatorID        string   `json:"validator_id"`
+}
+
 // CapabilitiesResponse is GET /system/capabilities. The API expression of the
 // PlatformCapabilities contract (apps/common/platform/capabilities).
 // A capability says what a platform CAN do; it never says who MAY do
@@ -448,6 +514,21 @@ type CapabilitiesResponse struct {
 	StoragePicker       bool   `json:"storage_picker"`
 }
 
+// CompleteFirstRunResponse is POST /system/first-run. The backup set the first configuration was
+// written around, NESTED rather than flattened, which is the one
+// place this contract deliberately differs from
+// CreateBackupSetResponse beside it. What this operation creates is
+// a whole configuration; the set is its first member, and
+// restart_required is a fact about the instance, not about the set.
+// Keeping backup_set as exactly a BackupSet means a later v1
+// addition describing the configuration lands beside it instead of
+// becoming indistinguishable from a backup-set field, and can never
+// collide with a field BackupSet itself grows.
+type CompleteFirstRunResponse struct {
+	BackupSet       BackupSet `json:"backup_set"`
+	RestartRequired bool      `json:"restart_required"`
+}
+
 // ConfigRevisionStaleResponse is the CONFIG_REVISION_STALE 409 body. It carries the current
 // revision as a structured field so a client retries against a value
 // it can rely on rather than one parsed out of prose.
@@ -456,26 +537,11 @@ type ConfigRevisionStaleResponse struct {
 	Error          ErrorBody `json:"error"`
 }
 
-// CreateBackupSetRequest is POST /backup-sets. ssh_key_id and known_hosts_line carry
-// REFERENCES produced by /ssh-keys and /ssh/host-key-probe, never
-// key material.
+// CreateBackupSetRequest is POST /backup-sets. The backup-set spec, plus the one thing only a
+// create can ask for: that the new set also runs at once.
 type CreateBackupSetRequest struct {
-	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
-	Host               string   `json:"host"`
-	Include            []string `json:"include"`
-	KnownHostsLine     string   `json:"known_hosts_line"`
-	LocalPath          string   `json:"local_path"`
-	Name               string   `json:"name"`
-	Port               int      `json:"port"`
-	RemotePath         string   `json:"remote_path"`
-	RunImmediately     bool     `json:"run_immediately"`
-	SourceName         string   `json:"source_name"`
-	SSHKeyID           string   `json:"ssh_key_id"`
-	StableForSeconds   int      `json:"stable_for_seconds"`
-	StaleAfterSeconds  int      `json:"stale_after_seconds"`
-	User               string   `json:"user"`
-	ValidatorID        string   `json:"validator_id"`
+	BackupSetSpec
+	RunImmediately bool `json:"run_immediately"`
 }
 
 // CreateBackupSetResponse is POST /backup-sets. The created set, plus at most one of operation
@@ -509,6 +575,14 @@ type ErrorBody struct {
 // correlation id travels in the X-Correlation-Id response header.
 type ErrorResponse struct {
 	Error ErrorBody `json:"error"`
+}
+
+// FirstRunStatusResponse is GET /system/first-run. The one question a client asks before it
+// decides whether to render the setup flow or the application.
+// Deliberately one field: a client that has just been handed a 503
+// NOT_CONFIGURED needs to know which screen to show, not why.
+type FirstRunStatusResponse struct {
+	Configured bool `json:"configured"`
 }
 
 // HostKeyProbeRequest is POST /ssh/host-key-probe. Opens a real outbound connection, trusts
@@ -720,6 +794,7 @@ type VersionResponse struct {
 	APIVersion     string `json:"api_version"`
 	Commit         string `json:"commit"`
 	ConfigRevision string `json:"config_revision"`
+	Configured     bool   `json:"configured"`
 	CoreVersion    string `json:"core_version"`
 	EngineVersion  string `json:"engine_version"`
 	GoVersion      string `json:"go_version"`
@@ -734,13 +809,16 @@ var SchemaTypes = map[string]any{
 	"ApplyRetentionRequest":       ApplyRetentionRequest{},
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
+	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
+	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
 	"ConfigRevisionStaleResponse": ConfigRevisionStaleResponse{},
 	"CreateBackupSetRequest":      CreateBackupSetRequest{},
 	"CreateBackupSetResponse":     CreateBackupSetResponse{},
 	"CredentialsRequest":          CredentialsRequest{},
 	"ErrorBody":                   ErrorBody{},
 	"ErrorResponse":               ErrorResponse{},
+	"FirstRunStatusResponse":      FirstRunStatusResponse{},
 	"HostKeyProbeRequest":         HostKeyProbeRequest{},
 	"HostKeyProbeResponse":        HostKeyProbeResponse{},
 	"ImportSSHKeyRequest":         ImportSSHKeyRequest{},
