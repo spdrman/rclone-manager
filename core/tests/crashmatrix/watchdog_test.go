@@ -183,7 +183,7 @@ func TestHarnessWatchdog_CatchesAGenuineHang(t *testing.T) {
 		t.Fatalf("trip.kind = %q, want no-progress: %v", trip.kind, trip)
 	}
 	if trip.lastEvent != "discover-start" {
-		t.Fatalf("trip.lastEvent = %q, want discover-start: the failure has to name where the harness got stuck, which is the whole point of #248's last paragraph", trip.lastEvent)
+		t.Fatalf("trip.lastEvent = %q, want discover-start: a gate failure that does not name where the harness got stuck is the thing both issues complain about", trip.lastEvent)
 	}
 	// Promptly, not eventually. The window here is the floor, because the
 	// steps before the planted hang are milliseconds long. The bound
@@ -208,13 +208,17 @@ func TestHarnessWatchdog_CatchesAGenuineHang(t *testing.T) {
 
 func TestHarnessWatchdog_DoesNotFailASlowButProgressingRun(t *testing.T) {
 	// Two planted stalls. The first is inside the floor and is what the
-	// run measures itself by; the second is three times the floor, and is
+	// run measures itself by; the second is twice the floor, and is
 	// survivable only because the first one widened the window. That makes
 	// this an A/B of the derivation itself rather than of a bigger number:
 	// the same harness, the same stalls, and the only difference is
 	// whether the window is allowed to grow.
+	// The floor is three times the first stall rather than twice it, so
+	// the measuring step has room for whatever real work happens around
+	// its sleep without tripping on a busy machine. Widening it costs
+	// nothing: the run's length is set by the stalls, not the floor.
 	const (
-		floor       = 2 * time.Second
+		floor       = 3 * time.Second
 		firstStall  = 1 * time.Second
 		secondStall = 6 * time.Second
 	)
@@ -233,7 +237,7 @@ func TestHarnessWatchdog_DoesNotFailASlowButProgressingRun(t *testing.T) {
 		if final, ok := res.finalState(); !ok || final != "COMPLETE" {
 			t.Fatalf("the slow harness reached %q, want COMPLETE\nstdout=%s", final, res.stdout)
 		}
-		t.Logf("a run whose slowest step was %s (three times the %s floor) finished in %s and was not failed",
+		t.Logf("a run whose slowest step was %s (twice the %s floor) finished in %s and was not failed",
 			secondStall, floor, time.Since(start).Round(time.Millisecond))
 	})
 
