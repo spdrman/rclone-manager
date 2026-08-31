@@ -214,7 +214,7 @@ func TestComplianceArtifactsMatchThisTree(t *testing.T) {
 	for _, f := range g.Files() {
 		onDisk, err := os.ReadFile(Path(f.Path))
 		if err != nil {
-			t.Errorf("%s is not in the tree: %v\n\nRegenerate with: (cd apps/common && go run ./cmd/provenance -write)", f.Path, err)
+			t.Errorf("%s is not in the tree: %v\n\nRegenerate with: (cd distribution && go run ./cmd/provenance -write)", f.Path, err)
 			continue
 		}
 		if !bytes.Equal(onDisk, f.Data) {
@@ -225,7 +225,7 @@ entered or left the graph, a frontend package moved, an upstream relicensed in
 place, a distributed artifact was edited, or container/release-manifest.json was
 regenerated.
 
-Regenerate with: (cd apps/common && go run ./cmd/provenance -write)`, f.Path, len(onDisk), len(f.Data))
+Regenerate with: (cd distribution && go run ./cmd/provenance -write)`, f.Path, len(onDisk), len(f.Data))
 		}
 	}
 }
@@ -579,7 +579,7 @@ func readProvenance(t *testing.T) Provenance {
 	t.Helper()
 	data, err := os.ReadFile(Path(ProvenancePath))
 	if err != nil {
-		t.Fatalf("cannot read %s: %v\n\nGenerate it with: (cd apps/common && go run ./cmd/provenance -write)", ProvenancePath, err)
+		t.Fatalf("cannot read %s: %v\n\nGenerate it with: (cd distribution && go run ./cmd/provenance -write)", ProvenancePath, err)
 	}
 	p, err := ParseProvenance(data)
 	if err != nil {

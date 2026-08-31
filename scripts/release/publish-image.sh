@@ -6,7 +6,7 @@
 #
 # This is the step #174 left open. That issue built the slot: the release
 # manifest carries an explicit per-architecture registry_digest, null for
-# exactly as long as apps/common/packaging/canonical.json records
+# exactly as long as distribution/packaging/canonical.json records
 # image.published false, with a test that makes the two move together. What
 # it could not do was fill the slot in, because filling it in requires a
 # real push to a real registry. This script is that push.
@@ -62,7 +62,7 @@
 # This script prints the per-architecture digests and stops. Recording them
 # is two deliberate edits, in this order:
 #
-#   1. apps/common/packaging/canonical.json: image.published false -> true
+#   1. distribution/packaging/canonical.json: image.published false -> true
 #   2. container/release-manifest.json: registry_digest null -> the digest
 #      printed for that architecture
 #
@@ -83,7 +83,7 @@
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-CANONICAL="apps/common/packaging/canonical.json"
+CANONICAL="distribution/packaging/canonical.json"
 MANIFEST="container/release-manifest.json"
 SBOM="provenance/sbom.spdx.json"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
@@ -208,7 +208,7 @@ fi
 # correction is worse than no attestation at all.
 if [ "${SKIP_PROVENANCE_CHECK:-0}" = "1" ] && [ "${GUARDS_ONLY:-0}" != "1" ]; then
   echo "refusing: SKIP_PROVENANCE_CHECK=1 removes the check that the SBOM about to be attested describes this tree, and this run is not a guards-only run, so it could push and sign." >&2
-  echo "It is a test-only seam: set GUARDS_ONLY=1 alongside it, or unset it and regenerate the bundle with (cd apps/common && go run ./cmd/provenance -write)." >&2
+  echo "It is a test-only seam: set GUARDS_ONLY=1 alongside it, or unset it and regenerate the bundle with (cd distribution && go run ./cmd/provenance -write)." >&2
   exit 2
 fi
 if [ "${SKIP_PROVENANCE_CHECK:-0}" = "1" ]; then
@@ -216,12 +216,12 @@ if [ "${SKIP_PROVENANCE_CHECK:-0}" = "1" ]; then
 fi
 if [ "${SKIP_PROVENANCE_CHECK:-0}" != "1" ]; then
   if [ ! -r "$SBOM" ]; then
-    echo "refusing: ${SBOM} is not in the tree, so there is no SBOM to attest. Generate it with: (cd apps/common && go run ./cmd/provenance -write)" >&2
+    echo "refusing: ${SBOM} is not in the tree, so there is no SBOM to attest. Generate it with: (cd distribution && go run ./cmd/provenance -write)" >&2
     exit 2
   fi
-  if ! (cd apps/common && GOWORK=off go run ./cmd/provenance >/dev/null 2>&1); then
+  if ! (cd distribution && GOWORK=off go run ./cmd/provenance >/dev/null 2>&1); then
     echo "refusing: the compliance artifacts in provenance/ are not what this tree generates, so the SBOM about to be attested to a published image describes a different tree." >&2
-    echo "Regenerate them with: (cd apps/common && go run ./cmd/provenance -write)" >&2
+    echo "Regenerate them with: (cd distribution && go run ./cmd/provenance -write)" >&2
     exit 2
   fi
 fi
@@ -275,4 +275,4 @@ docker buildx imagetools inspect "$REFERENCE" --raw \
   | while read -r d; do echo "  registry_digest candidate: ${d}"; done
 echo
 echo "Then set image.published to true in ${CANONICAL}, regenerate the provenance bundle"
-echo "((cd apps/common && go run ./cmd/provenance -write)), and run the gate."
+echo "((cd distribution && go run ./cmd/provenance -write)), and run the gate."

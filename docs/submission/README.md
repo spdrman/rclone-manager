@@ -32,7 +32,7 @@ for a target with no store, its documented workflow.
 | OpenMediaVault | `openmediavault.md` | none: documented workflow |
 | Proxmox VE | `proxmox.md` | none: documented workflow |
 
-Each of those files carries a machine-readable table that `apps/common/packaging` parses on
+Each of those files carries a machine-readable table that `distribution/packaging` parses on
 every commit. A missing row fails; a `ready` row naming a path that is not in the tree
 fails; a `blocked` row that does not name the issue that owns it fails. The prose around
 the table is what a reviewer reads; the table is what stops the prose from rotting.

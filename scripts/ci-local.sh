@@ -125,10 +125,10 @@ gate_step "apps/common go build, vet, test"
 gate_step "apps/common golangci-lint"
 (cd apps/common && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
-echo "==> distribution go build, vet, test"
+gate_step "distribution go build, vet, test"
 (cd distribution && GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...)
 
-echo "==> distribution golangci-lint"
+gate_step "distribution golangci-lint"
 (cd distribution && GOWORK=off golangci-lint run --config "$REPO_ROOT/.golangci.yml" ./...)
 
 if [ -f apps/generic/go.mod ]; then
@@ -230,13 +230,13 @@ fi
 # The static layer checks (issue #165) run even in FAST mode: none of them
 # builds, installs or deletes anything, so together they cost seconds, and
 # they are the ones a mid-refactor edit is most likely to break.
-echo "==> three-layer boundaries, static checks (§7.1, #165)"
+gate_step "three-layer boundaries, static checks (§7.1, #165)"
 bash scripts/architecture/check-layer-manifest.sh
 bash scripts/architecture/check-core-dependency-rule.sh
 bash scripts/architecture/check-layer-ownership.sh
 bash scripts/architecture/check-ui-shared-provider-imports.sh
 
-echo "==> performance baseline present, and its gate can fail (#165)"
+gate_step "performance baseline present, and its gate can fail (#165)"
 bash scripts/perf/check-baseline.sh
 bash scripts/perf/selftest.sh
 

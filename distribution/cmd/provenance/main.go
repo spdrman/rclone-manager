@@ -24,7 +24,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/spdrman/rclone-manager/apps/common/packaging"
+	"github.com/spdrman/rclone-manager/distribution/packaging"
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	if err := os.Chdir(filepath.Join(root, "apps", "common", "packaging")); err != nil {
+	if err := os.Chdir(filepath.Join(root, "distribution", "packaging")); err != nil {
 		fail(err)
 	}
 
@@ -84,7 +84,7 @@ func main() {
 	}
 
 	if stale > 0 {
-		fmt.Fprintf(os.Stderr, "\n%d compliance artifact(s) do not match this tree. Regenerate with:\n\n    (cd apps/common && go run ./cmd/provenance -write)\n", stale)
+		fmt.Fprintf(os.Stderr, "\n%d compliance artifact(s) do not match this tree. Regenerate with:\n\n    (cd distribution && go run ./cmd/provenance -write)\n", stale)
 		os.Exit(1)
 	}
 	if !*write {
@@ -94,7 +94,7 @@ func main() {
 
 // repoRoot walks up from the working directory to the checkout root,
 // identified by go.work. Walking up rather than taking a flag means this
-// behaves the same from apps/common, from the repository root and from a
+// behaves the same from distribution/, from the repository root and from a
 // git hook, which is where a path bug would otherwise hide.
 func repoRoot() (string, error) {
 	dir, err := os.Getwd()

@@ -203,7 +203,7 @@
         },
         "drift-image-reference": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than consuming it by reference, so there is no reference to compare. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: container/compose.yaml BUILDS the canonical image from container/Dockerfile rather than consuming it by reference, so there is no reference to compare. See distribution/packaging/conformance.json."
         },
         "drift-required-mounts": {
           "declared": "supported"
@@ -219,7 +219,7 @@
         },
         "drift-architecture-support": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
         },
         "drift-forbidden-privileges": {
           "declared": "supported"
@@ -311,7 +311,7 @@
         },
         "drift-architecture-support": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
         },
         "drift-forbidden-privileges": {
           "declared": "supported"
@@ -396,7 +396,7 @@
         },
         "drift-architecture-support": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
         },
         "drift-forbidden-privileges": {
           "declared": "supported"
@@ -466,7 +466,7 @@
         },
         "drift-image-reference": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: Synology is the one target that cannot consume the OCI image; its package embeds the canonical binaries instead, which is why it is the one target with a real hash-parity check of its own. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for canonical-image-parity: Synology is the one target that cannot consume the OCI image; its package embeds the canonical binaries instead, which is why it is the one target with a real hash-parity check of its own. See distribution/packaging/conformance.json."
         },
         "drift-required-mounts": {
           "declared": "not-applicable",
@@ -571,7 +571,7 @@
         },
         "drift-architecture-support": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
         },
         "drift-forbidden-privileges": {
           "declared": "supported"
@@ -662,7 +662,7 @@
         },
         "drift-architecture-support": {
           "declared": "not-applicable",
-          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json."
+          "reason": "Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See distribution/packaging/conformance.json."
         },
         "drift-forbidden-privileges": {
           "declared": "supported"

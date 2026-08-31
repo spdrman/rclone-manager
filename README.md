@@ -155,7 +155,7 @@ metadata is well-formed and mutually consistent, and it proves nothing whatsoeve
 any of these platforms behaves.
 
 The image itself has never been published either. `ghcr.io/spdrman/backup-manager` is the
-settled target and `apps/common/packaging/canonical.json` records `published: false`, so
+settled target and `distribution/packaging/canonical.json` records `published: false`, so
 that reference resolves to nothing today and every acceptance procedure opens with a step 0
 covering how to make it resolvable in the meantime.
 
@@ -215,7 +215,7 @@ that directory carries the key that can read and delete the source. The backup r
 platform below is a dedicated child directory rather than a share you already use, for the
 same reason.
 
-`apps/common/packaging/canonical.json` is the single source of truth for these paths, and
+`distribution/packaging/canonical.json` is the single source of truth for these paths, and
 this repository's own test suite fails the build if any platform's metadata disagrees with
 it.
 
@@ -758,7 +758,7 @@ The previous version of this README described a binary with one subcommand, elev
 subcommands after that stopped being true. It listed eleven packages under `core/internal`
 when there were seventeen. Both survived because prose does not fail a build, so the claims in here
 that a machine can decide are now decided on every run, by
-`apps/common/packaging/readme_claims_test.go`:
+`distribution/packaging/readme_claims_test.go`:
 
 - every markdown link and every backticked repository path in this file resolves, with the
   handful of paths this document names *because* they are absent kept in an explicit list
@@ -773,7 +773,7 @@ that a machine can decide are now decided on every run, by
   when the drift does;
 - the "build-supported and uncertified" statement holds for exactly as long as the generated
   conformance matrix still reports an unexecuted operator cell, in both directions;
-- the support tiers in the table above come from `apps/common/packaging/canonical.json`.
+- the support tiers in the table above come from `distribution/packaging/canonical.json`.
 
 Each of those carries its own positive control, because a check that cannot fail is
 decoration. What is deliberately *not* checked, and why, is written at the top of that test
@@ -924,5 +924,5 @@ copyleft component fails the build.
 All four are generated, never hand-edited:
 
 ```
-cd apps/common && go run ./cmd/provenance -write
+cd distribution && go run ./cmd/provenance -write
 ```

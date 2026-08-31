@@ -56,7 +56,7 @@ type Service struct {
 	// They are parsed even though every profile in this repository sets
 	// them to nothing, because a rule that reads only the keys a correct
 	// file happens to contain cannot fail on an incorrect one, and
-	// apps/common/packaging's submission preflight has to be able to.
+	// distribution/packaging's submission preflight has to be able to.
 	Privileged  bool
 	CapAdd      []string
 	NetworkMode string

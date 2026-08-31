@@ -3,7 +3,7 @@
 # scripts/release/record-release-hashes.sh.
 #
 # Those refusals are the half of #174's fix that keeps the net empty. The
-# net itself (apps/common/packaging's release-manifest checks) is tested
+# net itself (distribution/packaging's release-manifest checks) is tested
 # exhaustively; the generator was exercised once by hand at release time,
 # after two Docker cross-builds, and its result was recorded in a pull
 # request description. Two of its refusals have no downstream net at all:

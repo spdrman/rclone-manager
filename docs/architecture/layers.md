@@ -178,6 +178,8 @@ somewhere else:
 | `apps/common/packaging/` | `distribution/packaging/` | #165, done |
 | `github.com/spdrman/rclone-manager/apps/common/packaging` | `github.com/spdrman/rclone-manager/distribution/packaging` (new module) | #165, done |
 | `cd apps/common && go test ./packaging/` | `cd distribution && go test ./packaging/` | #165, done |
+| `apps/common/cmd/provenance` | `distribution/cmd/provenance` | #165, done |
+| `cd apps/common && go run ./cmd/provenance -write` | `cd distribution && go run ./cmd/provenance -write` | #165, done |
 | `container/{Dockerfile,compose.yaml,.env.example,release-manifest.json}` | `distribution/compose/` | **#167**, not yet |
 | `apps/truenas/{catalog,compose}` | `distribution/truenas/` | **#169**, not yet |
 | `apps/unraid/{template,frontend/webui.json}` | `distribution/unraid/` | **#169**, not yet |

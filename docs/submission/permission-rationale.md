@@ -2,7 +2,7 @@
 
 Every store asks, in one form or another, why an application wants what it wants. This is
 the answer, and each claim in it is checked against the shipped package rather than
-asserted: `apps/common/packaging`'s preflight fails the build if any target's metadata
+asserted: `distribution/packaging`'s preflight fails the build if any target's metadata
 stops matching what is below.
 
 ## The short version

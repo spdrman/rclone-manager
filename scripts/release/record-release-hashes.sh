@@ -18,7 +18,7 @@
 # a real release records (docs/EPIC-B-multi-nas.md §37.2's "SHOULD record
 # the resolved digest") is the digest the registry assigns on push. The
 # registry is ghcr.io and the reference is
-# ghcr.io/spdrman/backup-manager (apps/common/packaging/canonical.json is
+# ghcr.io/spdrman/backup-manager (distribution/packaging/canonical.json is
 # the single source of truth for it), so the gap is no longer "no
 # registry is configured": it is that nothing has been pushed there yet,
 # which canonical.json records as image.published false. This script
@@ -136,7 +136,7 @@ if [ "$UNSAFE" != "1" ]; then
   fi
 else
   echo "warning: UNSAFE_LOCAL_BUILD=1 waives all five reproducibility guards." >&2
-  echo "warning: the manifest is stamped \"unsafe_local_build\": true, which apps/common/packaging refuses, and it defaults to a gitignored path. Do not commit it." >&2
+  echo "warning: the manifest is stamped \"unsafe_local_build\": true, which distribution/packaging refuses, and it defaults to a gitignored path. Do not commit it." >&2
 fi
 
 # GUARDS_ONLY=1 stops here, after every refusal and before the first
@@ -222,7 +222,7 @@ cat > "$OUT" <<EOF
   "version": "${VERSION}",
   "commit": "${COMMIT}",
   "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why apps/common/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back), and it is null on every architecture below because nothing has been pushed yet; apps/common/packaging/canonical.json records the same fact as image.published false, and the two move together. local_image_id_sha256 is not a stand-in for it: it is the local Docker image ID this build produced, which identifies the image on the machine that built it and nowhere else. Filling registry_digest in from a real push, and signing and attesting what it points at, is issue #88's work, not this file's.",
+  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back), and it is null on every architecture below because nothing has been pushed yet; distribution/packaging/canonical.json records the same fact as image.published false, and the two move together. local_image_id_sha256 is not a stand-in for it: it is the local Docker image ID this build produced, which identifies the image on the machine that built it and nowhere else. Filling registry_digest in from a real push, and signing and attesting what it points at, is issue #88's work, not this file's.",
   "architectures": [
 ${joined}
   ]

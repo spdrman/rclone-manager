@@ -2,7 +2,7 @@
 
 Backup Manager, `com.iasbuilt.backupmanager`. This is the source and
 source-offer material §73 Work Package 5.2 requires, and it is what the
-`source-offer` link in `apps/common/packaging/compliance.json` resolves to.
+`source-offer` link in `distribution/packaging/compliance.json` resolves to.
 
 ## The licence
 
@@ -12,7 +12,7 @@ text a distributed package carries.
 
 Apache-2.0 was chosen over the equally available MIT for reasons that are
 specific to how this product ships, and they are recorded in full in
-`apps/common/packaging/compliance.json` under `license.rationale` rather than
+`distribution/packaging/compliance.json` under `license.rationale` rather than
 summarised here. In short: it grants patent rights explicitly and terminates
 them on patent litigation, which is the clause a store's legal review looks for
 before agreeing to redistribute somebody's binary; it defines the NOTICE file,
@@ -22,7 +22,7 @@ redistributing someone else's compiled packages.
 
 That choice was only available because nothing in the dependency graph is
 copyleft, and that is checked rather than remembered:
-`LicensePolicyComplaints` in `apps/common/packaging` refuses the build if a
+`LicensePolicyComplaints` in `distribution/packaging` refuses the build if a
 copyleft component ever appears in the inventory.
 
 ## What this product includes
@@ -59,7 +59,7 @@ distributed copy, which the packages do, and it does not oblige a public
 repository. But a store reviewer who follows a link into a private repository
 gets a 404, and a compliance package that pretends otherwise is worth nothing.
 So the state is recorded honestly, in
-`apps/common/packaging/compliance.json` (`sourceRepository.visibility`) and in
+`distribution/packaging/compliance.json` (`sourceRepository.visibility`) and in
 `provenance/release-provenance.json` (`links.publiclyReachable`), and
 the release provenance bundle says in as many words that the link criterion is
 not satisfied until the repository is made public.

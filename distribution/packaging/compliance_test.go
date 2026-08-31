@@ -397,7 +397,7 @@ func TestTheLicencePolicyJudgesTheNPMHalfAsItIsDerived(t *testing.T) {
 func TestLicensePolicyAgainstTheRealInventory(t *testing.T) {
 	data, err := os.ReadFile(Path(InventoryPath))
 	if err != nil {
-		t.Fatalf("cannot read %s: %v\n\nGenerate it with: (cd apps/common && go run ./cmd/provenance -write)", InventoryPath, err)
+		t.Fatalf("cannot read %s: %v\n\nGenerate it with: (cd distribution && go run ./cmd/provenance -write)", InventoryPath, err)
 	}
 	inv, err := ParseInventory(data)
 	if err != nil {
