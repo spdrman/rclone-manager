@@ -446,7 +446,27 @@ Match User backup
     X11Forwarding no
 `
 
-const sftpFixtureImageTag = "rclone-manager-sftp-fixture:test"
+// sftpFixtureImageTag names one build of the fixture image, and is
+// deliberately unique per call rather than one fixed string.
+//
+// A fixed tag is shared mutable state on the docker daemon, and this
+// machine runs several test processes against one daemon as a matter of
+// course: the dockerlease package's own comments already list them, and two
+// scripts/ci-local.sh runs from two worktrees is the ordinary case here.
+// Each of those bakes ITS freshly generated client key into
+// authorized_keys and rebuilds the same tag, so a container one process
+// starts can be running another process's authorized_keys and will
+// genuinely, permanently refuse the first process's key.
+//
+// That is not a startup race and no amount of waiting fixes it. It
+// presents as "ssh: unable to authenticate, attempted methods [none
+// publickey]" against a server whose own log says it is listening and
+// closed one connection at [preauth], and it clears on an isolated re-run
+// because nothing is then competing for the tag: #250's reported symptom,
+// exactly. TestFixtureImageIsNotSharedBetweenClientKeys holds this.
+func sftpFixtureImageTag() string {
+	return fmt.Sprintf("rclone-manager-sftp-fixture:test-%d-%d", os.Getpid(), time.Now().UnixNano())
+}
 
 // requireDocker skips the test when Docker is not available, so this file
 // stays runnable in environments without it. Where Docker is present, this
@@ -507,13 +527,59 @@ func buildSFTPFixtureImage(t *testing.T, authorizedKeyLine string) string {
 	writeMust("sshd_config", sftpFixtureSSHDConfig)
 	writeMust("authorized_keys", authorizedKeyLine+"\n")
 
+	tag := sftpFixtureImageTag()
+	// Registered before the build so a build that fails halfway still has
+	// its tag reclaimed, and before any container cleanup the caller adds
+	// later, so t.Cleanup's LIFO order removes the containers first.
+	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
+
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", sftpFixtureImageTag, dir)
+	cmd := exec.CommandContext(ctx, "docker", "build", "-t", tag, dir)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("docker build failed: %v\n%s", err, out)
 	}
-	return sftpFixtureImageTag
+	return tag
+}
+
+// TestFixtureImageIsNotSharedBetweenClientKeys is the other half of what
+// made #250 legible only after someone read a container log by hand.
+//
+// The fixture bakes the client's authorized_keys into the image, so the
+// image IS the answer to "which key does this server accept". While that
+// image had one fixed tag, building a second fixture on the same daemon
+// silently changed the answer for the first, and the first then met a
+// server that refused its key outright. This builds two fixtures with two
+// different client keys, in that order, and insists the first one still
+// authenticates its own key afterwards.
+//
+// It runs the probe rather than the adapter because the claim is about the
+// server's authorized_keys and nothing else, and because the probe is the
+// thing every other test in this file now trusts.
+func TestFixtureImageIsNotSharedBetweenClientKeys(t *testing.T) {
+	requireDocker(t)
+
+	firstKeyPath, firstAuthorized := generateClientSSHKeyPair(t)
+	firstImage := buildSFTPFixtureImage(t, firstAuthorized)
+
+	_, secondAuthorized := generateClientSSHKeyPair(t)
+	secondImage := buildSFTPFixtureImage(t, secondAuthorized)
+
+	if firstImage == secondImage {
+		t.Fatalf("both fixtures were built as %s, so the second build overwrote the first and any process holding the first is now pointed at somebody else's authorized_keys", firstImage)
+	}
+
+	// Started AFTER the second build on purpose: that is the ordering that
+	// hurts, and starting before it would prove nothing.
+	port := freeTCPPort(t)
+	cont, _ := startFixtureContainer(t, firstImage, port, "image-isolation", firstKeyPath)
+	defer stopFixtureContainer(cont)
+
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	if err := trySSHHandshake(addr, fixtureClientConfig(t, firstKeyPath)); err != nil {
+		logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+		t.Fatalf("a container built from %s refused the very key that image was built to authorize, after a second fixture was built on the same daemon: %v\nserver logs:\n%s", firstImage, err, logs)
+	}
 }
 
 // containerNameFor derives a Docker-safe container name from the running
@@ -533,11 +599,17 @@ func containerNameFor(t *testing.T, label string) string {
 
 // startFixtureContainer starts a fresh instance of the fixture image
 // publishing container port 22 on 127.0.0.1:hostPort, and returns once its
-// sshd is confirmed listening and its host key confirmed generated. It
-// retries the docker-run itself briefly on a port-in-use error, since a
+// host key is confirmed generated and its sshd is confirmed willing to
+// authenticate clientKeyPath, not merely to accept a TCP connection (#250).
+// It retries the docker-run itself briefly on a port-in-use error, since a
 // container stopped moments earlier by this same test can take a beat to
 // fully release its port.
-func startFixtureContainer(t *testing.T, image string, hostPort int, label string) (containerID, hostKeyLine string) {
+//
+// clientKeyPath is the caller's own client key, the one it is about to
+// hand the adapter. Readiness is checked with that exact key so that
+// "ready" means the thing the caller is about to do will work, rather than
+// something adjacent to it.
+func startFixtureContainer(t *testing.T, image string, hostPort int, label, clientKeyPath string) (containerID, hostKeyLine string) {
 	t.Helper()
 	// Reclaim anything a previously KILLED run left behind (#150).
 	dockerlease.Sweep()
@@ -567,7 +639,7 @@ func startFixtureContainer(t *testing.T, image string, hostPort int, label strin
 		_ = exec.Command("docker", "rm", "-f", containerID).Run()
 	})
 
-	hostKeyLine = waitForFixtureReady(t, containerID, hostPort)
+	hostKeyLine = waitForFixtureReady(t, containerID, hostPort, clientKeyPath)
 	return containerID, hostKeyLine
 }
 
@@ -579,38 +651,424 @@ func stopFixtureContainer(containerID string) {
 	_ = exec.Command("docker", "rm", "-f", containerID).Run()
 }
 
-// waitForFixtureReady polls until the container has generated its host key
-// and sshd is accepting TCP connections, then returns the ed25519 host
-// public key line (as produced by ssh-keygen, e.g. "ssh-ed25519 AAAA... comment").
-func waitForFixtureReady(t *testing.T, containerID string, hostPort int) string {
+// The two halves of one readiness attempt are bounded separately, on
+// purpose. ssh.ClientConfig.Timeout is documented as "the maximum amount of
+// time for the TCP connection to establish", and that is all x/crypto uses
+// it for: the version exchange, key exchange and user authentication that
+// follow it have no deadline at all. A peer that accepts TCP and then says
+// nothing is therefore not bounded by it, and that peer is not exotic here,
+// it is this fixture's ordinary startup window: a published docker port
+// accepts connections the moment the mapping exists, which is before sshd
+// inside the container is necessarily answering. Without a deadline over
+// the handshake, one such attempt outruns the polling loop's own deadline,
+// because that deadline is only re-read between attempts.
+//
+// These mirror core/tests/sftpfixture's sshDialTimeout and
+// sshHandshakeTimeout, which is the same probe against the same kind of
+// container, and whose reasoning is written out at length in
+// TestSSHHandshakeIsBoundedAgainstASilentPeer.
+const (
+	fixtureDialTimeout      = 2 * time.Second
+	fixtureHandshakeTimeout = 5 * time.Second
+
+	// fixtureHostKeyWindow and fixtureSSHReadyWindow bound the two waits
+	// waitForFixtureReady makes. They are separate because they are
+	// separate facts arriving in order: `ssh-keygen -A` writes the host
+	// key and only then does the image's CMD exec sshd, so the key file
+	// can exist for a while before anything is listening.
+	fixtureHostKeyWindow  = 20 * time.Second
+	fixtureSSHReadyWindow = 30 * time.Second
+)
+
+// sftpFixtureUser is the one account the fixture image creates (see
+// sftpFixtureDockerfile's adduser and sftpFixtureSSHDConfig's `Match User`).
+// The readiness probe authenticates as this user with the caller's client
+// key, so it is deliberately the same constant the tests put in
+// transport.Source.User: "the server will authenticate me" is only worth
+// checking for the identity the test is actually going to use.
+const sftpFixtureUser = "backup"
+
+// waitForFixtureReady blocks until the container has generated its host key
+// AND its sshd will complete a real SSH handshake and authenticate
+// clientKeyPath as sftpFixtureUser, then returns the ed25519 host public key
+// line (as produced by ssh-keygen, e.g. "ssh-ed25519 AAAA... comment").
+//
+// It authenticates rather than dialing because those are different claims,
+// and only the second one is what every caller here needs (#250). A bare
+// net.DialTimeout against a published docker port succeeds as soon as the
+// port mapping exists, which can be well before sshd is answering, so the
+// probe this replaces regularly handed tests a server that then refused
+// their first real connection. TestClassify_Docker's positive control
+// failed that way, with "ssh: unable to authenticate" on the client side
+// and a connection closed at [preauth] in the container log.
+//
+// The probe deliberately does not verify the host key. Its only job is to
+// establish that the server is up and will authenticate; host-key
+// verification is the thing the tests themselves exercise, through the real
+// adapter and the known_hosts files this file writes.
+func waitForFixtureReady(t *testing.T, containerID string, hostPort int, clientKeyPath string) string {
 	t.Helper()
-	deadline := time.Now().Add(20 * time.Second)
+	hostKeyLine := waitForFixtureHostKey(t, containerID)
+
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(hostPort))
+	if err := waitForSSHAuthReady(addr, fixtureClientConfig(t, clientKeyPath), fixtureSSHReadyWindow); err != nil {
+		logs, _ := exec.Command("docker", "logs", containerID).CombinedOutput()
+		t.Fatalf("sftp fixture container %s published %s but never authenticated %s there: %v\ncontainer logs:\n%s",
+			containerID, addr, sftpFixtureUser, err, logs)
+	}
+	return hostKeyLine
+}
+
+// waitForFixtureHostKey polls until the container has written its ed25519
+// host public key, and returns that line. This is a docker exec rather than
+// an ssh-keyscan because the tests need the key the server WILL present,
+// pinned from inside the container, independently of anything on the wire.
+func waitForFixtureHostKey(t *testing.T, containerID string) string {
+	t.Helper()
+	deadline := time.Now().Add(fixtureHostKeyWindow)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		out, err := exec.Command("docker", "exec", containerID, "cat", "/etc/ssh/ssh_host_ed25519_key.pub").CombinedOutput()
-		if err != nil {
+		switch {
+		case err != nil:
 			lastErr = fmt.Errorf("reading host key: %w: %s", err, out)
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		line := strings.TrimSpace(string(out))
-		if line == "" {
+		case len(bytes.TrimSpace(out)) == 0:
 			lastErr = fmt.Errorf("host key file was empty")
-			time.Sleep(200 * time.Millisecond)
-			continue
+		default:
+			return string(bytes.TrimSpace(out))
 		}
-		conn, dialErr := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", hostPort), 500*time.Millisecond)
-		if dialErr != nil {
-			lastErr = dialErr
-			time.Sleep(200 * time.Millisecond)
-			continue
-		}
-		_ = conn.Close()
-		return line
+		time.Sleep(200 * time.Millisecond)
 	}
 	logs, _ := exec.Command("docker", "logs", containerID).CombinedOutput()
-	t.Fatalf("sftp fixture container %s never became ready: %v\ncontainer logs:\n%s", containerID, lastErr, logs)
+	t.Fatalf("sftp fixture container %s never generated its host key: %v\ncontainer logs:\n%s", containerID, lastErr, logs)
 	return ""
+}
+
+// fixtureClientConfig builds the ssh client config the readiness probe
+// authenticates with: the caller's own key, the fixture's one account, and
+// no host-key verification (see waitForFixtureReady on why not).
+func fixtureClientConfig(t *testing.T, clientKeyPath string) *ssh.ClientConfig {
+	t.Helper()
+	cfg, err := sshClientConfig(clientKeyPath)
+	if err != nil {
+		t.Fatalf("building the readiness probe's client config: %v", err)
+	}
+	return cfg
+}
+
+// sshClientConfig is fixtureClientConfig without the *testing.T, so that
+// fixtureAuthVerdict can call it from inside a failure path without a
+// second failure replacing the message the caller was trying to print.
+func sshClientConfig(clientKeyPath string) (*ssh.ClientConfig, error) {
+	keyPEM, err := os.ReadFile(clientKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading client key %s: %w", clientKeyPath, err)
+	}
+	signer, err := ssh.ParsePrivateKey(keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parsing client key %s: %w", clientKeyPath, err)
+	}
+	return &ssh.ClientConfig{
+		User:            sftpFixtureUser,
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         fixtureDialTimeout,
+	}, nil
+}
+
+// fixtureAuthVerdict re-runs the readiness probe against a fixture whose
+// positive control has just failed, and describes what it found.
+//
+// It exists because #250 was only diagnosable after someone went and read
+// the container log by hand: "List should have succeeded" on its own does
+// not say whether the server stopped authenticating or the adapter stopped
+// being able to authenticate against a server that is fine, and those are
+// different bugs. This answers that question in the failure message.
+//
+// It deliberately cannot change a result. Nothing here retries the
+// assertion or swallows anything: the test has already failed by the time
+// this runs, and all this adds is a sentence about why.
+func fixtureAuthVerdict(hostPort int, clientKeyPath string) string {
+	cfg, err := sshClientConfig(clientKeyPath)
+	if err != nil {
+		return fmt.Sprintf("could not re-check the server, because the client key no longer loads: %v", err)
+	}
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(hostPort))
+	if err := trySSHHandshake(addr, cfg); err != nil {
+		return fmt.Sprintf("the readiness probe fails against %s too now (%v), so the server stopped authenticating rather than the adapter failing to", addr, err)
+	}
+	return fmt.Sprintf("the readiness probe still authenticates %s at %s with this same key, so the server is fine and the adapter is not", sftpFixtureUser, addr)
+}
+
+// waitForSSHAuthReady polls trySSHHandshake until one attempt completes a
+// full handshake AND authenticates, or until within has elapsed.
+//
+// It returns an error instead of calling t.Fatal so that it can be pointed
+// at a peer that is never going to be ready and asked what it decides. That
+// is what TestFixtureReadinessProbeRefusesASilentPeer does, and it is the
+// only way to show that this function refuses the exact state the bare dial
+// it replaces called ready.
+//
+// Note that within bounds when the LAST attempt may start, not when the
+// function returns: an attempt already in flight is bounded by
+// fixtureHandshakeTimeout instead. That is the point of the split. The
+// version it replaces had no bound on an attempt at all, so a single silent
+// peer could outlive the whole loop.
+func waitForSSHAuthReady(addr string, cfg *ssh.ClientConfig, within time.Duration) error {
+	deadline := time.Now().Add(within)
+	for {
+		err := trySSHHandshake(addr, cfg)
+		if err == nil {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("no authenticated SSH handshake within %s: %w", within, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// trySSHHandshake makes one bounded attempt to connect and authenticate.
+// It dials by hand rather than calling ssh.Dial so that the handshake gets
+// a deadline of its own: ssh.Dial passes cfg.Timeout to the dial and
+// nothing else, leaving everything after the TCP connect unbounded. This is
+// the same shape, and the same fix, as core/tests/sftpfixture's
+// trySSHHandshake.
+func trySSHHandshake(addr string, cfg *ssh.ClientConfig) error {
+	conn, err := net.DialTimeout("tcp", addr, fixtureDialTimeout)
+	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(time.Now().Add(fixtureHandshakeTimeout)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	// Clear the deadline before handing the connection on, so the close
+	// below is not racing one that has already passed.
+	_ = conn.SetDeadline(time.Time{})
+	_ = ssh.NewClient(c, chans, reqs).Close()
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// The readiness probe, proved against peers this process stands up itself.
+//
+// #250 is a readiness check that could not tell "the port answers" from
+// "sshd will authenticate me", so the fix is only worth anything if the new
+// check can be shown to tell those apart. None of the three tests below
+// needs Docker: an in-process listener reproduces each state exactly, on
+// every machine, every time, which is more than the container can promise
+// about a race it only sometimes loses.
+//
+// They come in a set on purpose. A probe hardcoded to "not ready" would
+// satisfy both refusals and prove nothing at all, so the acceptance test is
+// the control that stops the refusals meaning nothing.
+// ---------------------------------------------------------------------------
+
+// startInProcessSSHServer runs a real SSH server in this process, on a
+// random loopback port, that authenticates exactly one public key and
+// refuses every other. It exists so the probe can be pointed at a server
+// whose answer is decided in advance: a container's is not.
+//
+// Pass a nil authorized key for a server that refuses everyone.
+func startInProcessSSHServer(t *testing.T, authorized ssh.PublicKey) string {
+	t.Helper()
+
+	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating a host key: %v", err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(hostPriv)
+	if err != nil {
+		t.Fatalf("ssh.NewSignerFromKey: %v", err)
+	}
+
+	cfg := &ssh.ServerConfig{
+		PublicKeyCallback: func(_ ssh.ConnMetadata, offered ssh.PublicKey) (*ssh.Permissions, error) {
+			if authorized != nil && bytes.Equal(offered.Marshal(), authorized.Marshal()) {
+				return &ssh.Permissions{}, nil
+			}
+			return nil, fmt.Errorf("public key rejected by the in-process test server")
+		},
+	}
+	cfg.AddHostKey(hostSigner)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			raw, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return // the listener was closed by cleanup
+			}
+			// No t.* calls in here: this outlives the test body, and a
+			// failure reported after the test has finished panics the run
+			// instead of failing the test.
+			go func(c net.Conn) {
+				sc, chans, reqs, hsErr := ssh.NewServerConn(c, cfg)
+				if hsErr != nil {
+					_ = c.Close()
+					return
+				}
+				go ssh.DiscardRequests(reqs)
+				for ch := range chans {
+					_ = ch.Reject(ssh.Prohibited, "this fixture server offers no channels")
+				}
+				_ = sc.Close()
+			}(raw)
+		}
+	}()
+
+	return ln.Addr().String()
+}
+
+// clientPublicKey re-reads the authorized_keys line generateClientSSHKeyPair
+// produced, as a parsed key the in-process server can compare against.
+func clientPublicKey(t *testing.T, authorizedKeyLine string) ssh.PublicKey {
+	t.Helper()
+	key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(authorizedKeyLine))
+	if err != nil {
+		t.Fatalf("parsing the generated authorized_keys line: %v", err)
+	}
+	return key
+}
+
+// TestFixtureReadinessProbeAcceptsAServerThatAuthenticates is the control on
+// the two refusals below. Without it, a probe that answered "not ready" to
+// everything, including a healthy fixture, would pass them both, and the
+// only thing that would notice is the Docker suite timing out.
+func TestFixtureReadinessProbeAcceptsAServerThatAuthenticates(t *testing.T) {
+	clientKeyPath, authorizedKeyLine := generateClientSSHKeyPair(t)
+	addr := startInProcessSSHServer(t, clientPublicKey(t, authorizedKeyLine))
+
+	start := time.Now()
+	if err := waitForSSHAuthReady(addr, fixtureClientConfig(t, clientKeyPath), fixtureSSHReadyWindow); err != nil {
+		t.Fatalf("the probe refused a server that authenticates this exact key, so every refusal it reports elsewhere is worthless: %v", err)
+	}
+	t.Logf("accepted in %s", time.Since(start))
+}
+
+// TestFixtureReadinessProbeRefusesAServerThatRejectsTheKey is the half of
+// #250 that a handshake alone would miss. "Ready" has to mean the server
+// will authenticate the caller's key, not merely that it speaks SSH, so
+// this points the probe at a server that completes the transport handshake
+// happily and then refuses the key.
+func TestFixtureReadinessProbeRefusesAServerThatRejectsTheKey(t *testing.T) {
+	clientKeyPath, _ := generateClientSSHKeyPair(t)
+	addr := startInProcessSSHServer(t, nil) // authorizes nobody
+
+	const window = 500 * time.Millisecond
+	start := time.Now()
+	err := waitForSSHAuthReady(addr, fixtureClientConfig(t, clientKeyPath), window)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("the probe called a server ready that refuses this key outright")
+	}
+	// The error text is the positive control on the mechanism here. A probe
+	// that never reached user authentication would still return SOME error
+	// against this server if it were broken in an unrelated way, and would
+	// satisfy "returned an error" while proving nothing about auth. Only a
+	// probe that got through the key exchange and was then turned away at
+	// authentication produces this.
+	if !strings.Contains(err.Error(), "unable to authenticate") {
+		t.Fatalf("the probe failed, but not at authentication, so it says nothing about whether the probe checks auth at all: %v", err)
+	}
+	t.Logf("refused in %s: %v", elapsed, err)
+}
+
+// TestFixtureReadinessProbeRefusesASilentPeer is #250 stated as a test: a
+// peer that completes the TCP handshake and then never sends a byte is
+// precisely the state the old probe called ready, because a published
+// docker port accepts connections the moment the mapping exists, before
+// sshd inside is necessarily answering.
+//
+// The test opens with the old probe against this same listener, so the
+// defect is an executable fact in the record rather than a claim in a
+// comment: net.DialTimeout succeeds here, every time.
+//
+// Elapsed time is the control on the fix. A probe that never got past the
+// dial would come back in microseconds and would satisfy "returned an
+// error" while proving nothing about the handshake being bounded, so this
+// insists the refusal took roughly a whole handshake deadline to arrive.
+// The upper bound is the other half: ssh.ClientConfig.Timeout does not
+// cover the handshake, so without a deadline of its own this call does not
+// return at all.
+func TestFixtureReadinessProbeRefusesASilentPeer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	accepted := make(chan net.Conn, 8)
+	go func() {
+		defer close(accepted)
+		for {
+			c, acceptErr := ln.Accept()
+			if acceptErr != nil {
+				return
+			}
+			// Never written to and never closed: this peer completes the
+			// TCP handshake and then says nothing at all.
+			accepted <- c
+		}
+	}()
+	// One cleanup, in this order on purpose. t.Cleanup runs LIFO, so two
+	// separate ones would drain the channel before the listener was closed,
+	// and the drain would then wait forever for a close that cannot happen
+	// until the listener goes.
+	t.Cleanup(func() {
+		_ = ln.Close()
+		for c := range accepted {
+			_ = c.Close()
+		}
+	})
+
+	addr := ln.Addr().String()
+
+	// The old probe, verbatim, against this peer.
+	conn, dialErr := net.DialTimeout("tcp", addr, fixtureDialTimeout)
+	if dialErr != nil {
+		t.Fatalf("this peer is supposed to accept TCP and then go quiet, but the dial itself failed, so the rest of this test would be proving something else: %v", dialErr)
+	}
+	_ = conn.Close()
+	t.Log("a bare net.DialTimeout calls this peer ready, which is #250")
+
+	clientKeyPath, _ := generateClientSSHKeyPair(t)
+	cfg := fixtureClientConfig(t, clientKeyPath)
+
+	const window = 500 * time.Millisecond
+	// window bounds when the last attempt may START; an attempt already in
+	// flight is bounded by fixtureHandshakeTimeout. The slack on top is for
+	// a loaded machine, and is still far short of "unbounded".
+	limit := window + fixtureHandshakeTimeout + 15*time.Second
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- waitForSSHAuthReady(addr, cfg, window) }()
+
+	select {
+	case probeErr := <-done:
+		elapsed := time.Since(start)
+		if probeErr == nil {
+			t.Fatal("the probe called a peer ready that never sent a byte, which is the whole of #250")
+		}
+		if elapsed < fixtureHandshakeTimeout-time.Second {
+			t.Fatalf("the probe gave up after only %s, well short of the %s handshake deadline, so it cannot have got past the dial and says nothing about the handshake being bounded", elapsed, fixtureHandshakeTimeout)
+		}
+		t.Logf("bounded at %s: %v", elapsed, probeErr)
+	case <-time.After(limit):
+		t.Fatalf("the probe against a peer that accepts TCP and then says nothing was still waiting %s later; ssh.ClientConfig.Timeout bounds only the dial, so a handshake without a deadline of its own never returns here", limit)
+	}
 }
 
 // writeKnownHosts writes a single known_hosts entry, in the exact format
@@ -641,7 +1099,7 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 	port := freeTCPPort(t)
 	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
 
-	contA, hostKeyA := startFixtureContainer(t, image, port, "server-a")
+	contA, hostKeyA := startFixtureContainer(t, image, port, "server-a", clientKeyPath)
 	writeKnownHosts(t, knownHostsPath, host, port, hostKeyA)
 
 	src := transport.Source{
@@ -649,7 +1107,7 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 		Type:       "sftp",
 		Host:       host,
 		Port:       port,
-		User:       "backup",
+		User:       sftpFixtureUser,
 		KeyFile:    clientKeyPath,
 		KnownHosts: knownHostsPath,
 	}
@@ -664,7 +1122,8 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 	t.Run("recorded host key with the configured SSH key succeeds", func(t *testing.T) {
 		if _, err := adapter.List(ctx, src); err != nil {
 			logs, _ := exec.Command("docker", "logs", contA).CombinedOutput()
-			t.Fatalf("List against the recorded host key should have succeeded, got: %v\nserver logs:\n%s", err, logs)
+			t.Fatalf("List against the recorded host key should have succeeded, got: %v\n%s\nserver logs:\n%s",
+				err, fixtureAuthVerdict(port, clientKeyPath), logs)
 		}
 	})
 
@@ -672,7 +1131,7 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 
 	t.Run("unknown host key is refused", func(t *testing.T) {
 		unknownPort := freeTCPPort(t)
-		contU, _ := startFixtureContainer(t, image, unknownPort, "server-unknown")
+		contU, _ := startFixtureContainer(t, image, unknownPort, "server-unknown", clientKeyPath)
 		defer stopFixtureContainer(contU)
 
 		unknownSrc := src
@@ -691,7 +1150,7 @@ func TestSFTPHostKeyVerification(t *testing.T) {
 		// Same host:port as the one recorded in known_hosts, but a freshly
 		// started container, so a freshly generated, different host key:
 		// exactly the shape of a MITM, or a server quietly replaced.
-		contB, hostKeyB := startFixtureContainer(t, image, port, "server-b")
+		contB, hostKeyB := startFixtureContainer(t, image, port, "server-b", clientKeyPath)
 		defer stopFixtureContainer(contB)
 
 		if hostKeyB == hostKeyA {
@@ -732,7 +1191,7 @@ func TestSFTPKeyResolvers(t *testing.T) {
 	port := freeTCPPort(t)
 	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
 
-	cont, hostKeyLine := startFixtureContainer(t, image, port, "key-resolvers")
+	cont, hostKeyLine := startFixtureContainer(t, image, port, "key-resolvers", clientKeyPath)
 	t.Cleanup(func() { stopFixtureContainer(cont) })
 	writeKnownHosts(t, knownHostsPath, host, port, hostKeyLine)
 
@@ -741,7 +1200,7 @@ func TestSFTPKeyResolvers(t *testing.T) {
 		Type:       "sftp",
 		Host:       host,
 		Port:       port,
-		User:       "backup",
+		User:       sftpFixtureUser,
 		KnownHosts: knownHostsPath,
 	}
 	adapter := New()
