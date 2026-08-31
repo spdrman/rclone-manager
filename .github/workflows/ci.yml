@@ -77,6 +77,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # packaging's release-manifest checks ask git whether the commit
+          # container/release-manifest.json pins is an ancestor of HEAD
+          # (#174). In actions/checkout's default single-commit shallow
+          # clone that commit is not an object at all, so git exits 128 and
+          # the check correctly reports that it could not decide, which is
+          # a red job either way. Full history is what makes the question
+          # answerable.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
