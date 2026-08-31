@@ -136,6 +136,26 @@ func NewFirstRun(defaults FirstRunDefaults) (*FirstRun, error) {
 	if !filepath.IsAbs(defaults.ConfigPath) {
 		return nil, fmt.Errorf("service: first run config path %q must be absolute", defaults.ConfigPath)
 	}
+	// Issue #196 made the packaged configuration mount a DIRECTORY, so
+	// `--config /etc/backup-manager/config` is a spelling an operator is
+	// actively invited to type (config.ResolvePath's own doc). Resolving
+	// it here, once, at the boundary where a deployment's answer becomes
+	// this type's, is what keeps everything derived from ConfigPath
+	// agreeing with the file service.Open actually opens: the
+	// configuration itself, and the ssh_keys/ and known_hosts.d/ stores
+	// beside it.
+	//
+	// Without it the directory spelling fails in the direction that
+	// reports success. Configured() would stat a directory that always
+	// exists and call a completely empty install configured, and
+	// ImportSSHKey derives filepath.Dir(ConfigPath), so a private key an
+	// operator imports during setup would be written to the mount's
+	// PARENT -- outside the volume, onto the read-only rootfs on every
+	// shipped adapter.
+	defaults.ConfigPath = config.ResolvePath(defaults.ConfigPath)
+	if info, err := os.Stat(defaults.ConfigPath); err == nil && info.IsDir() {
+		return nil, fmt.Errorf("service: first run config path %q is a directory, not a configuration file", defaults.ConfigPath)
+	}
 	if defaults.StateDatabase == "" {
 		return nil, errors.New("service: first run needs a state database path")
 	}
@@ -298,6 +318,19 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name)), nil
 }
 
+// writeConfigPayload is the file-write half of the two create paths
+// below, behind a package variable so a test can inject the failure the
+// whole shape of those paths exists to survive: an ENOSPC on a NAS data
+// volume, an EIO, a quota. Production never replaces it, and neither
+// path is honest about "nothing partial is left behind" unless something
+// can actually make the write fail.
+var writeConfigPayload = func(f *os.File, b []byte) error {
+	if _, err := f.Write(b); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
 // writeConfigExclusively creates path and writes b to it, failing with
 // ErrAlreadyConfigured if anything is already there.
 //
@@ -305,16 +338,79 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 // That function's temp-file-plus-rename is right for REPLACING a
 // configuration whose current content the caller has just read; here
 // there is no current content, and rename would happily clobber a file
-// that appeared in between. O_CREATE|O_EXCL makes the check and the
-// claim one indivisible operation the filesystem performs, so two
-// concurrent setup submissions, or a setup racing an operator's own
-// `cp config.yaml`, cannot both believe they created the first
-// configuration.
+// that appeared in between.
 //
-// It fsyncs the file and then its directory for the same reason the
-// atomic path does: a configuration an operator was told was saved has to
-// still be there after the crash that follows.
+// It is not a bare O_CREATE|O_EXCL either, and that is the second half of
+// the shape. An exclusive create makes the claim indivisible but says
+// nothing about what is at path once the write that follows fails, and
+// what it leaves is a zero-length or truncated config.yaml. That file is
+// the worst possible outcome of a failed setup on the deployment this
+// whole issue is for: Configured() reports true for any file that exists,
+// so setup answers 409 from then on; OpenConfigAndJournal finds a file
+// and so never returns ErrConfigAbsent, so the provider app treats it as
+// a broken configuration and exits; and the container crash-loops until
+// somebody with a shell on the NAS deletes a file nobody told them about.
+//
+// So the write goes to a temp file in the target's OWN directory, is
+// synced there, and is only then given the real name with os.Link.
+// link(2) fails with EEXIST if the target exists, so "somebody else got
+// there first" is still one indivisible filesystem decision, and no
+// reader can ever observe a partial config.yaml at path, not even for an
+// instant. A filesystem with no hard links falls back to the exclusive
+// create, which removes what it created on any failure.
+//
+// The file and then its directory are fsynced for the same reason the
+// atomic path does it: a configuration an operator was told was saved has
+// to still be there after the crash that follows.
 func writeConfigExclusively(path string, b []byte) error {
+	dir := filepath.Dir(path)
+
+	// os.CreateTemp creates with 0600, which is the mode this file has to
+	// land on anyway: it names a host, a user and the path to a private
+	// key, exactly as writeConfigBytesAtomically's replacement does.
+	tmp, err := os.CreateTemp(dir, ".config-*.yaml.partial")
+	if err != nil {
+		return fmt.Errorf("service: creating the first configuration: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// Removed on EVERY path, success included: a successful link leaves
+	// one inode reachable under two names, and the dot-prefixed one is
+	// not something anybody should later find beside a live config.
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if err := writeConfigPayload(tmp, b); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("service: writing the first configuration: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("service: closing the first configuration: %w", err)
+	}
+	if err := os.Link(tmpPath, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return ErrAlreadyConfigured
+		}
+		// Anything else is treated as "this filesystem will not link"
+		// rather than classified by errno, because the fallback re-runs
+		// the same claim through a different primitive and reports its
+		// own failure if the real problem was the directory. Nothing is
+		// swallowed: a read-only mount fails again, one line later, with
+		// the error that names it.
+		return createConfigExclusivelyRemovingOnError(path, b)
+	}
+	if err := fsyncDir(dir); err != nil {
+		return fmt.Errorf("service: syncing the configuration directory: %w", err)
+	}
+	return nil
+}
+
+// createConfigExclusivelyRemovingOnError is writeConfigExclusively for a
+// filesystem that has no hard links (a FAT-formatted external volume on a
+// NAS, some network mounts). It keeps the exclusive claim and buys back
+// all-or-nothing with a deferred remove instead of a second name: a
+// concurrent reader can see a partial file for the moment between the
+// failed write and the remove, which the link path never allows, but the
+// install is not left bricked either way.
+func createConfigExclusivelyRemovingOnError(path string, b []byte) (retErr error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -322,13 +418,18 @@ func writeConfigExclusively(path string, b []byte) error {
 		}
 		return fmt.Errorf("service: creating the first configuration: %w", err)
 	}
-	if _, err := file.Write(b); err != nil {
-		file.Close()
+	// The file this function created is removed again on every error
+	// path, so a retry after a full disk is not refused by the truncated
+	// remains of the attempt that failed.
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(path)
+		}
+	}()
+
+	if err := writeConfigPayload(file, b); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("service: writing the first configuration: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return fmt.Errorf("service: syncing the first configuration: %w", err)
 	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("service: closing the first configuration: %w", err)

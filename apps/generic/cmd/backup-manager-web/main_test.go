@@ -94,6 +94,18 @@ func TestCmdServe_ServesTheFirstRunFlowRatherThanExitingOnAMissingConfig(t *test
 		t.Fatalf("service.Open against a missing config = %v, want an error matching ErrConfigAbsent; cmdServe would exit instead of serving the setup flow", err)
 	}
 
+	// The packaged mount is a DIRECTORY (#196), so --config naming it is
+	// the spelling an operator is invited to type. An empty one is the
+	// same fresh install, and it has to reach the same branch: statting
+	// the directory rather than the file inside it finds something
+	// present on a completely empty install, and this binary would exit
+	// at startup on the one deployment shape issue #176 is for.
+	emptyDir := t.TempDir()
+	_, _, err = service.Open(context.Background(), emptyDir)
+	if !errors.Is(err, service.ErrConfigAbsent) {
+		t.Fatalf("service.Open against an empty config DIRECTORY = %v, want an error matching ErrConfigAbsent", err)
+	}
+
 	invalid := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(invalid, []byte("poll_interval: 0s\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)

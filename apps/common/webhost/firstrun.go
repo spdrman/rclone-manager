@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -103,16 +104,41 @@ func (h *handlers) setup() SetupClient {
 }
 
 // configured reports whether this deployment has a configuration at all.
-// It asks the first-run surface when there is one (it is the thing that
-// looks at the file) and otherwise reads the presence of a backend, since
-// a backend can only ever have been opened from a configuration that
-// existed and validated.
+//
+// A live backend is the authority, and it is asked FIRST. A backend can
+// only ever have been opened from a configuration that existed and
+// validated, so a running process holding one is configured no matter
+// what is on disk at this instant. The first-run surface, which answers
+// by statting a file, is consulted only when there is no backend to ask,
+// which is the one situation where the file genuinely is the only
+// evidence there is.
+//
+// The order matters because both authorities survive activation: the
+// configured router keeps FirstRun set so GET /system/first-run keeps
+// answering. Asking the file first meant that deleting or renaming
+// config.yaml under a fully running instance flipped this to false, sent
+// every operator's browser to the setup wizard, and -- worse -- opened
+// completeFirstRun's guard, which would then write a SECOND "first"
+// configuration and report restart_required false while the process kept
+// serving the configuration that was no longer on disk. Both halves of
+// that answer were untrue.
 func (h *handlers) configured() bool {
+	if h.backend != nil {
+		return true
+	}
 	if h.firstRun != nil {
 		return h.firstRun.Configured()
 	}
-	return h.backend != nil
+	return false
 }
+
+// activationTimeout bounds the in-process activation completeFirstRun
+// triggers. It is generous on purpose: what it covers is a journal open
+// plus any pending schema migration on a NAS's own disk, and cutting that
+// short is the failure this bound exists to avoid, not the one it exists
+// to cause. It is a backstop against an open that never returns, so the
+// setup request cannot hang a connection for the life of the process.
+const activationTimeout = 10 * time.Minute
 
 // firstRunStatusResponse is GET /api/v1/system/first-run's body: the one
 // question the shared UI asks before deciding whether to render the setup
@@ -207,7 +233,27 @@ func (h *handlers) completeFirstRun(w http.ResponseWriter, r *http.Request) {
 	// completeFirstRunResponse.RestartRequired.
 	restartRequired := false
 	if h.onConfigured != nil {
-		if err := h.onConfigured(r.Context()); err != nil {
+		// Activation runs on a context detached from the request, and
+		// that is a correctness requirement rather than a nicety. What it
+		// builds is a process-lifetime resource -- a journal handle and
+		// the shared journal lock -- and the request context is cancelled
+		// the instant this handler returns, early if the operator closes
+		// the browser tab, and earlier still if serve-ui's reverse proxy
+		// hits its own ResponseHeaderTimeout on a slow first migration.
+		//
+		// A cancellation reaching state.Open surfaces as an error that is
+		// neither ErrUnknownSchemaVersion nor ErrSchemaDrift, so the
+		// migration failure path falls through to the snapshot restore,
+		// which rename-overwrites the journal's files. Whether a browser
+		// tab stayed open must not decide whether that runs.
+		//
+		// The timeout replaces the cancellation that was just removed:
+		// detaching means a client that gives up can no longer stop a
+		// hung open, so activation gets a bound of its own instead of
+		// none at all. r.Context() stays in use for writing the response.
+		activationCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), activationTimeout)
+		defer cancel()
+		if err := h.onConfigured(activationCtx); err != nil {
 			restartRequired = true
 		}
 	}

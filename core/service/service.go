@@ -265,11 +265,6 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 // BackupService is ever constructed and no daemon, API, scheduler tick or
 // transfer ever starts.
 func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Config, *state.Journal, func() error, error) {
-	// #196 made the packaged configuration mount a DIRECTORY, so resolve
-	// it to the file inside before anything below looks at it: the
-	// absence check immediately after has to ask about config.yaml, not
-	// about the directory holding it, or an empty fresh-install mount
-	// reads as "present but broken" instead of "not set up yet".
 	configPath = config.ResolvePath(configPath)
 
 	// An absent configuration file is reported as its own error, before
@@ -281,6 +276,15 @@ func OpenConfigAndJournal(ctx context.Context, configPath string) (*config.Confi
 	// config.Load's wrapped error happens to say, keeps that distinction
 	// a property of this function rather than of an error string another
 	// package is free to reword.
+	//
+	// The stat runs on the RESOLVED path, which is why the resolution
+	// above comes first. An operator may spell --config as the packaged
+	// configuration DIRECTORY (#196 made the mount a directory, and
+	// config.ResolvePath exists for that spelling), and statting the
+	// directory would find it present on a completely empty install: the
+	// one shape that most needs ErrConfigAbsent would be the one shape
+	// that never gets it, and the process would exit on a fresh install
+	// rather than serve setup.
 	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil, fmt.Errorf("%w at %s", ErrConfigAbsent, configPath)
 	}

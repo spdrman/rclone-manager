@@ -192,11 +192,13 @@ func TestUnconfiguredInstanceStillRequiresAuthentication(t *testing.T) {
 	})
 
 	var checked int
+	registered := map[string]bool{}
 	err := chi.Walk(routableFor(t, router), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		if strings.HasPrefix(route, "/health/") {
 			return nil
 		}
 		checked++
+		registered[method+" "+route] = true
 		req := httptest.NewRequest(method, strings.ReplaceAll(route, "/*", "/x"), strings.NewReader("{}"))
 		req.Header.Set("Content-Type", "application/json")
 		attachValidCSRF(req)
@@ -212,6 +214,31 @@ func TestUnconfiguredInstanceStillRequiresAuthentication(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("chi.Walk found no /api/v1 routes; this test would pass vacuously")
+	}
+
+	// The small table IS issue #176's answer to "what is reachable before
+	// configuration exists", and until now it was enforced by reading it.
+	// TestUnconfiguredInstanceRefusesEveryRouteOutsideTheSetupSurface
+	// walks the CONFIGURED router, so a route registered ONLY here never
+	// appears in that walk and is never compared against anything. That
+	// is exactly what a well-meaning future first-run feature looks like.
+	// This walk already has the small router in front of it, so pinning
+	// the set costs the two loops below.
+	for route := range registered {
+		if !firstRunSafeRoutes[route] {
+			t.Errorf("%s is served by an UNCONFIGURED instance but is not in firstRunSafeRoutes; every route reachable before setup has to be listed and justified there", route)
+		}
+	}
+	for route := range firstRunSafeRoutes {
+		if !registered[route] {
+			t.Errorf("firstRunSafeRoutes names %s, which the unconfigured router does not register; the allowlist is describing a surface that no longer exists", route)
+		}
+	}
+	// Positive control on the collection itself: a route from the full
+	// application must NOT be in the set, or the walk picked up the
+	// configured router and the equality above is meaningless.
+	if registered["GET /api/v1/backup-sets"] {
+		t.Fatal("the walk collected the CONFIGURED router's routes; this test is not looking at the setup surface at all")
 	}
 }
 
@@ -460,5 +487,130 @@ func TestSetupRoutesReachTheFirstRunClientWhileUnconfigured(t *testing.T) {
 	}
 	if fr.probed != "prod-db-01.internal" {
 		t.Errorf("the first-run client probed %q, want %q", fr.probed, "prod-db-01.internal")
+	}
+}
+
+// TestConfigured_PrefersALiveBackendOverTheFileOnDisk pins which of two
+// authorities owns one fact. Both survive activation: the configured
+// router keeps FirstRun set so GET /system/first-run keeps answering, and
+// FirstRun answers by statting a file. Removing config.yaml to reset an
+// instance is a plausible thing to do on a NAS, and when the file was
+// asked first it flipped a fully running, fully configured process back
+// into setup: every operator's browser sent to the wizard, and
+// completeFirstRun's guard opened, which would write a SECOND "first"
+// configuration and report restart_required false while the process kept
+// serving the configuration that was no longer on disk.
+func TestConfigured_PrefersALiveBackendOverTheFileOnDisk(t *testing.T) {
+	// configured: false is the state a deleted config file produces.
+	fr := &fakeFirstRun{configured: false}
+	router := NewRouter(RouterConfig{
+		Platform:      allowingPlatform("alice"),
+		Backend:       newSyncFakeBackend(),
+		Gate:          alwaysPassGate{},
+		FirstRun:      fr,
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/system/first-run", nil))
+	var body struct {
+		Configured bool `json:"configured"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !body.Configured {
+		t.Error("configured = false on a running instance whose config file was deleted; the UI would send every operator to the setup wizard")
+	}
+
+	if rec := postFirstRun(t, router, validCreateBody, true); rec.Code != http.StatusConflict {
+		t.Fatalf("POST status = %d, want 409 on a running instance (%s)", rec.Code, rec.Body.String())
+	}
+	if fr.created != nil {
+		t.Error("a second first configuration was written on a live, already-configured instance")
+	}
+
+	// Positive control: the identical first-run client with no backend
+	// behind it answers false and admits the write. Without this, both
+	// assertions above would also pass against a handler that simply
+	// hardcoded true.
+	unconfigured := unconfiguredRouter(&fakeFirstRun{configured: false})
+	rec = httptest.NewRecorder()
+	unconfigured.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/system/first-run", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if body.Configured {
+		t.Error("configured = true on an instance with no backend and no config file")
+	}
+	if rec := postFirstRun(t, unconfigured, validCreateBody, true); rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d on a genuinely unconfigured instance, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCompleteFirstRun_ActivationOutlivesTheRequest keeps a
+// process-lifetime resource from being built under a context Go cancels
+// the moment the handler returns, and that a browser tab or a reverse
+// proxy timeout can cancel long before that. What activation opens is a
+// journal handle and the shared journal lock, and a cancellation landing
+// inside state.Open surfaces as an error that is neither
+// ErrUnknownSchemaVersion nor ErrSchemaDrift, so the migration failure
+// path falls through to the snapshot restore, which rename-overwrites the
+// journal's files. Whether an operator closed a tab must not decide
+// whether that runs.
+func TestCompleteFirstRun_ActivationOutlivesTheRequest(t *testing.T) {
+	fr := &fakeFirstRun{}
+
+	// Declared before the router so the activation closure can reach the
+	// request it is called from, and assigned after: observing "the
+	// request was cancelled and activation carried on" needs both sides
+	// of one handler call.
+	var requestContext context.Context
+	var cancelRequest context.CancelFunc
+	var activationErr, requestErr error
+	var hasDeadline bool
+
+	router := NewRouter(RouterConfig{
+		Platform: allowingPlatform("alice"),
+		FirstRun: fr,
+		OnConfigured: func(ctx context.Context) error {
+			// Cancel the request from inside activation, which is what a
+			// closed tab or a proxy timeout does.
+			cancelRequest()
+			_, hasDeadline = ctx.Deadline()
+			activationErr = ctx.Err()
+			requestErr = requestContext.Err()
+			return nil
+		},
+		BinaryVersion: "test",
+		Commit:        "test",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/system/first-run", strings.NewReader(validCreateBody))
+	req.Header.Set("Content-Type", "application/json")
+	attachValidCSRF(req)
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	requestContext, cancelRequest = ctx, cancel
+	req = req.WithContext(ctx)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	// The positive control for the negative assertion below: unless the
+	// request context really was cancelled at that instant, "activation
+	// was not cancelled" proves nothing at all.
+	if requestErr == nil {
+		t.Fatal("the request context was not cancelled, so this test cannot tell a detached activation from an attached one")
+	}
+	if activationErr != nil {
+		t.Errorf("activation ran on a cancelled context (%v); a closed browser tab would reach the journal's restore path", activationErr)
+	}
+	if !hasDeadline {
+		t.Error("the detached activation context has no deadline; a hung open would hold the request for the life of the process")
 	}
 }
