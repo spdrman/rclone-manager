@@ -38,6 +38,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -55,6 +56,7 @@ import (
 	"github.com/spdrman/rclone-manager/apps/common/platform/capabilities"
 	"github.com/spdrman/rclone-manager/apps/common/platform/notify"
 	"github.com/spdrman/rclone-manager/apps/common/platform/profile"
+	"github.com/spdrman/rclone-manager/apps/common/webhost"
 	"github.com/spdrman/rclone-manager/apps/common/webhost/serve"
 	"github.com/spdrman/rclone-manager/apps/generic/webui"
 	"github.com/spdrman/rclone-manager/core/service"
@@ -72,6 +74,17 @@ var (
 // /etc/backup-manager/config (issue #196) and config.yaml lives inside
 // it; --config also accepts that directory.
 const defaultConfigPath = "/etc/backup-manager/config/config.yaml"
+
+// defaultStateDatabase is where a FIRST-RUN configuration will point its
+// SQLite journal (issue #176). It matches what
+// scripts/deploy/deploy_generic.py's render_config_yaml has always
+// written and what container/compose.yaml already mounts (STATE_DIR ->
+// /data/state), so an instance an administrator sets up through the web
+// UI lands in exactly the same place as one deployed by that script.
+//
+// It is a deployment fact, never something an API caller supplies: see
+// core/service.FirstRunDefaults' own doc for why that boundary matters.
+const defaultStateDatabase = "/data/state/state.db"
 
 // defaultAuthStorePath lives inside the SAME already-writable state
 // volume container/compose.yaml already mounts for the SQLite journal
@@ -155,7 +168,17 @@ commands:
 
 serve flags:
   --config PATH               path to the manager's YAML config file
-                               (default /etc/backup-manager/config/config.yaml)
+                               (default /etc/backup-manager/config/config.yaml).
+                               If this file does not exist, serve starts
+                               anyway and offers the first-run setup flow
+                               instead of refusing to start (issue #176);
+                               a file that exists and does not validate is
+                               still a hard startup failure
+  --state-database PATH        SQLite journal path written into a
+                               first-run configuration (default
+                               $STATE_DATABASE, or /data/state/state.db).
+                               Ignored once a config file exists, which
+                               names its own
   --listen ADDR                address to listen on
                                (default $LISTEN_ADDR, or :8080)
   --profile NAME               runtime profile: generic or ugos
@@ -281,6 +304,8 @@ func cmdServe(args []string) int {
 		"trust X-Forwarded-For/X-Forwarded-Proto from the immediate caller - only safe behind serve-ui's own reverse proxy over an isolated network (see this command's own --help)")
 	publicBaseURL := fset.String("public-base-url", envOrDefault("PUBLIC_BASE_URL", ""),
 		"externally-reachable base URL for the one-time enrollment link (default: print just the raw token, since this process's own --listen address is never externally reachable)")
+	stateDatabase := fset.String("state-database", envOrDefault("STATE_DATABASE", defaultStateDatabase),
+		"SQLite journal path written into a first-run configuration; ignored once a config file exists, which names its own")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}
@@ -328,17 +353,22 @@ func cmdServe(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	backend, cleanup, err := service.Open(ctx, *configPath)
-	if err != nil {
-		return fail(err)
-	}
-	defer func() { _ = cleanup() }()
-
-	// Local authentication is opened only for a profile that actually
-	// uses it. A gateway profile has no login surface of its own, so
-	// creating an administrator record it would never consult, and
-	// printing an enrolment token nobody can redeem, would be two
-	// misleading artifacts rather than a harmless extra.
+	// Local authentication is built BEFORE the configuration is loaded,
+	// and that ordering is deliberate (issue #176). Enrollment needs no
+	// configuration of its own, and on a fresh install it is what has to
+	// happen first: an unconfigured instance reachable on a LAN must not
+	// be configurable by whoever reaches the port first, so the operator
+	// enrolls with the single-use token printed below and only then sees
+	// a setup flow. Before this, the process exited at service.Open and
+	// none of this was reachable at all.
+	//
+	// It is still opened only for a profile that actually uses it. A
+	// gateway profile has no login surface of its own, so creating an
+	// administrator record it would never consult, and printing an
+	// enrolment token nobody can redeem, would be two misleading
+	// artifacts rather than a harmless extra. Such a profile reaches the
+	// setup flow already authenticated by its platform gateway, which is
+	// the same boundary it will use afterwards.
 	var (
 		authSvc    *local.Service
 		authRoutes http.Handler
@@ -380,41 +410,104 @@ func cmdServe(args []string) int {
 	fmt.Fprintf(os.Stderr, "backup-manager-web: runtime profile %q (%s), authentication: %s\n",
 		runtimeProfile.ID, runtimeProfile.DisplayName, authModeOf(runtimeProfile))
 
-	// Work Package 3.5's proactive alerting (docs/EPIC-B-multi-nas.md
-	// §71). Both halves have to agree before a single notification goes
-	// out: the administrator opted in through the config file's alerts
-	// block, and this platform actually offers a local notification
-	// capability to deliver through. The generic Docker/Linux adapter
-	// declares none (apps/generic/platform reports every capability
-	// false, never emulated), so on this provider the sink refuses at
-	// wiring time and alerting stays visibly off, printed once here
-	// rather than discovered as silence later. A provider that DOES
-	// declare NativeNotifications gets its alerts through exactly this
-	// wiring with no further change.
-	if sink, err := notify.NewPlatformSink(platformAdapter); err != nil {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off:", err)
-	} else if !backend.EnableAlerts(sink) {
-		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off: the configuration has not set alerts.enabled")
-	}
-
-	handler := serve.NewEngine(serve.EngineConfig{
+	engineConfig := serve.EngineConfig{
 		Platform:              platformAdapter,
 		AuthRoutes:            authRoutes,
 		TrustForwardedHeaders: trustFwd,
-		Backend:               backend,
 		BinaryVersion:         version,
 		Commit:                commit,
-	})
+	}
+
+	var handler http.Handler
+	var scheduler serve.Scheduler
+
+	backend, cleanup, err := service.Open(ctx, *configPath)
+	switch {
+	case err == nil:
+		defer func() { _ = cleanup() }()
+		enableAlerts(backend, platformAdapter)
+		engineConfig.Backend = backend
+		handler = serve.NewEngine(engineConfig)
+		scheduler = backend
+
+	case errors.Is(err, service.ErrConfigAbsent):
+		// Issue #176: no configuration on disk is a fresh install, not a
+		// misconfiguration. Serve the setup flow rather than exiting, so
+		// an administrator who installed this from an app store can
+		// finish the job in the web UI they installed it to reach. A
+		// config file that EXISTS and does not validate falls to the
+		// default branch below and is still fatal.
+		fmt.Fprintf(os.Stderr, "backup-manager-web: no configuration at %s yet; serving the first-run setup flow\n", *configPath)
+
+		firstRun, frErr := service.NewFirstRun(service.FirstRunDefaults{
+			ConfigPath:    *configPath,
+			StateDatabase: *stateDatabase,
+		})
+		if frErr != nil {
+			return fail(frErr)
+		}
+		engineConfig.FirstRun = firstRun
+		engineConfig.Activate = func(ctx context.Context) (webhost.BackupServiceClient, func() error, error) {
+			opened, closeFn, openErr := service.Open(ctx, *configPath)
+			if openErr != nil {
+				return nil, nil, openErr
+			}
+			// Alerting is decided from the configuration setup just
+			// wrote, exactly as it is for a process that started with
+			// one, so a first-run instance is not silently the one
+			// deployment shape where the alerts block does nothing until
+			// a restart.
+			enableAlerts(opened, platformAdapter)
+			return opened, closeFn, nil
+		}
+
+		engine, engErr := serve.NewFirstRunEngine(engineConfig)
+		if engErr != nil {
+			return fail(engErr)
+		}
+		defer func() { _ = engine.Close() }()
+		// The same value is both the HTTP surface and the scheduler: it
+		// serves setup now, the application after activation, and its
+		// scheduler loop simply waits for a backend to exist rather than
+		// this process ending up with no scheduler for its whole life.
+		handler = engine
+		scheduler = engine
+
+	default:
+		return fail(err)
+	}
 
 	httpServer := serve.NewHTTPServer(*listenAddr, handler)
 
 	// serve.RunEngine owns the §9.3 orchestration (HTTP server + scheduler
 	// share ctx) - see that function's own doc for exactly what each
 	// branch does and why.
-	if err := serve.RunEngine(ctx, httpServer, backend, shutdownGrace, os.Stderr); err != nil {
+	if err := serve.RunEngine(ctx, httpServer, scheduler, shutdownGrace, os.Stderr); err != nil {
 		return fail(err)
 	}
 	return 0
+}
+
+// enableAlerts is Work Package 3.5's proactive alerting wiring
+// (docs/EPIC-B-multi-nas.md §71), factored out of cmdServe because it now
+// runs from two places: a process that started with a configuration, and
+// one that gained its first configuration through the setup flow.
+//
+// Both halves have to agree before a single notification goes out: the
+// administrator opted in through the config file's alerts block, and this
+// platform actually offers a local notification capability to deliver
+// through. The generic Docker/Linux adapter declares none
+// (apps/generic/platform reports every capability false, never emulated),
+// so on this provider the sink refuses at wiring time and alerting stays
+// visibly off, printed once here rather than discovered as silence later.
+// A provider that DOES declare NativeNotifications gets its alerts
+// through exactly this wiring with no further change.
+func enableAlerts(backend *service.BackupService, platformAdapter capabilities.PlatformAdapter) {
+	if sink, err := notify.NewPlatformSink(platformAdapter); err != nil {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off:", err)
+	} else if !backend.EnableAlerts(sink) {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: proactive alerting is off: the configuration has not set alerts.enabled")
+	}
 }
 
 // cmdServeUI runs the UI-host container's whole job: serve the shared

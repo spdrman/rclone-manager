@@ -242,43 +242,20 @@ func (b *BackupService) GetBackupSet(_ context.Context, id string) (BackupSet, e
 	return BackupSet{}, ErrBackupSetNotFound
 }
 
-// CreateBackupSet validates req, persists it into the config file this
-// BackupService was opened from, and hot-reloads this BackupService so
-// the new backup set is immediately live — see this file's package doc
-// for the full sequence and why it is safe to do in-process.
-func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSetRequest) (CreateBackupSetResult, error) {
-	if b.configPath == "" {
-		return CreateBackupSetResult{}, ErrConfigNotFileBacked
-	}
-	if err := validateCreateRequest(req); err != nil {
-		return CreateBackupSetResult{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-	}
-
-	keyFile, err := b.resolveSSHKeyFile(req.SSHKeyID)
-	if err != nil {
-		return CreateBackupSetResult{}, err
-	}
-
-	sourceName := req.SourceName
-	if sourceName == "" {
-		sourceName = defaultSourceName
-	}
-
-	b.configMu.Lock()
-	defer b.configMu.Unlock()
-
-	// Re-read from disk, not b.state.Load().inner.Config: this is the same "always
-	// read fresh" discipline `backup-manager sources` already uses
-	// (core/cmd/backup-manager/sources.go), and it is what makes this
-	// method safe even if configPath was edited by hand (or by a second
-	// process) since this BackupService last loaded it — the write below
-	// is always based on the file's actual current content, never a
-	// possibly-stale in-memory copy.
-	cfg, err := config.Load(b.configPath)
-	if err != nil {
-		return CreateBackupSetResult{}, fmt.Errorf("service: re-reading configuration: %w", err)
-	}
-
+// newBackupSetFor turns one validated CreateBackupSetRequest into the
+// config.BackupSet that gets persisted, and writes the dedicated
+// known_hosts file it points at. It is deliberately the ONE place that
+// decides what a backup set created through the API looks like: both
+// CreateBackupSet (folding a set into an existing configuration) and
+// CreateInitialConfig (firstrun.go, writing the first one) go through it,
+// so a fresh install and an established one can never end up with two
+// different notions of the same request.
+//
+// keyFile is the caller's already-resolved SSH key path
+// (resolveSSHKeyFileIn), passed in rather than resolved here so
+// CreateBackupSet can keep failing on a bad ssh_key_id before it takes
+// its configuration lock.
+func newBackupSetFor(configPath, sourceName, keyFile string, req CreateBackupSetRequest) (config.BackupSet, error) {
 	newSet := config.BackupSet{
 		Name: req.Name,
 		Remote: config.Remote{
@@ -324,11 +301,55 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		newSet.Completion.StableFor = config.Duration(req.StableFor)
 	}
 
-	knownHostsPath, err := b.writeKnownHosts(sourceName, req.Name, req.KnownHostsLine)
+	knownHostsPath, err := writeKnownHostsIn(configPath, sourceName, req.Name, req.KnownHostsLine)
 	if err != nil {
-		return CreateBackupSetResult{}, fmt.Errorf("service: persisting known_hosts: %w", err)
+		return config.BackupSet{}, fmt.Errorf("service: persisting known_hosts: %w", err)
 	}
 	newSet.Remote.KnownHosts = knownHostsPath
+	return newSet, nil
+}
+
+// CreateBackupSet validates req, persists it into the config file this
+// BackupService was opened from, and hot-reloads this BackupService so
+// the new backup set is immediately live — see this file's package doc
+// for the full sequence and why it is safe to do in-process.
+func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSetRequest) (CreateBackupSetResult, error) {
+	if b.configPath == "" {
+		return CreateBackupSetResult{}, ErrConfigNotFileBacked
+	}
+	if err := validateCreateRequest(req); err != nil {
+		return CreateBackupSetResult{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+
+	keyFile, err := b.resolveSSHKeyFile(req.SSHKeyID)
+	if err != nil {
+		return CreateBackupSetResult{}, err
+	}
+
+	sourceName := req.SourceName
+	if sourceName == "" {
+		sourceName = defaultSourceName
+	}
+
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
+	// Re-read from disk, not b.state.Load().inner.Config: this is the same "always
+	// read fresh" discipline `backup-manager sources` already uses
+	// (core/cmd/backup-manager/sources.go), and it is what makes this
+	// method safe even if configPath was edited by hand (or by a second
+	// process) since this BackupService last loaded it — the write below
+	// is always based on the file's actual current content, never a
+	// possibly-stale in-memory copy.
+	cfg, err := config.Load(b.configPath)
+	if err != nil {
+		return CreateBackupSetResult{}, fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	newSet, err := newBackupSetFor(b.configPath, sourceName, keyFile, req)
+	if err != nil {
+		return CreateBackupSetResult{}, err
+	}
 
 	found := false
 	for i := range cfg.Sources {
@@ -446,9 +467,9 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	return result, nil
 }
 
-// writeKnownHosts writes line to a dedicated known_hosts file for
+// writeKnownHostsIn writes line to a dedicated known_hosts file for
 // sourceName/name, under the same directory as the state journal
-// (b.configPath's sibling "known_hosts" directory, mirroring
+// (configPath's sibling "known_hosts" directory, mirroring
 // docs/ssh-setup.md's own convention of one known_hosts file the
 // operator maintains by hand). One file per backup set, not one shared
 // file for every API-created set, so trusting (or later, rotating) one
@@ -464,14 +485,17 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 // name="../../../../tmp/evil" produced a path outside both the
 // known_hosts sandbox and the config directory. validateCreateRequest
 // (below) is CreateBackupSet's very first call and already refuses any
-// such Name/SourceName before this method is ever reached (its own
+// such Name/SourceName before this function is ever reached (its own
 // validPathSegment check), so this is defense in depth, not the primary
 // guard: even if some future caller reached this method with a value
 // validateCreateRequest never saw, the filepath.Rel check below refuses
 // to write outside dir regardless of what already let sourceName/name
 // through.
-func (b *BackupService) writeKnownHosts(sourceName, name, line string) (string, error) {
-	dir := filepath.Join(filepath.Dir(b.configPath), "known_hosts.d")
+//
+// It takes configPath rather than hanging off *BackupService for the
+// reason keysDirIn above gives.
+func writeKnownHostsIn(configPath, sourceName, name, line string) (string, error) {
+	dir := filepath.Join(filepath.Dir(configPath), "known_hosts.d")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -674,16 +698,21 @@ type SSHKeyRef struct {
 	Fingerprint string
 }
 
-// keysDir is where ImportSSHKey persists imported private key files:
-// b.configPath's sibling "ssh_keys" directory, so an imported key mounts
+// keysDirIn is where ImportSSHKey persists imported private key files:
+// configPath's sibling "ssh_keys" directory, so an imported key mounts
 // (or backs up) alongside the config file it is referenced from, the
 // same locality docs/ssh-setup.md already recommends for a manually
 // provisioned key.
-func (b *BackupService) keysDir() (string, error) {
-	if b.configPath == "" {
+//
+// It takes configPath rather than hanging off *BackupService so the
+// first-run surface (firstrun.go), which has no BackupService yet,
+// resolves the same directory from the same path: where an imported key
+// lands is decided here, once, for both.
+func keysDirIn(configPath string) (string, error) {
+	if configPath == "" {
 		return "", ErrConfigNotFileBacked
 	}
-	dir := filepath.Join(filepath.Dir(b.configPath), "ssh_keys")
+	dir := filepath.Join(filepath.Dir(configPath), "ssh_keys")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
@@ -701,10 +730,16 @@ func (b *BackupService) keysDir() (string, error) {
 // refused outright rather than let filepath.Join resolve it somewhere
 // else on disk.
 func (b *BackupService) resolveSSHKeyFile(id string) (string, error) {
+	return resolveSSHKeyFileIn(b.configPath, id)
+}
+
+// resolveSSHKeyFileIn is resolveSSHKeyFile's configPath-only half; see
+// keysDirIn above for why the split exists.
+func resolveSSHKeyFileIn(configPath, id string) (string, error) {
 	if id == "" || strings.ContainsAny(id, "/\\") {
 		return "", fmt.Errorf("%w: invalid ssh_key_id", ErrInvalidRequest)
 	}
-	dir, err := b.keysDir()
+	dir, err := keysDirIn(configPath)
 	if err != nil {
 		return "", err
 	}
@@ -728,6 +763,14 @@ func (b *BackupService) resolveSSHKeyFile(id string) (string, error) {
 // logged, never echoed back, and this process's own copy of it is
 // overwritten immediately after the file write below.
 func (b *BackupService) ImportSSHKey(_ context.Context, raw []byte) (SSHKeyRef, error) {
+	return importSSHKeyInto(b.configPath, raw)
+}
+
+// importSSHKeyInto is ImportSSHKey's configPath-only half; see keysDirIn
+// above for why the split exists. A first-run install imports its key
+// through exactly this function, so a fresh instance cannot be talked
+// into persisting material a configured one would refuse.
+func importSSHKeyInto(configPath string, raw []byte) (SSHKeyRef, error) {
 	// The validated obs.Secret wrapper is not itself what gets persisted:
 	// raw (below) is, once validation confirms it is safe to write.
 	_, algorithm, fingerprint, err := rclone.ValidateImportedPrivateKey(raw)
@@ -735,7 +778,7 @@ func (b *BackupService) ImportSSHKey(_ context.Context, raw []byte) (SSHKeyRef, 
 		return SSHKeyRef{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 
-	dir, err := b.keysDir()
+	dir, err := keysDirIn(configPath)
 	if err != nil {
 		return SSHKeyRef{}, err
 	}
@@ -808,11 +851,19 @@ type ConnectionTestResult struct {
 // (see the wizard's pre-save "Verify server"/review flow, where no trust
 // decision is final until CreateBackupSet actually runs).
 func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
+	return testConnectionVia(ctx, b.state.Load().inner.Transport, b.configPath, req)
+}
+
+// testConnectionVia is TestConnection's transport-and-configPath-only
+// half; see keysDirIn above for why the split exists. The first-run
+// surface wires a transport of its own (firstrun.go) because it has no
+// internal/app.Service to read one off yet.
+func testConnectionVia(ctx context.Context, tr transport.Transport, configPath string, req ConnectionTestRequest) (ConnectionTestResult, error) {
 	if req.Host == "" || req.User == "" || req.SSHKeyID == "" || req.KnownHostsLine == "" {
 		return ConnectionTestResult{}, fmt.Errorf("%w: host, user, ssh_key_id and known_hosts_line are all required", ErrInvalidRequest)
 	}
 
-	keyFile, err := b.resolveSSHKeyFile(req.SSHKeyID)
+	keyFile, err := resolveSSHKeyFileIn(configPath, req.SSHKeyID)
 	if err != nil {
 		return ConnectionTestResult{}, err
 	}
@@ -850,7 +901,7 @@ func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRe
 		Root:       root,
 	}
 
-	if _, err := b.state.Load().inner.Transport.List(testCtx, src); err != nil {
+	if _, err := tr.List(testCtx, src); err != nil {
 		// Not %w-wrapped, and not returned as a Go error at all: a failed
 		// connection test is an expected, ordinary OUTCOME (a typo'd
 		// hostname, a not-yet-authorized key), not a service failure, so

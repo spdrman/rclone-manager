@@ -176,11 +176,21 @@ credential, and `distribution/packaging` scans for one on every commit.
 
 ## config.yaml
 
-The engine calls `core/service.Open`, which loads **and validates** the config file
-before the HTTP listener starts. A missing or invalid file is a hard start failure,
-not a first-run wizard. See `apps/truenas/README.md` for an annotated example; the
-only difference here is the host path it lives at. The container-side paths in it
-are fixed by this profile and must not be changed.
+The engine no longer needs a configuration to start: as of issue #176 an instance
+with no `config.yaml` serves a first-run setup flow in the web UI that writes one
+for you. A config file that EXISTS and does not validate is still a hard start
+failure, deliberately, because replacing a configuration somebody already wrote
+is worse than refusing.
+
+That flow does not reach this package yet, and the reason is the mount, not the
+engine: `config.yaml` is bind-mounted here as a single **read-only file**, so the
+container cannot create it, and a bind mount cannot express "not there yet"
+either. Until that becomes a writable directory, write the file before
+installing.
+
+See `apps/truenas/README.md` for an annotated example; the only difference here
+is the host path it lives at. The container-side paths in it are fixed by this
+profile and must not be changed.
 
 ## The image reference
 
