@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Docker template for the Backup Manager ENGINE container
+  (WP4.3, deliverable D-7).
+
+  Two templates, not one: the canonical image needs the engine
+  (/backup-manager-web serve) and the Web UI (/backup-manager-web serve-ui)
+  as separate containers, and an Unraid template describes exactly one.
+  Install this one first, then backup-manager-ui.xml.
+
+  This container publishes NO port. It holds the state database and the
+  credentials and is reachable only from the Web UI container, over the
+  user-defined network below. Docker's embedded DNS resolves container
+  names only on a user-defined network, never on the default bridge, so
+  create it before installing either template:
+
+      docker network create backup-manager
+
+  Everything Unraid's template schema has no element for (a read-only
+  rootfs, dropped capabilities, no-new-privileges, the tmpfs a read-only
+  rootfs needs, and the non-root uid/gid) goes through ExtraParams. The
+  compose profiles express the same settings as first-class keys, and
+  apps/common/packaging checks both against one another on every commit.
+
+  PostArgs is Unraid's only seam for a container command, and the
+  canonical image ships no ENTRYPOINT and no CMD on purpose, so it is
+  load-bearing here rather than optional.
+-->
+<Container version="2">
+  <Name>backup-manager</Name>
+  <Repository>ghcr.io/spdrman/backup-manager:1.0.0</Repository>
+  <Registry>https://github.com/spdrman/rclone-manager/pkgs/container/backup-manager</Registry>
+  <Network>backup-manager</Network>
+  <MyIP/>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/spdrman/rclone-manager/issues</Support>
+  <Project>https://github.com/spdrman/rclone-manager</Project>
+  <Overview>
+    Backup Manager pulls backup artifacts off a remote SFTP source on a schedule, verifies them, retains them under a configurable policy, and keeps a durable catalog of everything it holds.
+
+    This is the engine container: the API, the scheduler and local authentication. It deliberately publishes no port. Install backup-manager-ui alongside it for the web interface.
+
+    Before installing: run `docker network create backup-manager`, create the appdata and backups paths, own them by the uid/gid below, and write config.yaml, the SSH key and the pinned known_hosts. The engine validates its config before it opens a listener, so a missing config file stops it starting.
+  </Overview>
+  <Category>Backup: Tools: Utilities:</Category>
+  <WebUI/>
+  <TemplateURL>https://raw.githubusercontent.com/spdrman/rclone-manager/main/apps/unraid/template/backup-manager.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/spdrman/rclone-manager/main/ui/shared/public/icon.svg</Icon>
+  <Requires>Run `docker network create backup-manager` before installing, and install the companion backup-manager-ui template for the web interface.</Requires>
+  <ExtraParams>--read-only --cap-drop=ALL --security-opt=no-new-privileges:true --tmpfs /tmp:size=64m,mode=1777,uid=99,gid=100 --user 99:100</ExtraParams>
+  <PostArgs>/backup-manager-web serve</PostArgs>
+  <DonateText/>
+  <DonateLink/>
+  <Config Name="Application state" Target="/data/state" Default="/mnt/user/appdata/backup-manager/state" Mode="rw" Description="Holds the SQLite catalog and the local-authentication administrator record. Must exist and be owned by the uid/gid in ExtraParams before first start." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/state</Config>
+  <Config Name="Backup root" Target="/data/backups" Default="/mnt/user/backups" Mode="rw" Description="Where retained artifacts land. Point this at a real user share, never at a directory inside appdata: no key material or authentication state may ever live inside the backup root." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/backups</Config>
+  <Config Name="Configuration file" Target="/etc/backup-manager/config.yaml" Default="/mnt/user/appdata/backup-manager/config/config.yaml" Mode="ro" Description="Mounted read-only. The engine loads and validates this before it opens a listener, so it must exist and be valid before first start." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/config/config.yaml</Config>
+  <Config Name="SFTP private key" Target="/etc/backup-manager/id_ed25519" Default="/mnt/user/appdata/backup-manager/secrets/id_ed25519" Mode="ro" Description="Mounted read-only. Keep it at mode 0600 on the host. It is never baked into the image." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/secrets/id_ed25519</Config>
+  <Config Name="Pinned known_hosts" Target="/etc/backup-manager/known_hosts" Default="/mnt/user/appdata/backup-manager/secrets/known_hosts" Mode="ro" Description="Mounted read-only. Verify the remote's host-key fingerprint out of band before trusting this file." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/backup-manager/secrets/known_hosts</Config>
+  <Config Name="TMPDIR" Target="TMPDIR" Default="/tmp" Mode="" Description="Go's temp directory. The rootfs is read-only, so this has to point at the tmpfs in ExtraParams." Type="Variable" Display="advanced" Required="true" Mask="false">/tmp</Config>
+  <Config Name="Listen address" Target="LISTEN_ADDR" Default=":8080" Mode="" Description="The engine's own listen address inside the container. Never published to the LAN." Type="Variable" Display="advanced" Required="true" Mask="false">:8080</Config>
+  <Config Name="Public base URL" Target="PUBLIC_BASE_URL" Default="http://tower.local:8080" Mode="" Description="What the Web UI container's published port looks like from outside this server. The engine prints its one-time enrollment link against this, because its own listen address is never reachable. Set your server's real hostname and the port you gave backup-manager-ui." Type="Variable" Display="always" Required="true" Mask="false">http://tower.local:8080</Config>
+  <Config Name="Trust forwarded headers" Target="TRUST_FORWARDED_HEADERS" Default="true" Mode="" Description="Safe only because this container joins the private backup-manager network, whose only other member is the Web UI container, so a forwarded header can only have come from that proxy. Never set this on the Web UI container itself." Type="Variable" Display="advanced" Required="true" Mask="false">true</Config>
+</Container>

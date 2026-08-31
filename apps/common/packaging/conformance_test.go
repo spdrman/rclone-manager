@@ -501,11 +501,39 @@ func TestEveryPlatformAppliesTheSameHardening(t *testing.T) {
 						t.Errorf("service %q has a read-only rootfs and no tmpfs for /tmp; Go's temp directory would be unwritable", svc.Name)
 					}
 				case extraParamsHardening:
-					for _, flag := range []string{"--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--tmpfs"} {
+					for _, flag := range []string{"--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges:true", "--tmpfs", "--user"} {
 						if !strings.Contains(svc.ExtraParams, flag) {
 							t.Errorf("template %q does not pass %s (ExtraParams = %q)", svc.Name, flag, svc.ExtraParams)
 						}
 					}
+				}
+			}
+		})
+	}
+}
+
+// TestEachContainerRunsItsCanonicalCommand pins which of the canonical
+// image's two commands each container runs. Two containers from one image
+// differ only by argv, so getting this wrong produces a deployment that
+// starts cleanly and serves nothing: two engines and no UI, or two UIs and
+// no API.
+func TestEachContainerRunsItsCanonicalCommand(t *testing.T) {
+	c := MustLoad()
+
+	for _, p := range allPlatforms() {
+		t.Run(p.name, func(t *testing.T) {
+			for _, svc := range p.services(t) {
+				var want []string
+				switch svc.Name {
+				case p.engineService:
+					want = c.Commands.Engine
+				case p.uiService:
+					want = c.Commands.WebUI
+				default:
+					continue
+				}
+				if strings.Join(svc.Command, " ") != strings.Join(want, " ") {
+					t.Errorf("service %q (%s) runs %v, want %v", svc.Name, svc.Source, svc.Command, want)
 				}
 			}
 		})

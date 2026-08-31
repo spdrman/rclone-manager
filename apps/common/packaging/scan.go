@@ -334,23 +334,50 @@ func scanYAML(rel string, data []byte) ([]Violation, error) {
 // list form with a canonical binary first is the only shape allowed: a
 // bare string is shell form, and a shell is where lifecycle logic hides.
 func checkCommand(rel string, val any) []Violation {
-	canonical := MustLoad()
-
 	seq, ok := val.([]any)
 	if !ok {
 		return []Violation{{rel, RuleNonCanonicalCommand,
 			"`command:` must be a list of arguments; a bare string is shell form"}}
 	}
-	if len(seq) == 0 {
-		return []Violation{{rel, RuleNonCanonicalCommand, "`command:` is empty"}}
+	argv := make([]string, 0, len(seq))
+	for _, e := range seq {
+		s, ok := e.(string)
+		if !ok {
+			return []Violation{{rel, RuleNonCanonicalCommand, "`command:` contains a non-string argument"}}
+		}
+		argv = append(argv, s)
 	}
-	first, ok := seq[0].(string)
-	if !ok {
-		return []Violation{{rel, RuleNonCanonicalCommand, "`command:`'s first element is not a string"}}
+	return CheckArgv(rel, argv)
+}
+
+// shellMetacharacters are what turns an argument vector back into a
+// script. The canonical image is distroless and has no shell at all, so
+// any of these in a command line is either dead on arrival or evidence
+// that the profile expects a shell it should not have.
+var shellMetacharacters = []string{"&&", "||", ";", "|", "$(", "`", ">", "<"}
+
+// CheckArgv holds one command line to the canonical image's binaries. It
+// is shared between compose `command:` values and Unraid's <PostArgs>,
+// which is Unraid's only seam for a container command (the image
+// deliberately ships no ENTRYPOINT and no CMD, since no single default
+// would be right for both of its binaries).
+func CheckArgv(rel string, argv []string) []Violation {
+	canonical := MustLoad()
+
+	if len(argv) == 0 {
+		return []Violation{{rel, RuleNonCanonicalCommand, "empty command"}}
 	}
-	if !contains(canonical.Binaries, first) {
+	if !contains(canonical.Binaries, argv[0]) {
 		return []Violation{{rel, RuleNonCanonicalCommand,
-			fmt.Sprintf("%q is not one of the canonical image's binaries %v", first, canonical.Binaries)}}
+			fmt.Sprintf("%q is not one of the canonical image's binaries %v", argv[0], canonical.Binaries)}}
+	}
+	for _, arg := range argv {
+		for _, meta := range shellMetacharacters {
+			if strings.Contains(arg, meta) {
+				return []Violation{{rel, RuleInlineShell,
+					fmt.Sprintf("argument %q contains %s, which needs a shell the distroless image does not have", arg, backquote(meta))}}
+			}
+		}
 	}
 	return nil
 }
@@ -376,13 +403,18 @@ func scanXML(rel string, data []byte) ([]Violation, error) {
 		name := strings.ToLower(n.XMLName.Local)
 		text := strings.TrimSpace(n.Content)
 		switch name {
-		case "postargs", "extraparams":
-			// Unraid appends these to the `docker run` command line. An
-			// empty element is the normal, correct value; anything in it
-			// is arbitrary runtime behaviour this package must not need.
-			if text != "" && name == "postargs" {
-				out = append(out, Violation{rel, RuleLifecycleHook,
-					"<PostArgs> appends arguments to the container's command line"})
+		case "postargs":
+			// <PostArgs> is everything Unraid appends after the image
+			// name in `docker run`, which makes it that platform's only
+			// way to supply a container command. The canonical image
+			// ships no ENTRYPOINT and no CMD on purpose (no single
+			// default is right for both of its binaries), so a template
+			// with an empty <PostArgs> would not start at all. It is
+			// therefore held to the same rule a compose `command:` is:
+			// a canonical binary, and nothing a shell would be needed
+			// for.
+			if text != "" {
+				out = append(out, CheckArgv(rel, strings.Fields(text))...)
 			}
 		case "privileged":
 			if strings.EqualFold(text, "true") {

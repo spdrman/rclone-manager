@@ -295,6 +295,10 @@ func (t UnraidTemplate) AsService(source string) Service {
 		Source:              source,
 		ExtraParams:         t.ExtraParms,
 		HealthcheckDisabled: strings.Contains(t.ExtraParms, "--no-healthcheck"),
+		// <PostArgs> is Unraid's container command (see scan.go's
+		// scanXML), so it lands in the same field a compose `command:`
+		// does and the same assertions cover both.
+		Command: strings.Fields(t.PostArgs),
 	}
 	for _, c := range t.Config {
 		value := strings.TrimSpace(c.Value)

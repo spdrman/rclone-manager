@@ -1,0 +1,158 @@
+# The TrueNAS install wizard for Backup Manager.
+#
+# Every variable here is consumed by templates/docker-compose.yaml and
+# given a default in ix_values.yaml. apps/common/packaging checks that
+# correspondence in both directions on every commit, because a question
+# nothing reads and a template value nothing asks for are the two ways a
+# catalog entry silently installs wrong.
+#
+# The defaults assume a pool named "tank" and TrueNAS's own apps account
+# (568:568). Both are meant to be changed at install time.
+groups:
+  - name: Image
+    description: Which canonical image to deploy.
+  - name: Storage
+    description: >-
+      Host paths on the NAS. Private application state and the user backup
+      root are separate security domains, so the state, config and secrets
+      paths must never sit inside the backup root.
+  - name: Network
+    description: The port the Web UI is published on.
+  - name: Runtime
+    description: The account the containers run as.
+
+questions:
+  - variable: image
+    label: Image
+    group: Image
+    schema:
+      type: dict
+      attrs:
+        - variable: reference
+          label: Canonical image reference
+          description: >-
+            The exact canonical OCI image. Every provider package in this
+            project deploys this same reference; change it only to point
+            at your own registry or a locally loaded tag.
+          schema:
+            type: string
+            required: true
+            default: "ghcr.io/spdrman/backup-manager:1.0.0"
+
+  - variable: storage
+    label: Storage
+    group: Storage
+    schema:
+      type: dict
+      attrs:
+        - variable: state
+          label: Application state
+          schema:
+            type: dict
+            attrs:
+              - variable: hostPath
+                label: State dataset
+                description: >-
+                  Holds the SQLite catalog and the local-authentication
+                  administrator record. Must exist, and must be owned by
+                  the uid/gid below, before first start.
+                schema:
+                  type: hostpath
+                  required: true
+                  default: "/mnt/tank/backup-manager/state"
+        - variable: backups
+          label: Backup root
+          schema:
+            type: dict
+            attrs:
+              - variable: hostPath
+                label: Backups dataset
+                description: >-
+                  Where retained artifacts land. Keep this separate from
+                  the state, config and secrets paths: no key material or
+                  authentication state may ever live inside it.
+                schema:
+                  type: hostpath
+                  required: true
+                  default: "/mnt/tank/backup-manager/backups"
+        - variable: config
+          label: Configuration file
+          schema:
+            type: dict
+            attrs:
+              - variable: hostPath
+                label: config.yaml
+                description: >-
+                  Mounted read-only. The engine loads and validates this
+                  before it opens a listener, so it must exist and be
+                  valid before first start.
+                schema:
+                  type: hostpath
+                  required: true
+                  default: "/mnt/tank/backup-manager/config/config.yaml"
+        - variable: sshKey
+          label: SFTP private key
+          schema:
+            type: dict
+            attrs:
+              - variable: hostPath
+                label: Private key file
+                description: >-
+                  Mounted read-only. Keep it at mode 0600 on the host. It
+                  is never baked into the image and never copied anywhere.
+                schema:
+                  type: hostpath
+                  required: true
+                  default: "/mnt/tank/backup-manager/secrets/id_ed25519"
+        - variable: knownHosts
+          label: Pinned known_hosts
+          schema:
+            type: dict
+            attrs:
+              - variable: hostPath
+                label: known_hosts file
+                description: >-
+                  Mounted read-only. Verify the remote's host-key
+                  fingerprint out of band before trusting this file.
+                schema:
+                  type: hostpath
+                  required: true
+                  default: "/mnt/tank/backup-manager/secrets/known_hosts"
+
+  - variable: network
+    label: Network
+    group: Network
+    schema:
+      type: dict
+      attrs:
+        - variable: webPort
+          label: Web UI port
+          description: >-
+            The only published port. The engine container publishes
+            nothing and is reachable only from the Web UI container.
+          schema:
+            type: int
+            required: true
+            default: 8080
+
+  - variable: runtime
+    label: Runtime
+    group: Runtime
+    schema:
+      type: dict
+      attrs:
+        - variable: puid
+          label: User ID
+          description: >-
+            Must already own the state and backups datasets. 568 is
+            TrueNAS's own apps account.
+          schema:
+            type: int
+            required: true
+            default: 568
+        - variable: pgid
+          label: Group ID
+          schema:
+            type: int
+            required: true
+            default: 568

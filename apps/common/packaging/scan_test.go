@@ -166,16 +166,31 @@ post_install: /usr/local/bin/seed-state.sh
 			wantRule: RulePrivileged,
 		},
 		{
-			name: "an Unraid template that appends its own arguments",
+			// <PostArgs> is Unraid's container command, so an empty one
+			// is broken rather than safe. What must not appear is
+			// anything that is not the canonical image's own binary.
+			name: "an Unraid template whose command is not a canonical binary",
 			mutate: func(t *testing.T, root string) {
 				mustWrite(t, filepath.Join(root, "template", "backup-manager.xml"),
 					`<?xml version="1.0"?>`+"\n"+`<Container version="2">
   <Name>backup-manager</Name>
-  <PostArgs>&amp;&amp; /usr/local/bin/seed.sh</PostArgs>
+  <PostArgs>/usr/local/bin/seed.sh</PostArgs>
 </Container>
 `)
 			},
-			wantRule: RuleLifecycleHook,
+			wantRule: RuleNonCanonicalCommand,
+		},
+		{
+			name: "an Unraid template that chains a script onto the canonical command",
+			mutate: func(t *testing.T, root string) {
+				mustWrite(t, filepath.Join(root, "template", "backup-manager.xml"),
+					`<?xml version="1.0"?>`+"\n"+`<Container version="2">
+  <Name>backup-manager</Name>
+  <PostArgs>/backup-manager-web serve &amp;&amp; /usr/local/bin/seed.sh</PostArgs>
+</Container>
+`)
+			},
+			wantRule: RuleInlineShell,
 		},
 		{
 			name: "a privileged Unraid template",
@@ -204,6 +219,26 @@ post_install: /usr/local/bin/seed-state.sh
 				t.Fatalf("ScanLifecycle did not report %s; it reported:\n%s", tc.wantRule, format(got))
 			}
 		})
+	}
+}
+
+// TestScanLifecycleAcceptsACanonicalUnraidCommand is the other half of
+// the two PostArgs controls above: the rule has to accept the one value
+// that is correct, or it would just be a ban on Unraid templates.
+func TestScanLifecycleAcceptsACanonicalUnraidCommand(t *testing.T) {
+	root := cleanFixture(t)
+	mustWrite(t, filepath.Join(root, "template", "backup-manager.xml"),
+		`<?xml version="1.0"?>`+"\n"+`<Container version="2">
+  <Name>backup-manager</Name>
+  <PostArgs>/backup-manager-web serve</PostArgs>
+</Container>
+`)
+	got, err := ScanLifecycle(root)
+	if err != nil {
+		t.Fatalf("ScanLifecycle: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a canonical <PostArgs> was reported as a violation:\n%s", format(got))
 	}
 }
 
