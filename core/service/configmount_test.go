@@ -22,12 +22,12 @@ import (
 // config.yaml as a single READ-ONLY FILE into a container whose rootfs is
 // itself read-only. Three merged features write that file —
 // CreateBackupSet (#146), the settings write path (#140) and #176's
-// first-run setup — and all three replace it through one temp-file-plus-
-// rename, which has to create a sibling temp file in the file's own
-// directory. On that mount shape the directory is the image's read-only
-// rootfs, so every one of them failed at the write however correct the
-// code above it was, and the whole suite stayed green because no fixture
-// ever had that shape.
+// first-run setup — and every one of them has to create a NEW file in
+// that file's own directory: the first two through a temp-file-plus-
+// rename, and setup through an exclusive create. On that mount shape the
+// directory is the image's read-only rootfs, so every one of them failed
+// at the write however correct the code above it was, and the whole suite
+// stayed green because no fixture ever had that shape.
 //
 // The two write paths beside them were inert for the same reason:
 // ImportSSHKey creates ssh_keys/ next to config.yaml, and the known-hosts
@@ -76,6 +76,28 @@ var configMountShapes = []configMountShape{
 type configMountFixture struct {
 	configDir  string
 	configPath string
+	// stateDatabase is the journal path this fixture's configuration
+	// names. It is on its own mount, outside configDir, which is what
+	// every packaged profile does and what lets the read-only arm fail
+	// for the configuration mount rather than for the journal.
+	stateDatabase string
+	// firstRunPath is a configuration file that does NOT exist, in the
+	// same configuration directory, beside the one that does.
+	//
+	// It is there because the first-run write path needs the opposite
+	// precondition from the three beside it. UpdateSettings,
+	// CreateBackupSet and ImportSSHKey all act on a deployment that is
+	// already configured; CreateInitialConfig refuses outright unless
+	// nothing is configured yet (ErrAlreadyConfigured), so it cannot be
+	// driven at configPath, and one fixture cannot have a configuration
+	// both present and absent at the same path.
+	//
+	// What all four share, which is the entire subject of this file, is
+	// the DIRECTORY the write lands in and the permission bits on it:
+	// this path sits inside configDir, next to the ssh_keys/ and
+	// known_hosts.d/ stores the first-run write also reaches, and is
+	// sealed by exactly the same chmod.
+	firstRunPath string
 	// keyID is an SSH key already present in ssh_keys/ before the
 	// directory was sealed, so CreateBackupSet can be driven all the way
 	// to its config write on the read-only shape instead of stopping at
@@ -178,7 +200,13 @@ func newConfigMountFixture(t *testing.T, shape configMountShape) configMountFixt
 		}
 	}
 
-	return configMountFixture{configDir: configDir, configPath: configPath, keyID: keyID}
+	return configMountFixture{
+		configDir:     configDir,
+		configPath:    configPath,
+		stateDatabase: filepath.Join(stateDir, "state.db"),
+		firstRunPath:  filepath.Join(configDir, "first-run-config.yaml"),
+		keyID:         keyID,
+	}
 }
 
 // requireDirectoryIsActuallySealed is the environment control. Permission
@@ -251,8 +279,8 @@ func assertWriteOutcome(t *testing.T, shape configMountShape, f configMountFixtu
 	}
 }
 
-// configWritePath is one of the three merged features #196 made inert,
-// reduced to the call that lands in the configuration directory.
+// configWritePath is one of the merged features #196 made inert, reduced
+// to the call that lands in the configuration directory.
 //
 // They are a list rather than three inline subtests so the mutation
 // control below drives EXACTLY the same calls as the table above it. A
@@ -291,6 +319,39 @@ func configWritePaths() []configWritePath {
 		}},
 		{"import ssh key", func(t *testing.T, svc *BackupService, f configMountFixture) error {
 			_, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+			return err
+		}},
+		{"first-run setup (#176)", func(t *testing.T, svc *BackupService, f configMountFixture) error {
+			// The fourth path, and the one with the most to lose from
+			// this shape: it is what a fresh app-store install runs, so a
+			// deployment whose configuration mount is read-only cannot be
+			// set up through its web UI at all, and the operator has no
+			// already-working instance to notice the difference against.
+			//
+			// It goes through FirstRun rather than svc for the reason
+			// firstRunPath's own doc gives. Everything that decides the
+			// outcome is nonetheless the same as for the three above: the
+			// same directory, the same ssh_keys/ store, the same
+			// known_hosts.d/ store, the same permission bits.
+			fr, err := NewFirstRun(FirstRunDefaults{
+				ConfigPath:    f.firstRunPath,
+				StateDatabase: f.stateDatabase,
+			})
+			if err != nil {
+				return err
+			}
+			_, err = fr.CreateInitialConfig(context.Background(), CreateBackupSetRequest{
+				Name:               "mount-shape-first-run",
+				Host:               "example.internal",
+				Port:               22,
+				User:               "backup-agent",
+				SSHKeyID:           f.keyID,
+				KnownHostsLine:     "example.internal ssh-ed25519 AAAAtestfixtureline",
+				RemotePath:         "/backups/mount-shape-first-run",
+				LocalPath:          filepath.Join(t.TempDir(), "mount-shape-first-run"),
+				Include:            []string{"*.dump"},
+				CompletionStrategy: "marker",
+			})
 			return err
 		}},
 	}

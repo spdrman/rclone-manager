@@ -586,7 +586,7 @@ func TestUI_StripsAClientSuppliedIdentityHeader(t *testing.T) {
 	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
 		Upstream: upstream,
 		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}},
-		Identity: mustCompileGateway(t, "192.0.2.0/24"),
+		Gateway:  mustCompileGateway(t, "192.0.2.0/24"),
 	}))
 	t.Cleanup(ui.Close)
 
@@ -624,7 +624,7 @@ func TestUI_ForwardsTheIdentityHeaderFromTheTrustedGateway(t *testing.T) {
 	ui := httptest.NewServer(serve.NewUI(serve.UIConfig{
 		Upstream: upstream,
 		StaticFS: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("shell")}},
-		Identity: mustCompileGateway(t, "127.0.0.0/8", "::1/128"),
+		Gateway:  mustCompileGateway(t, "127.0.0.0/8", "::1/128"),
 	}))
 	t.Cleanup(ui.Close)
 
@@ -658,6 +658,16 @@ type recordingGateway struct {
 func (g *recordingGateway) Sanitize(h http.Header, remoteAddr string) {
 	g.gateway.Sanitize(h, remoteAddr)
 }
+
+// IdentityBoundary is how this decorated Authenticator declares the peer
+// set it enforces, which NewEngine reads to build the strip
+// (serve.IdentityBoundaryCarrier). Without it the boundary resolves to
+// nil, every identity header is stripped, and a gateway deployment
+// authenticates nobody — so NewEngine refuses to build at all rather
+// than starting into that. This type IS the decorated shape that
+// refusal exists for, and it is the reason the refusal is not
+// theoretical.
+func (g *recordingGateway) IdentityBoundary() *profile.CompiledGateway { return g.gateway }
 
 func (g *recordingGateway) Authenticate(ctx context.Context, r capabilities.AuthRequest) (capabilities.AuthContext, error) {
 	select {

@@ -137,6 +137,132 @@ func derivationMutations() []derivationMutation {
 			a.WebUI.HealthcheckDisabled = false
 			return "left the Web UI inheriting the image's engine health check"
 		}},
+		{FieldHealthCheck, func(a *AdapterRuntime, _ *Canonical) string {
+			// Issue #206's shape, which needs BOTH halves to exist
+			// before it is a defect: an engine that declares nothing,
+			// so it inherits the image's backup-freshness verdict, and
+			// something that will not start until that verdict passes.
+			// The wait is added here rather than assumed, so this
+			// control is the same control on Unraid, whose template
+			// format has no dependency gate of its own.
+			a.Engine.HealthcheckTest = nil
+			a.Engine.HealthcheckDisabled = false
+			a.WebUI.WaitsForHealthy = append(a.WebUI.WaitsForHealthy, a.Engine.Name)
+			return "left the engine inheriting the image's backup-freshness verdict while the Web UI waits on its health"
+		}},
+	}
+}
+
+// TestTheBackupFreshnessVerdictIsRefusedAsAnEngineStartGate names the
+// regression rather than mutating something adjacent to it: the exact
+// health check every adapter shipped with, put back, has to be refused.
+//
+// A generic mutation cannot say this. `backup-manager status` is a real
+// command the image really ships and really answers, so nothing about it
+// looks wrong from the outside; what is wrong is that a container start
+// waits on it, and a fresh install has backed nothing up.
+func TestTheBackupFreshnessVerdictIsRefusedAsAnEngineStartGate(t *testing.T) {
+	c := canonicalForTest(t)
+
+	for _, p := range allPlatforms() {
+		t.Run(p.name, func(t *testing.T) {
+			a := adapterRuntimes(t, p, c)[0].rt
+			if d := CheckDerivation(a, c); len(d) > 0 {
+				t.Fatalf("the unmutated adapter already drifts, so this control would pass for the wrong reason:\n%s", FormatDrift(d))
+			}
+
+			a.Engine.HealthcheckTest = []string{"CMD", "/backup-manager", "status"}
+			a.Engine.HealthcheckDisabled = false
+			d := CheckDerivation(a, c)
+			if !namesField(d, FieldHealthCheck) {
+				t.Fatalf("declaring `backup-manager status` as the engine's health check produced %s, want a refusal naming %q: it is FR-24's freshness verdict, non-zero on a fresh install, and the Web UI waits on it", FormatDrift(d), FieldHealthCheck)
+			}
+		})
+	}
+}
+
+// TestTheStartOrderingGateIsActuallySeenInTheAdaptersThatDeclareIt is the
+// parse's own control, and without it the rule above is inert.
+//
+// The engine's inherited-check refusal only fires when something waits on
+// the engine's health. A depends_on parse that quietly returned nothing
+// would leave every adapter passing for the reason Unraid passes, with no
+// symptom anywhere: a rule that fires on nothing looks exactly like a rule
+// nothing violates. So this asserts the gate is really seen, in every
+// adapter that really declares one.
+//
+// The discriminator is the FORMAT, not a platform name. An Unraid Docker
+// template has no start-ordering key at all, so there is nothing there to
+// read; every Compose artifact has one and uses it.
+func TestTheStartOrderingGateIsActuallySeenInTheAdaptersThatDeclareIt(t *testing.T) {
+	c := canonicalForTest(t)
+
+	seen := 0
+	for _, p := range allPlatforms() {
+		for _, art := range adapterRuntimes(t, p, c) {
+			a := art.rt
+			waits := waitingOnHealthOf(a, a.Engine.Name)
+			isCompose := strings.Contains(a.WebUI.Source, ".yml") || strings.Contains(a.WebUI.Source, ".yaml")
+			switch {
+			case isCompose && len(waits) == 0:
+				t.Errorf("%s (%s) is a Compose runtime definition whose Web UI declares no `depends_on: %s: condition: service_healthy`; either the adapter dropped the start gate or the parse cannot see it, and both make the engine health rule fire on nothing",
+					p.name, art.name, a.Engine.Name)
+			case isCompose:
+				seen++
+				if len(waits) != 1 || waits[0] != a.WebUI.Name {
+					t.Errorf("%s (%s): %v waits on the engine's health, want exactly the Web UI service %q", p.name, art.name, waits, a.WebUI.Name)
+				}
+			case len(waits) != 0:
+				t.Errorf("%s (%s) is not a Compose definition and yet %v was read as waiting on the engine's health; that key does not exist in this format", p.name, art.name, waits)
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no adapter was seen to gate its Web UI start on the engine's health, so the rule that makes an inherited engine check a defect can never fire")
+	}
+}
+
+// TestTheEngineMayInheritTheImageCheckOnlyWhereNothingWaitsOnIt is the
+// negative assertion's positive control, on one fixture, in both
+// directions.
+//
+// Without the second half the rule reads as "inheriting is fine", which
+// is what shipped. Without the first it reads as "inheriting is never
+// fine", which would fail Unraid for a seam its template schema does not
+// have, and an exemption typed into a rule is how the rule stops being
+// one.
+func TestTheEngineMayInheritTheImageCheckOnlyWhereNothingWaitsOnIt(t *testing.T) {
+	c := canonicalForTest(t)
+
+	var unraid *platformFixture
+	for _, p := range allPlatforms() {
+		if p.name == "unraid" {
+			fixture := p
+			unraid = &fixture
+		}
+	}
+	if unraid == nil {
+		t.Fatal("no unraid fixture, so the one adapter with no health-check seam is not covered")
+	}
+
+	a := adapterRuntimes(t, *unraid, c)[0].rt
+	if got := SeamOf(a.Engine); got != SeamImageInherited {
+		t.Fatalf("the Unraid engine expresses its health check as %q, want %q; this control is about the adapter that CANNOT declare one, so any other seam means it proves nothing", got, SeamImageInherited)
+	}
+	if len(a.WebUI.WaitsForHealthy) != 0 {
+		t.Fatalf("the Unraid Web UI waits on %v, and an Unraid template has no dependency gate at all; the parse is reading something that is not there", a.WebUI.WaitsForHealthy)
+	}
+	if d := CheckDerivation(a, c); len(d) > 0 {
+		t.Fatalf("inheriting the image's health check drifted on an adapter where nothing waits on it, so the rule is refusing a seam rather than a defect:\n%s", FormatDrift(d))
+	}
+
+	a.WebUI.WaitsForHealthy = []string{a.Engine.Name}
+	d := CheckDerivation(a, c)
+	if !namesField(d, FieldHealthCheck) {
+		t.Fatalf("the same inherited check with the Web UI waiting on it produced %s, want a refusal naming %q", FormatDrift(d), FieldHealthCheck)
+	}
+	if !strings.Contains(FormatDrift(d), a.WebUI.Name) {
+		t.Errorf("the refusal %q does not name the container being held back, which is the whole symptom", FormatDrift(d))
 	}
 }
 

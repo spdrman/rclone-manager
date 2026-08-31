@@ -14,14 +14,17 @@ import (
 // guard (the consequence is protective, never destructive).
 func cmdValidate(args []string) int {
 	fs, cfgPath := newFlagSet("validate")
-	if err := fs.Parse(args); err != nil {
+	// Flags may come before or after the operand; see
+	// parseFlagsAroundOperands in setup.go for why.
+	operands, err := parseFlagsAroundOperands(fs, args)
+	if err != nil {
 		return 2
 	}
-	if fs.NArg() != 1 {
+	if len(operands) != 1 {
 		return usageError("validate takes exactly one argument: <source/backup-set/artifact>")
 	}
 
-	id, err := app.ParseArtifactID(fs.Arg(0))
+	id, err := app.ParseArtifactID(operands[0])
 	if err != nil {
 		return fail(err)
 	}
