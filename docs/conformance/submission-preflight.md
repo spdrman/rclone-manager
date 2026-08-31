@@ -30,14 +30,21 @@ gate exists to stop.
 
 ## Two things this report is careful about
 
-**Blocked is not a pass and not a failure.** Two rules cannot reach a verdict today and
-neither of them is this work package's to fix. `container/release-manifest.json` pins a
-commit that is not an ancestor of the main branch (#174), so nothing about the bytes a
-store would receive can be traced to a recorded build; and the licence, the software bill
-of materials and the third-party inventory are B5.2's (#88). Reporting either as a pass
-would claim something nobody checked, and reporting either as a failure would blame this
-work package for somebody else's. They are reported undecided, with the issue that owns
-them.
+**Blocked is not a pass and not a failure.** One rule cannot reach a verdict today and it
+is not this work package's to fix: the licence, the software bill of materials and the
+third-party inventory are B5.2's (#88), and until a `LICENSE` is in the tree the support,
+source and licence material is two thirds of a material. Reporting that as a pass would
+claim something nobody checked, and reporting it as a failure would blame this work
+package for somebody else's. It is reported undecided, with the issue that owns it.
+
+**A declaration is re-derived, never re-stated.** `container/release-manifest.json` used to
+pin a commit that was not an ancestor of the main branch, which held `artifact-provenance`
+undecided for all six targets. #182 repinned it, the check now passes, and the six
+declarations were re-derived rather than left standing, because a blocked declaration whose
+reason has been fixed underneath it is a documented reason not to look. That is what the
+staleness guard turns red, and it is why the same thing will happen to the four
+`materials-support-source-license` cells the day #88's `LICENSE` lands: whichever change
+merges second re-derives them.
 
 **UGREEN is in the mechanism and out of the gate.** UGOS Pro's column is decided by exactly
 these rules and reported in full below. While EPIC D's #83 has produced no `.UPK` it has no
@@ -63,22 +70,22 @@ these checks.
 | Target | Store or catalog | Gated by | Verdict | Undecided, tracked by | Needs the real platform |
 |---|---|---|---|---|---|
 | UGOS Pro | UGREEN App Center | EPIC D (reported here, gated there) | **NOT_YET_APPLICABLE** | #88 | nothing |
-| Synology DSM | Synology Package Center | EPIC B (Phase 5) | **BLOCKED** | #174, #88 | 2 step(s) |
-| TrueNAS | TrueNAS Apps catalog | EPIC B (Phase 5) | **BLOCKED** | #174, #88 | 2 step(s) |
-| Unraid | Unraid Community Applications | EPIC B (Phase 5) | **BLOCKED** | #174, #88 | 2 step(s) |
-| Generic Docker | no store (documented workflow) | EPIC B (Phase 5) | **BLOCKED** | #174 | 1 step(s) |
-| OpenMediaVault | no store (documented workflow) | EPIC B (Phase 5) | **BLOCKED** | #174 | 1 step(s) |
-| Proxmox VE | no store (documented workflow) | EPIC B (Phase 5) | **BLOCKED** | #174 | 1 step(s) |
+| Synology DSM | Synology Package Center | EPIC B (Phase 5) | **BLOCKED** | #88 | 2 step(s) |
+| TrueNAS | TrueNAS Apps catalog | EPIC B (Phase 5) | **BLOCKED** | #88 | 2 step(s) |
+| Unraid | Unraid Community Applications | EPIC B (Phase 5) | **BLOCKED** | #88 | 2 step(s) |
+| Generic Docker | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
+| OpenMediaVault | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
+| Proxmox VE | no store (documented workflow) | EPIC B (Phase 5) | **READY_PENDING_OPERATOR** | none | 1 step(s) |
 
 Why each target reads the way it does:
 
 - **UGOS Pro** — UGOS Pro declares no package this repository can inspect and ships no store artifact, so there is nothing to preflight yet; its shared listing materials are recorded on their own merits above
-- **Synology DSM** — nothing failed, and 2 rule(s) could not be decided, tracked by #174 and #88
-- **TrueNAS** — nothing failed, and 2 rule(s) could not be decided, tracked by #174 and #88
-- **Unraid** — nothing failed, and 2 rule(s) could not be decided, tracked by #174 and #88
-- **Generic Docker** — nothing failed, and 1 rule(s) could not be decided, tracked by #174
-- **OpenMediaVault** — nothing failed, and 1 rule(s) could not be decided, tracked by #174
-- **Proxmox VE** — nothing failed, and 1 rule(s) could not be decided, tracked by #174
+- **Synology DSM** — nothing failed, and 1 rule(s) could not be decided, tracked by #88
+- **TrueNAS** — nothing failed, and 1 rule(s) could not be decided, tracked by #88
+- **Unraid** — nothing failed, and 1 rule(s) could not be decided, tracked by #88
+- **Generic Docker** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
+- **OpenMediaVault** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
+- **Proxmox VE** — every rule this repository can decide held; 1 step(s) need the real platform: proactive-alert-delivery
 
 ### Per-rule results
 
@@ -106,39 +113,33 @@ Why each target reads the way it does:
 | Submission checklist complete against the tree | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 | Proactive alerts reach the administrator | N/A | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR | OPERATOR |
 | Recovery documented without a terminal | PASS | PASS | PASS | PASS | PASS | PASS | PASS |
-| Submitted bytes traceable to a recorded build | N/A | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED | BLOCKED |
+| Submitted bytes traceable to a recorded build | N/A | PASS | PASS | PASS | PASS | PASS | PASS |
 
 ### Totals
 
 | Outcome | Cells |
 |---|---|
-| PASS | 94 |
+| PASS | 100 |
 | PENDING_OPERATOR | 9 |
 | UNSUPPORTED | 0 |
 | NOT_APPLICABLE | 48 |
-| BLOCKED | 10 |
+| BLOCKED | 4 |
 | FAIL | 0 |
 
 ### Phase 5 submission gate
 
 Computed over the 6 targets EPIC B ships, and over nothing else: Synology DSM, TrueNAS, Unraid, Generic Docker, OpenMediaVault, Proxmox VE.
 
-**Not met.** 0 rule(s) failed and 9 could not be decided:
+**Not met.** 0 rule(s) failed and 3 could not be decided:
 
 | Target | Rule | Outcome | Tracked by |
 |---|---|---|---|
 | Synology DSM | Support, source and licence materials | BLOCKED | #88 |
-| Synology DSM | Submitted bytes traceable to a recorded build | BLOCKED | #174 |
 | TrueNAS | Support, source and licence materials | BLOCKED | #88 |
-| TrueNAS | Submitted bytes traceable to a recorded build | BLOCKED | #174 |
 | Unraid | Support, source and licence materials | BLOCKED | #88 |
-| Unraid | Submitted bytes traceable to a recorded build | BLOCKED | #174 |
-| Generic Docker | Submitted bytes traceable to a recorded build | BLOCKED | #174 |
-| OpenMediaVault | Submitted bytes traceable to a recorded build | BLOCKED | #174 |
-| Proxmox VE | Submitted bytes traceable to a recorded build | BLOCKED | #174 |
 
 Nothing in this run failed on a rule this work package owns. What stands between these
-targets and a submission is #174 and #88, and the gate reports that as undecided rather than
+targets and a submission is #88, and the gate reports that as undecided rather than
 letting a green run imply bytes nobody can trace.
 
 **UGOS Pro is EPIC D's column** (work package 4.2), and it is recorded **NOT_YET_APPLICABLE**.
@@ -168,7 +169,7 @@ below, with why.
 | Drift gate: forbidden-privilege set | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 | Drift gate: /api/v1 compatibility | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 | Store screenshots | N/A | The shared bundle covers UGREEN App Center's listing like every other target's, and a screenshot is of the app running on the hardware. EPIC D's #83 has produced no .UPK, so there is nothing to install and nothing to photograph. The listing copy, the icon, the release notes, the privacy disclosure and the permission rationale are all recorded ready above, which is the bundle #178 consumes rather than assembling a second copy of. |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. |
+| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | N/A | Same reason as the screenshots: docs/acceptance/store-submission-preflight.md carries UGOS Pro's section so EPIC D's #178 has the procedure waiting, and no operator can run it against a package that does not exist yet. |
 | Submitted bytes traceable to a recorded build | N/A | EPIC D's #83 has not produced the .UPK, so there is no UGREEN artifact to preflight. Recorded as not yet applicable rather than as a failing check, per this work package's own rule that a UGREEN row can never block Phase 5; the same mechanism decides this row the day #83 lands, with no edit here. |
 
@@ -183,9 +184,8 @@ below, with why.
 | Drift gate: forbidden-privilege set | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
 | Drift gate: /api/v1 compatibility | N/A | Synology's package is not container-based: DSM runs the two canonical binaries directly under its own package lifecycle, so there is no container service for this element to drift from. §81's own wording is that every CONTAINER-BASED adapter registers with the drift gate; the elements that do apply to a package (its image reference parity, its architecture claim, its port isolation) are decided above. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's Synology DSM section covers "screenshot"; the hardware run has not happened |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. |
+| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Synology DSM section exercises all four; the hardware run has not happened |
-| Submitted bytes traceable to a recorded build | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it. |
 
 #### TrueNAS (Tier B, TrueNAS Apps catalog, gated by EPIC B's Phase 5)
 
@@ -193,9 +193,8 @@ below, with why.
 |---|---|---|
 | Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's TrueNAS section covers "screenshot"; the hardware run has not happened |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. |
+| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's TrueNAS section exercises all four; the hardware run has not happened |
-| Submitted bytes traceable to a recorded build | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it. |
 
 #### Unraid (Tier B, Unraid Community Applications, gated by EPIC B's Phase 5)
 
@@ -203,9 +202,8 @@ below, with why.
 |---|---|---|
 | Drift gate: declared architecture support | N/A | Decided by consuming the cross-provider conformance matrix's own verdict for this column rather than by a second check, and that verdict is NOT_APPLICABLE for architecture-parity: this target makes no architecture claim of its own; it names the canonical image, whose architectures the release manifest records. See apps/common/packaging/conformance.json. |
 | Store screenshots | OPERATOR | docs/acceptance/store-submission-preflight.md's Unraid section covers "screenshot"; the hardware run has not happened |
-| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. |
+| Support, source and licence materials | BLOCKED | #88 — B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts §74 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to "supported" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Unraid section exercises all four; the hardware run has not happened |
-| Submitted bytes traceable to a recorded build | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it. |
 
 #### Generic Docker (Tier C, no store (documented workflow), gated by EPIC B's Phase 5)
 
@@ -221,7 +219,6 @@ below, with why.
 | Permission rationale | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it. |
 | Support, source and licence materials | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/generic.md is it. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Generic Docker section exercises all four; the hardware run has not happened |
-| Submitted bytes traceable to a recorded build | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it. |
 
 #### OpenMediaVault (Tier C, no store (documented workflow), gated by EPIC B's Phase 5)
 
@@ -236,7 +233,6 @@ below, with why.
 | Permission rationale | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it. |
 | Support, source and licence materials | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/openmediavault.md is it. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's OpenMediaVault section exercises all four; the hardware run has not happened |
-| Submitted bytes traceable to a recorded build | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it. |
 
 #### Proxmox VE (Tier C, no store (documented workflow), gated by EPIC B's Phase 5)
 
@@ -251,6 +247,5 @@ below, with why.
 | Permission rationale | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it. |
 | Support, source and licence materials | N/A | This target has no store or catalog to submit to, so there is no listing for this asset to appear on. §73's own treatment of Dockge is the shape: a distribution target supported by Compose compatibility rather than by packaging gets a documented workflow instead of a submission bundle, and docs/submission/proxmox.md is it. |
 | Proactive alerts reach the administrator | OPERATOR | the dashboard renders the conditions and docs/acceptance/store-submission-preflight.md's Proxmox VE section exercises all four; the hardware run has not happened |
-| Submitted bytes traceable to a recorded build | BLOCKED | #174 — container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it. |
 
 <!-- END GENERATED PREFLIGHT -->

@@ -640,7 +640,7 @@ func runPreflight(t *testing.T, s Submission, conf Conformance) PreflightRun {
 						t.Fatalf("no rule decides %q", cap.ID)
 					}
 					satisfied, detail := check(tut)
-					r := resolveWith(pid, cap, c.Providers[pid].Cells[cap.ID], satisfied, detail)
+					r := resolveWith(SubmissionSource, pid, cap, c.Providers[pid].Cells[cap.ID], satisfied, detail)
 					m.Record(r)
 					t.Logf("%s: %s", r.Outcome, r.Detail)
 					switch {

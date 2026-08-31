@@ -48,12 +48,12 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -229,9 +229,9 @@ const (
 	// ReadyBlocked: nothing failed, and at least one rule could not reach
 	// a verdict for a reason tracked elsewhere. Not a pass. Reporting a
 	// blocked rule as either a pass or a failure is a lie in a different
-	// direction, and the blocked rules here are real: #174's release
-	// manifest pins a commit that is not on main, so no parity claim
-	// about the shipped bytes can be checked at all today.
+	// direction, and the blocked rules here are real: #88 owns the
+	// licence, and a support-and-source material with no LICENSE beside
+	// it is not the material a store's legal review asks for.
 	ReadyBlocked Readiness = "BLOCKED"
 	// ReadyNot: at least one rule failed. Submitting anyway is how a
 	// store rejection happens.
@@ -407,7 +407,13 @@ var (
 	// not a violation of it.
 	telemetryVarRe = regexp.MustCompile(`(?i)\b([A-Z0-9_]*(?:TELEMETRY|ANALYTICS|USAGE_STATS|PHONE_HOME|CRASH_REPORT|METRICS_PUSH)[A-Z0-9_]*)\s*[:=]\s*["']?([^\s"',#]+)`)
 	sentryRe       = regexp.MustCompile(`(?i)\b(SENTRY_DSN|BUGSNAG_API_KEY|DATADOG_API_KEY|NEW_RELIC_LICENSE_KEY)\s*[:=]\s*["']?([^\s"',#]+)`)
-	urlRe          = regexp.MustCompile(`https?://[^\s"'<>)\]}]+`)
+	// The bracketed alternative is not decoration. A closing bracket ends
+	// a URL here (a markdown link and a YAML flow sequence both put one
+	// straight after the address), so without it an IPv6 literal was cut
+	// at `http://[2001:db8::1` and url.Parse rejected the fragment, which
+	// meant the one URL shape that cannot be written any other way was
+	// the one shape the scan never saw.
+	urlRe = regexp.MustCompile(`https?://(?:\[[0-9A-Fa-f:.]+\]|[^\s"'<>)\]}])[^\s"'<>)\]}]*`)
 
 	privilegedYAMLRe = regexp.MustCompile(`(?im)^\s*privileged\s*:\s*["']?true\b`)
 	privilegedXMLRe  = regexp.MustCompile(`(?is)<\s*Privileged\s*>\s*true\s*<`)
@@ -763,17 +769,36 @@ func isFalsy(v string) bool {
 	return false
 }
 
-// isPublicHost reports whether a host is a name that resolves on the
-// public internet. A bare container name has no dot, `.local` and
-// `.internal` are link-local or site-local by definition, and an address
-// literal that starts with a digit is not a name at all. None of those
-// can be a collector an operator did not configure.
+// isPublicHost reports whether a host is reachable on the public
+// internet, whether it is written as a name or as an address literal.
+//
+// Address literals are parsed rather than excluded. The rule's premise is
+// "an outbound host in a shipped package is a telemetry endpoint until it
+// is shown otherwise", which is a refusal, and the earlier version
+// skipped any host whose first dot-separated label parsed as an integer
+// on the grounds that "an address literal is not a name at all". That
+// reasoning holds for a loopback, private or CGNAT literal and does not
+// hold for a public one: it excluded every IPv4 and IPv6 literal, public
+// or private, so `http://203.0.113.9/collect` behind a variable name the
+// telemetry list does not recognise produced no violation at all while
+// the identical URL with a hostname produced one. A collector reached by
+// address is still a collector.
+//
+// A name that is not an address keeps the label rules: a bare container
+// name has no dot, and `.local`, `.internal`, `.lan`, `.home` and `.arpa`
+// are link-local or site-local by definition.
 func isPublicHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
-	if h == "" || h == "localhost" || !strings.Contains(h, ".") {
+	if h == "" || h == "localhost" {
 		return false
 	}
-	if _, err := strconv.Atoi(strings.Split(h, ".")[0]); err == nil {
+	// url.Hostname() already strips an IPv6 literal's brackets, but this
+	// function is also called on hosts taken straight out of a document,
+	// where they are still there.
+	if addr, err := netip.ParseAddr(strings.Trim(h, "[]")); err == nil {
+		return isPublicAddr(addr)
+	}
+	if !strings.Contains(h, ".") {
 		return false
 	}
 	// Link-local and site-local suffixes only. RFC 2606's reserved names
@@ -784,6 +809,32 @@ func isPublicHost(host string) bool {
 		if strings.HasSuffix(h, suffix) {
 			return false
 		}
+	}
+	return true
+}
+
+// cgnat is RFC 6598's shared address space, which netip has no predicate
+// for and which a NAS behind a carrier-grade NAT sits inside.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// isPublicAddr classifies an address literal the way isPublicHost
+// classifies a name: everything an operator's own network can hold is
+// skipped, and anything left is treated as an endpoint.
+//
+// The documentation and benchmark ranges (192.0.2.0/24, 198.51.100.0/24,
+// 203.0.113.0/24, 2001:db8::/32) are deliberately NOT skipped, for the
+// same reason RFC 2606's reserved names are not: they are not local
+// addresses, and a shipped package pointing at one is a defect whichever
+// way it is read.
+func isPublicAddr(a netip.Addr) bool {
+	a = a.Unmap()
+	switch {
+	case !a.IsValid(), a.IsUnspecified(), a.IsLoopback(), a.IsPrivate(),
+		a.IsLinkLocalUnicast(), a.IsLinkLocalMulticast(),
+		a.IsInterfaceLocalMulticast(), a.IsMulticast():
+		return false
+	case a.Is4() && cgnat.Contains(a):
+		return false
 	}
 	return true
 }

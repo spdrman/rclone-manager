@@ -39,9 +39,14 @@ it needs a decision, not an implementation.
 
 ## A note on build provenance
 
-`container/release-manifest.json` currently pins a commit that is not an ancestor of the
-main branch, so the hashes it records describe a build that is not in this history. Until
-#174 repins it, no claim that the bytes a store receives are the bytes this repository
-built can actually be checked. The preflight reports that as undecided for every target
-rather than passing it, and this paragraph is here so a reviewer reading the submission
-materials is told the same thing the gate is.
+`container/release-manifest.json` pins a commit that is on the main branch, so the hashes
+it records describe a build that is in this history and the preflight decides
+`artifact-provenance` for every target. That was not true while #174 was open: the manifest
+pinned a commit only a feature branch ever had, and the preflight reported every target
+undecided rather than claiming a parity nobody could check. This paragraph is here so a
+reviewer reading the submission materials is told the same thing the gate is, in either
+state.
+
+A reachable manifest is still not a byte-for-byte comparison of what a store receives
+against what this repository built. `docs/acceptance/README.md` says so in the same words
+and does not claim the row.

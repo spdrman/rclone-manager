@@ -265,10 +265,7 @@
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "blocked",
-          "blocker": "#174",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it.",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         }
       }
     },
@@ -343,7 +340,7 @@
         "materials-support-source-license": {
           "declared": "blocked",
           "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project.",
+          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
           "expectedDetail": "ships no LICENSE file"
         },
         "materials-submission-checklist": {
@@ -356,10 +353,7 @@
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "blocked",
-          "blocker": "#174",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it.",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         }
       }
     },
@@ -433,7 +427,7 @@
         "materials-support-source-license": {
           "declared": "blocked",
           "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project.",
+          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
           "expectedDetail": "ships no LICENSE file"
         },
         "materials-submission-checklist": {
@@ -446,10 +440,7 @@
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "blocked",
-          "blocker": "#174",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it.",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         }
       }
     },
@@ -528,7 +519,7 @@
         "materials-support-source-license": {
           "declared": "blocked",
           "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project.",
+          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
           "expectedDetail": "ships no LICENSE file"
         },
         "materials-submission-checklist": {
@@ -541,10 +532,7 @@
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "blocked",
-          "blocker": "#174",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it.",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         }
       }
     },
@@ -635,10 +623,7 @@
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "blocked",
-          "blocker": "#174",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it.",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         }
       }
     },
@@ -729,10 +714,7 @@
           "declared": "supported"
         },
         "artifact-provenance": {
-          "declared": "blocked",
-          "blocker": "#174",
-          "reason": "container/release-manifest.json pins commit c51a07f, which is not an ancestor of main, so its recorded hashes describe a build that is not in this history. Nothing about the bytes a store would receive can be traced to a recorded build until #174 repins it. Reported as undecided rather than as a pass or a failure: this work package does not own the manifest and must not paper over it.",
-          "expectedDetail": "is not an ancestor of HEAD"
+          "declared": "supported"
         }
       }
     },
@@ -816,7 +798,7 @@
         "materials-support-source-license": {
           "declared": "blocked",
           "blocker": "#88",
-          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project.",
+          "reason": "B5.2 (#88) owns the OSS/licence/SBOM compliance artifacts \u00a774 lists, and the repository ships no LICENCE file and no licence inventory yet. The support and source halves of this material are written and in the bundle; the licence half is #88's to produce and this work package must not invent a licence for somebody else's project. This declaration is correct for a tree with no LICENSE and only for such a tree: the moment #88's file lands the check passes, the staleness guard turns this cell red, and whichever change lands second re-derives it to \"supported\" and drops the blocker, reason and expectedDetail. That edit belongs to the second of the two branches to merge, because a cell declared supported against a tree that has no LICENSE fails just as loudly in the other direction.",
           "expectedDetail": "ships no LICENSE file"
         },
         "materials-submission-checklist": {

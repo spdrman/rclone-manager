@@ -209,6 +209,25 @@ type Provider struct {
 	Cells      map[string]Cell `json:"cells"`
 }
 
+// The two declaration files this package resolves cells from. A cell's
+// declaration is only ever repaired by editing one of these, so the
+// failure that reports a stale one names the file it came from rather
+// than the reader guessing between them.
+const (
+	ConformanceSource = "conformance.json"
+	SubmissionSource  = "submission.json"
+)
+
+// declarationField is the path to one cell's declaration, in the form a
+// reader can act on without opening anything first. A staleness failure
+// that says only "update the declaration" has already made the reader do
+// the work of finding it, and the pointer to the regeneration command
+// that used to accompany it is not the fix: regeneration records the new
+// verdict, it does not decide what the declaration should now say.
+func declarationField(source, provider, capability string) string {
+	return fmt.Sprintf("%s -> providers.%s.cells.%s.declared", source, provider, capability)
+}
+
 // Conformance is conformance.json.
 type Conformance struct {
 	Capabilities []Capability        `json:"capabilities"`

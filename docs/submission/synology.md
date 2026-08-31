@@ -47,8 +47,9 @@ privileged mode, and no mandatory telemetry. The current result for this target 
 ## Before submitting
 
 - [ ] The licence is chosen and `LICENSE` is in the tree (#88).
-- [ ] `container/release-manifest.json` pins a commit that is on the main branch (#174),
-      so the bytes in this submission can be traced to a recorded build.
+- [ ] `container/release-manifest.json` pins a commit that is on the main branch, so the
+      bytes in this submission can be traced to a recorded build. The preflight decides
+      this; the box is here because a submission is checked by a person, not only by a gate.
 - [ ] The acceptance run in `docs/acceptance/store-submission-preflight.md` has been done on
       real hardware and accepted.
 - [ ] The screenshots exist and are of that run.

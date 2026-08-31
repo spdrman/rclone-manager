@@ -190,6 +190,13 @@ make_full_tree() {
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$SELFTEST_STUB" \
     >"$tree/scripts/tests/ci-local-gate.test.sh"
 
+  # The other guard suite ci-local.sh runs before the self-test. It arrived
+  # with #182 without a stub here, and `bash` on a path that does not exist
+  # exits 127 under set -e, so every full-tree case below that step died for
+  # a reason unrelated to what it measured, Group D's own control included.
+  printf '#!/usr/bin/env bash\nexit 0\n' \
+    >"$tree/scripts/tests/record-release-hashes-guards.test.sh"
+
   # .husky/pre-commit is the one caller that has to act on the exit status
   # rather than read the prose, so Group F drives the real hook in this tree.
   mkdir -p "$tree/.husky"

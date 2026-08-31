@@ -139,6 +139,8 @@ func TestEachHardRuleFiresOnTheShapeItIsAbout(t *testing.T) {
 				"      USAGE_STATS: 1\n",
 				"      TELEMETRY_ENDPOINT: https://collector.example.invalid/ingest\n",
 				"      CRASH_REPORT_HOST: crash.example.invalid\n",
+				"      REPORT_URL: http://203.0.113.9/collect\n",
+				"      REPORT_URL: http://[2001:db8::1]:4318/v1/traces\n",
 			},
 			clean: []string{
 				"      TELEMETRY_ENABLED: \"false\"\n",
@@ -152,6 +154,11 @@ func TestEachHardRuleFiresOnTheShapeItIsAbout(t *testing.T) {
 				"  home: https://github.com/spdrman/rclone-manager\n",
 				"  icon: https://raw.githubusercontent.com/spdrman/rclone-manager/main/docs/submission/icon.svg\n",
 				"      ENGINE: http://192.168.1.20:8080\n",
+				"      ENGINE: http://127.0.0.1:8080\n",
+				"      ENGINE: http://10.7.0.4:8080\n",
+				"      ENGINE: http://100.64.5.9:8080\n",
+				"      ENGINE: http://[fd00::1]:8080\n",
+				"      ENGINE: http://[::1]:8080\n",
 			},
 		},
 	}
@@ -676,21 +683,42 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 		return m
 	}
 
+	// BLOCKED is the one state that needs a declaration as well as an
+	// outcome, because the row's blocker list is read off the
+	// declaration. The declaration is planted here rather than borrowed
+	// from submission.json: a control that reaches into the live data
+	// for the one cell that happens to be blocked today stops proving
+	// anything the day that blocker is resolved, which is exactly how
+	// the two staleness findings on this PR were reached.
+	sBlocked := MustLoadSubmission()
+	blockedCell := map[string]Cell{}
+	for id, cell := range sBlocked.Providers["truenas"].Cells {
+		blockedCell[id] = cell
+	}
+	blockedCell["artifact-provenance"] = Cell{
+		Declared: DeclBlocked, Blocker: "#9999", ExpectedDetail: "fixture",
+		Reason: "a planted blocker, so this control owns the state it measures",
+	}
+	blockedTruenas := sBlocked.Providers["truenas"]
+	blockedTruenas.Cells = blockedCell
+	sBlocked.Providers["truenas"] = blockedTruenas
+
 	cases := []struct {
 		name     string
 		id       string
+		sub      Submission
 		outcomes map[string]Outcome
 		want     Readiness
 	}{
-		{"everything held", "truenas", nil, ReadySubmit},
-		{"a hardware step outstanding", "truenas", map[string]Outcome{"materials-screenshots": OutcomePendingOperator}, ReadyPendingOperator},
-		{"a rule nobody can decide", "truenas", map[string]Outcome{"artifact-provenance": OutcomeBlocked}, ReadyBlocked},
-		{"a rule that failed", "truenas", map[string]Outcome{"no-privileged-mode": OutcomeFail}, ReadyNot},
-		{"no artifact to preflight", "ugos", nil, ReadyNotYetApplicable},
+		{"everything held", "truenas", s, nil, ReadySubmit},
+		{"a hardware step outstanding", "truenas", s, map[string]Outcome{"materials-screenshots": OutcomePendingOperator}, ReadyPendingOperator},
+		{"a rule nobody can decide", "truenas", sBlocked, map[string]Outcome{"artifact-provenance": OutcomeBlocked}, ReadyBlocked},
+		{"a rule that failed", "truenas", s, map[string]Outcome{"no-privileged-mode": OutcomeFail}, ReadyNot},
+		{"no artifact to preflight", "ugos", s, nil, ReadyNotYetApplicable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := ReadinessFor(build(tc.id, tc.outcomes), s, tc.id)
+			got := ReadinessFor(build(tc.id, tc.outcomes), tc.sub, tc.id)
 			if got.Readiness != tc.want {
 				t.Errorf("got %s, want %s (%s)", got.Readiness, tc.want, got.Why)
 			}
@@ -698,6 +726,14 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 				t.Error("a recorded verdict with no reason is not a recorded verdict")
 			}
 		})
+	}
+
+	// The positive control for the planted declaration: with the same
+	// blocked outcome and no declared blocker, the row must not read
+	// BLOCKED, so the state above is reached by the declaration under
+	// test rather than by the outcome alone.
+	if got := ReadinessFor(build("truenas", map[string]Outcome{"artifact-provenance": OutcomeBlocked}), s, "truenas"); got.Readiness == ReadyBlocked {
+		t.Error("a blocked outcome with no declared blocker read as BLOCKED, so the planted declaration proves nothing")
 	}
 
 	// Precedence, asserted rather than assumed. A failure outranks a
@@ -709,7 +745,7 @@ func TestReadinessVerdictDistinguishesItsFiveStates(t *testing.T) {
 		"artifact-provenance":   OutcomeBlocked,
 		"materials-screenshots": OutcomePendingOperator,
 	})
-	if got := ReadinessFor(m, s, "truenas"); got.Readiness != ReadyNot {
+	if got := ReadinessFor(m, sBlocked, "truenas"); got.Readiness != ReadyNot {
 		t.Errorf("a failure alongside a blocker read as %s, want %s", got.Readiness, ReadyNot)
 	}
 
@@ -822,10 +858,7 @@ https://docs.portainer.io/user/docker/templates
 		Declared: DeclBlocked, Blocker: "#170", ExpectedDetail: "has no section for",
 		Reason: "#170 adds this target; nobody has written its hardware section yet",
 	}
-	cells["artifact-provenance"] = Cell{
-		Declared: DeclBlocked, Blocker: "#174", ExpectedDetail: "is not an ancestor of HEAD",
-		Reason: "the repository-wide release manifest problem, identical for every target",
-	}
+	cells["artifact-provenance"] = Cell{Declared: DeclSupported}
 	sub.Providers["portainer"] = SubmissionProvider{
 		Store: Store{
 			Kind:      "none",
@@ -848,10 +881,10 @@ https://docs.portainer.io/user/docker/templates
 
 	row := run.ReadinessOf("portainer")
 	if row.Readiness != ReadyBlocked {
-		t.Errorf("Portainer is recorded %s (%s), want %s: nothing about it failed, and two rules cannot be decided", row.Readiness, row.Why, ReadyBlocked)
+		t.Errorf("Portainer is recorded %s (%s), want %s: nothing about it failed, and one rule cannot be decided", row.Readiness, row.Why, ReadyBlocked)
 	}
-	if strings.Join(row.Blockers, ",") != "#170,#174" {
-		t.Errorf("Portainer's blockers are %v, want #170 and #174", row.Blockers)
+	if strings.Join(row.Blockers, ",") != "#170" {
+		t.Errorf("Portainer's blockers are %v, want #170", row.Blockers)
 	}
 	if len(row.Failed) > 0 {
 		t.Errorf("a target registered by declaration alone failed %v, so registration is not enough after all", row.Failed)
@@ -935,28 +968,33 @@ func TestThePreflightStalenessGuardStillFires(t *testing.T) {
 
 	for _, declared := range []Declaration{DeclUnsupported, DeclNotApplicable} {
 		cell := Cell{Declared: declared, Reason: "recorded as not applying here"}
-		r := resolveWith("truenas", cap, cell, true, "the check now passes")
+		r := resolveWith(SubmissionSource, "truenas", cap, cell, true, "the check now passes")
 		if r.Outcome != OutcomeFail {
 			t.Errorf("a %s cell whose check passes resolved %s, want %s", declared, r.Outcome, OutcomeFail)
 		}
-		if !strings.Contains(r.Detail, "Update conformance.json rather than the check") {
-			t.Errorf("the staleness failure should say which side to change, got: %s", r.Detail)
+		// The message has to name the exact edit, not merely the side.
+		// Both blocking findings on this PR were repaired by editing one
+		// field, and the message that reported them pointed at the wrong
+		// file and left the reader to work out that the regeneration
+		// command it offered was not the fix.
+		if !strings.Contains(r.Detail, "Re-derive submission.json -> providers.truenas.cells.no-privileged-mode.declared rather than the check") {
+			t.Errorf("the staleness failure should name the file and field to edit, got: %s", r.Detail)
 		}
 	}
 
 	// A blocked cell excuses the failure it named and nothing else, which
 	// is the half a blocker number alone would silence.
 	blocked := Cell{Declared: DeclBlocked, Blocker: "#174", ExpectedDetail: "is not an ancestor of HEAD", Reason: "the release manifest"}
-	if r := resolveWith("truenas", cap, blocked, false, "release manifest pins commit c51a07f, which is not an ancestor of HEAD"); r.Outcome != OutcomeBlocked {
+	if r := resolveWith(SubmissionSource, "truenas", cap, blocked, false, "release manifest pins commit c51a07f, which is not an ancestor of HEAD"); r.Outcome != OutcomeBlocked {
 		t.Errorf("the failure the blocker names resolved %s, want %s", r.Outcome, OutcomeBlocked)
 	}
-	if r := resolveWith("truenas", cap, blocked, false, "the package now requests privileged mode"); r.Outcome != OutcomeFail {
+	if r := resolveWith(SubmissionSource, "truenas", cap, blocked, false, "the package now requests privileged mode"); r.Outcome != OutcomeFail {
 		t.Errorf("an unrelated failure was swallowed by the blocker: %s", r.Outcome)
 	}
 
 	// And the blocked cell still fails when the blocker has been fixed
 	// underneath it, so a stale excuse cannot outlive its reason.
-	if r := resolveWith("truenas", cap, blocked, true, "manifest commit is reachable"); r.Outcome != OutcomeFail {
+	if r := resolveWith(SubmissionSource, "truenas", cap, blocked, true, "manifest commit is reachable"); r.Outcome != OutcomeFail {
 		t.Errorf("a blocked cell whose check now passes resolved %s, want %s", r.Outcome, OutcomeFail)
 	}
 }
@@ -987,6 +1025,94 @@ func TestTheAPIContractAnchorsCannotSilentlyStopChecking(t *testing.T) {
 			t.Errorf("%s's pattern stopped matching when the version moved, so a bump would read as a missing anchor rather than as a disagreement", anchor.path)
 		} else if string(hit[1]) == APIBasePath {
 			t.Errorf("%s's pattern reported the old base path from a file that no longer contains it", anchor.path)
+		}
+	}
+}
+
+// TestTelemetryRuleReadsAddressLiteralsAsHosts is the control for the
+// hole the consolidated review of #191 found in isPublicHost.
+//
+// The rule's stated premise is that an outbound host in a shipped package
+// is a telemetry endpoint until it is shown otherwise, which is a
+// refusal. The earlier classifier skipped any host whose first
+// dot-separated label parsed as an integer, which excluded every IPv4 and
+// IPv6 literal, public or private, so the same URL was reported when it
+// named a host and ignored when it gave an address. That is the fail-open
+// half of a fail-closed rule, and only the unnamed path is affected: a
+// public address behind a recognised telemetry variable name was always
+// caught by the name-based half, which is why nothing here went red.
+//
+// Both directions are asserted from one table of URL shapes, because
+// either half alone is satisfied by something broken: a classifier that
+// calls everything public passes the first loop, and one that calls
+// nothing public passes the second.
+func TestTelemetryRuleReadsAddressLiteralsAsHosts(t *testing.T) {
+	// REPORT_URL deliberately: it is not on the telemetry variable list,
+	// so the only thing that can report these is the URL scan, which is
+	// the path isPublicHost exists to cover.
+	const varName = "      REPORT_URL: "
+
+	reportable := []string{
+		"https://collector.example-vendor.invalid/ingest",
+		"http://203.0.113.9/collect",
+		"http://198.51.100.7:9411/api/v2/spans",
+		"http://[2001:db8::1]:4318/v1/traces",
+		"https://[2606:4700:4700::1111]/ingest",
+		"http://8.8.8.8/collect",
+	}
+	for _, u := range reportable {
+		if v := CheckNoMandatoryTelemetry("fixture/compose.yaml", varName+u+"\n"); len(v) != 1 {
+			t.Errorf("%s produced %d violation(s), want 1: an outbound host is an endpoint whether it is written as a name or as an address", u, len(v))
+		}
+	}
+
+	// The positive control. Without it a classifier that answered "public"
+	// to everything would satisfy every assertion above, and the rule
+	// would fire on the loopback and LAN addresses this product's own
+	// packages are full of.
+	local := []string{
+		"http://localhost:8080",
+		"http://backup-manager:8080",
+		"http://tower.local:8080",
+		"http://127.0.0.1:8080",
+		"http://[::1]:8080",
+		"http://192.168.1.20:8080",
+		"http://10.7.0.4:8080",
+		"http://172.16.9.9:8080",
+		"http://100.64.5.9:8080",
+		"http://[fd00::1]:8080",
+		"http://0.0.0.0:8080",
+	}
+	for _, u := range local {
+		if v := CheckNoMandatoryTelemetry("fixture/compose.yaml", varName+u+"\n"); len(v) > 0 {
+			t.Errorf("%s produced %s: an address an operator's own network can hold is not a collector", u, oneLine(v))
+		}
+	}
+
+	// And the classifier on its own, since the parity between a name and
+	// an address is the actual claim and the URL scan is only where it
+	// shows up.
+	for host, want := range map[string]bool{
+		"collector.example-vendor.invalid": true,
+		"203.0.113.9":                      true,
+		"8.8.8.8":                          true,
+		"2001:db8::1":                      true,
+		"[2001:db8::1]":                    true,
+		"::ffff:203.0.113.9":               true,
+		"localhost":                        false,
+		"backup-manager":                   false,
+		"tower.local":                      false,
+		"127.0.0.1":                        false,
+		"::1":                              false,
+		"192.168.1.20":                     false,
+		"100.64.5.9":                       false,
+		"fd00::1":                          false,
+		"fe80::1":                          false,
+		"224.0.0.1":                        false,
+		"::ffff:127.0.0.1":                 false,
+	} {
+		if got := isPublicHost(host); got != want {
+			t.Errorf("isPublicHost(%q) = %v, want %v", host, got, want)
 		}
 	}
 }
