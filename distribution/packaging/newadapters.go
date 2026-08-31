@@ -241,14 +241,28 @@ var productPluginMarkers = []struct {
 
 // ScanForProductPlugin reports any sign that an adapter has grown into a
 // plugin, an agent or an API client for the platform it packages for.
+//
+// The match is case-insensitive, exactly as ScanForStoreMetadataLeak's
+// already is, and for a stronger reason: `x-api-key` is the canonical
+// HTTP/2 spelling of the header stored here as `X-API-Key` and the form
+// most OpenAPI documents use, `portainer_api_key` is an ordinary shell
+// env var, and `/API/endpoints` is a URL a server treats the same. A
+// guard that fires only on the one spelling somebody wrote into both the
+// rule and its fixture fails open on every other one. The widening costs
+// nothing legitimate here: this runs over apps/<platform>/, whose whole
+// deliverable is a template and a compose file, and it skips Markdown, so
+// the prose that may say these words is out of scope either way. The
+// message keeps the canonical spelling, because that is the one a reader
+// can grep the rule for.
 func ScanForProductPlugin(root string) ([]Violation, error) {
 	return scanText(root, func(rel, text string) []Violation {
 		if strings.EqualFold(filepath.Ext(rel), ".md") {
 			return nil
 		}
+		lower := strings.ToLower(text)
 		var out []Violation
 		for _, m := range productPluginMarkers {
-			if strings.Contains(text, m.marker) {
+			if strings.Contains(lower, strings.ToLower(m.marker)) {
 				out = append(out, Violation{rel, RuleProductPlugin,
 					fmt.Sprintf("contains %s, which %s; #170 rules out a product plugin, an agent and an API dependency by name", backquote(m.marker), m.detail)})
 			}

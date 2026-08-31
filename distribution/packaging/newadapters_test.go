@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // This file is issue #170's own suite: the four targets Phase 6 adds, and
@@ -623,6 +624,8 @@ func TestTheProductPluginScanFires(t *testing.T) {
 		{"an API client", "url: https://portainer.example/api/endpoints\n", "/api/endpoints"},
 		{"an API key", "PORTAINER_API_KEY=redacted\n", "PORTAINER_API_KEY"},
 		{"a Dockge plugin", "path: dockge/plugin/index.js\n", "dockge/plugin"},
+		{"an API-key header", "headers:\n  X-API-Key: ${TOKEN}\n", "X-API-Key"},
+		{"an API import", "import \"github.com/portainer/portainer-ce/api/client\"\n", "portainer-ce/api"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := t.TempDir()
@@ -647,6 +650,102 @@ func TestTheProductPluginScanFires(t *testing.T) {
 	write(t, filepath.Join(d, "README.md"), "This adapter needs no portainer/agent and never mounts docker.sock.\n")
 	if v, err := ScanForProductPlugin(d); err != nil || len(v) > 0 {
 		t.Errorf("prose about not needing an agent was reported as needing one: %v (err %v)", v, err)
+	}
+}
+
+// swapCase is the opposite spelling of whatever the rule stores: every
+// letter of the marker in the other case. It is deliberately mechanical
+// rather than a hand-picked variant, so the control below cannot be
+// written to agree with the rule by accident.
+func swapCase(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsLower(r):
+			return unicode.ToUpper(r)
+		case unicode.IsUpper(r):
+			return unicode.ToLower(r)
+		}
+		return r
+	}, s)
+}
+
+// TestTheProductPluginScanIgnoresCase is the control the marker list had
+// no way to fail before: every fixture in TestTheProductPluginScanFires
+// spells its marker exactly as the rule stores it, so a scan that matched
+// only that one spelling read clean and looked proven.
+//
+// It iterates productPluginMarkers itself rather than a copy of it, which
+// is the part that keeps working: a marker added later arrives with its
+// opposite-case control already written, and cannot be the one spelling
+// nobody checked.
+func TestTheProductPluginScanIgnoresCase(t *testing.T) {
+	for _, m := range productPluginMarkers {
+		t.Run(m.marker, func(t *testing.T) {
+			other := swapCase(m.marker)
+			if other == m.marker {
+				t.Fatalf("%q has no other case, so this control asserts nothing", m.marker)
+			}
+
+			// The negative half, first: the same fixture with the marker
+			// taken out has to read clean, or the hit below is the
+			// surrounding YAML rather than the marker.
+			d := t.TempDir()
+			write(t, filepath.Join(d, "thing.yml"), "value: harmless\n")
+			if v, err := ScanForProductPlugin(d); err != nil || len(v) > 0 {
+				t.Fatalf("the fixture without the marker reported %v (err %v), so the hit below proves nothing", v, err)
+			}
+
+			d = t.TempDir()
+			write(t, filepath.Join(d, "thing.yml"), "value: "+other+"\n")
+			v, err := ScanForProductPlugin(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(v) == 0 {
+				t.Fatalf("%q went unnoticed, and it is the same dependency as %q", other, m.marker)
+			}
+			if !strings.Contains(oneLine(v), m.marker) {
+				t.Errorf("the scan fired for a different reason than %q: %s", m.marker, oneLine(v))
+			}
+		})
+	}
+}
+
+// TestTheProductPluginScanCatchesTheOrdinarySpellings pins the four
+// spellings the #204 review named, which are all at least as likely as
+// the ones the rule happens to store: the HTTP/2 header form, the shell
+// env var form, an uppercased path segment, and a capitalised import
+// path.
+func TestTheProductPluginScanCatchesTheOrdinarySpellings(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"the header form", "headers:\n  x-api-key: ${TOKEN}\n", "X-API-Key"},
+		{"the env var form", "portainer_api_key=redacted\n", "PORTAINER_API_KEY"},
+		{"an uppercased path", "url: https://portainer.example/API/endpoints\n", "/api/endpoints"},
+		{"a capitalised plugin path", "path: Dockge/Plugin/index.js\n", "dockge/plugin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := t.TempDir()
+			write(t, filepath.Join(d, "thing.yml"), tc.body)
+			v, err := ScanForProductPlugin(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(v) == 0 {
+				t.Fatalf("%s went unnoticed", tc.name)
+			}
+			if !strings.Contains(oneLine(v), tc.want) {
+				t.Errorf("the scan fired for a different reason than %q: %s", tc.want, oneLine(v))
+			}
+		})
+	}
+
+	// Markdown stays skipped whatever the case: the reason it is skipped
+	// is that a README explaining the absence of a plugin is prose, and
+	// that does not change when the prose is capitalised.
+	d := t.TempDir()
+	write(t, filepath.Join(d, "README.md"), "This adapter needs no Portainer/Agent and sets no X-Api-Key.\n")
+	if v, err := ScanForProductPlugin(d); err != nil || len(v) > 0 {
+		t.Errorf("prose was reported as a dependency once it was capitalised: %v (err %v)", v, err)
 	}
 }
 
