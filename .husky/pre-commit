@@ -32,9 +32,21 @@
 # the gate where it would look like success. Anything that merges on this
 # gate's word must require 0.
 #
-# Playwright e2e is still not here, matching nightly-e2e.yml's own reasoning
-# (too slow, too flaky to sit in front of every commit) — run it by hand
-# (`cd ui/shared && npm run e2e`) or via workflow_dispatch before a release.
+# Playwright e2e IS here now, and that is the change #197 was about. It used
+# to run only when somebody remembered to run it, which is how a
+# deterministically red spec sat on main through four merges and was
+# dismissed twice as an ordering flake. The suite itself no longer lives in
+# this repository either: #158 moved it to spdrman/rclone-manager-tests, and
+# scripts/ci-local.sh now runs it from there, at the sha in
+# scripts/e2e/tests-repo.pin, against THIS working tree's ui/shared. The same
+# step runs that repository's CLI smoke slice against a backup-manager built
+# from this tree, which is a black-box CLI signal this repository never had.
+#
+# It costs about half a minute on a non-FAST run and it blocks: a red spec
+# exits nonzero, ci-local.sh is `set -e`, so the commit is refused. On a
+# machine with no Playwright browser the step refuses and names the install
+# command; CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that ledgers the skip,
+# which lands in outcome 3 below rather than looking like success.
 #
 # `git commit --no-verify` is the documented escape hatch for a WIP commit
 # you will fix before pushing.

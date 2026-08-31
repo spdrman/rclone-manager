@@ -108,10 +108,17 @@ front door.
 
 **The Playwright suite does not contradict any of that, because it never talks to the
 runtime.** `ui/shared/src/app/createApp.tsx` substitutes `createMockApi` whenever
-`import.meta.env.DEV` is set, and `ui/shared/playwright.config.ts` runs the suite against
+`import.meta.env.DEV` is set, and the browser suite runs against
 `npm run dev`. The suite is a real test of what the browser renders and of how the pages
 behave, and it is no evidence at all about the API. Do not read a green e2e run as an
 end-to-end proof.
+
+That is no longer only an argument. Suite C in `rclone-manager-tests` boots the real
+engine, serves the production bundle in front of it and drives the real pages, and four of
+the six pages cannot load: `ui/shared/src/api/client.ts` requests fourteen `/api/v1`
+operations that are in neither `api/v1/openapi.json` nor `apps/common/webhost/router.go`.
+Written up as #211. The contract gate does not catch it because it compares the generated
+bindings, and `client.ts` is hand-written on top of them.
 
 ### What is built but not exposed
 
@@ -783,11 +790,21 @@ with whatever failed. `.husky/pre-commit` allows 3 and says so out loud, so the 
 iteration loop still commits; nothing that merges on this gate's word may accept anything
 but 0.
 
-One qualification on `ok`: Playwright e2e is not in the gate at all (it matches
-`nightly-e2e.yml`'s own reasoning, too slow and too flaky in front of every commit), so
-`ok` means every check the gate invokes ran, not every test in the repository. Run
-`cd ui/shared && npm run e2e` by hand before a release, and remember what the
-[Status](#status-what-actually-runs-today) section says that run does and does not prove.
+Playwright e2e used to be the qualification on `ok`: it was not in the gate at all, so
+`ok` meant every check the gate invoked, which did not include the browser. It is in the
+gate now (#197), from outside the repository. The suite moved to
+[`spdrman/rclone-manager-tests`](https://github.com/spdrman/rclone-manager-tests) in #158,
+and a non-FAST run checks that repository out at the sha in `scripts/e2e/tests-repo.pin`
+and runs two things against the working tree: its CLI contract smoke slice, 55 black-box
+cases against a `backup-manager` built from this tree, and its browser suite, 165 tests
+against this tree's `ui/shared`. About half a minute together. A red spec exits nonzero,
+this script is `set -e`, so the commit is refused.
+
+On a machine with no Playwright browser the step refuses and names the install command;
+`CI_LOCAL_SKIP_E2E=1` is the out-loud opt-out that ledgers the skip, so that run ends
+`INCOMPLETE` rather than `ok`, the same way a stopped Docker daemon does.
+`scripts/e2e/README.md` has the mechanics, including how to move the pin and what to do
+when the pin and the working tree legitimately disagree.
 
 A component that is not in the tree at all is not a skip: its checks are inapplicable, and
 the run can still be `ok`. Today `apps/ugos/backend` and `apps/ugos/frontend/upk-proof`
