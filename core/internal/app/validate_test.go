@@ -50,6 +50,109 @@ func newCommittedFixture(t *testing.T) committedFixture {
 	return committedFixture{svc: svc, journal: journal, artifact: rec.Artifact, localDir: localDir}
 }
 
+// newRetainedFixture is newCommittedFixture's issue #315 twin: the same
+// real pipeline, driven by the same real processArtifact call, but against
+// a backup set declared read-only (config.BackupSet.ReadOnly), so the
+// artifact lands at REMOTE_RETAINED (issue #282's terminal state) instead
+// of COMPLETE.
+func newRetainedFixture(t *testing.T) committedFixture {
+	t.Helper()
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.ReadOnly = true
+	source := transport.Source{ID: "validate-retained-test"}
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload for validate", epoch.Unix())
+
+	journal := openJournal(t)
+	ctx := context.Background()
+	rec := discoverOneRecord(t, ctx, journal, tr, source, bs)
+
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.processArtifact(ctx, source, bs, rec)
+
+	final, err := journal.Get(ctx, rec.Artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.State != string(lifecycle.RemoteRetained) {
+		t.Fatalf("precondition failed: journal state = %q, want %q", final.State, lifecycle.RemoteRetained)
+	}
+
+	return committedFixture{svc: svc, journal: journal, artifact: rec.Artifact, localDir: localDir}
+}
+
+// TestValidateArtifact_RemoteRetained_QuarantinesOnCorruption is issue
+// #315's core proof for the operator-triggered path: before this fix,
+// ValidateArtifact refused every REMOTE_RETAINED artifact outright ("not a
+// durable restore point"), so `backup-manager validate <id>` gave an
+// operator no on-demand way to check a retained artifact's local copy
+// either, on top of reconcile.go's and internal/revalidate's own gaps.
+// This proves the refusal is gone and a corrupted local copy is actually
+// caught and quarantined, mirroring
+// TestValidateArtifact_QuarantinesOnCorruption's own shape for a COMPLETE
+// artifact, except this one must land in the recoverable QUARANTINED, not
+// QUARANTINED_LOST: REMOTE_RETAINED never confirmed the remote object
+// gone.
+func TestValidateArtifact_RemoteRetained_QuarantinesOnCorruption(t *testing.T) {
+	fx := newRetainedFixture(t)
+	ctx := context.Background()
+
+	localFinal := filepath.Join(fx.localDir, "backup.dump")
+	if err := os.WriteFile(localFinal, []byte("corrupted after the fact"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("ValidateArtifact: %v", err)
+	}
+	if result.Passed {
+		t.Fatalf("result = %+v, want Passed = false", result)
+	}
+	if result.NewState != lifecycle.Quarantined {
+		t.Errorf("NewState = %q, want %q: the remote was never touched or confirmed gone, so this must stay recoverable", result.NewState, lifecycle.Quarantined)
+	}
+
+	after, err := fx.journal.Get(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.State != string(lifecycle.Quarantined) {
+		t.Errorf("journal State = %q, want %q", after.State, lifecycle.Quarantined)
+	}
+}
+
+// TestValidateArtifact_RemoteRetained_PassesOnUnchangedFile is the
+// regression companion: a retained artifact whose local copy is still
+// intact must pass and stay exactly where it was, REMOTE_RETAINED, never
+// nudged toward COMPLETE or anywhere else.
+func TestValidateArtifact_RemoteRetained_PassesOnUnchangedFile(t *testing.T) {
+	fx := newRetainedFixture(t)
+	ctx := context.Background()
+
+	result, err := fx.svc.ValidateArtifact(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("ValidateArtifact: %v", err)
+	}
+	if !result.Checked || !result.Passed {
+		t.Errorf("result = %+v, want Checked && Passed", result)
+	}
+	if result.NewState != "" {
+		t.Errorf("NewState = %q, want empty (a pass must not move the artifact)", result.NewState)
+	}
+
+	after, err := fx.journal.Get(ctx, fx.artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.State != string(lifecycle.RemoteRetained) {
+		t.Errorf("State = %q, want %q", after.State, lifecycle.RemoteRetained)
+	}
+}
+
 // TestValidateArtifact_PassesOnUnchangedFile proves a clean validate
 // leaves the artifact exactly where it was (COMPLETE), reports Passed,
 // and writes nothing to the journal (no same-state audit write, unlike

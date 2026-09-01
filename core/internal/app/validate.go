@@ -65,21 +65,31 @@ type ValidateResult struct {
 //
 // # Which artifacts this accepts
 //
-// Only COMMITTED, REMOTE_DELETE_PENDING or COMPLETE: the same "a durable
-// local copy has actually landed" set internal/health's decideState,
-// internal/retention's gfsIsManagedComplete and internal/revalidate's
-// eligibleStates all already agree on. Anything else (still in flight, or
-// already FAILED/QUARANTINED/QUARANTINED_LOST) is refused outright: there
-// is either no durable copy yet to check, or the artifact has already been
-// routed to wherever it needs to go.
+// Only COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or (issue #315)
+// REMOTE_RETAINED: the same "a durable local copy has actually landed" set
+// internal/health's decideState, internal/retention's gfsIsManagedComplete
+// and internal/revalidate's eligibleStates all already agree on. Anything
+// else (still in flight, or already FAILED/QUARANTINED/QUARANTINED_LOST) is
+// refused outright: there is either no durable copy yet to check, or the
+// artifact has already been routed to wherever it needs to go.
+//
+// REMOTE_RETAINED belongs in that set for exactly the reason issue #315
+// exists: an operator running `validate` by hand against one specific
+// artifact id is the third, on-demand way this codebase can catch a
+// retained artifact's local copy going bad, alongside FR-17 reconciliation
+// (internal/reconcile) and Phase 4's scheduled revalidation
+// (internal/revalidate). Before this fix `validate` refused a
+// REMOTE_RETAINED artifact outright, "not a durable restore point", which
+// was simply wrong: it is one, this manager just never deletes the remote
+// copy alongside it.
 //
 // # No --dry-run, on purpose
 //
 // Unlike `fetch` and `retention`, `validate` is not gated behind a dry-run
 // flag. A failed check has a real, but protective rather than destructive,
 // consequence: it quarantines the artifact (the exact same
-// COMMITTED/REMOTE_DELETE_PENDING -> QUARANTINED, COMPLETE ->
-// QUARANTINED_LOST routing internal/reconcile and internal/revalidate
+// COMMITTED/REMOTE_DELETE_PENDING/REMOTE_RETAINED -> QUARANTINED, COMPLETE
+// -> QUARANTINED_LOST routing internal/reconcile and internal/revalidate
 // already use for "the durable local copy was found invalid after the
 // fact"), which preserves evidence and asks for human attention rather
 // than deleting anything. A passing check writes nothing at all: unlike
@@ -95,11 +105,11 @@ func (s *Service) ValidateArtifact(ctx context.Context, id model.ArtifactID) (Va
 
 	cur := lifecycle.State(rec.State)
 	switch cur {
-	case lifecycle.Committed, lifecycle.RemoteDeletePending, lifecycle.Complete:
+	case lifecycle.Committed, lifecycle.RemoteDeletePending, lifecycle.Complete, lifecycle.RemoteRetained:
 		// eligible
 	default:
 		return ValidateResult{Artifact: id}, fmt.Errorf(
-			"app: validate: %s is %s, not a durable restore point (COMMITTED, REMOTE_DELETE_PENDING or COMPLETE)", id, cur)
+			"app: validate: %s is %s, not a durable restore point (COMMITTED, REMOTE_DELETE_PENDING, COMPLETE or REMOTE_RETAINED)", id, cur)
 	}
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
