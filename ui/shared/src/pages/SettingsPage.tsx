@@ -8,6 +8,8 @@ import { versionNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
+import { apiErrorOf, describeFailure } from "@shared/api/failure";
+import type { OperatorFailure } from "@shared/api/failure";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
@@ -181,14 +183,34 @@ const MIN_PASSWORD_LENGTH = 12;
  *  a first-run one. A successful rotation signs out every OTHER session
  *  for this administrator (apps/common/auth/local's handleRotatePassword);
  *  this tab's own session is reissued, so no redirect/sign-out happens
- *  here. */
+ *  here.
+ *
+ *  #274: a rejected rotation used to read as a wrong current password
+ *  whatever the service said, under the literal `cid_rotate_password`. A
+ *  rate-limited address and a session that expired while this tab sat open
+ *  are both reachable here and neither is a wrong password. */
+function describeRotationFailure(e: unknown): OperatorFailure {
+  const api = apiErrorOf(e);
+  if (api?.code === "UNAUTHENTICATED") {
+    // handleRotatePassword answers UNAUTHENTICATED both for a wrong current
+    // password and for a session that is no longer valid, and does not say
+    // which. Naming both beats naming the wrong one.
+    return {
+      message: "That current password was not accepted.",
+      remediation: "If it is definitely right, this tab's session may have expired: reload the page, sign in again and retry.",
+      correlationId: api.correlationId
+    };
+  }
+  return describeFailure(e, "The password was not changed.");
+}
+
 function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
   const api = useApi();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<OperatorFailure | null>(null);
   const [success, setSuccess] = useState(false);
 
   const tooShort = next.length > 0 && next.length < MIN_PASSWORD_LENGTH;
@@ -199,7 +221,7 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
     e.preventDefault();
     if (!valid || readOnly) return;
     setBusy(true);
-    setError(null);
+    setFailure(null);
     setSuccess(false);
     api
       .rotatePassword(current, next)
@@ -209,7 +231,7 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
         setNext("");
         setConfirm("");
       })
-      .catch(() => setError("That current password was not accepted."))
+      .catch((e: unknown) => setFailure(describeRotationFailure(e)))
       .finally(() => setBusy(false));
   };
 
@@ -279,7 +301,13 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
               Password changed. Other signed-in sessions have been signed out.
             </div>
           ) : null}
-          {error ? <ErrorState message={error} correlationId="cid_rotate_password" /> : null}
+          {failure ? (
+            <ErrorState
+              message={failure.message}
+              remediation={failure.remediation}
+              correlationId={failure.correlationId}
+            />
+          ) : null}
           <div>
             <button
               className="btn btn--primary"

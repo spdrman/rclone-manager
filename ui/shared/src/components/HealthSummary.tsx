@@ -47,13 +47,13 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
               {"Storage " + health.storageState}
             </StatusBadge>
             {health.setsStale > 0 ? (
-              <StatusBadge tone="warn" glyph="\u25b2">{health.setsStale + " set stale"}</StatusBadge>
+              <StatusBadge tone="warn" glyph={"\u25b2"}>{health.setsStale + " set stale"}</StatusBadge>
             ) : null}
             {health.setsDegraded > 0 ? (
-              <StatusBadge tone="warn" glyph="\u25b2">{health.setsDegraded + " set degraded"}</StatusBadge>
+              <StatusBadge tone="warn" glyph={"\u25b2"}>{health.setsDegraded + " set degraded"}</StatusBadge>
             ) : null}
             {health.setsFailing > 0 ? (
-              <StatusBadge tone="danger" glyph="\u2715">{health.setsFailing + " set halted"}</StatusBadge>
+              <StatusBadge tone="danger" glyph={"\u2715"}>{health.setsFailing + " set halted"}</StatusBadge>
             ) : null}
           </div>
         </div>

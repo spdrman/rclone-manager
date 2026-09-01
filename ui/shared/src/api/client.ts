@@ -94,6 +94,21 @@ const CSRF_HEADER_NAME = "X-CSRF-Token";
  */
 const BOOTSTRAP_TOKEN_HEADER = "X-Bootstrap-Token";
 
+/**
+ * The bootstrap token this browser was handed, or null when the page was
+ * opened without one.
+ *
+ * Exported because the enrollment page has to tell those two cases apart
+ * to say anything useful about a refusal (#274): the service answers
+ * BOOTSTRAP_TOKEN_INVALID whether the token was missing, expired or
+ * already spent, and "you opened a link with no token in it" is the one
+ * of the three the browser can settle by itself, without asking.
+ */
+export function bootstrapTokenFromLocation(): string | null {
+  const token = new URLSearchParams(window.location.search).get("token");
+  return token === null || token === "" ? null : token;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -110,7 +125,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (path === "/auth/enroll") {
-    const bootstrapToken = new URLSearchParams(window.location.search).get("token");
+    const bootstrapToken = bootstrapTokenFromLocation();
     if (bootstrapToken) headers[BOOTSTRAP_TOKEN_HEADER] = bootstrapToken;
   }
 
