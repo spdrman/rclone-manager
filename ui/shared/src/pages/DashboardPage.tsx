@@ -15,6 +15,7 @@ import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { isNotConfigured } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
 
 export function DashboardPage({
@@ -40,6 +41,26 @@ export function DashboardPage({
   // the endpoint actually returns.
   const active = operations.data?.filter((op) => op.status === "running" || op.status === "queued") ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
+
+  // #275: an instance with no configuration refuses every read here, and
+  // that is not a fault to report, it is a setup step nobody has taken.
+  if (isNotConfigured(health.error))
+    return (
+      <>
+        <PageHeader title="Dashboard" subtitle="Not configured yet" />
+        <EmptyState
+          title="Nothing is being backed up yet"
+          action={
+            <button className="btn btn--primary" onClick={() => navigate("/sets/new")}>
+              Add backup set
+            </button>
+          }
+        >
+          This instance has no configuration. Adding your first backup set is what writes
+          it, and this page starts reporting the moment that set runs.
+        </EmptyState>
+      </>
+    );
 
   if (health.error)
     return <ErrorState {...health.error} onRetry={health.reload} />;

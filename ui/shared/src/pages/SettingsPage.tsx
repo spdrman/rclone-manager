@@ -4,7 +4,7 @@ import { useApi } from "@shared/api/ApiContext";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { notificationCopy } from "@shared/platform/capabilities";
 import { useCausl } from "@shared/state/graph";
-import { versionNode } from "@shared/state/appNodes";
+import { configuredNode, versionNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
@@ -20,6 +20,7 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
   // getVersion() here — the two could otherwise briefly disagree about
   // which version is current.
   const version = useCausl(versionNode);
+  const configured = useCausl(configuredNode);
 
   return (
     <>
@@ -90,22 +91,27 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
 
           <ChangePasswordCard readOnly={readOnly} />
 
-          <section className="card" style={{ borderColor: "var(--warn)" }}>
-            <div className="card__header"><h2 className="eyebrow">Catalog recovery</h2></div>
-            <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600 }}>Existing backup data detected</div>
-              <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
-                Backup files were found in the configured storage location, but they are
-                not currently present in the Backup Manager catalog. Scanning is
-                read-only — no files will be deleted.
-              </p>
-              <div>
-                <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/catalog-recovery")}>
-                  Scan backup storage
-                </button>
+          {/* #275: on an instance with no configuration there is no
+              storage location, so there is nothing this card could
+              truthfully claim was found in one. */}
+          {configured === false ? null : (
+            <section className="card" style={{ borderColor: "var(--warn)" }}>
+              <div className="card__header"><h2 className="eyebrow">Catalog recovery</h2></div>
+              <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 600 }}>Existing backup data detected</div>
+                <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
+                  Backup files were found in the configured storage location, but they are
+                  not currently present in the Backup Manager catalog. Scanning is
+                  read-only — no files will be deleted.
+                </p>
+                <div>
+                  <button className="btn btn--primary" disabled={readOnly} onClick={() => navigate("/catalog-recovery")}>
+                    Scan backup storage
+                  </button>
+                </div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>

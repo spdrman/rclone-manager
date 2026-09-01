@@ -6,6 +6,7 @@ import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { isNotConfigured } from "@shared/api/failure";
 import type { Severity } from "@shared/types/operation";
 
 /** Deliberately not overbuilt (§19): four filters, one list. */
@@ -28,6 +29,19 @@ export function ActivityPage() {
       return true;
     });
   }, [events.data, setId, minSeverity]);
+
+  // #275: an empty timeline is the truth on an unconfigured instance, and
+  // the filters above have nothing to filter.
+  if (isNotConfigured(events.error))
+    return (
+      <>
+        <PageHeader title="Activity" subtitle="Nothing has happened yet" />
+        <EmptyState title="No activity yet">
+          Backup Manager records what it does here. It has done nothing yet, because this
+          instance has no configuration and no backup set to run.
+        </EmptyState>
+      </>
+    );
 
   if (events.error) return <ErrorState {...events.error} onRetry={events.reload} />;
 

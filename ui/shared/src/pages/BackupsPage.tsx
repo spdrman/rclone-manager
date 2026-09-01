@@ -7,6 +7,7 @@ import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { isNotConfigured } from "@shared/api/failure";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { bytes, stamp } from "@shared/utilities/format";
 
@@ -29,6 +30,18 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
   // BackupSet.source/set's own doc), so this resolves the one from the
   // other.
   const previewSet = previewFor ? (sets.data ?? []).find((s) => s.id === previewFor) : null;
+
+  // #275: nothing to list, and nothing wrong either.
+  if (isNotConfigured(artifacts.error))
+    return (
+      <>
+        <PageHeader title="Backups" subtitle="Nothing retained yet" />
+        <EmptyState title="No backups yet">
+          Backups appear here once a backup set exists and has run. This instance has no
+          configuration yet, so nothing has run.
+        </EmptyState>
+      </>
+    );
 
   if (artifacts.error) return <ErrorState {...artifacts.error} onRetry={artifacts.reload} />;
 

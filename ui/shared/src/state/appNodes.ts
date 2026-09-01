@@ -27,6 +27,25 @@ export const quarantineNode = createResourceNode<BackupArtifact[]>("app.quaranti
  * directly rather than re-fetched per page. */
 export const operationsNode = createResourceNode<Operation[]>("app.operations");
 
+/**
+ * Whether this instance has a configuration at all: GET /system/first-run's
+ * own answer, `null` until it arrives.
+ *
+ * Issue #275. This was App.tsx's own useState, with a comment saying a
+ * plain local was enough because "exactly one component reads it". That
+ * stopped being true the moment an unconfigured instance became navigable:
+ * a page with no fetch of its own (catalog recovery) cannot learn it from
+ * a refusal, because it makes no request until the operator presses a
+ * button, and the settings page needs it to stop advertising a scan of
+ * storage that has not been configured.
+ *
+ * Pages that DO fetch should keep reading their own refusal instead
+ * (isNotConfigured, api/failure.ts): the 503 is the service's answer about
+ * the exact call that was made, and this node is one page's summary of a
+ * different call.
+ */
+export const configuredNode = registerInput<boolean | null>("app.configured", null);
+
 export interface AppCounts {
   sets: number | undefined;
   backups: number | undefined;

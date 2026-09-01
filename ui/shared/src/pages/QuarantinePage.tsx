@@ -6,6 +6,7 @@ import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { describeFailure } from "@shared/api/failure";
+import { isNotConfigured } from "@shared/api/failure";
 import { stamp } from "@shared/utilities/format";
 import type { BackupArtifact, QuarantineReason } from "@shared/types/backup";
 
@@ -137,6 +138,22 @@ export function QuarantinePage({
       })
       .finally(() => setRunning(false));
   };
+
+  // #275: quarantine holds what failed validation. Nothing has been
+  // ingested on an unconfigured instance, so nothing can have failed.
+  if (isNotConfigured(quarantine.error))
+    return (
+      <>
+        <PageHeader
+          title="Quarantine"
+          subtitle="Artifacts held back from the catalog. Their remote originals are retained until the issue is resolved."
+        />
+        <EmptyState title="Nothing in quarantine">
+          Quarantine holds backups that arrived but did not pass validation. This instance
+          has no configuration yet, so nothing has arrived.
+        </EmptyState>
+      </>
+    );
 
   if (quarantine.error) return <ErrorState {...quarantine.error} onRetry={quarantine.reload} />;
 
