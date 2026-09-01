@@ -53,11 +53,22 @@ func cmdFetch(args []string) int {
 		return 0
 	}
 
-	fmt.Printf("discovered=%d already_known=%d pending=%d rejected=%d conflicts=%d errors=%d\n",
+	fmt.Printf("discovered=%d already_known=%d pending=%d rejected=%d conflicts=%d errors=%d failed=%d\n",
 		len(result.Discovery.Discovered), len(result.Discovery.AlreadyKnown), len(result.Discovery.Pending),
-		len(result.Discovery.Rejected), len(result.Discovery.Conflicts), len(result.Discovery.Errors))
+		len(result.Discovery.Rejected), len(result.Discovery.Conflicts), len(result.Discovery.Errors), result.FailedArtifacts)
 	fmt.Printf("reconciliation: %d finding(s), %d error(s)\n", len(result.Reconcile.Findings), len(result.Reconcile.Errors))
-	if len(result.Discovery.Errors) > 0 || len(result.Reconcile.Errors) > 0 {
+	// failed counts artifacts that discovered and reconciled cleanly and
+	// then failed transfer, verification or commit (FAILED or
+	// QUARANTINED): the exact case discoveryOrReconcileFailed never sees,
+	// since that is a systemic discover/reconcile failure, not a
+	// per-artifact pipeline outcome. Checking it here, from the same
+	// count the line above just printed, is what issue #283 asks for:
+	// the exit code and the reported number cannot drift apart, because
+	// they are the same number. cycleFailed (setup.go) is the identical
+	// check `run` (run.go) makes, so the two commands cannot disagree
+	// about what a failed cycle is.
+	discoveryOrReconcileFailed := len(result.Discovery.Errors) > 0 || len(result.Reconcile.Errors) > 0
+	if cycleFailed(discoveryOrReconcileFailed, result.FailedArtifacts) {
 		return 1
 	}
 	return 0

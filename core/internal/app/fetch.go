@@ -38,6 +38,19 @@ type FetchResult struct {
 	// Reconcile and Discovery are set only when DryRun is false.
 	Reconcile reconcile.Report
 	Discovery discovery.Result
+
+	// FailedArtifacts is set only when DryRun is false: how many of this
+	// backup set's journal rows this call walked through processArtifacts
+	// (internal/app/pipeline.go) ended in FAILED or QUARANTINED. This is
+	// the other half of "did this fetch actually succeed" (issue #283)
+	// alongside Reconcile.Errors/Discovery.Errors: an artifact that
+	// discovers and reconciles cleanly and then fails transfer,
+	// verification or commit is counted in neither of those, so a caller
+	// that checked only them could report success for a cycle that backed
+	// up nothing at all. A dry-run never sets it, honestly: --dry-run
+	// looks at the remote, never at the journal's per-artifact outcomes,
+	// so it has nothing to report here.
+	FailedArtifacts int
 }
 
 // Fetch is `backup-manager fetch --source ... --backup-set ...`'s use
@@ -96,12 +109,7 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	if err != nil {
 		return result, fmt.Errorf("app: fetch: listing %s: %w", bs.ID, err)
 	}
-	for _, rec := range records {
-		if ctx.Err() != nil {
-			break
-		}
-		s.processArtifact(ctx, source, bs, rec)
-	}
+	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
 
 	return result, nil
 }

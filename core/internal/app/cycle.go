@@ -20,12 +20,21 @@ import (
 // budget, or a journal listing failing outright); a per-artifact problem
 // never sets it; see processArtifact's own doc for how those are isolated
 // instead.
+//
+// FailedArtifacts is the other half of "did this cycle fail" (issue
+// #283): how many of the artifacts this call itself walked through
+// processArtifacts ended in FAILED or QUARANTINED. Err alone used to be
+// the only thing a caller checked, which is exactly how a cycle where
+// every artifact discovered fine and then failed verification could
+// report success: nothing about that outcome is a systemic error, so Err
+// stayed nil.
 type BackupSetCycleResult struct {
-	Set       model.BackupSetID
-	Reconcile reconcile.Report
-	Discovery discovery.Result
-	Retention RetentionSetReport
-	Err       error
+	Set             model.BackupSetID
+	Reconcile       reconcile.Report
+	Discovery       discovery.Result
+	Retention       RetentionSetReport
+	Err             error
+	FailedArtifacts int
 }
 
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per
@@ -194,12 +203,9 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		result.Err = err
 		return result
 	}
-	for _, rec := range records {
-		if ctx.Err() != nil {
-			result.Err = ctx.Err()
-			break
-		}
-		s.processArtifact(ctx, source, bs, rec)
+	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	if ctx.Err() != nil {
+		result.Err = ctx.Err()
 	}
 
 	if ctx.Err() == nil {

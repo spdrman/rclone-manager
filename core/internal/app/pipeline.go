@@ -123,9 +123,22 @@ func attemptKey(rec state.Record) string {
 // asserts the fake transport's DeleteRemote is never invoked, the journal
 // still reads COMMITTED, the local final file still exists, and the fake
 // remote object was never removed.
-func (s *Service) processArtifact(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record) {
+//
+// # Return value
+//
+// final is rec's lifecycle.State exactly as this call leaves it: whatever
+// state the artifact reached, or was already sitting in, when this call
+// stopped advancing it. Callers that only care about forward progress
+// (which is all of them, before issue #283) can ignore it; processArtifacts
+// below uses it to tell a business outcome (FAILED, QUARANTINED) from
+// everything else, which the two other things that can stop this
+// function early -- an infrastructure error, or ctx being done -- never
+// change rec to reflect, since only a successful Advance call ever
+// reassigns rec.
+func (s *Service) processArtifact(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record) (final lifecycle.State) {
 	artifact := rec.Artifact
 	base := attemptKey(rec)
+	defer func() { final = lifecycle.State(rec.State) }()
 
 	// Live progress (progress.go). Each stage is announced immediately
 	// before the step that performs it, so an observer learns what is
@@ -271,6 +284,34 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 	}
 	s.logger().RemoteDelete(ctx, artifact.String(), rec.RemotePath, nil)
 	s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, "")
+	return
+}
+
+// processArtifacts drives every one of records forward via processArtifact
+// and reports how many ended this call in FAILED or QUARANTINED: a
+// business outcome, not the systemic reconcile/discover failure a
+// caller's own Err field already tracks separately.
+//
+// RunCycle (processBackupSet, below) and Fetch (fetch.go) both walk their
+// backup set's in-flight journal rows this exact same way and both need
+// this exact same count to decide whether their cycle actually succeeded
+// (issue #283: before this existed, neither did, and a cycle where every
+// artifact discovered fine and then failed verification exited 0). Pulling
+// the walk-and-count into one place, rather than each of them keeping its
+// own copy, is what makes "run and fetch agree on what a failed cycle is"
+// a structural property instead of two definitions that happen to match
+// today.
+func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) (failed int) {
+	for _, rec := range records {
+		if ctx.Err() != nil {
+			break
+		}
+		switch s.processArtifact(ctx, source, bs, rec) {
+		case lifecycle.Failed, lifecycle.Quarantined:
+			failed++
+		}
+	}
+	return failed
 }
 
 // transferOne runs lifecycle.Transfer with a bounded retry policy (see

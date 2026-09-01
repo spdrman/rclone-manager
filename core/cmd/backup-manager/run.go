@@ -38,7 +38,7 @@ func cmdRun(args []string) int {
 
 	failed := false
 	for _, s := range report.Sets {
-		if s.Err != nil {
+		if cycleFailed(s.Err != nil, s.FailedArtifacts) {
 			failed = true
 		}
 	}
