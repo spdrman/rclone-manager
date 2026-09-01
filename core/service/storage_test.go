@@ -123,7 +123,7 @@ func TestListStorageStatus_LevelMatchesWhatAdmitWouldDecide(t *testing.T) {
 		t.Fatalf("StorageStatus Level = %q, want %q", statuses[0].Level, capacity.Critical.String())
 	}
 
-	assessment, err := capacity.CheckBeforeTransfer(localDir, 0, impossible)
+	assessment, err := capacity.CheckBeforeTransfer(localDir, capacity.Usage{}, 0, impossible)
 	// errors.As, not a type assertion: this is exactly how pipeline.go's
 	// own admitCapacity classifies the same error, and matching it is the
 	// point — a refusal this test recognises but the real gate would not

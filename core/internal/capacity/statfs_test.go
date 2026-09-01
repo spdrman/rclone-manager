@@ -48,13 +48,13 @@ func TestStatPathErrorsOnAMissingPath(t *testing.T) {
 func TestCheckBeforeTransferAgainstARealFilesystem(t *testing.T) {
 	dir := t.TempDir()
 
-	a, err := CheckBeforeTransfer(dir, 1024, Thresholds{
+	a, err := CheckBeforeTransfer(dir, Usage{}, 1024, Thresholds{
 		WarningFreeBytes:  1,
 		CriticalFreeBytes: 1,
 		SafetyMarginBytes: 0,
 	})
 	if err != nil {
-		t.Fatalf("CheckBeforeTransfer() error = %v, want nil for a 1KiB artifact against a real filesystem", err)
+		t.Fatalf("CheckBeforeTransfer() error = %v, Usage{}, want nil for a 1KiB artifact against a real filesystem", err)
 	}
 	if !a.Fits {
 		t.Error("Fits = false, want true")
@@ -69,16 +69,16 @@ func TestCheckBeforeTransferRefusesAnImpossibleArtifact(t *testing.T) {
 	dir := t.TempDir()
 
 	const absurd = int64(1) << 62 // 4 exabytes; no test machine has this free
-	_, err := CheckBeforeTransfer(dir, absurd, Thresholds{})
+	_, err := CheckBeforeTransfer(dir, Usage{}, absurd, Thresholds{})
 	if err == nil {
-		t.Fatal("CheckBeforeTransfer() error = nil, want a refusal for an impossibly large artifact")
+		t.Fatal("CheckBeforeTransfer() error = nil, Usage{}, want a refusal for an impossibly large artifact")
 	}
 }
 
 func TestCheckBeforeTransferPropagatesAStatfsError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "gone")
-	_, err := CheckBeforeTransfer(missing, 1, Thresholds{})
+	_, err := CheckBeforeTransfer(missing, Usage{}, 1, Thresholds{})
 	if err == nil {
-		t.Fatal("CheckBeforeTransfer() error = nil, want a statfs error for a nonexistent directory")
+		t.Fatal("CheckBeforeTransfer() error = nil, Usage{}, want a statfs error for a nonexistent directory")
 	}
 }
