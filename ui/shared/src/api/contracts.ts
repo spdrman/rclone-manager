@@ -277,8 +277,72 @@ export interface RetentionSchema {
   defaultTiers: RetentionTierSetting[];
 }
 
+/**
+ * FR-21's capacity configuration as it is actually deciding (issue #286):
+ * the operator's storage cap, the two levels a reading is weighed
+ * against, the safety margin held back before every transfer, and the
+ * filesystem all of that is measured on.
+ *
+ * Every number is BYTES. The MB/GB picker beside the field in the
+ * Settings form is display only and converts at the edge, so nothing on
+ * this boundary, and nothing in the config file underneath it, ever
+ * carries a unit — a number whose meaning depends on a second field
+ * getting out of step with it is exactly the kind of mistake a stray
+ * factor of 1024 makes invisible in a diff.
+ */
+export interface CapacitySettings {
+  /** The ceiling on how much space this manager may occupy.
+   *
+   * ZERO MEANS NO CAP, never a zero-byte ceiling: the sentinel this
+   * product's default rests on, and nothing may resolve it to a number.
+   * Enforced, not merely displayed — a transfer that would push usage
+   * over this number is refused before it starts, the same way one the
+   * disk cannot hold already is. */
+  capBytes: number;
+  /** The headroom level, measured against whichever of the disk's free
+   *  space and the cap's remaining allowance is smaller, at or below
+   *  which a reading is reported as a warning. 0 means no warning line.
+   *  Never refuses a transfer by itself. */
+  warningFreeBytes: number;
+  /** The headroom floor at or below which a transfer is refused outright.
+   *  0 means no critical line. Must not exceed warningFreeBytes: headroom
+   *  is expected to cross the warning line before the critical one. */
+  criticalFreeBytes: number;
+  /** Held back on top of every incoming artifact's own size before a
+   *  transfer is admitted. Not exposed on the Settings form; configured,
+   *  if at all, by editing the config file directly. */
+  safetyMarginBytes: number;
+  /** The directory whose filesystem the manager-wide storage reading
+   *  (GET /system/storage's `manager` object) is taken from, ALREADY
+   *  RESOLVED: an operator's explicit choice when there is one, otherwise
+   *  the directory every backup set's destination has in common. Empty
+   *  means this configuration cannot say, which the dashboard renders as
+   *  "not known yet" rather than as a blank path. */
+  backupRoot: string;
+  /** Whether backupRoot was named by an operator rather than derived. A
+   *  form must never put a derived value in an editable box: saving it
+   *  back would pin today's derivation into the file as an explicit
+   *  choice, including on a later release that would have derived it
+   *  better. */
+  backupRootConfigured: boolean;
+}
+
+/** A PARTIAL capacity update: only the fields named here change. Every
+ *  field is optional rather than a plain number because, on this block,
+ *  ZERO IS A MEANING ("no cap", "no warning line", "no critical line"),
+ *  not the absence of one — a plain number could not tell "set this to
+ *  zero" apart from "I did not mention this field", and those are
+ *  opposite requests. */
+export interface UpdateCapacitySettings {
+  capBytes?: number;
+  warningFreeBytes?: number;
+  criticalFreeBytes?: number;
+  safetyMarginBytes?: number;
+}
+
 export interface AppSettings {
   retention: RetentionSettings;
+  capacity: CapacitySettings;
   schema: { retention: RetentionSchema };
 }
 
@@ -296,6 +360,88 @@ export interface UpdateRetentionSettings {
 
 export interface UpdateSettingsRequest {
   retention?: UpdateRetentionSettings;
+  capacity?: UpdateCapacitySettings;
+}
+
+/** Which question a storage gauge is a fraction OF (issue #286): the
+ *  whole disk, or an operator's configured cap. The two are
+ *  indistinguishable once reduced to a percentage — 80% of a 2 TB volume
+ *  and 80% of a 100 GB allowance draw the same bar — so this is carried
+ *  rather than inferred at the display layer. */
+export type StorageDenominator = "disk" | "cap";
+
+/** Why a manager-wide storage reading could not be taken. `""` is not a
+ *  real reason; it is what a `known: true` reading carries in that slot.
+ *  See ManagerStorage.known. */
+export type StorageUnknownReason = "" | "no_backup_root" | "not_created" | "unreadable" | "misconfigured";
+
+/**
+ * GET /api/v1/system/storage's manager-wide reading (issue #286): what
+ * the backup root's filesystem holds, what this manager itself accounts
+ * for, and which of the two a gauge should be a fraction of.
+ *
+ * `known` is false whenever no reading could be taken — no backup root
+ * yet, one that has not been created, one that could not be read, or a
+ * capacity configuration that cannot produce a verdict — and every
+ * numeric field is then 0. That 0 must never be rendered as a
+ * measurement: this is the type StorageGauge's own unknown-state branch
+ * exists for, and the shape "0 B of 0 B used · NaN%" reached a screen on
+ * an unconfigured instance is exactly the defect issue #286 was opened
+ * on.
+ */
+export interface ManagerStorage {
+  known: boolean;
+  unknownReason: StorageUnknownReason;
+  /** The directory actually statted, present whether or not the reading
+   *  succeeded. The engine runs in a container: this is what lets an
+   *  operator confirm the reading is of the bind-mounted backup volume
+   *  and not of the container's own root filesystem. */
+  measuredPath: string;
+
+  totalBytes: number;
+  /** Every free block, including any only a privileged process could
+   *  allocate into. Observability only. */
+  freeBytes: number;
+  /** Free space this process may actually use (df's Avail); the figure
+   *  every verdict below is decided from. */
+  availableBytes: number;
+
+  /** This manager's own consumption, summed from the state database's
+   *  own record of artifact sizes rather than walked off the backup
+   *  root, so it counts only what this manager put there. */
+  catalogBytes: number;
+  /** False means the catalog could not be summed, which is a different
+   *  thing from a genuine zero on a deployment that has transferred
+   *  nothing yet. */
+  catalogBytesKnown: boolean;
+  /** How much of what the filesystem reports as used this manager does
+   *  NOT account for. A large gap means something else is writing into
+   *  the backup root. */
+  otherBytes: number;
+  otherBytesKnown: boolean;
+
+  /** The configured ceiling; 0 means none. */
+  capBytes: number;
+  /** What limitBytes/usedBytes below answer a fraction OF. */
+  denominator: StorageDenominator;
+  limitBytes: number;
+  usedBytes: number;
+
+  /** How much room is left before the binding constraint refuses a
+   *  transfer: the smaller of availableBytes and the cap's remaining
+   *  allowance. */
+  headroomBytes: number;
+  /** Which of the two actually produced headroomBytes. A genuinely
+   *  different fact from `denominator`: a capped deployment whose volume
+   *  is nearly full is bound by the disk, which an operator watching
+   *  their allowance fill has no reason to expect. `""` when `known` is
+   *  false. */
+  bindingConstraint: "" | StorageDenominator;
+
+  warningFreeBytes: number;
+  criticalFreeBytes: number;
+  /** `""` when `known` is false: an unread disk is not OK. */
+  level: "" | "OK" | "WARNING" | "CRITICAL";
 }
 
 /** GET /api/v1/system/first-run's answer (issue #176). `configured` is
@@ -453,6 +599,15 @@ export interface BackupManagerApi {
    *  actually persisted rather than echoing its own request back. */
   getSettings(): Promise<AppSettings>;
   updateSettings(req: UpdateSettingsRequest): Promise<AppSettings>;
+
+  /** Issue #286: the one manager-wide storage reading. Deliberately not
+   *  derived from anything else this client already fetches — see
+   *  ManagerStorage's own doc for why summing the per-set list cannot
+   *  answer this question (a fresh instance sums to zero, two sets
+   *  sharing a volume sum to twice a disk that exists once, and a
+   *  manager-wide cap has no per-set entry to live on). Requires
+   *  configuration, exactly like getSettings. */
+  getStorage(): Promise<ManagerStorage>;
 
   scanCatalog(): Promise<CatalogScanPreview>;
   rebuildCatalog(): Promise<void>;

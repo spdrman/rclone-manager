@@ -43,6 +43,20 @@ const SCHEMA = {
   ]
 };
 
+/** This file is about the retention form only; every fixture here carries
+ *  the product default for capacity (no cap, no thresholds), the same
+ *  shape CapacityCard's own suite exercises in isolation. */
+function defaultCapacityFixture(): AppSettings["capacity"] {
+  return {
+    capBytes: 0,
+    warningFreeBytes: 0,
+    criticalFreeBytes: 0,
+    safetyMarginBytes: 0,
+    backupRoot: "/data/backups",
+    backupRootConfigured: false
+  };
+}
+
 function settingsFixture(
   overrides: Partial<AppSettings["retention"]> = {},
   schema: AppSettings["schema"]["retention"] = SCHEMA
@@ -59,6 +73,7 @@ function settingsFixture(
       protectLastKnownGood: true,
       ...overrides
     },
+    capacity: defaultCapacityFixture(),
     schema: { retention: schema }
   };
 }

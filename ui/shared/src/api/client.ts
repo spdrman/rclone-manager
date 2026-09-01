@@ -16,6 +16,7 @@ import type {
   WireBackupSet,
   WireBackupSetHealth,
   WireBackupSetSpec,
+  WireCapacitySettings,
   WireCatalogReportResponse,
   WireCompleteFirstRunResponse,
   WireCreateBackupSetRequest,
@@ -26,21 +27,26 @@ import type {
   WireListArtifactsResponse,
   WireListBackupSetsResponse,
   WireListOperationsResponse,
+  WireListStorageStatusResponse,
+  WireManagerStorage,
   WireOperation,
   WireRetentionPlan,
   WireRetentionTier,
   WireSettingsResponse,
+  WireUpdateCapacitySettings,
   WireVersionResponse
 } from "./generated/contract";
 import type {
   ApiError,
   AppSettings,
   BackupManagerApi,
+  CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
   ConnectionTestParams,
   CreateBackupSetRequest,
   CreatedBackupSet,
+  ManagerStorage,
   RetentionTierSetting,
   SSHKeyImportResult,
   UpdateSettingsRequest
@@ -420,6 +426,17 @@ function wireTier(t: RetentionTierSetting): WireRetentionTier {
   };
 }
 
+function fromWireCapacitySettings(c: WireCapacitySettings): CapacitySettings {
+  return {
+    capBytes: c.cap_bytes,
+    warningFreeBytes: c.warning_free_bytes,
+    criticalFreeBytes: c.critical_free_bytes,
+    safetyMarginBytes: c.safety_margin_bytes,
+    backupRoot: c.backup_root,
+    backupRootConfigured: c.backup_root_configured
+  };
+}
+
 function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
   return {
     retention: {
@@ -428,6 +445,7 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
       tiers: (body.retention.tiers ?? []).map(fromWireTier),
       protectLastKnownGood: body.retention.protect_last_known_good
     },
+    capacity: fromWireCapacitySettings(body.capacity),
     schema: {
       retention: {
         granularities: body.schema.retention.granularities,
@@ -442,22 +460,71 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
   };
 }
 
+/**
+ * Issue #286. `binding_constraint` and `denominator` both carry the wire's
+ * `""` alongside `"disk"`/`"cap"`; the type says so (StorageDenominator has
+ * no empty member) so a caller cannot forget that `""` only ever shows up
+ * when `known` is false.
+ */
+function fromWireManagerStorage(m: WireManagerStorage): ManagerStorage {
+  return {
+    known: m.known,
+    unknownReason: m.unknown_reason,
+    measuredPath: m.measured_path,
+    totalBytes: m.total_bytes,
+    freeBytes: m.free_bytes,
+    availableBytes: m.available_bytes,
+    catalogBytes: m.catalog_bytes,
+    catalogBytesKnown: m.catalog_bytes_known,
+    otherBytes: m.other_bytes,
+    otherBytesKnown: m.other_bytes_known,
+    capBytes: m.cap_bytes,
+    denominator: m.denominator,
+    limitBytes: m.limit_bytes,
+    usedBytes: m.used_bytes,
+    headroomBytes: m.headroom_bytes,
+    bindingConstraint: m.binding_constraint,
+    warningFreeBytes: m.warning_free_bytes,
+    criticalFreeBytes: m.critical_free_bytes,
+    level: m.level
+  };
+}
+
 /** Builds the PATCH body, carrying "the caller did not name this field"
  *  through as an ABSENT key rather than a null or a zero. The backend
  *  reads an absent key as "leave this alone" and an explicitly empty
  *  tiers list as a refusable request, so collapsing the two here would
  *  silently turn one into the other. */
 function wireUpdateSettings(req: UpdateSettingsRequest) {
-  if (!req.retention) return {};
-  const r = req.retention;
-  const retention: Record<string, unknown> = {};
-  if (r.timezone !== undefined) retention.timezone = r.timezone;
-  if (r.weekStartsOn !== undefined) retention.week_starts_on = r.weekStartsOn;
-  if (r.tiers !== undefined) retention.tiers = r.tiers.map(wireTier);
-  if (r.protectLastKnownGood !== undefined) {
-    retention.protect_last_known_good = r.protectLastKnownGood;
+  const body: Record<string, unknown> = {};
+
+  if (req.retention) {
+    const r = req.retention;
+    const retention: Record<string, unknown> = {};
+    if (r.timezone !== undefined) retention.timezone = r.timezone;
+    if (r.weekStartsOn !== undefined) retention.week_starts_on = r.weekStartsOn;
+    if (r.tiers !== undefined) retention.tiers = r.tiers.map(wireTier);
+    if (r.protectLastKnownGood !== undefined) {
+      retention.protect_last_known_good = r.protectLastKnownGood;
+    }
+    body.retention = retention;
   }
-  return { retention };
+
+  if (req.capacity) {
+    const c = req.capacity;
+    const capacity: WireUpdateCapacitySettings = {};
+    // Every field carries a meaning at 0 ("no cap", "no warning/critical
+    // line"), so the check is `!== undefined`, never truthiness: a
+    // capacity.capBytes of 0 must reach the wire as an explicit 0, not be
+    // dropped the way an empty string or a falsy number would be.
+    if (c.capBytes !== undefined) capacity.cap_bytes = c.capBytes;
+    if (c.warningFreeBytes !== undefined) capacity.warning_free_bytes = c.warningFreeBytes;
+    if (c.criticalFreeBytes !== undefined) capacity.critical_free_bytes = c.criticalFreeBytes;
+    if (c.safetyMarginBytes !== undefined) capacity.safety_margin_bytes = c.safetyMarginBytes;
+    body.capacity = capacity;
+  }
+
+  return body;
 }
 
 /** RFC3339 or "" off the wire, as a nullable timestamp. The API omits a
@@ -1008,6 +1075,12 @@ export const httpApi: BackupManagerApi = {
       method: "PATCH",
       body: JSON.stringify(wireUpdateSettings(req))
     }).then(fromWireSettingsResponse),
+
+  // Issue #286. Reads GET /system/storage's `manager` object only: the
+  // per-backup-set list beside it answers a different question (see
+  // ManagerStorage's own doc), and nothing in this client needs it yet.
+  getStorage: () =>
+    request<WireListStorageStatusResponse>("/system/storage").then((r) => fromWireManagerStorage(r.manager)),
 
   scanCatalog: () =>
     request<WireCatalogReportResponse>("/catalog/scan", { method: "POST" }).then(fromWireCatalogReport),
