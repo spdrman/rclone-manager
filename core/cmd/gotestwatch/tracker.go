@@ -49,9 +49,11 @@ func (e testEvent) label() string {
 
 // bounds mirrors tests/crashmatrix's harnessBounds (issue #247): a
 // no-progress window and an overall backstop, both derived from the
-// slowest step this run has itself measured, with a floor used only until
-// the first step completes. See doc.go for the reasoning; the numbers
-// themselves are chosen in main.go.
+// slowest of the run's recently measured steps (see slowestStepMemory:
+// deliberately NOT an all-time maximum, so one early outlier cannot
+// permanently inflate either bound for the rest of the run), with a
+// floor used only until the first step completes. See doc.go for the
+// reasoning; the numbers themselves are chosen in main.go.
 type bounds struct {
 	stepFloor     time.Duration
 	stepFactor    float64
@@ -75,6 +77,19 @@ type trip struct {
 	slowestStep  time.Duration
 	slowestLabel string
 	running      []string // tests with a "run" seen but no pass/fail/skip yet, sorted
+
+	// reapTimedOut and reapWait are set by run.go, not by anything in
+	// this file (tracker.go stays free of process/I/O concerns; see the
+	// package doc comment at the top of this file), when the process
+	// group a trip sent SIGKILL to did not actually exit within
+	// reapWait. SIGKILL cannot end a process stuck in uninterruptible
+	// kernel I/O wait, a real possibility for exactly the class of hang
+	// this tool targets (stuck Docker/SFTP I/O); a trip that has already
+	// correctly diagnosed the problem is still reported when that
+	// happens, rather than run.go blocking indefinitely on a reap that
+	// may never come.
+	reapTimedOut bool
+	reapWait     time.Duration
 }
 
 func (tr trip) String() string {
@@ -82,21 +97,49 @@ func (tr trip) String() string {
 	if len(tr.running) > 0 {
 		running = "test(s) still reported running: " + strings.Join(tr.running, ", ")
 	}
-	measured := fmt.Sprintf("%d events observed, slowest gap %s (%s)", tr.events, tr.slowestStep.Round(time.Millisecond), tr.slowestLabel)
+	measured := fmt.Sprintf("%d events observed, slowest recent gap %s (%s)", tr.events, tr.slowestStep.Round(time.Millisecond), tr.slowestLabel)
 	if tr.events == 0 {
 		measured = "no event had arrived yet, so the window was still the unmeasured floor"
 	}
+	var out string
 	switch tr.kind {
 	case "overall":
-		return fmt.Sprintf("go test kept reporting progress but never finished: %s elapsed against a cap of %s, last event %q. %s. %s. "+
-			"That is a livelock, not a slow machine: the cap is derived from this run's own slowest gap, so a genuinely slow run would have widened it.",
+		out = fmt.Sprintf("go test kept reporting progress but never finished: %s elapsed against a cap of %s, last event %q. %s. %s. "+
+			"That is a livelock, not a slow machine: the cap is derived from this run's own recent pace, so a genuinely, consistently slow run would have widened it.",
 			tr.elapsed.Round(time.Millisecond), tr.overallCap.Round(time.Millisecond), tr.lastEvent, running, measured)
 	default:
-		return fmt.Sprintf("go test stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. %s. "+
-			"This is a hang, not a slow machine: the window is derived from this run's own slowest gap, so being slow widens it and only being stuck trips it.",
+		out = fmt.Sprintf("go test stopped making progress: nothing after %q for %s, against a no-progress window of %s (%s elapsed in total). %s. %s. "+
+			"This is a hang, not a slow machine: the window is derived from this run's own recent pace, so being consistently slow widens it and only being stuck trips it.",
 			tr.lastEvent, tr.sinceLast.Round(time.Millisecond), tr.window.Round(time.Millisecond), tr.elapsed.Round(time.Millisecond), running, measured)
 	}
+	if tr.reapTimedOut {
+		out += fmt.Sprintf(" The killed process group had still not exited %s after being sent SIGKILL (likely stuck in uninterruptible I/O, which SIGKILL cannot end); reporting this trip anyway rather than waiting on the reap indefinitely.",
+			tr.reapWait.Round(time.Second))
+	}
+	return out
 }
+
+// slowestStepMemory bounds how many of the most recently observed gaps
+// contribute to the "slowest step" both derived bounds are multiples of.
+// A rolling max over a fixed-size window, not an all-time running
+// maximum: an all-time maximum meant one legitimately slow (not hung)
+// step anywhere in the run — a Docker pull under concurrent host load,
+// say — permanently inflated both the no-progress window and the overall
+// livelock cap for the rest of that same `go test` invocation, letting a
+// genuine hang occurring afterward go undetected far longer than the
+// fixed timeout this tool replaced (found in review of issue #256; see
+// TestTracker_ASlowOutlierDoesNotPermanentlyInflateTheWindow). Bounding
+// the memory to the most recent slowestStepMemory gaps means a single
+// outlier decays out once enough further events establish the run is
+// genuinely back to a normal pace, while a run that is consistently slow
+// — every recent gap large, not just one — still keeps a wide window,
+// which is the whole point of deriving these bounds from the run's own
+// measured pace at all. 20 is a plain, round choice: large enough that a
+// handful of naturally slower steps in a row (a build step, then its
+// linked tests) don't each look like a fresh isolated outlier, small
+// enough that a single anomaly is gone from memory within seconds of
+// normal-paced activity resuming.
+const slowestStepMemory = 20
 
 // tracker turns the `go test -json` event stream into the two derived
 // bounds above, plus the set of tests currently in flight. It is a plain
@@ -106,14 +149,26 @@ func (tr trip) String() string {
 type tracker struct {
 	b bounds
 
-	mu           sync.Mutex
-	start        time.Time
-	lastAt       time.Time
-	lastEvent    string
-	events       int
-	slowestStep  time.Duration
-	slowestLabel string
-	running      map[string]struct{}
+	mu        sync.Mutex
+	start     time.Time
+	lastAt    time.Time
+	lastEvent string
+	events    int
+
+	// recentGaps and recentLabels are a fixed-size ring buffer of the
+	// most recently observed gaps (see slowestStepMemory) and what each
+	// one was between; recentSlowest derives the current "slowest step"
+	// from their max, rather than from an ever-growing all-time running
+	// one. recentHead is the index the NEXT gap is written to; recentLen
+	// is how many of the slowestStepMemory slots are populated so far
+	// (less than its capacity until the run has observed that many
+	// gaps).
+	recentGaps   [slowestStepMemory]time.Duration
+	recentLabels [slowestStepMemory]string
+	recentHead   int
+	recentLen    int
+
+	running map[string]struct{}
 }
 
 func newTracker(b bounds, start time.Time) *tracker {
@@ -129,9 +184,13 @@ func (t *tracker) observe(ev testEvent, at time.Time) {
 	defer t.mu.Unlock()
 
 	label := ev.label()
-	if d := at.Sub(t.lastAt); d > t.slowestStep {
-		t.slowestStep = d
-		t.slowestLabel = t.lastEvent + " -> " + label
+	if d := at.Sub(t.lastAt); d > 0 {
+		t.recentGaps[t.recentHead] = d
+		t.recentLabels[t.recentHead] = t.lastEvent + " -> " + label
+		t.recentHead = (t.recentHead + 1) % slowestStepMemory
+		if t.recentLen < slowestStepMemory {
+			t.recentLen++
+		}
 	}
 	t.lastAt = at
 	t.lastEvent = label
@@ -148,9 +207,25 @@ func (t *tracker) observe(ev testEvent, at time.Time) {
 	}
 }
 
+// recentSlowest returns the largest of the most recently observed gaps
+// (see slowestStepMemory) and the label describing what it was between.
+// Callers hold t.mu.
+func (t *tracker) recentSlowest() (time.Duration, string) {
+	var slowest time.Duration
+	var label string
+	for i := 0; i < t.recentLen; i++ {
+		if t.recentGaps[i] > slowest {
+			slowest = t.recentGaps[i]
+			label = t.recentLabels[i]
+		}
+	}
+	return slowest, label
+}
+
 // window is the current no-progress bound. Callers hold t.mu.
 func (t *tracker) window() time.Duration {
-	if derived := time.Duration(float64(t.slowestStep) * t.b.stepFactor); derived > t.b.stepFloor {
+	slowest, _ := t.recentSlowest()
+	if derived := time.Duration(float64(slowest) * t.b.stepFactor); derived > t.b.stepFloor {
 		return derived
 	}
 	return t.b.stepFloor
@@ -158,7 +233,8 @@ func (t *tracker) window() time.Duration {
 
 // overallCap is the current total-runtime backstop. Callers hold t.mu.
 func (t *tracker) overallCap() time.Duration {
-	if derived := time.Duration(float64(t.slowestStep) * t.b.overallFactor); derived > t.b.overallFloor {
+	slowest, _ := t.recentSlowest()
+	if derived := time.Duration(float64(slowest) * t.b.overallFactor); derived > t.b.overallFloor {
 		return derived
 	}
 	return t.b.overallFloor
@@ -179,6 +255,7 @@ func (t *tracker) check(now time.Time) *trip {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	slowest, slowestLabel := t.recentSlowest()
 	tr := trip{
 		lastEvent:    t.lastEvent,
 		sinceLast:    now.Sub(t.lastAt),
@@ -186,8 +263,8 @@ func (t *tracker) check(now time.Time) *trip {
 		elapsed:      now.Sub(t.start),
 		overallCap:   t.overallCap(),
 		events:       t.events,
-		slowestStep:  t.slowestStep,
-		slowestLabel: t.slowestLabel,
+		slowestStep:  slowest,
+		slowestLabel: slowestLabel,
 		running:      t.runningNames(),
 	}
 	switch {
@@ -206,5 +283,6 @@ func (t *tracker) check(now time.Time) *trip {
 func (t *tracker) summary() (events int, slowest time.Duration, label string, window time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.events, t.slowestStep, t.slowestLabel, t.window()
+	slowest, label = t.recentSlowest()
+	return t.events, slowest, label, t.window()
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,67 @@ func TestTracker_WidensWithTheSlowestGapItHasSeen(t *testing.T) {
 	}
 	if trip := tr.check(at.Add(40 * time.Second)); trip != nil {
 		t.Fatalf("40s of silence after gaps measured at 10s each was called a hang: %v", trip)
+	}
+}
+
+func TestTracker_ASlowOutlierDoesNotPermanentlyInflateTheWindow(t *testing.T) {
+	// Reproduces the review finding on issue #256: under an all-time
+	// running maximum, one legitimately slow (not hung) step anywhere in
+	// a run permanently inflated both derived bounds for the rest of
+	// that run. This plants one ~60s step (the reviewer's own worked
+	// example: "a ~60s legitimate outlier inflates the window to 12
+	// minutes and the cap to 40 minutes"), then enough normal-paced
+	// activity to retire it from slowestStepMemory, then a genuine hang
+	// — which must still be caught within a bounded, practical time, not
+	// the twelve minutes the stale maximum would have allowed.
+	start := time.Now()
+	tr := newTracker(testBounds, start)
+
+	at := start
+	// One legitimately slow step: a Docker pull under concurrent host
+	// load, say. It completes and reports progress — it is not a hang.
+	at = at.Add(60 * time.Second)
+	tr.observe(testEvent{Action: "pass", Test: "TestSlowDockerPull"}, at)
+	if trip := tr.check(at); trip != nil {
+		t.Fatalf("the legitimately slow step itself was reported as a hang: %v", trip)
+	}
+
+	// Enough further normal-paced (10s) activity for the outlier to
+	// fully leave slowestStepMemory: exactly slowestStepMemory more
+	// events overwrites every ring-buffer slot, including the one the
+	// outlier occupies.
+	for i := 0; i < slowestStepMemory; i++ {
+		at = at.Add(10 * time.Second)
+		tr.observe(testEvent{Action: "pass", Test: fmt.Sprintf("TestNormal%d", i)}, at)
+		if trip := tr.check(at); trip != nil {
+			t.Fatalf("normal-paced event %d was reported as a hang: %v", i, trip)
+		}
+	}
+
+	// The outlier is gone from memory: both bounds now reflect the
+	// recent 10s pace (matching TestTracker_WidensWithTheSlowestGapItHasSeen's
+	// own numbers), not the stale 60s maximum. Under an all-time running
+	// maximum these would still read 720s and 2400s.
+	if got, want := tr.window(), 120*time.Second; got != want {
+		t.Fatalf("window after the outlier decayed out = %s, want %s (the outlier must not still be inflating it)", got, want)
+	}
+	if got, want := tr.overallCap(), 400*time.Second; got != want {
+		t.Fatalf("overall cap after the outlier decayed out = %s, want %s (the outlier must not still be inflating it)", got, want)
+	}
+
+	// Now a genuine hang: nothing after the last event for just over the
+	// now-decayed window. Under an all-time running maximum this silence
+	// (~121s) would have been far short of the stale 720s window and
+	// gone completely undetected.
+	if trip := tr.check(at.Add(119 * time.Second)); trip != nil {
+		t.Fatalf("tripped one second inside the decayed window: %v", trip)
+	}
+	trip := tr.check(at.Add(121 * time.Second))
+	if trip == nil {
+		t.Fatal("a genuine hang after the outlier decayed out was not caught within the decayed window; the outlier is still permanently inflating the bound")
+	}
+	if trip.kind != "no-progress" {
+		t.Fatalf("trip.kind = %q, want no-progress: %v", trip.kind, trip)
 	}
 }
 

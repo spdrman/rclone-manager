@@ -43,6 +43,37 @@ type Result struct {
 	Trip     *trip
 }
 
+// reapWait bounds how long killAndWait waits for a killed process group to
+// actually exit. SIGKILL cannot terminate a process stuck in
+// uninterruptible kernel I/O wait (D state), a real possibility for
+// exactly the class of hang this tool targets (stuck Docker/SFTP I/O);
+// without this bound, a trip that had already correctly diagnosed the
+// problem would reintroduce, one layer further down, the exact "hangs
+// forever with no bound" failure mode issues #247/#248/#256 exist to
+// close. Fixed, not derived like the tracker's own bounds: at this point
+// a trip has already been decided, so there is nothing left to derive a
+// bound from, and an operator seeing a report a few extra seconds late is
+// far preferable to gotestwatch itself hanging with no report at all.
+const reapWait = 15 * time.Second
+
+// killAndWait sends SIGKILL to the process group pgid, then waits up to
+// reapWait for waited (fed by a goroutine blocked on cmd.Wait(), as Run
+// sets up) to report the child's exit. reaped is false if the group did
+// not exit within that bound, in which case waitErr is always nil and the
+// caller's cmd.Wait() goroutine is left running: it is harmless on its
+// own, since gotestwatch itself is about to report the trip and exit, and
+// there is no portable way to abandon a Wait() already blocked in the
+// kernel on a process that will not reap.
+func killAndWait(pgid int, waited <-chan error, reapWait time.Duration) (waitErr error, reaped bool) {
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	select {
+	case waitErr = <-waited:
+		return waitErr, true
+	case <-time.After(reapWait):
+		return nil, false
+	}
+}
+
 // forbiddenGoTestFlag reports the -timeout/-json flag gotestwatch always
 // owns itself, if arg is (a prefix of) one, so a caller passing either is
 // refused loudly instead of silently overridden or duplicated. go test's
@@ -170,9 +201,18 @@ watch:
 				// that leaves the tree it gave up on running behind
 				// defeats the one correctness property (see doc.go)
 				// that motivated owning process-group membership at
-				// all.
-				_ = syscall.Kill(-pgid, syscall.SIGKILL)
-				waitErr = <-waited
+				// all. That wait is itself bounded (see killAndWait):
+				// SIGKILL cannot terminate a process stuck in
+				// uninterruptible kernel I/O wait, and this trip has
+				// already been correctly diagnosed, so it is reported
+				// either way rather than risking gotestwatch itself
+				// hanging forever on the reap.
+				var reaped bool
+				waitErr, reaped = killAndWait(pgid, waited, reapWait)
+				if !reaped {
+					tripped.reapTimedOut = true
+					tripped.reapWait = reapWait
+				}
 				break watch
 			}
 		}

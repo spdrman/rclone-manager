@@ -162,3 +162,60 @@ func TestRun_RefusesATimeoutOrJsonFlagFromTheCaller(t *testing.T) {
 		})
 	}
 }
+
+// TestKillAndWait_DoesNotBlockForeverIfTheProcessGroupNeverReaps proves the
+// review finding on issue #256: after a trip sends SIGKILL, Run used to
+// block unboundedly on the child's exit. SIGKILL cannot terminate a
+// process stuck in uninterruptible kernel I/O wait (D state), a real
+// possibility for exactly the class of hang this tool targets (stuck
+// Docker/SFTP I/O) — and a real D-state process cannot be manufactured
+// portably or quickly in a test. This instead proves the contract
+// killAndWait must uphold, which is what actually matters: if the
+// process's exit never arrives on `waited`, killAndWait must still return
+// within its bound rather than block forever, exactly the case a
+// genuinely stuck process would produce.
+//
+// pgid is deliberately a pid far outside any real process's range, so the
+// SIGKILL this sends is a guaranteed no-op (ESRCH) and this test cannot
+// affect any real process on the machine it runs on.
+func TestKillAndWait_DoesNotBlockForeverIfTheProcessGroupNeverReaps(t *testing.T) {
+	const farOutsideAnyRealPid = 1 << 30
+	waited := make(chan error) // deliberately never written to: the reap that never comes
+
+	start := time.Now()
+	waitErr, reaped := killAndWait(farOutsideAnyRealPid, waited, 100*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if reaped {
+		t.Fatal("killAndWait reported the process group reaped when the wait channel never delivered anything")
+	}
+	if waitErr != nil {
+		t.Fatalf("waitErr = %v, want nil when the reap timed out", waitErr)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("killAndWait took %s to give up on a 100ms reap bound; it is not actually bounded", elapsed)
+	}
+}
+
+// TestKillAndWait_ReturnsPromptlyWhenTheProcessDoesReap proves killAndWait
+// does not itself introduce a delay on the ordinary path, where the
+// killed process exits normally and `waited` delivers right away.
+func TestKillAndWait_ReturnsPromptlyWhenTheProcessDoesReap(t *testing.T) {
+	const farOutsideAnyRealPid = 1 << 30
+	waited := make(chan error, 1)
+	waited <- nil
+
+	start := time.Now()
+	waitErr, reaped := killAndWait(farOutsideAnyRealPid, waited, 5*time.Second)
+	elapsed := time.Since(start)
+
+	if !reaped {
+		t.Fatal("killAndWait reported the process group not reaped when the wait channel delivered immediately")
+	}
+	if waitErr != nil {
+		t.Fatalf("waitErr = %v, want nil", waitErr)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("killAndWait took %s to return an already-delivered result; it waited on the reap bound instead of the channel", elapsed)
+	}
+}
