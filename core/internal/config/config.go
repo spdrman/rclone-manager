@@ -402,6 +402,29 @@ type Completion struct {
 	// silently turn the gate off on exactly the deployments that never
 	// got the chance to opt in. Only a negative value is refused.
 	DeleteSafetyDelay Duration `yaml:"delete_safety_delay"`
+
+	// ManifestMarker is the directory-level completion marker filename the
+	// "marker" strategy looks for (issue #291), only used when
+	// Strategy == "marker". Before this field existed, that filename was
+	// the fixed literal "_SUCCESS" (borrowed from the well-known
+	// Hadoop/Spark convention), a choice internal/discovery/complete.go's
+	// package doc used to call out as deliberate rather than an oversight.
+	// It stopped being defensible the moment a real read-only producer
+	// showed up with its own completion signal under a different name
+	// (SHA256SUMS, written last, after every artifact) that this manager
+	// has no ability to rename to match: the producer cannot be
+	// reconfigured, so the manager has to be able to recognise the name
+	// the producer already uses.
+	//
+	// A zero value is not read literally, the same way DeleteSafetyDelay's
+	// isn't: Validate resolves it to DefaultManifestMarker, so every config
+	// written before this field existed keeps recognising exactly the
+	// marker it recognised before. The resolved name is validated as a
+	// bare filename, on the same terms Include patterns are: no path
+	// separator, no "."/".." traversal. It is a single literal name, never
+	// a pattern; the sibling per-artifact marker convention (markerSuffix,
+	// "<artifact>.complete") is unrelated to this field and stays fixed.
+	ManifestMarker string `yaml:"manifest_marker"`
 }
 
 // DefaultDeleteSafetyDelay is the Completion.DeleteSafetyDelay that
@@ -415,6 +438,13 @@ type Completion struct {
 // answer different questions: stable_for gates starting work on an
 // artifact, this gates destroying the only other copy of it.
 const DefaultDeleteSafetyDelay = time.Hour
+
+// DefaultManifestMarker is the Completion.ManifestMarker that Validate
+// fills in when a "marker" backup set does not set one. It is the name
+// internal/discovery/complete.go recognised unconditionally before this
+// field existed, so an unset manifest_marker leaves every existing
+// configuration behaving exactly as it did before (issue #291).
+const DefaultManifestMarker = "_SUCCESS"
 
 // Validation configures how a transferred artifact gets checked before it's
 // allowed to be treated as a good restore point (FR-13).

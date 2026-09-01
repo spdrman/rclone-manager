@@ -376,17 +376,62 @@ func (v *validator) validateCompletion(path string, c *Completion) {
 		case c.DeleteSafetyDelay.Duration() == 0:
 			c.DeleteSafetyDelay = Duration(DefaultDeleteSafetyDelay)
 		}
-	case "rename", "marker":
+		if c.ManifestMarker != "" {
+			v.addf("%s: manifest_marker is not used by strategy %q; remove it", path, c.Strategy)
+		}
+	case "marker":
 		if c.StableFor.Duration() != 0 {
 			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
 		}
 		if c.DeleteSafetyDelay.Duration() != 0 {
 			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
 		}
+		v.validateManifestMarker(path, c)
+	case "rename":
+		if c.StableFor.Duration() != 0 {
+			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.DeleteSafetyDelay.Duration() != 0 {
+			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.ManifestMarker != "" {
+			v.addf("%s: manifest_marker is not used by strategy %q; remove it", path, c.Strategy)
+		}
 	case "":
 		v.addf("%s: strategy must be set (\"rename\", \"marker\" or \"stable\", FR-8)", path)
 	default:
 		v.addf("%s: unsupported strategy %q; must be \"rename\", \"marker\" or \"stable\" (FR-8)", path, c.Strategy)
+	}
+}
+
+// validateManifestMarker checks c.ManifestMarker's shape and, if it is
+// unset, resolves it to DefaultManifestMarker (issue #291). Only called
+// when c.Strategy == "marker".
+//
+// The checks mirror validateBackupSet's Include pattern validation on
+// purpose: an operator-supplied filename read back off a remote listing is
+// exactly the kind of untrusted-adjacent string include patterns already
+// guard (no path separator, since this is a basename never a path; no "."
+// or ".." segment, since those are directory references, not filenames,
+// and model.ArtifactID would refuse them downstream anyway). It is
+// deliberately not run through filepath.Match the way an include pattern
+// is: ManifestMarker is a single literal name, matched by exact string
+// comparison in internal/discovery/complete.go, never a glob, so a
+// character that would be an invalid glob metachar (say, an unmatched "[")
+// is still a perfectly valid literal filename here.
+func (v *validator) validateManifestMarker(path string, c *Completion) {
+	markerPath := path + ".manifest_marker"
+	switch {
+	case c.ManifestMarker == "":
+		c.ManifestMarker = DefaultManifestMarker
+	case strings.ContainsAny(c.ManifestMarker, `/\`):
+		// Mirrors the Include pattern message: this matches a remote
+		// directory's basename, never a path, so a value that could
+		// itself contain a path separator invites exactly the kind of
+		// traversal ArtifactID is built to reject downstream.
+		v.addf("%s: %q must be a filename, not a path", markerPath, c.ManifestMarker)
+	case c.ManifestMarker == "." || c.ManifestMarker == "..":
+		v.addf("%s: %q must not be a directory reference", markerPath, c.ManifestMarker)
 	}
 }
 

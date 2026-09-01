@@ -795,6 +795,80 @@ func TestCompletionStrategyValidation(t *testing.T) {
 	})
 }
 
+// --- manifest_marker (issue #291) ---
+
+func TestManifestMarkerValidation(t *testing.T) {
+	t.Run("unset defaults to _SUCCESS, so an existing config is unaffected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("strategy marker with no manifest_marker was rejected: %v", err)
+		}
+		if got := cfg.Sources[0].BackupSets[0].Completion.ManifestMarker; got != DefaultManifestMarker {
+			t.Fatalf("manifest_marker resolved to %q, want the default %q", got, DefaultManifestMarker)
+		}
+	})
+
+	t.Run("an explicit bare filename is kept, not overwritten", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a valid manifest_marker was rejected: %v", err)
+		}
+		if got, want := cfg.Sources[0].BackupSets[0].Completion.ManifestMarker, "SHA256SUMS"; got != want {
+			t.Fatalf("manifest_marker = %q, want the operator's %q", got, want)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		marker string
+	}{
+		{"contains forward slash", "sub/SHA256SUMS"},
+		{"contains backslash", `sub\SHA256SUMS`},
+		{"is a single dot", "."},
+		{"is a double dot", ".."},
+	} {
+		t.Run(tc.name+" rejected", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: tc.marker}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("manifest_marker %q was accepted", tc.marker)
+			}
+			if !strings.Contains(err.Error(), "manifest_marker") {
+				t.Fatalf("error does not name the offending field: %v", err)
+			}
+		})
+	}
+
+	// A literal glob metacharacter is not rejected: manifest_marker is
+	// matched as an exact literal filename in internal/discovery/complete.go,
+	// never as a pattern (unlike include), so a character that would be an
+	// invalid glob is still a perfectly valid literal filename here.
+	t.Run("a glob-looking literal is accepted, since it is never used as a pattern", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "[unterminated"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a literal manifest_marker containing glob metacharacters was rejected: %v", err)
+		}
+	})
+
+	for _, strategy := range []string{"rename", "stable"} {
+		t.Run(strategy+" rejects manifest_marker", func(t *testing.T) {
+			cfg := validConfig()
+			c := Completion{Strategy: strategy, ManifestMarker: "SHA256SUMS"}
+			if strategy == "stable" {
+				c.StableFor = Duration(10 * time.Minute)
+			}
+			cfg.Sources[0].BackupSets[0].Completion = c
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("strategy %s with manifest_marker set was accepted", strategy)
+			}
+		})
+	}
+}
+
 // --- include patterns ---
 
 func TestIncludePatternValidation(t *testing.T) {
