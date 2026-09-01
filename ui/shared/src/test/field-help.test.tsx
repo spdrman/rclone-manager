@@ -235,9 +235,10 @@ describe("FieldHelp pop-up", () => {
   it("keeps a pinned pop-up up when the control is clicked, so a touch tap survives its own click", async () => {
     render(<Harness />);
 
-    // A real touch tap is a pointerdown AND a click. The pointerdown pins;
-    // if the click that follows dismissed, a tap would open and close the
-    // pop-up in one gesture and a phone could never see it at all.
+    // A real touch tap is a pointerdown AND a click. The pointerdown pins
+    // and the click dismisses, so what keeps the pop-up up is that `pinned`
+    // beats `dismissed`. Get that ordering wrong and a tap opens and closes
+    // the pop-up in one gesture, and a phone never sees it at all.
     tap(field());
     fireEvent.click(field());
 

@@ -94,7 +94,6 @@ export interface FieldHelpProps {
 export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
   const helpId = useId();
   const wrapper = useRef<HTMLDivElement | null>(null);
-  const pop = useRef<HTMLDivElement | null>(null);
 
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -172,7 +171,7 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
         if (staysInside(event)) return;
         setFocused(false);
       }}
-      onClick={(event) => {
+      onClick={() => {
         // Acting on the control puts its help away. This is not cosmetic:
         // the pop-up is a real overlay, so while it is up it covers, and
         // takes the clicks meant for, whatever sits below the field —
@@ -182,12 +181,12 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
         // else, so this is the moment to get out of that way. Hovering or
         // focusing the field again brings it straight back.
         //
-        // A pinned pop-up is exempt: pinning is a request for it to stay,
-        // and on a touch screen the tap that pins is immediately followed
-        // by a click on the field, which would otherwise close what the
-        // tap just opened.
-        if (pinned) return;
-        if (pop.current?.contains(event.target as Node)) return;
+        // Every click inside this field's help lands here, the pop-up's
+        // own included, and none of them needs excluding: `pinned` wins
+        // over `dismissed` in `open` above, so a click that pins survives
+        // the dismissal it also records. That ordering is what makes a
+        // touch tap work too, since a tap is a pointerdown that pins
+        // followed by a click that lands here.
         setDismissed(true);
       }}
       onPointerDown={(event) => {
@@ -201,7 +200,6 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
       {children(helpId)}
 
       <div
-        ref={pop}
         className="fieldhelp__pop"
         hidden={!open}
         // Clicking the pop-up pins it. A click on the close button inside
