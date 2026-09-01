@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -42,6 +43,163 @@ type Config struct {
 	Sources      []Source  `yaml:"sources"`
 	Retention    Retention `yaml:"retention"`
 	Alerts       Alerts    `yaml:"alerts"`
+	Capacity     Capacity  `yaml:"capacity,omitempty"`
+}
+
+// Capacity is FR-21's configuration: how much space this manager is allowed
+// to occupy, and the two levels at which it should say something about it
+// (issue #286).
+//
+// # Why this block exists at all, and why it exists all at once
+//
+// internal/capacity has enforced FR-21 since it was written, but with
+// caller-supplied numbers nothing outside a test ever supplied: apps/common
+// /webhost's storage route said, in so many words, that its warning and
+// critical figures were "structurally zero until internal/config grows
+// capacity fields". This is that block. The cap an operator asked for and
+// the thresholds the guard has always wanted are the same missing
+// configuration, so they land together rather than the second set arriving
+// as a near-identical block a release later.
+//
+// # Bytes, always
+//
+// Every number here is a byte count. A units picker belongs to the form an
+// operator types into, not to the file: a config that could carry either
+// "100" meaning megabytes or "100" meaning gigabytes is a config whose
+// meaning depends on a second field, and getting that pair out of step is
+// a two-order-of-magnitude mistake nobody would see. The Settings UI shows
+// MB/GB and converts at the edge; what lands here is bytes.
+type Capacity struct {
+	// CapBytes is the ceiling on how much space this manager may occupy on
+	// the filesystem underneath BackupRoot.
+	//
+	// ZERO MEANS NO CAP: use the whole volume, and report the reading
+	// against the volume. That is this product's default, and it is a
+	// sentinel rather than a literal, so nothing anywhere may resolve it
+	// to a number or read it as "a ceiling of zero bytes, refuse
+	// everything". Completion.DeleteSafetyDelay resolves ITS zero to a
+	// documented default for the opposite reason: reading that zero
+	// literally would turn a safety gate off, whereas reading this one
+	// literally would turn the product off. Validate refuses a negative
+	// value and says, in the refusal, that 0 is how an operator asks for
+	// no cap.
+	//
+	// The cap is enforced, not merely displayed. internal/capacity weighs
+	// it against how much this manager is already using and refuses a
+	// transfer that would exceed it, exactly as it already refuses one the
+	// disk cannot hold; see that package's "Two different questions"
+	// section for why the refusal fires on whichever of the two is
+	// smaller.
+	CapBytes int64 `yaml:"cap_bytes,omitempty"`
+
+	// WarningFreeBytes and CriticalFreeBytes are FR-21's two levels,
+	// measured against whatever headroom actually binds: the disk's free
+	// space with no cap set, and the cap's remaining allowance with one.
+	//
+	// Zero means "no line here", which is the default and is what every
+	// deployment has effectively been running with. A warning line below
+	// the critical floor cannot be honoured (internal/capacity.Thresholds
+	// .Validate refuses it, and the level would jump straight from OK to
+	// CRITICAL), so Validate refuses that pair at load rather than letting
+	// every storage reading come back "misconfigured" with nothing naming
+	// the two numbers responsible. That rule also means a critical floor
+	// with no warning line is refused: state both, or neither.
+	WarningFreeBytes  int64 `yaml:"warning_free_bytes,omitempty"`
+	CriticalFreeBytes int64 `yaml:"critical_free_bytes,omitempty"`
+
+	// SafetyMarginBytes is held back on top of every incoming artifact's
+	// own size before a transfer is admitted. See internal/capacity's
+	// headroom-arithmetic section for what it is meant to cover (listing
+	// drift, block rounding, other writers on the same volume) and for why
+	// it is deliberately a plain byte count this product does not try to
+	// compute on an operator's behalf.
+	SafetyMarginBytes int64 `yaml:"safety_margin_bytes,omitempty"`
+
+	// BackupRoot names the one directory whose filesystem the manager-wide
+	// storage reading is taken from.
+	//
+	// Leave it unset and it is derived: see EffectiveBackupRoot, which
+	// takes the directory every configured backup set's local_path has in
+	// common. That covers the deployment this product actually ships (one
+	// bind-mounted backup volume, every set beneath it) with no operator
+	// input at all. Set it when the derivation cannot answer honestly,
+	// which is when backup sets sit on genuinely different volumes.
+	//
+	// It exists as a field rather than as pure derivation because of the
+	// container-versus-host trap: the engine runs in a container, and the
+	// filesystem to measure is the one the backup root is on AS THE
+	// CONTAINER SEES IT, never the container's own root filesystem and
+	// never the host's "/". A derivation that fell back to "/" would
+	// report a confident number about the wrong disk, which is worse than
+	// reporting nothing because nobody would notice; so the derivation
+	// gives up instead, and this field is how an operator answers when it
+	// does.
+	BackupRoot string `yaml:"backup_root,omitempty"`
+}
+
+// EffectiveBackupRoot is the directory whose filesystem a manager-wide
+// storage reading should be taken from, or "" when this configuration does
+// not know.
+//
+// An empty answer is a real answer and must be rendered as "capacity is not
+// known yet", never as zero bytes and never as a percentage. There are two
+// ways to get one: a configuration with no backup sets at all, and one
+// whose sets share no ancestor but the filesystem root (see
+// Capacity.BackupRoot for why "/" is refused rather than returned).
+//
+// Purely derived, never written back into the Config. Resolving it in place
+// during Validate would freeze today's derivation into an operator's file
+// the next time anything re-marshals it, so a later release that learned to
+// answer better would be ignored on exactly the deployments that never
+// chose a root.
+func (c *Config) EffectiveBackupRoot() string {
+	if c.Capacity.BackupRoot != "" {
+		return c.Capacity.BackupRoot
+	}
+
+	root := ""
+	for _, src := range c.Sources {
+		for _, bs := range src.BackupSets {
+			if bs.LocalPath == "" {
+				continue
+			}
+			// A disabled backup set still occupies its destination, and
+			// still shares the volume this reading is about, so it counts
+			// towards the root exactly like an enabled one.
+			if root == "" {
+				root = filepath.Clean(bs.LocalPath)
+				continue
+			}
+			root = commonAncestorDir(root, filepath.Clean(bs.LocalPath))
+		}
+	}
+	if root == "/" {
+		return ""
+	}
+	return root
+}
+
+// commonAncestorDir is the deepest directory a and b are both inside,
+// comparing whole path segments rather than characters: "/data/backups" and
+// "/data/backups-old" share "/data", never "/data/backups", and a prefix
+// comparison that missed that would measure a sibling volume.
+func commonAncestorDir(a, b string) string {
+	as := strings.Split(a, "/")
+	bs := strings.Split(b, "/")
+	n := len(as)
+	if len(bs) < n {
+		n = len(bs)
+	}
+	shared := 0
+	for shared < n && as[shared] == bs[shared] {
+		shared++
+	}
+	if shared <= 1 {
+		// Only the empty leading segment matched, so the two share
+		// nothing but "/".
+		return "/"
+	}
+	return strings.Join(as[:shared], "/")
 }
 
 // DefaultRepeatedFailureThreshold is how many artifacts have to be

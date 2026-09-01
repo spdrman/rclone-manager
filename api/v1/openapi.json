@@ -338,9 +338,156 @@
           "level"
         ]
       },
+      "ManagerStorage": {
+        "type": "object",
+        "description": "The one manager-wide storage reading: what the backup root's filesystem holds, what this manager itself accounts for, and which of the two the gauge is a fraction of. Distinct from the per-backup-set list beside it, which answers a different question and cannot answer this one: a fresh instance has no backup sets, two sets on one volume are two entries reporting the same disk, and the storage cap is one ceiling for the whole manager. When known is false every byte count is 0 and level is empty; render that as \"capacity is not known yet\", never as zero bytes and never as a percentage.",
+        "additionalProperties": false,
+        "properties": {
+          "known": {
+            "type": "boolean",
+            "description": "False means no reading could be taken. Every numeric field below is then 0 and must not be displayed as a measurement."
+          },
+          "unknown_reason": {
+            "type": "string",
+            "enum": [
+              "",
+              "no_backup_root",
+              "not_created",
+              "unreadable",
+              "misconfigured"
+            ],
+            "description": "Why known is false. no_backup_root: this configuration cannot say which filesystem to measure (no backup sets yet, or sets on different volumes). not_created: the backup root is known and does not exist yet, which is normal before the first cycle. unreadable: it exists and could not be read, which needs a person. misconfigured: the capacity numbers cannot produce a verdict, or a cap is set and this manager's own usage could not be measured."
+          },
+          "measured_path": {
+            "type": "string",
+            "description": "The directory whose filesystem was statted, reported whether or not the reading succeeded. The engine runs in a container and the reading must be of the backup root as the container sees it; naming the path is what makes a reading of the wrong mount noticeable."
+          },
+          "total_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The filesystem's total capacity."
+          },
+          "free_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "Every free block, including any only a privileged process could allocate into. Observability only."
+          },
+          "available_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "Free space this process may actually use (df's Avail). This, not free_bytes, is what level and every refusal are decided from."
+          },
+          "catalog_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "How much space this manager is occupying, summed from the sizes the state database records for artifacts whose local copy the journal says exists. This manager's own consumption, not the volume's."
+          },
+          "catalog_bytes_known": {
+            "type": "boolean",
+            "description": "Separates \"we summed the catalog and it came to zero\", which is correct on a deployment that has transferred nothing, from \"we could not read the catalog\"."
+          },
+          "other_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "How much of what the filesystem reports as used this manager does NOT account for. Surfaced rather than hidden: a large gap means something else is writing into the backup root."
+          },
+          "other_bytes_known": {
+            "type": "boolean"
+          },
+          "cap_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The configured ceiling on how much space this manager may use. 0 means no cap, never a zero-byte ceiling."
+          },
+          "denominator": {
+            "type": "string",
+            "enum": [
+              "disk",
+              "cap"
+            ],
+            "description": "What limit_bytes is. \"disk\" is the whole filesystem, which is what a deployment with no cap is measured against; \"cap\" is the operator's allowance. A bar at 80% of a 2 TB disk and one at 80% of a 100 GB cap are different facts and must not render identically."
+          },
+          "limit_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The denominator in effect: the cap when one is set, otherwise the filesystem's total."
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The numerator: this manager's own consumption when a cap is set, otherwise how full the volume is (total minus free)."
+          },
+          "headroom_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "How much room is left before the binding constraint refuses a transfer: the smaller of available_bytes and the cap's remaining allowance."
+          },
+          "binding_constraint": {
+            "type": "string",
+            "enum": [
+              "",
+              "disk",
+              "cap"
+            ],
+            "description": "Which constraint produced headroom_bytes, which is a different fact from denominator: a capped deployment whose volume is nearly full is bound by the disk, and an operator watching their allowance has no reason to expect that. Empty when known is false."
+          },
+          "warning_free_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The configured warning level, weighed against headroom_bytes. 0 means no warning level."
+          },
+          "critical_free_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "The configured critical floor, weighed against headroom_bytes. 0 means no critical level."
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "",
+              "OK",
+              "WARNING",
+              "CRITICAL"
+            ],
+            "description": "Empty when known is false. An unread disk is not OK."
+          }
+        },
+        "required": [
+          "known",
+          "unknown_reason",
+          "measured_path",
+          "total_bytes",
+          "free_bytes",
+          "available_bytes",
+          "catalog_bytes",
+          "catalog_bytes_known",
+          "other_bytes",
+          "other_bytes_known",
+          "cap_bytes",
+          "denominator",
+          "limit_bytes",
+          "used_bytes",
+          "headroom_bytes",
+          "binding_constraint",
+          "warning_free_bytes",
+          "critical_free_bytes",
+          "level"
+        ]
+      },
       "ListStorageStatusResponse": {
         "type": "object",
-        "description": "GET /system/storage.",
+        "description": "GET /system/storage. The manager-wide reading a dashboard gauge is drawn from, plus one entry per configured backup set.",
         "additionalProperties": false,
         "properties": {
           "backup_sets": {
@@ -348,9 +495,13 @@
             "items": {
               "$ref": "#/components/schemas/StorageStatus"
             }
+          },
+          "manager": {
+            "$ref": "#/components/schemas/ManagerStorage"
           }
         },
         "required": [
+          "manager",
           "backup_sets"
         ]
       },
@@ -986,6 +1137,49 @@
           "protect_last_known_good"
         ]
       },
+      "CapacitySettings": {
+        "type": "object",
+        "description": "FR-21's capacity configuration as it is actually deciding. Every number is BYTES: the MB/GB picker beside the field is display only and converts at the edge, so nothing on this boundary carries a unit.",
+        "additionalProperties": false,
+        "properties": {
+          "cap_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The ceiling on how much space this manager may use. 0 means no cap: use the whole volume and report the reading against it. A sentinel, never a zero-byte ceiling, and never resolved to a number. A negative value is refused."
+          },
+          "warning_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The level at which a reading is reported as WARNING, measured against whatever headroom binds. 0 means no warning level."
+          },
+          "critical_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The floor at or below which a transfer is refused, measured against whatever headroom binds. 0 means no critical level. Must not exceed warning_free_bytes."
+          },
+          "safety_margin_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Held back on top of every incoming artifact's own size before a transfer is admitted."
+          },
+          "backup_root": {
+            "type": "string",
+            "description": "The directory whose filesystem the manager-wide reading is taken from, already resolved: the configured value when there is one, otherwise the directory every backup set's destination has in common. Empty means this configuration cannot say, which a form renders as \"not known yet\"."
+          },
+          "backup_root_configured": {
+            "type": "boolean",
+            "description": "Whether backup_root was named by an operator rather than derived. A form must not put a derived value in an input box: saving it would pin today's derivation into the file."
+          }
+        },
+        "required": [
+          "cap_bytes",
+          "warning_free_bytes",
+          "critical_free_bytes",
+          "safety_margin_bytes",
+          "backup_root",
+          "backup_root_configured"
+        ]
+      },
       "RetentionSchema": {
         "type": "object",
         "description": "The closed value sets and bounds a retention chain is validated against, served rather than transcribed into a frontend.",
@@ -1058,10 +1252,14 @@
           },
           "schema": {
             "$ref": "#/components/schemas/SettingsSchema"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/CapacitySettings"
           }
         },
         "required": [
           "retention",
+          "capacity",
           "schema"
         ]
       },
@@ -1091,6 +1289,34 @@
         },
         "required": []
       },
+      "UpdateCapacitySettings": {
+        "type": "object",
+        "description": "A PARTIAL capacity update. An omitted field is left exactly as the running configuration has it. An explicit 0 is a request, not an omission: on this block zero means \"no cap\" and \"no warning line\", which is why every field is nullable rather than a plain number.",
+        "additionalProperties": false,
+        "properties": {
+          "cap_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-pointer": true
+          },
+          "warning_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-pointer": true
+          },
+          "critical_free_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-pointer": true
+          },
+          "safety_margin_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "x-go-pointer": true
+          }
+        },
+        "required": []
+      },
       "UpdateSettingsRequest": {
         "type": "object",
         "description": "PATCH /settings. An enumerated request type, never a configuration passthrough.",
@@ -1098,6 +1324,10 @@
         "properties": {
           "retention": {
             "$ref": "#/components/schemas/UpdateRetentionSettings",
+            "x-go-pointer": true
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/UpdateCapacitySettings",
             "x-go-pointer": true
           }
         },

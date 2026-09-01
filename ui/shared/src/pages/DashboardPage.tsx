@@ -41,6 +41,12 @@ export function DashboardPage({
   // the endpoint actually returns.
   const active = operations.data?.filter((op) => op.status === "running" || op.status === "queued") ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
+  // Issue #286: a separate fetch, not derived from `health` above. GET
+  // /system/storage's `manager` object answers a different question than
+  // GET /system/health's per-set list (see ManagerStorage's own doc for
+  // why summing that list cannot answer it), and it is the one this
+  // panel is meant to show.
+  const storage = useAsync(() => api.getStorage(), [api]);
 
   // #275: an instance with no configuration refuses every read here, and
   // that is not a fault to report, it is a setup step nobody has taken.
@@ -146,13 +152,26 @@ export function DashboardPage({
               value={String(h.quarantinedCount)}
               detail="need review"
             />
-            <MetricCard label="Storage" value={bytes(h.storageFreeBytes) + " free"}>
+            <MetricCard
+              label="Storage"
+              value={
+                storage.data
+                  ? storage.data.known
+                    ? bytes(storage.data.freeBytes) + " free"
+                    : "Not known yet"
+                  : "…"
+              }
+            >
               <div style={{ marginTop: 8 }}>
-                <StorageGauge
-                  freeBytes={h.storageFreeBytes}
-                  totalBytes={h.storageTotalBytes}
-                  state={h.storageState}
-                />
+                {storage.data ? (
+                  <StorageGauge storage={storage.data} />
+                ) : storage.error ? (
+                  <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                    {"Storage capacity is unavailable (" + storage.error.message + ")."}
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking storage…</p>
+                )}
               </div>
             </MetricCard>
           </div>

@@ -322,6 +322,20 @@ func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageS
 	return nil, nil
 }
 
+// ManagerStorage's default is an honest unknown rather than a zeroed
+// reading that claims Known. Every test in this package that does not
+// care about capacity therefore gets the shape a fresh install actually
+// produces, which is the one the NaN came from.
+func (f *syncFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
+	if f.errOnStorage != nil {
+		return service.ManagerStorage{}, f.errOnStorage
+	}
+	return service.ManagerStorage{
+		UnknownReason: service.StorageUnknownNoBackupRoot,
+		Denominator:   service.DenominatorDisk,
+	}, nil
+}
+
 // --- issue #211's read surface and its two quarantine actions ---
 //
 // Each of these is an in-memory store plus one error-injection field, so
@@ -577,6 +591,14 @@ func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.H
 
 func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
 	return service.ConnectionTestResult{}, errors.New("asyncFakeBackend: TestConnection not implemented")
+}
+
+// The same honest unknown syncFakeBackend gives: see its own comment.
+func (f *asyncFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
+	return service.ManagerStorage{
+		UnknownReason: service.StorageUnknownNoBackupRoot,
+		Denominator:   service.DenominatorDisk,
+	}, nil
 }
 
 func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {

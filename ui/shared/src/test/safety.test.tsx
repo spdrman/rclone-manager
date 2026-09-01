@@ -7,6 +7,7 @@ import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { StorageGauge } from "@shared/components/StorageGauge";
 import { createMockApi } from "@shared/api/mock";
 import { httpApi } from "@shared/api/client";
+import type { ManagerStorage } from "@shared/api/contracts";
 import type { SystemHealth } from "@shared/types/operation";
 import type { BackupArtifact } from "@shared/types/backup";
 
@@ -240,9 +241,38 @@ describe("storage pressure (\u00a756)", () => {
   });
 
   it("renders a critical storage reading with no action attached to it", () => {
-    render(<StorageGauge freeBytes={2_000_000_000} totalBytes={6_200_000_000_000} state="critical" />);
+    const critical: ManagerStorage = {
+      known: true, unknownReason: "", measuredPath: "/data/backups",
+      totalBytes: 6_200_000_000_000, freeBytes: 2_000_000_000, availableBytes: 2_000_000_000,
+      catalogBytes: 6_198_000_000_000, catalogBytesKnown: true, otherBytes: 0, otherBytesKnown: true,
+      capBytes: 0, denominator: "disk", limitBytes: 6_200_000_000_000, usedBytes: 6_198_000_000_000,
+      headroomBytes: 2_000_000_000, bindingConstraint: "disk",
+      warningFreeBytes: 0, criticalFreeBytes: 0, level: "CRITICAL"
+    };
+    render(<StorageGauge storage={critical} />);
     expect(screen.getByRole("meter")).toBeTruthy();
     expect(screen.queryAllByRole("button")).toEqual([]);
     expect(screen.queryAllByRole("link")).toEqual([]);
+  });
+
+  it("says capacity is not known yet instead of rendering a NaN percentage", () => {
+    // Issue #286: the exact defect this whole mechanism exists to stop.
+    // An unconfigured instance's reading is known: false with every byte
+    // count at 0, and a component that computed 1 - 0/0 anyway would put
+    // "NaN%" on screen. This proves the guard, not just the honest copy:
+    // no meter is rendered at all, so there is no aria-valuenow for a NaN
+    // to hide inside.
+    const unknown: ManagerStorage = {
+      known: false, unknownReason: "no_backup_root", measuredPath: "",
+      totalBytes: 0, freeBytes: 0, availableBytes: 0,
+      catalogBytes: 0, catalogBytesKnown: false, otherBytes: 0, otherBytesKnown: false,
+      capBytes: 0, denominator: "disk", limitBytes: 0, usedBytes: 0,
+      headroomBytes: 0, bindingConstraint: "",
+      warningFreeBytes: 0, criticalFreeBytes: 0, level: ""
+    };
+    render(<StorageGauge storage={unknown} />);
+    expect(screen.queryByRole("meter")).toBeNull();
+    expect(screen.queryByText(/NaN/)).toBeNull();
+    expect(screen.getByText(/not known yet/i)).toBeTruthy();
   });
 });

@@ -326,9 +326,10 @@ func (s *Service) deleteRemoteOne(ctx context.Context, source transport.Source, 
 // It reports false, meaning "do not transfer this artifact right now", on
 // any refusal or error; the artifact is left exactly where it is (no
 // journal write happens here at all) for a later cycle to retry once space
-// is available. See Service.Capacity's own doc for why this runs with a
-// zero-value Thresholds today, and what that does and does not protect
-// against.
+// is available. See Service.Capacity's own doc for where its thresholds
+// come from, and internal/capacity's "Two different questions" section for
+// how the operator's cap and the filesystem's free space combine into the
+// one headroom figure this gate is decided from.
 func (s *Service) admitCapacity(ctx context.Context, bs config.BackupSet, rec state.Record) bool {
 	// capacity.StatPath needs an existing directory to statfs; nothing
 	// upstream of this call (config.Validate only checks the configured
@@ -350,7 +351,21 @@ func (s *Service) admitCapacity(ctx context.Context, bs config.BackupSet, rec st
 		size = *rec.Remote.Size
 	}
 
-	assessment, err := capacity.CheckBeforeTransfer(bs.LocalPath, size, s.Capacity)
+	// The cap's own input (issue #286). A statfs reading answers "does the
+	// disk have room"; enforcing an operator's ceiling additionally needs
+	// "how much of the allowance have we spent", and only the catalog
+	// knows that. A failure to measure it is a refusal, not a zero: with a
+	// cap configured, capacity.Assess will not guess at an unmeasured
+	// usage, and with no cap configured the value is never consulted, so
+	// this costs a deployment without a cap nothing but one aggregate
+	// query.
+	usage, err := s.LocalUsage(ctx)
+	if err != nil {
+		s.logger().Error(ctx, "capacity", err)
+		return false
+	}
+
+	assessment, err := capacity.CheckBeforeTransfer(bs.LocalPath, usage, size, s.Capacity)
 	var insufficient *capacity.InsufficientCapacityError
 	switch {
 	case errors.As(err, &insufficient):

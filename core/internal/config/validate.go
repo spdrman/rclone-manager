@@ -67,6 +67,7 @@ func (c *Config) Validate() error {
 
 	v.validateRetention(&c.Retention)
 	v.validateAlerts(&c.Alerts)
+	v.validateCapacity(&c.Capacity)
 
 	return v.err()
 }
@@ -91,6 +92,67 @@ func (v *validator) validateAlerts(a *Alerts) {
 		a.RepeatedFailureThreshold = DefaultRepeatedFailureThreshold
 	case a.RepeatedFailureThreshold < 0:
 		v.addf("alerts.repeated_failure_threshold: must be a positive number of failed artifacts (got %d)", a.RepeatedFailureThreshold)
+	}
+}
+
+// validateCapacity checks FR-21's configuration block (issue #286).
+//
+// It resolves nothing. Every other block in this file fills in a documented
+// default for a field left at zero, and this one deliberately does not:
+// zero is the meaning here, not the absence of one. capacity.cap_bytes at
+// zero is "no cap, use the whole volume", and the two thresholds at zero
+// are "no line here", which is what every deployment written before this
+// block existed has been running with and must keep running with after an
+// upgrade.
+//
+// What it does instead is refuse three configurations that are individually
+// well-formed and jointly mean something an operator did not intend:
+//
+//   - A negative byte count anywhere. Nothing below zero has a meaning, and
+//     for the cap the refusal has to say so out loud, because "-1" is a
+//     plausible way for somebody to try to spell "no cap".
+//   - A warning line below the critical floor, including the common case of
+//     a critical floor with no warning line at all.
+//     internal/capacity.Thresholds.Validate refuses that pair, so accepting
+//     it here would mean every storage reading on the running deployment
+//     coming back "misconfigured" with nothing naming the two numbers that
+//     did it.
+//   - A cap at or below the critical floor. Each number is fine; together
+//     they mean no transfer can ever be admitted, because finishing any of
+//     them would leave the allowance at or under the floor. Left to run, it
+//     is indistinguishable from a broken product.
+func (v *validator) validateCapacity(c *Capacity) {
+	if c.CapBytes < 0 {
+		v.addf("capacity.cap_bytes: must not be negative (got %d); use 0 for no cap, meaning this manager may use the whole volume", c.CapBytes)
+	}
+	if c.WarningFreeBytes < 0 {
+		v.addf("capacity.warning_free_bytes: must not be negative (got %d); use 0 for no warning level", c.WarningFreeBytes)
+	}
+	if c.CriticalFreeBytes < 0 {
+		v.addf("capacity.critical_free_bytes: must not be negative (got %d); use 0 for no critical level", c.CriticalFreeBytes)
+	}
+	if c.SafetyMarginBytes < 0 {
+		v.addf("capacity.safety_margin_bytes: must not be negative (got %d)", c.SafetyMarginBytes)
+	}
+
+	if c.WarningFreeBytes >= 0 && c.CriticalFreeBytes >= 0 && c.WarningFreeBytes < c.CriticalFreeBytes {
+		v.addf(
+			"capacity.warning_free_bytes (%d) must be at or above capacity.critical_free_bytes (%d): free space crosses the warning line first as it drops, so the pair cannot be honoured the other way round; set both or neither",
+			c.WarningFreeBytes, c.CriticalFreeBytes,
+		)
+	}
+
+	if c.CapBytes > 0 && c.CriticalFreeBytes > 0 && c.CapBytes <= c.CriticalFreeBytes {
+		v.addf(
+			"capacity.cap_bytes (%d) must be above capacity.critical_free_bytes (%d): a cap at or below the critical floor leaves no headroom any transfer could ever be admitted into",
+			c.CapBytes, c.CriticalFreeBytes,
+		)
+	}
+
+	if c.BackupRoot != "" {
+		if err := validAbsolutePath(c.BackupRoot); err != nil {
+			v.addf("capacity.backup_root %v", err)
+		}
 	}
 }
 
