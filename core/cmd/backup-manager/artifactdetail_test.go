@@ -7,6 +7,58 @@ import (
 	"testing"
 )
 
+// writeRejectingValidatorScript writes an executable shell script to a
+// fresh temp directory that always rejects (exit 1) and writes message to
+// its combined stdout/stderr, exactly the shape internal/lifecycle/
+// verify.go's runValidator captures into rec.ValidationDetail on a clean
+// non-zero exit ("a verdict, not an infrastructure failure"). It returns
+// the script's absolute path, since config.Validation.Command.Executable
+// must be absolute (core/internal/config/validate.go).
+func writeRejectingValidatorScript(t *testing.T, message string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "reject.sh")
+	script := "#!/bin/sh\necho " + shellQuote(message) + "\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+// shellQuote wraps s in single quotes for embedding literally in a
+// generated sh script, escaping any single quote s itself contains. Good
+// enough for the fixed, punctuation-light messages this file's tests pass;
+// not a general-purpose shell-quoting routine.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// writeTestConfigWithValidatorBlock is writeTestConfig plus an application
+// validator (config.Validation.Command) wired onto the one backup set, so
+// a test can drive a real application-validator rejection (as opposed to
+// the hash-mismatch quarantine writeTestConfig's callers normally drive)
+// through the actual `run` pipeline.
+func writeTestConfigWithValidatorBlock(t *testing.T, executable string) string {
+	t.Helper()
+	configPath := writeTestConfig(t)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading generated config: %v", err)
+	}
+	const marker = "        stale_after: 24h\n"
+	validationYAML := "        validation:\n" +
+		"          command:\n" +
+		"            executable: " + executable + "\n" +
+		"            timeout: 5s\n"
+	content := strings.Replace(string(data), marker, marker+validationYAML, 1)
+	if content == string(data) {
+		t.Fatalf("writeTestConfigWithValidatorBlock: marker %q not found in generated config %q", marker, data)
+	}
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("rewriting config with a validation block: %v", err)
+	}
+	return configPath
+}
+
 // TestRun_ArtifactsPrintsTheRecordedReasonForAQuarantinedArtifact is issue
 // #284's end-to-end proof at the CLI boundary an operator actually types
 // at: `artifacts` with no operand cannot say why an artifact failed
@@ -53,6 +105,56 @@ func TestRun_ArtifactsPrintsTheRecordedReasonForAQuarantinedArtifact(t *testing.
 	}
 	if !strings.Contains(stdout, "now hashes to") || !strings.Contains(stdout, "hash recorded at verification was") {
 		t.Errorf("artifacts %s output = %q, want it to contain the journal's own recorded sentence (operator-triggered validate's hash-mismatch detail), not a generic message", id, stdout)
+	}
+}
+
+// TestRun_ArtifactsDetailDoesNotDisagreeWithItselfAboutWhyAnArtifactIsQuarantined
+// is the adversarial review's finding on PR #312 (issues #284/#308):
+// printArtifactDetail printed two different explanations for the same
+// quarantine back to back -- quarantine_reason (quarantineReasonFor:
+// rec.LastError falling back to rec.ValidationDetail, the derivation this
+// file's own doc comment already calls "often empty" and "not the
+// recommended way to learn why") sitting directly above reason/reason_at
+// (the journal's own literal transition-log sentence, via
+// state.LastEnteredDetail and app.ArtifactDetail.FailureReason).
+//
+// This drives a real application-validator rejection, the one shape of
+// quarantine where the old derivation is not merely empty but actively
+// disagrees: the validator process's own stdout becomes
+// rec.ValidationDetail (and, with LastError still unset -- it is only
+// ever written at release time -- quarantineReasonFor returns exactly
+// that stdout text as quarantine_reason), while the journal records the
+// fixed, generic sentence verify.go writes for every application-validator
+// rejection ("application validator rejected the artifact") as this
+// artifact's reason. Before the fix, an operator saw both, disagreeing,
+// with nothing telling them which to trust. The fix drops
+// quarantine_reason from this command's output entirely, so
+// reason:/reason_at: are the only explanation left.
+func TestRun_ArtifactsDetailDoesNotDisagreeWithItselfAboutWhyAnArtifactIsQuarantined(t *testing.T) {
+	const validatorMessage = "custom validator: payload failed the internal schema check"
+	scriptPath := writeRejectingValidatorScript(t, validatorMessage)
+	configPath := writeTestConfigWithValidatorBlock(t, scriptPath)
+	const id = "production/postgres-primary/backup.dump"
+
+	run([]string{"run", "--config", configPath}) // exit code intentionally unchecked: a per-artifact quarantine need not fail the whole cycle; state is asserted directly below.
+
+	stdout := captureStdout(t, func() {
+		if got := run([]string{"artifacts", "--config", configPath, id}); got != 0 {
+			t.Errorf("run([\"artifacts\", --config, %q, %q]) = %d, want 0", configPath, id, got)
+		}
+	})
+
+	if !strings.Contains(stdout, "QUARANTINED") {
+		t.Fatalf("artifacts %s output = %q, want it to report a quarantined state (test setup did not actually quarantine anything)", id, stdout)
+	}
+	if !strings.Contains(stdout, "validation_detail:   "+validatorMessage) {
+		t.Fatalf("artifacts %s output = %q, want a validation_detail: line carrying the validator's own message: without it, rec.ValidationDetail is empty and this test cannot prove quarantine_reason would have disagreed", id, stdout)
+	}
+	if !strings.Contains(stdout, "reason:              application validator rejected the artifact\n") {
+		t.Errorf("artifacts %s output = %q, want the journal-sourced reason: line with verify.go's generic rejection sentence", id, stdout)
+	}
+	if strings.Contains(stdout, "quarantine_reason:") {
+		t.Errorf("artifacts %s output = %q, want no quarantine_reason: line at all: it is redundant with reason:/reason_at: and, per this command's own doc comment, an unreliable derivation dropped by this fix", id, stdout)
 	}
 }
 

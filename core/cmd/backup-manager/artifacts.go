@@ -7,7 +7,6 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
-	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // cmdArtifacts is `backup-manager artifacts`.
@@ -85,11 +84,23 @@ func cmdArtifacts(args []string) int {
 // Every field that schema marks required is printed unconditionally, in
 // its own order; every field it marks `x-go-omitempty` is printed only
 // when non-empty/non-zero, exactly matching when the API itself would
-// omit it. `reason`/`reason_at` at the end are NOT in that schema at all:
-// they are this command's whole reason for existing, and closing that gap
-// on the API side (so the Web UI can show it too, and so `quarantine_reason`
-// stops being the unreliable, best-effort text it is today) is bigger than
-// this command; see issue #308.
+// omit it, with one deliberate exception: `quarantine_reason`, the
+// schema's own LastError-falling-back-to-ValidationDetail guess, is never
+// printed here at all. It reimplements exactly what issue #308 already
+// flags as unreliable in core/service.toServiceArtifact -- often empty,
+// and, worse, sometimes non-empty and wrong, since LastError only ever
+// reflects a *previous* quarantine's release, not the one currently in
+// effect -- and this command already prints something strictly better one
+// field below: `reason`/`reason_at`, the literal sentence
+// internal/lifecycle recorded on the transition that produced the
+// artifact's *current* state, read from the journal directly rather than
+// reconstructed. Printing both risked showing an operator two disagreeing
+// explanations for the same quarantine with no way to tell which to
+// trust; closing that gap on the API side too is issue #308, bigger than
+// this command.
+//
+// `reason`/`reason_at` themselves are NOT in that schema at all: they are
+// this command's whole reason for existing (issue #284).
 func printArtifactDetail(d app.ArtifactDetail) {
 	rec := d.Record
 	const layout = time.RFC3339
@@ -128,11 +139,6 @@ func printArtifactDetail(d app.ArtifactDetail) {
 	quarantined, irrecoverable := quarantineFlags(lifecycle.State(rec.State))
 	fmt.Printf("quarantined:         %v\n", quarantined)
 	fmt.Printf("quarantine_irrecoverable: %v\n", irrecoverable)
-	if quarantined {
-		if reason := quarantineReasonFor(rec); reason != "" {
-			fmt.Printf("quarantine_reason:   %s\n", reason)
-		}
-	}
 
 	if rec.RetentionTier != "" {
 		fmt.Printf("retention_tier:      %s\n", rec.RetentionTier)
@@ -171,25 +177,4 @@ func quarantineFlags(st lifecycle.State) (quarantined, irrecoverable bool) {
 	default:
 		return false, false
 	}
-}
-
-// quarantineReasonFor mirrors core/service.toServiceArtifact's derivation
-// of quarantine_reason exactly (LastError, the release-time record left by
-// internal/lifecycle.ReleaseFromQuarantine, falling back to
-// ValidationDetail), so this command's own quarantine_reason line agrees
-// with what the API would say. It is shown here for field-by-field parity
-// with api/v1/openapi.json's Artifact schema, not because it is the
-// recommended way to learn why an artifact is quarantined: it is often
-// empty (LastError is only ever set at release time, not at the moment of
-// quarantine, and ValidationDetail is only set for the application-
-// validator path) even for an artifact this command's own `reason` field,
-// sourced from the journal's transition log directly rather than
-// reconstructed from whatever else the record happens to carry, can
-// always answer. See issue #308, filed against core/service for the API
-// side of this exact gap.
-func quarantineReasonFor(rec state.Record) string {
-	if rec.LastError != "" {
-		return rec.LastError
-	}
-	return rec.ValidationDetail
 }
