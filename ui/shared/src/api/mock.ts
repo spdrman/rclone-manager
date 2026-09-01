@@ -158,7 +158,13 @@ const ARTIFACTS: BackupArtifact[] = [
     checksumAlgorithm: "sha256", validation: "failed",
     retentionClasses: ["daily"], remoteSourceRemovedAt: null,
     // Remote original stays put. Quarantine never triggers remote deletion.
-    quarantine: { reason: "checksum-mismatch", detectedAt: "2026-08-26T04:14:10+02:00", remoteSourceRetained: true }
+    quarantine: {
+      reason: "checksum-mismatch",
+      detail:
+        "sha256 mismatch: local file hashes to c19f3ba7..., remote reports 91a4d02e...",
+      detectedAt: "2026-08-26T04:14:10+02:00",
+      remoteSourceRetained: true
+    }
   },
   {
     id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -170,7 +176,12 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "e42b9c8f1a370d6512cf4b7d2098ae31c67d5f0a9b8241e3c07d5b6a2f918d04",
     checksumAlgorithm: "sha256", validation: "failed",
     retentionClasses: [], remoteSourceRemovedAt: null,
-    quarantine: { reason: "validation-failed", detectedAt: "2026-08-24T02:19:02+02:00", remoteSourceRetained: true }
+    quarantine: {
+      reason: "validation-failed",
+      detail: "application validator rejected the artifact: restore-test hook failed: could not decompress",
+      detectedAt: "2026-08-24T02:19:02+02:00",
+      remoteSourceRetained: true
+    }
   },
   {
     id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",

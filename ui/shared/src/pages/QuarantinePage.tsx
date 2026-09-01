@@ -239,6 +239,29 @@ export function QuarantinePage({
                           <span aria-hidden="true" style={{ color: "var(--danger)" }}>{"\u2715"}</span>
                           {a.quarantine ? REASON[a.quarantine.reason] : "\u2014"}
                         </span>
+                        {/* The literal sentence the journal recorded when this
+                            backup was quarantined (issue #308), not just the
+                            category badge above it. Only rendered when the
+                            backend actually sent one: an artifact whose
+                            quarantining transition carried no detail text
+                            shows the badge alone, same as before. */}
+                        {a.quarantine?.detail ? (
+                          <div
+                            className="mono"
+                            title={a.quarantine.detail}
+                            style={{
+                              fontSize: "var(--text-xs)",
+                              color: "var(--text-2)",
+                              marginTop: 2,
+                              maxWidth: 320,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap"
+                            }}
+                          >
+                            {a.quarantine.detail}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
                         {a.quarantine ? stamp(a.quarantine.detectedAt) : "\u2014"}

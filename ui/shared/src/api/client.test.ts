@@ -1009,6 +1009,11 @@ describe("httpApi maps the wire shapes onto the domain types", () => {
     expect(got.validation).toBe("failed");
     expect(got.quarantine).not.toBeNull();
     expect(got.quarantine?.reason).toBe("checksum-mismatch");
+    // The literal sentence the server sent, verbatim: `reason` above is a
+    // derived bucket, `detail` is the actual words an operator needs
+    // (issue #308). Losing this here would mean the same gap #308 closed
+    // on the server reopens silently on the client.
+    expect(got.quarantine?.detail).toBe("local final file now hashes to something else");
     expect(got.quarantine?.remoteSourceRetained).toBe(true);
   });
 
