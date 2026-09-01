@@ -363,6 +363,19 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		cfg.Sources = append(cfg.Sources, config.Source{Name: sourceName, BackupSets: []config.BackupSet{newSet}})
 	}
 
+	// Encoded before cfg.Validate, which resolves Retention and Alerts IN
+	// PLACE (validateRetention's own doc says so). cfg here is the file
+	// this method just re-read plus the new backup set, so a retention or
+	// alerts choice the operator never made (or never made yet, on a
+	// config.yaml issue #294's CreateInitialConfig fix now leaves without
+	// one) has to survive adding an unrelated backup set exactly as it
+	// survives a settings edit; see UpdateSettings' own comment (above,
+	// in settings.go) for the full reasoning this shares.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return CreateBackupSetResult{}, fmt.Errorf("service: encoding configuration: %w", err)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		// cfg.Validate's ValidationError text is built entirely from this
 		// package's own field descriptions and the caller's own request
@@ -380,7 +393,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// once. What comes back is a pure in-memory assignment, applied after
 	// the write, that cannot fail.
 	//
-	// The ordering is the point. A failure after writeConfigAtomically
+	// The ordering is the point. A failure after writeConfigBytesAtomically
 	// returns an error with an empty Set.ID, which the API layer correctly
 	// reads as "creation never happened", for a backup set that is
 	// durably in config.yaml -- the same split state #155's M6 fixed for
@@ -398,7 +411,13 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, err
 	}
 
-	if err := writeConfigAtomically(b.configPath, cfg); err != nil {
+	// encoded was captured above, before cfg.Validate resolved Retention
+	// and Alerts in place, so this write carries the file's own
+	// omissions rather than a copy of today's defaults. cfg itself stays
+	// fully resolved for planValidatorCatalog above and everything below
+	// that rebuilds this BackupService's in-memory state — only the
+	// bytes on disk differ from it.
+	if err := writeConfigBytesAtomically(b.configPath, encoded); err != nil {
 		return CreateBackupSetResult{}, fmt.Errorf("service: persisting configuration: %w", err)
 	}
 
@@ -647,8 +666,9 @@ func writeConfigAtomically(path string, cfg *config.Config) error {
 // writeConfigBytesAtomically is writeConfigAtomically's second half, for a
 // caller that has to choose WHICH encoding of the config lands on disk
 // rather than encoding whatever struct it happens to be holding.
-// UpdateSettings (settings.go) is that caller: it encodes before
-// config.Validate resolves its defaults in place, so the operator's file
+// UpdateSettings (settings.go), backupsetenabled.go's toggle, and
+// CreateBackupSet above are those callers: each encodes before
+// config.Validate resolves its defaults in place, so the file on disk
 // keeps its own omissions instead of gaining a frozen copy of today's
 // defaults, while the running process still uses the validated struct.
 func writeConfigBytesAtomically(path string, b []byte) error {
