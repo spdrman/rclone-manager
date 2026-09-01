@@ -9,6 +9,8 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { PlatformBadge } from "@shared/components/PlatformBadge";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
+import { HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
   const navigate = useNavigate();
@@ -216,52 +218,62 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
       <div className="card__header"><h2 className="eyebrow">Administrator password</h2></div>
       <div className="card__body">
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <label className="field">
-            <span className="field__label">Current password</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="current-password"
-              value={current}
-              onChange={(e) => setCurrent(e.target.value)}
-              disabled={readOnly}
-              required
-            />
-          </label>
-          <label className="field">
-            <span className="field__label">New password</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={next}
-              onChange={(e) => setNext(e.target.value)}
-              disabled={readOnly}
-              required
-            />
-            {tooShort ? (
-              <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
-                {"Minimum " + MIN_PASSWORD_LENGTH + " characters."}
-              </span>
-            ) : null}
-          </label>
-          <label className="field">
-            <span className="field__label">Confirm new password</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              disabled={readOnly}
-              required
-            />
-            {mismatch ? (
-              <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
-                Passwords do not match.
-              </span>
-            ) : null}
-          </label>
+          <HelpField label="Current password" help={FIELD_HELP.currentPassword}>
+            {(helpId) => (
+              <input
+                className="input"
+                type="password"
+                aria-describedby={helpId}
+                autoComplete="current-password"
+                value={current}
+                onChange={(e) => setCurrent(e.target.value)}
+                disabled={readOnly}
+                required
+              />
+            )}
+          </HelpField>
+          <HelpField label="New password" help={FIELD_HELP.newPassword}>
+            {(helpId) => (
+              <>
+                <input
+                  className="input"
+                  type="password"
+                  aria-describedby={helpId}
+                  autoComplete="new-password"
+                  value={next}
+                  onChange={(e) => setNext(e.target.value)}
+                  disabled={readOnly}
+                  required
+                />
+                {tooShort ? (
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                    {"Minimum " + MIN_PASSWORD_LENGTH + " characters."}
+                  </span>
+                ) : null}
+              </>
+            )}
+          </HelpField>
+          <HelpField label="Confirm new password" help={FIELD_HELP.confirmNewPassword}>
+            {(helpId) => (
+              <>
+                <input
+                  className="input"
+                  type="password"
+                  aria-describedby={helpId}
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  disabled={readOnly}
+                  required
+                />
+                {mismatch ? (
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                    Passwords do not match.
+                  </span>
+                ) : null}
+              </>
+            )}
+          </HelpField>
           {success ? (
             <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
               Password changed. Other signed-in sessions have been signed out.

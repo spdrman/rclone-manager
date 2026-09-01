@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { BackupSet } from "@shared/types/backup";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import {
   captureSetEditSnapshot,
   isSetEditStale
@@ -113,14 +115,16 @@ export function EditBackupSetDialog({
             </WarningBanner>
           ) : null}
 
-          <label className="field">
-            <span className="field__label">Name</span>
-            <input
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
+          <HelpField label="Name" help={FIELD_HELP.editSetName}>
+            {(helpId) => (
+              <input
+                className="input"
+                aria-describedby={helpId}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            )}
+          </HelpField>
         </div>
 
         <div className="card__footer" style={{ display: "flex", justifyContent: "flex-end", gap: 9, borderRadius: "0 0 10px 10px" }}>

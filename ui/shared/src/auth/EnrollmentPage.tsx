@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { AuthFrame } from "./LoginPage";
 import { ErrorState } from "@shared/components/EmptyState";
+import { HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 const MIN_LENGTH = 12;
 
@@ -37,28 +39,35 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
         operating-system account.
       </p>
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <label className="field">
-          <span className="field__label">Username</span>
-          <input className="input input--mono" autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
-        </label>
-        <label className="field">
-          <span className="field__label">Password</span>
-          <input className="input" type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          {tooShort ? (
-            <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
-              {"Minimum " + MIN_LENGTH + " characters."}
-            </span>
-          ) : null}
-        </label>
-        <label className="field">
-          <span className="field__label">Confirm password</span>
-          <input className="input" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
-          {mismatch ? (
-            <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
-              Passwords do not match.
-            </span>
-          ) : null}
-        </label>
+        <HelpField label="Username" help={FIELD_HELP.enrollUsername}>
+          {(helpId) => (
+            <input className="input input--mono" aria-describedby={helpId} autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+          )}
+        </HelpField>
+        <HelpField label="Password" help={FIELD_HELP.enrollPassword}>
+          {(helpId) => (
+            <>
+              <input className="input" type="password" aria-describedby={helpId} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              {tooShort ? (
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                  {"Minimum " + MIN_LENGTH + " characters."}
+                </span>
+              ) : null}
+            </>
+          )}
+        </HelpField>
+        <HelpField label="Confirm password" help={FIELD_HELP.enrollConfirm}>
+          {(helpId) => (
+            <>
+              <input className="input" type="password" aria-describedby={helpId} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+              {mismatch ? (
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                  Passwords do not match.
+                </span>
+              ) : null}
+            </>
+          )}
+        </HelpField>
         <div className="banner banner--info" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
           <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
           <span>
