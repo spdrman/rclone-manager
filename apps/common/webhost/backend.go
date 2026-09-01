@@ -76,8 +76,10 @@ type BackupServiceClient interface {
 
 	// ImportSSHKey backs POST /api/v1/ssh-keys: the wizard's "Import
 	// key" step, persisting client-validated key material server-side
-	// for the first time (issue #146).
-	ImportSSHKey(ctx context.Context, raw []byte) (service.SSHKeyRef, error)
+	// for the first time (issue #146). passphrase is "" for an
+	// unencrypted key; see service.BackupService.ImportSSHKey's own doc
+	// for what a non-empty one does (#269).
+	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 
 	// ProbeHostKey backs POST /api/v1/ssh/host-key-probe: the wizard's
 	// "Verify server" step, fetching a real fingerprint instead of a

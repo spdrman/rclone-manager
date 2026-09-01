@@ -26,8 +26,16 @@ const (
 // importSSHKeyRequest is POST /api/v1/ssh-keys' request body: the
 // wizard's "Import key" step (#98), sent once, straight to the backend,
 // per that step's own on-screen copy.
+//
+// Passphrase is optional (#269): "" is every request before this field
+// existed, and means PrivateKeyPEM is not passphrase-protected. When set,
+// it is checked against PrivateKeyPEM right here, at import time -- see
+// service.BackupService.ImportSSHKey's own doc for why that check exists
+// and what it guarantees against a key.file/key.passphrase configuration
+// reaching the same key later.
 type importSSHKeyRequest struct {
 	PrivateKeyPEM string `json:"private_key_pem"`
+	Passphrase    string `json:"passphrase"`
 }
 
 // importSSHKeyResponse never carries KeyFile (the server-side path
@@ -56,13 +64,14 @@ func (h *handlers) importSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ref, err := h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM))
+	ref, err := h.setup().ImportSSHKey(r.Context(), []byte(body.PrivateKeyPEM), body.Passphrase)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidRequest) {
 			// Safe to echo: rclone.ValidateImportedPrivateKey's own doc
 			// guarantees this never includes the key bytes themselves,
 			// only the shape of the problem ("empty", "passphrase-
-			// protected", "does not parse", ...).
+			// protected", "did not decrypt with the configured
+			// passphrase", "does not parse", ...).
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}

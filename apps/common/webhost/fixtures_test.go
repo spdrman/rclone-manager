@@ -303,7 +303,7 @@ func (f *syncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupS
 	return service.CreateBackupSetResult{}, errors.New("syncFakeBackend: CreateBackupSet not implemented")
 }
 
-func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte) (service.SSHKeyRef, error) {
+func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
 }
 
@@ -581,7 +581,7 @@ func (f *asyncFakeBackend) CreateBackupSet(context.Context, service.CreateBackup
 	return service.CreateBackupSetResult{}, errors.New("asyncFakeBackend: CreateBackupSet not implemented")
 }
 
-func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte) (service.SSHKeyRef, error) {
+func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
 }
 
@@ -680,6 +680,13 @@ type backupSetFakeBackend struct {
 	// what came back out of it.
 	lastCreate service.CreateBackupSetRequest
 
+	// lastImportPassphrase records the passphrase argument the handler
+	// called ImportSSHKey with (#269), the same way lastCreate does for
+	// CreateBackupSet: a test can assert the JSON "passphrase" field
+	// actually crossed the HTTP-to-core seam, not only that it was
+	// accepted by the JSON decoder.
+	lastImportPassphrase string
+
 	errOnCreate  error
 	errOnList    error
 	errOnGet     error
@@ -768,7 +775,10 @@ func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.
 	return result, nil
 }
 
-func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte) (service.SSHKeyRef, error) {
+func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error) {
+	f.mu.Lock()
+	f.lastImportPassphrase = passphrase
+	f.mu.Unlock()
 	if f.errOnImport != nil {
 		return service.SSHKeyRef{}, f.errOnImport
 	}
