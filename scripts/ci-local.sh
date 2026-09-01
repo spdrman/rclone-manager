@@ -284,6 +284,17 @@ bash scripts/architecture/check-core-dependency-rule.sh
 bash scripts/architecture/check-layer-ownership.sh
 bash scripts/architecture/check-ui-shared-provider-imports.sh
 
+# The installer's refusals (#262). Standard library only and no Docker, so
+# this is a couple of seconds and runs in FAST mode too. It is here rather
+# than nowhere for the reason #160 exists: scripts/deploy's own Python
+# tests have never been wired into this gate, so they have never run on a
+# commit, and a refusal nobody has watched work is not a refusal. Every
+# assertion in it is about the installer saying no, which is exactly the
+# behaviour nobody exercises until the day it matters on a NAS they cannot
+# debug.
+gate_step "installer prerequisite refusals (#262)"
+(cd scripts/install && python3 -m unittest test_install_docker_host 2>&1 | tail -3)
+
 gate_step "performance baseline present, and its gate can fail (#165)"
 bash scripts/perf/check-baseline.sh
 bash scripts/perf/selftest.sh
