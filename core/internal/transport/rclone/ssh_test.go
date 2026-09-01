@@ -175,6 +175,88 @@ func TestSftpConfig_DriftedKeyFileModeIsClassifiedAndActionable(t *testing.T) {
 	}
 }
 
+// TestSftpConfig_RefusesWorldWritableAncestorDirectory is the other half of
+// issue #293 the PR #311 review flagged as unaddressed: checkKeyFileMode
+// only ever looks at the key file's OWN mode. The production incident
+// this whole file exists for drifted the key AND the directory chain down
+// to the backup root to world-writable, and a world-writable directory
+// lets any local actor unlink/replace/rename the entry inside it
+// regardless of what mode the file itself carries — Unix directory-write
+// permission governs entry changes independent of the target's own mode
+// bits. Before checkKeyDirChainMode existed, a key file left at a
+// pristine 0600 sailed through unnoticed even while its own directory (or,
+// as here, a directory two levels further up, well past its immediate
+// parent) was wide open, which is exactly the "more dangerous half" the
+// review named: the file-mode check gives false confidence while the real
+// exposure, swapping the key out entirely, still stands.
+func TestSftpConfig_RefusesWorldWritableAncestorDirectory(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "level1", "level2")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir chain: %v", err)
+	}
+	src := validSource(t, root)
+	src.KeyFile = touchFile(t, nested, "id_ed25519")
+
+	// Positive control: an untouched chain (every directory 0700, the key
+	// file itself 0600) must be accepted, otherwise the refusal below
+	// would prove nothing.
+	if _, err := sftpConfig(src); err != nil {
+		t.Fatalf("sftpConfig refused a key_file with an untouched directory chain: %v", err)
+	}
+
+	// Widen "level1", two levels above the key file and one above its own
+	// immediate parent ("level2"), which stays at 0700 throughout. The key
+	// file itself is never touched: this is the drift the finding says
+	// checkKeyFileMode alone cannot see.
+	level1 := filepath.Join(root, "level1")
+	if err := os.Chmod(level1, 0o777); err != nil {
+		t.Fatalf("chmod level1 to 0777: %v", err)
+	}
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("sftpConfig accepted a key_file whose directory chain contains a world-writable component, want a refusal")
+	}
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.KeyPermissions {
+		t.Fatalf("category = %v (ok=%v), want transport.KeyPermissions (the same halt-reason path checkKeyFileMode uses)", category, ok)
+	}
+	if !strings.Contains(err.Error(), level1) {
+		t.Errorf("error %q should name the drifted directory %q", err, level1)
+	}
+}
+
+// TestSftpConfig_AllowsStickyWorldWritableAncestorDirectory locks in the
+// one deliberate exception to the check above: a directory with the
+// sticky bit set (mode 1777, /tmp's standard permissions on every
+// mainstream Unix) is not refused for being world-writable. That is not a
+// gap in the check, it is the same fact that makes a world-writable /tmp
+// safe to have on every real system: POSIX restricts unlink/rename inside
+// a sticky directory to the entry's own owner, the directory's owner, or
+// root, regardless of who else can write there, which is exactly the
+// attack checkKeyDirChainMode exists to close. Without this exception the
+// check would refuse a perfectly ordinary, correctly configured system
+// any time a key file's path happened to share an ancestor with the
+// system's shared temp directory.
+func TestSftpConfig_AllowsStickyWorldWritableAncestorDirectory(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "level1", "level2")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir chain: %v", err)
+	}
+	level1 := filepath.Join(root, "level1")
+	if err := os.Chmod(level1, 0o777|os.ModeSticky); err != nil {
+		t.Fatalf("chmod level1 to 1777: %v", err)
+	}
+
+	src := validSource(t, root)
+	src.KeyFile = touchFile(t, nested, "id_ed25519")
+
+	if _, err := sftpConfig(src); err != nil {
+		t.Fatalf("sftpConfig refused a key_file under a world-writable-but-sticky ancestor directory: %v", err)
+	}
+}
+
 // TestSftpConfig_RequiresKnownHosts is the core FR-6 test: rclone's own
 // default, reached whenever known_hosts_file is left unset, is
 // ssh.InsecureIgnoreHostKey(), which accepts any host key at all. This

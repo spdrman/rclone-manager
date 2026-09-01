@@ -24,6 +24,7 @@ package rclone
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -201,6 +202,9 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		if err := checkKeyFileMode(src.ID, src.KeyFile, info); err != nil {
 			return nil, err
 		}
+		if err := checkKeyDirChainMode(src.ID, src.KeyFile, keyFilePath); err != nil {
+			return nil, err
+		}
 		keyFileValue = src.KeyFile
 	case src.KeyEnv != "":
 		secret, err := resolveKeyFromEnv(src.KeyEnv, passphrase)
@@ -373,6 +377,82 @@ func checkKeyFileMode(sourceID, configuredPath string, info os.FileInfo) error {
 		))
 	}
 	return nil
+}
+
+// checkKeyDirChainMode is checkKeyFileMode's other half: it refuses when
+// ANY ancestor directory between the key file and the filesystem root is
+// writable by anyone but its owner, rather than trusting that a tight
+// mode on the key file itself is enough.
+//
+// It has to exist because checkKeyFileMode alone leaves exactly the gap
+// issue #293's own incident report describes: "the key AND the whole
+// directory chain down to the backup root" had drifted to world-writable.
+// Unix directory-write permission governs entry changes (unlink, rename,
+// create) independent of the target file's own mode bits, so a key left
+// at a pristine 0600 sitting inside a world-writable directory is still
+// fully exposed: any local actor can delete it and drop a replacement in
+// its place, and checkKeyFileMode, looking only at the file, would never
+// notice. That is the "more dangerous half" PR #311's own review flagged:
+// the file check alone gives false confidence while the actual attack
+// surface, swapping the key out entirely, stands untouched.
+//
+// # How far up: every ancestor, to the filesystem root
+//
+// There is no configuration field this function can bound the walk to
+// instead. sftpConfig only ever receives a transport.Source, which has no
+// notion of "the backup root" (that concept, config.Capacity.BackupRoot,
+// belongs to a different tree entirely: where backup SETS write their
+// output, not where an imported key lives), and threading the full
+// manager Config down through Adapter into here for one check would be a
+// far bigger change than this fix warrants. Stopping short at some
+// arbitrary depth instead would just relocate the blind spot rather than
+// remove it: a directory widened one level above wherever the walk gave
+// up would be exactly as invisible as the key file itself was before this
+// check existed. Walking to the root closes that off completely, "up to
+// (at least) the backup root" being trivially true of every path. The
+// cost is a handful of extra stat calls per connection, negligible next
+// to the SSH handshake this check already gates.
+//
+// # The sticky-bit exception
+//
+// A directory whose mode has the sticky bit set (os.ModeSticky — 1777,
+// the standard permissions of /tmp on every mainstream Unix) is not
+// refused merely for being group- or world-writable. This is not a
+// loophole; it is the same fact that makes a world-writable /tmp safe to
+// have on a real system in the first place: POSIX restricts unlink and
+// rename inside a sticky directory to the entry's own owner, the
+// directory's owner, or root, regardless of who else can write there,
+// which is exactly the attack this function exists to close. A check that
+// ignored the sticky bit would refuse an entirely ordinary, correctly
+// configured deployment the moment a key file's path happened to share an
+// ancestor with the system's shared temp directory, which is a false
+// positive this project has no reason to accept for a bit POSIX itself
+// already uses to neutralize the risk.
+func checkKeyDirChainMode(sourceID, configuredPath, keyFilePath string) error {
+	dir, err := filepath.Abs(filepath.Dir(keyFilePath))
+	if err != nil {
+		return fmt.Errorf("source %q: resolving the directory containing key_file %q: %w", sourceID, configuredPath, err)
+	}
+	for {
+		info, err := os.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("source %q: checking permissions on %q, a directory containing key_file %q: %w", sourceID, dir, configuredPath, err)
+		}
+		mode := info.Mode()
+		if mode.Perm()&0o022 != 0 && mode&os.ModeSticky == 0 {
+			return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
+				"source %q: key_file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
+					"directory lets any local actor delete or replace the key regardless of the key file's own mode; "+
+					"correct it (chmod go-w %s) or move the key",
+				sourceID, configuredPath, dir, mode.Perm(), dir,
+			))
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
 }
 
 // quoteForRclonePem converts raw PEM text into the single-line,
