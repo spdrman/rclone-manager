@@ -475,7 +475,7 @@ describe("add backup set wizard", () => {
       vi.spyOn(api, "createBackupSet").mockResolvedValue({
         id: "api/x", sourceName: "api", name: "x", host: "h", port: 22, user: "u",
         remotePath: "/r", localPath: "/l", include: [], completionStrategy: "rename",
-        disabled: false,
+        disabled: false, readOnly: false,
         runError: "the destructive gate is closed, so the run was not submitted"
       });
       renderWizardWithRoutes(api);

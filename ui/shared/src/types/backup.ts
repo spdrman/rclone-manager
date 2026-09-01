@@ -64,6 +64,27 @@ export interface BackupSet {
   stateNote: string;
   enabled: boolean;
   /**
+   * Issue #282's read-only declaration, resolved (config.BackupSet.ReadOnly,
+   * never the per-set-override/source-default split): pull backups from
+   * this source, but never delete the remote original. Set through the
+   * wizard or the "declare read-only" control on this set's own detail
+   * page (issue #316), not only by hand-editing config.yaml.
+   */
+  readOnly: boolean;
+  /**
+   * How many backups in THIS set currently hold a remote source kept only
+   * because `readOnly` above is true, not because any one of them was
+   * individually reinstated out of quarantine (issue #227's own count,
+   * which this type has no field for at all: see QuarantinePage.tsx's own
+   * doc for why that population has never had a UI home). Comes from this
+   * set's own entry in GET /system/health, the same join haltReason above
+   * already depends on; 0 when that report could not be read for this set,
+   * which is indistinguishable here from a genuine zero — the aggregate
+   * across every set (SystemHealth.readOnlyRetainedCount) carries the
+   * same caveat for the identical reason.
+   */
+  readOnlyRetainedCount: number;
+  /**
    * Why the manager could not connect to this backup set the last time it
    * tried, so nothing was backed up. Absent when no refusal is on record
    * (#245).

@@ -147,6 +147,14 @@ type BackupServiceClient interface {
 	// not touch.
 	SetBackupSetEnabled(ctx context.Context, id string, enabled bool) (service.BackupSet, error)
 
+	// SetBackupSetReadOnly backs POST /api/v1/backup-sets/{id}/read-only
+	// (issue #316): the CRUD-parity write that turns issue #282's
+	// read-only declaration on or off for an already-persisted backup
+	// set. State-changing but not destructive — see
+	// core/service.SetBackupSetReadOnly's own doc for what each direction
+	// does and, in particular, does not undo.
+	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
+
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same
 	// non-destructive reachability check TestConnection performs, against

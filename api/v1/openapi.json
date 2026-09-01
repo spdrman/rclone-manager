@@ -860,6 +860,9 @@
           },
           "disabled": {
             "type": "boolean"
+          },
+          "read_only": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -874,7 +877,8 @@
           "include",
           "completion_strategy",
           "validator_id",
-          "disabled"
+          "disabled",
+          "read_only"
         ]
       },
       "CreateBackupSetResponse": {
@@ -1517,6 +1521,10 @@
           },
           "disabled": {
             "type": "boolean"
+          },
+          "read_only": {
+            "type": "boolean",
+            "description": "Declares this backup set's remote source read-only from creation (issue #282): pull backups from here, but never delete the remote original. Omitted or false means exactly what every request meant before this field existed."
           }
         },
         "required": [
@@ -1909,6 +1917,11 @@
             "description": "How many backups in this set were re-trusted after quarantine and still hold a remote source this manager has undertaken never to delete. The forfeiture is permanent by design, so this only ever grows, and releasing those remote copies is an operator decision made outside this manager. There is deliberately no companion size: the only measurement this manager ever took of a remote object was at discovery, the producer may since have removed or replaced it, and re-reading every one on every health call would be a network round trip per backup against a source that may be unreachable. The count is known; the bytes are not. Zero here is a real reading, not a missing one, so it is always present.",
             "format": "int32"
           },
+          "read_only_retained_count": {
+            "type": "integer",
+            "description": "How many backups here currently hold a remote source this manager will never delete because the SET itself is declared read-only (issue #282), not because any one of them was individually reinstated (see reinstated_remote_retained_count, issue #227, for that separate population). Zero is a real reading, not a missing one, so it is always present.",
+            "format": "int32"
+          },
           "free_bytes": {
             "type": "integer",
             "description": "Free space at this set's destination. Absent when the reading could not be taken; a zero would otherwise read as \"full\", which is the one thing it must not be mistaken for.",
@@ -1948,6 +1961,7 @@
           "quarantined_count",
           "quarantined_lost_count",
           "reinstated_remote_retained_count",
+          "read_only_retained_count",
           "free_bytes_known"
         ]
       },
@@ -2044,6 +2058,19 @@
         },
         "required": [
           "enabled"
+        ]
+      },
+      "SetReadOnlyRequest": {
+        "type": "object",
+        "description": "POST /backup-sets/{id}/read-only. Declares, or withdraws, a backup set's read-only status (issue #282). Turning it on only prevents a future deletion; turning it back off does not retroactively authorise deleting anything already retained under it, so this is state-changing but not destructive.",
+        "additionalProperties": false,
+        "properties": {
+          "read_only": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read_only"
         ]
       }
     },
@@ -4792,6 +4819,133 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SetEnabledRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/read-only": {
+      "post": {
+        "operationId": "setBackupSetReadOnly",
+        "summary": "Declare, or withdraw, one backup set's read-only status (issue #282). Turning it on only prevents a future deletion; turning it back off does not retroactively authorise deleting anything already retained under it. Keyed by the two halves of the identity, like /enabled beside it.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetReadOnlyRequest"
               }
             }
           }

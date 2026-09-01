@@ -158,6 +158,7 @@ type syncFakeBackend struct {
 	errOnRetry          error
 	errOnReinstate      error
 	errOnSetEnabled     error
+	errOnSetReadOnly    error
 	errOnTestPersisted  error
 
 	lastArtifactFilter    service.ArtifactFilter
@@ -167,6 +168,7 @@ type syncFakeBackend struct {
 	lastRetried           string
 	lastReinstated        string
 	lastSetEnabled        setEnabledCall
+	lastSetReadOnly       setReadOnlyCall
 	lastTestedBackupSetID string
 }
 
@@ -355,6 +357,16 @@ func (f *syncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enab
 	return service.BackupSet{ID: id, Disabled: !enabled}, nil
 }
 
+func (f *syncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
+	if f.errOnSetReadOnly != nil {
+		return service.BackupSet{}, f.errOnSetReadOnly
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSetReadOnly = setReadOnlyCall{id: id, readOnly: readOnly}
+	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
+}
+
 func (f *syncFakeBackend) TestBackupSetConnection(_ context.Context, id string) (service.ConnectionTestResult, error) {
 	if f.errOnTestPersisted != nil {
 		return service.ConnectionTestResult{}, f.errOnTestPersisted
@@ -480,6 +492,13 @@ func (f *syncFakeBackend) RebuildCatalog(context.Context) (service.CatalogReport
 type setEnabledCall struct {
 	id      string
 	enabled bool
+}
+
+// setReadOnlyCall is setEnabledCall's issue #316 counterpart, for
+// SetBackupSetReadOnly.
+type setReadOnlyCall struct {
+	id       string
+	readOnly bool
 }
 
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
@@ -613,6 +632,10 @@ func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.Storage
 // to route around.
 func (f *asyncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (service.BackupSet, error) {
 	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *asyncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
+	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
 }
 
 func (f *asyncFakeBackend) TestBackupSetConnection(context.Context, string) (service.ConnectionTestResult, error) {
@@ -754,6 +777,7 @@ func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.
 		CompletionStrategy: req.CompletionStrategy,
 		ValidatorID:        req.ValidatorID,
 		Disabled:           req.Disabled,
+		ReadOnly:           req.ReadOnly,
 	}
 	f.mu.Lock()
 	f.lastCreate = req

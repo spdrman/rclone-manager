@@ -181,6 +181,7 @@ describe("every request the shared client makes is a declared operation", () => 
       ["runCycle", () => httpApi.runCycle("rev-1")],
       ["testConnection", () => httpApi.testConnection("set-1")],
       ["setEnabled", () => httpApi.setEnabled("src", "set-1", true)],
+      ["setReadOnly", () => httpApi.setReadOnly("src", "set-1", true)],
       ["createBackupSet", () => httpApi.createBackupSet({
         name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
         knownHostsLine: "l", remotePath: "/r", localPath: "/l",

@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "279de1206d524fa715dd46ca28d47116cb27ef3f04a3f494de4269820771f333"
+const ContractSHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -303,6 +303,18 @@ var Endpoints = []Endpoint{
 		ID: "setBackupSetEnabled", Method: "POST", Path: "/backup-sets/{source}/{set}/enabled",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "SetEnabledRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "setBackupSetReadOnly", Method: "POST", Path: "/backup-sets/{source}/{set}/read-only",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "SetReadOnlyRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
 			400: {ErrorCodeInvalidRequest},
 			401: {ErrorCodeUnauthenticated},
@@ -668,6 +680,7 @@ type BackupSet struct {
 	LocalPath          string   `json:"local_path"`
 	Name               string   `json:"name"`
 	Port               int      `json:"port"`
+	ReadOnly           bool     `json:"read_only"`
 	RemotePath         string   `json:"remote_path"`
 	SourceName         string   `json:"source_name"`
 	User               string   `json:"user"`
@@ -689,6 +702,7 @@ type BackupSetHealth struct {
 	PendingDeletes                int    `json:"pending_deletes"`
 	QuarantinedCount              int    `json:"quarantined_count"`
 	QuarantinedLostCount          int    `json:"quarantined_lost_count"`
+	ReadOnlyRetainedCount         int    `json:"read_only_retained_count"`
 	Reason                        string `json:"reason"`
 	ReinstatedRemoteRetainedCount int    `json:"reinstated_remote_retained_count"`
 	SetName                       string `json:"set_name"`
@@ -719,6 +733,7 @@ type BackupSetSpec struct {
 	LocalPath          string   `json:"local_path"`
 	Name               string   `json:"name"`
 	Port               int      `json:"port"`
+	ReadOnly           bool     `json:"read_only"`
 	RemotePath         string   `json:"remote_path"`
 	SourceName         string   `json:"source_name"`
 	SSHKeyID           string   `json:"ssh_key_id"`
@@ -1091,6 +1106,15 @@ type SetEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+// SetReadOnlyRequest is POST /backup-sets/{id}/read-only. Declares, or withdraws, a backup
+// set's read-only status (issue #282). Turning it on only prevents a
+// future deletion; turning it back off does not retroactively
+// authorise deleting anything already retained under it, so this is
+// state-changing but not destructive.
+type SetReadOnlyRequest struct {
+	ReadOnly bool `json:"read_only"`
+}
+
 // SettingsResponse is GET and PATCH /settings both return this: the settings now in
 // effect plus the rules they were validated against.
 type SettingsResponse struct {
@@ -1247,6 +1271,7 @@ var SchemaTypes = map[string]any{
 	"RotatePasswordRequest":       RotatePasswordRequest{},
 	"SessionResponse":             SessionResponse{},
 	"SetEnabledRequest":           SetEnabledRequest{},
+	"SetReadOnlyRequest":          SetReadOnlyRequest{},
 	"SettingsResponse":            SettingsResponse{},
 	"SettingsSchema":              SettingsSchema{},
 	"StorageStatus":               StorageStatus{},

@@ -133,6 +133,12 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//     cycle, and everything already backed up stays exactly where it
 	//     is. core/service pins that directly
 	//     (TestSetBackupSetEnabled_DisablingDeletesNothing).
+	//   - read-only (issue #316): declares, or withdraws, a backup set's
+	//     issue #282 read-only status. Turning it on only PREVENTS a
+	//     future deletion; turning it back off does not reach back and
+	//     delete anything already retained under it
+	//     (core/service.SetBackupSetReadOnly's own doc). Neither
+	//     direction touches, moves or deletes a byte of backup data.
 	//   - revalidate: re-reads a quarantined backup's local copy and
 	//     reports a verdict. It writes nothing at all.
 	//   - retry: moves a journal row from QUARANTINED to DISCOVERED. No
@@ -156,6 +162,7 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//
 	// None of them can reach a deletion, which is what this list is for.
 	"POST /api/v1/backup-sets/{source}/{set}/enabled":          true,
+	"POST /api/v1/backup-sets/{source}/{set}/read-only":        true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,

@@ -56,6 +56,13 @@ type backupSetSpec struct {
 	// (docs/EPIC-B-multi-nas.md §26 Step 5).
 	ValidatorID string `json:"validator_id"`
 	Disabled    bool   `json:"disabled"`
+	// ReadOnly declares this backup set's remote source read-only from
+	// creation (issue #282's "pull from here, never delete here"), set
+	// through the wizard/API rather than by hand-editing config.yaml
+	// (issue #316). Omitted or false means exactly what every request
+	// before this issue already meant: FR-15's delete step runs
+	// unchanged.
+	ReadOnly bool `json:"read_only"`
 }
 
 // backupSetRequest is POST /api/v1/backup-sets' request body: the spec
@@ -98,6 +105,12 @@ type backupSetResponse struct {
 	// keys).
 	ValidatorID string `json:"validator_id"`
 	Disabled    bool   `json:"disabled"`
+	// ReadOnly is the fully-resolved answer (service.BackupSet.ReadOnly):
+	// see backupSetSpec.ReadOnly's own doc for what setting it means.
+	// Never omitted, the same discipline Disabled above already follows:
+	// a caller must be able to tell "not read-only" from "this build does
+	// not report it".
+	ReadOnly bool `json:"read_only"`
 }
 
 func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
@@ -114,6 +127,7 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		CompletionStrategy: bs.CompletionStrategy,
 		ValidatorID:        string(bs.ValidatorID),
 		Disabled:           bs.Disabled,
+		ReadOnly:           bs.ReadOnly,
 	}
 }
 
@@ -194,6 +208,7 @@ func (h *handlers) createBackupSet(w http.ResponseWriter, r *http.Request) {
 		StableFor:          secondsToDuration(body.StableForSeconds),
 		StaleAfter:         secondsToDuration(body.StaleAfterSeconds),
 		Disabled:           body.Disabled,
+		ReadOnly:           body.ReadOnly,
 		RunImmediately:     body.RunImmediately,
 		Actor:              actorFromContext(r.Context()),
 	}
@@ -372,6 +387,50 @@ func (h *handlers) setBackupSetEnabled(w http.ResponseWriter, r *http.Request) {
 
 	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
 	updated, err := h.backend.SetBackupSetEnabled(r.Context(), id, body.Enabled)
+	if err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
+		writeBackupSetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
+}
+
+// setReadOnlyRequest is POST /api/v1/backup-sets/{id}/read-only's body.
+type setReadOnlyRequest struct {
+	ReadOnly bool `json:"read_only"`
+}
+
+// setBackupSetReadOnly is POST /api/v1/backup-sets/{source}/{set}/read-only
+// (issue #316): declare, or withdraw, one already-persisted backup set's
+// read-only status without hand-editing config.yaml — the CRUD-parity
+// counterpart setBackupSetEnabled already has for `disabled`.
+//
+// Same tier as setBackupSetEnabled: requireCSRF but NOT
+// requireDestructiveGate. Nothing reachable from here touches, moves or
+// deletes a byte of backup data either direction. Turning read-only ON
+// only PREVENTS a future deletion (service.SetBackupSetReadOnly's own
+// doc); turning it back OFF does not reach back and delete anything this
+// manager already retained under it, so neither direction is the
+// "delete a byte of backup data" requireDestructiveGate exists to gate.
+//
+// The id is read from two named segments, like setBackupSetEnabled
+// beside it, for the identical reason: a backup set id is always exactly
+// source/name, a fixed arity, and this route needs a literal
+// "/read-only" tail a catch-all would swallow.
+func (h *handlers) setBackupSetReadOnly(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
+
+	var body setReadOnlyRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxCreateBackupSetBodyBytes)
+		return
+	}
+
+	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	updated, err := h.backend.SetBackupSetReadOnly(r.Context(), id, body.ReadOnly)
 	if err != nil {
 		if errors.Is(err, service.ErrBackupSetNotFound) {
 			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
