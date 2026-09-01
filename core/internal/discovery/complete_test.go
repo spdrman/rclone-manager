@@ -49,17 +49,30 @@ func TestIncludeMatches(t *testing.T) {
 }
 
 func TestIsMarkerObject(t *testing.T) {
+	defaultCompletion := config.Completion{Strategy: "marker"}
+
 	markers := []string{"_SUCCESS", "backup.dump.complete", "x.complete"}
 	for _, m := range markers {
-		if !isMarkerObject(m) {
-			t.Errorf("isMarkerObject(%q) = false, want true", m)
+		if !isMarkerObject(m, defaultCompletion) {
+			t.Errorf("isMarkerObject(%q, default) = false, want true", m)
 		}
 	}
 	notMarkers := []string{"backup.dump", "_SUCCESSFUL", "success"}
 	for _, m := range notMarkers {
-		if isMarkerObject(m) {
-			t.Errorf("isMarkerObject(%q) = true, want false", m)
+		if isMarkerObject(m, defaultCompletion) {
+			t.Errorf("isMarkerObject(%q, default) = true, want false", m)
 		}
+	}
+
+	// A configured manifest_marker replaces "_SUCCESS" as the recognized
+	// directory-level signal; it does not additionally recognize it
+	// (issue #291).
+	customCompletion := config.Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}
+	if !isMarkerObject("SHA256SUMS", customCompletion) {
+		t.Errorf(`isMarkerObject("SHA256SUMS", custom) = false, want true`)
+	}
+	if isMarkerObject("_SUCCESS", customCompletion) {
+		t.Errorf(`isMarkerObject("_SUCCESS", custom) = true, want false: a configured manifest_marker should replace the default, not add to it`)
 	}
 }
 
@@ -115,6 +128,64 @@ func TestIsComplete_Marker(t *testing.T) {
 		}
 		if reason == "" {
 			t.Errorf("expected a non-empty reason for a not-yet-complete marker candidate")
+		}
+	})
+}
+
+// TestIsComplete_Marker_CustomManifestMarker is issue #291's own reproduction:
+// a producer (the Gitea backup example in the issue) signals a finished run
+// directory with a file it names itself (SHA256SUMS), not "_SUCCESS", and
+// this manager cannot ask the producer to rename it. Before this issue's
+// fix, config.Completion had no field for that name at all, so
+// isComplete's "marker" case only ever looked for the hardcoded literal
+// "_SUCCESS" -- a directory containing SHA256SUMS was never treated as
+// complete no matter what a caller wrote into a Completion value, because
+// nothing in the type could carry a different name to check for.
+func TestIsComplete_Marker_CustomManifestMarker(t *testing.T) {
+	now := time.Now()
+	a := transport.RemoteArtifact{Path: "run/backup.dump"}
+	custom := config.Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}
+
+	t.Run("configured marker present makes it complete", func(t *testing.T) {
+		known := map[string]transport.RemoteArtifact{"run/SHA256SUMS": {}}
+		complete, reason := isComplete(a, custom, known, now)
+		if !complete {
+			t.Errorf("configured manifest marker SHA256SUMS present: complete = false, reason %q, want true", reason)
+		}
+	})
+
+	t.Run("only the default _SUCCESS present is not enough once a custom name is configured", func(t *testing.T) {
+		// The directory contains the OLD hardcoded default, not the
+		// configured name. A backup set that asked for SHA256SUMS must
+		// not be satisfied by a completely different producer's _SUCCESS
+		// convention showing up in the same directory by coincidence:
+		// the configured name replaces the default, it does not add to
+		// it.
+		known := map[string]transport.RemoteArtifact{"run/_SUCCESS": {}}
+		complete, reason := isComplete(a, custom, known, now)
+		if complete {
+			t.Errorf("only _SUCCESS present with manifest_marker=SHA256SUMS configured: complete = true, want false")
+		}
+		if reason == "" {
+			t.Errorf("expected a non-empty reason")
+		}
+	})
+
+	t.Run("neither present is not complete", func(t *testing.T) {
+		complete, reason := isComplete(a, custom, map[string]transport.RemoteArtifact{}, now)
+		if complete {
+			t.Errorf("no marker present: complete = true, want false")
+		}
+		if reason == "" {
+			t.Errorf("expected a non-empty reason")
+		}
+	})
+
+	t.Run("an unset manifest_marker still means _SUCCESS, unchanged from before this field existed", func(t *testing.T) {
+		known := map[string]transport.RemoteArtifact{"run/_SUCCESS": {}}
+		complete, reason := isComplete(a, config.Completion{Strategy: "marker"}, known, now)
+		if !complete {
+			t.Errorf("default manifest marker: complete = false, reason %q, want true", reason)
 		}
 	})
 }
