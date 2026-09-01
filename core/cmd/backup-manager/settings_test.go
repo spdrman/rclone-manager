@@ -104,3 +104,43 @@ func TestRun_SettingsPatchWithNoFlagsIsRefused(t *testing.T) {
 		t.Errorf("run(%v) with no patch flags = 0, want non-zero (a patch must name at least one setting)", args)
 	}
 }
+
+// TestRun_SettingsWithPatchFlagsButNoPatchOperandIsRefused is the mirror
+// case of TestRun_SettingsPatchWithNoFlagsIsRefused: a patch-shaped flag
+// given WITHOUT the "patch" operand must never be silently accepted and
+// ignored. Before this test's fix, `settings --timezone ...` parsed
+// successfully, dropped the flag on the floor, and printed the unchanged
+// current settings with exit code 0 -- identical to a plain `settings`
+// call, and indistinguishable from an operator who forgot the word
+// "patch" believing their change took effect on a live daemon.
+func TestRun_SettingsWithPatchFlagsButNoPatchOperandIsRefused(t *testing.T) {
+	configPath := writeTestConfig(t)
+	args := []string{"settings", "--config", configPath, "--timezone", "America/Vancouver"}
+
+	var got int
+	errOut := captureStderr(t, func() {
+		got = run(args)
+	})
+
+	if got == 0 {
+		t.Errorf("run(%v) = 0, want non-zero (a patch-only flag with no \"patch\" operand must be refused)", args)
+	}
+	if !strings.Contains(errOut, "timezone") {
+		t.Errorf("run(%v) stderr = %q, want it to name the ignored flag", args, errOut)
+	}
+	if !strings.Contains(errOut, "patch") {
+		t.Errorf("run(%v) stderr = %q, want it to mention the missing \"patch\" operand", args, errOut)
+	}
+
+	// Confirm the setting was NOT silently applied: a follow-up plain
+	// `settings` read must still report the config's original value, not
+	// America/Vancouver.
+	getOut := captureStdout(t, func() {
+		if rc := run([]string{"settings", "--config", configPath}); rc != 0 {
+			t.Fatalf("run([\"settings\"]) = %d, want 0", rc)
+		}
+	})
+	if strings.Contains(getOut, "timezone: America/Vancouver") {
+		t.Errorf("settings output after refused patch = %q, want the timezone to be unchanged", getOut)
+	}
+}

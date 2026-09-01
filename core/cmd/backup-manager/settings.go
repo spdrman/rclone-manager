@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/service"
@@ -29,15 +30,17 @@ import (
 // capacity field is here.
 func cmdSettings(args []string) int {
 	fs, cfgPath := newFlagSet("settings")
-	timezone := fs.String("timezone", "", "patch: retention.timezone (an IANA name)")
-	weekStartsOn := fs.String("week-starts-on", "", "patch: retention.week_starts_on (a weekday name)")
+	timezone := fs.String("timezone", "", "patch only; ignored otherwise: retention.timezone (an IANA name)")
+	weekStartsOn := fs.String("week-starts-on", "", "patch only; ignored otherwise: retention.week_starts_on (a weekday name)")
 	protect := fs.Bool("protect-last-known-good", true,
-		"patch: retention.protect_last_known_good; pass =false to explicitly disable FR-19 protection, "+
-			"which LastKnownGoodDecide treats as a materially more dangerous configuration")
-	capBytes := fs.Int64("cap-bytes", 0, "patch: capacity.cap_bytes (0 means no cap)")
-	warningFreeBytes := fs.Int64("warning-free-bytes", 0, "patch: capacity.warning_free_bytes (0 means no warning line)")
-	criticalFreeBytes := fs.Int64("critical-free-bytes", 0, "patch: capacity.critical_free_bytes (0 means no critical line)")
-	safetyMarginBytes := fs.Int64("safety-margin-bytes", 0, "patch: capacity.safety_margin_bytes")
+		"patch only; ignored otherwise: retention.protect_last_known_good; pass =false to explicitly disable "+
+			"FR-19 protection, which LastKnownGoodDecide treats as a materially more dangerous configuration")
+	capBytes := fs.Int64("cap-bytes", 0, "patch only; ignored otherwise: capacity.cap_bytes (0 means no cap)")
+	warningFreeBytes := fs.Int64("warning-free-bytes", 0,
+		"patch only; ignored otherwise: capacity.warning_free_bytes (0 means no warning line)")
+	criticalFreeBytes := fs.Int64("critical-free-bytes", 0,
+		"patch only; ignored otherwise: capacity.critical_free_bytes (0 means no critical line)")
+	safetyMarginBytes := fs.Int64("safety-margin-bytes", 0, "patch only; ignored otherwise: capacity.safety_margin_bytes")
 
 	operands, err := parseFlagsAroundOperands(fs, args)
 	if err != nil {
@@ -47,6 +50,21 @@ func cmdSettings(args []string) int {
 		return usageError(`settings: expected no argument, or exactly one argument "patch"`)
 	}
 	patching := len(operands) == 1
+
+	// A patch-only flag given without the "patch" operand must never be
+	// silently accepted and dropped: that is indistinguishable, in its
+	// output and its exit code, from a plain read, and an operator who
+	// forgot the word "patch" would walk away believing they changed a
+	// setting on a live daemon when nothing happened. This mirrors, in
+	// the opposite direction, buildSettingsPatch's own refusal of a
+	// `patch` operand that names no flag at all.
+	if !patching {
+		if named := visitedSettingsPatchFlags(fs); len(named) > 0 {
+			return usageError(
+				"settings: --%s only take(s) effect with the \"patch\" operand, and would otherwise be silently ignored; did you mean \"settings patch --%s ...\"?",
+				strings.Join(named, ", --"), named[0])
+		}
+	}
 
 	ctx := context.Background()
 	svc, cleanup, err := openBackupService(ctx, *cfgPath)
@@ -73,6 +91,36 @@ func cmdSettings(args []string) int {
 	}
 	printSettings(settings)
 	return 0
+}
+
+// settingsPatchFlagNames lists every flag cmdSettings declares that is
+// meaningful only under the "patch" operand -- shared between
+// visitedSettingsPatchFlags (which refuses them when "patch" is absent)
+// and buildSettingsPatch (which reads them once it is present), so the
+// two lists cannot drift apart on which flags are patch-only.
+var settingsPatchFlagNames = []string{
+	"timezone", "week-starts-on", "protect-last-known-good",
+	"cap-bytes", "warning-free-bytes", "critical-free-bytes", "safety-margin-bytes",
+}
+
+// visitedSettingsPatchFlags returns the names of every patch-only flag
+// actually passed on the command line, in the order fs.Visit reports
+// them. This is fs.Visit, not the flags' own zero values, for the same
+// reason buildSettingsPatch reads them that way: an explicitly-passed
+// --cap-bytes=0 or --protect-last-known-good=false (its zero value is
+// already true) has to count as "named" too.
+func visitedSettingsPatchFlags(fs *flag.FlagSet) []string {
+	patchOnly := make(map[string]bool, len(settingsPatchFlagNames))
+	for _, name := range settingsPatchFlagNames {
+		patchOnly[name] = true
+	}
+	var named []string
+	fs.Visit(func(f *flag.Flag) {
+		if patchOnly[f.Name] {
+			named = append(named, f.Name)
+		}
+	})
+	return named
 }
 
 // buildSettingsPatch reads fs's parsed flag values into an
