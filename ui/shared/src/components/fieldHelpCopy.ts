@@ -317,8 +317,9 @@ export const FIELD_HELP = {
     example: "check it once you've read the sequence above",
     effect:
       "Every Save button on this page stays disabled until this is checked, alongside a trusted host and an imported key: it's a structural gate, not a formality. Checking it deletes nothing by itself; the remote copy is only removed once that specific artifact has cleared every step in the sequence shown above, never earlier (FR-15)."
+  },
 
-// ------------------------------------------------------------- capacity
+  // ------------------------------------------------------------- capacity
 
   storageCap: {
     what: "A ceiling on how much space this manager may occupy, separate from how full the disk actually is.",
