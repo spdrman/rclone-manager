@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
+// The real stylesheet, not a stub (vite.config.ts's `css: true`). Every
+// visibility assertion below is therefore a statement about the CSS this
+// project ships, which is the only place the hidden state actually lives:
+// `hidden` gets its display: none from the user-agent sheet, and any
+// author `display` on the same element overrides it. Without the
+// .fieldhelp__pop[hidden] rule, every pop-up on a real page is permanently
+// open, covering the control beneath it and swallowing clicks meant for
+// it — and with a stubbed stylesheet, nothing here notices.
+import "@shared/design-system/components.css";
 
 /**
  * Issue #278 — the help pop-up's interaction, state by state and
@@ -42,6 +51,9 @@ const field = () => screen.getByLabelText("Keep");
  *  matches regardless of visibility, which is what lets the hidden state be
  *  asserted as "present but not visible" rather than as absence. */
 const popup = () => screen.getByText(HELP.effect);
+/** The pop-up's own box, for the assertions that are about the box rather
+ *  than about the copy in it. */
+const popupBox = () => popup().closest(".fieldhelp__pop") as HTMLElement;
 const closeControl = () => screen.getByRole("button", { name: "Close help for Keep" });
 const elsewhere = () => screen.getByRole("button", { name: "Somewhere else" });
 
@@ -52,6 +64,12 @@ describe("FieldHelp pop-up", () => {
     render(<Harness />);
 
     expect(popup()).not.toBeVisible();
+    // toBeVisible() is satisfied by the `hidden` ATTRIBUTE alone and never
+    // consults the stylesheet, so it stays green even when the shipped CSS
+    // overrides the user-agent rule and leaves every pop-up on the page
+    // permanently open. This is the assertion that reads the CSS, and it
+    // is the one that catches that.
+    expect(getComputedStyle(popupBox()).display).toBe("none");
     expect(screen.queryByRole("button", { name: "Close help for Keep" })).toBeNull();
   });
 
@@ -190,21 +208,40 @@ describe("FieldHelp pop-up", () => {
     expect(popup()).toBeVisible();
   });
 
-  it("does not pin on a mouse pointerdown", async () => {
+  it("gets out of the way when the control itself is clicked", async () => {
     const user = userEvent.setup();
     render(<Harness />);
 
-    // Clicking into the field to type does open the pop-up, because the
-    // field takes focus. What it must not do is PIN: once the pointer and
-    // the focus have both moved on, the pop-up goes with them, rather than
-    // being left over the next field the operator is trying to read.
-    await user.click(field());
+    await user.hover(field());
     expect(popup()).toBeVisible();
+
+    // The pop-up is a real overlay: while it is up it covers, and takes
+    // the clicks meant for, whatever is below the field. Clicking the
+    // control is the operator saying they are done reading, so the help
+    // stands aside rather than sitting over the button they are heading
+    // for. A mouse click must also not PIN, which is the touch gesture.
+    await user.click(field());
+    expect(popup()).not.toBeVisible();
 
     await user.unhover(field());
     act(() => field().blur());
-
     expect(popup()).not.toBeVisible();
+
+    // And it is not gone for good.
+    await user.hover(field());
+    expect(popup()).toBeVisible();
+  });
+
+  it("keeps a pinned pop-up up when the control is clicked, so a touch tap survives its own click", async () => {
+    render(<Harness />);
+
+    // A real touch tap is a pointerdown AND a click. The pointerdown pins;
+    // if the click that follows dismissed, a tap would open and close the
+    // pop-up in one gesture and a phone could never see it at all.
+    tap(field());
+    fireEvent.click(field());
+
+    expect(popup()).toBeVisible();
   });
 
   it("associates all three parts of the copy with the field, and nothing else", () => {
@@ -247,7 +284,11 @@ describe("FieldHelp pop-up", () => {
     // #257: a Unicode escape written as JSX text renders as its six
     // literal characters. This is the fifth site that could have made
     // that mistake, so it is asserted rather than reviewed.
-    expect(closeControl().textContent).toBe("×");
+    expect(closeControl().querySelector("[aria-hidden='true']")?.textContent).toBe("×");
+    // The name is hidden TEXT, not an aria-label. An aria-label here would
+    // make this button answer to a lookup for "the control labelled Keep",
+    // which is the field beside it, not this.
+    expect(closeControl().getAttribute("aria-label")).toBeNull();
   });
 });
 

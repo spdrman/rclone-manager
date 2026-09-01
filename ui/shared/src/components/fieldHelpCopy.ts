@@ -69,7 +69,7 @@ export const FIELD_HELP = {
   // ---------------------------------------------------------------- auth
 
   loginUsername: {
-    what: "The Backup Manager account created on this NAS. It is not your NAS operating-system login, and not an account on any server you back up.",
+    what: "The Backup Manager account created on this NAS. Separate from the NAS's own administrator account, and separate from any login on a server you back up.",
     example: "backup-admin",
     effect:
       "Checked against the single administrator account this instance stores locally. No NAS OS account and no remote host is contacted, so a NAS password will not work here even if it is the one you use everywhere else."

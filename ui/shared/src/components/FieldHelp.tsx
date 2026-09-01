@@ -23,7 +23,9 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * the pinned state, and getting that wrong is exactly how a pop-up ends up
  * stuck on screen.
  *
- * `dismissed` is the one that is easy to leave out and is not optional.
+ * `dismissed` is what all three exits set, and it is also what clicking
+ * the control itself sets. It is the one that is easy to leave out and is
+ * not optional.
  * Without it, closing a pinned pop-up while the pointer is still over the
  * input immediately re-opens it as a hover pop-up, so the close control and
  * Escape both appear to do nothing. It is cleared on the next thing that
@@ -58,10 +60,16 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  *     A mouse pointerdown deliberately does nothing here, so clicking into
  *     a field to type does not leave a pop-up pinned over the next field.
  *   - The close control has an accessible name naming its field ("Close
- *     help for Keep"), not a bare glyph. The glyph itself is a literal
- *     character in a string expression rather than an escape in JSX text,
- *     which is the bug #257 exists for: `×` written as element content
- *     renders as the six characters, not the symbol.
+ *     help for Keep"), not a bare glyph. That name is visually hidden TEXT
+ *     inside the button rather than an aria-label on it, which is not a
+ *     stylistic choice: an aria-label makes the button answer to "the
+ *     control labelled Keep" in every label-based lookup, browser
+ *     automation and assistive-technology alike, and the control labelled
+ *     Keep is the field. A button should take its name from its content,
+ *     which is also what survives translation and find-in-page. The glyph
+ *     itself is a literal character in a string expression rather than an
+ *     escape in JSX text, which is the bug #257 exists for: `×` written as
+ *     element content renders as the six characters, not the symbol.
  *
  * Hiding uses the `hidden` attribute rather than unmounting, so the pop-up
  * keeps one stable id for aria-describedby across every state change, and
@@ -86,6 +94,7 @@ export interface FieldHelpProps {
 export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
   const helpId = useId();
   const wrapper = useRef<HTMLDivElement | null>(null);
+  const pop = useRef<HTMLDivElement | null>(null);
 
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -163,6 +172,24 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
         if (staysInside(event)) return;
         setFocused(false);
       }}
+      onClick={(event) => {
+        // Acting on the control puts its help away. This is not cosmetic:
+        // the pop-up is a real overlay, so while it is up it covers, and
+        // takes the clicks meant for, whatever sits below the field —
+        // which in these forms is the Save button, the Sign in button, the
+        // next row. Once the operator has clicked the control they have
+        // read what they were going to read and are on their way somewhere
+        // else, so this is the moment to get out of that way. Hovering or
+        // focusing the field again brings it straight back.
+        //
+        // A pinned pop-up is exempt: pinning is a request for it to stay,
+        // and on a touch screen the tap that pins is immediately followed
+        // by a click on the field, which would otherwise close what the
+        // tap just opened.
+        if (pinned) return;
+        if (pop.current?.contains(event.target as Node)) return;
+        setDismissed(true);
+      }}
       onPointerDown={(event) => {
         // Touch only. See the module doc: a tap is the pinned case,
         // because there is no hover to show a pop-up with first.
@@ -174,6 +201,7 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
       {children(helpId)}
 
       <div
+        ref={pop}
         className="fieldhelp__pop"
         hidden={!open}
         // Clicking the pop-up pins it. A click on the close button inside
@@ -194,13 +222,13 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
         <button
           type="button"
           className="fieldhelp__close"
-          aria-label={"Close help for " + label}
           onClick={(event) => {
             event.stopPropagation();
             dismiss();
           }}
         >
-          {"×"}
+          <span aria-hidden="true">{"×"}</span>
+          <span className="visually-hidden">{"Close help for " + label}</span>
         </button>
       </div>
     </div>

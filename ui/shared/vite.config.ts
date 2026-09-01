@@ -19,6 +19,15 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test/setup.ts",
+    // Process real stylesheets instead of stubbing them to an empty
+    // module, so a test that imports one is asserting against the CSS this
+    // project actually ships. It is off by default in vitest, and that
+    // default hid a real bug: components.css set `display` on the field
+    // help pop-up, which beats the user-agent [hidden] rule outright, so
+    // every pop-up in a real browser was permanently open while every
+    // jsdom visibility assertion still passed. Only the test files that
+    // import a stylesheet pay for this.
+    css: true,
     // e2e/ used to hold the Playwright suite, and this exclusion kept
     // `vitest run` from collecting its specs. The suite left in #158: it
     // is Suite B of spdrman/rclone-manager-tests now, and rclone-manager's

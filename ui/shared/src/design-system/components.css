@@ -92,7 +92,7 @@
    components/FieldHelp.tsx; this is only its shape. Hidden state is the
    `hidden` attribute, not a class, so the copy keeps one stable id for
    aria-describedby and the close button is unfocusable while it is off
-   screen. */
+   screen. See the [hidden] rule below, which is what makes that true. */
 .fieldhelp { position: relative; }
 .fieldhelp__pop {
   position: absolute; z-index: 40;
@@ -109,6 +109,18 @@
   color: var(--text-2);
   cursor: default;
 }
+/* Load-bearing, and its absence is a functional bug rather than a style
+   one. The pop-up is hidden with the `hidden` ATTRIBUTE, whose display:
+   none comes from the user-agent stylesheet, and the author `display`
+   above beats it outright. Without this line every pop-up on the page is
+   permanently open, covering the control beneath it and swallowing the
+   clicks meant for that control.
+
+   It goes AFTER the rule it overrides, not before. A browser would resolve
+   it either way on specificity, but jsdom's cascade is order-based, so
+   written first it loses there and the test environment stops agreeing
+   with the product. */
+.fieldhelp__pop[hidden] { display: none; }
 .fieldhelp__body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .fieldhelp__body p { margin: 0; }
 .fieldhelp__what { color: var(--text); }
