@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -50,7 +54,7 @@ func openTestService(t *testing.T) (*BackupService, string) {
 
 func validCreateReq(t *testing.T, svc *BackupService, name string) CreateBackupSetRequest {
 	t.Helper()
-	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -487,7 +491,7 @@ func TestCreateBackupSet_ConcurrentWithReadersDoesNotRace(t *testing.T) {
 func TestImportSSHKey_Success_PersistsFileAndReportsFingerprint(t *testing.T) {
 	svc, configPath := openTestService(t)
 
-	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -523,7 +527,7 @@ func TestImportSSHKey_Success_PersistsFileAndReportsFingerprint(t *testing.T) {
 
 func TestImportSSHKey_NotAKeyReturnsErrInvalidRequestWithoutEchoingInput(t *testing.T) {
 	svc, _ := openTestService(t)
-	_, err := svc.ImportSSHKey(context.Background(), []byte("this-is-not-an-ssh-key-at-all"))
+	_, err := svc.ImportSSHKey(context.Background(), []byte("this-is-not-an-ssh-key-at-all"), "")
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("err = %v, want ErrInvalidRequest", err)
 	}
@@ -534,9 +538,106 @@ func TestImportSSHKey_NotAKeyReturnsErrInvalidRequestWithoutEchoingInput(t *test
 
 func TestImportSSHKey_EmptyReturnsErrInvalidRequest(t *testing.T) {
 	svc, _ := openTestService(t)
-	_, err := svc.ImportSSHKey(context.Background(), []byte(""))
+	_, err := svc.ImportSSHKey(context.Background(), []byte(""), "")
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+}
+
+// testEncryptedFixtureKeyPassphrase is the passphrase
+// mustEncryptedFixtureKeyPEM always encrypts with.
+const testEncryptedFixtureKeyPassphrase = "correct horse battery staple"
+
+// mustEncryptedFixtureKeyPEM generates a fresh, throwaway, passphrase-
+// protected ed25519 private key for #269's ImportSSHKey tests: real
+// encrypted key bytes, generated the same Go-native way
+// internal/transport/rclone/ssh_test.go's generateEncryptedClientSSHKeyPair
+// does (x/crypto/ssh's own MarshalPrivateKeyWithPassphrase), rather than
+// shelling out to ssh-keygen. Like testFixtureEd25519Key above, it
+// authorizes access to nothing: no server anywhere trusts its public half.
+func mustEncryptedFixtureKeyPEM(t *testing.T) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "backupsets-test-fixture", []byte(testEncryptedFixtureKeyPassphrase))
+	if err != nil {
+		t.Fatalf("ssh.MarshalPrivateKeyWithPassphrase: %v", err)
+	}
+	return pem.EncodeToMemory(block)
+}
+
+// TestImportSSHKey_EncryptedKeyWithCorrectPassphraseSucceeds is #269's
+// GREEN case for the import endpoint's backing method: a passphrase-
+// protected key, imported with the correct passphrase, is accepted and
+// persisted exactly like an unencrypted one, still encrypted on disk (this
+// method changes nothing about key storage, #298's separate concern).
+func TestImportSSHKey_EncryptedKeyWithCorrectPassphraseSucceeds(t *testing.T) {
+	svc, _ := openTestService(t)
+	raw := mustEncryptedFixtureKeyPEM(t)
+
+	ref, err := svc.ImportSSHKey(context.Background(), raw, testEncryptedFixtureKeyPassphrase)
+	if err != nil {
+		t.Fatalf("ImportSSHKey with the correct passphrase: %v", err)
+	}
+	if ref.ID == "" {
+		t.Error("ID is empty")
+	}
+	if !strings.HasPrefix(ref.Fingerprint, "SHA256:") {
+		t.Errorf("Fingerprint = %q, want a SHA256: prefix", ref.Fingerprint)
+	}
+	persisted, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("ReadFile(KeyFile): %v", err)
+	}
+	if string(persisted) != string(raw) {
+		t.Error("persisted key file content does not match the imported (still encrypted) key")
+	}
+}
+
+// TestImportSSHKey_EncryptedKeyWithNoPassphraseIsRefused is #269's
+// unchanged-refusal case: an encrypted key imported with no passphrase at
+// all still fails exactly as it always has, by name, never silently
+// accepted.
+func TestImportSSHKey_EncryptedKeyWithNoPassphraseIsRefused(t *testing.T) {
+	svc, _ := openTestService(t)
+	raw := mustEncryptedFixtureKeyPEM(t)
+
+	_, err := svc.ImportSSHKey(context.Background(), raw, "")
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+	if !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("error %q does not name the actual problem (passphrase-protected)", err.Error())
+	}
+}
+
+// TestImportSSHKey_EncryptedKeyWithWrongPassphraseIsRefusedAtImport is
+// #269's central acceptance criterion, proven at the service method POST
+// /ssh-keys actually calls: "whatever is added is refused at
+// configuration time rather than at the first cycle" means a wrong
+// passphrase must fail HERE, before anything is persisted, not be
+// accepted and only discovered broken the first time a backup cycle tries
+// to connect.
+func TestImportSSHKey_EncryptedKeyWithWrongPassphraseIsRefusedAtImport(t *testing.T) {
+	svc, configPath := openTestService(t)
+	raw := mustEncryptedFixtureKeyPEM(t)
+
+	_, err := svc.ImportSSHKey(context.Background(), raw, "definitely the wrong passphrase")
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+	if strings.Contains(err.Error(), "definitely the wrong passphrase") {
+		t.Fatalf("error echoed the passphrase back: %v", err)
+	}
+
+	// Nothing was written: a refused import must not leave a key file
+	// behind for a later step to trip over.
+	keysDir := filepath.Join(filepath.Dir(configPath), "ssh_keys")
+	entries, statErr := os.ReadDir(keysDir)
+	if statErr == nil && len(entries) != 0 {
+		t.Fatalf("a refused import still persisted %d file(s) in %s", len(entries), keysDir)
 	}
 }
 

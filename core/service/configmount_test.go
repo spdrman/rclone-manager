@@ -318,7 +318,7 @@ func configWritePaths() []configWritePath {
 			return err
 		}},
 		{"import ssh key", func(t *testing.T, svc *BackupService, f configMountFixture) error {
-			_, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+			_, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 			return err
 		}},
 		{"first-run setup (#176)", func(t *testing.T, svc *BackupService, f configMountFixture) error {

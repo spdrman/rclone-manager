@@ -519,6 +519,81 @@ func TestKeyCommandEmptyExecutableRejected(t *testing.T) {
 	}
 }
 
+// --- #269: key.passphrase.file, key.passphrase.env, key.passphrase.command ---
+
+func TestKeyPassphraseIsOptional(t *testing.T) {
+	cfg := validConfig()
+	// validConfig's Key.Passphrase is already the zero value; Validate
+	// must accept that exactly as it always has, since every config.yaml
+	// written before #269 looks like this.
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a key with no passphrase configured was rejected: %v", err)
+	}
+}
+
+func TestKeyPassphraseExactlyOneSourceAllowed(t *testing.T) {
+	t.Run("file alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{File: "/run/secrets/backup_ssh_key_passphrase"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("env alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Env: "BACKUP_SSH_KEY_PASSPHRASE"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("command alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key-passphrase"}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		passphrase Passphrase
+	}{
+		{"file and env", Passphrase{File: "/a/path", Env: "SOME_VAR"}},
+		{"file and command", Passphrase{File: "/a/path", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+		{"env and command", Passphrase{Env: "SOME_VAR", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+	} {
+		t.Run(tc.name+" together rejected", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = tc.passphrase
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("%s set together were accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestKeyPassphraseCommandExecutableMustBeAbsolute(t *testing.T) {
+	cfg := validConfig()
+	cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"op", "read", "op://infra/backup-manager/private-key-passphrase"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a relative key.passphrase.command executable was accepted")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error %q does not explain the absolute-path requirement", err.Error())
+	}
+}
+
+func TestKeyPassphraseCommandEmptyExecutableRejected(t *testing.T) {
+	cfg := validConfig()
+	cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{""}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a key.passphrase.command with an empty executable was accepted")
+	}
+}
+
 func TestKeyValidateIsIdempotent(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -612,6 +687,7 @@ func TestLocalTypeRejectsSftpFields(t *testing.T) {
 		{"key.file", func(r *Remote) { r.Key = Key{File: "/key"} }},
 		{"key.env", func(r *Remote) { r.Key = Key{Env: "SOME_VAR"} }},
 		{"key.command", func(r *Remote) { r.Key = Key{Command: []string{"/bin/cat", "/dev/null"}} }},
+		{"key.passphrase.env", func(r *Remote) { r.Key = Key{Passphrase: Passphrase{Env: "SOME_VAR"}} }},
 		{"known_hosts", func(r *Remote) { r.KnownHosts = "/known_hosts" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

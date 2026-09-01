@@ -770,30 +770,44 @@ func resolveSSHKeyFileIn(configPath, id string) (string, error) {
 	return path, nil
 }
 
-// ImportSSHKey validates raw as an unencrypted SSH private key (reusing
+// ImportSSHKey validates raw as an SSH private key (reusing
 // internal/transport/rclone.ValidateImportedPrivateKey — the exact check
 // a key.env/key.command resolver's own output already goes through, see
 // that function's doc) and persists it to a dedicated file with 0600
 // permissions, the same trust level docs/ssh-setup.md already assumes
 // for a manually provisioned key.file.
 //
+// passphrase is "" for an unencrypted key, and #269's answer to this
+// method's own acceptance criteria otherwise: when raw is passphrase-
+// protected, passphrase is checked against it right here, at import time,
+// through the exact same validateAndWrapKey verdict a key.file +
+// key.passphrase configuration reaches at connection time — so the two
+// can never disagree about what a usable key is. A wrong passphrase is
+// refused here, before anything is written to disk, rather than accepted
+// and only discovered broken the first time a cycle tries to connect.
+// raw is persisted exactly as given, still passphrase-protected on disk
+// if it was to begin with: this method changes nothing about how an
+// imported key is stored (that is #298's separate concern), only whether
+// an encrypted one is accepted at all and, if so, whether it is proven to
+// actually decrypt before it is trusted.
+//
 // This is the backend half of the wizard's "Import key" step (#98):
 // BackupSetWizardPage.tsx already collects the pasted key client-side and
 // discards it from the page the instant this call returns; raw is never
 // logged, never echoed back, and this process's own copy of it is
 // overwritten immediately after the file write below.
-func (b *BackupService) ImportSSHKey(_ context.Context, raw []byte) (SSHKeyRef, error) {
-	return importSSHKeyInto(b.configPath, raw)
+func (b *BackupService) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (SSHKeyRef, error) {
+	return importSSHKeyInto(b.configPath, raw, passphrase)
 }
 
 // importSSHKeyInto is ImportSSHKey's configPath-only half; see keysDirIn
 // above for why the split exists. A first-run install imports its key
 // through exactly this function, so a fresh instance cannot be talked
 // into persisting material a configured one would refuse.
-func importSSHKeyInto(configPath string, raw []byte) (SSHKeyRef, error) {
+func importSSHKeyInto(configPath string, raw []byte, passphrase string) (SSHKeyRef, error) {
 	// The validated obs.Secret wrapper is not itself what gets persisted:
 	// raw (below) is, once validation confirms it is safe to write.
-	_, algorithm, fingerprint, err := rclone.ValidateImportedPrivateKey(raw)
+	_, algorithm, fingerprint, err := rclone.ValidateImportedPrivateKey(raw, passphrase)
 	if err != nil {
 		return SSHKeyRef{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}

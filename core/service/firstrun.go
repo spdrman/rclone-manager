@@ -183,11 +183,12 @@ func (f *FirstRun) Configured() bool {
 }
 
 // ImportSSHKey is BackupService.ImportSSHKey for an instance that has no
-// BackupService yet: the same validation, the same 0600 file, in the same
-// directory beside the config file, so the key an operator imports during
-// setup is the key the configuration written seconds later points at.
-func (f *FirstRun) ImportSSHKey(_ context.Context, raw []byte) (SSHKeyRef, error) {
-	return importSSHKeyInto(f.defaults.ConfigPath, raw)
+// BackupService yet: the same validation (including #269's passphrase
+// check), the same 0600 file, in the same directory beside the config
+// file, so the key an operator imports during setup is the key the
+// configuration written seconds later points at.
+func (f *FirstRun) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (SSHKeyRef, error) {
+	return importSSHKeyInto(f.defaults.ConfigPath, raw, passphrase)
 }
 
 // ProbeHostKey is BackupService.ProbeHostKey for an unconfigured
