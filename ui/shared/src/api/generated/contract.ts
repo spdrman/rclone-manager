@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "ea34b4847dc9a8afcf139cb3d72a260927f109192f211ef3c9559ca7afb74b3a";
+export const CONTRACT_SHA256 = "0e76129bfbab67d6eda02dd08e4760dd9866abec2570506d82fa877cf4392fb8";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -969,6 +969,19 @@ export interface WireCapabilitiesResponse {
   storage_picker: boolean;
 }
 
+/** FR-21's capacity configuration as it is actually deciding. Every
+ *  number is BYTES: the MB/GB picker beside the field is display only
+ *  and converts at the edge, so nothing on this boundary carries a
+ *  unit. */
+export interface WireCapacitySettings {
+  backup_root: string;
+  backup_root_configured: boolean;
+  cap_bytes: number;
+  critical_free_bytes: number;
+  safety_margin_bytes: number;
+  warning_free_bytes: number;
+}
+
 /** One recovery manifest a catalog pass could not use. */
 export interface WireCatalogFailure {
   backup_set_id: string;
@@ -1118,15 +1131,49 @@ export interface WireListOperationsResponse {
   operations: WireOperation[];
 }
 
-/** GET /system/storage. */
+/** GET /system/storage. The manager-wide reading a dashboard gauge is
+ *  drawn from, plus one entry per configured backup set. */
 export interface WireListStorageStatusResponse {
   backup_sets: WireStorageStatus[];
+  manager: WireManagerStorage;
 }
 
 /** GET /validators. Read-only by design: a client-extensible catalog
  *  would be an arbitrary-command surface. */
 export interface WireListValidatorsResponse {
   validators: WireValidator[];
+}
+
+/** The one manager-wide storage reading: what the backup root's
+ *  filesystem holds, what this manager itself accounts for, and which
+ *  of the two the gauge is a fraction of. Distinct from the
+ *  per-backup-set list beside it, which answers a different question
+ *  and cannot answer this one: a fresh instance has no backup sets,
+ *  two sets on one volume are two entries reporting the same disk,
+ *  and the storage cap is one ceiling for the whole manager. When
+ *  known is false every byte count is 0 and level is empty; render
+ *  that as "capacity is not known yet", never as zero bytes and never
+ *  as a percentage. */
+export interface WireManagerStorage {
+  available_bytes: number;
+  binding_constraint: "" | "disk" | "cap";
+  cap_bytes: number;
+  catalog_bytes: number;
+  catalog_bytes_known: boolean;
+  critical_free_bytes: number;
+  denominator: "disk" | "cap";
+  free_bytes: number;
+  headroom_bytes: number;
+  known: boolean;
+  level: "" | "OK" | "WARNING" | "CRITICAL";
+  limit_bytes: number;
+  measured_path: string;
+  other_bytes: number;
+  other_bytes_known: boolean;
+  total_bytes: number;
+  unknown_reason: "" | "no_backup_root" | "not_created" | "unreadable" | "misconfigured";
+  used_bytes: number;
+  warning_free_bytes: number;
 }
 
 /** One durable operation record. Timestamp fields are omitted, not
@@ -1272,6 +1319,7 @@ export interface WireSetEnabledRequest {
 /** GET and PATCH /settings both return this: the settings now in
  *  effect plus the rules they were validated against. */
 export interface WireSettingsResponse {
+  capacity: WireCapacitySettings;
   retention: WireRetentionSettings;
   schema: WireSettingsSchema;
 }
@@ -1326,6 +1374,17 @@ export interface WireTestConnectionResponse {
   ok: boolean;
 }
 
+/** A PARTIAL capacity update. An omitted field is left exactly as the
+ *  running configuration has it. An explicit 0 is a request, not an
+ *  omission: on this block zero means "no cap" and "no warning line",
+ *  which is why every field is nullable rather than a plain number. */
+export interface WireUpdateCapacitySettings {
+  cap_bytes?: number;
+  critical_free_bytes?: number;
+  safety_margin_bytes?: number;
+  warning_free_bytes?: number;
+}
+
 /** A PARTIAL retention update. An omitted field is left exactly as
  *  the running configuration has it; omitting tiers leaves the chain,
  *  and a legacy file's own spelling of it, untouched. */
@@ -1339,6 +1398,7 @@ export interface WireUpdateRetentionSettings {
 /** PATCH /settings. An enumerated request type, never a configuration
  *  passthrough. */
 export interface WireUpdateSettingsRequest {
+  capacity?: WireUpdateCapacitySettings;
   retention?: WireUpdateRetentionSettings;
 }
 

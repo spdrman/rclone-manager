@@ -20,6 +20,12 @@ type storageFakeBackend struct {
 	*syncFakeBackend
 	statuses  []service.StorageStatus
 	errOnList error
+
+	// The manager-wide reading (issue #286), controlled separately from
+	// the per-set list because the two are different questions and a test
+	// about one must be able to leave the other alone.
+	manager      service.ManagerStorage
+	errOnManager error
 }
 
 func newStorageFakeBackend(statuses ...service.StorageStatus) *storageFakeBackend {

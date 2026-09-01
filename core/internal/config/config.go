@@ -43,7 +43,7 @@ type Config struct {
 	Sources      []Source  `yaml:"sources"`
 	Retention    Retention `yaml:"retention"`
 	Alerts       Alerts    `yaml:"alerts"`
-	Capacity     Capacity  `yaml:"capacity"`
+	Capacity     Capacity  `yaml:"capacity,omitempty"`
 }
 
 // Capacity is FR-21's configuration: how much space this manager is allowed
@@ -90,7 +90,7 @@ type Capacity struct {
 	// disk cannot hold; see that package's "Two different questions"
 	// section for why the refusal fires on whichever of the two is
 	// smaller.
-	CapBytes int64 `yaml:"cap_bytes"`
+	CapBytes int64 `yaml:"cap_bytes,omitempty"`
 
 	// WarningFreeBytes and CriticalFreeBytes are FR-21's two levels,
 	// measured against whatever headroom actually binds: the disk's free
@@ -104,8 +104,8 @@ type Capacity struct {
 	// every storage reading come back "misconfigured" with nothing naming
 	// the two numbers responsible. That rule also means a critical floor
 	// with no warning line is refused: state both, or neither.
-	WarningFreeBytes  int64 `yaml:"warning_free_bytes"`
-	CriticalFreeBytes int64 `yaml:"critical_free_bytes"`
+	WarningFreeBytes  int64 `yaml:"warning_free_bytes,omitempty"`
+	CriticalFreeBytes int64 `yaml:"critical_free_bytes,omitempty"`
 
 	// SafetyMarginBytes is held back on top of every incoming artifact's
 	// own size before a transfer is admitted. See internal/capacity's
@@ -113,7 +113,7 @@ type Capacity struct {
 	// drift, block rounding, other writers on the same volume) and for why
 	// it is deliberately a plain byte count this product does not try to
 	// compute on an operator's behalf.
-	SafetyMarginBytes int64 `yaml:"safety_margin_bytes"`
+	SafetyMarginBytes int64 `yaml:"safety_margin_bytes,omitempty"`
 
 	// BackupRoot names the one directory whose filesystem the manager-wide
 	// storage reading is taken from.
@@ -134,7 +134,7 @@ type Capacity struct {
 	// reporting nothing because nobody would notice; so the derivation
 	// gives up instead, and this field is how an operator answers when it
 	// does.
-	BackupRoot string `yaml:"backup_root"`
+	BackupRoot string `yaml:"backup_root,omitempty"`
 }
 
 // EffectiveBackupRoot is the directory whose filesystem a manager-wide

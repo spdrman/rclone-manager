@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "ea34b4847dc9a8afcf139cb3d72a260927f109192f211ef3c9559ca7afb74b3a"
+const ContractSHA256 = "0e76129bfbab67d6eda02dd08e4760dd9866abec2570506d82fa877cf4392fb8"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -741,6 +741,19 @@ type CapabilitiesResponse struct {
 	StoragePicker       bool   `json:"storage_picker"`
 }
 
+// CapacitySettings is FR-21's capacity configuration as it is actually deciding. Every
+// number is BYTES: the MB/GB picker beside the field is display only
+// and converts at the edge, so nothing on this boundary carries a
+// unit.
+type CapacitySettings struct {
+	BackupRoot           string `json:"backup_root"`
+	BackupRootConfigured bool   `json:"backup_root_configured"`
+	CapBytes             int64  `json:"cap_bytes"`
+	CriticalFreeBytes    int64  `json:"critical_free_bytes"`
+	SafetyMarginBytes    int64  `json:"safety_margin_bytes"`
+	WarningFreeBytes     int64  `json:"warning_free_bytes"`
+}
+
 // CatalogFailure is one recovery manifest a catalog pass could not use.
 type CatalogFailure struct {
 	BackupSetID string `json:"backup_set_id"`
@@ -892,15 +905,49 @@ type ListOperationsResponse struct {
 	Operations []Operation `json:"operations"`
 }
 
-// ListStorageStatusResponse is GET /system/storage.
+// ListStorageStatusResponse is GET /system/storage. The manager-wide reading a dashboard gauge is
+// drawn from, plus one entry per configured backup set.
 type ListStorageStatusResponse struct {
 	BackupSets []StorageStatus `json:"backup_sets"`
+	Manager    ManagerStorage  `json:"manager"`
 }
 
 // ListValidatorsResponse is GET /validators. Read-only by design: a client-extensible catalog
 // would be an arbitrary-command surface.
 type ListValidatorsResponse struct {
 	Validators []Validator `json:"validators"`
+}
+
+// ManagerStorage is the one manager-wide storage reading: what the backup root's
+// filesystem holds, what this manager itself accounts for, and which
+// of the two the gauge is a fraction of. Distinct from the
+// per-backup-set list beside it, which answers a different question
+// and cannot answer this one: a fresh instance has no backup sets,
+// two sets on one volume are two entries reporting the same disk,
+// and the storage cap is one ceiling for the whole manager. When
+// known is false every byte count is 0 and level is empty; render
+// that as "capacity is not known yet", never as zero bytes and never
+// as a percentage.
+type ManagerStorage struct {
+	AvailableBytes    uint64 `json:"available_bytes"`
+	BindingConstraint string `json:"binding_constraint"`
+	CapBytes          uint64 `json:"cap_bytes"`
+	CatalogBytes      uint64 `json:"catalog_bytes"`
+	CatalogBytesKnown bool   `json:"catalog_bytes_known"`
+	CriticalFreeBytes uint64 `json:"critical_free_bytes"`
+	Denominator       string `json:"denominator"`
+	FreeBytes         uint64 `json:"free_bytes"`
+	HeadroomBytes     uint64 `json:"headroom_bytes"`
+	Known             bool   `json:"known"`
+	Level             string `json:"level"`
+	LimitBytes        uint64 `json:"limit_bytes"`
+	MeasuredPath      string `json:"measured_path"`
+	OtherBytes        uint64 `json:"other_bytes"`
+	OtherBytesKnown   bool   `json:"other_bytes_known"`
+	TotalBytes        uint64 `json:"total_bytes"`
+	UnknownReason     string `json:"unknown_reason"`
+	UsedBytes         uint64 `json:"used_bytes"`
+	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
 }
 
 // Operation is one durable operation record. Timestamp fields are omitted, not
@@ -1046,6 +1093,7 @@ type SetEnabledRequest struct {
 // SettingsResponse is GET and PATCH /settings both return this: the settings now in
 // effect plus the rules they were validated against.
 type SettingsResponse struct {
+	Capacity  CapacitySettings  `json:"capacity"`
 	Retention RetentionSettings `json:"retention"`
 	Schema    SettingsSchema    `json:"schema"`
 }
@@ -1100,6 +1148,17 @@ type TestConnectionResponse struct {
 	OK      bool   `json:"ok"`
 }
 
+// UpdateCapacitySettings is A PARTIAL capacity update. An omitted field is left exactly as the
+// running configuration has it. An explicit 0 is a request, not an
+// omission: on this block zero means "no cap" and "no warning line",
+// which is why every field is nullable rather than a plain number.
+type UpdateCapacitySettings struct {
+	CapBytes          *int64 `json:"cap_bytes"`
+	CriticalFreeBytes *int64 `json:"critical_free_bytes"`
+	SafetyMarginBytes *int64 `json:"safety_margin_bytes"`
+	WarningFreeBytes  *int64 `json:"warning_free_bytes"`
+}
+
 // UpdateRetentionSettings is A PARTIAL retention update. An omitted field is left exactly as
 // the running configuration has it; omitting tiers leaves the chain,
 // and a legacy file's own spelling of it, untouched.
@@ -1113,6 +1172,7 @@ type UpdateRetentionSettings struct {
 // UpdateSettingsRequest is PATCH /settings. An enumerated request type, never a configuration
 // passthrough.
 type UpdateSettingsRequest struct {
+	Capacity  *UpdateCapacitySettings  `json:"capacity"`
 	Retention *UpdateRetentionSettings `json:"retention"`
 }
 
@@ -1152,6 +1212,7 @@ var SchemaTypes = map[string]any{
 	"BackupSetHealth":             BackupSetHealth{},
 	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
+	"CapacitySettings":            CapacitySettings{},
 	"CatalogFailure":              CatalogFailure{},
 	"CatalogReportResponse":       CatalogReportResponse{},
 	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
@@ -1173,6 +1234,7 @@ var SchemaTypes = map[string]any{
 	"ListOperationsResponse":      ListOperationsResponse{},
 	"ListStorageStatusResponse":   ListStorageStatusResponse{},
 	"ListValidatorsResponse":      ListValidatorsResponse{},
+	"ManagerStorage":              ManagerStorage{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
 	"RetentionPlan":               RetentionPlan{},
@@ -1190,6 +1252,7 @@ var SchemaTypes = map[string]any{
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
 	"TestConnectionResponse":      TestConnectionResponse{},
+	"UpdateCapacitySettings":      UpdateCapacitySettings{},
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},
 	"UpdateSettingsRequest":       UpdateSettingsRequest{},
 	"Validator":                   Validator{},
