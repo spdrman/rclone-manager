@@ -38,7 +38,7 @@ export function CatalogRecoveryPage({ readOnly }: { readOnly: boolean }) {
             metadata and checksums only.
           </p>
           <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-            <span aria-hidden="true" style={{ color: "var(--ok)" }}>\u2713</span>
+            <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
             <span>No files will be deleted, moved, or modified by a scan or a rebuild.</span>
           </div>
           <div>

@@ -180,10 +180,10 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <KV label="Daily" value={s.retention.daily + " kept"} />
               <KV label="Weekly" value={s.retention.weekly + " kept"} />
               <KV label="Monthly" value={s.retention.monthly + " kept"} />
-              <KV label="Timezone \u00b7 week start" value={s.retention.timezone + " \u00b7 " + s.retention.weekStartsOn} />
+              <KV label={"Timezone \u00b7 week start"} value={s.retention.timezone + " \u00b7 " + s.retention.weekStartsOn} />
               {s.retention.protectLastKnownGood ? (
                 <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-                  <span aria-hidden="true" style={{ color: "var(--ok)" }}>\u2713</span>
+                  <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
                   <span>Newest known-good backup is protected from deletion</span>
                 </div>
               ) : null}
