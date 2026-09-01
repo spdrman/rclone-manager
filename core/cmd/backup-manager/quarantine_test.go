@@ -44,7 +44,7 @@ func stageQuarantinedArtifact(t *testing.T, configPath, name string, corrupt boo
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	set, err := model.NewBackupSetID("production", "postgres-primary")
 	if err != nil {
@@ -167,6 +167,32 @@ func TestRun_QuarantineRevalidateRefusesAHealthyArtifact(t *testing.T) {
 	args := []string{"quarantine", "--config", configPath, "revalidate", "production/postgres-primary/backup.dump"}
 	if got := run(args); got == 0 {
 		t.Errorf("run(%v) on a COMMITTED (never-quarantined) artifact = 0, want non-zero", args)
+	}
+}
+
+// TestRun_QuarantineAcceptsFlagsOnEitherSideOfItsOperands mirrors issue
+// #188's own fix for `validate` (TestRun_ValidateAcceptsFlagsOnEitherSideOfItsOperand):
+// `quarantine` takes TWO operands (a verb and an artifact id), not one, but
+// parseFlagsAroundOperands (setup.go) is the identical mechanism, so
+// --config has to work before, between and after them.
+func TestRun_QuarantineAcceptsFlagsOnEitherSideOfItsOperands(t *testing.T) {
+	configPath := writeQuarantineTestConfig(t)
+	id := stageQuarantinedArtifact(t, configPath, "flag-order.dump", false)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"the flag before both operands", []string{"quarantine", "--config", configPath, "revalidate", id.String()}},
+		{"the flag between the two operands", []string{"quarantine", "revalidate", "--config", configPath, id.String()}},
+		{"the flag after both operands", []string{"quarantine", "revalidate", id.String(), "--config", configPath}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := run(tc.args); got != 0 {
+				t.Errorf("run(%v) = %d, want 0", tc.args, got)
+			}
+		})
 	}
 }
 

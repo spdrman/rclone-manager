@@ -222,11 +222,13 @@ is the identical outcome (a real, readable `known_hosts` file) through tools eve
 with already.
 
 **Quarantine actions and settings were the two gaps #277 found real, and both now have a
-command:** see [Quarantine](#quarantine) above for `quarantine revalidate`, `quarantine
-retry` and `quarantine reinstate`, and [Retention](#retention) area's `backup-manager
-settings` / `backup-manager settings patch` for the FR-18/FR-19/FR-21 settings surface. A
-full retention tier-chain replacement stays a config-file edit; everything else about
-retention and capacity is reachable through `settings patch` without a restart.
+command.** See [Quarantine](#quarantine) above for `quarantine revalidate`, `quarantine
+retry` and `quarantine reinstate`. `backup-manager settings` reports the live, resolved
+FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
+table above has both), and `backup-manager settings patch [flags]` changes one in place,
+hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
+replacement stays a config-file edit; every other retention and capacity field is reachable
+through `settings patch` without a restart.
 
 **What is not covered here: authentication and account management.** `/auth/enroll`,
 `/auth/login` and `/auth/password` are genuinely out of scope for a CLI wrapper, not merely
