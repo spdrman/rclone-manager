@@ -390,5 +390,298 @@ class TestWhatCountsAsInstalled(unittest.TestCase):
         self.assertFalse(self.verdict("running healthy", 502, (200, "")))
 
 
+
+# ---------------------------------------------------------------------
+# Bridge networking (issue #271)
+# ---------------------------------------------------------------------
+
+# The real filter table from the UGREEN NAS this was diagnosed on, trimmed
+# to the chains that matter. It is a fixture rather than an invention
+# because the shape is the finding: the host firewall's own chain is jumped
+# to from inside DOCKER-USER, ahead of everything Docker put there, and its
+# last rule is a blanket DROP. An invented fixture would have been a
+# DOCKER-USER DROP, which is the case everyone expects and not the one that
+# was actually there.
+REAL_RULESET_BEFORE = """Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination
+1      14M   54G UG_SSH_INPUT  0    --  *      *       0.0.0.0/0            0.0.0.0/0
+2      13M   53G UG_INPUT   0    --  *      *       0.0.0.0/0            0.0.0.0/0
+
+Chain FORWARD (policy DROP 0 packets, 0 bytes)
+num   pkts bytes target     prot opt in     out     source               destination
+1      169 10236 DOCKER-USER  0    --  *      *       0.0.0.0/0            0.0.0.0/0
+2        0     0 DOCKER-FORWARD  0    --  *      *       0.0.0.0/0            0.0.0.0/0
+3        0     0 UG_FORWARD  0    --  *      *       0.0.0.0/0            0.0.0.0/0
+
+Chain DOCKER (1 references)
+num   pkts bytes target     prot opt in     out     source               destination
+1        0     0 DROP       0    --  !docker0 docker0  0.0.0.0/0            0.0.0.0/0
+
+Chain DOCKER-USER (1 references)
+num   pkts bytes target     prot opt in     out     source               destination
+1      169 10236 UG_FORWARD  0    --  *      *       0.0.0.0/0            0.0.0.0/0
+2        0     0 RETURN     0    --  *      *       0.0.0.0/0            0.0.0.0/0
+
+Chain DOCKER-ISOLATION-STAGE-1 (0 references)
+num   pkts bytes target     prot opt in     out     source               destination
+
+Chain UG_FORWARD (3 references)
+num   pkts bytes target     prot opt in     out     source               destination
+1        0     0 ACCEPT     0    --  lo     *       0.0.0.0/0            0.0.0.0/0
+2        0     0 ACCEPT     0    --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED
+3        0     0 RETURN     0    --  eth0   *       192.168.0.0/24       0.0.0.0/0
+4      169 10236 DROP       0    --  *      *       0.0.0.0/0            0.0.0.0/0
+
+Chain UG_INPUT (1 references)
+num   pkts bytes target     prot opt in     out     source               destination
+1    1426K  270M ACCEPT     0    --  lo     *       0.0.0.0/0            0.0.0.0/0
+4      12M   52G ACCEPT     0    --  *      *       0.0.0.0/0            0.0.0.0/0            ctstate RELATED,ESTABLISHED
+7     3997  494K DROP       0    --  *      *       0.0.0.0/0            0.0.0.0/0
+"""
+
+# The same table after three pings to the gateway and a handful of SYNs to
+# an external endpoint. UG_INPUT rule 7 moves by 3, UG_FORWARD rule 4 by 6.
+REAL_RULESET_AFTER = (REAL_RULESET_BEFORE
+                      .replace("4      169 10236 DROP", "4      175 10596 DROP")
+                      .replace("7     3997  494K DROP", "7     4000  494K DROP"))
+
+
+class TestToolLookup(unittest.TestCase):
+    def test_a_privileged_tool_is_found_even_when_PATH_excludes_sbin(self):
+        """The mistake that made an earlier diagnosis of this host useless.
+
+        `iptables` and `nft` were reported absent because the probe ran as
+        a non-root account whose PATH has no /sbin, and the whole firewall
+        section of that report was empty as a result. That section held
+        the answer.
+        """
+        real_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = "/nonexistent"
+        self.addCleanup(lambda: os.environ.__setitem__("PATH", real_path))
+        found = installer.find_tool("sh")
+        self.assertIsNotNone(found, "sh lives on the privileged PATH and must be found with PATH gutted")
+        self.assertTrue(found.startswith("/"), f"must be an absolute path: {found}")
+
+    def test_the_privileged_path_actually_contains_sbin(self):
+        self.assertIn("/sbin", installer.PRIVILEGED_PATH.split(":"))
+        self.assertIn("/usr/sbin", installer.PRIVILEGED_PATH.split(":"))
+
+
+class TestCounterParsing(unittest.TestCase):
+    def test_abbreviated_counters_are_not_read_as_zero(self):
+        """iptables prints 12M and 494K, and the busiest DROP on a NAS is
+        exactly the one that gets abbreviated. A parse that returned 0 for
+        those would make the guilty rule look idle."""
+        self.assertEqual(installer._int_or_zero("3997"), 3997)
+        self.assertEqual(installer._int_or_zero("494K"), 494000)
+        self.assertEqual(installer._int_or_zero("12M"), 12000000)
+        self.assertEqual(installer._int_or_zero("54G"), 54000000000)
+        self.assertEqual(installer._int_or_zero("nonsense"), 0)
+
+    def test_the_ruleset_parses_chains_policies_and_drops(self):
+        r = installer.Ruleset(REAL_RULESET_BEFORE)
+        self.assertEqual(r.policies["FORWARD"], "DROP")
+        self.assertEqual(r.policies["INPUT"], "ACCEPT")
+        for chain in installer.DOCKER_CHAINS:
+            self.assertIn(chain, r.chains, f"{chain} is in the fixture and must parse")
+        drops = r.drops()
+        self.assertIn(("UG_FORWARD", 4), drops)
+        self.assertIn(("UG_INPUT", 7), drops)
+        self.assertEqual(drops[("UG_FORWARD", 4)]["packets"], 169)
+        self.assertEqual(drops[("UG_INPUT", 7)]["packets"], 3997)
+
+
+class TestCounterDeltaNamesTheRule(unittest.TestCase):
+    """The mechanism the whole feature rests on.
+
+    Reading the ruleset and reasoning about it is inference, and on this
+    host inference got it wrong twice: once blaming a missing binary, once
+    blaming forwarding and NAT when half the fault was in INPUT. The delta
+    across generated traffic is measurement.
+    """
+
+    def deltas(self, before_text, after_text):
+        before, after = installer.Ruleset(before_text), installer.Ruleset(after_text)
+        moved = []
+        for key, rule in after.drops().items():
+            delta = rule["packets"] - before.drops().get(key, {"packets": 0})["packets"]
+            if delta > 0:
+                moved.append((rule, delta))
+        moved.sort(key=lambda item: item[1], reverse=True)
+        return moved
+
+    def test_both_offending_rules_are_named_with_their_deltas(self):
+        moved = self.deltas(REAL_RULESET_BEFORE, REAL_RULESET_AFTER)
+        named = {(r["chain"], r["num"]): d for r, d in moved}
+        self.assertEqual(named, {("UG_FORWARD", 4): 6, ("UG_INPUT", 7): 3},
+                         "both chains have to be named: the gateway ping is INPUT and the external "
+                         "connection is FORWARD, and a fix aimed at one leaves the other standing")
+
+    def test_a_quiet_ruleset_names_nothing(self):
+        """The negative control. If no counter moves, the installer must
+        refuse to correct anything rather than apply its default guess."""
+        self.assertEqual(self.deltas(REAL_RULESET_BEFORE, REAL_RULESET_BEFORE), [])
+
+
+class TestRemediationIsSafe(unittest.TestCase):
+    """Every one of these is a way to lock somebody out of a NAS reachable
+    only over SSH, asserted as absent rather than avoided by care."""
+
+    def doctor(self):
+        fx = Fixture(self)
+        args = fx.args()
+        d = installer.BridgeDoctor(args)
+        d.iptables = "/sbin/iptables"
+        return d
+
+    def test_nothing_flushes_changes_a_policy_or_restores_a_ruleset(self):
+        d = self.doctor()
+        for script in (d.insert_script(), d.delete_script()):
+            for forbidden in (" -F", " --flush", " -P ", " --policy", "iptables-restore", " -X", " -Z"):
+                self.assertNotIn(forbidden, script,
+                                 f"{forbidden!r} can take the SSH session with it: {script}")
+
+    def test_every_rule_is_interface_scoped_and_never_a_blanket_accept(self):
+        d = self.doctor()
+        for chain, spec in d.rule_specs():
+            self.assertIn("-i", spec, f"{chain} rule is not scoped to an interface: {spec}")
+            iface = spec[spec.index("-i") + 1]
+            self.assertIn(iface, installer.DOCKER_BRIDGE_MATCHES,
+                          f"{iface} is not one of Docker's own bridges")
+
+    def test_the_forward_rule_returns_rather_than_accepts(self):
+        """An ACCEPT in DOCKER-USER ends the FORWARD traversal and takes
+        Docker's inter-network isolation with it. This project's whole
+        topology is that the engine is reachable only from the Web UI
+        because they share a network nothing else joins, so an ACCEPT here
+        would quietly undo the security property the deployment is built
+        on. RETURN hands the decision back to Docker's own chains."""
+        d = self.doctor()
+        for chain, spec in d.rule_specs():
+            if chain == "DOCKER-USER":
+                self.assertEqual(spec[-1], "RETURN",
+                                 "an ACCEPT here bypasses DOCKER-ISOLATION and un-isolates every "
+                                 "user-defined network on the host")
+
+    def test_every_rule_carries_the_tag_so_it_can_be_found_again(self):
+        d = self.doctor()
+        for chain, spec in d.rule_specs():
+            self.assertIn(installer.RULE_TAG, spec, f"{chain} rule is not removable: {spec}")
+
+    def test_insertion_checks_before_it_inserts(self):
+        """Idempotence by construction. Re-running must not stack
+        duplicates, and `iptables -C` is the only thing that can say
+        whether the exact rule is already there."""
+        d = self.doctor()
+        lines = [ln for ln in d.insert_script().splitlines() if "iptables" in ln]
+        self.assertTrue(lines)
+        for line in lines:
+            self.assertIn(" -C ", line, f"inserts without checking first: {line}")
+            self.assertIn("||", line, f"the insert is not conditional on the check: {line}")
+
+    def test_deletion_removes_only_tagged_rules(self):
+        d = self.doctor()
+        for line in d.delete_script().splitlines():
+            if "-D" in line:
+                self.assertIn(installer.RULE_TAG, line,
+                              f"a delete that does not name the tag can remove somebody else's rule: {line}")
+
+    def test_insert_and_delete_describe_the_same_rules(self):
+        d = self.doctor()
+        ins = {ln.split(" -I ")[1] for ln in d.insert_script().splitlines() if " -I " in ln}
+        dele = {ln.split(" -D ")[1].split(" || ")[0] for ln in d.delete_script().splitlines() if " -D " in ln}
+        self.assertEqual({i.replace(" 1 ", " ", 1) for i in ins}, dele,
+                         "anything the installer adds it has to be able to take back")
+
+
+class TestSudoRefusals(unittest.TestCase):
+    """Three problems, three exit codes. They call for completely
+    different reactions and a shared code cannot tell them apart."""
+
+    def test_each_failure_mode_maps_to_its_own_code(self):
+        s = installer.Sudo(sudo_path="/usr/bin/sudo")
+        cases = [
+            ("sudo: no tty present and no askpass program specified", installer.EXIT_SUDO_NO_TTY),
+            # The wording the UGREEN's own sudo actually used. It shares no
+            # distinctive word with the line above, so a classifier written
+            # from memory misses it and reports a generic runtime failure
+            # for the one case that has an obvious remedy.
+            ("sudo: a terminal is required to read the password; either use the -S option to read "
+             "from standard input or configure an askpass helper", installer.EXIT_SUDO_NO_TTY),
+            ("rom is not in the sudoers file.  This incident will be reported.",
+             installer.EXIT_SUDO_NOT_PERMITTED),
+            ("Sorry, try again.\nsudo: 3 incorrect password attempts",
+             installer.EXIT_SUDO_WRONG_PASSWORD),
+            ("something nobody predicted", installer.EXIT_RUNTIME),
+        ]
+        seen = set()
+        for stderr, want in cases:
+            got = s.classify(stderr)
+            self.assertEqual(got, want, f"{stderr!r} classified as {got}, want {want}")
+            seen.add(got)
+        self.assertEqual(len(seen), 4, "the inputs must produce four distinct codes")
+
+    def test_a_missing_sudo_refuses_rather_than_raising(self):
+        s = installer.Sudo(sudo_path=None)
+        s.sudo = None
+        exc = refusal_from(s.run_script, "true\n", purpose="test")
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_SUDO_NOT_PERMITTED)
+        self.assertIn("--fix-network=never", exc.remedy)
+
+
+class TestHealthyHostIsANoOp(unittest.TestCase):
+    def test_a_working_host_changes_nothing_and_never_escalates(self):
+        fx = Fixture(self)
+        args = fx.args("--fix-network", "auto")
+
+        class ExplodingSudo(installer.Sudo):
+            def run_script(self, script, *, purpose, timeout=300):
+                raise AssertionError("a healthy host must never ask for a password")
+
+        real_probe = installer.BridgeDoctor.probe
+        real_image = installer.BridgeDoctor.ensure_probe_image
+        installer.BridgeDoctor.probe = lambda self, net: {
+            "gateway": True, "egress": True, "gateway_ip": "172.17.0.1", "raw": ""}
+        installer.BridgeDoctor.ensure_probe_image = lambda self: None
+        self.addCleanup(lambda: setattr(installer.BridgeDoctor, "probe", real_probe))
+        self.addCleanup(lambda: setattr(installer.BridgeDoctor, "ensure_probe_image", real_image))
+
+        outcome = installer.diagnose_and_fix(args, "bridge", sudo=ExplodingSudo())
+        self.assertTrue(outcome["healthy"])
+        self.assertFalse(outcome["changed"], "a healthy host must not be modified")
+
+    def test_fix_network_never_refuses_on_a_broken_host_without_escalating(self):
+        fx = Fixture(self)
+        args = fx.args("--fix-network", "never")
+
+        class ExplodingSudo(installer.Sudo):
+            def run_script(self, script, *, purpose, timeout=300):
+                raise AssertionError("--fix-network=never must touch no firewall")
+
+        real_probe = installer.BridgeDoctor.probe
+        real_image = installer.BridgeDoctor.ensure_probe_image
+        installer.BridgeDoctor.probe = lambda self, net: {
+            "gateway": False, "egress": False, "gateway_ip": "172.17.0.1", "raw": ""}
+        installer.BridgeDoctor.ensure_probe_image = lambda self: None
+        self.addCleanup(lambda: setattr(installer.BridgeDoctor, "probe", real_probe))
+        self.addCleanup(lambda: setattr(installer.BridgeDoctor, "ensure_probe_image", real_image))
+
+        exc = refusal_from(installer.diagnose_and_fix, args, "bridge", sudo=ExplodingSudo())
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_NETWORK_BROKEN)
+
+
+class TestProbeDefaultsCarryNothingPrivate(unittest.TestCase):
+    """The egress probe opens a real connection, so its default target is
+    part of the shipped source. It must be a neutral public endpoint and
+    never a host this project happens to back up."""
+
+    def test_the_default_probe_target_is_generic(self):
+        args = Fixture(self).args()
+        self.assertEqual(args.probe_host, "1.1.1.1")
+        self.assertEqual(args.probe_port, 443)
+
+
 if __name__ == "__main__":
     unittest.main()
