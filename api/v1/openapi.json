@@ -1857,10 +1857,11 @@
           },
           "halt_reason": {
             "type": "string",
-            "description": "Why the manager could not connect to this backup set the last time it tried, so no backup ran. HOST_KEY_CHANGED is FR-6's refusal, the host's SSH key no longer matching its known_hosts entry; AUTHENTICATION_FAILED is the host answering and rejecting the login. Absent means no refusal is on record, which is NOT the same claim as the set being reachable: a set that has never been cycled has nothing on record either, and that asymmetry is why this is an optional reason rather than a halted boolean. The refusal is recorded by the cycle that hit it and removed only by a later cycle that ran the set to completion, because re-trusting a changed host key is an explicit administrator action and a cycle that failed for some other reason is not evidence the key verifies again. Reporting it never re-trusts a key, retries a connection, or resumes a set.",
+            "description": "Why the manager could not connect to this backup set the last time it tried, so no backup ran. HOST_KEY_CHANGED is FR-6's refusal, the host's SSH key no longer matching its known_hosts entry; AUTHENTICATION_FAILED is the host answering and rejecting the login; KEY_PERMISSIONS is a refusal that never reaches the host at all, the configured key's on-disk permissions no longer matching what it was imported with. Absent means no refusal is on record, which is NOT the same claim as the set being reachable: a set that has never been cycled has nothing on record either, and that asymmetry is why this is an optional reason rather than a halted boolean. The refusal is recorded by the cycle that hit it and removed only by a later cycle that ran the set to completion, because re-trusting a changed host key is an explicit administrator action and a cycle that failed for some other reason is not evidence the key verifies again. Reporting it never re-trusts a key, retries a connection, or resumes a set.",
             "enum": [
               "HOST_KEY_CHANGED",
-              "AUTHENTICATION_FAILED"
+              "AUTHENTICATION_FAILED",
+              "KEY_PERMISSIONS"
             ],
             "x-go-omitempty": true
           },

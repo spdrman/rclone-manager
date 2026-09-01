@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "87084b268650ad7c4997174b07db0a9e419f2cdc768aa3b855d9b651d8a52afc";
+export const CONTRACT_SHA256 = "a06e76c4792631fee7a4f2036c3a94f3e5e0c58fe1686d255183f92ce2b2a4d1";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -911,7 +911,7 @@ export interface WireBackupSetHealth {
   failures: number;
   free_bytes?: number;
   free_bytes_known: boolean;
-  halt_reason?: "HOST_KEY_CHANGED" | "AUTHENTICATION_FAILED";
+  halt_reason?: "HOST_KEY_CHANGED" | "AUTHENTICATION_FAILED" | "KEY_PERMISSIONS";
   last_completed_backup_at?: string;
   newest_good_backup_at?: string;
   pending_deletes: number;

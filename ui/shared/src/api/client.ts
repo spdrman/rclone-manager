@@ -581,7 +581,8 @@ const HEALTH_STATE: Record<string, SystemHealth["backupHealth"]> = {
  */
 const HALT_REASON: Record<string, BackupSet["haltReason"]> = {
   HOST_KEY_CHANGED: "host-key-changed",
-  AUTHENTICATION_FAILED: "authentication-failed"
+  AUTHENTICATION_FAILED: "authentication-failed",
+  KEY_PERMISSIONS: "key-permissions"
 };
 
 const HOUR_MS = 3_600_000;
