@@ -126,6 +126,22 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
     expect(banner.textContent).not.toMatch(/SSH host key/i);
   });
 
+  // Second defect in the same report (issue #285): DashboardPage.tsx used
+  // to pass one hardcoded action, "Review fingerprint", regardless of
+  // haltReason, so a rejected-credential halt offered a button for a
+  // problem it did not have. A fingerprint has nothing to do with a
+  // rejected login, and HaltBanner's own doc is the rule this breaks:
+  // actions are for navigating to the evidence, and there is no
+  // fingerprint evidence to navigate to here. The right fix is no
+  // action, not a relabelled one — an action naming the wrong remedy
+  // sends an operator to check the wrong thing.
+  it("offers no action for a rejected login, rather than the host-key one", async () => {
+    renderDashboard([await setFixture({ haltReason: "authentication-failed" })]);
+
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("button", { name: "Review fingerprint" })).toBeNull();
+  });
+
   it("the dashboard raises nothing when no set carries a reason", async () => {
     renderDashboard([await setFixture()]);
 
