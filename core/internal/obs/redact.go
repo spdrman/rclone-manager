@@ -21,7 +21,11 @@ type Endpoint struct {
 
 // Redactor filters a RENDERED string, substituting redacted for every
 // occurrence of an Endpoint's host, port and account identity it was built
-// from.
+// from — including, for a Host that is a DNS hostname rather than an IP
+// literal, every address that hostname resolves to (see add and
+// resolveHost): a dial failure's error text carries the resolved address,
+// never the configured hostname, so redacting only the literal Host string
+// would leave a DNS-configured endpoint's real address unredacted.
 //
 // # Why the rendered string, not the code path
 //
