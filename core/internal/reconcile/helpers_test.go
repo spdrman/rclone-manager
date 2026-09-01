@@ -178,6 +178,17 @@ func driveTo(t *testing.T, j *state.Journal, p driveParams) state.Record {
 		return out.Record
 	}
 
+	if p.stopAt == lifecycle.RemoteRetained {
+		out, err = j.RecordTransition(ctx, state.Transition{
+			Artifact: p.artifact, Key: nextKey(), From: string(lifecycle.Committed), To: string(lifecycle.RemoteRetained),
+			OccurredAt: now(),
+		})
+		if err != nil {
+			t.Fatalf("-> REMOTE_RETAINED: %v", err)
+		}
+		return out.Record
+	}
+
 	out, err = j.RecordTransition(ctx, state.Transition{
 		Artifact: p.artifact, Key: nextKey(), From: string(lifecycle.Committed), To: string(lifecycle.RemoteDeletePending),
 		OccurredAt: now(),

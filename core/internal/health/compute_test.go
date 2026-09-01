@@ -344,3 +344,46 @@ func TestMultipleBackupSetsInputsStayIndependent(t *testing.T) {
 		}
 	}
 }
+
+// TestRemoteRetainedCountsAsKnownGoodAndIsCounted is issue #282's health
+// proof: a read-only backup set whose only artifact ever reaches
+// REMOTE_RETAINED (never COMPLETE, by design) must still read HEALTHY, not
+// STALE -- the whole point of the feature is that this manager keeps
+// producing valid backups it will simply never delete the remote copy
+// of -- and ReadOnlyRetainedCount must report it, the way
+// ReinstatedRemoteRetainedCount already reports #227's shape.
+func TestRemoteRetainedCountsAsKnownGoodAndIsCounted(t *testing.T) {
+	now := time.Now().UTC()
+	records := []state.Record{
+		rec("a.dump", lifecycle.RemoteRetained, now.Add(-2*day), now.Add(-time.Hour)),
+	}
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
+
+	if got.State != Healthy {
+		t.Fatalf("State = %s, want %s: a read-only set with a fresh REMOTE_RETAINED backup is exactly as healthy as one with a fresh COMPLETE backup (reason: %s)", got.State, Healthy, got.Reason)
+	}
+	if got.NewestGoodBackupAt == nil {
+		t.Fatalf("NewestGoodBackupAt should be set for REMOTE_RETAINED")
+	}
+	if got.LastCompletedBackupAt != nil {
+		t.Fatalf("LastCompletedBackupAt should stay nil for REMOTE_RETAINED (not COMPLETE), got %v", got.LastCompletedBackupAt)
+	}
+	if got.ReadOnlyRetainedCount != 1 {
+		t.Fatalf("ReadOnlyRetainedCount = %d, want 1", got.ReadOnlyRetainedCount)
+	}
+}
+
+// TestReadOnlyRetainedCountDefaultsZero pins the regression this whole
+// issue depends on at the health layer too: a backup set that has never
+// retained anything reports zero, the same silent default every existing
+// deployment already reads.
+func TestReadOnlyRetainedCountDefaultsZero(t *testing.T) {
+	now := time.Now().UTC()
+	records := []state.Record{
+		rec("a.dump", lifecycle.Complete, now.Add(-2*day), now.Add(-time.Hour)),
+	}
+	got := ComputeBackupSetHealth(testSet, records, nil, day, BackupSetInputs{}, now)
+	if got.ReadOnlyRetainedCount != 0 {
+		t.Fatalf("ReadOnlyRetainedCount = %d, want 0", got.ReadOnlyRetainedCount)
+	}
+}

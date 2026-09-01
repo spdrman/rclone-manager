@@ -319,6 +319,7 @@ func TestGFSDecideOnlyConsidersManagedCompleteStates(t *testing.T) {
 		strings.ToLower(string(lifecycle.Committed)):           true,
 		strings.ToLower(string(lifecycle.RemoteDeletePending)): true,
 		strings.ToLower(string(lifecycle.Complete)):            true,
+		strings.ToLower(string(lifecycle.RemoteRetained)):      true,
 	}
 	if len(got) != len(wantEligible) {
 		t.Fatalf("got %d verdicts, want %d (one per managed-complete state); got=%+v", len(got), len(wantEligible), got)
@@ -329,13 +330,13 @@ func TestGFSDecideOnlyConsidersManagedCompleteStates(t *testing.T) {
 		}
 	}
 
-	// Complete is discovered latest of the three (see AllStates order), so
-	// within the shared daily bucket it wins; Committed and
-	// RemoteDeletePending are eligible (they appear above) but lose that
-	// bucket and are correctly not kept.
-	completeName := strings.ToLower(string(lifecycle.Complete))
+	// RemoteRetained is discovered latest of the four eligible states (see
+	// AllStates order), so within the shared daily bucket it wins;
+	// Committed, RemoteDeletePending and Complete are eligible (they
+	// appear above) but lose that bucket and are correctly not kept.
+	winnerName := strings.ToLower(string(lifecycle.RemoteRetained))
 	for _, v := range got {
-		want := v.Artifact.Name == completeName
+		want := v.Artifact.Name == winnerName
 		if v.Keep != want {
 			t.Errorf("artifact %q: Keep = %v, want %v", v.Artifact.Name, v.Keep, want)
 		}

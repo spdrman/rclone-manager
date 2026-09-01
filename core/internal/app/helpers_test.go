@@ -80,6 +80,14 @@ type fakeTransport struct {
 	// every backup set that happens to use it.
 	failForSourceID string
 	failErr         error
+
+	// poison, when set, makes DeleteRemote fail the test the instant it is
+	// called, rather than merely counting the call for a later assertion.
+	// Issue #282's own acceptance criterion asks for proof "not by
+	// asserting a refusal": a double that fails as soon as it is invoked
+	// is the strongest form of that this package can build, stronger than
+	// a post-hoc deleteCallCount() check.
+	poison *testing.T
 }
 
 func newFakeTransport() *fakeTransport {
@@ -152,6 +160,9 @@ func (f *fakeTransport) RemoteHash(ctx context.Context, source transport.Source,
 
 func (f *fakeTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
 	atomic.AddInt32(&f.deleteRemoteCalls, 1)
+	if f.poison != nil {
+		f.poison.Fatalf("fakeTransport.DeleteRemote(%q) was called; this test's backup set must never reach the transport's delete", remotePath)
+	}
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}

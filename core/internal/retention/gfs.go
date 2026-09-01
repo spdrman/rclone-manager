@@ -255,10 +255,19 @@ func (v GFSVerdict) tierNames() []GFSTier {
 // left to recover from, and lifecycle's package doc is explicit that
 // leaving it requires an operator to act rather than another automatic
 // decision, GFS math included.
+//
+// RemoteRetained (issue #282) is included for the same reason Committed
+// is: it means the durable local backup already succeeded, exactly as
+// much a completed backup as Complete is, just with the remote copy kept
+// by policy rather than deleted. Excluding it would make GFS's view of
+// "what backups exist" for a read-only set depend on a remote-delete step
+// that set will never take, which is the same category error the
+// Committed paragraph above already rules out for the ordinary case.
 var gfsManagedCompleteStates = map[lifecycle.State]bool{
 	lifecycle.Committed:           true,
 	lifecycle.RemoteDeletePending: true,
 	lifecycle.Complete:            true,
+	lifecycle.RemoteRetained:      true,
 }
 
 func gfsIsManagedComplete(raw string) bool {

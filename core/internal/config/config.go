@@ -267,6 +267,20 @@ type State struct {
 type Source struct {
 	Name       string      `yaml:"id"`
 	BackupSets []BackupSet `yaml:"backup_sets"`
+
+	// ReadOnly is issue #282's source-level default for every backup set
+	// declared under this source: "pull from here, never delete here".
+	// It exists at this level, and not only per set, because read-only-ness
+	// is normally a property of the whole host (a production machine an
+	// engagement is only allowed to read from), not of one particular
+	// backup set on it; grouping sources the way these deployments actually
+	// are means declaring it once here covers every set under it without
+	// repeating the flag per set.
+	//
+	// A set's own BackupSet.ReadOnlyConfig, when set, overrides this
+	// default; see that field's doc for the full precedence rule and
+	// Validate for where the two are resolved into BackupSet.ReadOnly.
+	ReadOnly bool `yaml:"read_only,omitempty"`
 }
 
 // BackupSet is one stream of logically interchangeable restore points
@@ -298,6 +312,51 @@ type BackupSet struct {
 	// running today, written before this field existed, keeps running
 	// unchanged after an upgrade.
 	Disabled bool `yaml:"disabled"`
+
+	// ReadOnlyConfig is issue #282's per-set override of the parent
+	// Source's ReadOnly default: "pull from here, never delete here",
+	// declared for this one backup set specifically. It is a pointer, not
+	// a plain bool, because the three-way choice it has to express -- "not
+	// set here, inherit the source's default", "explicitly read-only
+	// regardless of the source default", "explicitly NOT read-only
+	// regardless of the source default" -- has no honest two-value
+	// encoding: a plain bool's zero value (false) could never be told
+	// apart from an operator who typed `read_only: false` on purpose to
+	// carve one set out of an otherwise read-only source.
+	//
+	// This field is never read directly outside Validate. Every other
+	// consumer in this codebase reads the resolved ReadOnly field below,
+	// exactly as every consumer of a backup set's identity reads ID rather
+	// than reassembling it from Name and a parent Source, so "did this
+	// come from Validate yet" is never a question call sites have to ask
+	// twice.
+	ReadOnlyConfig *bool `yaml:"read_only,omitempty"`
+
+	// ReadOnly is the fully-resolved answer to "may this backup set's
+	// remote source ever be deleted", filled in by Validate from
+	// ReadOnlyConfig (when set) or the parent Source's ReadOnly default
+	// (otherwise) -- the same before/after-Validate discipline ID follows.
+	// An unvalidated BackupSet reads false here regardless of what YAML
+	// said, same as an unresolved ID reads "".
+	//
+	// With this true, FR-15's whole delete step never runs for this set:
+	// core/internal/app's pipeline calls lifecycle.RetainRemote instead of
+	// lifecycle.DeleteRemote, so transport.Transport.DeleteRemote is never
+	// invoked, full stop, rather than merely being asked and refused (see
+	// internal/lifecycle/remotedelete.go's package doc for why "usually
+	// refuses" is not the same promise, and issue #282 for the deployment
+	// that made the difference matter). An artifact that reaches
+	// COMMITTED under a read-only set is routed to the REMOTE_RETAINED
+	// terminal state instead of REMOTE_DELETE_PENDING -> COMPLETE.
+	//
+	// The default (false, including by omission of both this field and the
+	// source's) is unchanged from every configuration written before this
+	// field existed: FR-15's delete step runs exactly as it always has.
+	// This cannot be inferred from a set's own history -- a source that
+	// has never had a successful delete has told this package nothing
+	// either way -- so it is only ever set by an explicit yaml key, never
+	// derived.
+	ReadOnly bool `yaml:"-"`
 
 	Validation   Validation   `yaml:"validation"`
 	Revalidation Revalidation `yaml:"revalidation"`
