@@ -44,11 +44,21 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * they came to read and is heading somewhere else, and hovering or
  * focusing the field brings it straight back.
  *
+ * A changed VALUE puts it away too, on the same "you acted on this
+ * control" reasoning as a click, and for a reason a click alone does not
+ * cover: focusing a field opens its help, and a paste, an autofill, or a
+ * script's own .fill() can change a field's value without ever dispatching
+ * a click. Found on the wizard's private-key field, a multi-row textarea
+ * tall enough that its own pop-up, opened purely by that focus, reached
+ * down over the button below it, a control a keyboard-only path into the
+ * field left uncoverable by mouse until something else dismissed the help
+ * first.
+ *
  * That does not make the overlay disappear as a property, and the residue
  * is worth stating rather than discovering: a pointer that arrives
- * directly on a covered control, without having clicked the field first,
- * still lands on the pop-up. Nothing short of giving up click-to-pin fixes
- * that, and click-to-pin is the feature.
+ * directly on a covered control, without having clicked or edited the
+ * field first, still lands on the pop-up. Nothing short of giving up
+ * click-to-pin fixes that, and click-to-pin is the feature.
  *
  * # Accessibility, which the interaction spec does not cover
  *
@@ -208,6 +218,20 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
         // the dismissal it also records. That ordering is what makes a
         // touch tap work too, since a tap is a pointerdown that pins
         // followed by a click that lands here.
+        setDismissed(true);
+      }}
+      onChange={() => {
+        // The same "acting on the control puts its help away" rule as
+        // onClick above, for the one way a control changes value WITHOUT a
+        // click ever firing: a paste that lands via keyboard, a browser
+        // autofill, or Playwright's own .fill(), all of which set the
+        // value and dispatch input/change directly. Found the hard way, on
+        // a multi-row textarea (the wizard's private-key field) tall
+        // enough that its own pop-up, opened by the FOCUS .fill() does
+        // cause, reached down over the button beneath it: a keyboard-only
+        // path into the field left that button uncoverable by mouse until
+        // something else dismissed the help first. onChange closes that
+        // gap the same way onClick already closes it for a mouse.
         setDismissed(true);
       }}
       onPointerDown={(event) => {

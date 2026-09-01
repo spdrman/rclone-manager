@@ -263,7 +263,7 @@ export const FIELD_HELP = {
     what: "How this backup set authenticates to the remote server. Only one of the three choices actually lets you finish this wizard today.",
     example: "Import key",
     effect:
-      "Generate dedicated SSH key and Use managed key each open a panel below, but neither is wired to a save yet: choosing either one and clicking any Save button is refused, with a message telling you to import a key instead. Import key is the only choice that lets Save succeed, once a key is imported below and the host is trusted on the next step."
+      "The first two options above each open their own panel below, but neither is wired to a save yet: picking either one and clicking any Save button is refused, with a message pointing you at the third option instead. That one is the one that actually lets Save succeed, once its key is imported below and the host is trusted on the next step."
   },
 
   wizardPrivateKey: {
@@ -291,7 +291,7 @@ export const FIELD_HELP = {
     what: "How Backup Manager decides a remote file has finished being written, rather than still being uploaded by its producer (FR-8).",
     example: "Completion marker / manifest",
     effect:
-      "Atomic rename and Completion marker both wait for a positive signal from whatever writes the file; one that never gets renamed, or never gets its marker, is never treated as complete and is never backed up, no matter how long it sits there. Stable file size / timestamp instead infers completion once a file has looked unchanged for a period fixed at one hour, which this wizard doesn't let you adjust; it exists for a producer that can't signal completion at all, and it's a weaker guarantee than the other two."
+      "Atomic rename and Completion marker both wait for a positive signal from whatever writes the file; one that never gets renamed, or never gets its marker, is never treated as complete and is never backed up, no matter how long it sits there. Stable file size / timestamp instead treats a file as done once it has looked unchanged for a period fixed at one hour, rather than waiting for a signal from the producer, which this wizard doesn't let you adjust; it exists for a producer that can't signal completion at all, and it's a weaker guarantee than the other two."
   },
 
   wizardNasDestination: {
@@ -312,6 +312,6 @@ export const FIELD_HELP = {
     what: "Confirms you understand when this backup set deletes the copy on the remote server, not just that a backup of it now exists here.",
     example: "check it once you've read the sequence above",
     effect:
-      "Every Save button on this page stays disabled until this is checked, alongside a trusted host and an imported key: it's a structural gate, not a formality. Checking it deletes nothing by itself; a remote copy is only ever removed after that specific artifact has been transferred, verified, durably committed to this NAS, and recorded as safe (FR-15)."
+      "Every Save button on this page stays disabled until this is checked, alongside a trusted host and an imported key: it's a structural gate, not a formality. Checking it deletes nothing by itself; the remote copy is only removed once that specific artifact has cleared every step in the sequence shown above, never earlier (FR-15)."
   }
 } as const satisfies Record<string, FieldHelpCopy>;

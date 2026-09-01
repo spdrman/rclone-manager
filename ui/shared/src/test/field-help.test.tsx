@@ -245,6 +245,31 @@ describe("FieldHelp pop-up", () => {
     expect(popup()).toBeVisible();
   });
 
+  it("gets out of the way when the control's value changes without any click at all", () => {
+    render(<Harness />);
+
+    // Found on the wizard's private-key textarea: focusing a field opens
+    // its help, and a paste, a browser autofill, or a script's own
+    // .fill() changes the field's value by dispatching input/change
+    // directly, never a click. Without this, a pop-up opened purely by
+    // focus can sit open indefinitely over whatever the operator reaches
+    // for next, since nothing else was ever going to dismiss it.
+    fireEvent.focus(field());
+    expect(popup()).toBeVisible();
+
+    fireEvent.change(field(), { target: { value: "14" } });
+    expect(popup()).not.toBeVisible();
+  });
+
+  it("keeps a pinned pop-up up when the control's value changes", () => {
+    render(<Harness />);
+
+    tap(field());
+    fireEvent.change(field(), { target: { value: "14" } });
+
+    expect(popup()).toBeVisible();
+  });
+
   it("associates all three parts of the copy with the field, and nothing else", () => {
     render(<Harness />);
 
