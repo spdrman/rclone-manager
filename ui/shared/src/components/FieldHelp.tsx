@@ -23,17 +23,32 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * the pinned state, and getting that wrong is exactly how a pop-up ends up
  * stuck on screen.
  *
- * `dismissed` is what all three exits set, and it is also what clicking
- * the control itself sets. It is the one that is easy to leave out and is
- * not optional.
- * Without it, closing a pinned pop-up while the pointer is still over the
- * input immediately re-opens it as a hover pop-up, so the close control and
+ * `dismissed` is set by all three exits, and also by clicking the control
+ * itself. It is the one that is easy to leave out and is not optional:
+ * without it, closing a pinned pop-up while the pointer is still over the
+ * input re-opens it instantly as a hover pop-up, so the close control and
  * Escape both appear to do nothing. It is cleared on the next thing that
- * asks for the pop-up rather than on the next thing that would hide it: a
+ * ASKS for the pop-up rather than on the next thing that would hide it: a
  * pointer arriving, focus arriving, or a touch tap. Clearing it on the way
- * out as well reads like belt and braces and is not — nothing can observe
- * `dismissed` while neither the pointer nor the focus is here, so a clear
- * there is a line no test can fail on.
+ * out as well reads like belt and braces and is not, because nothing can
+ * observe it while neither the pointer nor the focus is here.
+ *
+ * # It is an overlay, so it has to get out of the way
+ *
+ * The pop-up is absolutely positioned over the page and takes pointer
+ * events, which it must, since clicking it is how it gets pinned. The cost
+ * is that while it is up it covers, and swallows the clicks meant for,
+ * whatever sits below the field: on these forms that is the Save button,
+ * the Sign in button, the next row of the chain. So clicking the control
+ * puts its own help away. That is the moment the operator has read what
+ * they came to read and is heading somewhere else, and hovering or
+ * focusing the field brings it straight back.
+ *
+ * That does not make the overlay disappear as a property, and the residue
+ * is worth stating rather than discovering: a pointer that arrives
+ * directly on a covered control, without having clicked the field first,
+ * still lands on the pop-up. Nothing short of giving up click-to-pin fixes
+ * that, and click-to-pin is the feature.
  *
  * # Accessibility, which the interaction spec does not cover
  *
@@ -57,8 +72,9 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  *   - Touch. There is no hover to detect, so a touch pointerdown pins
  *     directly. That is the only sensible reading of "hover shows, click
  *     pins" on a phone: one tap, and the pop-up stays until it is dismissed.
- *     A mouse pointerdown deliberately does nothing here, so clicking into
- *     a field to type does not leave a pop-up pinned over the next field.
+ *     A MOUSE pointerdown deliberately does nothing, so clicking into a
+ *     field to type puts the help away instead of pinning it over whatever
+ *     the operator is about to click next.
  *   - The close control has an accessible name naming its field ("Close
  *     help for Keep"), not a bare glyph. That name is visually hidden TEXT
  *     inside the button rather than an aria-label on it, which is not a
@@ -74,7 +90,12 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * Hiding uses the `hidden` attribute rather than unmounting, so the pop-up
  * keeps one stable id for aria-describedby across every state change, and
  * so the close button inside it is not focusable while the pop-up is not
- * on screen.
+ * on screen. That attribute gets its display: none from the user-agent
+ * stylesheet, which any author `display` on the same element overrides, so
+ * design-system/components.css has to re-assert it and does; without that
+ * one rule every pop-up on the page is permanently open. It is asserted
+ * from the shipped stylesheet in this component's suite, because a stubbed
+ * stylesheet cannot tell the difference.
  */
 
 /** How a caller renders its own control: it must put `helpId` on the

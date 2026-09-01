@@ -79,14 +79,14 @@ export const FIELD_HELP = {
     what: "The password set for that Backup Manager account when it was created, or the one it was last rotated to.",
     example: "a passphrase of at least 12 characters",
     effect:
-      "A match starts a signed-in session in this browser and opens the dashboard. A miss is reported as one combined failure, so a wrong username and a wrong password cannot be told apart from the message."
+      "A match starts a signed-in session in this browser and replaces this form with the application. A miss is reported as one combined failure, so a wrong username and a wrong password cannot be told apart from the message, and repeated attempts from one address are rate limited rather than answered faster."
   },
 
   enrollUsername: {
     what: "The name for the administrator account you are creating now. This is the first-run step, and it is separate from your NAS operating-system account.",
     example: "backup-admin",
     effect:
-      "Creates that account on this NAS and signs you in as it. This is the name you will type on every later sign-in, so it is worth picking one you will recognise months from now in an audit trail."
+      "Creates that account on this NAS and signs you straight in as it. Enrolment is single-shot: once an administrator exists the endpoint refuses another, so this is the name for every later sign-in unless the credential store is reset at the host."
   },
 
   enrollPassword: {
@@ -144,7 +144,7 @@ export const FIELD_HELP = {
     what: "This tier's identifier. Lower_snake_case, starting with a letter, and unique within the chain.",
     example: "fortnightly",
     effect:
-      "This is the name you will be shown later when you ask why a backup survived: a kept backup is reported as kept by FORTNIGHTLY in the retention preview and in every KEEP verdict. It is a label, not a rule, so renaming a tier changes nothing about what it keeps. last_known_good is reserved, because that name already means the protected backup rather than a tier selection."
+      "This is the name you are shown later when you ask why a backup survived: the retention preview badges a backup this tier keeps as Fortnightly, over a verdict that carries FORTNIGHTLY. It is a label, not a rule, so renaming a tier changes nothing about what it keeps. last_known_good is reserved, because that name already means the protected backup rather than a tier selection."
   },
 
   tierGranularity: {
