@@ -11,11 +11,11 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 // author `display` on the same element overrides it. Without the
 // .fieldhelp__pop[hidden] rule, every pop-up on a real page is permanently
 // open, covering the control beneath it and swallowing clicks meant for
-// it — and with a stubbed stylesheet, nothing here notices.
+// it, and with a stubbed stylesheet nothing here notices.
 import "@shared/design-system/components.css";
 
 /**
- * Issue #278 — the help pop-up's interaction, state by state and
+ * Issue #278: the help pop-up's interaction, state by state and
  * transition by transition.
  *
  * There are four visible states (hidden, hover-shown, pinned, dismissed)
@@ -25,7 +25,7 @@ import "@shared/design-system/components.css";
  * anything: the copy is three sentences and a pop-up that vanishes when
  * the pointer moves cannot be read. So every transition gets its own case,
  * and the pinning ones assert the negative that a naive implementation
- * gets wrong — the pop-up is STILL there after the pointer has left.
+ * gets wrong: the pop-up is STILL there after the pointer has left.
  *
  * The keyboard and screen-reader cases are here for the same reason. Hover
  * is not available to either, and a help affordance only a mouse can reach

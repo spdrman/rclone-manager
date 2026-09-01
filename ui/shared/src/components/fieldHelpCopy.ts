@@ -1,5 +1,5 @@
 /**
- * Issue #278 — what every explained input in this UI actually says.
+ * Issue #278: what every explained input in this UI actually says.
  *
  * # Three parts, and the third is the point
  *

@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 
 /**
- * Issue #278 — the explanatory pop-up an input carries, and the four states
+ * Issue #278: the explanatory pop-up an input carries, and the four states
  * it can be in.
  *
  * # The interaction
@@ -195,9 +195,9 @@ export function FieldHelp({ label, help, children, style }: FieldHelpProps) {
       onClick={() => {
         // Acting on the control puts its help away. This is not cosmetic:
         // the pop-up is a real overlay, so while it is up it covers, and
-        // takes the clicks meant for, whatever sits below the field —
-        // which in these forms is the Save button, the Sign in button, the
-        // next row. Once the operator has clicked the control they have
+        // takes the clicks meant for, whatever sits below the field, which
+        // in these forms is the Save button, the Sign in button or the next
+        // row of the chain. Once the operator has clicked the control they have
         // read what they were going to read and are on their way somewhere
         // else, so this is the moment to get out of that way. Hovering or
         // focusing the field again brings it straight back.

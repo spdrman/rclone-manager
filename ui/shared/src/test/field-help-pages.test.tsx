@@ -19,7 +19,7 @@ import type { BackupSet } from "@shared/types/backup";
 import type { VersionInfo } from "@shared/types/operation";
 
 /**
- * Issue #278 — the page wiring, as distinct from the component.
+ * Issue #278: the page wiring, as distinct from the component.
  *
  * FieldHelp's own suite proves the pop-up behaves. This proves each field
  * is actually attached to one, and to the RIGHT one: the failure this
