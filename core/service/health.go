@@ -68,7 +68,8 @@ type BackupSetHealth struct {
 
 	// HaltReason is why the manager could not connect to this backup set
 	// the last time it tried: "HOST_KEY_CHANGED", "AUTHENTICATION_FAILED",
-	// or empty when no refusal is on record (issue #245).
+	// "KEY_PERMISSIONS" (issue #293), or empty when no refusal is on
+	// record (issue #245).
 	//
 	// Empty means "no refusal has been observed", never "this set is
 	// reachable". Those are different claims, and only the first one is
