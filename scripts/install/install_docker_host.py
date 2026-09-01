@@ -39,10 +39,13 @@ condition:
     than refusing to start (issue #176).
 
 So `install` succeeds when Docker reports the engine healthy by its own
-probe AND the Web UI answers AND what it answers with is the first-run
-flow. Anything less is reported as a verification failure with its own
-exit code, and the stack is left up for inspection rather than torn down
-under you.
+probe, AND the Web UI serves its bundle, AND a request through the Web UI
+reaches the engine. The third is separate from the second because a real
+install proved they are different claims: on a UGREEN NAS whose Docker
+cannot pass container-originated traffic, the bundle served perfectly and
+not one API call could get through. Anything less is a verification
+failure with its own exit code, and the stack is left up for inspection
+rather than torn down under you.
 
 # Credentials
 
@@ -703,8 +706,12 @@ def probe_web_ui(args, timeout: int):
             with urllib.request.urlopen(base + "/health/ready", timeout=5) as resp:
                 result["ready"] = (resp.status, resp.read(2048).decode("utf-8", "replace"))
         except urllib.error.HTTPError as exc:
+            # A status is a status. 503 not_ready is the right answer for
+            # an unconfigured instance and proves the whole path works.
             result["ready"] = (exc.code, exc.read(2048).decode("utf-8", "replace"))
         except (urllib.error.URLError, OSError) as exc:
+            # Not a status. The request did not complete, which is what a
+            # broken proxy hop looks like from here.
             result["ready"] = ("unreachable", str(exc))
         return result
     return result
@@ -783,17 +790,44 @@ def cmd_install(args) -> int:
     say(f"     index:  {web['index']}")
     say(f"     ready:  {web['ready']}")
 
+    # Three conditions, and the third is the one a real install taught me
+    # to add. On a UGREEN NAS all of this came up healthy, the Web UI
+    # answered 200, and the installer said "Installed." It was not: that
+    # host's Docker cannot pass container-originated traffic, so the Web
+    # UI could serve its own static bundle and could not reach the engine
+    # for a single API call. An operator would have found that out from a
+    # page that loads and then fails everything.
+    #
+    # The static bundle and the proxy are different claims, so they are
+    # checked separately. /health/ready is the cheapest request that has
+    # to travel the whole path, and its STATUS does not matter here: 503
+    # not_ready is the correct answer for a fresh install (issue #176) and
+    # is a pass. What fails is not reaching the engine at all.
     ok_health = health.endswith("healthy")
     ok_web = web["index"] == 200
-    if not (ok_health and ok_web):
+    ok_proxy = isinstance(web["ready"], tuple) and isinstance(web["ready"][0], int)
+    if not (ok_health and ok_web and ok_proxy):
+        remedy = (
+            f"The stack is left up on purpose. Read it with:\n"
+            f"  {' '.join(compose_argv(args))} logs --tail=100"
+        )
+        if ok_health and ok_web and not ok_proxy:
+            remedy = (
+                "The Web UI serves its own bundle and cannot reach the engine, so every API call from the\n"
+                "browser will hang. That hop is container to container over the compose network, and the\n"
+                "usual cause is the host, not this deployment: check whether ANY container on this machine\n"
+                "can open a TCP connection, with\n"
+                "  docker run --rm --network " + args.project + "_internal alpine wget -T5 -O- http://rclone-manager:8080/health/live\n"
+                "A host whose bridge networking cannot pass container-originated traffic cannot run this\n"
+                "deployment, and cannot reach an SFTP source either, so fixing it is not optional."
+            )
         raise Refusal(
             EXIT_VERIFY,
             "the stack started but did not reach the state that counts as installed:\n"
-            f"  engine liveness: {health}\n"
-            f"  web ui:          {web['index']}\n"
-            f"  readiness:       {web['ready']}",
-            f"The stack is left up on purpose. Read it with:\n"
-            f"  {' '.join(compose_argv(args))} logs --tail=100",
+            f"  engine liveness:       {health}\n"
+            f"  web ui static bundle:  {web['index']}\n"
+            f"  web ui -> engine:      {web['ready']}",
+            remedy,
         )
 
     say("")

@@ -316,5 +316,38 @@ class TestRendering(unittest.TestCase):
         self.assertEqual((args.prefix / "compose.yaml").read_bytes(), CANONICAL_COMPOSE.read_bytes())
 
 
+class TestWhatCountsAsInstalled(unittest.TestCase):
+    """The success condition, which a real install had to correct.
+
+    The installer reported success on a host where the Web UI served its
+    own bundle and could not reach the engine for a single API call. That
+    host's Docker cannot pass container-originated traffic, so every page
+    would load and then fail. These pin the three conditions apart, and in
+    particular pin that a 503 from an unconfigured engine is a PASS (issue
+    #176 makes that the correct answer) while a request that never
+    completed is not.
+    """
+
+    def verdict(self, health, index, ready):
+        ok_health = health.endswith("healthy")
+        ok_web = index == 200
+        ok_proxy = isinstance(ready, tuple) and isinstance(ready[0], int)
+        return ok_health and ok_web and ok_proxy
+
+    def test_a_fresh_install_answering_503_not_ready_is_installed(self):
+        self.assertTrue(self.verdict("running healthy", 200, (503, '{"status":"not_ready"}')))
+
+    def test_a_web_ui_that_cannot_reach_the_engine_is_not_installed(self):
+        self.assertFalse(self.verdict("running healthy", 200, ("unreachable", "timed out")),
+                         "a bundle that serves and a proxy that hangs is the exact shape the UGREEN "
+                         "install had, and it was reported as success")
+
+    def test_an_unhealthy_engine_is_not_installed(self):
+        self.assertFalse(self.verdict("running starting", 200, (503, "")))
+
+    def test_a_web_ui_that_does_not_serve_is_not_installed(self):
+        self.assertFalse(self.verdict("running healthy", 502, (200, "")))
+
+
 if __name__ == "__main__":
     unittest.main()
