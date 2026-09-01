@@ -742,8 +742,15 @@ func cmdAuthCreateAdmin(args []string) int {
 		return fail(fmt.Errorf("auth create-admin: %w", err))
 	}
 
-	fmt.Fprintf(os.Stdout, "backup-manager-web: administrator %q created in %s. Start the server normally - it will see this account already exists and will not print or accept an enrollment bootstrap token.\n",
-		admin.Username, *authStorePath)
+	// errcheck's default exclusions cover a diagnostic write to
+	// os.Stderr (every other message in this file), not a write to
+	// os.Stdout like this one, which is this command's actual
+	// machine/operator-facing output rather than a log line - so its
+	// error is checked explicitly rather than silently ignored.
+	if _, err := fmt.Fprintf(os.Stdout, "backup-manager-web: administrator %q created in %s. Start the server normally - it will see this account already exists and will not print or accept an enrollment bootstrap token.\n",
+		admin.Username, *authStorePath); err != nil {
+		return fail(fmt.Errorf("auth create-admin: writing confirmation: %w", err))
+	}
 	return 0
 }
 
