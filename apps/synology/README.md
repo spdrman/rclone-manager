@@ -67,11 +67,11 @@ Then:
 
 ```sh
 cd apps/synology
-go run ./cmd/spkctl build --arch amd64 --version 1.0.0-1 \
+go run ./cmd/spkctl build --arch amd64 --version 0.1.0-1 \
     --binaries ../../release/amd64 \
     --ui-bundle ../../ui/shared/dist-bundles/synology \
     --out ../../dist
-go run ./cmd/spkctl verify --spk ../../dist/BackupManager-x86_64-1.0.0-1.spk \
+go run ./cmd/spkctl verify --spk ../../dist/BackupManager-x86_64-0.1.0-1.spk \
     --manifest ../../container/release-manifest.json
 ```
 

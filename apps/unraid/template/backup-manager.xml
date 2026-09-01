@@ -31,7 +31,7 @@
 -->
 <Container version="2">
   <Name>backup-manager</Name>
-  <Repository>ghcr.io/spdrman/backup-manager:1.0.0</Repository>
+  <Repository>ghcr.io/spdrman/backup-manager:0.1.0</Repository>
   <Registry>https://github.com/spdrman/rclone-manager/pkgs/container/backup-manager</Registry>
   <Network>backup-manager</Network>
   <MyIP/>

@@ -74,7 +74,7 @@ records no identity:
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity-regexp '^https://github.com/spdrman/rclone-manager/\.github/workflows/release\.yml@refs/tags/' \
-  ghcr.io/spdrman/backup-manager:1.0.0
+  ghcr.io/spdrman/backup-manager:0.1.0
 ```
 
 The SBOM is attached as an attestation over the same digest
