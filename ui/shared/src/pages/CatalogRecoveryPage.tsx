@@ -69,25 +69,25 @@ export function CatalogRecoveryPage({ readOnly }: { readOnly: boolean }) {
           instance has not been given yet.
         </EmptyState>
       ) : (
-      <section className="card">
-        <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Existing backup data detected</div>
-          <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
-            Backup files were found in the configured storage location, but they are not
-            currently present in the Backup Manager catalog. Scanning reads file
-            metadata and checksums only.
-          </p>
-          <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-            <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
-            <span>No files will be deleted, moved, or modified by a scan or a rebuild.</span>
+        <section className="card">
+          <div className="card__body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ fontSize: 15, fontWeight: 600 }}>Existing backup data detected</div>
+            <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "74ch" }}>
+              Backup files were found in the configured storage location, but they are not
+              currently present in the Backup Manager catalog. Scanning reads file
+              metadata and checksums only.
+            </p>
+            <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+              <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
+              <span>No files will be deleted, moved, or modified by a scan or a rebuild.</span>
+            </div>
+            <div>
+              <button className="btn btn--primary" disabled={readOnly || scanning} onClick={scan}>
+                {scanning ? "Scanning backup storage…" : "Scan backup storage"}
+              </button>
+            </div>
           </div>
-          <div>
-            <button className="btn btn--primary" disabled={readOnly || scanning} onClick={scan}>
-              {scanning ? "Scanning backup storage…" : "Scan backup storage"}
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
       )}
 
       {preview ? (
