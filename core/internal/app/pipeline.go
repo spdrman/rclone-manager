@@ -288,9 +288,27 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 }
 
 // processArtifacts drives every one of records forward via processArtifact
-// and reports how many ended this call in FAILED or QUARANTINED: a
-// business outcome, not the systemic reconcile/discover failure a
-// caller's own Err field already tracks separately.
+// and reports how many ended this call in FAILED, QUARANTINED or
+// QUARANTINED_LOST: a business outcome, not the systemic reconcile/
+// discover failure a caller's own Err field already tracks separately.
+//
+// records is always listed fresh from the journal after this cycle's own
+// FR-17 reconcile pass has already run and written whatever it decided
+// (processBackupSet in cycle.go, and Fetch in fetch.go, both list after
+// reconciling), so a record reconciliation itself just moved to
+// QUARANTINED or QUARANTINED_LOST -- a previously-durable artifact whose
+// local copy turned out corrupted or missing, discovered by a
+// reconciliation pass that otherwise succeeded -- already carries that
+// state by the time it reaches processArtifact here. processArtifact's
+// own switch has no case for an already-terminal state, so it takes no
+// further action and simply reports the state back; this function's own
+// switch is what turns that into a counted failure. This is issue #283's
+// second half (a High finding from PR #303's own adversarial review): a
+// cycle where reconciliation alone discovered an irrecoverable loss, with
+// no new transfer/verify/commit failure of its own, must count as failed
+// too, since a successful reconciliation pass finding rot is a stronger
+// case for a non-zero exit than a single artifact this cycle's own
+// pipeline quarantined.
 //
 // RunCycle (processBackupSet, below) and Fetch (fetch.go) both walk their
 // backup set's in-flight journal rows this exact same way and both need
@@ -307,7 +325,7 @@ func (s *Service) processArtifacts(ctx context.Context, source transport.Source,
 			break
 		}
 		switch s.processArtifact(ctx, source, bs, rec) {
-		case lifecycle.Failed, lifecycle.Quarantined:
+		case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
 			failed++
 		}
 	}

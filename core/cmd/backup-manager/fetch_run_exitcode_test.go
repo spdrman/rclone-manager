@@ -128,6 +128,63 @@ func TestRun_FetchExitsZeroOnACleanCycle(t *testing.T) {
 	}
 }
 
+// TestRun_FetchExitsNonZeroWhenReconciliationFindsAnIrrecoverableLoss is
+// the adversarial review's High finding on PR #303: `fetch`'s own
+// reconcile pass, run before discovery and before this cycle's own
+// forward pipeline, can discover on its own that a previously-durable
+// artifact's local final copy has gone missing after its remote source
+// was already cleaned up -- COMPLETE -> QUARANTINED_LOST, total,
+// permanent loss of that restore point. Reconcile itself returns no error
+// for this (finding and recording the loss is reconciliation doing its
+// job correctly), so before this fix a cron-scheduled fetch that hit this
+// exact case still exited 0.
+func TestRun_FetchExitsNonZeroWhenReconciliationFindsAnIrrecoverableLoss(t *testing.T) {
+	configPath := writeTestConfig(t)
+
+	// First fetch drives the one seeded artifact all the way to COMPLETE:
+	// local final copy durable, remote source already deleted.
+	if got := run([]string{"fetch", "--config", configPath, "--source", "production", "--backup-set", "postgres-primary"}); got != 0 {
+		t.Fatalf("precondition: first fetch = %d, want 0 (a clean cycle)", got)
+	}
+
+	localFinal := filepath.Join(filepath.Dir(configPath), "local", "backup.dump")
+	if err := os.Remove(localFinal); err != nil {
+		t.Fatalf("corrupting the durable local copy: %v", err)
+	}
+
+	// Second fetch has nothing new to discover on the remote (already
+	// deleted), but reconciliation finds the durable local copy gone with
+	// the remote already confirmed gone too, an irrecoverable loss
+	// discovered during an otherwise successful reconciliation pass.
+	var got int
+	out := captureStdout(t, func() {
+		got = run([]string{"fetch", "--config", configPath, "--source", "production", "--backup-set", "postgres-primary"})
+	})
+	if got == 0 {
+		t.Errorf("fetch exit code = 0, want non-zero: reconciliation just discovered this artifact's only remaining copy is gone (QUARANTINED_LOST).\nstdout:\n%s", out)
+	}
+}
+
+// TestRun_RunExitsNonZeroWhenReconciliationFindsAnIrrecoverableLoss is the
+// same repro through `run`, the multi-set sibling `fetch` is meant to
+// agree with (see TestRun_FetchAndRunAgreeOnAFailedCycle above).
+func TestRun_RunExitsNonZeroWhenReconciliationFindsAnIrrecoverableLoss(t *testing.T) {
+	configPath := writeTestConfig(t)
+
+	if got := run([]string{"run", "--config", configPath}); got != 0 {
+		t.Fatalf("precondition: first run = %d, want 0 (a clean cycle)", got)
+	}
+
+	localFinal := filepath.Join(filepath.Dir(configPath), "local", "backup.dump")
+	if err := os.Remove(localFinal); err != nil {
+		t.Fatalf("corrupting the durable local copy: %v", err)
+	}
+
+	if got := run([]string{"run", "--config", configPath}); got == 0 {
+		t.Error("run exit code = 0, want non-zero: reconciliation just discovered this artifact's only remaining copy is gone (QUARANTINED_LOST)")
+	}
+}
+
 // TestRun_FetchDryRunExitsZeroRegardlessOfJournalHistory is issue #283's
 // fourth acceptance criterion: --dry-run inspects the remote only, never
 // the journal's per-artifact outcomes, so it must exit 0 even against a

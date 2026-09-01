@@ -41,15 +41,21 @@ type FetchResult struct {
 
 	// FailedArtifacts is set only when DryRun is false: how many of this
 	// backup set's journal rows this call walked through processArtifacts
-	// (internal/app/pipeline.go) ended in FAILED or QUARANTINED. This is
-	// the other half of "did this fetch actually succeed" (issue #283)
-	// alongside Reconcile.Errors/Discovery.Errors: an artifact that
-	// discovers and reconciles cleanly and then fails transfer,
-	// verification or commit is counted in neither of those, so a caller
-	// that checked only them could report success for a cycle that backed
-	// up nothing at all. A dry-run never sets it, honestly: --dry-run
-	// looks at the remote, never at the journal's per-artifact outcomes,
-	// so it has nothing to report here.
+	// (internal/app/pipeline.go) ended in FAILED, QUARANTINED or
+	// QUARANTINED_LOST. This is the other half of "did this fetch actually
+	// succeed" (issue #283) alongside Reconcile.Errors/Discovery.Errors:
+	// an artifact that discovers and reconciles cleanly and then fails
+	// transfer, verification or commit is counted in neither of those, so
+	// a caller that checked only them could report success for a cycle
+	// that backed up nothing at all. It also covers a loss Reconcile
+	// (above) discovered entirely on its own -- a previously-durable
+	// artifact whose local copy is found corrupted or missing -- since
+	// processArtifacts lists the journal after reconcileOne has already
+	// written that verdict (see processArtifacts's own doc): a successful
+	// reconciliation pass finding rot is not a systemic error, but it
+	// must still count as this fetch failing. A dry-run never sets it,
+	// honestly: --dry-run looks at the remote, never at the journal's
+	// per-artifact outcomes, so it has nothing to report here.
 	FailedArtifacts int
 }
 

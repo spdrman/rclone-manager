@@ -23,11 +23,17 @@ import (
 //
 // FailedArtifacts is the other half of "did this cycle fail" (issue
 // #283): how many of the artifacts this call itself walked through
-// processArtifacts ended in FAILED or QUARANTINED. Err alone used to be
-// the only thing a caller checked, which is exactly how a cycle where
-// every artifact discovered fine and then failed verification could
-// report success: nothing about that outcome is a systemic error, so Err
-// stayed nil.
+// processArtifacts ended in FAILED, QUARANTINED or QUARANTINED_LOST. Err
+// alone used to be the only thing a caller checked, which is exactly how
+// a cycle where every artifact discovered fine and then failed
+// verification could report success: nothing about that outcome is a
+// systemic error, so Err stayed nil. This also covers a loss this
+// cycle's own reconcile pass discovered on its own -- a previously-
+// durable artifact whose local copy turned out corrupted or missing --
+// since processArtifacts lists the journal after reconcileOne has
+// already written that verdict (see processArtifacts's own doc); a
+// successful reconciliation pass that finds rot is not a systemic
+// failure either, but it must still make this cycle count as failed.
 type BackupSetCycleResult struct {
 	Set             model.BackupSetID
 	Reconcile       reconcile.Report
