@@ -274,6 +274,31 @@ func TestQuarantinedHasExits(t *testing.T) {
 	assertStateSet(t, "Successors(Quarantined)", exits, Discovered, Committed, RemoteRetained)
 }
 
+// HasReinstatementExit only promises existence, never a resolved target
+// (see its own doc for why that is all it is safe to promise now that
+// QUARANTINED declares two reinstatement edges). This pins down that
+// existence answer for both quarantine states and for a sample of states
+// that were never quarantined at all.
+func TestHasReinstatementExit(t *testing.T) {
+	cases := []struct {
+		from State
+		want bool
+	}{
+		{Quarantined, true},
+		{QuarantinedLost, true},
+		{Discovered, false},
+		{Verifying, false},
+		{Failed, false},
+		{Committed, false},
+		{Complete, false},
+	}
+	for _, c := range cases {
+		if got := HasReinstatementExit(c.from); got != c.want {
+			t.Errorf("HasReinstatementExit(%s) = %v, want %v", c.from, got, c.want)
+		}
+	}
+}
+
 // The hole this whole package exists to close: a quarantined artifact must
 // never be able to silently resume the happy path.
 //

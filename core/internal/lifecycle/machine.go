@@ -232,9 +232,9 @@ var Transitions = []Transition{
 	// ReinstateFromQuarantine (quarantine.go) resolves the actual target by
 	// reading the append-only transition log for the exact edge that led
 	// THIS artifact into QUARANTINED, rather than by asking
-	// ReinstatementTarget below, which -- now that QUARANTINED has two
-	// declared exits into a durable state -- can only ever name one of
-	// them.
+	// HasReinstatementExit below, which -- now that QUARANTINED has two
+	// declared exits into a durable state -- only confirms that at least
+	// one of them exists, not which one applies.
 	{From: Quarantined, To: RemoteRetained},
 }
 
@@ -306,32 +306,35 @@ func ReinstatementEdges() []Transition {
 	return append([]Transition(nil), reinstatementEdges...)
 }
 
-// ReinstatementTarget reports A state a quarantined artifact may be
-// returned to when it is reinstated, and whether from is a quarantine
-// state that has at least one such exit.
+// HasReinstatementExit reports whether from is a quarantine state that has
+// at least one reinstatement exit declared in Transitions.
 //
-// Before issue #315 there was exactly one target per quarantine state, and
-// this function's answer was unambiguous: QUARANTINED_LOST -> COMPLETE, and
-// QUARANTINED -> COMMITTED regardless of which of COMMITTED,
-// REMOTE_DELETE_PENDING or (as of #315) REMOTE_RETAINED the artifact had
-// actually been quarantined FROM. That is no longer true for QUARANTINED,
-// which now declares two reinstatement edges (see Transitions), so this
-// function returns only the first one declared, in table order, and exists
-// for a caller that only needs to know an exit exists at all, not which one
-// applies (quarantineactions.go's ReinstateQuarantined uses it exactly this
-// way, as a guard before it gathers evidence). A caller that needs the
-// actual target for one specific artifact, the way ReinstateFromQuarantine
-// itself does, must not use this: it has to resolve the target per artifact
-// by reading which exact edge led that artifact into QUARANTINED (see
-// quarantine.go's origin-aware resolution), because this function cannot
-// tell two quarantined artifacts' lineages apart.
-func ReinstatementTarget(from State) (State, bool) {
+// This function used to be ReinstatementTarget and returned (State, bool):
+// before issue #315 there was exactly one target per quarantine state, so
+// naming it was safe -- QUARANTINED_LOST -> COMPLETE, and QUARANTINED ->
+// COMMITTED regardless of which of COMMITTED, REMOTE_DELETE_PENDING or (as
+// of #315) REMOTE_RETAINED the artifact had actually been quarantined
+// FROM. That is no longer true for QUARANTINED, which now declares two
+// reinstatement edges (see Transitions): a from-state-only answer would
+// have to pick one of them arbitrarily, silently misrouting whichever
+// artifacts' real lineage points at the other edge. This function keeps
+// only the part of the old contract that is still safe to expose:
+// existence. quarantineactions.go's ReinstateQuarantined is the one
+// caller, and it only needs to know an exit exists at all, as a guard
+// before it gathers evidence, not which one applies. A caller that needs
+// the actual target for one specific artifact, the way
+// ReinstateFromQuarantine itself does, must not use this: it has to
+// resolve the target per artifact by reading which exact edge led that
+// artifact into QUARANTINED (see quarantine.go's origin-aware
+// resolution), because no from-state-only answer can tell two quarantined
+// artifacts' lineages apart.
+func HasReinstatementExit(from State) bool {
 	for _, t := range reinstatementEdges {
 		if t.From == from {
-			return t.To, true
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 var transitionSet = func() map[Transition]bool {
