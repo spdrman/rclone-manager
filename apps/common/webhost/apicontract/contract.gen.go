@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "a06e76c4792631fee7a4f2036c3a94f3e5e0c58fe1686d255183f92ce2b2a4d1"
+const ContractSHA256 = "279de1206d524fa715dd46ca28d47116cb27ef3f04a3f494de4269820771f333"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.

@@ -1647,6 +1647,7 @@
           },
           "quarantine_reason": {
             "type": "string",
+            "description": "The literal diagnostic sentence recorded at the moment this backup was quarantined (a hash mismatch, a failed content check, or an application validator's rejection). Present for every quarantine cause, not only a validator's. Absent when it is not quarantined, or on the rare row whose quarantining transition carried no detail text.",
             "x-go-omitempty": true
           },
           "retention_tier": {
