@@ -290,6 +290,50 @@ func TestReconcile_RemoteRetained_IsConsistent(t *testing.T) {
 	}
 }
 
+// TestReconcile_RemoteRetained_InvalidLocal_Quarantines is issue #315's
+// core proof: unlike the no-action case above, a REMOTE_RETAINED artifact
+// whose local final copy has gone bad must actually be noticed by FR-17's
+// startup pass, exactly like TestReconcile_Committed_InvalidLocal_Quarantines
+// proves for COMMITTED. Before this, reconcileOne's REMOTE_RETAINED case
+// was a pure no-op regardless of the local copy's condition, which is the
+// gap issue #315 exists to close: for a read-only source, the local final
+// copy is often the only copy this manager still has any relationship to.
+func TestReconcile_RemoteRetained_InvalidLocal_Quarantines(t *testing.T) {
+	cases := []struct {
+		name      string
+		localPath func(t *testing.T) string
+	}{
+		{"corrupted size", func(t *testing.T) string { return writeLocalFile(t, 4) }}, // recorded size is 128
+		{"missing file", func(t *testing.T) string { return t.TempDir() + "/never-written.final" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			j := openTestJournal(t)
+			artifact := testArtifact(t, "retained-invalid.dump")
+			size := int64(128)
+			driveTo(t, j, driveParams{
+				artifact: artifact, remote: state.RemoteIdentity{Size: &size}, localPath: tc.localPath(t),
+				transfer: &state.TransferResult{BytesTransferred: size}, stopAt: lifecycle.RemoteRetained,
+			})
+
+			tp := &fakeTransport{}
+			report, err := Reconcile(context.Background(), Deps{Journal: j, Transport: tp}, testSource, testSet(t))
+			if err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			requireNoErrors(t, report)
+			f := requireOneFinding(t, report)
+			if f.To != lifecycle.Quarantined {
+				t.Errorf("To = %s, want QUARANTINED (reason: %s)", f.To, f.Reason)
+			}
+			if tp.statCalls != 0 {
+				t.Errorf("statCalls = %d, want 0: a retained artifact's remote is never examined, valid local copy or not", tp.statCalls)
+			}
+			assertJournalState(t, j, artifact, lifecycle.Quarantined)
+		})
+	}
+}
+
 // --- the gap row this package adds: absent, invalid final, any -> quarantine, unrecoverable ---
 
 func TestReconcile_Complete_InvalidLocal_QuarantinesAsLost(t *testing.T) {
