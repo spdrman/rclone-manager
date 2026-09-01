@@ -69,10 +69,16 @@ dispatch was the only way in.
 
 Rules 1 and 2 are branch protection, not a test. A clone cannot observe that the
 remote branch was force-pushed yesterday, so no check in this repository can enforce
-them. They belong in a GitHub ruleset on `release`: block force pushes, block
-deletion. What the tests above enforce is the consequence of the rules holding, which
-is the useful half: if the rules are broken, the reachability check starts failing,
-loudly, on the next run.
+them.
+
+They are a GitHub ruleset instead, named "release branch is append-only", active,
+targeting `refs/heads/release`, carrying `deletion` and `non_fast_forward`. That blocks
+a force push and blocks deleting the branch, and blocks neither an ordinary push nor
+creating it, which matters: an ordinary push to `release` is the thing that publishes.
+
+What the tests above enforce is the consequence of the rules holding, which is the
+useful half. If the ruleset were removed and the branch rewritten, the reachability
+check starts failing, loudly, on the next run rather than months later.
 
 ## Cutting a release
 
@@ -107,3 +113,10 @@ which is a commit on `main`, and the parity rebuild proves the published binarie
 that commit's binaries. So the released bytes are reproducible from `main` even
 though the tree that pushed them was not yet. Every later cut follows step 1 as
 written.
+
+Step 7 also went slightly differently, and for a reason worth keeping. The digests
+`ghcr.io` assigned are recorded on the pull request into `main` rather than pushed
+straight back to `release`, because a push to `release` publishes: it would rebuild,
+re-push bytes the registry already holds under the same digest, and add a second
+Sigstore signature for nothing. So `release` records the tree that published, and
+`main` records what the registry answered. The next cut fast-forwards past both.
