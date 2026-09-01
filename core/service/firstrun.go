@@ -209,7 +209,9 @@ func (f *FirstRun) ProbeHostKey(ctx context.Context, host string, port int) (Hos
 // can find out their credentials are wrong before writing a
 // configuration around them rather than after.
 func (f *FirstRun) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
-	return testConnectionVia(ctx, f.transport, f.defaults.ConfigPath, req)
+	// config.KeyEncryption{} (the zero value): see testConnectionVia's own
+	// doc for why a first-run instance always passes the zero value here.
+	return testConnectionVia(ctx, f.transport, f.defaults.ConfigPath, config.KeyEncryption{}, req)
 }
 
 // CreateInitialConfig writes this deployment's FIRST configuration: the

@@ -325,7 +325,7 @@ func (s *Service) lifecycleDeps() lifecycle.Deps {
 // describes. This is the one place config.Remote's fields are translated
 // into transport.Source's, so every use case in this package (the cycle,
 // fetch, reconcile) agrees on exactly how that translation works.
-func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
+func sourceFor(cfg *config.Config, src config.Source, bs config.BackupSet) transport.Source {
 	r := bs.Remote
 	return transport.Source{
 		ID:   bs.ID.String(),
@@ -349,8 +349,15 @@ func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 		PassphraseFile:    r.Key.Passphrase.File,
 		PassphraseEnv:     r.Key.Passphrase.Env,
 		PassphraseCommand: r.Key.Passphrase.Command,
-		KnownHosts:        r.KnownHosts,
-		Root:              bs.RemotePath,
+		// KeyEncryption is config-wide (#298), not per-Remote, so it comes
+		// from cfg rather than r; see transport.Source's own doc for why
+		// it still travels on every Source built here rather than through
+		// a separate parameter.
+		KeyEncryptionFile:    cfg.KeyEncryption.File,
+		KeyEncryptionEnv:     cfg.KeyEncryption.Env,
+		KeyEncryptionCommand: cfg.KeyEncryption.Command,
+		KnownHosts:           r.KnownHosts,
+		Root:                 bs.RemotePath,
 	}
 }
 

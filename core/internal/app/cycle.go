@@ -162,7 +162,7 @@ sourcesLoop:
 // rationale.
 func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs config.BackupSet) BackupSetCycleResult {
 	result := BackupSetCycleResult{Set: bs.ID}
-	source := sourceFor(src, bs)
+	source := sourceFor(s.Config, src, bs)
 
 	// Deferred, so a set counts as finished however this returns. A set
 	// whose reconcile or discovery failed is still a set this cycle is

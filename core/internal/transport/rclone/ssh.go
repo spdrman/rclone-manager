@@ -62,7 +62,15 @@ import (
 //     the default and documented preference specifically because it is the
 //     only one of the three sources that never routes through key_pem at
 //     all: rclone opens that file itself, so this adapter's own memory
-//     never holds the key.
+//     never holds the key. #298 adds a fourth, narrower way in: when Source
+//     names a key_encryption source AND key_file's content is (or gets
+//     migrated to) this program's own at-rest encryption format,
+//     keyencryption.go's resolveKeyFileForSFTP decrypts it into memory and
+//     it reaches key_pem the same way an env/command resolver's output
+//     does. With no key_encryption source configured, key_file keeps its
+//     "never enters memory" property exactly as before #298 existed; see
+//     keyencryption.go's package doc for the full threat model this trades
+//     away in exchange for defending the file at rest.
 //   - key_file_pass (#269) IS reachable, the same way key_pem is: only with
 //     what passphrase.go's resolvePassphrase returned, never with anything
 //     an operator could write into this adapter's option map directly.
@@ -183,17 +191,18 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 
 	switch {
 	case src.KeyFile != "":
-		// The default and documented preference (docs/ssh-setup.md): this
-		// adapter only ever confirms the file exists, is readable, and
-		// still carries the mode it was written with. It never opens it,
-		// so the key itself never enters this process's memory at all;
-		// rclone's own sftp backend reads key_file directly. A passphrase,
-		// if one resolved above, is NOT verified against this file's
-		// content here, for the same reason: verifying it would mean
-		// reading and decrypting the file in this process, exactly what
-		// key_file exists to avoid. rclone itself checks it, with the
-		// key_file_pass option set below, the moment this cfg is actually
-		// used to connect.
+		// #293/#311: the file's own mode and its whole containing
+		// directory chain are checked first, before anything reads or
+		// resolves the file's content, and regardless of whether
+		// key_encryption ends up applying below. A world-writable
+		// directory lets any local actor unlink/replace/rename the key
+		// file regardless of the file's own mode bits, and that risk is
+		// identical whether the file holds a plaintext PEM or #298's
+		// at-rest ciphertext -- the ciphertext's own AES-GCM
+		// authentication defeats a silent CONTENT forgery, but not a
+		// wholesale swap or deletion, so this check applies to the
+		// physical file unconditionally rather than only on the
+		// plaintext path.
 		keyFilePath := env.ShellExpand(src.KeyFile)
 		info, err := os.Stat(keyFilePath)
 		if err != nil {
@@ -205,6 +214,32 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		if err := checkKeyDirChainMode(src.ID, src.KeyFile, keyFilePath); err != nil {
 			return nil, err
 		}
+
+		// #298: resolveKeyFileForSFTP handles both the default case (no
+		// key_encryption source configured, ok == false) and the at-rest
+		// encryption case (decrypt, or migrate-then-decrypt, into
+		// memory). See its own doc for the full contract.
+		secret, usingPEM, err := resolveKeyFileForSFTP(src)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: %w", src.ID, err)
+		}
+		if usingPEM {
+			keyPEM = secret
+			usingKeyPEM = true
+			break
+		}
+		// The default and documented preference (docs/ssh-setup.md), and
+		// still exactly what happens when no key_encryption source is
+		// configured at all: beyond the mode/directory checks just
+		// above, this adapter never opens the file itself, so the key
+		// never enters this process's memory at all; rclone's own sftp
+		// backend reads key_file directly. A passphrase, if one resolved
+		// above, is NOT verified against this file's content here, for
+		// the same reason: verifying it would mean reading and
+		// decrypting the file in this process, exactly what key_file
+		// exists to avoid. rclone itself checks it, with the
+		// key_file_pass option set below, the moment this cfg is
+		// actually used to connect.
 		keyFileValue = src.KeyFile
 	case src.KeyEnv != "":
 		secret, err := resolveKeyFromEnv(src.KeyEnv, passphrase)

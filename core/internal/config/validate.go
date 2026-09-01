@@ -68,8 +68,52 @@ func (c *Config) Validate() error {
 	v.validateRetention(&c.Retention)
 	v.validateAlerts(&c.Alerts)
 	v.validateCapacity(&c.Capacity)
+	v.validateKeyEncryption(&c.KeyEncryption)
 
 	return v.err()
+}
+
+// validateKeyEncryption checks KeyEncryption's shape (#298): at most one
+// of File, Env or Command may be set, mirroring validateKey's rule for
+// Key's own three sources, except that zero is fine here -- like
+// Passphrase, KeyEncryption is entirely optional, and every config
+// written before #298 has none of the three set.
+//
+// This never reads File's content, on the same "shape only, nothing this
+// package can decide by opening a file or running a command" principle
+// validateKey's own doc states for Key.Command: whether a resolved value
+// actually decrypts a given key file is a question only
+// internal/transport/rclone can answer, once it can actually reach both.
+func (v *validator) validateKeyEncryption(e *KeyEncryption) {
+	sources := 0
+	if e.File != "" {
+		sources++
+	}
+	if e.Env != "" {
+		sources++
+	}
+	if len(e.Command) != 0 {
+		sources++
+	}
+	if sources > 1 {
+		v.addf("key_encryption: exactly one of file, env or command may be set, not more than one")
+		return
+	}
+
+	if len(e.Command) != 0 {
+		cmdPath := "key_encryption.command"
+		if e.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(e.Command[0]) {
+			// Same reasoning as validateKey's identical rule on
+			// Key.Command: a resolver has to resolve to exactly one
+			// binary regardless of the process's working directory or
+			// $PATH at the moment a key file is actually read or
+			// written, which matters here just as much as it does for
+			// the key material itself.
+			v.addf("%s: executable %q must be an absolute path", cmdPath, e.Command[0])
+		}
+	}
 }
 
 // validateAlerts resolves the Alerts block (docs/EPIC-B-multi-nas.md

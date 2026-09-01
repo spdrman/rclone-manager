@@ -260,7 +260,7 @@ func TestSensitiveEndpointRedactsRealDialFailureFromJournal(t *testing.T) {
 	svc.RetryPolicy = fastRetryPolicy()
 	svc.Now = fixedNow(epoch)
 
-	svc.processArtifact(ctx, sourceFor(src, bs), bs, rec)
+	svc.processArtifact(ctx, sourceFor(svc.Config, src, bs), bs, rec)
 
 	activity, err := journal.RecentActivity(ctx, 10)
 	if err != nil {
@@ -322,7 +322,7 @@ func TestSensitiveEndpointDefaultBehaviourUnchanged(t *testing.T) {
 	svc.RetryPolicy = fastRetryPolicy()
 	svc.Now = fixedNow(epoch)
 
-	svc.processArtifact(ctx, sourceFor(src, bs), bs, rec)
+	svc.processArtifact(ctx, sourceFor(svc.Config, src, bs), bs, rec)
 
 	portStr := strconv.Itoa(port)
 	out := buf.String()

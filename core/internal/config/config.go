@@ -38,12 +38,72 @@ import (
 // A Config fresh out of Load has not been checked for semantic sense: call
 // Validate (or use LoadAndValidate) before anything reads it for real.
 type Config struct {
-	PollInterval Duration  `yaml:"poll_interval"`
-	State        State     `yaml:"state"`
-	Sources      []Source  `yaml:"sources"`
-	Retention    Retention `yaml:"retention"`
-	Alerts       Alerts    `yaml:"alerts"`
-	Capacity     Capacity  `yaml:"capacity,omitempty"`
+	PollInterval  Duration      `yaml:"poll_interval"`
+	State         State         `yaml:"state"`
+	Sources       []Source      `yaml:"sources"`
+	Retention     Retention     `yaml:"retention"`
+	Alerts        Alerts        `yaml:"alerts"`
+	Capacity      Capacity      `yaml:"capacity,omitempty"`
+	KeyEncryption KeyEncryption `yaml:"key_encryption,omitempty"`
+}
+
+// KeyEncryption names an optional, config-wide way to obtain the key
+// (#298) that protects secret material this manager persists to disk
+// under configPath's sibling directories -- today, an imported SSH
+// private key under keysDirIn's ssh_keys/ (core/service/backupsets.go);
+// a future medium credential (EPIC E's S3 keys, #235) is expected to
+// reuse this same field rather than inventing its own, since the
+// question ("how is a secret this program itself must write to disk
+// protected at rest") does not change with the kind of secret.
+//
+// It mirrors Key and Passphrase's own File/Env/Command shape exactly
+// (three ways to name where a secret comes from, never a field to paste
+// one into directly), for the same reason those two do: a bare
+// "key_encryption: <value>" field an operator could type directly into
+// YAML would be one more credential sitting in the clear next to
+// everything else in this file, the exact problem #298 exists to close
+// for the key it protects.
+//
+// It is entirely optional. The zero value (File, Env and Command all
+// empty) means "no encryption key is configured", which is every
+// config.yaml written before this field existed and every one written
+// since that simply does not opt in: an imported key is then persisted
+// exactly as before #298, a plaintext file protected only by filesystem
+// permissions (#293). That is a deliberate, documented trade, not a
+// silent downgrade: see docs/ssh-setup.md's "Encrypting the key store at
+// rest" section for the threat this does and does not cover, and in
+// particular why the resolved key here MUST live outside whatever
+// directory tree an SMB/AFP share exports, or protecting the key file
+// buys nothing at all against the exact exposure #298 was filed over.
+type KeyEncryption struct {
+	// File points at a file holding the encryption key, read directly by
+	// this process at the point a secret file is written or first
+	// decrypted -- there is no rclone-shaped backend here for this to
+	// hand a path to instead, unlike Key.File, so this file's content
+	// necessarily enters this process's memory. See the type doc above
+	// for why that is an accepted, documented cost rather than an
+	// oversight.
+	File string `yaml:"file"`
+
+	// Env names an environment variable this process reads the
+	// encryption key from.
+	Env string `yaml:"env"`
+
+	// Command is an argv array: Command[0] is the executable, invoked
+	// directly (never through a shell), and the rest are its arguments.
+	// Its stdout is treated as the encryption key. Mirrors Key.Command
+	// and Passphrase.Command exactly, for the identical reason: this is
+	// the path a secrets manager (OpenBao, Vault, SOPS, 1Password, AWS
+	// Secrets Manager, ...) adopts without this project taking a
+	// dependency on any of their SDKs.
+	Command []string `yaml:"command"`
+}
+
+// isZero reports whether none of KeyEncryption's three sources are set:
+// "no encryption key is configured", the case for every config that
+// predates #298 and for every one since that has not opted in.
+func (e KeyEncryption) isZero() bool {
+	return e.File == "" && e.Env == "" && len(e.Command) == 0
 }
 
 // Capacity is FR-21's configuration: how much space this manager is allowed

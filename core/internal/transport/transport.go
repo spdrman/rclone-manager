@@ -55,6 +55,23 @@ type Source struct {
 	PassphraseEnv     string
 	PassphraseCommand []string
 
+	// KeyEncryptionFile, KeyEncryptionEnv and KeyEncryptionCommand are the
+	// three ways (#298) this manager may name where the key that protects
+	// KeyFile's content at rest comes from, mirroring KeyFile/KeyEnv/
+	// KeyCommand's own three in shape. Unlike those three, this is a
+	// config-wide setting, not a per-Source one -- every Source built
+	// from the same *config.Config carries the same three values here,
+	// see internal/app's sourceFor -- but it travels on Source anyway
+	// rather than through a separate parameter, because internal/
+	// transport/rclone's sftpConfig is the one place that already reads
+	// KeyFile and is the only place that can act on this. None of them
+	// set at all (every Source built before #298 existed) means KeyFile,
+	// if set, is read and used exactly as before: an on-disk key this
+	// manager never opens itself.
+	KeyEncryptionFile    string
+	KeyEncryptionEnv     string
+	KeyEncryptionCommand []string
+
 	KnownHosts string
 	Root       string
 }
