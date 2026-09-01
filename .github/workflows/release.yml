@@ -1,18 +1,45 @@
 name: Release
 
-# Issue #88 (B5.2), docs/EPIC-B-multi-nas.md §61 and §62.
+# Issue #88 (B5.2), docs/EPIC-B-multi-nas.md §61 and §62, retriggered by
+# issue #259.
 #
 # The release pipeline: regenerate the compliance artifacts inside the
-# build, prove they are what is committed, build and push the canonical
+# build, prove they are what is committed, prove the release manifest
+# describes what this tree builds, then build and push the canonical
 # multi-architecture image, sign it keylessly and attest its SBOM.
 #
-# NOT auto-triggered, and not only for the reason every other workflow in
-# this repository is not. GitHub Actions no longer auto-triggers here at
-# all (scripts/ci-local.sh is the gate; see its header), and on top of that
-# this one publishes: it puts a semantic version in a public registry,
-# which is not a thing that is taken back cleanly. It takes a typed
-# confirmation, and `publish: false` is the default so that a dispatch made
-# to check the pipeline does not push anything.
+# WHAT PUBLISHES, AND WHY THAT IS SAFE
+#
+# A push to `release` publishes. That is a change from this file's first
+# version, which was workflow_dispatch-only and argued the case in this
+# same paragraph, so here is what changed rather than a comment left
+# contradicting the file underneath it.
+#
+# The original reasoning was that this workflow puts a semantic version in
+# a public registry, which is not a thing that is taken back cleanly, so
+# it should only ever run because a person meant it to. That is still
+# true. What changed is what counts as a person meaning it. A typed
+# confirmation input was the only deliberate act a dispatch-only workflow
+# could observe; merging to `release` is a stronger one, because it has a
+# reviewable diff, an author and an audit trail that a dispatch input
+# never had. docs/release-branch.md is what makes that hold: `release` is
+# append-only, nothing is branched off it, and only a release cut lands on
+# it.
+#
+# workflow_dispatch stays, with `publish` and `confirm` intact, because a
+# dry run against the real tree is worth having and is how a cut gets
+# checked before it is made. The two paths must not disagree about what
+# gets published: a push-triggered run that quietly used `publish: false`
+# would be a pipeline that looks like it released and did not, which is
+# worse than either behaviour on its own. So exactly one expression
+# decides, in the `decide` job below, and every other job reads its
+# output.
+#
+# GitHub Actions still does not auto-trigger anywhere else in this
+# repository (see the "on:" blocks in .github/workflows/*.yml) and
+# scripts/ci-local.sh is still the gate. This workflow is the one
+# exception, and it is an exception about publishing rather than about
+# testing.
 #
 # There is no signing key here and none should ever be added. The signature
 # is keyless: the job's own OIDC token is exchanged for a short-lived
@@ -23,6 +50,9 @@ name: Release
 # a release signed by hand.
 
 on:
+  push:
+    branches:
+      - release
   workflow_dispatch:
     inputs:
       publish:
@@ -30,7 +60,7 @@ on:
         type: boolean
         default: false
       confirm:
-        description: "Type the image tag being published (for example 1.0.0) to confirm. Ignored when publish is false."
+        description: "Type the image tag being published (for example 0.1.0) to confirm. Ignored when publish is false."
         type: string
         default: ""
 
@@ -42,8 +72,34 @@ permissions:
   contents: read
 
 jobs:
+  # The single place publishing is decided, so the push path and the
+  # dispatch path cannot drift into disagreeing. A push to `release` is
+  # itself the confirmation; a dispatch says so with its own input and is
+  # separately made to type the tag below.
+  decide:
+    name: decide whether this run publishes
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - name: Decide
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ]; then
+            publish=true
+            echo "A push reached the release branch, so this run publishes." >> "$GITHUB_STEP_SUMMARY"
+          else
+            publish="${INPUT_PUBLISH:-false}"
+            echo "Dispatched with publish=${publish}." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+
   compliance-artifacts:
     name: compliance artifacts are what this tree generates
+    needs: decide
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -103,7 +159,7 @@ jobs:
 
   publish:
     name: build, push, sign and attest
-    needs: compliance-artifacts
+    needs: [decide, compliance-artifacts]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -116,11 +172,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      # After the checkout, because it reads canonical.json. A publish
+      # After the checkout, because it reads canonical.json. A dispatch
       # that types the wrong tag is stopped here rather than by the
       # script's own guards, which check a different thing: those ask
       # whether this tree may be published at all, this asks whether the
       # person dispatching meant to publish this version.
+      #
+      # Only on the dispatch path. A push to `release` needs no typed
+      # string, because reaching that branch is the deliberate act the
+      # string was standing in for, and asking for it again would make
+      # the merge conditional on something no merge can supply.
       #
       # The dispatcher's string arrives through env, never through a
       # ${{ }} expansion inside the script. An expansion is textual: it
@@ -130,7 +191,7 @@ jobs:
       # Fulcio certifies) and packages: write. A confirmation step whose
       # input can rewrite the step is not a confirmation.
       - name: Refuse an unconfirmed publish
-        if: inputs.publish
+        if: github.event_name == 'workflow_dispatch' && needs.decide.outputs.publish == 'true'
         env:
           CONFIRM: ${{ inputs.confirm }}
         run: |
@@ -144,11 +205,11 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Install cosign
-        if: inputs.publish
+        if: needs.decide.outputs.publish == 'true'
         uses: sigstore/cosign-installer@v3
 
       - name: Log in to ghcr.io
-        if: inputs.publish
+        if: needs.decide.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -160,10 +221,21 @@ jobs:
         with:
           name: compliance-bundle
 
+      # Unconditional, on both paths, and before the push rather than
+      # beside it (#260). The old guard 2 asked whether the manifest's
+      # commit equalled HEAD, which no tree can satisfy and which would
+      # not have answered the real question anyway. This rebuilds each
+      # architecture and hashes the two binaries out of the image, so a
+      # release cannot ship a manifest describing different bytes. Running
+      # it on a `publish: false` dispatch is the point: that is the run
+      # whose whole job is to find this out before the registry does.
+      - name: Prove the release manifest describes what this tree builds
+        run: bash scripts/release/verify-manifest-parity.sh
+
       # DRY_RUN=1 runs every guard and stops before the push, so a
       # dispatch with publish left false still exercises the refusals
       # against the real tree rather than only against fixtures.
       - name: Publish
         env:
-          DRY_RUN: ${{ inputs.publish && '0' || '1' }}
+          DRY_RUN: ${{ needs.decide.outputs.publish == 'true' && '0' || '1' }}
         run: bash scripts/release/publish-image.sh

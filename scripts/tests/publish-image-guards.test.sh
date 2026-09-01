@@ -198,13 +198,68 @@ r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
 rc="$(split_rc "$r")"; out="$(split_out "$r")"
 expect "$rc" "$out" 2 "no image reference in"
 
-# --- guard 2: HEAD is not the commit the manifest describes -------------
-current="HEAD is not the commit the release manifest records"
+# --- guard 2: the manifest has to describe a build this history has -----
+#
+# The refusals here replaced a single equality check (manifest commit ==
+# HEAD) that no tree could satisfy, which is #260. Four arms now, because
+# the four things that can be wrong call for four different reactions: the
+# commit is not in this repository at all, it is in the repository but not
+# in this history, it is in this history but only on a branch that a
+# squash merge will rewrite (#174), or git could not answer.
+current="the manifest pins a SHA that is not an object in this repository"
 repo="$(new_repo)" # the fixture's manifest still pins all-zeroes
 r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
 rc="$(split_rc "$r")"; out="$(split_out "$r")"
-expect "$rc" "$out" 2 "and HEAD is"
-expect "$rc" "$out" 2 "in the registry"
+expect "$rc" "$out" 2 "which is not a commit in this repository"
+
+current="the manifest pins a real commit that is not an ancestor of HEAD"
+repo="$(new_repo)"
+git -C "$repo" checkout -q -b sidebranch
+printf 'package main // side\n' >"$repo/core/main.go"
+git -C "$repo" commit -qam "side"
+side="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" checkout -q main
+printf '{ "version": "test", "commit": "%s" }\n' "$side" >"$repo/container/release-manifest.json"
+r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
+rc="$(split_rc "$r")"; out="$(split_out "$r")"
+expect "$rc" "$out" 2 "which is not an ancestor of HEAD"
+
+# #174 in the registry. The commit is perfectly reachable from HEAD, so
+# the arm above passes it; what makes it unpublishable is that HEAD is a
+# feature branch, and a squash merge rewrites the commit the registry tag
+# would then be the only record of.
+current="the manifest pins a commit only a feature branch has"
+repo="$(new_repo)"
+git -C "$repo" checkout -q -b feature
+printf 'package main // feature\n' >"$repo/core/main.go"
+git -C "$repo" commit -qam "feature work"
+pin_manifest_to_head "$repo"
+r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
+rc="$(split_rc "$r")"; out="$(split_out "$r")"
+expect "$rc" "$out" 2 "not reachable from any rewrite-free ref"
+expect "$rc" "$out" 2 "#174"
+
+# origin/release is a rewrite-free ref in its own right, and it has to
+# answer on its own: a release cut carries the pipeline change that
+# publishes it, so the first cut is pinned to release rather than to
+# main. The local main is renamed away so nothing else can answer and the
+# pass is attributable.
+current="a commit reachable only from origin/release is publishable, and the ref is named"
+repo="$(new_repo)"
+pin_manifest_to_head "$repo"
+git -C "$repo" update-ref refs/remotes/origin/release "$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" branch -m main cut
+r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
+rc="$(split_rc "$r")"; out="$(split_out "$r")"
+expect "$rc" "$out" 0 "is reachable from origin/release"
+
+current="CHECKABLE_FROM names the rewrite-free ref for a fork"
+repo="$(new_repo)"
+pin_manifest_to_head "$repo"
+git -C "$repo" branch -m main stable
+r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1 CHECKABLE_FROM=stable)"
+rc="$(split_rc "$r")"; out="$(split_out "$r")"
+expect "$rc" "$out" 0 "is reachable from stable"
 
 current="a manifest that pins no commit at all"
 repo="$(new_repo)"
@@ -212,7 +267,7 @@ printf '{ "version": "test" }\n' >"$repo/container/release-manifest.json"
 r="$(run_guards "$repo" SKIP_PROVENANCE_CHECK=1)"
 rc="$(split_rc "$r")"; out="$(split_out "$r")"
 expect "$rc" "$out" 2 "pins no commit"
-refute "$out" "and HEAD is"
+refute "$out" "not an ancestor of HEAD"
 
 # --- guard 3: a waived manifest must never be published -----------------
 current="a manifest stamped unsafe_local_build"

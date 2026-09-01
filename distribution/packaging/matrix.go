@@ -989,6 +989,87 @@ var ancestryRefWhy = map[string]string{
 	"HEAD":        "neither origin/main nor main is in this checkout, so this is the weakest form of the question: a commit that only this branch has still passes",
 }
 
+// releaseAncestryRefPreference is the ordered set of refs a published
+// build may be pinned to, strongest question first.
+//
+// It is longer than ancestryRefPreference by exactly one idea: `release`
+// (issue #258). #174's rule was "an ancestor of origin/main", and the
+// reason was never main specifically. It was that main does not rewrite:
+// a commit reachable from it stays reachable, so a manifest pinned to it
+// stays checkable. `release` has that property by policy rather than by
+// accident, and docs/release-branch.md is where the policy is written
+// down: it is append-only, never force-pushed, never rebased, never
+// squash-merged into, and nothing is branched off it.
+//
+// It has to be here, and not as a nicety. A release cut carries the
+// pipeline change that publishes it, so the first commit on `release` is
+// by construction not yet on main. Without this entry the only ways to
+// publish it are to weaken the check or to skip it, and both of those
+// end at #174.
+//
+// HEAD stays last, and stays the weakest form: a commit only this branch
+// has is reachable from HEAD and stops existing the moment the branch is
+// squash merged. It is here so a fresh clone with no remote refs reports
+// something rather than nothing, and ResolveReachableAncestryRef names
+// it so a fallback never reads as the full-strength check.
+var releaseAncestryRefPreference = []string{"origin/main", "origin/release", "main", "release", "HEAD"}
+
+var releaseAncestryRefWhy = map[string]string{
+	"origin/main":    "the branch a squash merge lands on, which is the question scripts/release/record-release-hashes.sh refuses on",
+	"origin/release": "the publish branch, which docs/release-branch.md holds to being append-only, so a commit on it stays checkable exactly as one on main does",
+	"main":           "origin/main is not in this checkout, so the local main is the strongest ref available",
+	"release":        "origin/release is not in this checkout, so the local release branch is what answered",
+	"HEAD":           "no main and no release ref is in this checkout, so this is the weakest form of the question: a commit that only this branch has still passes",
+}
+
+// ResolveReachableAncestryRef asks every rewrite-free ref this checkout
+// has whether it can reach commit, and reports the first that can.
+//
+// This is a different question from ResolveAncestryRef's, which is why
+// it is a second function rather than a change to that one.
+// ResolveAncestryRef picks ONE ref, the strongest that exists, and asks
+// only that. That is right when the question is "which ref is the
+// authority here". It is wrong when the question is "is this build
+// pinned to something that will still be there", because there is more
+// than one ref that answers yes to that, and stopping at the first one
+// that merely EXISTS refuses a commit that a later ref in the list would
+// have accepted.
+//
+// Three outcomes, kept apart for the reason CommitReachableFrom keeps
+// its two apart:
+//
+//	(ref, true, nil)   reachable, and ref says which one answered
+//	(_, false, nil)    every ref this checkout has said no. A fact about
+//	                   the manifest.
+//	(_, false, err)    nobody decided: a shallow clone, a missing object,
+//	                   or no ref to ask at all. A fact about the checkout,
+//	                   and never to be reported as a no.
+func ResolveReachableAncestryRef(repoDir, commit string) (AncestryRef, bool, error) {
+	var asked, undecided []string
+	for _, ref := range releaseAncestryRefPreference {
+		cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+		if err := cmd.Run(); err != nil {
+			continue
+		}
+		asked = append(asked, ref)
+		reachable, err := CommitReachableFrom(repoDir, commit, ref)
+		if err != nil {
+			undecided = append(undecided, ref)
+			continue
+		}
+		if reachable {
+			return AncestryRef{Ref: ref, Why: releaseAncestryRefWhy[ref]}, true, nil
+		}
+	}
+	switch {
+	case len(asked) == 0:
+		return AncestryRef{}, false, fmt.Errorf("none of %v resolves to a commit in %s, so there is nothing to check reachability against", releaseAncestryRefPreference, repoDir)
+	case len(undecided) == len(asked):
+		return AncestryRef{}, false, fmt.Errorf("git could not decide whether %s is reachable from any of %v; that is a fact about this checkout (a shallow clone, a missing object), not about the commit", commit, undecided)
+	}
+	return AncestryRef{Why: fmt.Sprintf("asked %v", asked)}, false, nil
+}
+
 // ResolveAncestryRef picks the strongest ref this checkout actually has
 // to ask a reachability question against.
 //
