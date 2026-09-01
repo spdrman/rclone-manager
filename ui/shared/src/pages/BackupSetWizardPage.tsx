@@ -7,6 +7,9 @@ import type { ValidatorCatalogEntry } from "@shared/api/contracts";
 import { PageHeader } from "@shared/components/PageHeader";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
+import { FieldHelp, HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
+import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 import type { CompletionMethod } from "@shared/types/backup";
 import { graph, useCausl } from "@shared/state/graph";
 import { setsNode } from "@shared/state/appNodes";
@@ -447,16 +450,22 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
               lede="The remote server that produces the backup artifacts. Backup Manager pulls — it is never given write access to your data."
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
-                <Field label="Backup set name" value={source.name} onChange={(v) => updateSource("name", v)} span />
+                <Field
+                  label="Backup set name" value={source.name} onChange={(v) => updateSource("name", v)} span
+                  help={FIELD_HELP.wizardSetName}
+                />
                 <Field
                   label="Server hostname" value={source.host} onChange={(v) => updateSource("host", v)}
-                  onBlur={revalidateHostTrust} mono
+                  onBlur={revalidateHostTrust} mono help={FIELD_HELP.wizardHostname}
                 />
                 <Field
                   label="SSH port" value={source.port} onChange={(v) => updateSource("port", v)}
-                  onBlur={revalidateHostTrust} mono
+                  onBlur={revalidateHostTrust} mono help={FIELD_HELP.wizardSshPort}
                 />
-                <Field label="Username" value={source.username} onChange={(v) => updateSource("username", v)} mono />
+                <Field
+                  label="Username" value={source.username} onChange={(v) => updateSource("username", v)} mono
+                  help={FIELD_HELP.wizardUsername}
+                />
               </div>
             </StepBody>
           ) : null}
@@ -466,20 +475,34 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
               title="Authentication"
               lede="Install the public key on the remote server. Private keys stay on this NAS and are never shown after creation."
             >
-              <div role="radiogroup" aria-label="Key source" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(216px, 1fr))", gap: 10 }}>
-                <Choice
-                  name="keysrc" title="Generate dedicated SSH key" detail="Recommended · scoped to this set only"
-                  checked={keySource === "generate"} onChange={() => setKeySource("generate")}
-                />
-                <Choice
-                  name="keysrc" title="Use managed key" detail="Reuse an existing Backup Manager key"
-                  checked={keySource === "managed"} onChange={() => setKeySource("managed")}
-                />
-                <Choice
-                  name="keysrc" title="Import key" detail="Paste once · stored encrypted, never displayed"
-                  checked={keySource === "import"} onChange={() => setKeySource("import")}
-                />
-              </div>
+              {/* One tooltip for the whole group, on the radiogroup container
+                  itself: aria-describedby is valid there, and there is no
+                  single control the way HelpField's .field shape assumes.
+                  The copy is honest about a fact split across three radios,
+                  that only one of them actually lets you finish this
+                  wizard, which is exactly the kind of thing no single
+                  radio's own label says. */}
+              <FieldHelp label="Key source" help={FIELD_HELP.wizardKeySource}>
+                {(helpId) => (
+                  <div
+                    role="radiogroup" aria-label="Key source" aria-describedby={helpId}
+                    style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(216px, 1fr))", gap: 10 }}
+                  >
+                    <Choice
+                      name="keysrc" title="Generate dedicated SSH key" detail="Recommended · scoped to this set only"
+                      checked={keySource === "generate"} onChange={() => setKeySource("generate")}
+                    />
+                    <Choice
+                      name="keysrc" title="Use managed key" detail="Reuse an existing Backup Manager key"
+                      checked={keySource === "managed"} onChange={() => setKeySource("managed")}
+                    />
+                    <Choice
+                      name="keysrc" title="Import key" detail="Paste once · stored encrypted, never displayed"
+                      checked={keySource === "import"} onChange={() => setKeySource("import")}
+                    />
+                  </div>
+                )}
+              </FieldHelp>
 
               {keySource === "generate" ? (
                 <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden", marginTop: 18 }}>
@@ -543,26 +566,28 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                     </div>
                   ) : (
                     <>
-                      <label className="field">
-                        <span className="field__label">Private key (OpenSSH or PEM)</span>
-                        <textarea
-                          className="input input--mono"
-                          rows={5}
-                          value={importPasted}
-                          onChange={(e) => setImportPasted(e.target.value)}
-                          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                          style={{ height: "auto", padding: "10px 11px", resize: "vertical" }}
-                          // M2 (#98 PR #145 review): key material must never
-                          // leave this screen unhashed, and cloud/"enhanced"
-                          // spellcheck (on by default in some browsers) sends
-                          // the full contents of an unmasked text field to a
-                          // third-party service as the user types or pastes.
-                          spellCheck={false}
-                          autoComplete="off"
-                          autoCorrect="off"
-                          autoCapitalize="off"
-                        />
-                      </label>
+                      <HelpField label="Private key (OpenSSH or PEM)" help={FIELD_HELP.wizardPrivateKey}>
+                        {(helpId) => (
+                          <textarea
+                            className="input input--mono"
+                            aria-describedby={helpId}
+                            rows={5}
+                            value={importPasted}
+                            onChange={(e) => setImportPasted(e.target.value)}
+                            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                            style={{ height: "auto", padding: "10px 11px", resize: "vertical" }}
+                            // M2 (#98 PR #145 review): key material must never
+                            // leave this screen unhashed, and cloud/"enhanced"
+                            // spellcheck (on by default in some browsers) sends
+                            // the full contents of an unmasked text field to a
+                            // third-party service as the user types or pastes.
+                            spellCheck={false}
+                            autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                          />
+                        )}
+                      </HelpField>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <button
                           className="btn btn--primary"
@@ -665,8 +690,14 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
               lede="Where artifacts appear, and how Backup Manager knows one is finished being written."
             >
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(228px, 1fr))", gap: "15px 18px" }}>
-                <Field label="Remote folder" value={remoteFolder} onChange={setRemoteFolder} mono span />
-                <Field label="Include patterns" value={includePatterns} onChange={setIncludePatterns} mono />
+                <Field
+                  label="Remote folder" value={remoteFolder} onChange={setRemoteFolder} mono span
+                  help={FIELD_HELP.wizardRemoteFolder}
+                />
+                <Field
+                  label="Include patterns" value={includePatterns} onChange={setIncludePatterns} mono
+                  help={FIELD_HELP.wizardIncludePatterns}
+                />
                 {/* Exclude patterns stays display-only (#98): core's
                     config.BackupSet has no exclude field yet (only
                     Include, see core/internal/config/config.go), so
@@ -674,42 +705,46 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                 <Field label="Exclude patterns" defaultValue="*.tmp, *.part" mono />
               </div>
 
-              <fieldset style={{ margin: "18px 0 0", padding: 0, border: "none" }}>
-                <legend style={{ padding: "0 0 9px", fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-2)" }}>
-                  Completion method
-                </legend>
-                <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-                  <div className="eyebrow" style={{ fontSize: "var(--text-xs)" }}>Recommended</div>
-                  <Choice
-                    name="cm" title="Atomic rename"
-                    detail="Producer writes to a temporary name, then renames into place."
-                    checked={completion === "atomic-rename"}
-                    onChange={() => setCompletion("atomic-rename")}
-                  />
-                  <Choice
-                    name="cm" title="Completion marker / manifest"
-                    detail="Producer writes a sidecar manifest when the artifact is complete."
-                    checked={completion === "completion-marker"}
-                    onChange={() => setCompletion("completion-marker")}
-                  />
-                  <div className="eyebrow" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>Advanced</div>
-                  <Choice
-                    name="cm" title="Stable file size / timestamp"
-                    detail="Use only when the producer cannot signal completion."
-                    checked={completion === "stable-size"}
-                    onChange={() => setCompletion("stable-size")}
-                  >
-                    {completion === "stable-size" ? (
-                      <div style={{ marginTop: 9 }}>
-                        <WarningBanner tone="warn">
-                          This method infers completion and provides less assurance than
-                          a producer-provided completion marker.
-                        </WarningBanner>
-                      </div>
-                    ) : null}
-                  </Choice>
-                </div>
-              </fieldset>
+              <FieldHelp label="Completion method" help={FIELD_HELP.wizardCompletionMethod}>
+                {(helpId) => (
+                  <fieldset aria-describedby={helpId} style={{ margin: "18px 0 0", padding: 0, border: "none" }}>
+                    <legend style={{ padding: "0 0 9px", fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-2)" }}>
+                      Completion method
+                    </legend>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+                      <div className="eyebrow" style={{ fontSize: "var(--text-xs)" }}>Recommended</div>
+                      <Choice
+                        name="cm" title="Atomic rename"
+                        detail="Producer writes to a temporary name, then renames into place."
+                        checked={completion === "atomic-rename"}
+                        onChange={() => setCompletion("atomic-rename")}
+                      />
+                      <Choice
+                        name="cm" title="Completion marker / manifest"
+                        detail="Producer writes a sidecar manifest when the artifact is complete."
+                        checked={completion === "completion-marker"}
+                        onChange={() => setCompletion("completion-marker")}
+                      />
+                      <div className="eyebrow" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>Advanced</div>
+                      <Choice
+                        name="cm" title="Stable file size / timestamp"
+                        detail="Use only when the producer cannot signal completion."
+                        checked={completion === "stable-size"}
+                        onChange={() => setCompletion("stable-size")}
+                      >
+                        {completion === "stable-size" ? (
+                          <div style={{ marginTop: 9 }}>
+                            <WarningBanner tone="warn">
+                              This method infers completion and provides less assurance than
+                              a producer-provided completion marker.
+                            </WarningBanner>
+                          </div>
+                        ) : null}
+                      </Choice>
+                    </div>
+                  </fieldset>
+                )}
+              </FieldHelp>
             </StepBody>
           ) : null}
 
@@ -719,26 +754,33 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
               lede="Where the NAS copy lives, how long it is kept, and how it is proven good."
             >
               <div className="eyebrow" style={{ fontSize: "var(--text-xs)", marginBottom: 10 }}>Storage</div>
-              <label className="field" style={{ maxWidth: 560 }}>
-                <span className="field__label">NAS destination</span>
-                <span style={{ display: "flex", gap: 8 }}>
-                  <input
-                    className="input input--mono"
-                    style={{ flex: 1 }}
-                    value={localDestination}
-                    onChange={(e) => setLocalDestination(e.target.value)}
-                  />
-                  {/* Do not fake a native picker the platform does not have (§22). */}
-                  <button className="btn" style={{ whiteSpace: "nowrap" }}>
-                    {caps.storagePicker ? "Browse volumes…" : "Validate path"}
-                  </button>
-                </span>
-                <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                  {caps.storagePicker
-                    ? "Uses the native " + bridge.name + " storage picker."
-                    : "This platform integration has no native storage picker — enter the mounted path directly (" + bridge.deployment.storageMount + ")."}
-                </span>
-              </label>
+              <HelpField
+                label="NAS destination" help={FIELD_HELP.wizardNasDestination}
+                labelStyle={{ maxWidth: 560 }}
+              >
+                {(helpId) => (
+                  <>
+                    <span style={{ display: "flex", gap: 8 }}>
+                      <input
+                        className="input input--mono"
+                        aria-describedby={helpId}
+                        style={{ flex: 1 }}
+                        value={localDestination}
+                        onChange={(e) => setLocalDestination(e.target.value)}
+                      />
+                      {/* Do not fake a native picker the platform does not have (§22). */}
+                      <button className="btn" style={{ whiteSpace: "nowrap" }}>
+                        {caps.storagePicker ? "Browse volumes…" : "Validate path"}
+                      </button>
+                    </span>
+                    <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                      {caps.storagePicker
+                        ? "Uses the native " + bridge.name + " storage picker."
+                        : "This platform integration has no native storage picker — enter the mounted path directly (" + bridge.deployment.storageMount + ")."}
+                    </span>
+                  </>
+                )}
+              </HelpField>
 
               <div className="eyebrow" style={{ fontSize: "var(--text-xs)", margin: "20px 0 10px" }}>Retention</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(164px, 1fr))", gap: 14 }}>
@@ -769,39 +811,43 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                     an id; there is deliberately no field here, or
                     anywhere else in this app, for naming a command
                     (docs/EPIC-B-multi-nas.md §26 Step 5). */}
-                <label className="field">
-                  <span className="field__label">Application validation</span>
-                  <select
-                    className="select"
-                    value={validatorId}
-                    disabled={validatorCatalogFailed || validatorCatalog === null}
-                    onChange={(e) => setValidatorId(e.target.value)}
-                  >
-                    <option value="">None (transfer and checksum verification only)</option>
-                    {(validatorCatalog ?? []).map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.id}
-                      </option>
-                    ))}
-                  </select>
-                  {/* The option labels are the ids themselves, since an
-                      id is what this actually sends and what an operator
-                      will see again in config.yaml. The chosen entry's
-                      own sentence goes here instead, where there is room
-                      for it. */}
-                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                    {validatorCatalogFailed
-                      ? "Could not load the available validators. Save without one, or retry after reloading."
-                      : validatorCatalog === null
-                        ? "Loading the available validators…"
-                        : (selectedValidator?.summary ??
-                          "No application validator: transfer and checksum verification only.")}
-                  </span>
-                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                    A validator runs against every artifact once it is transferred and checksummed. Rejecting one
-                    quarantines it and leaves the remote copy in place.
-                  </span>
-                </label>
+                <HelpField label="Application validation" help={FIELD_HELP.wizardValidatorId}>
+                  {(helpId) => (
+                    <>
+                      <select
+                        className="select"
+                        aria-describedby={helpId}
+                        value={validatorId}
+                        disabled={validatorCatalogFailed || validatorCatalog === null}
+                        onChange={(e) => setValidatorId(e.target.value)}
+                      >
+                        <option value="">None (transfer and checksum verification only)</option>
+                        {(validatorCatalog ?? []).map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.id}
+                          </option>
+                        ))}
+                      </select>
+                      {/* The option labels are the ids themselves, since an
+                          id is what this actually sends and what an operator
+                          will see again in config.yaml. The chosen entry's
+                          own sentence goes here instead, where there is room
+                          for it. */}
+                      <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                        {validatorCatalogFailed
+                          ? "Could not load the available validators. Save without one, or retry after reloading."
+                          : validatorCatalog === null
+                            ? "Loading the available validators…"
+                            : (selectedValidator?.summary ??
+                              "No application validator: transfer and checksum verification only.")}
+                      </span>
+                      <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                        A validator runs against every artifact once it is transferred and checksummed. Rejecting one
+                        quarantines it and leaves the remote copy in place.
+                      </span>
+                    </>
+                  )}
+                </HelpField>
               </div>
             </StepBody>
           ) : null}
@@ -867,24 +913,29 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                     ))}
                     <li style={{ color: "var(--warn)", fontWeight: 600 }}>Remote artifact deleted</li>
                   </ol>
-                  <label
-                    style={{
-                      display: "flex", gap: 10, padding: "13px 14px",
-                      border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)",
-                      background: "var(--surface-2)", fontSize: 13, cursor: "pointer"
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={acknowledged}
-                      onChange={(e) => setAcknowledged(e.target.checked)}
-                      style={{ marginTop: 2, accentColor: "var(--accent)" }}
-                    />
-                    <span>
-                      I understand the remote backup will be removed only after the NAS
-                      copy has been safely committed.
-                    </span>
-                  </label>
+                  <FieldHelp label="Acknowledgement" help={FIELD_HELP.wizardAcknowledge}>
+                    {(helpId) => (
+                      <label
+                        style={{
+                          display: "flex", gap: 10, padding: "13px 14px",
+                          border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)",
+                          background: "var(--surface-2)", fontSize: 13, cursor: "pointer"
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          aria-describedby={helpId}
+                          checked={acknowledged}
+                          onChange={(e) => setAcknowledged(e.target.checked)}
+                          style={{ marginTop: 2, accentColor: "var(--accent)" }}
+                        />
+                        <span>
+                          I understand the remote backup will be removed only after the NAS
+                          copy has been safely committed.
+                        </span>
+                      </label>
+                    )}
+                  </FieldHelp>
                 </div>
               </div>
 
@@ -975,25 +1026,64 @@ function StepBody({ title, lede, children }: { title: string; lede: string; chil
   );
 }
 
+/**
+ * One labelled text input, controlled or (for the wizard's own still-
+ * decorative fields, see fieldHelpCopy.ts) `defaultValue`. `help` is
+ * optional and deliberately so: passing it is what turns this into an
+ * explained field (#278); the decorative call sites below never pass it,
+ * so they keep rendering exactly as before, with no pop-up and no
+ * aria-describedby for a claim this file can't stand behind.
+ *
+ * `help`'s presence, not a separate boolean, decides which shape renders.
+ * When it's set, `style` (the grid-span object `span` builds) is forwarded
+ * to HelpField's own `style`, not to the `<label>` inside it: `gridColumn`
+ * only affects a DIRECT grid child, and once HelpField wraps the label,
+ * its own outer div is that direct child instead.
+ */
 function Field(
   props:
     | {
         label: string; value: string; onChange: (v: string) => void; onBlur?: () => void;
-        mono?: boolean; span?: boolean; defaultValue?: undefined;
+        mono?: boolean; span?: boolean; help?: FieldHelpCopy; defaultValue?: undefined;
       }
-    | { label: string; defaultValue: string; mono?: boolean; span?: boolean; value?: undefined; onChange?: undefined; onBlur?: undefined }
+    | {
+        label: string; defaultValue: string; mono?: boolean; span?: boolean; help?: FieldHelpCopy;
+        value?: undefined; onChange?: undefined; onBlur?: undefined;
+      }
 ) {
-  const { label, mono, span } = props;
+  const { label, mono, span, help } = props;
   const style = span ? { gridColumn: "1 / -1", maxWidth: 420 } : undefined;
   const className = "input" + (mono ? " input--mono" : "");
+  const input = (helpId?: string) =>
+    "onChange" in props && props.onChange ? (
+      <input
+        className={className}
+        aria-describedby={helpId}
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
+        onBlur={props.onBlur}
+      />
+    ) : (
+      <input className={className} aria-describedby={helpId} defaultValue={props.defaultValue} />
+    );
+
+  if (help) {
+    return (
+      <FieldHelp label={label} help={help} style={style}>
+        {(helpId) => (
+          <label className="field">
+            <span className="field__label">{label}</span>
+            {input(helpId)}
+          </label>
+        )}
+      </FieldHelp>
+    );
+  }
+
   return (
     <label className="field" style={style}>
       <span className="field__label">{label}</span>
-      {"onChange" in props && props.onChange ? (
-        <input className={className} value={props.value} onChange={(e) => props.onChange(e.target.value)} onBlur={props.onBlur} />
-      ) : (
-        <input className={className} defaultValue={props.defaultValue} />
-      )}
+      {input()}
     </label>
   );
 }
