@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
@@ -115,5 +116,70 @@ func TestRedactor_LongestNeedleWinsFirst(t *testing.T) {
 	}
 	if !strings.Contains(got, redacted) {
 		t.Fatalf("Filter(%q) = %q, want the redaction placeholder", "...", got)
+	}
+}
+
+// TestRedactor_RedactsIPv6DialErrorShape reproduces, deterministically and
+// without depending on this machine's own DNS or hosts file, the
+// adversarial review's exact empirical finding on PR #304: Go's net
+// dialer formats an IPv6 connection failure as "dial tcp [::1]:PORT:
+// connect: connection refused" (brackets, no literal hostname anywhere),
+// not "dial tcp ::1:PORT: ...". A needle built by naive string
+// concatenation ("::1" + ":" + "PORT") would never match this; only
+// net.JoinHostPort's bracketing does.
+func TestRedactor_RedactsIPv6DialErrorShape(t *testing.T) {
+	r := NewRedactor(Endpoint{Host: "::1", Port: 51839, User: "backupuser"})
+	input := "dial tcp [::1]:51839: connect: connection refused"
+	got := r.Filter(input)
+	if strings.Contains(got, "::1") {
+		t.Fatalf("Filter(%q) = %q, want the IPv6 address redacted", input, got)
+	}
+	if strings.Contains(got, "51839") {
+		t.Fatalf("Filter(%q) = %q, want the port redacted", input, got)
+	}
+	if !strings.Contains(got, redacted) {
+		t.Fatalf("Filter(%q) = %q, want the redaction placeholder", input, got)
+	}
+}
+
+// TestNewRedactor_AlsoRedactsWhatHostResolvesTo is the obs-package-local
+// proof for the Critical finding: needles must cover not just the
+// CONFIGURED Host string but every address it resolves to, since that
+// resolved address (never the literal hostname) is what actually shows up
+// in a real dial failure. internal/app/redaction_test.go's
+// TestSensitiveEndpointRedactsResolvedIPFromDNSHostname is the full
+// end-to-end version of this same proof, driven through a real rclone
+// sftp dial; this test isolates just the needle-building behavior.
+func TestNewRedactor_AlsoRedactsWhatHostResolvesTo(t *testing.T) {
+	resolved, err := net.LookupHost("localhost")
+	if err != nil || len(resolved) == 0 {
+		t.Skipf("this host cannot resolve %q, cannot exercise the DNS-hostname path: %v", "localhost", err)
+	}
+
+	r := NewRedactor(Endpoint{Host: "localhost", Port: 2222, User: "backupuser"})
+	for _, ip := range resolved {
+		input := "dial tcp " + net.JoinHostPort(ip, "2222") + ": connect: connection refused"
+		got := r.Filter(input)
+		if strings.Contains(got, ip) {
+			t.Errorf("Filter(%q) = %q, still contains the resolved address %q", input, got, ip)
+		}
+		if !strings.Contains(got, redacted) {
+			t.Errorf("Filter(%q) = %q, want the redaction placeholder", input, got)
+		}
+	}
+}
+
+// TestResolveHost_SkipsAlreadyLiteralIPs proves resolveHost's early exit:
+// a Host that is already an IP (v4 or v6) triggers no DNS lookup at all,
+// since the literal itself is already registered as a needle by
+// addHostShapes and there is nothing further to resolve.
+func TestResolveHost_SkipsAlreadyLiteralIPs(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "::1", "10.0.0.5"} {
+		if ips := resolveHost(host); ips != nil {
+			t.Errorf("resolveHost(%q) = %v, want nil for an IP literal", host, ips)
+		}
+	}
+	if ips := resolveHost(""); ips != nil {
+		t.Errorf("resolveHost(\"\") = %v, want nil", ips)
 	}
 }

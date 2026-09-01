@@ -178,6 +178,56 @@ func TestSensitiveEndpointRedactsRealDialFailureFromLog(t *testing.T) {
 	}
 }
 
+// TestSensitiveEndpointRedactsResolvedIPFromDNSHostname is the adversarial
+// review's Critical finding on PR #304: TestSensitiveEndpointRedactsReal-
+// DialFailureFromLog above configures Host as "127.0.0.1", a bare IP
+// literal, the one case where the CONFIGURED string and the DNS-RESOLVED
+// address Go's net stack actually puts into a dial failure coincide. That
+// test cannot tell "redaction works" apart from "redaction only works
+// because Host already happened to be an IP". This test configures Host as
+// a DNS hostname instead ("localhost", resolved for real via
+// net.LookupHost, not assumed), so the resolved address and the configured
+// string differ exactly the way they would for a real deployment's
+// dynamic-DNS or *.internal.example.com remote: the log line must still
+// not contain whichever address(es) "localhost" actually resolved to.
+func TestSensitiveEndpointRedactsResolvedIPFromDNSHostname(t *testing.T) {
+	resolved, err := net.LookupHost("localhost")
+	if err != nil || len(resolved) == 0 {
+		t.Skipf("this host cannot resolve %q, cannot exercise the DNS-hostname path: %v", "localhost", err)
+	}
+
+	remote, port := unreachableRemote(t, true)
+	remote.Host = "localhost"
+	bs := unreachableBackupSet(t, remote)
+
+	journal := openJournal(t)
+	var buf bytes.Buffer
+	logger := obs.New(&buf, obs.LevelInfo)
+
+	svc := New(testConfig(t, testSource("cicd-pipeline", bs)), journal, rclone.New(), logger)
+	svc.RetryPolicy = fastRetryPolicy()
+	svc.Now = fixedNow(epoch)
+
+	svc.RunCycle(context.Background())
+
+	out := buf.String()
+	for _, ip := range resolved {
+		if strings.Contains(out, ip) {
+			t.Fatalf("log output contains %q, the address DNS resolved %q to, want it redacted:\n%s", ip, "localhost", out)
+		}
+	}
+	portStr := strconv.Itoa(port)
+	if strings.Contains(out, portStr) {
+		t.Fatalf("log output contains the sensitive port %q, want it redacted:\n%s", portStr, out)
+	}
+	if !strings.Contains(out, "[REDACTED]") {
+		t.Fatalf("log output never mentions the redaction placeholder, want at least one occurrence:\n%s", out)
+	}
+	if !strings.Contains(out, "cicd-pipeline/gitea-forge-dump") {
+		t.Fatalf("log output lost the source id entirely, want the line to still say what failed:\n%s", out)
+	}
+}
+
 // TestSensitiveEndpointRedactsRealDialFailureFromJournal is issue #295's
 // behavioral contract for the durable journal: an artifact already at
 // DISCOVERED, whose backup set's remote is marked Sensitive, fails its

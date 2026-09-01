@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,8 +87,10 @@ func NewRedactor(endpoints ...Endpoint) *Redactor {
 
 // add registers every needle shape e's fields can build: user@host:port,
 // user@host, host:port, host, and the bare user, skipping whichever of
-// those a missing field makes impossible to form. Duplicate needles
-// (two endpoints sharing a host, say) are not registered twice.
+// those a missing field makes impossible to form, for BOTH the configured
+// host and every address it resolves to (see resolveHost). Duplicate
+// needles (two endpoints sharing a host, or a resolved address that
+// happens to equal the configured one, say) are not registered twice.
 func (r *Redactor) add(e Endpoint) {
 	host := strings.TrimSpace(e.Host)
 	user := strings.TrimSpace(e.User)
@@ -95,20 +98,75 @@ func (r *Redactor) add(e Endpoint) {
 		return
 	}
 
+	r.addHostShapes(host, user, e.Port)
+
+	// A dial failure's error text carries the address Go's net stack (and
+	// rclone, by way of it) actually connected to, not the hostname this
+	// process was configured with: "dial tcp 127.0.0.1:22: connect:
+	// connection refused" for a Host of "nas.internal.example.com", never
+	// the literal hostname. Without this, every needle above only ever
+	// matches when Host was already an IP literal, which is the one case
+	// where "configured" and "resolved" happen to be the same string; a
+	// Host that is a real DNS name would leak its resolved address with
+	// zero redaction otherwise. resolveHost is a no-op (returns nil) when
+	// host is already an IP, so this costs a DNS lookup only for the
+	// hostnames that actually need one.
+	for _, ip := range resolveHost(host) {
+		r.addHostShapes(ip, user, e.Port)
+	}
+
+	r.addNeedle(user)
+}
+
+// addHostShapes registers user@host:port, user@host, host:port and host
+// for one already-resolved host string (a configured hostname, a
+// configured IP literal, or a DNS-resolved address), skipping whichever
+// shape a missing user or port makes impossible to form. It never
+// registers the bare user alone; add does that once, regardless of how
+// many host shapes (configured plus resolved) it calls this with.
+func (r *Redactor) addHostShapes(host, user string, port int) {
+	if host == "" {
+		return
+	}
+
 	var hostPort string
-	if host != "" && e.Port != 0 {
-		hostPort = host + ":" + strconv.Itoa(e.Port)
+	if port != 0 {
+		// net.JoinHostPort brackets an IPv6 address (host containing a
+		// colon) the same way Go's own net dialer does when it formats a
+		// dial error ("[::1]:22", not "::1:22"), and leaves a hostname or
+		// IPv4 address untouched. Building this by hand would silently
+		// stop matching the moment a resolved address is IPv6.
+		hostPort = net.JoinHostPort(host, strconv.Itoa(port))
 	}
 
 	if user != "" && hostPort != "" {
 		r.addNeedle(user + "@" + hostPort)
 	}
-	if user != "" && host != "" {
+	if user != "" {
 		r.addNeedle(user + "@" + host)
 	}
 	r.addNeedle(hostPort)
 	r.addNeedle(host)
-	r.addNeedle(user)
+}
+
+// resolveHost returns every address host resolves to via DNS (or the
+// local hosts file), or nil when host is already an IP literal (nothing
+// new to resolve: the literal itself is already registered as a needle)
+// or the lookup fails for any reason (an unresolvable hostname, a DNS
+// outage at config-load time, an offline test environment). A failed
+// lookup deliberately costs no needle rather than an error a caller would
+// have to plumb through config loading and hot-reload alike: the
+// configured hostname is still registered as a needle either way, so this
+// only ever adds coverage, never removes it.
+func resolveHost(host string) []string {
+	if host == "" || net.ParseIP(host) != nil {
+		return nil
+	}
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		return nil
+	}
+	return ips
 }
 
 func (r *Redactor) addNeedle(s string) {
