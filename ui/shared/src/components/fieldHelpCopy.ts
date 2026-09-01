@@ -29,13 +29,17 @@
  * a fourth, because a plausible sentence about a decorative control reads
  * exactly like a true one. The controls left out today, and why:
  *
- *   - SettingsPage "Polling interval", "Log level", "Storage warning
- *     threshold", "Storage critical threshold". None is wired to anything
- *     (defaultValue, no handler, no save), and UpdateSettingsRequest carries
- *     only `retention`. poll_interval is a real config key but a duration
- *     (documented as 15m), not the 15/30/60 SECONDS this control offers;
- *     there is no log level in config.Config at all; and FR-21's capacity
- *     thresholds have no config field yet.
+ *   - SettingsPage "Polling interval", "Log level". Neither is wired to
+ *     anything (defaultValue, no handler, no save). poll_interval is a real
+ *     config key but a duration (documented as 15m), not the 15/30/60
+ *     SECONDS this control offers, and there is no log level in
+ *     config.Config at all.
+ *
+ *     "Storage warning threshold" and "Storage critical threshold" left
+ *     this list with issue #286, when internal/config grew the capacity
+ *     block FR-21's guard had been waiting on: they are now real fields on
+ *     UpdateSettingsRequest.capacity, and the storage cap beside them
+ *     joined the catalogue at the same time.
  *   - SettingsPage "Webhook notifications". config.Alerts' own doc says
  *     where an alert goes is deliberately not configurable and that there is
  *     no URL for this package to validate. Explaining this control would
@@ -212,5 +216,28 @@ export const FIELD_HELP = {
     example: "Production PostgreSQL",
     effect:
       "Nothing is written. Backup Manager has no endpoint yet for saving an edited backup set, so Save changes reports that plainly instead of appearing to succeed. What the form does still do is check, at save, whether the set changed while this dialog was open, and refuse rather than overwrite someone else's change."
+  },
+
+  // ------------------------------------------------------------- capacity
+
+  storageCap: {
+    what: "A ceiling on how much space this manager may occupy, separate from how full the disk actually is.",
+    example: "100 GB, or 0",
+    effect:
+      "0 is this product's default and means no cap: the manager uses the whole volume, and the dashboard's storage gauge reports against the disk itself. Any other value is enforced, not displayed: a transfer that would push this manager's own usage over that number is refused before it starts, exactly as one a completely full disk cannot hold already is. It must be greater than the critical threshold below, or every transfer would be refused from the moment it is saved."
+  },
+
+  storageWarningThreshold: {
+    what: "The remaining headroom, in bytes, at or below which the dashboard reports a storage warning. “Headroom” is whichever is smaller of the disk's free space and any configured cap's unused allowance.",
+    example: "20 GB",
+    effect:
+      "Never refuses a transfer by itself: it only changes what the storage panel reports. It must stay at or above the critical threshold below, since remaining headroom is expected to cross the warning line before it reaches the critical one, never the other way round."
+  },
+
+  storageCriticalThreshold: {
+    what: "The headroom floor, in bytes, at or below which a transfer is refused outright, even one that would technically still fit.",
+    example: "10 GB",
+    effect:
+      "A transfer that would itself drop the remaining headroom to or below this number never begins. Nothing is deleted to make room for it: the transfer is simply skipped and retried on a later cycle, once space has been freed some other way."
   }
 } as const satisfies Record<string, FieldHelpCopy>;

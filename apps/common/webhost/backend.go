@@ -99,6 +99,20 @@ type BackupServiceClient interface {
 	// into internal/retention's apply path.
 	ListStorageStatus(ctx context.Context) ([]service.StorageStatus, error)
 
+	// ManagerStorage backs the other half of GET /api/v1/system/storage
+	// (issue #286): the ONE manager-wide reading, taken from the
+	// filesystem the backup root is on, carrying this manager's own
+	// consumption and the operator's cap alongside the volume's figures.
+	//
+	// It is a separate call rather than something derivable from
+	// ListStorageStatus because summing that list cannot answer the same
+	// question: an unconfigured instance sums to zero, two sets on one
+	// volume sum to twice the disk, and a manager-wide cap has no per-set
+	// entry to live on. See core/service.ManagerStorage's own doc, and in
+	// particular what a reading with Known false must and must not be
+	// rendered as.
+	ManagerStorage(ctx context.Context) (service.ManagerStorage, error)
+
 	// Settings and UpdateSettings back GET and PATCH /api/v1/settings
 	// (issue #140/B3.7): the one generic, authenticated, CSRF-protected
 	// settings surface a shared Web UI administers server-side

@@ -88,6 +88,15 @@ type Journal interface {
 	// status call and dashboard load.
 	ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error)
 
+	// LocalBytesInUse is FR-21's other input, added with the storage cap
+	// (issue #286): how much space this manager itself is occupying,
+	// summed from the sizes this journal already records. admitCapacity
+	// needs it before every transfer, because a cap cannot be enforced
+	// from a statfs reading alone; see internal/capacity's "Two different
+	// questions" section. The state vocabulary travels as an argument
+	// because internal/lifecycle owns it, not internal/state.
+	LocalBytesInUse(ctx context.Context, states []string) (uint64, error)
+
 	// The durable per-backup-set connection refusal (issue #245).
 	// RunCycle writes through the first two at the end of every pass and
 	// BuildHealthReport reads the whole population once per report; see
@@ -156,18 +165,20 @@ type Service struct {
 	Now func() time.Time
 
 	// Capacity is FR-21's thresholds, consulted before every transfer
-	// begins (see pipeline.go's admitCapacity). Its zero value
-	// (WarningFreeBytes, CriticalFreeBytes and SafetyMarginBytes all 0) is
-	// valid (internal/capacity.Thresholds.Validate requires only that
-	// Warning >= Critical) and still enforces FR-21's hard rule, "do not
-	// begin a transfer known not to fit at all", because
-	// internal/capacity.Assess reports Critical whenever the artifact
-	// simply does not fit, regardless of what the thresholds are. What the
-	// zero value cannot do is warn before the disk is actually full, since
-	// there is no configured margin to warn against. See this package's
-	// introducing PR description for why: internal/config.BackupSet has no
-	// warning_free_bytes / critical_free_bytes / safety_margin_bytes
-	// fields yet, and extending it is out of this package's file scope.
+	// begins (see pipeline.go's admitCapacity).
+	//
+	// New fills it in from Config.Capacity, which is where an operator's
+	// cap and threshold numbers live since issue #286. Before that block
+	// existed nothing outside a test ever assigned this field, so every
+	// running deployment ran on the zero value: still a real FR-21 guard
+	// ("do not begin a transfer known not to fit at all", which Assess
+	// reports as Critical regardless of thresholds), but with no warning
+	// level ahead of it and no ceiling of its own.
+	//
+	// The zero value remains valid and remains the default: a cap of zero
+	// is no cap, and thresholds of zero are no warning and no critical
+	// line. See internal/config.Capacity for what each number means and
+	// which combinations config.Validate refuses outright.
 	Capacity capacity.Thresholds
 
 	// RetryPolicy bounds this package's own network-facing retries (see
@@ -198,7 +209,37 @@ func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *ob
 		Journal:   journal,
 		Transport: tr,
 		Logger:    logger,
+		Capacity:  thresholdsFrom(cfg),
 	}
+}
+
+// thresholdsFrom translates internal/config's capacity block into the plain
+// struct internal/capacity takes. It is the one place the two shapes meet,
+// which is exactly why internal/capacity does not import internal/config
+// (see that package's doc).
+//
+// Every conversion here is from a validated int64 to a uint64.
+// config.Validate refuses a negative value in any of these fields, so a
+// Config that reached this function cannot produce a wrapped byte count;
+// the guards are here anyway, because "cannot happen" plus an unsigned
+// conversion is how eighteen exabytes of imaginary headroom gets invented.
+func thresholdsFrom(cfg *config.Config) capacity.Thresholds {
+	if cfg == nil {
+		return capacity.Thresholds{}
+	}
+	return capacity.Thresholds{
+		CapBytes:          nonNegative(cfg.Capacity.CapBytes),
+		WarningFreeBytes:  nonNegative(cfg.Capacity.WarningFreeBytes),
+		CriticalFreeBytes: nonNegative(cfg.Capacity.CriticalFreeBytes),
+		SafetyMarginBytes: nonNegative(cfg.Capacity.SafetyMarginBytes),
+	}
+}
+
+func nonNegative(n int64) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
 }
 
 func (s *Service) now() time.Time {

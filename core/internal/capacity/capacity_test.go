@@ -47,14 +47,14 @@ func TestThresholdsValidate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAssessRejectsNegativeArtifactSize(t *testing.T) {
-	_, err := Assess(Stat{AvailableBytes: 1000}, -1, Thresholds{})
+	_, err := Assess(Stat{AvailableBytes: 1000}, Usage{}, -1, Thresholds{})
 	if err == nil {
 		t.Fatal("Assess with a negative artifact size = nil error, want one")
 	}
 }
 
 func TestAssessRejectsInvalidThresholds(t *testing.T) {
-	_, err := Assess(Stat{AvailableBytes: 1000}, 10, Thresholds{WarningFreeBytes: 1, CriticalFreeBytes: 2})
+	_, err := Assess(Stat{AvailableBytes: 1000}, Usage{}, 10, Thresholds{WarningFreeBytes: 1, CriticalFreeBytes: 2})
 	if err == nil {
 		t.Fatal("Assess with inverted thresholds = nil error, want one")
 	}
@@ -72,7 +72,7 @@ func TestAssessDetectsOverflow(t *testing.T) {
 	// Assess checks for.
 	const maxInt64 = int64(1<<63 - 1)
 	const marginNearMaxUint64 = ^uint64(0) - 1
-	_, err := Assess(Stat{AvailableBytes: 1000}, maxInt64, Thresholds{SafetyMarginBytes: marginNearMaxUint64})
+	_, err := Assess(Stat{AvailableBytes: 1000}, Usage{}, maxInt64, Thresholds{SafetyMarginBytes: marginNearMaxUint64})
 	if err == nil {
 		t.Fatal("Assess with an overflowing requirement = nil error, want one")
 	}
@@ -167,9 +167,9 @@ func TestAssessLevels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stat := Stat{AvailableBytes: tt.availableBytes}
-			a, err := Assess(stat, artifactSize, th)
+			a, err := Assess(stat, Usage{}, artifactSize, th)
 			if err != nil {
-				t.Fatalf("Assess() error = %v, want nil", err)
+				t.Fatalf("Assess() error = %v, Usage{}, want nil", err)
 			}
 			if a.Fits != tt.wantFits {
 				t.Errorf("Fits = %v, want %v", a.Fits, tt.wantFits)
@@ -181,8 +181,8 @@ func TestAssessLevels(t *testing.T) {
 				t.Errorf("RequiredBytes = %d, want %d", a.RequiredBytes, required)
 			}
 			if tt.wantFits {
-				if a.ProjectedAvailableBytes != tt.wantProjected {
-					t.Errorf("ProjectedAvailableBytes = %d, want %d", a.ProjectedAvailableBytes, tt.wantProjected)
+				if a.ProjectedHeadroomBytes != tt.wantProjected {
+					t.Errorf("ProjectedHeadroomBytes = %d, want %d", a.ProjectedHeadroomBytes, tt.wantProjected)
 				}
 				if a.ShortfallBytes != 0 {
 					t.Errorf("ShortfallBytes = %d, want 0 when Fits", a.ShortfallBytes)
@@ -191,8 +191,8 @@ func TestAssessLevels(t *testing.T) {
 				if a.ShortfallBytes != tt.wantShortfall {
 					t.Errorf("ShortfallBytes = %d, want %d", a.ShortfallBytes, tt.wantShortfall)
 				}
-				if a.ProjectedAvailableBytes != 0 {
-					t.Errorf("ProjectedAvailableBytes = %d, want 0 when !Fits", a.ProjectedAvailableBytes)
+				if a.ProjectedHeadroomBytes != 0 {
+					t.Errorf("ProjectedHeadroomBytes = %d, want 0 when !Fits", a.ProjectedHeadroomBytes)
 				}
 			}
 		})
@@ -209,7 +209,7 @@ func TestAssessHeadroomArithmeticIsNotDoubled(t *testing.T) {
 	const artifactSize = int64(4 << 30) // 4 GiB, matching the scenario the issue calls out
 	th := Thresholds{SafetyMarginBytes: 1 << 30}
 
-	a, err := Assess(Stat{AvailableBytes: 5 << 30}, artifactSize, th)
+	a, err := Assess(Stat{AvailableBytes: 5 << 30}, Usage{}, artifactSize, th)
 	if err != nil {
 		t.Fatalf("Assess() error = %v", err)
 	}
@@ -224,7 +224,7 @@ func TestAssessHeadroomArithmeticIsNotDoubled(t *testing.T) {
 
 func TestAssessCurrentUsesZeroArtifactSize(t *testing.T) {
 	th := Thresholds{WarningFreeBytes: 1000, CriticalFreeBytes: 100, SafetyMarginBytes: 200}
-	a, err := AssessCurrent(Stat{AvailableBytes: 5000}, th)
+	a, err := AssessCurrent(Stat{AvailableBytes: 5000}, Usage{}, th)
 	if err != nil {
 		t.Fatalf("AssessCurrent() error = %v", err)
 	}
@@ -242,9 +242,9 @@ func TestAssessCurrentUsesZeroArtifactSize(t *testing.T) {
 
 func TestAdmitAllowsAnOKTransfer(t *testing.T) {
 	th := Thresholds{WarningFreeBytes: 1000, CriticalFreeBytes: 100, SafetyMarginBytes: 50}
-	a, err := Admit(Stat{AvailableBytes: 1_000_000}, 500, th)
+	a, err := Admit(Stat{AvailableBytes: 1_000_000}, Usage{}, 500, th)
 	if err != nil {
-		t.Fatalf("Admit() error = %v, want nil", err)
+		t.Fatalf("Admit() error = %v, Usage{}, want nil", err)
 	}
 	if a.Level != OK {
 		t.Errorf("Level = %v, want OK", a.Level)
@@ -254,9 +254,9 @@ func TestAdmitAllowsAnOKTransfer(t *testing.T) {
 func TestAdmitAllowsWithOnlyAWarning(t *testing.T) {
 	th := Thresholds{WarningFreeBytes: 1000, CriticalFreeBytes: 100, SafetyMarginBytes: 50}
 	required := uint64(500 + 50)
-	a, err := Admit(Stat{AvailableBytes: required + 500}, 500, th) // projected 500: warning band
+	a, err := Admit(Stat{AvailableBytes: required + 500}, Usage{}, 500, th) // projected 500: warning band
 	if err != nil {
-		t.Fatalf("Admit() error = %v, want nil (warning must not block)", err)
+		t.Fatalf("Admit() error = %v, Usage{}, want nil (warning must not block)", err)
 	}
 	if a.Level != Warning {
 		t.Errorf("Level = %v, want Warning", a.Level)
@@ -265,9 +265,9 @@ func TestAdmitAllowsWithOnlyAWarning(t *testing.T) {
 
 func TestAdmitRefusesWhenItDoesNotFit(t *testing.T) {
 	th := Thresholds{SafetyMarginBytes: 50}
-	_, err := Admit(Stat{AvailableBytes: 100}, 500, th)
+	_, err := Admit(Stat{AvailableBytes: 100}, Usage{}, 500, th)
 	if err == nil {
-		t.Fatal("Admit() = nil error, want a refusal")
+		t.Fatal("Admit() = nil error, Usage{}, want a refusal")
 	}
 	var insufficient *InsufficientCapacityError
 	if !errors.As(err, &insufficient) {
@@ -286,9 +286,9 @@ func TestAdmitRefusesWhenItWouldBreachCritical(t *testing.T) {
 	required := uint64(500 + 50)
 	// Fits (barely), but leaves only 100 bytes projected, under the 1000-byte
 	// critical floor: the "fits but not safely" refusal shape.
-	_, err := Admit(Stat{AvailableBytes: required + 100}, 500, th)
+	_, err := Admit(Stat{AvailableBytes: required + 100}, Usage{}, 500, th)
 	if err == nil {
-		t.Fatal("Admit() = nil error, want a refusal for breaching the critical floor")
+		t.Fatal("Admit() = nil error, Usage{}, want a refusal for breaching the critical floor")
 	}
 	var insufficient *InsufficientCapacityError
 	if !errors.As(err, &insufficient) {
@@ -303,13 +303,13 @@ func TestAdmitRefusesWhenItWouldBreachCritical(t *testing.T) {
 }
 
 func TestAdmitPropagatesAssessErrors(t *testing.T) {
-	_, err := Admit(Stat{}, -1, Thresholds{})
+	_, err := Admit(Stat{}, Usage{}, -1, Thresholds{})
 	if err == nil {
-		t.Fatal("Admit() with a negative artifact size = nil error, want one")
+		t.Fatal("Admit() with a negative artifact size = nil error, Usage{}, want one")
 	}
 	var insufficient *InsufficientCapacityError
 	if errors.As(err, &insufficient) {
-		t.Fatal("Admit() returned *InsufficientCapacityError for an input error, want a plain validation error")
+		t.Fatal("Admit() returned *InsufficientCapacityError for an input error, Usage{}, want a plain validation error")
 	}
 }
 

@@ -11,6 +11,7 @@ import { ErrorState } from "@shared/components/EmptyState";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import type { OperatorFailure } from "@shared/api/failure";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
+import { CapacityCard } from "@shared/pages/CapacityCard";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
@@ -53,16 +54,17 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                   <option>error</option><option>warn</option><option>info</option><option>debug</option>
                 </select>
               </label>
-              <label className="field">
-                <span className="field__label">Storage warning threshold</span>
-                <input className="input input--mono" defaultValue="80%" disabled={readOnly} />
-              </label>
-              <label className="field">
-                <span className="field__label">Storage critical threshold</span>
-                <input className="input input--mono" defaultValue="92%" disabled={readOnly} />
-              </label>
             </div>
           </section>
+
+          {/* Issue #286: the storage cap and its two FR-21 thresholds
+              used to sit here as three decorative controls that saved
+              nowhere ("Storage warning threshold"/"Storage critical
+              threshold" carried defaultValue="80%"/"92%" and no handler
+              at all). They are now the real thing, reading from and
+              writing to internal/config's capacity block, same as
+              RetentionPolicyCard below did for retention under #140. */}
+          <CapacityCard readOnly={readOnly} />
 
           {/* B3.7 (#140). This used to be a static row of badges reading
               "7 daily / 13 weekly / 12 monthly / protect known-good": a

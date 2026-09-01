@@ -1,12 +1,14 @@
 import type {
   AppSettings,
   BackupManagerApi,
+  CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
   CreateBackupSetRequest,
   CreatedBackupSet,
   FirstRunResult,
   HostKeyProbeResult,
+  ManagerStorage,
   SSHKeyImportResult,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
@@ -249,6 +251,80 @@ const HEALTH: SystemHealth = {
   storageReadingsUnavailable: 0
 };
 
+/**
+ * Issue #286's manager-wide reading. Deliberately its own fixture rather
+ * than derived from HEALTH: the two answer different questions (a
+ * fresh/unconfigured instance sums HEALTH's per-set list to zero and gets
+ * "0 B of 0 B used · NaN%", which is the defect this whole mechanism
+ * exists to stop), so nothing here is computed FROM the other.
+ *
+ * "default" reports the disk itself (no cap configured, this product's
+ * default): 6.2 TB total, 1.8 TB free, matching HEALTH's own numbers so
+ * the two readings agree where they overlap. "empty" reports known:false
+ * with no_backup_root, which is the honest answer a configuration with no
+ * backup sets actually gives — not a fabricated zero. "storage-critical"
+ * keeps the disk denominator (a critically full volume, not a spent cap)
+ * so it lines up with HEALTH's own "storage critical" narrative for that
+ * scenario.
+ */
+const STORAGE: ManagerStorage = {
+  known: true,
+  unknownReason: "",
+  measuredPath: "/data/backups",
+  totalBytes: 6.2 * TB,
+  freeBytes: 1.8 * TB,
+  availableBytes: 1.8 * TB,
+  catalogBytes: 4.4 * TB,
+  catalogBytesKnown: true,
+  otherBytes: 0,
+  otherBytesKnown: true,
+  capBytes: 0,
+  denominator: "disk",
+  limitBytes: 6.2 * TB,
+  usedBytes: 4.4 * TB,
+  headroomBytes: 1.8 * TB,
+  bindingConstraint: "disk",
+  warningFreeBytes: 0,
+  criticalFreeBytes: 0,
+  level: "OK"
+};
+
+const STORAGE_CRITICAL: ManagerStorage = {
+  ...STORAGE,
+  freeBytes: 0.28 * TB,
+  availableBytes: 0.28 * TB,
+  catalogBytes: 5.92 * TB,
+  usedBytes: 5.92 * TB,
+  headroomBytes: 0.28 * TB,
+  level: "CRITICAL"
+};
+
+/** What a configuration with no backup sets actually reports: there is no
+ *  local_path anywhere to derive a backup root from, so this is not
+ *  known, not a fabricated zero. Matches getHealth's own "empty" branch,
+ *  which reports zero sets for the identical reason. */
+const STORAGE_EMPTY: ManagerStorage = {
+  known: false,
+  unknownReason: "no_backup_root",
+  measuredPath: "",
+  totalBytes: 0,
+  freeBytes: 0,
+  availableBytes: 0,
+  catalogBytes: 0,
+  catalogBytesKnown: false,
+  otherBytes: 0,
+  otherBytesKnown: false,
+  capBytes: 0,
+  denominator: "disk",
+  limitBytes: 0,
+  usedBytes: 0,
+  headroomBytes: 0,
+  bindingConstraint: "",
+  warningFreeBytes: 0,
+  criticalFreeBytes: 0,
+  level: ""
+};
+
 const VERSION: VersionInfo = {
   api: "v1", service: "1.3.0", buildCommit: "9f4c1ab", goVersion: "go1.27.0",
   engine: "1.68.2", configRevision: "cfg_9f4c1ab", ready: true, compatible: true
@@ -380,6 +456,23 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
  * `schema` mirrors core/internal/config's own constants, so the picker
  * this fixture drives offers exactly what config.Validate accepts.
  */
+/** Issue #286: 0 across the board, which is this product's default (no
+ *  cap, no warning line, no critical line) and matches how getStorage's
+ *  own "default" fixture below reports the disk itself as the
+ *  denominator. backupRoot mirrors the derivation the real backend does
+ *  when an operator has not named one: the directory the fixture's own
+ *  backup sets share. */
+function defaultCapacitySettings(): CapacitySettings {
+  return {
+    capBytes: 0,
+    warningFreeBytes: 0,
+    criticalFreeBytes: 0,
+    safetyMarginBytes: 0,
+    backupRoot: "/data/backups",
+    backupRootConfigured: false
+  };
+}
+
 function defaultSettings(): AppSettings {
   return {
     retention: {
@@ -392,6 +485,7 @@ function defaultSettings(): AppSettings {
       ],
       protectLastKnownGood: true
     },
+    capacity: defaultCapacitySettings(),
     schema: {
       retention: {
         granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
@@ -533,6 +627,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             : HEALTH
       ),
 
+    // Issue #286. See STORAGE/STORAGE_CRITICAL/STORAGE_EMPTY's own doc
+    // for why this is not derived from getHealth's own numbers.
+    getStorage: () =>
+      delay(empty ? STORAGE_EMPTY : scenario === "storage-critical" ? STORAGE_CRITICAL : STORAGE),
+
     listSets: () => delay(empty ? [] : SETS),
     getSet: (id) => {
       const found = SETS.find((s) => s.id === id);
@@ -633,26 +732,44 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getSettings: () => delay(structuredClone(settings)),
     updateSettings: (req: UpdateSettingsRequest) => {
       const r = req.retention;
-      // The real backend refuses a write that names no setting, in both
-      // layers and structurally: an absent retention section and a
+      const c = req.capacity;
+      // The real backend refuses a write that names no setting at all, in
+      // both layers and structurally: an absent section and a
       // present-but-empty one are the same request, and honouring either
       // would rewrite the config file and move the config revision for a
-      // body with no content (PR #171, mandatory finding M3). A fixture
-      // that resolved with the current settings instead would let a
-      // component that sends an empty body pass here and fail against the
-      // server.
-      const namesNothing =
-        !r ||
+      // body with no content (PR #171, mandatory finding M3; issue #286
+      // extended this to capacity, the same way). A fixture that resolved
+      // with the current settings instead would let a component that
+      // sends an empty body pass here and fail against the server.
+      const retentionNamesNothing =
+        r === undefined ||
         (r.timezone === undefined &&
           r.weekStartsOn === undefined &&
           r.tiers === undefined &&
           r.protectLastKnownGood === undefined);
-      if (namesNothing)
+      const capacityNamesNothing =
+        c === undefined ||
+        (c.capBytes === undefined &&
+          c.warningFreeBytes === undefined &&
+          c.criticalFreeBytes === undefined &&
+          c.safetyMarginBytes === undefined);
+      if (retentionNamesNothing && capacityNamesNothing)
         return Promise.reject(new BackupManagerError({
           code: "INVALID_REQUEST",
           message: "a settings write must name at least one setting to change",
           correlationId: "cid_mocksettings400"
         }));
+      // A section that WAS sent but named nothing is refused even when
+      // the OTHER section carries a real change: quietly dropping half a
+      // request is how a settings page reports success for an edit that
+      // never happened.
+      if ((r !== undefined && retentionNamesNothing) || (c !== undefined && capacityNamesNothing))
+        return Promise.reject(new BackupManagerError({
+          code: "INVALID_REQUEST",
+          message: "a settings section was sent with no field in it; omit the section instead of sending an empty one",
+          correlationId: "cid_mocksettings400"
+        }));
+
       if (r) {
         // Only the named fields move, exactly like the PATCH contract
         // (and like core/service's own applyRetentionUpdate): a mock that
@@ -679,6 +796,51 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           settings.retention.tiers = r.tiers.map((t) => ({ ...t }));
         }
       }
+
+      if (c) {
+        // core/internal/config.validateCapacity's own rules (issue #286):
+        // nothing negative, and a cap may not sit at or below the
+        // critical floor, since that combination refuses every transfer
+        // forever. Checked against what the write would leave in effect
+        // (the named fields folded onto the current settings), the same
+        // way the real backend validates the WHOLE config rather than
+        // only the fields a request happened to touch.
+        const capBytes = c.capBytes ?? settings.capacity.capBytes;
+        const warningFreeBytes = c.warningFreeBytes ?? settings.capacity.warningFreeBytes;
+        const criticalFreeBytes = c.criticalFreeBytes ?? settings.capacity.criticalFreeBytes;
+        const safetyMarginBytes = c.safetyMarginBytes ?? settings.capacity.safetyMarginBytes;
+
+        if (capBytes < 0)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity.cap_bytes must not be negative; use 0 for no cap",
+            correlationId: "cid_mocksettings400"
+          }));
+        if (warningFreeBytes < 0 || criticalFreeBytes < 0 || safetyMarginBytes < 0)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity thresholds must not be negative",
+            correlationId: "cid_mocksettings400"
+          }));
+        if (warningFreeBytes < criticalFreeBytes)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity.warning_free_bytes must be at or above capacity.critical_free_bytes",
+            correlationId: "cid_mocksettings400"
+          }));
+        if (capBytes > 0 && criticalFreeBytes > 0 && capBytes <= criticalFreeBytes)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity.cap_bytes must be above capacity.critical_free_bytes",
+            correlationId: "cid_mocksettings400"
+          }));
+
+        if (c.capBytes !== undefined) settings.capacity.capBytes = c.capBytes;
+        if (c.warningFreeBytes !== undefined) settings.capacity.warningFreeBytes = c.warningFreeBytes;
+        if (c.criticalFreeBytes !== undefined) settings.capacity.criticalFreeBytes = c.criticalFreeBytes;
+        if (c.safetyMarginBytes !== undefined) settings.capacity.safetyMarginBytes = c.safetyMarginBytes;
+      }
+
       return delay(structuredClone(settings));
     },
 

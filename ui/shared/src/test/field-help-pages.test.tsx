@@ -121,6 +121,14 @@ describe("every explained field is wired to its own copy", () => {
     expectHelp(screen.getByLabelText("Confirm new password"), FIELD_HELP.confirmNewPassword);
   });
 
+  it("on the storage capacity form", async () => {
+    await renderSettings();
+
+    expectHelp(screen.getByLabelText("Storage cap"), FIELD_HELP.storageCap);
+    expectHelp(screen.getByLabelText("Storage warning threshold"), FIELD_HELP.storageWarningThreshold);
+    expectHelp(screen.getByLabelText("Storage critical threshold"), FIELD_HELP.storageCriticalThreshold);
+  });
+
   it("on the activity filters", async () => {
     render(
       <ApiProvider api={createMockApi()}>

@@ -43,6 +43,20 @@ const SCHEMA = {
   ]
 };
 
+/** This file is about the retention form only; every fixture here carries
+ *  the product default for capacity (no cap, no thresholds), the same
+ *  shape CapacityCard's own suite exercises in isolation. */
+function defaultCapacityFixture(): AppSettings["capacity"] {
+  return {
+    capBytes: 0,
+    warningFreeBytes: 0,
+    criticalFreeBytes: 0,
+    safetyMarginBytes: 0,
+    backupRoot: "/data/backups",
+    backupRootConfigured: false
+  };
+}
+
 function settingsFixture(
   overrides: Partial<AppSettings["retention"]> = {},
   schema: AppSettings["schema"]["retention"] = SCHEMA
@@ -59,6 +73,7 @@ function settingsFixture(
       protectLastKnownGood: true,
       ...overrides
     },
+    capacity: defaultCapacityFixture(),
     schema: { retention: schema }
   };
 }
@@ -495,6 +510,11 @@ describe("SettingsPage retention policy form", () => {
   });
 
   it("shows an error instead of an empty form when the settings read fails", async () => {
+    // RetentionPolicyCard and CapacityCard each fetch getSettings()
+    // independently (like the real per-set health/status cards, neither
+    // shares the other's request), so a read failure here is not one
+    // card's problem: both show it, honestly, rather than one failing
+    // silently while the other renders as if nothing were wrong.
     const getSettings = vi.fn(() =>
       Promise.reject(
         new BackupManagerError({
@@ -521,7 +541,13 @@ describe("SettingsPage retention policy form", () => {
     );
     await act(async () => {});
 
-    expect(screen.getByText(/failed to read settings/)).toBeTruthy();
+    const retentionCard = screen.getByText("Retention policy").closest("section");
+    const capacityCard = screen.getByText("Storage capacity").closest("section");
+    if (!retentionCard || !capacityCard) throw new Error("expected card sections not found");
+
+    expect(within(retentionCard).getByText(/failed to read settings/)).toBeTruthy();
+    expect(within(capacityCard).getByText(/failed to read settings/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save retention policy" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save storage capacity" })).toBeNull();
   });
 });

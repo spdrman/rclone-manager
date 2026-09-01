@@ -81,19 +81,22 @@ type StorageStatus struct {
 	AvailableBytes uint64
 
 	// WarningFreeBytes and CriticalFreeBytes are the configured thresholds
-	// AvailableBytes is compared against.
+	// the binding headroom is compared against.
 	//
-	// Both are zero in every deployment today. internal/config carries no
-	// capacity fields yet (see internal/app/app.go's own note on that
-	// deferral) and nothing outside tests assigns app.Service.Capacity, so
-	// a running process reports 0 / 0 and, since Assess only reaches
-	// Critical on a genuine shortfall, a Level of OK for anything short of
-	// a full disk. FR-21's hard refusal is unaffected — it does not need a
-	// configured floor to refuse a transfer that will not fit — but there
-	// is no warning level to display until those config fields land, and
-	// TestListStorageStatus_ProductionDefaults_ReportsZeroThresholdsAndOK
-	// pins exactly that so the inert state is a stated fact rather than a
-	// surprise.
+	// They come from internal/config's capacity block, added with the
+	// storage cap in issue #286. Before that they were structurally zero in
+	// every deployment (nothing outside a test assigned
+	// app.Service.Capacity), so a running process reported 0 / 0 and a
+	// Level of OK for anything short of a full disk. Both are still zero by
+	// default, which means "no line here" rather than "a line at zero
+	// bytes"; FR-21's hard refusal never needed a configured floor and is
+	// unaffected either way.
+	//
+	// "Binding headroom" is the filesystem's available space, or the
+	// operator's remaining cap allowance, whichever is smaller. See
+	// internal/capacity's "Two different questions" section: a set whose
+	// volume has a terabyte free can still be at CRITICAL because the
+	// manager-wide cap is nearly spent.
 	WarningFreeBytes  uint64
 	CriticalFreeBytes uint64
 
@@ -149,7 +152,19 @@ func (b *BackupService) ListStorageStatus(ctx context.Context) ([]StorageStatus,
 		return nil, fmt.Errorf("service: listing backup sets for storage status: %w", err)
 	}
 
-	th := b.state.Load().inner.Capacity
+	st := b.state.Load()
+	th := st.inner.Capacity
+
+	// This manager's own usage, measured once for the whole walk. The cap
+	// is manager-wide, so the answer is identical for every backup set, and
+	// re-reading it per set would let two entries in one response disagree
+	// about the same number. An unmeasured usage leaves every set's reading
+	// "misconfigured" when a cap is configured (capacity.AssessCurrent will
+	// not guess at it) and is simply not consulted when one is not.
+	usage, usageErr := st.inner.LocalUsage(ctx)
+	if usageErr != nil {
+		b.logger.Error(ctx, "storage-status", usageErr)
+	}
 
 	out := make([]StorageStatus, 0, len(sets))
 	for _, bs := range sets {
@@ -179,7 +194,7 @@ func (b *BackupService) ListStorageStatus(ctx context.Context) ([]StorageStatus,
 			continue
 		}
 
-		assessment, assessErr := capacity.AssessCurrent(stat, th)
+		assessment, assessErr := capacity.AssessCurrent(stat, usage, th)
 		if assessErr != nil {
 			status.UnavailableReason = StorageUnavailableMisconfigured
 			b.logger.Error(ctx, "storage-status",
