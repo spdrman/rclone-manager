@@ -278,6 +278,13 @@ func ApplyLastKnownGood(verdicts []GFSVerdict, lkg LastKnownGoodResult) []GFSVer
 		if out[i].Artifact == lkg.Artifact {
 			out[i].Keep = true
 			out[i].Tiers = append(append([]GFSTierSelection(nil), out[i].Tiers...), lkgSelection)
+			// GFSVerdict.SiblingCollisions is documented as populated
+			// only when Keep is false (issue #292): an artifact FR-19
+			// protection just kept has nothing left to disambiguate, and
+			// leaving a now-stale collision attached would say this
+			// protected artifact is still a silently-split delete
+			// candidate, which it no longer is.
+			out[i].SiblingCollisions = nil
 			return out
 		}
 	}

@@ -641,6 +641,50 @@ from the previous version of this document, which said no code path deleted a lo
 one does now, and it is the second file in this repository whose doc comment calls itself
 the most dangerous line in the project.
 
+### A restore point written as several files
+
+GFS classifies one artifact at a time and selects at most one representative per bucket per
+tier. That is also, implicitly, an assumption that one artifact IS one restore point. Most
+producers write that way, but not all of them: a producer that writes a portable archive and
+a native database dump of the same backup run, both carrying the run's own timestamp, hands
+this manager two artifacts that only restore together as one thing, in one directory, in one
+backup set.
+
+Point a single backup set's `include` at both files and GFS still has no concept of "these two
+belong to one restore point." Each tier's bucket admits both as separate candidates competing
+on the same timestamp, picks one as its representative by the same deterministic name
+tie-break `gfsIsNewerRepresentative` always uses for any tie, and the loser comes back
+`Keep: false`, `tiers=[]` (issue #292). Applied, that deletes half a restore point and keeps
+the half that happens to sort last, and nothing about a bare `tiers=[]` says whether that
+artifact is genuinely older than every configured window or lost only because a sibling
+artifact from its own run won the tie-break.
+
+**The configuration this manager actually supports today is one backup set per file
+pattern.** Point one backup set's `include` at the archive (`include: ["gitea-dump-*.tar.gz"]`)
+and a second backup set's `include` at the dump (`include: ["gitea-db-*.dump"]`), and each
+set has exactly one artifact per bucket, so GFS classifies correctly within each set. Know
+the trade-off before leaning on it: the two sets retain independently, so nothing keeps them
+selecting the *same* run, a verification failure quarantining one day's file in one set can
+leave the two sets' retained runs drifting apart over time, and `status` reports each set's
+health on its own, with no line connecting the two halves of one restore point. Modelling a
+restore point as more than one artifact end to end, so retention, last-known-good and
+`status` all reason about the group rather than the file, is a real question and a
+substantially bigger one than this section's scope; splitting by `include` pattern is the
+narrower answer this manager gives today.
+
+What issue #292 *does* add: `retention --dry-run` no longer lets that split through silently.
+When two artifacts in one backup set tie on the exact same discovery or producer instant (in
+practice, the same run, captured as more than one file) and the tie-break sends one of them to
+KEEP and the other to DELETE, the losing artifact's line grows an indented `! sibling
+collision:` warning naming the sibling it tied with, so `tiers=[]` because "older than every
+window" and `tiers=[]` because "a sibling in the same bucket won" no longer print the same way.
+`core/internal/retention/prune.go`'s own `PruneVerdict.Reason` (and, through it, the
+`POST .../retention/apply` an administrator would review before it runs) carries the identical
+warning. Nothing about the KEEP/DELETE decision itself changes: the artifact still is deleted
+by policy exactly as before, and it still would be, with a per-run backup set split, if that's
+the workaround chosen above. This is a narrower fix on purpose, refusing the *silence*, not the
+split itself; see the issue for why the full remodel is out of scope here.
+
 ### Last-known-good protection
 
 **Implemented**, which is also a change from the previous version of this document. FR-19
