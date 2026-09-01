@@ -17,8 +17,11 @@
  * The retention entries come from core/internal/config (config.go's
  * RetentionTier and Retention, and validate.go's rules) and FR-18/FR-19 in
  * docs/EPIC.md; the auth entries from apps/common/auth and the pages'
- * own handlers; the filter entries from the pages' own filtering code. Where
- * two of those disagree, the code wins, because the code is what runs.
+ * own handlers; the filter entries from the pages' own filtering code; the
+ * wizard entries from core/service/backupsets.go (CreateBackupSet,
+ * ImportSSHKey, validateCreateRequest), core/internal/transport/rclone
+ * (key parsing) and FR-7/FR-8/FR-13/FR-15 in docs/EPIC.md. Where two of
+ * those disagree, the code wins, because the code is what runs.
  *
  * # What is deliberately NOT in here
  *
@@ -42,12 +45,24 @@
  *     mean describing a capability the design explicitly refused.
  *   - ActivityPage "Time range". Nothing reads it and listActivity takes no
  *     window argument.
- *   - The wizard's decorative controls (exclude patterns, the four per-set
- *     retention controls, the two verification toggles, the managed-key
- *     picker). Per-set retention in particular is not merely unwired: issue
- *     #111 decided retention is one global policy and specifically warned
- *     that this UI's already-drawn per-set shape must not be mistaken for a
- *     capability.
+ *   - The wizard's remaining decorative controls: exclude patterns; the
+ *     four per-set retention controls (Daily/Weekly/Monthly/Week starts,
+ *     plus its own always-checked "protect newest known-good" toggle,
+ *     distinct from the real global one on Settings); the always-on
+ *     transfer-verification toggle; the checksum-verification toggle
+ *     (`newBackupSetFor` in core/service/backupsets.go sets `Hash: ""`
+ *     unconditionally, so this toggle has no field to write to); the
+ *     "Generate dedicated SSH key" panel's static content (a fixed sample
+ *     key, and an authorized_keys path that always names "backup-agent"
+ *     regardless of the username actually entered); and the "Use managed
+ *     key" branch entire, whose picklist offers two hardcoded key names
+ *     and a fabricated "Already installed on 2 other backup sets" count
+ *     with no backend behind either. Per-set retention in particular is
+ *     not merely unwired: issue #111 decided retention is one global
+ *     policy and specifically warned that this UI's already-drawn per-set
+ *     shape must not be mistaken for a capability. All of it is tracked as
+ *     one issue (#299) rather than fixed here, since each needs its own
+ *     product decision (wire it, or remove it), not a tooltip.
  */
 
 /** One field's help copy. All three parts are required. */
@@ -212,5 +227,91 @@ export const FIELD_HELP = {
     example: "Production PostgreSQL",
     effect:
       "Nothing is written. Backup Manager has no endpoint yet for saving an edited backup set, so Save changes reports that plainly instead of appearing to succeed. What the form does still do is check, at save, whether the set changed while this dialog was open, and refuse rather than overwrite someone else's change."
+  },
+
+  // ------------------------------------------------------------- wizard
+
+  wizardSetName: {
+    what: "This backup set's own name. Combined with its source, name is the set's true identity (FR-7): retention, health and lifecycle are all tracked per set, independently of every other set.",
+    example: "postgres-primary",
+    effect:
+      "The wizard never asks for a source, so every set it saves is filed under the same default source, api, in config.yaml. Name also becomes part of a filename this manager writes to disk, so it can't contain a slash, can't be \".\" or \"..\", and can't have leading or trailing whitespace; the server refuses the save outright if it does."
+  },
+
+  wizardHostname: {
+    what: "The address of the remote server this backup set pulls artifacts from over SFTP.",
+    example: "prod-db-01.internal",
+    effect:
+      "Used to probe and verify the host's SSH fingerprint on the next step, then to actually connect and transfer files once saved. If you already trusted a fingerprint for this host on the Verify server step, changing this and leaving the field revokes that trust, since it no longer matches what was trusted, and you'll need to fetch and trust the new address's fingerprint before you can save."
+  },
+
+  wizardSshPort: {
+    what: "The TCP port the remote server's SSH/SFTP service listens on.",
+    example: "22",
+    effect:
+      "Sent with every probe and connection attempt to that host. Leave it blank, or clear it entirely, and Backup Manager treats it as port 22 rather than refusing to proceed. Like the hostname, changing this after trusting a fingerprint on the Verify server step revokes that trust, since port is part of what was trusted."
+  },
+
+  wizardUsername: {
+    what: "The account on the remote server Backup Manager signs in as over SSH.",
+    example: "backup-agent",
+    effect:
+      "Sent as the SSH username on every connection this backup set makes. That account needs read access to the remote folder you set on the Discovery step, and, once an artifact completes its full verify-and-commit chain, delete access there too: Backup Manager removes the remote copy after that (FR-15)."
+  },
+
+  wizardKeySource: {
+    what: "How this backup set authenticates to the remote server. Only one of the three choices actually lets you finish this wizard today.",
+    example: "Import key",
+    effect:
+      "Generate dedicated SSH key and Use managed key each open a panel below, but neither is wired to a save yet: choosing either one and clicking any Save button is refused, with a message telling you to import a key instead. Import key is the only choice that lets Save succeed, once a key is imported below and the host is trusted on the next step."
+  },
+
+  wizardPrivateKey: {
+    what: "The SSH private key Backup Manager will use to sign in to the remote server. Pasted once, then discarded from this screen.",
+    example: "-----BEGIN OPENSSH PRIVATE KEY-----…",
+    effect:
+      "Sent once to the backend when you click Import key, which hands back a fingerprint and an internal reference and nothing else; the pasted text is cleared from this page immediately afterward and the key material never appears here again. It has to be an unencrypted OpenSSH or PEM key: a passphrase-protected one fails to parse and is refused, since nothing later in this flow can ask for the passphrase."
+  },
+
+  wizardRemoteFolder: {
+    what: "The directory on the remote server Backup Manager watches for finished backup artifacts.",
+    example: "/backups/postgresql/",
+    effect:
+      "Sent as this set's remote path, and it has to be an absolute one; the server refuses the save otherwise. Only files discovered directly under this one directory are ever considered for this backup set, and each is then checked against the include patterns below."
+  },
+
+  wizardIncludePatterns: {
+    what: "Which filenames under the remote folder count as this backup set's artifacts.",
+    example: "*.dump.zst, *.sql.gz",
+    effect:
+      "Split on commas into a list of glob patterns, each matched against a remote file's own name only, never its path, so a pattern can't contain a slash. A file that matches none of them is invisible to this backup set: never discovered, never transferred, never counted toward retention."
+  },
+
+  wizardCompletionMethod: {
+    what: "How Backup Manager decides a remote file has finished being written, rather than still being uploaded by its producer (FR-8).",
+    example: "Completion marker / manifest",
+    effect:
+      "Atomic rename and Completion marker both wait for a positive signal from whatever writes the file; one that never gets renamed, or never gets its marker, is never treated as complete and is never backed up, no matter how long it sits there. Stable file size / timestamp instead infers completion once a file has looked unchanged for a period fixed at one hour, which this wizard doesn't let you adjust; it exists for a producer that can't signal completion at all, and it's a weaker guarantee than the other two."
+  },
+
+  wizardNasDestination: {
+    what: "The local directory on this NAS where this backup set's verified artifacts are committed and kept.",
+    example: "/data/backups/production/postgres/",
+    effect:
+      "Sent as this set's local path, and it has to be an absolute one. Every transferred, verified artifact is written here, and retention deletes old ones from here too, so this needs to be a path Backup Manager can actually write to, with room for however much you plan to retain."
+  },
+
+  wizardValidatorId: {
+    what: "An optional external check Backup Manager runs against every artifact after it's transferred and checksummed (FR-13), on top of that built-in verification.",
+    example: "None (transfer and checksum verification only)",
+    effect:
+      "Choosing a validator sends its id with the save, and every future artifact in this set runs that check before being trusted. An artifact the validator rejects is quarantined rather than committed, and its remote copy is kept rather than deleted, permanently: FR-13 requires a required validator's failure to block deletion of the source, and that block outlives even a later reinstatement out of quarantine."
+  },
+
+  wizardAcknowledge: {
+    what: "Confirms you understand when this backup set deletes the copy on the remote server, not just that a backup of it now exists here.",
+    example: "check it once you've read the sequence above",
+    effect:
+      "Every Save button on this page stays disabled until this is checked, alongside a trusted host and an imported key: it's a structural gate, not a formality. Checking it deletes nothing by itself; a remote copy is only ever removed after that specific artifact has been transferred, verified, durably committed to this NAS, and recorded as safe (FR-15)."
   }
 } as const satisfies Record<string, FieldHelpCopy>;
