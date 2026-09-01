@@ -710,6 +710,22 @@ Producer-controlled atomic completion SHOULD be preferred.
 
 Remote filenames and metadata SHALL be treated as untrusted input.
 
+The manifest marker strategy's directory-level marker filename is
+configurable (`completion.manifest_marker`, issue #291). It defaults to
+`_SUCCESS`, the well-known Hadoop/Spark convention this manager recognized
+unconditionally before this field existed, so a configuration written
+before this field existed keeps recognising exactly the marker it
+recognised before, unchanged. A read-only producer that already writes its
+own completion signal under a different name (for example a checksum
+manifest, written last, after every artifact) is told that name instead of
+being asked to rename its output to match this manager's convention, which
+a read-only source cannot do. `manifest_marker` is a single literal
+filename, never a pattern: it is matched by exact comparison against a
+directory's contents, not a glob. It is validated as a bare filename, on
+the same terms `include` patterns are (FR-5): no path separator, no `.`/`..`
+traversal. The sibling per-artifact marker convention
+(`<artifact-name>.complete`) is unrelated to this field and stays fixed.
+
 ------------------------------------------------------------------------
 
 ## FR-9 --- SQLite Lifecycle Journal
