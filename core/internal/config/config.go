@@ -327,6 +327,26 @@ type Remote struct {
 	Key Key `yaml:"key"`
 
 	KnownHosts string `yaml:"known_hosts"`
+
+	// Sensitive marks this remote's endpoint identity, its Host, Port and
+	// User, as something that must never reach a log line or a journal
+	// detail (issue #295). It is opt-in and defaults to false: whether a
+	// port is a credential is a deployment's decision, not a universal
+	// fact (issue #264 states the rule for the one deployment that needs
+	// it), and a log line that omits "connection refused to WHAT" is a
+	// worse default for every deployment that hasn't made that call. It
+	// is set per remote, not globally, because two backup sets in the
+	// same config file are free to differ (a public mirror beside an
+	// internal host only reachable on the operator's own network).
+	//
+	// internal/app.New reads this across every configured Source's
+	// BackupSets at startup (and again on every hot config reload) and
+	// builds the obs.Redactor both the process logger and the state
+	// journal filter every rendered error message and journal detail
+	// through before either one is written down. Nothing here changes
+	// what this manager does, only what its own observability output is
+	// allowed to contain.
+	Sensitive bool `yaml:"sensitive_endpoint,omitempty"`
 }
 
 // Key names exactly one way for an sftp Remote to obtain its SSH private
