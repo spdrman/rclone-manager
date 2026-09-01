@@ -6,9 +6,9 @@ import "@shared/design-system/components.css";
 import { useApi } from "@shared/api/ApiContext";
 import { usePlatform } from "@shared/platform/PlatformContext";
 import { usePolling } from "@shared/hooks/useAsync";
-import { useCausl } from "@shared/state/graph";
+import { graph, useCausl } from "@shared/state/graph";
 import { useResource } from "@shared/state/resource";
-import { countsNode, healthNode, operationsNode, quarantineNode, readOnlyNode, setsNode, versionNode } from "@shared/state/appNodes";
+import { configuredNode, countsNode, healthNode, operationsNode, quarantineNode, readOnlyNode, setsNode, versionNode } from "@shared/state/appNodes";
 import { AppShell } from "@shared/layouts/AppShell";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { DashboardPage } from "@shared/pages/DashboardPage";
@@ -21,7 +21,7 @@ import { ActivityPage } from "@shared/pages/ActivityPage";
 import { QuarantinePage } from "@shared/pages/QuarantinePage";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { CatalogRecoveryPage } from "@shared/pages/CatalogRecoveryPage";
-import { FirstRunPage } from "@shared/pages/FirstRunPage";
+import { ConfigurationSavedPage } from "@shared/pages/ConfigurationSavedPage";
 import { LoginPage } from "@shared/auth/LoginPage";
 import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
 
@@ -44,10 +44,20 @@ export function App() {
 
   // Issue #176: which mode this instance is in, asked before anything
   // else, because on an instance with no configuration at all every
-  // resource below refuses with NOT_CONFIGURED. It is a plain useState
-  // rather than a shared graph node on purpose: exactly one component
-  // reads it, and it changes at most once in the life of a session.
-  const [configured, setConfigured] = useState<boolean | null>(null);
+  // resource below refuses with NOT_CONFIGURED. Issue #275 moved it out of
+  // this component's own useState and into the graph: more than one
+  // component reads it now (see configuredNode's own doc).
+  const configured = useCausl(configuredNode);
+  const setConfigured = useCallback(
+    (value: boolean) => graph.commit("app/first-run-status", (tx) => tx.set(configuredNode, value)),
+    []
+  );
+
+  // Issue #275: an instance whose configuration was written but could not
+  // be activated in place is the one state where the application really
+  // cannot be navigated, because the engine is not serving the new
+  // configuration yet and a restart is the only thing that helps.
+  const [restartRequired, setRestartRequired] = useState(false);
 
   useEffect(() => {
     if (!auth?.authenticated) return;
@@ -67,7 +77,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [api, auth?.authenticated]);
+  }, [api, auth?.authenticated, setConfigured]);
 
   const health = useResource(healthNode, () => api.getHealth(), [api]);
   const version = useResource(versionNode, () => api.getVersion(), [api]);
@@ -116,16 +126,10 @@ export function App() {
 
   if (configured === null) return <Splash />;
 
-  if (!configured) {
-    return (
-      <FirstRunPage
-        onConfigured={() => {
-          setConfigured(true);
-          reloadAll();
-        }}
-      />
-    );
-  }
+  // The one state that genuinely is a dead end, and says so rather than
+  // offering navigation that cannot work: the configuration is on disk,
+  // this process is not serving it, and only a restart changes that.
+  if (restartRequired) return <ConfigurationSavedPage />;
 
   return (
     <AppShell
@@ -136,6 +140,22 @@ export function App() {
       onToggleTheme={() => setTheme(theme === "light" ? "dark" : "light")}
       onSignOut={() => api.logout().then(refreshAuth)}
     >
+      {configured ? null : (
+        // Deliberately no button of its own: the two pages that can act on
+        // this (the dashboard and the backup-sets list) already offer
+        // "Add backup set", and a banner repeating it puts the same
+        // primary action on one page twice.
+        <WarningBanner
+          tone="info"
+          eyebrow="First run"
+          title="Backup Manager has no configuration yet"
+        >
+          {"Add your first backup set, under Backup sets, and Backup Manager writes its " +
+            "configuration for you. Until that is done nothing is backed up, and the " +
+            "pages here have nothing behind them to show."}
+        </WarningBanner>
+      )}
+
       {readOnly && version.data ? (
         <WarningBanner
           tone="warn"
@@ -155,7 +175,27 @@ export function App() {
           element={<DashboardPage health={health} sets={sets} readOnly={readOnly} />}
         />
         <Route path="/sets" element={<BackupSetsPage sets={sets} readOnly={readOnly} />} />
-        <Route path="/sets/new" element={<BackupSetWizardPage readOnly={readOnly} />} />
+        <Route
+          path="/sets/new"
+          element={
+            <BackupSetWizardPage
+              readOnly={readOnly}
+              firstRun={!configured}
+              onFirstRunComplete={(needsRestart) => {
+                if (needsRestart) {
+                  setRestartRequired(true);
+                  return;
+                }
+                setConfigured(true);
+                reloadAll();
+                // The same place the configured path lands after a save,
+                // by the same route, which is the whole point of #275:
+                // there is now a sets list to come back to.
+                navigate("/sets");
+              }}
+            />
+          }
+        />
         <Route path="/sets/:setId" element={<BackupSetDetailPage readOnly={readOnly} />} />
         <Route path="/backups" element={<BackupsPage readOnly={readOnly} />} />
         <Route path="/backups/:artifactId" element={<BackupDetailPage />} />

@@ -16,6 +16,19 @@ import type { ApiError } from "./contracts";
  * beats a reason we invented.
  */
 
+/**
+ * Issue #275, the same lesson one refusal over. An instance with no
+ * configuration serves a deliberately tiny route table
+ * (apps/common/webhost's newUnconfiguredRouter) and answers everything
+ * else 503 NOT_CONFIGURED. That is a fact about this deployment, not a
+ * failure of the request: it means "there is nothing behind this page
+ * yet", which a page can say far better than a red banner quoting an API
+ * path at an operator who never asked for one.
+ */
+export function isNotConfigured(error: ApiError | null | undefined): boolean {
+  return error?.code === "NOT_CONFIGURED";
+}
+
 /** The typed envelope behind a rejected request, or null when the failure
  *  never reached the service at all (a stopped container, a dropped
  *  connection) and so carries no code and no correlation id. */

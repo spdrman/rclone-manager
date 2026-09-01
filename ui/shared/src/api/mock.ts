@@ -414,6 +414,59 @@ function defaultSettings(): AppSettings {
   };
 }
 
+/**
+ * The operations an instance with no configuration actually serves, taken
+ * from apps/common/webhost's newUnconfiguredRouter: the two reads that tell
+ * a client which mode it is in, the setup flow itself, the wizard's own
+ * pre-save helpers, and the auth routes, which are mounted by a different
+ * package and are not gated on configuration at all. Everything else
+ * answers 503 NOT_CONFIGURED.
+ *
+ * Issue #275: this fixture used to serve the FULL dataset in the
+ * "first-run" scenario, so `?scenario=first-run` in dev, and every test
+ * using it, showed an unconfigured instance behaving like a configured one.
+ * That is the fixture lying about the state it exists to reproduce, and it
+ * is why nothing caught what the pages do with the refusals they really
+ * get.
+ */
+const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupManagerApi> = new Set([
+  "getVersion",
+  "getFirstRunStatus",
+  "completeFirstRun",
+  "listValidators",
+  "importSSHKey",
+  "probeHostKey",
+  "testCandidateConnection",
+  "login",
+  "enrollAdministrator",
+  "rotatePassword",
+  "logout"
+]);
+
+function notConfigured(): BackupManagerError {
+  return new BackupManagerError({
+    code: "NOT_CONFIGURED",
+    message:
+      "this instance has not been configured yet; complete the setup flow at /api/v1/system/first-run first",
+    correlationId: "cid_mock503"
+  });
+}
+
+/** Wraps every operation an unconfigured instance does not serve so it
+ *  refuses while `isConfigured()` is false, and stops refusing the moment
+ *  setup writes a configuration, exactly as the real router's own
+ *  configured/unconfigured split does on the next request. */
+function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => boolean): BackupManagerApi {
+  const wrapped = { ...api } as Record<string, unknown>;
+  for (const key of Object.keys(api) as (keyof BackupManagerApi)[]) {
+    if (SERVED_WHILE_UNCONFIGURED.has(key)) continue;
+    const original = api[key] as (...args: unknown[]) => unknown;
+    wrapped[key] = (...args: unknown[]) =>
+      isConfigured() ? original(...args) : Promise.reject(notConfigured());
+  }
+  return wrapped as unknown as BackupManagerApi;
+}
+
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
   // Every previewRetention call advances this backup set's "inventory" by
@@ -430,7 +483,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // same one-way transition the real backend makes in-process.
   let configured = scenario !== "first-run";
 
-  return {
+  const api: BackupManagerApi = {
     getVersion: () =>
       delay(
         scenario === "version-mismatch"
@@ -649,4 +702,6 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         : delay(undefined),
     logout: () => delay(undefined)
   };
+
+  return refusingWhileUnconfigured(api, () => configured);
 }

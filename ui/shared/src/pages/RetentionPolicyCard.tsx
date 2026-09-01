@@ -16,6 +16,7 @@ import { FieldHelp, HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 import { ErrorState } from "@shared/components/EmptyState";
+import { isNotConfigured } from "@shared/api/failure";
 import { WarningBanner } from "@shared/components/WarningBanner";
 
 /**
@@ -69,7 +70,15 @@ export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
         <h2 className="eyebrow">Retention policy</h2>
       </div>
       <div className="card__body">
-        {settings.error ? (
+        {isNotConfigured(settings.error) ? (
+          // #275: retention is part of a configuration this instance does
+          // not have. That is a step not taken, not a read that failed, and
+          // a red banner with a Try again button would be both wrong.
+          <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)" }}>
+            Retention is part of the configuration this instance has not been given yet.
+            It becomes editable once the first backup set has been added.
+          </p>
+        ) : settings.error ? (
           <ErrorState
             message={settings.error.message}
             remediation="The retention policy could not be read, so it cannot be edited here yet."
