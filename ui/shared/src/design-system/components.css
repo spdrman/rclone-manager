@@ -87,3 +87,41 @@
   position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap;
 }
+
+/* Field help pop-ups — issue #278. The interaction lives in
+   components/FieldHelp.tsx; this is only its shape. Hidden state is the
+   `hidden` attribute, not a class, so the copy keeps one stable id for
+   aria-describedby and the close button is unfocusable while it is off
+   screen. */
+.fieldhelp { position: relative; }
+.fieldhelp__pop {
+  position: absolute; z-index: 40;
+  top: calc(100% + 6px); left: 0;
+  width: max(100%, 292px); max-width: min(384px, 88vw);
+  display: flex; align-items: flex-start; gap: var(--space-2);
+  padding: 11px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-2);
+  cursor: default;
+}
+.fieldhelp__body { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.fieldhelp__body p { margin: 0; }
+.fieldhelp__what { color: var(--text); }
+.fieldhelp__example-lead {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3);
+}
+.fieldhelp__example code { color: var(--text); overflow-wrap: anywhere; }
+.fieldhelp__close {
+  flex: none; width: 22px; height: 22px; margin: -2px -3px 0 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-3);
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.fieldhelp__close:hover { background: var(--surface-3); color: var(--text); }
