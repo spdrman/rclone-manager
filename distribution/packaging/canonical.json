@@ -14,18 +14,20 @@
     "repository": "spdrman/backup-manager",
     "tag": "0.1.0",
     "reference": "ghcr.io/spdrman/backup-manager:0.1.0",
-    "published": false,
+    "published": true,
     "note": [
-      "published:false is the honest state, matching container/release-manifest.json's",
-      "own note: the registry is settled (ghcr.io) but nothing has been pushed to it,",
-      "so this reference resolves to nothing today, and the manifest's per-architecture",
-      "registry_digest is null for exactly as long as this stays false. It is the",
-      "intended publish target and the one string",
-      "every provider package must carry, so that pointing the project at a real",
-      "registry is a one-line change here rather than an edit in four metadata formats.",
-      "Every acceptance procedure in docs/acceptance/ opens with a step 0 covering how",
-      "to make the image resolvable in the meantime (push to your own registry, or",
-      "docker save/load), and every profile keeps the reference substitutable."
+      "published:true as of the 0.1.0 push on 2026-09-01. The image index is",
+      "sha256:533e7540e3b4c496de56d56d1e5bc54ed17d050d7d3296f266f10c852d6381cb, signed keylessly",
+      "through the release workflow's own OIDC identity and carrying an SBOM attestation, and",
+      "container/release-manifest.json records the per-architecture manifest digests underneath",
+      "it. That file and this flag move together: TestReleaseManifestRegistryDigestTracksThe",
+      "CanonicalPublishFlag refuses a published flag with no digest and a digest with no flag,",
+      "because either one alone is a half-truth.",
+      "This reference is the one string every provider package must carry, so pointing the",
+      "project at a different registry stays a one-line change here rather than an edit in four",
+      "metadata formats. Every acceptance procedure in docs/acceptance/ keeps its step 0 for a",
+      "deployment that cannot reach ghcr.io (push to your own registry, or docker save/load),",
+      "and every profile keeps the reference substitutable."
     ]
   },
 

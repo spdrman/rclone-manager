@@ -18,17 +18,17 @@
   "imageReference": "ghcr.io/spdrman/backup-manager:0.1.0",
   "releaseManifest": {
     "path": "container/release-manifest.json",
-    "sha256": "452c6e84bbdee9327033d8c420e3aaa744b64662ad87a0713a1c5a7f3f57c13c",
+    "sha256": "8b27afa2f293caa1c87fe255c28f311853d842a7e214b413f684f607c13cacba",
     "commit": "13ed7108c0459228d4c251cdd941b96137154556",
     "recordedBuildVersion": "0.1.0",
     "architectures": [
       "amd64",
       "arm64"
     ],
-    "published": false,
+    "published": true,
     "registryDigests": {
-      "amd64": null,
-      "arm64": null
+      "amd64": "sha256:67781dcb5148f9613891da87d08ea14b7656a668247f0b483bea5c02a15be81a",
+      "arm64": "sha256:a8a1f7227c57db8545c81c7dc7d031ba9535c287e69f25fbd2cb01c6b02bfd67"
     },
     "versionIsABuildStamp": false
   },
@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "b1c552317d9cc0e498ab96ad42ae0d708dcce9b7346f421110e87448a934934f",
+    "sha256": "ec68e31bc182920db1d91c5ca5b4bec2a95d4ed7abc2dc1364b979f49cd22cc5",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -190,14 +190,12 @@
     "reason": "the source repository is private, so every link into it is a 404 for a reviewer outside the project. The materials exist and are checked for substance on every run; what is missing is public access to them, which only the repository owner can grant. docs/compliance/source-offer.md is the written offer that stands until then."
   },
   "signing": {
-    "status": "unsigned",
+    "status": "signed",
     "method": "sigstore-keyless",
     "identity": "https://github.com/spdrman/rclone-manager/.github/workflows/release.yml@refs/tags/*",
     "transparencyLog": "https://rekor.sigstore.dev",
     "note": [
-      "Nothing has been pushed to ghcr.io/spdrman/backup-manager:0.1.0, so there is no digest to sign and no signature to verify.",
-      "The mechanism is scripts/release/publish-image.sh; the key design is in docs/compliance/release-provenance.md.",
-      "There is no signing key to store, rotate or leak: the workflow's OIDC identity is exchanged for a short-lived Fulcio certificate at signing time."
+      "Verify with: cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp '^https://github.com/spdrman/rclone-manager/\\.github/workflows/release\\.yml@refs/tags/' ghcr.io/spdrman/backup-manager:0.1.0"
     ]
   },
   "performance": {
