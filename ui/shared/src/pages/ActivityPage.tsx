@@ -4,6 +4,8 @@ import { useAsync } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
 import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
+import { FieldHelp } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
@@ -50,15 +52,35 @@ export function ActivityPage() {
       <PageHeader title="Activity" subtitle="Operational timeline across all backup sets" />
 
       <div style={{ display: "flex", gap: 9, flexWrap: "wrap" }}>
-        <select className="select" style={{ height: 32 }} aria-label="Backup set" value={setId} onChange={(e) => setSetId(e.target.value)}>
-          <option value="">All backup sets</option>
-          {(sets.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        <select className="select" style={{ height: 32 }} aria-label="Severity" value={minSeverity} onChange={(e) => setMinSeverity(e.target.value)}>
-          <option value="">All severities</option>
-          <option value="1">Warning and above</option>
-          <option value="2">Errors only</option>
-        </select>
+        {/* These two carry an aria-label rather than a visible one, so the
+            help attaches through the low-level wrapper: HelpField would
+            draw a second, visible label beside a filter row that is
+            deliberately compact. */}
+        <FieldHelp label="Backup set" help={FIELD_HELP.activitySetFilter}>
+          {(helpId) => (
+            <select
+              className="select" style={{ height: 32 }} aria-label="Backup set"
+              aria-describedby={helpId}
+              value={setId} onChange={(e) => setSetId(e.target.value)}
+            >
+              <option value="">All backup sets</option>
+              {(sets.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+        </FieldHelp>
+        <FieldHelp label="Severity" help={FIELD_HELP.activitySeverityFilter}>
+          {(helpId) => (
+            <select
+              className="select" style={{ height: 32 }} aria-label="Severity"
+              aria-describedby={helpId}
+              value={minSeverity} onChange={(e) => setMinSeverity(e.target.value)}
+            >
+              <option value="">All severities</option>
+              <option value="1">Warning and above</option>
+              <option value="2">Errors only</option>
+            </select>
+          )}
+        </FieldHelp>
         <select className="select" style={{ height: 32 }} aria-label="Time range" defaultValue="24">
           <option value="24">Last 24 hours</option>
           <option value="168">Last 7 days</option>

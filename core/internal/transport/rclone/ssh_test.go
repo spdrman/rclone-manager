@@ -1245,3 +1245,124 @@ func freeTCPPort(t *testing.T) int {
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port
 }
+
+// TestWithSHA256_AsksRcloneForTheHashThisProjectVerifiesWith is the
+// regression test for the one value config.Validation.Hash accepts being
+// unreachable over the one remote backend this project ships besides
+// "local".
+//
+// rclone's sftp backend builds its candidate hash set from its own
+// "hashes" option, and seeds it with hash.MD5 and hash.SHA1 when that
+// option is empty (backend/sftp/sftp.go, Hashes()). SHA-256 is never a
+// candidate, so Adapter.RemoteHash's capability check refused before it
+// reached the object, internal/lifecycle's Verify turned that into FAILED,
+// and a backup set configured the way core/internal/config/testdata/
+// full.yaml shows,
+//
+//	remote: {type: sftp, ...}
+//	validation: {hash: sha256}
+//
+// failed 100% of its artifacts on every host, hardened or not. The
+// documented configuration on the documented transport was the broken one.
+func TestWithSHA256_AsksRcloneForTheHashThisProjectVerifiesWith(t *testing.T) {
+	dir := t.TempDir()
+	base, err := sftpConfig(validSource(t, dir))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cfg := withSHA256(base)
+
+	got, ok := cfg.Get("hashes")
+	if !ok {
+		t.Fatal("withSHA256 did not set \"hashes\"; rclone then defaults to MD5+SHA1 and can never answer a sha256 request, so validation.hash: sha256 fails every artifact")
+	}
+	if !strings.Contains(got, "sha256") {
+		t.Errorf("hashes = %q, want it to include \"sha256\"; config.Validation.Hash accepts no other non-empty value", got)
+	}
+
+	// Naming the hash is necessary and not sufficient. rclone will not
+	// trust a hash command until it has probed it, and its v1.75.0
+	// SHA-256 probe list pairs the sha256 commands with the SHA-1 ones
+	// for the empty-input check ({"sha256sum", "sha1sum"} and
+	// {"sha256 -r", "sha1 -r"}), so the probe runs sha1sum, gets SHA-1's
+	// digest of empty input, compares it against SHA-256's, and rejects
+	// a working sha256sum. Only its third candidate can be accepted, and
+	// that one needs rclone installed on the SOURCE host. Measured
+	// against a real sshd with coreutils sha256sum on PATH: with
+	// "hashes" alone, RemoteHash still answered `backend "sftp" cannot
+	// compute sha256`; with the pin below it returned the digest, equal
+	// to the one sha256sum produced over a plain ssh session.
+	if v, _ := cfg.Get("sha256sum_command"); v != "sha256sum" {
+		t.Errorf("sha256sum_command = %q, want %q; without it rclone probes sha256 with sha1sum and rejects a working sha256sum", v, "sha256sum")
+	}
+}
+
+// TestWithSHA256_NeverReachesTheFsThatCopies is the other half of the fix,
+// and the half a gate run had to teach me.
+//
+// rclone's copy picks its integrity hash from Common(src.Hashes(),
+// dst.Hashes()). Setting these options on the Fs that copies makes a
+// hardened, shell-less account advertise SHA-256, fail to compute it at
+// copy time, and rclone then compares the empty string against the local
+// digest and reports `corrupted on transfer: sha256 hashes differ`.
+// Measured in core/tests/sftpintegration: it turned the recommended
+// deployment from "backs up, cannot hash-verify" into "cannot back up at
+// all", broke the backup sets that never asked for a hash as well as the
+// ones that did, and blamed corruption for a missing capability.
+//
+// So sftpConfig, which is what fsFor builds every list, copy and delete
+// from, must come back without either key.
+func TestWithSHA256_NeverReachesTheFsThatCopies(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := sftpConfig(validSource(t, dir))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, k := range []string{"hashes", "sha256sum_command"} {
+		if v, ok := cfg.Get(k); ok {
+			t.Errorf("sftpConfig set %q = %q; on the copy path that turns a missing hash capability into `corrupted on transfer` and stops the backup entirely", k, v)
+		}
+	}
+}
+
+// TestWithSHA256_IsNotAClaimTheServerCanHashIt guards the remaining risk:
+// the pin must not turn a source that genuinely cannot hash into one that
+// appears to pass.
+//
+// It does not, and the reason is structural rather than a value in this
+// map. Pinning the command makes rclone RUN it instead of probing for it;
+// where the account has no shell, the run fails, RemoteHash returns that
+// error, and Verify fails the artifact exactly as it did when the
+// capability came back absent. Measured both ways against real sshd
+// containers: a shell account returns the digest, a forced internal-sftp
+// account returns `failed to run "sha256sum ...": Process exited with
+// status 1`. Neither hands back a hash the manager did not earn.
+//
+// What this test can pin is the narrower, checkable claim: nothing here
+// reaches for one of rclone's own ways of making a hash check pass without
+// performing one, or pays for digests this project never requests.
+func TestWithSHA256_IsNotAClaimTheServerCanHashIt(t *testing.T) {
+	dir := t.TempDir()
+	base, err := sftpConfig(validSource(t, dir))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	cfg := withSHA256(base)
+
+	if v, ok := cfg.Get("disable_hashcheck"); ok && v != "false" {
+		t.Errorf("disable_hashcheck = %q; nothing may switch off the check internal/lifecycle is being asked to enforce", v)
+	}
+	for _, k := range []string{"md5sum_command", "sha1sum_command"} {
+		if v, ok := cfg.Get(k); ok {
+			t.Errorf("%s = %q; nothing in this project asks for that digest, so pinning it only buys a wasted round trip", k, v)
+		}
+	}
+
+	// And it leaves the FR-6 posture alone: every key sftpConfig set is
+	// still set, to the same value.
+	for k, want := range base {
+		if got, _ := cfg.Get(k); got != want {
+			t.Errorf("withSHA256 changed %q from %q to %q; it may only add", k, want, got)
+		}
+	}
+}
