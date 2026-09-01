@@ -183,18 +183,23 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	switch {
 	case src.KeyFile != "":
 		// The default and documented preference (docs/ssh-setup.md): this
-		// adapter only ever confirms the file exists and is readable. It
-		// never opens it, so the key itself never enters this process's
-		// memory at all; rclone's own sftp backend reads key_file directly.
-		// A passphrase, if one resolved above, is NOT verified against this
-		// file's content here, for the same reason: verifying it would mean
+		// adapter only ever confirms the file exists, is readable, and
+		// still carries the mode it was written with. It never opens it,
+		// so the key itself never enters this process's memory at all;
+		// rclone's own sftp backend reads key_file directly. A passphrase,
+		// if one resolved above, is NOT verified against this file's
+		// content here, for the same reason: verifying it would mean
 		// reading and decrypting the file in this process, exactly what
 		// key_file exists to avoid. rclone itself checks it, with the
 		// key_file_pass option set below, the moment this cfg is actually
 		// used to connect.
 		keyFilePath := env.ShellExpand(src.KeyFile)
-		if _, err := os.Stat(keyFilePath); err != nil {
+		info, err := os.Stat(keyFilePath)
+		if err != nil {
 			return nil, fmt.Errorf("source %q: key_file %q is not accessible: %w", src.ID, src.KeyFile, err)
+		}
+		if err := checkKeyFileMode(src.ID, src.KeyFile, info); err != nil {
+			return nil, err
 		}
 		keyFileValue = src.KeyFile
 	case src.KeyEnv != "":
@@ -303,6 +308,71 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	cfg.Set("concurrency", "64")
 
 	return cfg, nil
+}
+
+// wantKeyFileMode is the permission mode importSSHKeyInto
+// (core/service/backupsets.go) writes an imported key with
+// (os.WriteFile(path, raw, 0o600)). It is a literal here rather than an
+// import of that package's constant, because checkKeyFileMode's whole job
+// is to notice when a key's mode has drifted away from what was written,
+// and that comparison has to stay honest even if the two files' idea of
+// "0600" were ever to drift apart from each other, which is exactly the
+// class of silent assumption issue #293 is about.
+const wantKeyFileMode = 0o600
+
+// checkKeyFileMode refuses a key_file whose mode is not exactly
+// wantKeyFileMode (issue #293), rather than silently trusting that the
+// 0600 importSSHKeyInto wrote at creation is still true whenever the key
+// is next needed.
+//
+// This runs inside sftpConfig, so it runs on every call to it: every List,
+// Stat, CopyToLocal, RemoteHash and DeleteRemote against an sftp source
+// (adapter.go's fsFor/fsForHashing), not only at import. Import-time
+// correctness says nothing about whether the mode is still what it was set
+// to by the time the key is next used, and a real production deployment
+// found exactly that gap: the directory chain down to a backup root had
+// drifted to world-writable out of band, most likely during unrelated
+// troubleshooting on the host. The cost of checking is one os.Stat the
+// key_file case already pays for (see the caller), so there is no added
+// I/O over what existed before, and the healthy path (mode unchanged)
+// takes exactly the same number of syscalls it always did.
+//
+// This is an exact-match check, not "no wider than 0600": a mode that only
+// ever narrows (say, an operator's own well-meaning 0400) is still not
+// what was written, and "verify what actually happened, do not assume a
+// write stuck" is the whole point, not "assume a write stuck unless it
+// got worse."
+//
+// # Why this refuses instead of re-asserting 0600
+//
+// core/service/validator.go's materializeValidators is this project's one
+// existing precedent for self-healing a drifted permission: it rewrites an
+// embedded validator script, mode included, whenever upToDate finds it has
+// drifted, on every run cycle. That precedent does not transfer here,
+// because what makes it safe is that the content being restored is
+// verified byte-for-byte against an embedded copy this process authored;
+// self-healing there can never re-trust content an outside actor supplied.
+// A private key has no such reference copy: this process wrote it once,
+// from bytes an operator pasted through the wizard, and never kept an
+// independent copy to verify against. A chmod alone cannot tell "an
+// operator's own chmod widened this" apart from "something replaced the
+// file altogether", and a permission drift wide enough to let another
+// local actor read this key is exactly the situation where silently
+// narrowing the mode back and proceeding, without telling anyone, is the
+// wrong instinct. It is HostKeyChanged's own posture (internal/state/
+// halts.go, §77 invariant 5) read the same way: a security-relevant trust
+// break gets surfaced for a human to look at, not smoothed over so nobody
+// ever has to. Refusing with a clear, actionable diagnostic is the safe
+// default the issue names for exactly this reason.
+func checkKeyFileMode(sourceID, configuredPath string, info os.FileInfo) error {
+	if mode := info.Mode().Perm(); mode != wantKeyFileMode {
+		return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
+			"source %q: key_file %q has permissions %04o, expected exactly %04o (the mode it was imported with): "+
+				"an imported key's permissions must not drift after import; correct it (chmod %04o %s) or re-import the key",
+			sourceID, configuredPath, mode, wantKeyFileMode, wantKeyFileMode, configuredPath,
+		))
+	}
+	return nil
 }
 
 // quoteForRclonePem converts raw PEM text into the single-line,

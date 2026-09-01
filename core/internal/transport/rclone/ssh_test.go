@@ -97,6 +97,84 @@ func TestSftpConfig_KeyFileMustExist(t *testing.T) {
 	}
 }
 
+// TestSftpConfig_KeyFileModeMustMatchExactlyWhatWasWritten is issue #293's
+// RED case. importSSHKeyInto (service/backupsets.go) writes an imported key
+// with os.WriteFile(path, raw, 0o600), but that mode argument only ever
+// applies at creation: an operator's own chmod, a bind mount shared over
+// SMB/AFP, or unrelated troubleshooting on the host can widen it afterward,
+// and nothing used to look again before the key was next used.
+//
+// Before this check existed, drift was not merely reported opaquely, it
+// was not reported at all: rclone's own embedded sftp backend
+// (backend/sftp/sftp.go, vendored v1.75.0) os.ReadFile's key_file directly
+// and hands the bytes to golang.org/x/crypto/ssh.ParsePrivateKey, and
+// neither of those looks at the file's mode, unlike a real OpenSSH client
+// or ssh-agent, which refuse a too-open key outright. A key widened to
+// 0777 authenticated exactly as well as one still at 0600 through this
+// project's own code path, silently.
+//
+// wantErr is exact-match, not "any group/other bit set": the check exists
+// to notice when the mode is no longer what importSSHKeyInto wrote, so a
+// mode that is merely narrower than 0600 (say, an operator's own
+// well-meaning 0400) is drift too, not a stricter-and-therefore-fine case.
+func TestSftpConfig_KeyFileModeMustMatchExactlyWhatWasWritten(t *testing.T) {
+	cases := []struct {
+		name    string
+		mode    os.FileMode
+		wantErr bool
+	}{
+		{"exactly what importSSHKeyInto writes", 0o600, false},
+		{"world-writable drift, the production incident (#293)", 0o777, true},
+		{"group-readable drift", 0o640, true},
+		{"narrower than written is still drift", 0o400, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := validSource(t, dir)
+			if err := os.Chmod(src.KeyFile, tc.mode); err != nil {
+				t.Fatalf("chmod key file to %04o: %v", tc.mode, err)
+			}
+
+			_, err := sftpConfig(src)
+			if tc.wantErr && err == nil {
+				t.Fatalf("mode %04o: sftpConfig accepted it, want a refusal", tc.mode)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("mode %04o: sftpConfig refused an untouched key file: %v", tc.mode, err)
+			}
+		})
+	}
+}
+
+// TestSftpConfig_DriftedKeyFileModeIsClassifiedAndActionable is the other
+// half of issue #293's ask: refuse LOUDLY, with a specific diagnostic,
+// rather than letting the transport's own opaque rejection (or, as the
+// test above shows, its silent acceptance) be the only signal. The
+// category is what lets internal/app/halt.go tell this apart from a
+// rejected login (state.HaltAuthenticationFailed) in the operator-facing
+// halt reason; the message is what a human reads if they go looking.
+func TestSftpConfig_DriftedKeyFileModeIsClassifiedAndActionable(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	if err := os.Chmod(src.KeyFile, 0o777); err != nil {
+		t.Fatalf("chmod key file to 0777: %v", err)
+	}
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("sftpConfig accepted a key_file with drifted (0777) permissions, want a refusal")
+	}
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.KeyPermissions {
+		t.Fatalf("category = %v (ok=%v), want transport.KeyPermissions", category, ok)
+	}
+	for _, want := range []string{"0777", "0600"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should mention %s, so the operator sees both the actual and the expected mode", err, want)
+		}
+	}
+}
+
 // TestSftpConfig_RequiresKnownHosts is the core FR-6 test: rclone's own
 // default, reached whenever known_hosts_file is left unset, is
 // ssh.InsecureIgnoreHostKey(), which accepts any host key at all. This

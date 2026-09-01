@@ -23,6 +23,22 @@ at all unless:
   and so is the literal string `none`, which is rclone's own way of saying
   "don't check host keys at all." Both would otherwise let rclone accept any
   host key silently, which is the exact failure FR-6 exists to prevent.
+- when the key source is `key_file`, the file's mode is exactly `0600`, the
+  same check on every connection attempt, not only at import (issue #293).
+  Neither rclone's embedded sftp backend nor the `golang.org/x/crypto/ssh`
+  library underneath it looks at a key file's permissions at all, unlike a
+  real OpenSSH client, so without this check a key that drifted wider after
+  import (an operator's own `chmod -R`, a bind mount shared over SMB/AFP,
+  troubleshooting on the host) would go on authenticating exactly as well
+  as one still at `0600`, silently. A drifted key is refused with a
+  diagnostic naming the actual and expected mode, never silently
+  re-narrowed back to `0600`: see `checkKeyFileMode`'s doc in `ssh.go` for
+  why re-asserting the mode automatically was rejected in favour of a loud
+  refusal.
+
+Manually provisioning `key_file` yourself, outside the wizard's "Import key"
+step, means you own keeping that `0600` correct: `chmod 600` after generating
+the key (see step 1 below) and after any change you make to it later.
 
 So the two things this doc walks through, a key source and a known_hosts
 file, aren't just good practice, they're the two things you cannot skip.
