@@ -245,3 +245,72 @@ func quoteForRclonePem(pem string) string {
 	quoted := strconv.Quote(pem)
 	return quoted[1 : len(quoted)-1]
 }
+
+// withSHA256 returns cfg with the two options rclone needs before it will
+// compute a SHA-256 digest on an sftp source, and is applied ONLY on the
+// path that asks for one (Adapter.RemoteHash). It is deliberately not part
+// of sftpConfig, so the Fs that lists and copies is built exactly as it was
+// before this existed.
+//
+// # Why the hash has to be asked for at all
+//
+// rclone's sftp backend builds its candidate hash set from its own "hashes"
+// option, and when that option is empty (backend/sftp/sftp.go, Hashes()) it
+// seeds the set with hash.MD5 and hash.SHA1 and nothing else. SHA-256 is
+// never a candidate, so the probe that would look for a working sha256sum
+// never runs, Hashes() comes back without it on every server however
+// capable, and Adapter.RemoteHash's capability check refuses before it ever
+// reaches the object. config.Validation.Hash accepts "" or "sha256" and
+// nothing else, so leaving this unset made the only non-empty value it
+// accepts unusable against the only remote backend this project ships
+// besides "local": every artifact in such a backup set went
+// TRANSFERRED -> VERIFYING -> FAILED, forever, on every host.
+//
+// # Why naming it is not enough
+//
+// rclone will not trust a hash command until it has probed it, and its
+// v1.75.0 SHA-256 probe list pairs the sha256 commands with the SHA-1 ones
+// for the empty-input check:
+//
+//	{"sha256sum", "sha1sum"}, {"sha256 -r", "sha1 -r"},
+//	{"rclone hashsum sha256", "rclone hashsum sha256"}
+//
+// checkHash runs the second element and compares its output against
+// SHA-256's digest of empty input. It runs sha1sum, gets SHA-1's, and
+// rejects a working sha256sum. Only the third candidate can ever be
+// accepted, and that one needs rclone installed on the SOURCE host, which
+// nothing entitles a backup source to have. Measured against a real sshd
+// with coreutils sha256sum on PATH: with "hashes" alone, RemoteHash still
+// answered `backend "sftp" cannot compute sha256`. checkHash skips its
+// whole probe when the command is already set, so pinning it is rclone's
+// own supported way past a table this project does not own.
+//
+// # Why this is not folded into sftpConfig
+//
+// Because it would stop backups working. rclone's copy picks an integrity
+// hash from Common(src.Hashes(), dst.Hashes()). With these options on the
+// Fs that copies, a hardened, shell-less account (the posture
+// docs/ssh-setup.md recommends) advertises SHA-256, fails to compute it at
+// copy time, and rclone compares the empty string against the local digest
+// and reports `corrupted on transfer: sha256 hashes differ`. Measured: it
+// turns that deployment from "backs up, cannot hash-verify" into "cannot
+// back up at all", and it does so with a message that blames corruption
+// for a missing capability. It breaks the no-hash case too, which never
+// asked for any of this.
+//
+// Confining it to RemoteHash keeps the copy path byte-identical and leaves
+// exactly one behaviour changed: an account that CAN run sha256sum is now
+// allowed to. One that cannot still fails, because rclone runs the command
+// and the run fails, so Verify fails the artifact exactly as it did when
+// the capability was reported absent. The message changes from "backend
+// \"sftp\" cannot compute sha256" to one naming the command that could not
+// run, which is more use to whoever has to fix it.
+func withSHA256(cfg configmap.Simple) configmap.Simple {
+	out := configmap.Simple{}
+	for k, v := range cfg {
+		out[k] = v
+	}
+	out.Set("hashes", "sha256")
+	out.Set("sha256sum_command", "sha256sum")
+	return out
+}
