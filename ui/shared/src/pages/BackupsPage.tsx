@@ -5,6 +5,8 @@ import { useAsync } from "@shared/hooks/useAsync";
 import { useCausl } from "@shared/state/graph";
 import { setsNode } from "@shared/state/appNodes";
 import { PageHeader } from "@shared/components/PageHeader";
+import { FieldHelp } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
@@ -42,18 +44,23 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
         subtitle={rows.length + " retained artifacts \u00b7 " + bytes(totalBytes)}
         actions={
           <>
-            <select
-              className="select"
-              style={{ height: 32 }}
-              aria-label="Filter by backup set"
-              value={setFilter}
-              onChange={(e) => setSetFilter(e.target.value)}
-            >
-              <option value="">All backup sets</option>
-              {(sets.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
+            <FieldHelp label="Filter by backup set" help={FIELD_HELP.backupsSetFilter}>
+              {(helpId) => (
+                <select
+                  className="select"
+                  style={{ height: 32 }}
+                  aria-label="Filter by backup set"
+                  aria-describedby={helpId}
+                  value={setFilter}
+                  onChange={(e) => setSetFilter(e.target.value)}
+                >
+                  <option value="">All backup sets</option>
+                  {(sets.data ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              )}
+            </FieldHelp>
             <button
               className="btn"
               disabled={readOnly || !setFilter}
