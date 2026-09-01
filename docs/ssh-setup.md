@@ -276,6 +276,81 @@ There is no field anywhere in this configuration for pasting key bytes
 directly into YAML, and there never will be: `key.file`, `key.env` and
 `key.command` all name WHERE the key lives, none of them carry it.
 
+## Encrypting the key store at rest (#298)
+
+Everything above defends the key in transit and defends the account it
+authenticates. It says nothing about the key FILE itself once it's sitting
+on the NAS: by default, an imported key (the wizard's "Import key" step, or
+`key.file` pointed at a file you provisioned by hand) is a plain,
+unencrypted PEM file on disk, protected only by the filesystem permissions
+from step 1. That is fine on a host you control end to end. It is not fine
+the moment anything else can read that filesystem, and the case that
+motivated this section was exactly that: an operator decrypted a
+passphrase-protected production key to get it into a form backup-manager
+could use, and the resulting plaintext file sat on a volume also reachable
+over an SMB/AFP share, entirely outside backup-manager's own permission
+model.
+
+`key_encryption` closes that gap, and it is entirely optional:
+
+```yaml
+key_encryption:
+  file: /etc/backup-manager/secrets/key.dek
+  # env: BACKUP_MANAGER_KEY_DEK
+  # command: ["op", "read", "op://infra/backup-manager/key-encryption-key"]
+```
+
+Exactly one of `file`, `env` or `command` goes in that block, the identical
+shape `key` and `key.passphrase` already use, for the identical reason:
+nowhere in this configuration can an operator paste the actual encryption
+key in directly. Leaving the whole block out, which is every `config.yaml`
+written before this feature existed, means exactly what it always has:
+an imported key is stored as plain PEM, defended only by permissions.
+
+**What this does and does not defend, stated plainly:**
+
+- It defends the key FILE against being read directly: disk theft, a copy
+  taken by a backup of backup-manager's own state directory, and -- the
+  case this was filed over -- access through an SMB/AFP share exported
+  from the same volume, which can bypass Unix owner-only file permissions
+  entirely depending on how the share itself is configured. An attacker
+  with any of those three now gets ciphertext, not a usable key.
+- It does NOT defend a live process's memory. Authenticating a connection
+  still requires the plaintext key in backup-manager's own memory for the
+  duration of that attempt, exactly like `key.env` or `key.command`
+  already put a resolved key in memory today. A process compromise, a core
+  dump, or a debugger attached to a running backup-manager can still reach
+  the key. If that threat matters more to your deployment than the
+  at-rest one, this feature does not change your risk there either way.
+- **It does NOT defend anything if the encryption key (the `key_encryption`
+  block above resolves to it) lives inside the same share or backup root
+  the key file itself lives in.** If `key_encryption.file` points at a path
+  under the SMB/AFP-exported tree, or under whatever directory gets backed
+  up alongside the encrypted key, anyone who could previously read the
+  plaintext key can now read the encryption key and the ciphertext side by
+  side and undo this entirely. Put it somewhere that export, and any backup
+  of it, never reaches: a directory local to the host that is not shared
+  and not part of the backed-up tree, an environment variable set only in
+  backup-manager's own runtime, or a secrets manager via `command`.
+
+**What happens to a key imported before this was configured:** nothing, on
+its own. `key_encryption` is opt-in and config-wide, not per-source, so an
+existing plaintext key file is picked up automatically the first time a
+source that uses it actually connects (a real cycle, or the wizard's "Test
+connection" step) once `key_encryption` is set: backup-manager detects the
+file is still plaintext, encrypts it in place with the configured key, and
+authenticates that same connection with the key it just read, all in memory,
+with the plaintext bytes never written back to disk. There is no separate
+migration command to run and no window where the key is unreadable; the
+first real use after you add the `key_encryption` block IS the migration.
+
+An encrypted key file is easy to tell apart from a plain one if you ever
+need to check: a plain key still begins `-----BEGIN `, exactly like
+`ssh-keygen` produces; an encrypted one begins with backup-manager's own
+`RCLONEMGR-KEYENC-V1:` marker instead and is not valid PEM to any other
+tool, `ssh-keygen -lf` included, on purpose -- nothing but backup-manager's
+own configured `key_encryption` source can read it.
+
 ## 5. Point a source at it
 
 Using the shape from FR-5's config example in `docs/EPIC.md`:
@@ -352,3 +427,8 @@ reason.
   array; nothing in it is ever interpreted by `/bin/sh` or any other shell.
 - A changed host key at a previously-known address, without a human repeating
   step 4 on purpose.
+- More than one `key_encryption` source configured at once, on the same
+  "a mistake to fix, not a precedence order" reasoning as the key sources
+  themselves. A `key_encryption` source that doesn't actually decrypt an
+  at-rest-encrypted key file fails that connection loudly rather than
+  silently falling back to treating the file as plaintext.

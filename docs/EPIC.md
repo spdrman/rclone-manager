@@ -629,6 +629,52 @@ public key will fail authentication rather than falling back to anything.
 `docs/ssh-setup.md` is the operational procedure, and `docs/deployment.md`
 covers mounting the key into the container.
 
+### Key at rest: optional encryption (#298)
+
+An imported key (the wizard's "Import key" step, `core/service/backupsets
+.go`'s `ImportSSHKey`) IS a case where the manager stores key material of
+its own, on disk, alongside the deployment's configuration -- unlike the
+operator-provisioned `key_file` custody model above. Before #298 that file
+was defended only by filesystem permissions (FR-6's account-hardening
+requirements below, and #293's permission-drift detection); nothing
+encrypted it. Two real incidents on the same live deployment -- a
+permission drift to world-writable (#293), and a plaintext copy reachable
+through an SMB/AFP share exported from the same NAS volume -- showed that
+permission hardening alone does not close the reported exposure: an
+SMB/AFP share can bypass Unix owner-only file-mode bits entirely depending
+on how the share is configured, so a hardened-permissions-only posture
+leaves that exact attack vector open.
+
+`config.KeyEncryption` (the `key_encryption` block, `file`/`env`/`command`,
+the same shape `key` and `key.passphrase` already use) SHALL be the
+optional mechanism for encrypting such a key file at rest, with AES-GCM
+authenticated encryption and a key resolved through that block. It is
+opt-in and config-wide: a `config.yaml` with no `key_encryption` block
+(every one written before #298, and any deployment that has not chosen to
+opt in) behaves exactly as before, an unencrypted PEM file on disk. A key
+already on disk in plaintext from before this was configured SHALL be
+migrated to at-rest encryption transparently, in place, the first time a
+source that uses it actually connects once `key_encryption` is set, with
+no separate migration step and no window where the key is unreadable.
+
+This defends the key FILE against being read directly: disk theft, a
+backup of the manager's own state directory, and the SMB/AFP-share case
+above. It does NOT defend a live process's memory -- authenticating a
+connection still requires the plaintext key in memory for the duration of
+that attempt, exactly as `key.env`/`key.command` already do today. And it
+defends nothing at all if the `key_encryption` source itself is reachable
+from the same share or backup root as the encrypted key file: an
+encryption key stored next to what it protects, inside the same exported
+tree, gives back exactly the exposure this feature exists to close.
+`docs/ssh-setup.md`'s "Encrypting the key store at rest" section states
+this trade-off in full and is the operational guidance for where the
+`key_encryption` source itself belongs.
+
+A future medium credential of the same shape (EPIC E's S3 keys, #235) is
+expected to answer "how is a secret this manager itself persists to disk
+protected at rest" by reusing this same `key_encryption` mechanism, rather
+than each credential type inventing its own.
+
 ### Key source: file, environment, or command (#74)
 
 A source's private key is named exactly one of three ways:
@@ -1580,6 +1626,10 @@ Decision Record because it creates fork-like maintenance obligations.
 13. Container runs non-root where practical.
 14. Architecture should permit future immutable/off-site copies.
 15. rclone dependency security updates SHALL be tracked.
+16. A manager-stored key file MAY be encrypted at rest (`key_encryption`,
+    #298); when configured, the encryption key's own storage location MUST
+    NOT be reachable from the same SMB/AFP share or backup root as the key
+    file it protects.
 
 ------------------------------------------------------------------------
 
