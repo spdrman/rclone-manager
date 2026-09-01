@@ -121,7 +121,7 @@ describe("retention plan integrity", () => {
 describe("private key handling", () => {
   it("never ships a private-key field in any contract", async () => {
     const api = createMockApi();
-    const set = await api.getSet("set_pg_prod");
+    const set = await api.getSet("production/postgres-primary");
     expect(JSON.stringify(set)).not.toMatch(/privateKey|BEGIN OPENSSH PRIVATE KEY/i);
   });
 });

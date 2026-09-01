@@ -196,7 +196,12 @@ export function App() {
             />
           }
         />
-        <Route path="/sets/:setId" element={<BackupSetDetailPage readOnly={readOnly} />} />
+        {/* Two segments, not one: a real backup set id (model.BackupSetID.
+            String(), core/internal/model/ids.go) is source and set
+            joined by "/", matching the API's own /backup-sets/{source}/
+            {set}/... shape (router.go). A single :setId segment cannot
+            match a path with that extra segment in it (issue #285). */}
+        <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={readOnly} />} />
         <Route path="/backups" element={<BackupsPage readOnly={readOnly} />} />
         <Route path="/backups/:artifactId" element={<BackupDetailPage />} />
         <Route path="/activity" element={<ActivityPage />} />

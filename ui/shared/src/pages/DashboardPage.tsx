@@ -17,6 +17,7 @@ import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
+import { backupSetPath } from "@shared/utilities/routes";
 
 export function DashboardPage({
   health,
@@ -125,7 +126,10 @@ export function DashboardPage({
         <HaltBanner
           set={haltedSet}
           actions={
-            <button className="btn btn--sm" onClick={() => navigate("/sets/" + haltedSet.id)}>
+            <button
+              className="btn btn--sm"
+              onClick={() => navigate(backupSetPath(haltedSet.source, haltedSet.set))}
+            >
               Review fingerprint
             </button>
           }

@@ -9,6 +9,7 @@ import { createMockApi } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import type { SystemHealth } from "@shared/types/operation";
 import { resetGraphForTests } from "@shared/state/graph";
+import { backupSetPath } from "@shared/utilities/routes";
 
 /**
  * Issue #245. These two banners existed before this and could not fire:
@@ -35,10 +36,10 @@ function renderDetail(set: BackupSet) {
   const api = createMockApi();
   vi.spyOn(api, "getSet").mockResolvedValue(set);
   return render(
-    <MemoryRouter initialEntries={["/sets/" + set.id]}>
+    <MemoryRouter initialEntries={[backupSetPath(set.source, set.set)]}>
       <ApiProvider api={api}>
         <Routes>
-          <Route path="/sets/:setId" element={<BackupSetDetailPage readOnly={false} />} />
+          <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
         </Routes>
       </ApiProvider>
     </MemoryRouter>
