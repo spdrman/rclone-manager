@@ -49,8 +49,13 @@ export function describeFailure(e: unknown, fallbackMessage: string): OperatorFa
   if (api === null) {
     return {
       message: "Backup Manager did not answer.",
+      // Deliberately does NOT say nothing was changed. A request that got
+      // no reply may still have been carried out, with only the response
+      // lost, and claiming otherwise would be this module's own version of
+      // the defect it exists to fix. The CSRF branch below can say it,
+      // because requireCSRF refuses before any handler runs.
       remediation:
-        "The request got no reply at all, so nothing was changed. Check that the Backup Manager service is still running, then try again."
+        "The request got no reply at all, so whether it was carried out is unknown. Check that the Backup Manager service is still running, then try again."
     };
   }
 
