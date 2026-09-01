@@ -183,6 +183,15 @@ make_full_tree() {
   add_go_module "$tree" core stubcore
   add_go_module "$tree" core/internal/stub stubcoreinternal
   rm -f "$tree/core/internal/stub/go.mod"
+  # issue #256: the Docker-backed suites step now runs
+  # `go run ./cmd/gotestwatch ...` instead of a plain `go test`, so this
+  # fixture needs that package to actually exist and resolve, the same
+  # reason every other stub in this function exists. The stub does nothing
+  # with its arguments (a bare `func main() {}` ignores them entirely),
+  # which is enough: this fixture measures which steps the gate chooses to
+  # run, not what gotestwatch itself does with real packages.
+  mkdir -p "$tree/core/cmd/gotestwatch"
+  printf 'package main\n\nfunc main() {}\n' >"$tree/core/cmd/gotestwatch/main.go"
   add_go_module "$tree" apps/common stubcommon
   # The distribution layer became its own Go module in #165, and ci-local.sh
   # builds, vets, tests and lints it like every other module. Without it here
