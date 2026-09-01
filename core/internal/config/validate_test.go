@@ -869,6 +869,74 @@ func TestManifestMarkerValidation(t *testing.T) {
 	}
 }
 
+// --- manifest_marker vs include collision (safety & reliability finding on
+// #307): before manifest_marker was operator-configurable it was always the
+// fixed literal "_SUCCESS", implicitly never a real payload name. Now that
+// an operator picks it, a marker name that happens to match the backup
+// set's own include patterns would make discovery.Discover silently and
+// permanently drop that payload on every run: isMarkerObject is checked
+// before include filtering and unconditionally skips a match, with no
+// error, no rejection entry, no warning. ---
+
+func TestManifestMarkerIncludeCollision(t *testing.T) {
+	t.Run("explicit marker matching an explicit include pattern is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.dump.zst"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "backup.dump.zst"}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("a manifest_marker matching the set's own include pattern was accepted")
+		}
+		if !strings.Contains(err.Error(), "manifest_marker") || !strings.Contains(err.Error(), "include") {
+			t.Fatalf("error does not name both colliding fields: %v", err)
+		}
+	})
+
+	t.Run("defaulted marker matching an explicit include pattern is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"_SUCCESS", "*.dump.zst"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker"}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("a defaulted _SUCCESS marker matching the set's own include pattern was accepted")
+		}
+		if !strings.Contains(err.Error(), "manifest_marker") {
+			t.Fatalf("error does not name the offending field: %v", err)
+		}
+	})
+
+	t.Run("marker matching one of several include patterns is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.dump.zst", "MANIFEST-*", "*.tar"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "MANIFEST-001"}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("a manifest_marker matching one of several include patterns was accepted")
+		}
+	})
+
+	t.Run("marker not matching any include pattern is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.dump.zst"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a non-colliding manifest_marker was rejected: %v", err)
+		}
+	})
+
+	t.Run("no include patterns configured, nothing to collide with", func(t *testing.T) {
+		// An empty include list has no configured patterns to cross-check
+		// against; that is the same "no explicit filter" baseline that let
+		// the old hardcoded "_SUCCESS" work unconditionally before this
+		// field existed, so it stays out of scope for this check.
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = nil
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "_SUCCESS"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a manifest_marker with no include patterns configured was rejected: %v", err)
+		}
+	})
+}
+
 // --- include patterns ---
 
 func TestIncludePatternValidation(t *testing.T) {

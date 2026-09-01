@@ -723,8 +723,14 @@ a read-only source cannot do. `manifest_marker` is a single literal
 filename, never a pattern: it is matched by exact comparison against a
 directory's contents, not a glob. It is validated as a bare filename, on
 the same terms `include` patterns are (FR-5): no path separator, no `.`/`..`
-traversal. The sibling per-artifact marker convention
-(`<artifact-name>.complete`) is unrelated to this field and stays fixed.
+traversal. Its resolved value is also cross-checked against the same
+backup set's own `include` patterns, and rejected if one of them would
+match it: discovery treats a manifest-marker match as a completion signal,
+never a candidate, so a marker name an operator picked that collides with
+their own `include` patterns would otherwise silently and permanently
+exclude a real artifact from every backup. The sibling per-artifact marker
+convention (`<artifact-name>.complete`) is unrelated to this field and
+stays fixed.
 
 ------------------------------------------------------------------------
 
