@@ -63,16 +63,18 @@ trusted. Regenerate without the waiver from a clean checkout of a commit that is
 already on main.`)
 	}
 
-	ancestry, err := ResolveAncestryRef(Path("."))
+	// Every rewrite-free ref this checkout has, not just the first one
+	// that exists (#258). #174's rule was never about main specifically:
+	// it was that a commit pinned to a branch that does not rewrite stays
+	// checkable. `release` has that property by policy, and a release cut
+	// carries the pipeline change that publishes it, so the commit a first
+	// release is pinned to is on `release` before it is on main.
+	ancestry, reachable, err := ResolveReachableAncestryRef(Path("."), m.Commit)
 	if err != nil {
-		t.Fatalf("no ref to check %s against, so this check did not run: %v", m.Commit, err)
-	}
-	reachable, err := CommitReachableFrom(Path("."), m.Commit, ancestry.Ref)
-	if err != nil {
-		t.Fatalf("git could not decide whether %s is an ancestor of %s, so this check did not run: %v", m.Commit, ancestry.Ref, err)
+		t.Fatalf("no ref could decide whether %s is reachable, so this check did not run: %v", m.Commit, err)
 	}
 	if !reachable {
-		t.Fatalf(`container/release-manifest.json pins commit %s, which is not an ancestor of %s (%s).
+		t.Fatalf(`container/release-manifest.json pins commit %s, which no rewrite-free ref in this checkout can reach (%s).
 
 Its binary_sha256 values therefore describe a build nobody can reproduce
 from this history, and every parity check that compares against them is
@@ -85,8 +87,64 @@ on main:
 
     scripts/release/record-release-hashes.sh
 
-which refuses to record an unreachable commit in the first place.`, m.Commit, ancestry.Ref, ancestry.Why)
+which refuses to record an unreachable commit in the first place.`, m.Commit, ancestry.Why)
 	}
+	t.Logf("%s is reachable from %s (%s)", m.Commit, ancestry.Ref, ancestry.Why)
+}
+
+// TestResolveReachableAncestryRef_AsksEveryRewriteFreeRef is the control
+// for the change above.
+//
+// The arm that matters is the third: a commit that origin/main cannot
+// reach and origin/release can. Under the old single-ref resolution
+// origin/main existed, so it was the only ref asked, and the answer was
+// a flat no. That is the shape a first release actually has, because the
+// release cut carries the pipeline change that publishes it, so getting
+// this wrong does not fail loudly at review time. It fails by making the
+// first release impossible and looking like #174 while it does.
+func TestResolveReachableAncestryRef_AsksEveryRewriteFreeRef(t *testing.T) {
+	fx := newSquashMergeFixture(t)
+	gitIn(t, fx.dir, "update-ref", "refs/remotes/origin/main", fx.squashed)
+
+	// A commit that is on neither main nor release.
+	gitIn(t, fx.dir, "checkout", "-q", "-b", "cut", fx.squashed)
+	if err := os.WriteFile(filepath.Join(fx.dir, "cut.txt"), []byte("release cut\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, fx.dir, "add", ".")
+	gitIn(t, fx.dir, "commit", "-qm", "release cut")
+	cut := gitIn(t, fx.dir, "rev-parse", "HEAD")
+
+	t.Run("a commit on main is reached by origin/main", func(t *testing.T) {
+		ref, reachable, err := ResolveReachableAncestryRef(fx.dir, fx.squashed)
+		if err != nil || !reachable {
+			t.Fatalf("reachable=%v err=%v, want reachable with no error", reachable, err)
+		}
+		if ref.Ref != "origin/main" {
+			t.Errorf("answered by %q, want origin/main to answer first", ref.Ref)
+		}
+	})
+
+	t.Run("origin/release answers for a commit origin/main cannot reach", func(t *testing.T) {
+		gitIn(t, fx.dir, "update-ref", "refs/remotes/origin/release", cut)
+		ref, reachable, err := ResolveReachableAncestryRef(fx.dir, cut)
+		if err != nil || !reachable {
+			t.Fatalf("reachable=%v err=%v, want reachable with no error", reachable, err)
+		}
+		if ref.Ref != "origin/release" {
+			t.Fatalf("answered by %q, want origin/release: origin/main exists and cannot reach this commit, so a resolver that stops at the first ref that merely EXISTS refuses a legitimate release cut", ref.Ref)
+		}
+		if !strings.Contains(ref.Why, "append-only") {
+			t.Errorf("the reason has to say why a release commit stays checkable, so a reader can tell this is not a weakened check: %q", ref.Why)
+		}
+	})
+
+	t.Run("an object nothing has is undecidable, never a no", func(t *testing.T) {
+		_, reachable, err := ResolveReachableAncestryRef(fx.dir, unknownSHA)
+		if err == nil {
+			t.Fatalf("reachable=%v with no error; git failing to answer must not be reported as the manifest being wrong", reachable)
+		}
+	})
 }
 
 // TestCommitReachableFromModelsASquashMerge is the positive control.

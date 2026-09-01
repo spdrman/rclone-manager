@@ -28,7 +28,7 @@ Dockge packaging, so nothing here is a migration from an earlier one.
 ### 0.2 Make the canonical image resolvable
 
 `distribution/packaging/canonical.json` records `published: false`: no registry
-is configured for this repository yet, so `ghcr.io/spdrman/backup-manager:1.0.0`
+is configured for this repository yet, so `ghcr.io/spdrman/backup-manager:0.1.0`
 resolves to nothing until you make it resolve. Either push a build to a registry
 this host can reach and change the image reference in one place, or build
 elsewhere and load it:

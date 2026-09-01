@@ -205,7 +205,7 @@ profile and must not be changed.
 ## The image reference
 
 The registry is settled and nothing has been pushed to it yet, so
-`ghcr.io/spdrman/backup-manager:1.0.0` is the intended publish target rather than
+`ghcr.io/spdrman/backup-manager:0.1.0` is the intended publish target rather than
 something that resolves today. `distribution/packaging/canonical.json` is the
 single source of truth for the reference and records `image.published: false`,
 and `container/release-manifest.json` carries a `registry_digest` of `null` per

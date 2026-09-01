@@ -2586,7 +2586,7 @@ docker run --rm \
   -v /path/to/config:/etc/backup-manager:ro \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:1.0.0 \
+  <registry>/iasbuilt/backup-manager:0.1.0 \
   backup-manager check
 ```
 
@@ -2599,7 +2599,7 @@ docker run -d \
   -v /path/to/config:/etc/backup-manager:ro \
   -v /path/to/state:/var/lib/backup-manager \
   -v /path/to/backups:/data/backups \
-  <registry>/iasbuilt/backup-manager:1.0.0 \
+  <registry>/iasbuilt/backup-manager:0.1.0 \
   backup-manager daemon
 ```
 
@@ -2614,7 +2614,7 @@ Provide a supported example:
 ```yaml
 services:
   backup-manager:
-    image: <registry>/iasbuilt/backup-manager:1.0.0
+    image: <registry>/iasbuilt/backup-manager:0.1.0
     restart: unless-stopped
 
     command:

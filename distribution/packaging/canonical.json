@@ -12,8 +12,8 @@
   "image": {
     "registry": "ghcr.io",
     "repository": "spdrman/backup-manager",
-    "tag": "1.0.0",
-    "reference": "ghcr.io/spdrman/backup-manager:1.0.0",
+    "tag": "0.1.0",
+    "reference": "ghcr.io/spdrman/backup-manager:0.1.0",
     "published": false,
     "note": [
       "published:false is the honest state, matching container/release-manifest.json's",
