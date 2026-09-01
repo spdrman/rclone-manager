@@ -41,6 +41,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -142,6 +143,8 @@ func run(args []string) int {
 		return cmdServeUI(args[1:])
 	case "healthcheck":
 		return cmdHealthcheck(args[1:])
+	case "auth":
+		return cmdAuth(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown command %q\n\n", args[0])
 		usage()
@@ -165,6 +168,16 @@ commands:
               response, 1 otherwise - serve-ui's own HEALTHCHECK, since
               it has no state database to run backup-manager status
               against the way the engine container does.
+  auth create-admin --username U --password-stdin [--auth-store PATH]
+              provision the first Web UI administrator directly in the
+              local-auth store (apps/common/auth/local.CreateAdmin), with
+              no HTTP request and no running server involved at all
+              (issue #322). For the headless case the normal enrollment
+              flow cannot help: no browser, and no server up yet to print
+              a bootstrap token to. Refuses if a server is currently
+              running against the same --auth-store (its lock is held for
+              as long as it is up) - run this before first start, or
+              while the server is stopped.
 
 serve flags:
   --config PATH               path to the manager's YAML config file
@@ -281,6 +294,17 @@ serve-ui flags:
 healthcheck flags:
   --url URL   URL to GET (default $LISTEN_ADDR turned into
                http://127.0.0.1:<port>/)
+
+auth create-admin flags:
+  --auth-store PATH   path to the local-auth administrator record
+                       (default /data/state/local-auth.json, matching
+                       serve's own --auth-store default)
+  --username U         administrator username to create (required)
+  --password-stdin     read the administrator password from stdin
+                       (required; nothing else reads it, so it never
+                       appears in this process's own argument list -
+                       e.g. echo -n "$PASS" | backup-manager-web auth
+                       create-admin --username admin --password-stdin)
 `)
 }
 
@@ -643,6 +667,107 @@ func cmdServeUI(args []string) int {
 		return fail(err)
 	}
 	return 0
+}
+
+// cmdAuth dispatches `auth`'s own subcommands, one level deeper than
+// run's own top-level switch, the same shape core/cmd/backup-manager's
+// `catalog rebuild` uses for its one subcommand (catalog.go). `auth`
+// takes no flags of its own - only create-admin does - so there is no
+// flags-around-operands ordering to resolve the way catalog.go's own
+// parseFlagsAroundOperands does; today there is exactly one subcommand
+// (create-admin, issue #322), but the shape leaves room for a later one
+// (e.g. a headless password reset) without `auth` growing flags that
+// would collide across subcommands.
+func cmdAuth(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: auth requires a subcommand (create-admin)")
+		return 2
+	}
+	switch args[0] {
+	case "create-admin":
+		return cmdAuthCreateAdmin(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "backup-manager-web: unknown auth subcommand %q (only create-admin exists)\n", args[0])
+		return 2
+	}
+}
+
+// cmdAuthCreateAdmin is issue #322's headless provisioning path: it calls
+// apps/common/auth/local.CreateAdmin directly, the store-level entry
+// point that writes an AdminRecord straight to --auth-store's JSON file
+// (store.go) with no HTTP request, no CSRF cookie, and no dependency on
+// bootstrap.go's in-memory, network-reachable bootstrap token at all -
+// see CreateAdmin's own doc for exactly why that is safe (it is a
+// different trust boundary than "reaching the port", not a weaker one)
+// and how it stays safe if `serve` happens to be running against the
+// same store at the same time (ErrStoreLocked below).
+//
+// The password is read only from stdin, deliberately never from a flag:
+// a flag's value sits in this process's own argument list (visible to
+// anyone who can run `ps` on the same host for as long as it runs) and
+// often ends up in a shell history file besides. Piping it in
+// (--password-stdin, matching `docker login`'s own convention) keeps it
+// out of both.
+func cmdAuthCreateAdmin(args []string) int {
+	fset := flag.NewFlagSet("auth create-admin", flag.ContinueOnError)
+	authStorePath := fset.String("auth-store", defaultAuthStorePath, "path to the local-auth administrator record")
+	username := fset.String("username", "", "administrator username to create (required)")
+	passwordStdin := fset.Bool("password-stdin", false, "read the administrator password from stdin (required)")
+	if err := fset.Parse(args); err != nil {
+		return 2
+	}
+	if *username == "" {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: auth create-admin: --username is required")
+		return 2
+	}
+	if !*passwordStdin {
+		fmt.Fprintln(os.Stderr, "backup-manager-web: auth create-admin: --password-stdin is required (this command never accepts a password as a flag); pipe it in, e.g. echo -n \"$PASS\" | backup-manager-web auth create-admin --username U --password-stdin")
+		return 2
+	}
+
+	password, err := readPasswordFromStdin(os.Stdin)
+	if err != nil {
+		return fail(fmt.Errorf("auth create-admin: %w", err))
+	}
+
+	admin, err := local.CreateAdmin(local.CreateAdminConfig{
+		StorePath: *authStorePath,
+		Username:  *username,
+		Password:  password,
+	})
+	if err != nil {
+		if errors.Is(err, local.ErrStoreLocked) {
+			return fail(fmt.Errorf("auth create-admin: %w; stop the running server (or wait for the other create-admin invocation to finish) and try again", err))
+		}
+		return fail(fmt.Errorf("auth create-admin: %w", err))
+	}
+
+	fmt.Fprintf(os.Stdout, "backup-manager-web: administrator %q created in %s. Start the server normally - it will see this account already exists and will not print or accept an enrollment bootstrap token.\n",
+		admin.Username, *authStorePath)
+	return 0
+}
+
+// readPasswordFromStdin reads all of r and returns it as a password,
+// stripping exactly one trailing newline (and a preceding carriage
+// return, for a CRLF source) the way `docker login --password-stdin`
+// does, so `printf '%s' "$PASS" | ...` and `echo "$PASS" | ...` both
+// hand this the password an operator actually meant, not that password
+// plus a stray newline character. An empty result (a closed stdin, or a
+// terminal an operator forgot to pipe into) is refused rather than
+// silently treated as an empty password local.CreateAdmin would then
+// refuse anyway for being too short - refusing here names the actual
+// mistake instead of a symptom of it.
+func readPasswordFromStdin(r io.Reader) (string, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("reading password from stdin: %w", err)
+	}
+	s := strings.TrimSuffix(string(b), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	if s == "" {
+		return "", fmt.Errorf("stdin was empty; pipe the administrator password in rather than a terminal (--password-stdin)")
+	}
+	return s, nil
 }
 
 // cmdHealthcheck is serve-ui's own HEALTHCHECK: since that container has
