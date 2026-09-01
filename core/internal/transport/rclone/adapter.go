@@ -56,6 +56,18 @@ var ErrUnsupportedHash = errors.New("rclone: unsupported hash")
 // sftp options are built by sftpConfig in ssh.go, which owns the SSH
 // authentication and host-key verification posture required by FR-6.
 func (a *Adapter) fsFor(ctx context.Context, src transport.Source) (fs.Fs, error) {
+	return a.newFs(ctx, src, false)
+}
+
+// fsForHashing builds the same Fs fsFor does, plus the two sftp options
+// rclone needs before it will compute a SHA-256 digest (see withSHA256 in
+// ssh.go, and in particular why those options must not reach the Fs that
+// copies).
+func (a *Adapter) fsForHashing(ctx context.Context, src transport.Source) (fs.Fs, error) {
+	return a.newFs(ctx, src, true)
+}
+
+func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bool) (fs.Fs, error) {
 	info, err := fs.Find(src.Type)
 	if err != nil {
 		return nil, fmt.Errorf("backend %q is not registered in this binary: %w", src.Type, err)
@@ -68,6 +80,9 @@ func (a *Adapter) fsFor(ctx context.Context, src transport.Source) (fs.Fs, error
 			return nil, err
 		}
 		cfg = sftpCfg
+		if forHashing {
+			cfg = withSHA256(cfg)
+		}
 	}
 
 	f, err := info.NewFs(ctx, src.ID, src.Root, cfg)
@@ -240,7 +255,7 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 }
 
 func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
-	f, err := a.fsFor(ctx, src)
+	f, err := a.fsForHashing(ctx, src)
 	if err != nil {
 		return "", Wrap("remote_hash", err)
 	}
@@ -260,7 +275,37 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	if !f.Hashes().Contains(ht) {
 		return "", fmt.Errorf("%w: backend %q cannot compute %s", ErrUnsupportedHash, src.Type, alg)
 	}
-	return o.Hash(ctx, ht)
+
+	sum, err := o.Hash(ctx, ht)
+	if err != nil {
+		// The Hashes() guard above stopped being the whole answer for sftp
+		// once fsForHashing pinned sha256sum_command: pinning it is what
+		// makes rclone skip its own (broken, see withSHA256) probe, and
+		// skipping the probe means Hashes() reports SHA-256 without ever
+		// having established that the account can run the command. So for
+		// sftp the capability question is now settled here, by running it,
+		// and a failure to run it is the same fact the guard above reports:
+		// this account cannot compute this hash.
+		//
+		// Joining the sentinel keeps that fact classifiable. Classify is
+		// sentinel-based on purpose (see its doc), and without this a
+		// shell-less account's refusal would land in Permanent, which is
+		// the label for "we do not know what this was". The message keeps
+		// rclone's own text, which names the command that failed and is
+		// more use than "cannot compute sha256" was.
+		//
+		// The cost is fidelity in one direction: an ssh session that dies
+		// mid-hash is also called a capability absence. Nothing downstream
+		// can tell the difference today (verify.go fails the artifact on
+		// any RemoteHash error, and neither category is retried), and the
+		// alternative is a string match on rclone's error text, which this
+		// package deliberately does not do.
+		if src.Type == "sftp" {
+			return "", fmt.Errorf("%w: %w", ErrUnsupportedHash, err)
+		}
+		return "", err
+	}
+	return sum, nil
 }
 
 func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remotePath string) error {

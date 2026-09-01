@@ -12,6 +12,9 @@ import type {
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
+import { FieldHelp, HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
+import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
 import { ErrorState } from "@shared/components/EmptyState";
 import { WarningBanner } from "@shared/components/WarningBanner";
 
@@ -265,36 +268,40 @@ function RetentionPolicyEditor({
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(196px, 1fr))", gap: "15px 18px" }}>
-        <label className="field">
-          <span className="field__label">Timezone</span>
-          <input
-            className="input input--mono"
-            value={timezone}
-            disabled={readOnly}
-            onChange={(e) => {
-              setSaved(false);
-              setTimezone(e.target.value);
-            }}
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Week starts on</span>
-          <select
-            className="select"
-            value={weekStartsOn}
-            disabled={readOnly}
-            onChange={(e) => {
-              setSaved(false);
-              setWeekStartsOn(e.target.value);
-            }}
-          >
-            {WEEKDAYS.map((d) => (
-              <option key={d} value={d}>
-                {d.charAt(0).toUpperCase() + d.slice(1)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <HelpField label="Timezone" help={FIELD_HELP.retentionTimezone}>
+          {(helpId) => (
+            <input
+              className="input input--mono"
+              aria-describedby={helpId}
+              value={timezone}
+              disabled={readOnly}
+              onChange={(e) => {
+                setSaved(false);
+                setTimezone(e.target.value);
+              }}
+            />
+          )}
+        </HelpField>
+        <HelpField label="Week starts on" help={FIELD_HELP.weekStartsOn}>
+          {(helpId) => (
+            <select
+              className="select"
+              aria-describedby={helpId}
+              value={weekStartsOn}
+              disabled={readOnly}
+              onChange={(e) => {
+                setSaved(false);
+                setWeekStartsOn(e.target.value);
+              }}
+            >
+              {WEEKDAYS.map((d) => (
+                <option key={d} value={d}>
+                  {d.charAt(0).toUpperCase() + d.slice(1)}
+                </option>
+              ))}
+            </select>
+          )}
+        </HelpField>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -350,27 +357,35 @@ function RetentionPolicyEditor({
         at all.
       </p>
 
-      <label
-        style={{
-          display: "flex", alignItems: "center", gap: 10, padding: "11px 13px",
-          border: "1px solid " + (protect ? "var(--border)" : "var(--danger)"),
-          borderRadius: 7, fontSize: 13, cursor: readOnly ? "default" : "pointer"
-        }}
+      <FieldHelp
+        label="Protect the newest known-good backup"
+        help={FIELD_HELP.protectLastKnownGood}
       >
-        <input
-          type="checkbox"
-          checked={protect}
-          disabled={readOnly}
-          style={{ accentColor: "var(--accent)" }}
-          onChange={(e) => {
-            setSaved(false);
-            setProtect(e.target.checked);
-          }}
-        />
-        <span style={{ flex: 1 }}>
-          Protect the newest known-good backup from retention (FR-19)
-        </span>
-      </label>
+        {(helpId) => (
+          <label
+            style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "11px 13px",
+              border: "1px solid " + (protect ? "var(--border)" : "var(--danger)"),
+              borderRadius: 7, fontSize: 13, cursor: readOnly ? "default" : "pointer"
+            }}
+          >
+            <input
+              type="checkbox"
+              aria-describedby={helpId}
+              checked={protect}
+              disabled={readOnly}
+              style={{ accentColor: "var(--accent)" }}
+              onChange={(e) => {
+                setSaved(false);
+                setProtect(e.target.checked);
+              }}
+            />
+            <span style={{ flex: 1 }}>
+              Protect the newest known-good backup from retention (FR-19)
+            </span>
+          </label>
+        )}
+      </FieldHelp>
 
       {!protect ? (
         <WarningBanner tone="danger" title="Last-known-good protection is off">
@@ -469,74 +484,89 @@ function TierRow({
         background: "var(--surface-2)"
       }}
     >
-      <Field label="Name" error={errors.name}>
-        <input
-          className="input input--mono"
-          value={tier.name}
-          disabled={readOnly}
-          onChange={(e) => onChange({ name: e.target.value })}
-        />
+      <Field label="Name" help={FIELD_HELP.tierName} error={errors.name}>
+        {(helpId) => (
+          <input
+            className="input input--mono"
+            aria-describedby={helpId}
+            value={tier.name}
+            disabled={readOnly}
+            onChange={(e) => onChange({ name: e.target.value })}
+          />
+        )}
       </Field>
 
-      <Field label="Granularity">
-        <select
-          className="select"
-          value={tier.granularity}
-          disabled={readOnly}
-          onChange={(e) => onChange({ granularity: e.target.value })}
-        >
-          {schema.granularities.map((g) => (
-            <option key={g} value={g}>
-              {granularityLabel(g)}
-            </option>
-          ))}
-        </select>
+      <Field label="Granularity" help={FIELD_HELP.tierGranularity}>
+        {(helpId) => (
+          <select
+            className="select"
+            aria-describedby={helpId}
+            value={tier.granularity}
+            disabled={readOnly}
+            onChange={(e) => onChange({ granularity: e.target.value })}
+          >
+            {schema.granularities.map((g) => (
+              <option key={g} value={g}>
+                {granularityLabel(g)}
+              </option>
+            ))}
+          </select>
+        )}
       </Field>
 
       {custom ? (
-        <Field label="Period (days)" error={errors.periodDays}>
-          <input
-            className="input"
-            type="number"
-            min={1}
-            max={schema.periodDaysMax}
-            value={tier.periodDays}
-            disabled={readOnly}
-            onChange={(e) => onChange({ periodDays: e.target.value })}
-          />
+        <Field label="Period (days)" help={FIELD_HELP.tierPeriodDays} error={errors.periodDays}>
+          {(helpId) => (
+            <input
+              className="input"
+              type="number"
+              aria-describedby={helpId}
+              min={1}
+              max={schema.periodDaysMax}
+              value={tier.periodDays}
+              disabled={readOnly}
+              onChange={(e) => onChange({ periodDays: e.target.value })}
+            />
+          )}
         </Field>
       ) : null}
 
-      <Field label="Keep" error={errors.keep}>
-        <input
-          className="input"
-          type="number"
-          min={1}
-          max={schema.keepMax}
-          value={tier.keep}
-          disabled={readOnly}
-          onChange={(e) => onChange({ keep: e.target.value })}
-        />
+      <Field label="Keep" help={FIELD_HELP.tierKeep} error={errors.keep}>
+        {(helpId) => (
+          <input
+            className="input"
+            type="number"
+            aria-describedby={helpId}
+            min={1}
+            max={schema.keepMax}
+            value={tier.keep}
+            disabled={readOnly}
+            onChange={(e) => onChange({ keep: e.target.value })}
+          />
+        )}
       </Field>
 
       {/* A custom period measures its own window, so it never carries a
           window unit — the server refuses that combination outright, so
           the control is absent rather than present and ignored. */}
       {custom ? null : (
-        <Field label="Window unit">
-          <select
-            className="select"
-            value={tier.windowUnit}
-            disabled={readOnly}
-            onChange={(e) => onChange({ windowUnit: e.target.value })}
-          >
-            <option value="">Same as granularity</option>
-            {schema.windowUnits.map((u) => (
-              <option key={u} value={u}>
-                {granularityLabel(u)}
-              </option>
-            ))}
-          </select>
+        <Field label="Window unit" help={FIELD_HELP.tierWindowUnit}>
+          {(helpId) => (
+            <select
+              className="select"
+              aria-describedby={helpId}
+              value={tier.windowUnit}
+              disabled={readOnly}
+              onChange={(e) => onChange({ windowUnit: e.target.value })}
+            >
+              <option value="">Same as granularity</option>
+              {schema.windowUnits.map((u) => (
+                <option key={u} value={u}>
+                  {granularityLabel(u)}
+                </option>
+              ))}
+            </select>
+          )}
         </Field>
       )}
 
@@ -556,29 +586,39 @@ function TierRow({
 }
 
 /**
- * One labelled control plus its validation message.
+ * One labelled control, its help pop-up (#278) and its validation message.
  *
  * The message is a SIBLING of the <label>, never inside it. A wrapping
  * label's accessible name is its whole text content, so an error rendered
  * inside it renames the control from "Keep" to "KeepKeep at least 1
  * look-back unit." — which breaks assistive technology and every
  * label-based query alike, silently, and only once the field is invalid.
+ *
+ * The help copy is kept out of the label for the same reason and reaches
+ * the control the other way round, through its aria-describedby: a
+ * description is announced after the name rather than becoming part of it,
+ * which is exactly the difference between "Keep, edit, 7, how many
+ * look-back units..." and a control whose name is three sentences long.
+ * That is why `children` is a function: the control has to be handed the
+ * id, and there is no honest way to attach a description to a control this
+ * component cannot see.
  */
 function Field({
   label,
+  help,
   error,
   children
 }: {
   label: string;
+  help: FieldHelpCopy;
   error?: string;
-  children: ReactNode;
+  children: (helpId: string) => ReactNode;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-      <label className="field">
-        <span className="field__label">{label}</span>
+      <HelpField label={label} help={help}>
         {children}
-      </label>
+      </HelpField>
       {error ? (
         <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>{error}</span>
       ) : null}

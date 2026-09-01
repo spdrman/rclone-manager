@@ -5,6 +5,8 @@ import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import type { OperatorFailure } from "@shared/api/failure";
 import { Logo, Wordmark } from "@shared/components/Logo";
 import { ErrorState } from "@shared/components/EmptyState";
+import { HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 /** Issue #274, one view over from the enrolment page it was filed against:
  *  a wrong password and a rate-limited address are different problems with
@@ -52,27 +54,31 @@ export function LoginPage({ onSignedIn }: { onSignedIn(): void }) {
         NAS operating-system login.
       </p>
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <label className="field">
-          <span className="field__label">Username</span>
-          <input
-            className="input input--mono"
-            autoComplete="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
-        </label>
-        <label className="field">
-          <span className="field__label">Password</span>
-          <input
-            className="input"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
+        <HelpField label="Username" help={FIELD_HELP.loginUsername}>
+          {(helpId) => (
+            <input
+              className="input input--mono"
+              aria-describedby={helpId}
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          )}
+        </HelpField>
+        <HelpField label="Password" help={FIELD_HELP.loginPassword}>
+          {(helpId) => (
+            <input
+              className="input"
+              type="password"
+              aria-describedby={helpId}
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          )}
+        </HelpField>
         {failure ? (
           <ErrorState
             message={failure.message}
