@@ -318,7 +318,7 @@ func (v GFSVerdict) SiblingCollisionLines() []string {
 	out := make([]string, 0, len(order))
 	for _, sib := range order {
 		out = append(out, fmt.Sprintf(
-			"sibling collision: %s shares an identical timestamp with %s (%s) and lost only the name tie-break, not the retention window -- this is not an ordinary supersession; if these are two files of one restore point, see docs/ on configuring one backup set per file pattern before deleting either",
+			"sibling collision: %s shares an identical timestamp with %s (%s) and lost only the name tie-break, not the retention window -- this is not an ordinary supersession; if these are two files of one restore point, see docs/EPIC.md's FR-18 \"Multi-file restore points\" section on configuring one backup set per file pattern before deleting either",
 			v.Artifact.Name, sib.Name, strings.Join(bySibling[sib], ", ")))
 	}
 	return out

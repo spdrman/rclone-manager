@@ -29,8 +29,8 @@ var siblingRunFixtureTimestamp = time.Date(2026, 8, 30, 3, 30, 0, 0, time.UTC)
 // directory holds two files sharing siblingRunFixtureTimestamp as their
 // mtime, both matched by one `include` pattern -- exactly the "producer
 // writes several files per run" scenario the issue describes, and
-// exactly the scenario docs/ (this issue's own acceptance criteria) says
-// to instead split into one backup set per file pattern.
+// exactly the scenario docs/EPIC.md's FR-18 "Multi-file restore points"
+// section says to instead split into one backup set per file pattern.
 func writeSiblingRunConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
