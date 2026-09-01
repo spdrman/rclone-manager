@@ -21,12 +21,9 @@ const STEPS = [
   "Authentication",
   "Verify server",
   "Discovery",
-  "Storage & retention",
+  "Storage & validation",
   "Review"
 ] as const;
-
-const PUBLIC_KEY =
-  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL4pQ7mXvR2tYc8nJ0dKeW1sBfHgZaTqOo9UiKrEu backup-manager@nas-01";
 
 /** Shown only until the real probe (issue #146) resolves for the first
  *  time — see the "Verify server" step below — so step 3 never renders
@@ -504,39 +501,39 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                 )}
               </FieldHelp>
 
+              {/* Issue #299: "Generate" used to show a fixed sample public
+                  key (never actually generated per set) with a "Copy
+                  public key" button, plus an authorized_keys instruction
+                  that always named "backup-agent" regardless of the
+                  username actually entered on the Source step —
+                  fabricated specifics, the same class of problem as the
+                  webhook line the Settings page used to show. This path
+                  is already refused at save (see handleSave/saveHint
+                  below), exactly like "Use managed key", so both panels
+                  now say the same honest thing instead of inventing
+                  detail for a path that cannot be saved. */}
               {keySource === "generate" ? (
-                <div style={{ border: "1px solid var(--border)", borderRadius: "var(--radius-lg)", overflow: "hidden", marginTop: 18 }}>
-                  <div className="card__header" style={{ background: "var(--surface-2)" }}>
-                    <span className="eyebrow" style={{ fontSize: "var(--text-xs)" }}>Public key · ed25519</span>
-                    <button className="btn btn--sm" onClick={() => navigator.clipboard?.writeText(PUBLIC_KEY)}>
-                      Copy public key
-                    </button>
-                  </div>
-                  <div className="mono" style={{ padding: "13px 14px", fontSize: "var(--text-sm)", lineHeight: 1.6, wordBreak: "break-all" }}>
-                    {PUBLIC_KEY}
-                  </div>
-                  <p style={{ margin: 0, padding: "0 14px 13px", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                    Add to <span className="mono">/home/backup-agent/.ssh/authorized_keys</span> on the remote server.
-                  </p>
+                <div className="banner banner--info" style={{ marginTop: 18, fontSize: "var(--text-sm)" }}>
+                  <span aria-hidden="true">i</span>
+                  <span>
+                    Generating a key on save isn&rsquo;t available yet — import a key on the Authentication
+                    step instead.
+                  </span>
                 </div>
               ) : null}
 
+              {/* Issue #299: "Use managed key" used to show a picklist of
+                  two hardcoded key names and a fabricated "Already
+                  installed on 2 other backup sets" count — there is no
+                  managed-key store behind either. Same treatment as
+                  "Generate" above. */}
               {keySource === "managed" ? (
-                <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 10 }}>
-                  <label className="field">
-                    <span className="field__label">Managed key</span>
-                    <select className="select">
-                      <option>nas-01-postgres · ed25519 · SHA256:9kQ2m…</option>
-                      <option>nas-01-billing · ed25519 · SHA256:7bTmQ…</option>
-                    </select>
-                  </label>
-                  <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
-                    <span aria-hidden="true">i</span>
-                    <span>
-                      Already installed on 2 other backup sets. A key in use can&rsquo;t be deleted from
-                      Settings until every set referencing it is reassigned or disabled.
-                    </span>
-                  </div>
+                <div className="banner banner--info" style={{ marginTop: 18, fontSize: "var(--text-sm)" }}>
+                  <span aria-hidden="true">i</span>
+                  <span>
+                    Reusing a managed key on save isn&rsquo;t available yet — import a key on the
+                    Authentication step instead.
+                  </span>
                 </div>
               ) : null}
 
@@ -698,12 +695,13 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                   label="Include patterns" value={includePatterns} onChange={setIncludePatterns} mono
                   help={FIELD_HELP.wizardIncludePatterns}
                 />
-                {/* Exclude patterns stays display-only (#98): core's
-                    config.BackupSet has no exclude field yet (only
-                    Include, see core/internal/config/config.go), so
-                    there is nowhere real for this to be sent. */}
-                <Field label="Exclude patterns" defaultValue="*.tmp, *.part" mono />
               </div>
+              {/* Issue #299 (was #98's display-only placeholder before
+                  that): an "Exclude patterns" field used to sit here,
+                  `defaultValue`-only. Removed rather than wired — core's
+                  config.BackupSet still has no exclude field, only
+                  Include (core/internal/config/config.go), so there is
+                  nowhere real for this to be sent. */}
 
               <FieldHelp label="Completion method" help={FIELD_HELP.wizardCompletionMethod}>
                 {(helpId) => (
@@ -750,8 +748,8 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
 
           {step === 5 ? (
             <StepBody
-              title="Storage, retention and validation"
-              lede="Where the NAS copy lives, how long it is kept, and how it is proven good."
+              title="Storage and validation"
+              lede="Where the NAS copy lives, and how it is proven good."
             >
               <div className="eyebrow" style={{ fontSize: "var(--text-xs)", marginBottom: 10 }}>Storage</div>
               <HelpField
@@ -782,28 +780,36 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                 )}
               </HelpField>
 
-              <div className="eyebrow" style={{ fontSize: "var(--text-xs)", margin: "20px 0 10px" }}>Retention</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(164px, 1fr))", gap: 14 }}>
-                <Field label="Daily" defaultValue="7 days" mono />
-                <Field label="Weekly" defaultValue="3 months" mono />
-                <Field label="Monthly" defaultValue="12 months" mono />
-                <label className="field">
-                  <span className="field__label">Week starts</span>
-                  <select className="select" defaultValue="Monday">
-                    <option>Monday</option>
-                    <option>Sunday</option>
-                  </select>
-                </label>
-              </div>
-              <label className="banner banner--ok" style={{ marginTop: 12, alignItems: "center", fontSize: "var(--text-sm)", cursor: "pointer" }}>
-                <input type="checkbox" defaultChecked style={{ accentColor: "var(--ok)" }} />
-                <span>Protect newest known-good backup — never deleted by retention</span>
-              </label>
+              {/* Issue #299 (per #111 before it): this step used to draw
+                  its own Daily/Weekly/Monthly/Week-starts fields plus an
+                  always-checked "protect newest known-good" toggle, none
+                  of them wired to anything. #111 already decided GFS
+                  retention is one global policy, configured once on the
+                  Settings page (RetentionPolicyCard, #140), and
+                  specifically warned that this wizard's own per-set shape
+                  "must not be mistaken for a capability." Removed here
+                  rather than reopening that decision. */}
 
               <div className="eyebrow" style={{ fontSize: "var(--text-xs)", margin: "20px 0 10px" }}>Validation</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <Toggle label="Transfer verification" note="always on" defaultChecked />
-                <Toggle label="Checksum verification" note="SHA-256" defaultChecked mono />
+                {/* Transfer verification is unconditional server-side —
+                    there is no field anywhere that could turn it off — so
+                    unlike Checksum verification below this stays, but
+                    disabled: an honest status, not a control. */}
+                <Toggle label="Transfer verification" note="always on" defaultChecked disabled />
+                {/* Issue #299: "Checksum verification" used to sit here as
+                    a live-looking, always-checked toggle. newBackupSetFor
+                    (core/service/backupsets.go) sets Hash: "" on every
+                    created set, unconditionally — there is no field for
+                    this toggle to write to. That "" is deliberate, not a
+                    gap: the recommended deployment is a chrooted,
+                    forced-command internal-sftp account with no shell,
+                    against which hash computation is proven not to work
+                    (see backupsets.go's own comment and
+                    core/tests/sftpintegration.TestSFTPHashCapability), so
+                    wiring this toggle would offer a choice that fails
+                    every artifact in the account shape this product
+                    recommends. Removed rather than wired. */}
 
                 {/* Issue #162: a real picklist over the backend's own
                     registered catalog (GET /api/v1/validators), replacing
@@ -821,7 +827,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                         disabled={validatorCatalogFailed || validatorCatalog === null}
                         onChange={(e) => setValidatorId(e.target.value)}
                       >
-                        <option value="">None (transfer and checksum verification only)</option>
+                        <option value="">None (transfer verification only)</option>
                         {(validatorCatalog ?? []).map((v) => (
                           <option key={v.id} value={v.id}>
                             {v.id}
@@ -839,10 +845,10 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                           : validatorCatalog === null
                             ? "Loading the available validators…"
                             : (selectedValidator?.summary ??
-                              "No application validator: transfer and checksum verification only.")}
+                              "No application validator: transfer verification only.")}
                       </span>
                       <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                        A validator runs against every artifact once it is transferred and checksummed. Rejecting one
+                        A validator runs against every artifact once it is transferred. Rejecting one
                         quarantines it and leaves the remote copy in place.
                       </span>
                     </>
@@ -863,11 +869,16 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
               >
                 <Summary label="Source" lines={[source.host, remoteFolder]} />
                 <Summary label="Destination" lines={[localDestination]} />
-                <Summary label="Retention" lines={["7 daily", "13 weekly", "12 monthly"]} />
+                {/* Issue #299: this card used to show a hardcoded
+                    "7 daily" / "13 weekly" / "12 monthly" that summarized
+                    fields removed above — retention is one global policy
+                    now (see Settings), not something this wizard's Review
+                    step reports per set. "SHA-256" below is gone for the
+                    same reason as the Checksum verification toggle: this
+                    product never actually sets a hash algorithm. */}
                 <Summary
                   label="Validation"
                   lines={[
-                    "SHA-256",
                     "transfer verify",
                     validatorId || "no application validator",
                     completionSummaryLabel(completion)
@@ -1123,16 +1134,23 @@ function Choice({
   );
 }
 
-function Toggle({ label, note, defaultChecked, mono }: { label: string; note: string; defaultChecked?: boolean; mono?: boolean }) {
+function Toggle({
+  label, note, defaultChecked, mono, disabled
+}: {
+  label: string; note: string; defaultChecked?: boolean; mono?: boolean; disabled?: boolean;
+}) {
   return (
     <label
       style={{
         display: "flex", alignItems: "center", gap: 10, padding: "11px 13px",
         border: "1px solid var(--border)", borderRadius: 7,
-        background: "var(--surface-2)", fontSize: 13, cursor: "pointer"
+        background: "var(--surface-2)", fontSize: 13, cursor: disabled ? "default" : "pointer"
       }}
     >
-      <input type="checkbox" defaultChecked={defaultChecked} style={{ accentColor: "var(--accent)" }} />
+      <input
+        type="checkbox" defaultChecked={defaultChecked} disabled={disabled}
+        style={{ accentColor: "var(--accent)" }}
+      />
       <span style={{ flex: 1 }}>{label}</span>
       <span
         className={mono ? "mono" : undefined}

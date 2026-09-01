@@ -27,46 +27,57 @@
  *
  * A field whose effect cannot be stated from the code gets no entry, and its
  * control gets no pop-up. That is not an oversight to be filled in later by
- * whoever notices the gap: this UI has removed invented claims three times
- * (#211, #231, #274), and a help pop-up is the easiest possible place to add
- * a fourth, because a plausible sentence about a decorative control reads
- * exactly like a true one. The controls left out today, and why:
+ * whoever notices the gap: this UI has removed invented claims several times
+ * (#211, #231, #274, #299), and a help pop-up is the easiest possible place
+ * to add another, because a plausible sentence about a decorative control
+ * reads exactly like a true one.
  *
- *   - SettingsPage "Polling interval", "Log level". Neither is wired to
- *     anything (defaultValue, no handler, no save). poll_interval is a real
- *     config key but a duration (documented as 15m), not the 15/30/60
- *     SECONDS this control offers, and there is no log level in
- *     config.Config at all.
+ * Issue #299 (filed against this exact list) resolved each entry that used
+ * to be documented here as "left out, unexplained" one of two ways: remove
+ * the control outright, or make it an honest, non-interactive statement of
+ * fact rather than a live-looking one. Nothing decorative was wired, since
+ * none of it was cheap to wire honestly. What is left with no entry today,
+ * and why:
  *
- *     "Storage warning threshold" and "Storage critical threshold" left
- *     this list with issue #286, when internal/config grew the capacity
- *     block FR-21's guard had been waiting on: they are now real fields on
- *     UpdateSettingsRequest.capacity, and the storage cap beside them
- *     joined the catalogue at the same time.
- *   - SettingsPage "Webhook notifications". config.Alerts' own doc says
- *     where an alert goes is deliberately not configurable and that there is
- *     no URL for this package to validate. Explaining this control would
- *     mean describing a capability the design explicitly refused.
- *   - ActivityPage "Time range". Nothing reads it and listActivity takes no
- *     window argument.
- *   - The wizard's remaining decorative controls: exclude patterns; the
- *     four per-set retention controls (Daily/Weekly/Monthly/Week starts,
- *     plus its own always-checked "protect newest known-good" toggle,
- *     distinct from the real global one on Settings); the always-on
- *     transfer-verification toggle; the checksum-verification toggle
- *     (`newBackupSetFor` in core/service/backupsets.go sets `Hash: ""`
- *     unconditionally, so this toggle has no field to write to); the
- *     "Generate dedicated SSH key" panel's static content (a fixed sample
- *     key, and an authorized_keys path that always names "backup-agent"
- *     regardless of the username actually entered); and the "Use managed
- *     key" branch entire, whose picklist offers two hardcoded key names
- *     and a fabricated "Already installed on 2 other backup sets" count
- *     with no backend behind either. Per-set retention in particular is
- *     not merely unwired: issue #111 decided retention is one global
- *     policy and specifically warned that this UI's already-drawn per-set
- *     shape must not be mistaken for a capability. All of it is tracked as
- *     one issue (#299) rather than fixed here, since each needs its own
- *     product decision (wire it, or remove it), not a tooltip.
+ *   - The wizard's "Transfer verification" toggle (Storage & validation
+ *     step). It stayed, because it is true — every artifact this product
+ *     creates is transfer-verified, unconditionally, with no field
+ *     anywhere that could turn that off — but it is `disabled` now, not a
+ *     control: a checkbox with nothing behind it doesn't get a tooltip
+ *     explaining a choice, because there is no choice to explain.
+ *   - SettingsPage's "Catalog recovery" and "Administrator password"
+ *     sections, and the wizard's own key-source radios and Save
+ *     acknowledgement, are real and DO have entries below; they are not
+ *     part of this list.
+ *
+ * Everything else this list used to carry is simply gone from the pages
+ * themselves, not merely un-explained:
+ *
+ *   - SettingsPage's "Polling interval" and "Log level" (defaultValue, no
+ *     handler, no save; poll_interval is a real config key but a duration
+ *     in minutes, not the 15/30/60 SECONDS the control offered, and there
+ *     is no log level in config.Config at all) and "Webhook notifications"
+ *     (config.Alerts' own doc says delivery is deliberately not
+ *     configurable, so the specific URL this row showed was a fabricated
+ *     fact, not an unwired one) are removed.
+ *   - ActivityPage's "Time range" select is removed (listActivity takes no
+ *     window argument).
+ *   - The wizard's exclude-patterns field, its four per-set retention
+ *     controls (Daily/Weekly/Monthly/Week starts, plus their own
+ *     always-checked "protect newest known-good" toggle — #111 already
+ *     decided retention is one global policy, configured on Settings, and
+ *     specifically warned this per-set shape must not be mistaken for a
+ *     capability), and its checksum-verification toggle (`newBackupSetFor`
+ *     in core/service/backupsets.go sets `Hash: ""` unconditionally, so
+ *     the toggle had no field to write to) are all removed.
+ *   - The wizard's "Generate dedicated SSH key" panel (a fixed sample key
+ *     never actually generated per set, and an authorized_keys path that
+ *     always named "backup-agent" regardless of the username entered) and
+ *     the "Use managed key" panel (a picklist of two hardcoded key names
+ *     plus a fabricated "Already installed on 2 other backup sets" count)
+ *     no longer show fabricated specifics — both key-source choices are
+ *     already refused at save (see wizardKeySource's own entry below), so
+ *     both now just say that plainly instead.
  */
 
 /** One field's help copy. All three parts are required. */
@@ -306,8 +317,8 @@ export const FIELD_HELP = {
   },
 
   wizardValidatorId: {
-    what: "An optional external check Backup Manager runs against every artifact after it's transferred and checksummed (FR-13), on top of that built-in verification.",
-    example: "None (transfer and checksum verification only)",
+    what: "An optional external check Backup Manager runs against every artifact after it's transferred (FR-13), on top of that built-in verification.",
+    example: "None (transfer verification only)",
     effect:
       "Choosing a validator sends its id with the save, and every future artifact in this set runs that check before being trusted. An artifact the validator rejects is quarantined rather than committed, and its remote copy is kept rather than deleted, permanently: FR-13 requires a required validator's failure to block deletion of the source, and that block outlives even a later reinstatement out of quarantine."
   },
