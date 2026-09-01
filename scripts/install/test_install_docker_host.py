@@ -665,12 +665,57 @@ class TestRemediationIsSafe(unittest.TestCase):
         d._bridge_interfaces = ["docker0", "br-0123456789ab"]
         return d
 
+    def every_script(self, d):
+        """Every place this installer can emit a firewall command.
+
+        The unit is in here deliberately. A safety assertion that only
+        covers the path a human takes is not covering the path that runs
+        unattended every couple of minutes for the life of the machine,
+        and that is the one nobody is watching (#273).
+        """
+        return {
+            "insert": d.insert_script(),
+            "delete": d.delete_script(),
+            "unit service": d.unit_service_text(),
+            "unit install": d.unit_install_script(),
+            "unit remove": d.unit_remove_script(),
+            "docker restart": d.restart_docker_script(),
+        }
+
     def test_nothing_flushes_changes_a_policy_or_restores_a_ruleset(self):
         d = self.doctor()
-        for script in (d.insert_script(), d.delete_script()):
+        for name, script in self.every_script(d).items():
             for forbidden in (" -F", " --flush", " -P ", " --policy", "iptables-restore", " -X", " -Z"):
                 self.assertNotIn(forbidden, script,
-                                 f"{forbidden!r} can take the SSH session with it: {script}")
+                                 f"{forbidden!r} in the {name} script can take the SSH session with it")
+
+    def test_nothing_ever_touches_a_chain_this_installer_did_not_create(self):
+        """UG_* is the host's own firewall. Reading it is the diagnosis;
+        writing to it would be taking ownership of somebody else's rules,
+        which is the same mistake as snapshotting the whole ruleset."""
+        d = self.doctor()
+        for name, script in self.every_script(d).items():
+            for verb in (" -I UG_", " -A UG_", " -D UG_", " -R UG_", " -F UG_"):
+                self.assertNotIn(verb, script, f"the {name} script writes to a UG_ chain")
+
+    def test_persistence_never_snapshots_the_hosts_ruleset(self):
+        """`netfilter-persistent save` is installed and active on the target
+        host and is the obvious move. It writes the ENTIRE live ruleset,
+        the host's own chains included, into a file this project would then
+        restore at every boot."""
+        d = self.doctor()
+        for name, script in self.every_script(d).items():
+            self.assertNotIn("iptables-save", script, f"the {name} script snapshots the ruleset")
+            # Naming the unit in an After= is ordering, and is the point.
+            # RUNNING it is the mistake, so the check is per line and only
+            # a line that orders against it is allowed to mention it.
+            for line in script.splitlines():
+                if "netfilter-persistent" in line:
+                    self.assertTrue(
+                        line.startswith("After=") or line.startswith("# "),
+                        f"the {name} script invokes netfilter-persistent, which writes the ENTIRE live "
+                        f"ruleset including the host's own chains into a file this project would then "
+                        f"restore at every boot: {line}")
 
     def test_every_rule_is_interface_scoped_and_never_a_blanket_accept(self):
         d = self.doctor()
@@ -853,6 +898,142 @@ class TestProbeDefaultsCarryNothingPrivate(unittest.TestCase):
         args = Fixture(self).args()
         self.assertEqual(args.probe_host, "1.1.1.1")
         self.assertEqual(args.probe_port, 443)
+
+
+
+class TestPersistenceUnit(unittest.TestCase):
+    """The unit is the thing that runs unattended for the life of the
+    machine, so what it contains is checked rather than trusted."""
+
+    def doctor(self):
+        d = installer.BridgeDoctor(Fixture(self).args())
+        d.iptables = "/sbin/iptables"
+        return d
+
+    def test_the_unit_asserts_exactly_the_rules_the_interactive_path_does(self):
+        """If these two ever drift, the timer spends the life of the machine
+        re-asserting a different set from the one that was verified."""
+        d = self.doctor()
+        interactive = {f"{chain} {' '.join(spec)}" for chain, spec in d.rule_specs()}
+        in_unit = set()
+        for line in d.unit_service_text().splitlines():
+            if line.startswith("ExecStart="):
+                after_c = line.split(" -C ", 1)[1]
+                in_unit.add(after_c.split(" || ")[0].strip())
+        self.assertEqual(in_unit, interactive)
+
+    def test_the_unit_checks_before_it_inserts(self):
+        d = self.doctor()
+        execs = [ln for ln in d.unit_service_text().splitlines() if ln.startswith("ExecStart=")]
+        self.assertEqual(len(execs), 4, "one ExecStart per rule, so systemd names the one that failed")
+        for line in execs:
+            self.assertIn(" -C ", line, f"the unit inserts without checking: {line}")
+            self.assertIn(" || ", line, f"the insert is not conditional on the check: {line}")
+
+    def test_the_unit_is_ordered_after_everything_that_builds_the_ruleset(self):
+        after = [ln for ln in self.doctor().unit_service_text().splitlines() if ln.startswith("After=")]
+        self.assertEqual(len(after), 1)
+        for unit in ("net_serv.service", "netfilter-persistent.service", "nftables.service",
+                     "docker.service"):
+            self.assertIn(unit, after[0])
+
+    def test_the_unit_never_hard_depends_on_those(self):
+        """A host without one of them should still get its rules, not a
+        failed unit."""
+        # Directives only. The unit's own comment explains why it does not
+        # use Requires=, so a whole-text substring match reads that
+        # explanation as the thing it is warning against.
+        directives = [ln for ln in self.doctor().unit_service_text().splitlines()
+                      if ln and not ln.startswith("#")]
+        for directive in ("Requires=", "BindsTo=", "Requisite="):
+            for line in directives:
+                self.assertFalse(line.startswith(directive),
+                                 f"{directive} makes a host missing one of those units fail instead "
+                                 f"of getting its rules: {line}")
+
+    def test_the_timer_covers_boot_and_runtime_rewrites(self):
+        timer = self.doctor().unit_timer_text()
+        self.assertIn("OnBootSec=", timer, "a reboot is one of the two ways the rules go away")
+        self.assertIn(f"OnUnitActiveSec={installer.BridgeDoctor.REASSERT_INTERVAL}", timer,
+                      "the host rewriting its ruleset at runtime is the other, and a boot-only "
+                      "unit does not cover it")
+        self.assertIn(f"Unit={installer.BridgeDoctor.SERVICE_UNIT}", timer)
+
+    def test_a_healthy_run_produces_no_output_from_the_unit(self):
+        """`iptables -C` prints nothing on success, so a fire that changes
+        nothing says nothing. LogLevelMax keeps systemd's own start and
+        finish lines out of the journal as well."""
+        self.assertIn("LogLevelMax=", self.doctor().unit_service_text())
+
+    def test_everything_the_install_writes_the_remove_deletes(self):
+        d = self.doctor()
+        written = {tok for tok in d.unit_install_script().split() if tok.startswith(d.UNIT_DIR)}
+        removed = {tok for tok in d.unit_remove_script().split() if tok.startswith(d.UNIT_DIR)}
+        self.assertTrue(written, "the install script writes no unit file at all")
+        self.assertEqual(written, removed, "anything installed has to be removable")
+
+    def test_the_remove_script_tolerates_a_half_installed_host(self):
+        """Undo has to work on a machine where installation failed partway,
+        and an undo that dies at the first missing thing is worse than
+        none."""
+        for line in self.doctor().unit_remove_script().splitlines():
+            if "systemctl" in line and "daemon-reload" not in line:
+                self.assertIn("|| true", line, f"this aborts on an already-absent unit: {line}")
+
+
+class TestFixNetworkVocabulary(unittest.TestCase):
+    def test_the_default_is_the_conservative_one(self):
+        args = Fixture(self).args()
+        self.assertEqual(args.fix_network, "auto",
+                         "installing a systemd unit is a larger commitment than a runtime rule, "
+                         "so it has to be asked for")
+
+    def test_persistence_is_a_value_of_the_existing_flag_not_a_second_one(self):
+        parser = installer.build_parser()
+        choices = None
+        for action in parser._actions:
+            if action.dest == "fix_network":
+                choices = set(action.choices)
+        self.assertEqual(choices, {"auto", "persist", "diagnose", "never"})
+        flags = {opt for action in parser._actions for opt in action.option_strings}
+        for overlapping in ("--persist", "--persist-network", "--install-unit", "--systemd"):
+            self.assertNotIn(overlapping, flags,
+                             "a second flag with overlapping meaning is how two knobs end up "
+                             "disagreeing about what the operator asked for")
+
+    def test_a_healthy_host_installs_the_unit_only_when_persistence_is_asked_for(self):
+        """Otherwise persistence could only ever be installed on a host that
+        was currently broken, so an operator would have to wait for the
+        failure they are trying to prevent."""
+        for mode, want_install in (("auto", False), ("persist", True)):
+            with self.subTest(mode=mode):
+                fx = Fixture(self)
+                args = fx.args("--fix-network", mode)
+                calls = []
+
+                class RecordingSudo(installer.Sudo):
+                    def run_script(self, script, *, purpose, timeout=300):
+                        calls.append(purpose)
+                        class P:
+                            stdout = ""
+                        return P()
+
+                real_probe = installer.BridgeDoctor.probe
+                real_image = installer.BridgeDoctor.ensure_probe_image
+                real_install = installer.install_persistence
+                installer.BridgeDoctor.probe = lambda self, net: {
+                    "gateway": True, "egress": True, "gateway_ip": "172.17.0.1", "raw": ""}
+                installer.BridgeDoctor.ensure_probe_image = lambda self: None
+                installed = []
+                installer.install_persistence = lambda d, a: installed.append(True)
+                self.addCleanup(lambda: setattr(installer.BridgeDoctor, "probe", real_probe))
+                self.addCleanup(lambda: setattr(installer.BridgeDoctor, "ensure_probe_image", real_image))
+                self.addCleanup(lambda: setattr(installer, "install_persistence", real_install))
+
+                installer.diagnose_and_fix(args, "bridge", sudo=RecordingSudo())
+                self.assertEqual(bool(installed), want_install)
+                if not want_install:
+                    self.assertEqual(calls, [], "auto must not escalate on a healthy host")
 
 
 if __name__ == "__main__":

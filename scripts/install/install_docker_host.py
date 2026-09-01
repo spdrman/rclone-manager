@@ -1470,6 +1470,155 @@ class BridgeDoctor:
                          f"{self.iptables} -w 5 -D {chain} {tail} || true")
         return "\n".join(lines) + "\n"
 
+    # -- persistence ---------------------------------------------------
+    #
+    # Issue #273. The rules above are runtime inserts: a reboot loses them
+    # and so does UGOS rewriting its own ruleset, and the containers come
+    # back either way, so the product stops working silently.
+    #
+    # NOT `netfilter-persistent save`, even though the mechanism is
+    # installed, enabled and active on this host with /etc/iptables/rules.v4
+    # sitting right there. That command snapshots the ENTIRE live ruleset,
+    # so the first save would take UG_INPUT, UG_FORWARD, UG_SSH_INPUT and
+    # everything else UGOS owns and write them into a file this project then
+    # restores at every boot. rules.v4 being zero bytes today is the whole
+    # argument in one fact: nothing has claimed that file yet, and the first
+    # thing to claim it inherits somebody else's firewall. It would fight
+    # the Control Panel the moment an operator changed anything there, it
+    # would silently restore stale UGOS rules after a UGOS update, and it
+    # breaks the one property the rules above are careful to keep: never
+    # own, reorder or replace a ruleset this installer did not create.
+    #
+    # So: a unit that owns exactly the four tagged rules and nothing else,
+    # re-asserting them with the same check-before-insert the interactive
+    # path uses.
+    #
+    # ONESHOT PLUS TIMER, and the alternatives were considered rather than
+    # skipped:
+    #
+    #   Restart= needs a process to restart. There is nothing here that
+    #   stays alive: the work is four checks that take milliseconds. A
+    #   Type=oneshot unit with Restart=always and a RestartSec is a timer
+    #   built out of the wrong primitive, and it reports as perpetually
+    #   activating rather than as a scheduled job anybody can read.
+    #
+    #   A .path unit watches the filesystem, and netfilter rules are not a
+    #   file. There is no path whose modification corresponds to UGOS
+    #   rewriting the live ruleset; /etc/iptables/rules.v4 is zero bytes and
+    #   nothing here writes it, so watching it would watch nothing happen.
+    #
+    #   oneshot plus timer is auditable in a way neither of those is:
+    #   `systemctl cat` shows every command that will run, and
+    #   `systemctl list-timers` shows when it last did and when it next
+    #   will. For something that edits a firewall unattended, being legible
+    #   afterwards matters more than being clever.
+    #
+    # The service is ALSO enabled in its own right, ordered after the four
+    # units that construct the ruleset, so at boot the rules are in place as
+    # part of the boot sequence rather than up to a timer interval later.
+    # The timer's OnBootSec is the safety net for the case where that
+    # ordering turns out to be wrong on some host.
+    SERVICE_UNIT = "rclone-manager-bridge.service"
+    TIMER_UNIT = "rclone-manager-bridge.timer"
+    UNIT_DIR = "/etc/systemd/system"
+
+    # Two minutes, chosen rather than inherited. The work is four
+    # `iptables -C` calls, single-digit milliseconds, so the cost of the
+    # interval is not the consideration. What sets it is the failure mode:
+    # UGOS rewriting its ruleset is human-triggered, plausibly whenever the
+    # Control Panel is touched, so the question is how long a person may be
+    # left with a deployment that has quietly stopped working. Two minutes
+    # bounds that well inside the time it takes anyone to notice, and it is
+    # a small fraction of the engine's own default one-hour poll interval,
+    # so a gap cannot swallow a backup cycle.
+    REASSERT_INTERVAL = "2min"
+
+    def unit_service_text(self) -> str:
+        lines = [
+            "[Unit]",
+            "Description=rclone-manager: re-assert this deployment's own Docker bridge firewall rules",
+            "Documentation=https://github.com/spdrman/rclone-manager/blob/main/docs/install.md",
+            "# Ordered after everything that constructs the ruleset, so this runs on top of",
+            "# whatever they built rather than underneath it. After= only, never Requires=:",
+            "# a host without one of these should still get its rules, not a failed unit.",
+            "After=net_serv.service netfilter-persistent.service nftables.service docker.service",
+            "",
+            "[Service]",
+            "Type=oneshot",
+            "RemainAfterExit=no",
+            "# Quiet on a healthy host. `iptables -C` prints nothing when the rule is already",
+            "# there, so a fire that changes nothing says nothing, and this keeps systemd's own",
+            "# start and finish lines out of the journal too.",
+            "LogLevelMax=warning",
+        ]
+        for chain, spec in self.rule_specs():
+            tail = " ".join(spec)
+            lines.append(f'ExecStart=/bin/sh -c "{self.iptables} -C {chain} {tail} '
+                         f'|| {self.iptables} -I {chain} 1 {tail}"')
+        lines += [
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+            "",
+        ]
+        return "\n".join(lines)
+
+    def unit_timer_text(self) -> str:
+        return "\n".join([
+            "[Unit]",
+            "Description=rclone-manager: periodically re-assert the Docker bridge firewall rules",
+            "Documentation=https://github.com/spdrman/rclone-manager/blob/main/docs/install.md",
+            "",
+            "[Timer]",
+            "# The boot safety net, in case the service's own After= ordering is not enough",
+            "# on some host.",
+            "OnBootSec=1min",
+            f"OnUnitActiveSec={self.REASSERT_INTERVAL}",
+            "AccuracySec=30s",
+            f"Unit={self.SERVICE_UNIT}",
+            "",
+            "[Install]",
+            "WantedBy=timers.target",
+            "",
+        ])
+
+    def unit_install_script(self) -> str:
+        """Write both units, reload, enable, and assert the rules once now.
+
+        Idempotent at the unit level as well as the rule level: the files
+        are rewritten with identical content, `systemctl enable` on an
+        already-enabled unit is a no-op, and the rules themselves are
+        check-before-insert. Running this twice converges.
+        """
+        systemctl = find_tool("systemctl") or "/bin/systemctl"
+        service = f"{self.UNIT_DIR}/{self.SERVICE_UNIT}"
+        timer = f"{self.UNIT_DIR}/{self.TIMER_UNIT}"
+        return (
+            "set -e\n"
+            f"cat > {service} <<'RCLONE_MANAGER_UNIT'\n{self.unit_service_text()}RCLONE_MANAGER_UNIT\n"
+            f"cat > {timer} <<'RCLONE_MANAGER_UNIT'\n{self.unit_timer_text()}RCLONE_MANAGER_UNIT\n"
+            f"{systemctl} daemon-reload\n"
+            f"{systemctl} enable {self.SERVICE_UNIT}\n"
+            f"{systemctl} enable --now {self.TIMER_UNIT}\n"
+            f"{systemctl} start {self.SERVICE_UNIT}\n"
+        )
+
+    def unit_remove_script(self) -> str:
+        """Take the units away and leave nothing behind.
+
+        Every step tolerates the thing already being gone, because undo has
+        to work on a half-installed machine as well as a fully installed
+        one, and an undo that fails partway is worse than no undo at all.
+        """
+        systemctl = find_tool("systemctl") or "/bin/systemctl"
+        return (
+            f"{systemctl} disable --now {self.TIMER_UNIT} 2>/dev/null || true\n"
+            f"{systemctl} disable --now {self.SERVICE_UNIT} 2>/dev/null || true\n"
+            f"rm -f {self.UNIT_DIR}/{self.SERVICE_UNIT} {self.UNIT_DIR}/{self.TIMER_UNIT}\n"
+            f"{systemctl} daemon-reload\n"
+            f"{systemctl} reset-failed {self.SERVICE_UNIT} 2>/dev/null || true\n"
+        )
+
     def restart_docker_script(self) -> str:
         systemctl = find_tool("systemctl") or "/bin/systemctl"
         return f"{systemctl} restart docker\n"
@@ -1516,6 +1665,17 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
     say(f"     open TCP to {args.probe_host}:{args.probe_port}: {'yes' if result['egress'] else 'NO'}")
 
     if result["gateway"] and result["egress"]:
+        if args.fix_network == "persist":
+            # An explicit request, so it is honoured even though nothing is
+            # broken right now. The alternative reading, that a healthy host
+            # is always a no-op, would mean persistence could only ever be
+            # installed on a host that was currently broken, so an operator
+            # would have to wait for the failure they are trying to prevent.
+            # `auto`, the default, is still a strict no-op here.
+            say("==> Bridge networking is healthy, and --fix-network=persist asks for the rules to be")
+            say("    kept that way across reboots, so the unit is installed anyway.")
+            install_persistence(BridgeDoctor(args, sudo=sudo), args)
+            return {"healthy": True, "changed": True, "moved": [], "method": "persist-only"}
         say("==> Bridge networking is healthy. Nothing to change, and no password needed.")
         return {"healthy": True, "changed": False, "moved": []}
 
@@ -1632,18 +1792,49 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
             "Take the measurement above to whoever administers this host.",
         )
 
+    if args.fix_network == "persist":
+        install_persistence(doctor, args)
+
     say("")
     say("==> Fixed, and proven. What was added, and how to take it back:")
     for chain, spec in doctor.rule_specs():
         say(f"     {chain}: {' '.join(spec)}")
     say("     remove with: python3 install_docker_host.py network-undo")
     say("")
-    say("     THESE RULES DO NOT SURVIVE A REBOOT. They are raw iptables inserts, and this host's own")
-    say("     firewall rewrites its ruleset on boot and may rewrite it again at any time. After a")
-    say("     reboot the containers come back and this hop is broken again, silently, because nothing")
-    say("     re-runs the installer. `status` re-checks it, and the durable fix belongs in the host")
-    say("     firewall's own configuration rather than in an insert this installer makes.")
-    return {"healthy": True, "changed": True, "moved": moved, "method": "rules"}
+    if args.fix_network == "persist":
+        say(f"     {BridgeDoctor.TIMER_UNIT} re-asserts these every "
+            f"{BridgeDoctor.REASSERT_INTERVAL} and at boot, so a reboot and a runtime rewrite of the")
+        say("     host firewall both recover on their own. It is still not absolute: the host can")
+        say("     rewrite its ruleset between fires, and this hop is down until the next one.")
+    else:
+        say("     THESE RULES DO NOT SURVIVE A REBOOT. They are raw iptables inserts, and this host's own")
+        say("     firewall rewrites its ruleset on boot and may rewrite it again at any time. After a")
+        say("     reboot the containers come back and this hop is broken again, silently, because nothing")
+        say("     re-runs the installer. Re-run with --fix-network=persist to install a unit that keeps")
+        say("     them, or read docs/install.md for the durable fix in the host firewall's own config.")
+    return {"healthy": True, "changed": True, "moved": moved,
+            "method": "persist" if args.fix_network == "persist" else "rules"}
+
+
+def install_persistence(doctor, args) -> None:
+    """Install the unit and the timer, then read back what systemd thinks.
+
+    Reading it back matters: `systemctl enable` succeeding says the symlink
+    was made, not that the unit is valid or that the timer is armed, and a
+    unit file with a typo in it enables perfectly and never runs.
+    """
+    doctor.sudo.run_script(
+        doctor.unit_install_script(),
+        purpose=f"Install {doctor.SERVICE_UNIT} and {doctor.TIMER_UNIT} so the rules survive a reboot")
+    systemctl = find_tool("systemctl") or "/bin/systemctl"
+    for unit in (doctor.SERVICE_UNIT, doctor.TIMER_UNIT):
+        state = run([systemctl, "is-enabled", unit], check=False, timeout=30).stdout.strip()
+        active = run([systemctl, "is-active", unit], check=False, timeout=30).stdout.strip()
+        say(f"     {unit}: {state or 'unknown'}, {active or 'unknown'}")
+    listed = run([systemctl, "list-timers", "--no-pager", "--no-legend", doctor.TIMER_UNIT],
+                 check=False, timeout=30).stdout.strip()
+    if listed:
+        say(f"     next fire: {' '.join(listed.split())}")
 
 
 def cmd_network_doctor(args) -> int:
@@ -1656,10 +1847,15 @@ def cmd_network_undo(args) -> int:
     if doctor.iptables is None:
         raise Refusal(EXIT_NETWORK_UNDIAGNOSED,
                       f"no iptables binary on {PRIVILEGED_PATH}, so there is nothing to undo with.", "")
-    doctor.sudo.run_script(doctor.delete_script(),
-                           purpose="Remove the rules this installer added, and only those")
+    # Units first, then rules. The other order leaves a window in which the
+    # timer fires and puts back rules that were just deleted, and an undo
+    # that races its own subject is an undo nobody can trust.
+    doctor.sudo.run_script(doctor.unit_remove_script() + doctor.delete_script(),
+                           purpose="Remove the unit, the timer and the rules this installer added, "
+                                   "and only those")
     say("")
-    say("==> Removed every rule carrying the comment " + RULE_TAG + ", and nothing else.")
+    say(f"==> Removed {doctor.SERVICE_UNIT}, {doctor.TIMER_UNIT}, and every rule carrying the comment "
+        f"{RULE_TAG}. Nothing else was touched.")
     return EXIT_OK
 
 
@@ -1688,6 +1884,20 @@ def cmd_status(args) -> int:
         say(f"bridge networking: {'ok' if ok else 'BROKEN'} "
             f"(gateway {'yes' if result['gateway'] else 'NO'}, "
             f"egress {'yes' if result['egress'] else 'NO'})")
+        # Unprivileged, so this costs nothing and answers the question an
+        # operator actually has after a reboot: is anything keeping these.
+        systemctl = find_tool("systemctl")
+        if systemctl:
+            state = run([systemctl, "is-enabled", BridgeDoctor.TIMER_UNIT],
+                        check=False, timeout=30).stdout.strip()
+            if state == "enabled":
+                nxt = run([systemctl, "list-timers", "--no-pager", "--no-legend",
+                           BridgeDoctor.TIMER_UNIT], check=False, timeout=30).stdout.strip()
+                say(f"  persistence: {BridgeDoctor.TIMER_UNIT} enabled"
+                    + (f", next fire {' '.join(nxt.split()[:3])}" if nxt else ""))
+            else:
+                say("  persistence: none. These rules are lost on reboot; "
+                    "--fix-network=persist installs a unit that keeps them.")
         if not ok:
             say("  A bridged container cannot originate traffic, so the Web UI cannot reach the engine")
             say("  and no SFTP transfer can run. If this worked before a reboot, the inserted rules were")
@@ -1821,10 +2031,15 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--timeout", type=int, default=180,
                          help="Seconds to wait for the engine's liveness probe and the Web UI.")
     net = parser.add_argument_group("bridge networking (issue #271)")
-    net.add_argument("--fix-network", choices=["auto", "diagnose", "never"], default="auto",
+    net.add_argument("--fix-network", choices=["auto", "persist", "diagnose", "never"], default="auto",
                      help="auto diagnoses and repairs Docker bridge networking when a bridged container "
-                          "cannot originate traffic, escalating through sudo. diagnose stops after "
-                          "naming the rule. never skips the check entirely and touches no firewall.")
+                          "cannot originate traffic, escalating through sudo, with rules that are lost on "
+                          "reboot. persist does the same and additionally installs a systemd unit and "
+                          "timer that re-assert those same rules, which survives a reboot and a runtime "
+                          "rewrite of the host firewall. diagnose stops after naming the rule. never "
+                          "skips the check entirely and touches no firewall. auto is the default because "
+                          "installing a systemd unit is a larger commitment than inserting a runtime "
+                          "rule, and an operator should have to ask for it.")
     net.add_argument("--probe-image", default="busybox:stable",
                      help="A small image with a shell, ping and nc, used to ask what a bridged container "
                           "can actually do. Point it at one this host already has to avoid a pull.")
