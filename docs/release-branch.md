@@ -107,3 +107,10 @@ which is a commit on `main`, and the parity rebuild proves the published binarie
 that commit's binaries. So the released bytes are reproducible from `main` even
 though the tree that pushed them was not yet. Every later cut follows step 1 as
 written.
+
+Step 7 also went slightly differently, and for a reason worth keeping. The digests
+`ghcr.io` assigned are recorded on the pull request into `main` rather than pushed
+straight back to `release`, because a push to `release` publishes: it would rebuild,
+re-push bytes the registry already holds under the same digest, and add a second
+Sigstore signature for nothing. So `release` records the tree that published, and
+`main` records what the registry answered. The next cut fast-forwards past both.
