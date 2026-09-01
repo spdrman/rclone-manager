@@ -7,10 +7,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
 // emptyInstall is the state a real operator actually starts in and that
@@ -179,6 +182,66 @@ func TestFirstRun_CreateInitialConfig_TurnsAnEmptyInstallIntoAServiceableOne(t *
 	}
 	if !strings.Contains(string(raw), statePath) {
 		t.Errorf("config on disk does not name the deployment's state database %s:\n%s", statePath, raw)
+	}
+}
+
+// TestFirstRun_CreateInitialConfig_DoesNotFreezeResolvedDefaultsIntoTheFile
+// is issue #294. CreateInitialConfig's own comment says Retention and
+// Alerts are left zero "on purpose" so an operator who never touches them
+// keeps resolving to this product's CURRENT defaults across an upgrade,
+// rather than freezing today's numbers into the file. But cfg.Validate
+// resolves both IN PLACE (validateRetention's own doc says so), and the
+// marshal used to read the same pointer afterwards, so the file got
+// exactly the frozen numbers the comment said it would not. The
+// assertion has to be on the bytes: a test on the returned BackupSet, or
+// on cfg itself, is resolved either way and cannot see this.
+func TestFirstRun_CreateInitialConfig_DoesNotFreezeResolvedDefaultsIntoTheFile(t *testing.T) {
+	fr, configPath, _ := newTestFirstRun(t)
+
+	if _, err := fr.CreateInitialConfig(context.Background(), firstRunCreateReq(t, fr, "nightly")); err != nil {
+		t.Fatalf("CreateInitialConfig: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	written := string(raw)
+
+	// Every spelling below is a resolved default nobody in this test
+	// chose: config.Validate only fills each in when the field is still
+	// at its zero value. Freezing any of them into a first-run file is
+	// exactly the bug #294 reports.
+	frozen := []string{
+		"timezone: UTC",
+		"week_starts_on: monday",
+		"daily_days:",
+		"weekly_months:",
+		"monthly_months:",
+		"protect_last_known_good: true",
+		"repeated_failure_threshold: " + strconv.Itoa(config.DefaultRepeatedFailureThreshold),
+	}
+	for _, spelling := range frozen {
+		if strings.Contains(written, spelling) {
+			t.Errorf("CreateInitialConfig froze the resolved default %q into a first-run file nobody configured retention or alerts on:\n%s", spelling, written)
+		}
+	}
+
+	// Positive control for the assertions above: encoding the VALIDATED
+	// config -- what this function used to do -- does produce every one
+	// of those spellings, so their absence from the file is not vacuous.
+	validated, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	encoded, err := yaml.Marshal(validated)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, spelling := range frozen {
+		if !strings.Contains(string(encoded), spelling) {
+			t.Errorf("control failed: encoding the validated config does not produce %q, so the absence assertions above prove nothing", spelling)
+		}
 	}
 }
 
