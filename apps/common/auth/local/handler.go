@@ -229,7 +229,14 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.bootstrap.consume(r.Header.Get(BootstrapTokenHeader)) {
-		writeAuthError(w, http.StatusForbidden, "BOOTSTRAP_TOKEN_INVALID", "missing, expired or already-used bootstrap token")
+		// 401, not 403: this is a credential the caller presented that
+		// wasn't accepted (the bootstrap token), same class of refusal as
+		// UNAUTHENTICATED, which is exactly where api/v1/openapi.json's
+		// own x-error-classes files it (issue #289). ENROLLMENT_CLOSED
+		// above stays a 403 - that one really is "you are who you say,
+		// but this route isn't open to you," a genuine authorization
+		// refusal rather than a rejected credential.
+		writeAuthError(w, http.StatusUnauthorized, "BOOTSTRAP_TOKEN_INVALID", "missing, expired or already-used bootstrap token")
 		return
 	}
 
