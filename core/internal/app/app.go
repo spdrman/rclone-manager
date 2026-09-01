@@ -79,6 +79,12 @@ type Journal interface {
 	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
 
+	// LastEnteredDetail is LastEnteredAt plus the free-text detail that
+	// exact transition recorded (issue #284): GetArtifactDetail's whole
+	// reason for existing is that state_transitions.detail is otherwise
+	// unreachable outside internal/state (see that method's own doc).
+	LastEnteredDetail(ctx context.Context, id model.ArtifactID, st string) (detail string, occurredAt time.Time, found bool, err error)
+
 	// ArtifactsWithAnyTransition is the set-wide form of LastTransition:
 	// which artifacts in one backup set have any of a given set of edges
 	// in the append-only log. BuildHealthReport needs it to report how

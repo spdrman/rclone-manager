@@ -162,7 +162,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 			s.logger().Error(ctx, "transfer", err)
 			return
 		}
-		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, "")
+		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, out.Detail)
 		if out.Record.Transfer != nil {
 			s.logger().TransferStats(ctx, artifact.String(), out.Record.Transfer.BytesTransferred, 0, out.Record.Transfer.Checksummed)
 		}
@@ -196,7 +196,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 			s.logger().Error(ctx, "verify", err)
 			return
 		}
-		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, "")
+		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, out.Detail)
 		if out.Record.ValidationDetail != "" || out.Record.ValidationPassed != nil {
 			passed := out.Record.ValidationPassed != nil && *out.Record.ValidationPassed
 			s.logger().Validation(ctx, artifact.String(), passed, out.Record.ValidationDetail)
@@ -283,7 +283,7 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		return
 	}
 	s.logger().RemoteDelete(ctx, artifact.String(), rec.RemotePath, nil)
-	s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, "")
+	s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State, out.Detail)
 	return
 }
 

@@ -83,6 +83,27 @@ type Outcome struct {
 	// earlier call's result and this call changed nothing.
 	Applied bool
 	Record  Record
+
+	// Detail echoes back this call's own Transition.Detail: the free-text
+	// note (if any) the caller attached to this exact transition, for
+	// example the sentence internal/lifecycle/verify.go writes when an
+	// artifact fails or is quarantined. Record itself never carries this
+	// text (see this package's own doc on why state_transitions.detail is
+	// kept off the artifacts row), so a caller holding only an Outcome,
+	// for example internal/app writing an FR-23 log line immediately
+	// after the call, would otherwise have no way to report it without a
+	// second query against this table (see LastEnteredDetail, the
+	// package's answer for a caller that only has an artifact id and no
+	// Outcome in hand).
+	//
+	// On a replayed call (Applied == false) this is still t.Detail from
+	// THIS call, not necessarily a re-read of whatever text the original
+	// call recorded: idempotency keys are derived deterministically from
+	// the attempt itself, so a caller retrying with the same Key is, by
+	// construction, the same code path recomputing the same fact, and
+	// echoing the replay's own value is cheaper than a second read for
+	// the same answer.
+	Detail string
 }
 
 // Discover records DISCOVERED and creates the artifact's journal row,
@@ -148,7 +169,7 @@ func (j *Journal) RecordTransition(ctx context.Context, t Transition) (Outcome, 
 		if err := tx.Commit(); err != nil {
 			return Outcome{}, fmt.Errorf("state: commit idempotent replay: %w", err)
 		}
-		return Outcome{Applied: false, Record: rec}, nil
+		return Outcome{Applied: false, Record: rec, Detail: t.Detail}, nil
 	}
 
 	redact := j.redact.Load()
@@ -189,7 +210,7 @@ func (j *Journal) RecordTransition(ctx context.Context, t Transition) (Outcome, 
 		return Outcome{}, fmt.Errorf("state: commit transition: %w", err)
 	}
 
-	return Outcome{Applied: true, Record: rec}, nil
+	return Outcome{Applied: true, Record: rec, Detail: t.Detail}, nil
 }
 
 func validateTransition(t Transition) error {

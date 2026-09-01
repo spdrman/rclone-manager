@@ -70,6 +70,8 @@ commands:
   status                                         report process and backup-set health (FR-24)
   sources                                        list configured sources and backup sets
   artifacts [--source S] [--backup-set B]        list journal artifacts
+  artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
+                                                  recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
                                                   preview GFS/last-known-good retention decisions; each retention flag
