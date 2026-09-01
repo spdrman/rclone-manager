@@ -187,18 +187,25 @@ type Thresholds struct {
 	// 10 GB of disk left.
 	CapBytes uint64
 
-	// WarningFreeBytes is the free-space level, measured after a
+	// WarningFreeBytes is the headroom level, measured after a
 	// hypothetical transfer would land, at or below which this package
 	// reports Level Warning: worth logging or alerting on (FR-23's "disk
 	// pressure", FR-24's health surface), but never by itself a reason to
 	// refuse a transfer.
+	//
+	// The name says "Free" because before the cap existed headroom and
+	// free space were the same number. They are not any more: with a cap
+	// configured this is measured against whichever of the two binds. The
+	// field keeps its name so an existing config key and every caller that
+	// sets it keep working, and this comment is where the difference is
+	// stated.
 	WarningFreeBytes uint64
 
-	// CriticalFreeBytes is the free-space floor, measured after a
+	// CriticalFreeBytes is the headroom floor, measured after a
 	// hypothetical transfer would land, at or below which Admit refuses the
 	// transfer outright. This is the hard rule FR-21 asks for: a transfer
-	// that would itself be the thing that drops the filesystem to or below
-	// this floor never begins.
+	// that would itself be the thing that drops the binding headroom to or
+	// below this floor never begins. See WarningFreeBytes on the name.
 	CriticalFreeBytes uint64
 
 	// SafetyMarginBytes is added on top of the incoming artifact's own size
@@ -278,17 +285,23 @@ func (c Constraint) String() string {
 	}
 }
 
-// Level classifies a filesystem's projected free space against Thresholds.
+// Level classifies the projected headroom against Thresholds.
+//
+// "Headroom", not "free space": since the cap landed (issue #286) the
+// number these three are measured against is the smaller of the
+// filesystem's available space and the configured cap's remaining
+// allowance, so a deployment whose volume has a terabyte free can still
+// read Critical. Assessment.Binding says which of the two decided.
 type Level int
 
 const (
-	// OK means projected free space is above WarningFreeBytes.
+	// OK means projected headroom is above WarningFreeBytes.
 	OK Level = iota
-	// Warning means projected free space is at or below WarningFreeBytes
+	// Warning means projected headroom is at or below WarningFreeBytes
 	// but above CriticalFreeBytes. Worth surfacing; never a reason to
 	// refuse a transfer by itself.
 	Warning
-	// Critical means projected free space is at or below CriticalFreeBytes,
+	// Critical means projected headroom is at or below CriticalFreeBytes,
 	// including the degenerate case where the transfer does not even fit
 	// today. Admit refuses whenever Level is Critical.
 	Critical

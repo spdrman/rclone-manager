@@ -49,12 +49,18 @@ type storageStatusResponse struct {
 	// (df's Avail), which is the number level below was decided from.
 	AvailableBytes uint64 `json:"available_bytes"`
 
-	// WarningFreeBytes and CriticalFreeBytes are both always 0 today:
-	// internal/config carries no capacity thresholds yet, so nothing
-	// populates them in a running process and level can only read "OK"
-	// short of a genuinely full disk. See core/service.StorageStatus's own
-	// doc for the full statement of that, and why FR-21's refusal is
-	// nonetheless intact.
+	// WarningFreeBytes and CriticalFreeBytes are the configured
+	// thresholds, from internal/config's capacity block (issue #286).
+	// Before that block existed they were structurally zero in every
+	// deployment and level could only read "OK" short of a genuinely full
+	// disk. Both still default to zero, which means "no line here" rather
+	// than a line at zero bytes.
+	//
+	// They are weighed against the BINDING headroom, which is the
+	// filesystem's available space or the manager-wide cap's remaining
+	// allowance, whichever is smaller. A set whose volume has a terabyte
+	// free can therefore read CRITICAL because the cap is nearly spent.
+	// See core/service.StorageStatus's own doc.
 	WarningFreeBytes  uint64 `json:"warning_free_bytes"`
 	CriticalFreeBytes uint64 `json:"critical_free_bytes"`
 

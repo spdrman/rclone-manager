@@ -264,16 +264,14 @@ func TestAnExplicitBackupRootIsMeasured(t *testing.T) {
 	}
 }
 
-// pinStat replaces this package's statfs seam for one test, so a verdict
-// about thresholds is a verdict about the code rather than about how full
-// the developer's laptop happens to be. Every test that asserts a Level
-// uses it; the ones that assert MeasuredPath, or that a real reading comes
-// back at all, deliberately do not.
+// pinStat is withStatPath (storage_test.go) with a fixed reading, so a
+// verdict about thresholds is a verdict about the code rather than about
+// how full the developer's laptop happens to be. Every test below that
+// asserts a Level uses it; the ones that assert MeasuredPath, or that a
+// real reading comes back at all, deliberately do not.
 func pinStat(t *testing.T, stat capacity.Stat) {
 	t.Helper()
-	prev := statPath
-	statPath = func(string) (capacity.Stat, error) { return stat, nil }
-	t.Cleanup(func() { statPath = prev })
+	withStatPath(t, func(string) (capacity.Stat, error) { return stat, nil })
 }
 
 // TestTheThresholdsAreTheConfiguredOnes closes the loop on the comment in

@@ -337,16 +337,20 @@ func TestListStorageStatus_ClassifiesAndLogsWhyAReadingIsUnavailable(t *testing.
 }
 
 // TestListStorageStatus_ProductionDefaults_ReportsZeroThresholdsAndOK
-// pins what a real deployment actually gets from this endpoint today, as
-// opposed to what every other test in this file constructs by hand.
+// pins what a real deployment actually gets from this endpoint, as opposed
+// to what every other test in this file constructs by hand.
 //
-// internal/config carries no capacity fields yet and nothing outside tests
-// assigns app.Service.Capacity, so both thresholds are zero in every
-// running process and Assess can only reach Critical on a genuinely full
-// disk. FR-21's refusal is unaffected (it does not need a configured floor
-// to refuse a transfer that will not fit) but there is no warning level to
-// display until those config fields land, and that is a stated, tested
-// fact here rather than something a reader has to discover from a grep.
+// A configuration with no capacity block is this product's default, and it
+// leaves both thresholds at zero, which means "no line here" rather than a
+// line at zero bytes. Assess can then only reach Critical on a genuinely
+// full disk. FR-21's refusal is unaffected either way: it does not need a
+// configured floor to refuse a transfer that will not fit.
+//
+// Until issue #286 that was not a default but a structural fact, because
+// internal/config had no capacity fields for an operator to set. It is a
+// default now, and TestListStorageStatus_ReportsTheConfiguredThresholds
+// below is the control that says so: without it, this test would pass just
+// as happily on a build where the wiring had been lost again.
 func TestListStorageStatus_ProductionDefaults_ReportsZeroThresholdsAndOK(t *testing.T) {
 	svc := New(storageTestSet(t, t.TempDir()), openTestJournal(t), nil, nil)
 
@@ -359,11 +363,34 @@ func TestListStorageStatus_ProductionDefaults_ReportsZeroThresholdsAndOK(t *test
 		t.Fatalf("Available = false for a real directory, reason %q", got.UnavailableReason)
 	}
 	if got.WarningFreeBytes != 0 || got.CriticalFreeBytes != 0 {
-		t.Errorf("thresholds = %d/%d, want 0/0: nothing in a running process populates these yet, and a test that pretends otherwise hides it",
+		t.Errorf("thresholds = %d/%d, want 0/0: a config with no capacity block asks for no warning and no critical line",
 			got.WarningFreeBytes, got.CriticalFreeBytes)
 	}
 	if got.Level != capacity.OK.String() {
-		t.Errorf("Level = %q, want %q: with zero thresholds this endpoint cannot report anything else short of a completely full disk",
+		t.Errorf("Level = %q, want %q: with no lines configured this endpoint cannot report anything else short of a completely full disk",
 			got.Level, capacity.OK.String())
+	}
+}
+
+// TestListStorageStatus_ReportsTheConfiguredThresholds is the control the
+// test above needs now that the zeros are a choice rather than a hole. A
+// configured capacity block has to reach this endpoint, or the numbers an
+// operator typed are decoration.
+func TestListStorageStatus_ReportsTheConfiguredThresholds(t *testing.T) {
+	cfg := storageTestSet(t, t.TempDir())
+	cfg.Capacity = config.Capacity{
+		WarningFreeBytes:  40 << 30,
+		CriticalFreeBytes: 20 << 30,
+	}
+	svc := New(cfg, openTestJournal(t), nil, nil)
+
+	statuses, err := svc.ListStorageStatus(context.Background())
+	if err != nil {
+		t.Fatalf("ListStorageStatus: %v", err)
+	}
+	got := statuses[0]
+	if got.WarningFreeBytes != 40<<30 || got.CriticalFreeBytes != 20<<30 {
+		t.Errorf("thresholds = %d/%d, want %d/%d: the configured capacity block must reach this endpoint",
+			got.WarningFreeBytes, got.CriticalFreeBytes, uint64(40)<<30, uint64(20)<<30)
 	}
 }
