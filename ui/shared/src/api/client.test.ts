@@ -399,6 +399,50 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
     expect(result.operation).toEqual({ operationId: "op_1", status: "queued" });
   });
 
+  // Issue #316's RED case for this file: before wireBackupSetSpec carried
+  // read_only, a request that set CreateBackupSetRequest.readOnly sent
+  // nothing for it at all, and the response's read_only never reached
+  // CreatedBackupSet.readOnly.
+  it("createBackupSet sends read_only when set, and maps it back from the response", async () => {
+    const fetchMock = mockFetchOk(
+      {
+        id: "api/archive",
+        source_name: "api",
+        name: "archive",
+        host: "h",
+        port: 22,
+        user: "u",
+        remote_path: "/r",
+        local_path: "/l",
+        include: [],
+        completion_strategy: "marker",
+        disabled: false,
+        read_only: true
+      },
+      201
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await httpApi.createBackupSet({
+      name: "archive",
+      host: "h",
+      port: 22,
+      user: "u",
+      sshKeyId: "k",
+      knownHostsLine: "line",
+      remotePath: "/r",
+      localPath: "/l",
+      include: [],
+      completionStrategy: "marker",
+      readOnly: true
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sentBody = JSON.parse(init.body as string);
+    expect(sentBody.read_only).toBe(true);
+    expect(result.readOnly).toBe(true);
+  });
+
   it("createBackupSet's response has no operation field when the backend omits one", async () => {
     const fetchMock = mockFetchOk(
       {
@@ -903,6 +947,19 @@ describe("httpApi requests the paths the contract declares", () => {
     expect(bodyOf(fetchMock)).toEqual({ enabled: false });
   });
 
+  // Issue #316's RED case: before setReadOnly existed on the client at
+  // all, there was no HTTP call this file could make to flip an
+  // already-persisted set's read-only declaration.
+  it("declares a set read-only on its two-segment path, encoding each half independently", async () => {
+    const fetchMock = mockFetchOk(undefined, 204);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await httpApi.setReadOnly("nas a", "photos/2026", true);
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/backup-sets/nas%20a/photos%2F2026/read-only");
+    expect(bodyOf(fetchMock)).toEqual({ read_only: true });
+  });
+
   it("passes a backup set filter as a query parameter, and omits it when absent", async () => {
     const withFilter = mockFetchOk({ artifacts: [] });
     vi.stubGlobal("fetch", withFilter);
@@ -1320,6 +1377,7 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     quarantined_count: 0,
     quarantined_lost_count: 0,
     reinstated_remote_retained_count: 0,
+    read_only_retained_count: 0,
     free_bytes_known: false,
     ...extra
   });
@@ -1395,6 +1453,32 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     expect(refused?.state).toBe("stale");
     expect(refused?.stateNote).toBe("no known-good backup inside the freshness window");
     expect(fine?.state).toBe("healthy");
+  });
+
+  // Issue #316's RED case for this join: before fromWireBackupSet mapped
+  // read_only/read_only_retained_count at all, both were simply dropped —
+  // the mapped result compiled, serialised and reported a confident 0/false
+  // for a set the server was actually reporting as read-only.
+  it("carries read_only and its retained count through the same join haltReason uses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/archive", "archive"), wireSet("production/postgres", "postgres")],
+        [
+          wireHealth("production/archive", { read_only_retained_count: 4 }),
+          wireHealth("production/postgres")
+        ]
+      )
+    );
+
+    const sets = await httpApi.listSets();
+    const archive = sets.find((s) => s.id === "production/archive");
+    const postgres = sets.find((s) => s.id === "production/postgres");
+
+    expect(archive?.readOnlyRetainedCount).toBe(4);
+    // Zero is a real reading here, not an absent one: it must actually be
+    // 0, not undefined or dropped.
+    expect(postgres?.readOnlyRetainedCount).toBe(0);
   });
 
   it("carries a rejected login through under its own reason", async () => {

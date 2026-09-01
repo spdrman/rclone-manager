@@ -418,6 +418,44 @@ describe("add backup set wizard", () => {
       expect(req.runImmediately).toBe(false);
     });
 
+    // Issue #316's RED case: before this checkbox existed, there was no
+    // control anywhere in the wizard that could set read_only, and the
+    // deletion acknowledgement was mandatory for every saved set
+    // regardless of whether it would ever delete anything.
+    it("declaring the source read-only sends read_only:true and needs no deletion acknowledgement", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await advanceToReviewReady();
+      // Deliberately no acknowledgement click — checking read-only is
+      // this test's own escape hatch from it, the same claim the
+      // "Save disabled" test above makes for its own button.
+      await userEvent.click(screen.getByRole("checkbox", { name: /read-only/i }));
+
+      const save = screen.getByRole("button", { name: /^Save & enable$/ });
+      expect(save).toBeEnabled();
+      await userEvent.click(save);
+
+      await screen.findByText("SETS LIST PAGE");
+      const req = spy.mock.calls[0][0];
+      expect(req.readOnly).toBe(true);
+      expect(req.disabled).toBe(false);
+    });
+
+    it("leaves read_only false, and the deletion acknowledgement still required, when the checkbox is never touched", async () => {
+      const api = createMockApi();
+      const spy = vi.spyOn(api, "createBackupSet");
+      renderWizardWithRoutes(api);
+
+      await completeWizardUpToReview();
+      await userEvent.click(screen.getByRole("button", { name: /^Save & enable$/ }));
+
+      await screen.findByText("SETS LIST PAGE");
+      const req = spy.mock.calls[0][0];
+      expect(req.readOnly).toBe(false);
+    });
+
     it("sends the chosen application validator's id, and nothing that could name an executable (issue #162)", async () => {
       const api = createMockApi();
       const spy = vi.spyOn(api, "createBackupSet");

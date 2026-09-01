@@ -36,6 +36,19 @@ describe("health rendering", () => {
     render(<HealthSummary health={health} />);
     expect(screen.getByText(/No verified backup received for 31 hours/)).toBeTruthy();
   });
+
+  // Issue #316's RED case for this component: before this badge existed,
+  // readOnlyRetainedCount had nowhere on this page to be shown at all,
+  // even though the field already carries a real number.
+  it("shows the read-only-retained badge only when the count is nonzero", () => {
+    render(<HealthSummary health={{ ...health, readOnlyRetainedCount: 4 }} />);
+    expect(screen.getByText(/4 retained \(read-only source\)/)).toBeTruthy();
+  });
+
+  it("omits the read-only-retained badge when nothing is retained under it", () => {
+    render(<HealthSummary health={health} />);
+    expect(screen.queryByText(/retained \(read-only source\)/)).toBeNull();
+  });
 });
 
 const committed: BackupArtifact = {

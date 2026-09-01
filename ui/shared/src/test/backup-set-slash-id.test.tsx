@@ -80,6 +80,8 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     retainedBytes: 1024,
     hostFingerprint: "SHA256:test-fingerprint",
     fingerprintTrustedAt: "2026-08-02T10:14:00Z",
+    readOnly: false,
+    readOnlyRetainedCount: 0,
     ...overrides
   };
 }
