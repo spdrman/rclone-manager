@@ -259,6 +259,19 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/$guard.test.sh"
   done
 
+  # The installer's unit tests (#262), which the gate runs by `cd`-ing into
+  # scripts/install. Same reason as every stub above, and the same failure
+  # mode without it: a `cd` into a directory this fixture does not have
+  # fails, the gate runs under `set -e`, and every full-tree case below the
+  # step dies for a reason that has nothing to do with what it measures.
+  # This is the third time that has happened here, and it is why the step
+  # gets a stub rather than a conditional in ci-local.sh: a step that
+  # quietly skips itself when its own file is missing is #160's silent skip
+  # wearing a different hat.
+  mkdir -p "$tree/scripts/install"
+  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self):\n        pass\n' \
+    >"$tree/scripts/install/test_install_docker_host.py"
+
   # The browser e2e step (#158, #197). Same reason as every stub above, and
   # the same failure mode without it, which this suite has now been bitten
   # by twice: `bash` on a path that does not exist exits 127, the gate runs
