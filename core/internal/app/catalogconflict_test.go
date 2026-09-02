@@ -10,6 +10,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/recovery"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // rebuildConflictFixture runs one full cycle so a real journal row and a
@@ -197,6 +198,85 @@ func TestCommittedArtifactsSidecarCarriesItsPlacements(t *testing.T) {
 	for _, banned := range []string{"endpoint", "bucket", "region", "access_key", "secret", "credential"} {
 		if strings.Contains(strings.ToLower(string(raw)), banned) {
 			t.Errorf("the sidecar mentions %q; a medium sidecar is readable by everyone who can read the bucket, and a local one is readable by everyone the backup root is exported to", banned)
+		}
+	}
+}
+
+// TestRebuildCatalog_AMediumPlacementInASidecarIsReportedAndNotAdopted is
+// the other half of FR-32's untrusted-proposal rule, and it applies to the
+// artifact a rebuild DOES reconstruct rather than to one it leaves alone.
+//
+// A reconstructed row gets its local placement derived the trusted way,
+// from the backup set's own root and the artifact's name. There is no
+// equivalent derivation for an object in a bucket: the only source for it
+// is the sidecar. Writing an ACTIVE medium placement on that say-so would
+// put a copy nobody has verified into the journal, where FR-30's standing
+// invariant counts it as one of the artifact's durable copies and a
+// medium-aware prune becomes willing to delete an object on the strength
+// of it.
+//
+// Dropping it silently is the other wrong answer and it is the one that
+// bites during a real recovery, so the test asserts both halves: the
+// journal did not take it, and the operator was told about it.
+func TestRebuildCatalog_AMediumPlacementInASidecarIsReportedAndNotAdopted(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "payload the sidecar will overclaim about", epoch.Unix())
+
+	cfg := testConfig(t, testSource("production", bs))
+	writer := New(cfg, openJournalAt(t, filepath.Join(t.TempDir(), "journal.db")), tr, nil)
+	writer.Now = fixedNow(epoch)
+	writer.RunCycle(context.Background())
+
+	manifestPath := recovery.ManifestPath(localDir, "backup.dump")
+	m := readSidecar(t, manifestPath)
+	m.Placements = append(m.Placements, recovery.ManifestPlacement{
+		Medium:            "offsite_s3",
+		Location:          "backups/production/postgres-primary/backup.dump",
+		VerificationClass: "content",
+		Status:            "ACTIVE",
+	})
+	rewriteSidecar(t, manifestPath, m)
+
+	// A fresh journal is the situation this whole command exists for: the
+	// operator has the backup root and has lost the database.
+	rebuilt := openJournalAt(t, filepath.Join(t.TempDir(), "rebuilt.db"))
+	reader := New(cfg, rebuilt, tr, nil)
+	reader.Now = fixedNow(epoch)
+
+	report, err := reader.RebuildCatalog(context.Background(), bs.ID, false)
+	if err != nil {
+		t.Fatalf("RebuildCatalog: %v", err)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Action != CatalogRebuildReconstructed {
+		t.Fatalf("Findings = %+v, want one reconstruction", report.Findings)
+	}
+
+	finding := report.Findings[0]
+	if len(finding.Notes) != 1 {
+		t.Fatalf("Notes = %+v, want exactly one saying the medium copy was not adopted", finding.Notes)
+	}
+	if !strings.Contains(finding.Notes[0], "offsite_s3") {
+		t.Errorf("the note is %q; it has to name the medium, because the operator's next move is to go and look there", finding.Notes[0])
+	}
+	if finding.ManifestPath != manifestPath {
+		t.Errorf("ManifestPath = %q, want %q", finding.ManifestPath, manifestPath)
+	}
+
+	artifact, err := model.NewArtifactID(bs.ID, "backup.dump")
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	rec, err := rebuilt.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("reading the reconstructed row: %v", err)
+	}
+	for _, p := range rec.Placements {
+		if p.Medium != state.MediumLocal {
+			t.Fatalf("the rebuilt row carries a %s placement at %q; a placement on a medium can only have come from the sidecar, and a sidecar is a proposal", p.Medium, p.Location)
 		}
 	}
 }
