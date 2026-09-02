@@ -175,6 +175,17 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// pins that directly, so this entry's justification is a test and not
 	// only this comment.
 	"PATCH /api/v1/backup-sets/{source}/{set}": true,
+
+	// Issue #350's edit hold. Both writes STOP a backup set's processing
+	// rather than starting or deleting anything: taking the hold cancels
+	// the pass currently running against that one set and keeps the
+	// scheduler from starting another, and releasing it lets normal
+	// scheduling resume. Neither can reach a deletion, which is what this
+	// list is for, and gating them would mean an operator who has not
+	// turned destructive operations on cannot safely edit a set at all.
+	// TestBackupSetEditHold_IsNotBehindTheDestructiveGate pins it.
+	"POST /api/v1/backup-sets/{source}/{set}/edit-hold":         true,
+	"POST /api/v1/backup-sets/{source}/{set}/edit-hold/release": true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
 	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,

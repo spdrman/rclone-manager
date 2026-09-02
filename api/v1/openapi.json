@@ -2130,6 +2130,75 @@
             "x-go-pointer": true
           }
         }
+      },
+      "RunningWork": {
+        "type": "object",
+        "description": "What a run cycle is doing for one backup set right now (issue #350). It is the content of the warning shown before edit mode opens: discarding a partial transfer of a named artifact is a materially different cost from cancelling a scheduler tick that has not started work, and only a message saying which one it is lets an operator decide.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "type": "string",
+            "description": "The artifact being worked on, or \"\" during discovery, when the cycle has reached this set but not yet picked one."
+          },
+          "stage": {
+            "type": "string",
+            "description": "One of OperationProgress.stage's values."
+          }
+        },
+        "required": [
+          "artifact",
+          "stage"
+        ]
+      },
+      "BackupSetEditHoldState": {
+        "type": "object",
+        "description": "GET /backup-sets/{source}/{set}/edit-hold. What entering edit mode for this backup set would interrupt, and whether a hold is already in force. `running` is null when no cycle is currently inside this set, which is what lets a client open edit mode with no prompt for a risk that does not exist.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "held": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "When the hold lapses if nothing renews it. Present only when held."
+          },
+          "running": {
+            "$ref": "#/components/schemas/RunningWork",
+            "x-go-pointer": true
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "held",
+          "running"
+        ]
+      },
+      "BackupSetEditHold": {
+        "type": "object",
+        "description": "POST /backup-sets/{source}/{set}/edit-hold. The lease just taken or renewed, plus what taking it interrupted. `stopped` is null when nothing was running, so a client never claims to have stopped something it did not.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When this hold lapses if nothing renews it. A client that means to keep editing renews well before it."
+          },
+          "stopped": {
+            "$ref": "#/components/schemas/RunningWork",
+            "x-go-pointer": true
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "expires_at",
+          "stopped"
+        ]
       }
     },
     "responses": {}
@@ -5031,6 +5100,295 @@
             "x-error-codes": [
               "INVALID_REQUEST"
             ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/edit-hold": {
+      "get": {
+        "operationId": "getBackupSetEditHold",
+        "summary": "Report what a run cycle is currently doing for this backup set, and whether it is already held for editing (issue #350). Read-only: it takes no hold and stops nothing, which is what lets a client show an operator what pressing Edit would interrupt and then let them decline.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetEditHoldState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "post": {
+        "operationId": "takeBackupSetEditHold",
+        "summary": "Take, or renew, the edit hold on one backup set (issue #350). The cycle currently processing it stops at its next safe boundary and the scheduler starts no new pass for it until the hold is released or its lease lapses. One route for both taking and renewing: a renewal is 'hold this set for another lease', and refusing a heartbeat that arrived a second late would leave the set unheld while the operator's form stayed open.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetEditHold"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/edit-hold/release": {
+      "post": {
+        "operationId": "releaseBackupSetEditHold",
+        "summary": "Leave edit mode and let normal scheduling resume for this backup set (issue #350). Every route out of edit mode calls it, and releasing a hold that is not held is a success: several routes fire for one edit, and a duplicate release must not be something a client has to avoid.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Released. There is nothing to say, so there is no body."
           },
           "401": {
             "description": "Refused: UNAUTHENTICATED.",

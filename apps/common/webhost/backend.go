@@ -170,6 +170,21 @@ type BackupServiceClient interface {
 	// does and, in particular, does not undo.
 	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
 
+	// BackupSetEditState, BeginBackupSetEdit, RenewBackupSetEdit and
+	// EndBackupSetEdit back the three /edit-hold routes (issue #350).
+	//
+	// A backup set being edited while a cycle runs against it is two
+	// writers on one definition, so entering edit mode holds that one
+	// set: the pass currently running against it stops, and the scheduler
+	// starts no new one until the hold is released or its lease lapses.
+	// The read is separate from the write precisely so an operator can be
+	// shown what they are about to stop and then decline; see
+	// core/service/edithold.go for the lease, and for why it is a lease
+	// rather than a flag.
+	BackupSetEditState(ctx context.Context, id string) (service.BackupSetEditState, error)
+	BeginBackupSetEdit(ctx context.Context, id string) (service.EditHold, error)
+	EndBackupSetEdit(ctx context.Context, id string) error
+
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same
 	// non-destructive reachability check TestConnection performs, against
