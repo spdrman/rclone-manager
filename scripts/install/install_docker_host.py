@@ -110,6 +110,7 @@ Run --help for the full flag list.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -303,6 +304,16 @@ class Preflight:
         self.notes.append(text)
         say(f"  ok   {text}")
 
+    def warn(self, text: str) -> None:
+        """Something an operator has to read that is not a refusal.
+
+        `ok` and `!!` read differently at a glance, which is the whole
+        reason for having two. A preflight where every line says ok is a
+        preflight nobody reads the lines of.
+        """
+        self.notes.append(text)
+        say(f"  !!   {text}")
+
     def check_all(self) -> None:
         self.check_python()
         self.check_arch()
@@ -395,8 +406,7 @@ class Preflight:
         """
         canonical = self.args.compose_file
         if canonical is None:
-            self.note("canonical runtime definition embedded in this installer "
-                      "(generated from container/compose.yaml)")
+            self.check_embedded_compose()
             return
         if not canonical.is_file():
             raise Refusal(
@@ -406,6 +416,55 @@ class Preflight:
                 "definition embedded in this installer.",
             )
         self.note(f"canonical runtime definition at {canonical} (supplied, overriding the embedded copy)")
+
+    def check_embedded_compose(self) -> None:
+        """The shipped artifact checking itself, before it stages anything.
+
+        TestEmbeddedComposeMatchesCanonical only exists inside a checkout,
+        and the whole point of embedding the definition is that the
+        installer travels without one. So the copy that actually lands on
+        a NAS has had no gate applied to it at all, and the failure it is
+        exposed to is the quiet kind: truncation is loud because Python
+        stops parsing, while a changed mount, network or healthcheck
+        parses perfectly and stages a runtime topology nobody wrote.
+
+        The digest is recorded beside the blob by
+        scripts/install/embed_compose.py, held to the canonical file by
+        the same test, and verified here, so the artifact carries its own
+        check wherever it ends up.
+        """
+        digest = embedded_compose_digest()
+        if digest != EMBEDDED_COMPOSE_SHA256:
+            raise Refusal(
+                EXIT_PREREQ_PAYLOAD,
+                "the runtime definition embedded in this installer does not match the digest "
+                f"recorded beside it:\n  found    {digest}\n  expected {EMBEDDED_COMPOSE_SHA256}\n"
+                "so this copy of the script has been edited since it was generated.",
+                "Do not install from it. Fetch a clean copy of install_docker_host.py, or from a "
+                "checkout regenerate it with `python3 scripts/install/embed_compose.py` and commit "
+                "the result. If you meant to install a modified runtime, put it in a file and pass "
+                "--compose-file, which is the supported way to do that and leaves a trail.",
+            )
+        self.note("canonical runtime definition embedded in this installer, sha256 "
+                  f"{digest[:12]} (generated from container/compose.yaml)")
+
+        # Running from inside a checkout used to mean installing that
+        # checkout's compose.yaml. It silently does not any more, and a
+        # developer testing an uncommitted runtime change through the
+        # installer would have deployed the embedded copy and never been
+        # told. This does not change which file wins, because "whichever
+        # directory the script happens to sit in" is precisely the
+        # location-dependent behaviour embedding removed. It says so
+        # instead, and names the flag that settles it.
+        local = checkout_compose_beside_this_installer()
+        if local is None:
+            return
+        if local.read_bytes() == embedded_compose_bytes():
+            self.note(f"identical to {local} in the checkout this installer is sitting in")
+        else:
+            self.warn(f"{local} in this checkout DIFFERS from the embedded copy, and the embedded "
+                      f"copy is what will be staged. Pass --compose-file {local} to install the "
+                      f"checkout's version instead.")
 
     def check_paths(self) -> None:
         """Every host directory, and whether THIS uid can actually use it.
@@ -1376,8 +1435,15 @@ def other_running_containers(project: str):
 # GENERATED FROM container/compose.yaml. DO NOT EDIT BY HAND.
 #
 # Regenerate with:
-#     EMBED_COMPOSE_UPDATE=1 python3 -m unittest \
-#         scripts.install.test_install_docker_host.TestEmbeddedComposeMatchesCanonical
+#     python3 scripts/install/embed_compose.py
+#
+# EMBEDDED_COMPOSE_SHA256 below is the sha256 of these bytes, written by
+# that same script. It is not decoration: check_payload verifies it before
+# anything is staged, so a copy of this installer that was edited in
+# transit refuses on the operator's machine rather than quietly deploying
+# a runtime topology nobody wrote. Truncation is loud (Python stops
+# parsing); a changed mount, network or healthcheck is not, and that is
+# the one this catches.
 #
 # Why this is carried here at all: copying install_docker_host.py to a NAS
 # and running it used to refuse with exit 19, because container/compose.yaml
@@ -1392,8 +1458,8 @@ def other_running_containers(project: str):
 # something no gate has ever checked." That property is kept, not traded:
 # there is still exactly one canonical runtime definition, this is a
 # generated copy of it rather than a second opinion about it, and
-# TestEmbeddedComposeMatchesCanonical compares the two BYTE FOR BYTE and
-# fails when they diverge.
+# TestEmbeddedComposeMatchesCanonical compares the two BYTE FOR BYTE (as
+# bytes, not as decoded text) and fails when they diverge.
 #
 # The gate is the whole point. The --image default was the one shipped
 # artifact nothing held to canonical.json, so cutting 0.2.0 moved all eight
@@ -1928,6 +1994,50 @@ services:
       - internal
 """
 
+# Written by scripts/install/embed_compose.py alongside the blob above.
+EMBEDDED_COMPOSE_SHA256 = "3b0c90a4b3a7beb4f88921adbbc9feabfd67905428f31d3a51569e306f494137"
+
+
+def embedded_compose_bytes() -> bytes:
+    """The embedded definition as the exact bytes that get staged.
+
+    UTF-8 explicitly, never the locale's encoding. container/compose.yaml
+    has a section sign and em dashes in it, so on a host with LC_ALL=C
+    `write_text` on this string raises UnicodeEncodeError and the install
+    dies mid-stage. It is also what makes the embedded path byte-identical
+    to the shutil.copyfile path rather than merely similar.
+    """
+    return EMBEDDED_COMPOSE_YAML.encode("utf-8")
+
+
+def embedded_compose_digest() -> str:
+    return hashlib.sha256(embedded_compose_bytes()).hexdigest()
+
+
+def checkout_compose_beside_this_installer():
+    """container/compose.yaml from the checkout this script is sitting in,
+    or None when it is not sitting in one.
+
+    Deliberately narrow: it looks at the one place a checkout puts it
+    relative to this file (scripts/install/ -> ../../container/) rather
+    than walking every ancestor, because an unrelated container/ directory
+    somewhere above a copied file is not this project's runtime contract.
+
+    Path.parents raises IndexError rather than answering for a file fewer
+    than three directories deep, and a copy sitting at /tmp/install.py is
+    exactly the standalone case this installer now supports, so "not in a
+    checkout" is an answer here and not an error.
+    """
+    here = Path(__file__).resolve()
+    try:
+        root = here.parents[2]
+    except IndexError:
+        return None
+    if here.parent.name != "install" or here.parents[1].name != "scripts":
+        return None
+    candidate = root / "container" / "compose.yaml"
+    return candidate if candidate.is_file() else None
+
 
 def stage_payload(args) -> None:
     args.prefix.mkdir(parents=True, exist_ok=True)
@@ -1945,13 +2055,19 @@ def stage_payload(args) -> None:
     # checkout on the host to state the one opinion there is.
     dest = args.prefix / "compose.yaml"
     if args.compose_file is None:
-        dest.write_text(EMBEDDED_COMPOSE_YAML)
+        # write_bytes, not write_text. write_text encodes with the
+        # LOCALE's codec, and this file carries a section sign and em
+        # dashes, so under LC_ALL=C it raises UnicodeEncodeError partway
+        # through staging. Bytes also make this branch byte-identical to
+        # the shutil.copyfile branch below rather than merely similar,
+        # which is what lets a test compare the two.
+        dest.write_bytes(embedded_compose_bytes())
     else:
         shutil.copyfile(str(args.compose_file), str(dest))
-    (args.prefix / "compose.image.yaml").write_text(render_image_override(args))
+    (args.prefix / "compose.image.yaml").write_text(render_image_override(args), encoding="utf-8")
 
     env_path = args.prefix / ".env"
-    env_path.write_text(render_env(args))
+    env_path.write_text(render_env(args), encoding="utf-8")
     os.chmod(env_path, 0o600)
 
 
@@ -3487,7 +3603,7 @@ def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     layout.add_argument("--project", default=DEFAULT_PROJECT, help="Compose project name.")
 
 
-def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> None:
+def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
     """credentials and the rest of runtime: only preflight and install read
     any of these (every check in the Preflight class, and everything
     cmd_install stages and brings up). status, uninstall, network-doctor
@@ -3615,7 +3731,15 @@ class _IfInstalledRemoved(argparse.Action):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    repo_root = Path(__file__).resolve().parents[2]
+    # No repo_root here any more. --compose-file used to default to
+    # <repo>/container/compose.yaml, computed as parents[2] of this file,
+    # which raises IndexError outright for a copy of this script sitting
+    # fewer than three directories deep. That is exactly the standalone
+    # case issue #346 exists to support: a single file on a NAS, in the
+    # operator's home directory, with no checkout anywhere near it. The
+    # default is None now, and the one place that still asks about a
+    # checkout (checkout_compose_beside_this_installer) answers "no"
+    # rather than raising.
     parser = argparse.ArgumentParser(
         prog="install_docker_host.py",
         description="Install rclone-manager on a Docker host (issue #262).",
@@ -3627,7 +3751,7 @@ def build_parser() -> argparse.ArgumentParser:
         "preflight", formatter_class=_HelpFormatter,
         help="Check every prerequisite and exit. Changes nothing on the host.")
     _add_shared_groups(sp_preflight)
-    _add_install_prereq_groups(sp_preflight, repo_root)
+    _add_install_prereq_groups(sp_preflight)
 
     sp_install = subparsers.add_parser(
         "install", formatter_class=_HelpFormatter,
@@ -3642,7 +3766,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_shared_groups(sp_install)
-    _add_install_prereq_groups(sp_install, repo_root)
+    _add_install_prereq_groups(sp_install)
     _add_fix_network_flag(
         sp_install, default="auto",
         why_this_default="auto is the default because a healthy host is a strict no-op either way, so "
