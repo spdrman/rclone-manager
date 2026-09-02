@@ -647,19 +647,70 @@ func TestRecordTransitionWritesThePlacementItIsGiven(t *testing.T) {
 	}
 }
 
-// TestListingABackupSetAcrossSeveralPlacementBatches proves the batched
-// read stitches back together: every artifact in a set spanning several
-// batches comes back with its own placement and not somebody else's.
+// driverParameterCeiling is the number of bound parameters this project's
+// SQLite driver accepts in one statement.
 //
-// It deliberately does NOT claim to reach the driver's parameter ceiling.
-// I measured that (see placementBatchSize's doc: 5,000 placeholders are
-// accepted and 40,000 are refused on this driver), so a test that actually
-// crossed it would have to write tens of thousands of artifacts and would
-// cost the gate more than the risk is worth. What this covers is the thing
-// batching can plausibly get wrong, which is losing or misattributing a
-// batch, and it fails loudly if the fixture ever stops crossing a boundary
-// at all.
-func TestListingABackupSetAcrossSeveralPlacementBatches(t *testing.T) {
+// I measured it rather than quoting the familiar 999, which is a
+// build-time default this driver does not use: on modernc.org/sqlite
+// v1.57.0 a statement with 32,766 placeholders runs and one with 32,767
+// fails with "too many SQL variables". TestTheDriverParameterCeilingIsWhereIThinkItIs
+// below pins that, so a driver upgrade that moves the ceiling is caught
+// here rather than in production.
+const driverParameterCeiling = 32766
+
+// TestTheDriverParameterCeilingIsWhereIThinkItIs is the measurement the
+// read path's design rests on, kept as a test so it stays true.
+//
+// loadPlacementsFor re-runs the caller's predicate instead of listing the
+// artifact ids it already holds, and the whole argument for paying a second
+// predicate evaluation is that the id-listing shape has a ceiling. A
+// measurement that stops being true silently would turn that argument into
+// a story.
+func TestTheDriverParameterCeilingIsWhereIThinkItIs(t *testing.T) {
+	db, _ := openRaw(t)
+	ctx := context.Background()
+	if _, err := db.ExecContext(ctx, `CREATE TABLE ceiling_probe (id INTEGER PRIMARY KEY)`); err != nil {
+		t.Fatalf("creating the probe table: %v", err)
+	}
+
+	ask := func(n int) error {
+		ph := make([]string, n)
+		args := make([]any, n)
+		for i := range ph {
+			ph[i] = "?"
+			args[i] = int64(i)
+		}
+		rows, err := db.QueryContext(ctx,
+			`SELECT id FROM ceiling_probe WHERE id IN (`+strings.Join(ph, ",")+`)`, args...)
+		if err != nil {
+			return err
+		}
+		return rows.Close()
+	}
+
+	if err := ask(driverParameterCeiling); err != nil {
+		t.Fatalf("%d placeholders should be accepted by this driver, got: %v", driverParameterCeiling, err)
+	}
+	if err := ask(driverParameterCeiling + 1); err == nil {
+		t.Fatalf("%d placeholders were accepted; the ceiling this read path is designed around has moved, so re-derive it and revisit loadPlacementsFor's doc", driverParameterCeiling+1)
+	}
+}
+
+// TestListingABackupSetPastTheDriverParameterCeiling is the behavioural
+// proof that the placement read has no per-artifact parameter limit.
+//
+// The shape this replaced built one placeholder per artifact and batched to
+// stay under the ceiling above. This one re-runs the caller's predicate, so
+// the statement binds two parameters whatever the set holds, and the way to
+// prove that is to list a set larger than any placeholder-per-artifact read
+// could have served in one statement. Every record still has to come back
+// with its own placement and not somebody else's, which is the thing a read
+// that lost or misattributed a chunk would fail.
+//
+// It seeds rows directly rather than through RecordTransition because the
+// subject here is the read, and 32,767 separate write transactions would
+// cost the gate minutes to prove nothing about it.
+func TestListingABackupSetPastTheDriverParameterCeiling(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "journal.db")
 	j, err := Open(ctx, path)
@@ -673,47 +724,57 @@ func TestListingABackupSetAcrossSeveralPlacementBatches(t *testing.T) {
 		t.Fatalf("NewBackupSetID: %v", err)
 	}
 
-	const count = 1200
-	if count <= placementBatchSize {
-		t.Fatalf("the fixture writes %d artifacts and the batch size is %d, so this test never crosses a batch boundary", count, placementBatchSize)
-	}
+	count := driverParameterCeiling + 1
+	now := formatTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
 
-	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	tx, err := j.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx: %v", err)
+	}
 	for i := 0; i < count; i++ {
-		name := fmt.Sprintf("artifact-%04d.dump", i)
-		artifact, err := model.NewArtifactID(set, name)
-		if err != nil {
-			t.Fatalf("NewArtifactID: %v", err)
-		}
-		if _, err := j.RecordTransition(ctx, Transition{
-			Artifact: artifact, Key: name + ":discover", From: "", To: "DISCOVERED",
-			RemotePath: "/remote/" + name, OccurredAt: at,
-		}); err != nil {
-			t.Fatalf("discovering %s: %v", name, err)
-		}
+		name := fmt.Sprintf("artifact-%05d.dump", i)
 		final := "/backups/pg/" + name
-		if _, err := j.RecordTransition(ctx, Transition{
-			Artifact: artifact, Key: name + ":committed", From: "DISCOVERED", To: "COMMITTED",
-			OccurredAt: at, LocalPath: &final,
-			Placement: &PlacementUpdate{Medium: MediumLocal, Location: final, Status: PlacementActive},
-		}); err != nil {
-			t.Fatalf("committing %s: %v", name, err)
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO artifacts (
+				source, backup_set, artifact_name, remote_path, local_path, state,
+				discovered_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			set.Source, set.Set, name, "/remote/"+name, final, "COMPLETE", now, now)
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("seeding artifact %d: %v", i, err)
 		}
+		rowID, err := res.LastInsertId()
+		if err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("seeding artifact %d: %v", i, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO placements (artifact_id, medium, location, status, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			rowID, MediumLocal, final, PlacementActive, now, now); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("seeding the placement for artifact %d: %v", i, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit: %v", err)
 	}
 
 	records, err := j.ListByBackupSet(ctx, set)
 	if err != nil {
-		t.Fatalf("ListByBackupSet over %d artifacts: %v", count, err)
+		t.Fatalf("ListByBackupSet over %d artifacts: %v; a read that binds one parameter per artifact fails here and that is the point", count, err)
 	}
 	if len(records) != count {
 		t.Fatalf("ListByBackupSet returned %d records, want %d", len(records), count)
 	}
 	for _, rec := range records {
 		if len(rec.Placements) != 1 {
-			t.Fatalf("artifact %s came back with %d placements, want 1; a batched read that dropped a batch would look exactly like this", rec.Artifact, len(rec.Placements))
+			t.Fatalf("artifact %s came back with %d placements, want 1; a read that dropped or duplicated a chunk looks exactly like this", rec.Artifact, len(rec.Placements))
 		}
-		if got, ok := rec.ReadableLocalPath(); !ok || got != "/backups/pg/"+rec.Artifact.Name {
-			t.Fatalf("artifact %s resolved to %q (ok=%v)", rec.Artifact, got, ok)
+		want := "/backups/pg/" + rec.Artifact.Name
+		if got, ok := rec.ReadableLocalPath(); !ok || got != want {
+			t.Fatalf("artifact %s resolved to %q (ok=%v), want %q; a read that misattributed a placement looks exactly like this", rec.Artifact, got, ok, want)
 		}
 	}
 }

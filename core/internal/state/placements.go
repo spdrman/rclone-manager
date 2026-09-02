@@ -219,68 +219,48 @@ func loadPlacements(ctx context.Context, q querier, artifactRowID int64) ([]Plac
 	return out, nil
 }
 
-// placementBatchSize bounds how many artifact ids go into one IN clause.
-//
-// SQLite has a hard ceiling on bound parameters per statement
-// (SQLITE_MAX_VARIABLE_NUMBER), and a query built from one placeholder per
-// artifact walks straight into it, because "every artifact in this backup
-// set" is exactly the list the retention cycle asks for.
-//
-// I measured where that ceiling actually is on the driver this project
-// embeds rather than repeating the number everyone quotes: modernc.org/
-// sqlite v1.57.0 accepts 5,000 placeholders and refuses 40,000 with "too
-// many SQL variables", so the historical 999 does not apply here and an
-// unbatched query would only fail on a backup set holding tens of
-// thousands of artifacts. That is a large set, not an impossible one:
-// hourly artifacts for four years reaches it, and the failure would then
-// appear as a listing error on exactly the deployments that can least
-// afford one, and never on any deployment small enough to have caught it
-// in testing.
-//
-// So this is a defensive bound rather than a fix for a bug anyone has hit.
-// 500 keeps the statement far away from any build's limit and is large
-// enough that even a very large backup set is a handful of queries rather
-// than one per artifact.
-const placementBatchSize = 500
-
-// loadPlacementsFor reads the placements for many artifact rows and
+// loadPlacementsFor reads the placements of every artifact matching
+// artifactWhere, a predicate over the artifacts table aliased as a, and
 // returns them keyed by artifact row id.
 //
-// Batched rather than one query per record, because the list paths
-// (ListByState, ListByBackupSet) are what a retention cycle runs over every
-// backup set, and an N+1 there is a real cost on a NAS with thousands of
-// artifacts.
-func loadPlacementsFor(ctx context.Context, q querier, artifactRowIDs []int64) (map[int64][]Placement, error) {
+// # Why it re-runs the predicate instead of listing the ids it already has
+//
+// The obvious shape is one placeholder per artifact in an IN clause, and
+// the caller does have every id in hand by the time it gets here. That
+// shape has a ceiling: SQLite refuses a statement past
+// SQLITE_MAX_VARIABLE_NUMBER bound parameters, and "every artifact in this
+// backup set" is exactly the list a retention cycle asks for on every
+// pass.
+//
+// I measured the ceiling on the driver this project actually embeds rather
+// than quoting the familiar 999, which is a build-time default this driver
+// does not use. On modernc.org/sqlite v1.57.0 a statement takes 32,766
+// placeholders and refuses 32,767 with "too many SQL variables". So an
+// unbatched read would break on a backup set holding more than 32,766
+// artifacts, which is large but not impossible (hourly artifacts for four
+// years is 35,040), and it would break as a listing error on exactly the
+// deployments least able to absorb one.
+//
+// Batching the ids would keep the query under that ceiling. Re-running the
+// predicate removes the ceiling instead, and I would rather delete a limit
+// than manage one: this way the number of bound parameters is however many
+// the caller's own WHERE clause needs, which is two, whether the set holds
+// one artifact or a million. It costs a second evaluation of a predicate
+// SQLite has already planned and indexed for the read that just ran.
+//
+// It is still one query rather than one per record. The N+1 that shape
+// would create is not hypothetical: the list paths are what a retention
+// cycle runs over every backup set on every pass.
+func loadPlacementsFor(ctx context.Context, q querier, artifactWhere string, args ...any) (map[int64][]Placement, error) {
 	out := map[int64][]Placement{}
-	for start := 0; start < len(artifactRowIDs); start += placementBatchSize {
-		end := start + placementBatchSize
-		if end > len(artifactRowIDs) {
-			end = len(artifactRowIDs)
-		}
-		if err := loadPlacementBatch(ctx, q, artifactRowIDs[start:end], out); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
-}
-
-func loadPlacementBatch(ctx context.Context, q querier, artifactRowIDs []int64, out map[int64][]Placement) error {
-	if len(artifactRowIDs) == 0 {
-		return nil
-	}
-
-	placeholders := make([]string, len(artifactRowIDs))
-	args := make([]any, len(artifactRowIDs))
-	for i, id := range artifactRowIDs {
-		placeholders[i] = "?"
-		args[i] = id
-	}
 	rows, err := q.QueryContext(ctx,
 		`SELECT artifact_id, `+placementColumns+
-			` FROM placements WHERE artifact_id IN (`+join(placeholders, ", ")+`) ORDER BY artifact_id, medium`,
+			` FROM placements
+			  WHERE artifact_id IN (SELECT a.id FROM artifacts a WHERE `+artifactWhere+`)
+			  ORDER BY artifact_id, medium`,
 		args...)
 	if err != nil {
-		return fmt.Errorf("state: read placements: %w", err)
+		return nil, fmt.Errorf("state: read placements: %w", err)
 	}
 	defer rows.Close()
 
@@ -295,18 +275,18 @@ func loadPlacementBatch(ctx context.Context, q querier, artifactRowIDs []int64, 
 		)
 		if err := rows.Scan(&artifactRowID, &medium, &location, &size, &hash, &hashAlg,
 			&verificationClass, &verifiedAt, &status, &createdAt, &updatedAt); err != nil {
-			return fmt.Errorf("state: scan placement: %w", err)
+			return nil, fmt.Errorf("state: scan placement: %w", err)
 		}
 		p, err := buildPlacement(medium, location, size, hash, hashAlg, verificationClass, verifiedAt, status, createdAt, updatedAt)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		out[artifactRowID] = append(out[artifactRowID], p)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("state: read placements: %w", err)
+		return nil, fmt.Errorf("state: read placements: %w", err)
 	}
-	return nil
+	return out, nil
 }
 
 func scanPlacement(row scanRow) (Placement, error) {

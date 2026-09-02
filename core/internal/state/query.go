@@ -350,24 +350,32 @@ func (j *Journal) LastTransition(ctx context.Context, artifact model.ArtifactID,
 // ListByState returns every artifact currently recorded in the given state.
 // Reconciliation (FR-17) and retry scheduling are the expected callers.
 func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, error) {
-	rows, err := j.db.QueryContext(ctx, `SELECT `+selectColumns+` FROM artifacts WHERE state = ? ORDER BY id`, state)
-	if err != nil {
-		return nil, fmt.Errorf("state: list by state: %w", err)
-	}
-	return scanRecords(ctx, j.db, rows)
+	return j.listRecords(ctx, "list by state", "a.state = ?", state)
 }
 
 // ListByBackupSet returns every artifact recorded for one backup set (FR-7):
 // retention and health calculations must never cross this boundary.
 func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]Record, error) {
+	return j.listRecords(ctx, "list by backup set", "a.source = ? AND a.backup_set = ?", set.Source, set.Set)
+}
+
+// listRecords reads every artifact matching one predicate, with its
+// placements.
+//
+// The predicate is a parameter rather than inlined into each caller's SQL
+// because it is used twice, once for the artifact rows and once for their
+// placements (see loadPlacementsFor for why the placement read re-runs it
+// rather than listing the ids it already has). Writing it once here is what
+// stops the two halves drifting into asking about different sets of
+// artifacts, which is a failure that would show up as records silently
+// missing their placements rather than as an error.
+func (j *Journal) listRecords(ctx context.Context, what, artifactWhere string, args ...any) ([]Record, error) {
 	rows, err := j.db.QueryContext(ctx,
-		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? ORDER BY id`,
-		set.Source, set.Set,
-	)
+		`SELECT `+selectColumns+` FROM artifacts a WHERE `+artifactWhere+` ORDER BY a.id`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("state: list by backup set: %w", err)
+		return nil, fmt.Errorf("state: %s: %w", what, err)
 	}
-	return scanRecords(ctx, j.db, rows)
+	return scanRecords(ctx, j.db, rows, artifactWhere, args...)
 }
 
 // scanRecords decodes a whole result set and then attaches every record's
@@ -377,7 +385,7 @@ func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([
 // retention cycle runs over every backup set on every pass, and a NAS with
 // a few thousand artifacts would pay a round trip per artifact per cycle
 // for a table that is almost always tiny.
-func scanRecords(ctx context.Context, q querier, rows *sql.Rows) ([]Record, error) {
+func scanRecords(ctx context.Context, q querier, rows *sql.Rows, artifactWhere string, args ...any) ([]Record, error) {
 	defer rows.Close()
 
 	var out []Record
@@ -394,7 +402,7 @@ func scanRecords(ctx context.Context, q querier, rows *sql.Rows) ([]Record, erro
 		return nil, fmt.Errorf("state: list artifacts: %w", err)
 	}
 
-	byArtifact, err := loadPlacementsFor(ctx, q, rowIDs)
+	byArtifact, err := loadPlacementsFor(ctx, q, artifactWhere, args...)
 	if err != nil {
 		return nil, err
 	}
