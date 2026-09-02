@@ -102,6 +102,15 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
     expect(banner.textContent).not.toMatch(/SSH host key/i);
   });
 
+  it("the detail page names a key-permission problem when that is the reason, not a rejected login (#293)", async () => {
+    renderDetail(await setFixture({ haltReason: "key-permissions" }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toMatch(/permission/i);
+    expect(banner.textContent).not.toMatch(/SSH host key/i);
+    expect(banner.textContent).not.toMatch(/rejected|log in|sign in/i);
+  });
+
   it("the detail page shows no halt banner for a set with no reason", async () => {
     renderDetail(await setFixture());
 
@@ -140,6 +149,14 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
 
     await screen.findByRole("alert");
     expect(screen.queryByRole("button", { name: "Review fingerprint" })).toBeNull();
+  });
+
+  it("the dashboard raises a key-permission problem under its own words (#293)", async () => {
+    renderDashboard([await setFixture({ haltReason: "key-permissions" })]);
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toMatch(/permission/i);
+    expect(banner.textContent).not.toMatch(/SSH host key/i);
   });
 
   it("the dashboard raises nothing when no set carries a reason", async () => {

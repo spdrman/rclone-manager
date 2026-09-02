@@ -33,6 +33,11 @@ func authRefusal() error {
 		errors.New("ssh: unable to authenticate"))
 }
 
+func keyPermissionsRefusal() error {
+	return transport.NewError(transport.KeyPermissions, "ssh_key_permissions",
+		errors.New(`key_file has permissions 0777, expected exactly 0600`))
+}
+
 // haltReasonOf reads one backup set's halt reason back through
 // BuildHealthReport, which is the read path GET /system/health and
 // `backup-manager status` both go through. Reading it through the report
@@ -112,6 +117,32 @@ func TestRunCycle_AFailedAuthenticationIsARefusalToo(t *testing.T) {
 
 	if got := haltReasonOf(t, svc, bs.ID); got != state.HaltAuthenticationFailed {
 		t.Fatalf("halt reason after an authentication refusal = %q, want %q", got, state.HaltAuthenticationFailed)
+	}
+}
+
+// TestRunCycle_ADriftedKeyPermissionIsARefusalDistinctFromAuthentication is
+// issue #293's producer-level case. internal/transport/rclone/ssh.go now
+// refuses to build a connection at all when a configured key_file's mode
+// has drifted, classified as transport.KeyPermissions, and this proves
+// that refusal reaches the same durable halt-reason mechanism #245 built,
+// under its own name rather than folded into HaltAuthenticationFailed:
+// the two call for different fixes, and an operator reading the halt
+// reason needs to be able to tell which one this is.
+func TestRunCycle_ADriftedKeyPermissionIsARefusalDistinctFromAuthentication(t *testing.T) {
+	bs := testBackupSet(t, t.TempDir())
+	tr := newFakeTransport()
+	tr.failForSourceID = bs.ID.String()
+	tr.failErr = keyPermissionsRefusal()
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.RunCycle(context.Background())
+
+	if got := haltReasonOf(t, svc, bs.ID); got != state.HaltKeyPermissions {
+		t.Fatalf("halt reason after a key-permission refusal = %q, want %q", got, state.HaltKeyPermissions)
+	}
+	if got := haltReasonOf(t, svc, bs.ID); got == state.HaltAuthenticationFailed {
+		t.Fatalf("halt reason after a key-permission refusal read as %q, the credential reason: the two must stay distinct", got)
 	}
 }
 

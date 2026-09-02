@@ -78,7 +78,7 @@ export interface BackupSet {
    * and the word a card printed for its current activity. Two fields for
    * one concept could also disagree; this one carries it alone.
    *
-   * Both values have a producer. api/client.ts reads them from GET
+   * All three values have a producer. api/client.ts reads them from GET
    * /system/health's per-set `halt_reason`, which core writes to a
    * durable per-backup-set record when a cycle's transport refuses the
    * connection and removes when a later cycle runs that set to
@@ -86,12 +86,21 @@ export interface BackupSet {
    * recognise maps to absent rather than through, so a banner never
    * renders for a word it cannot explain.
    *
+   * `key-permissions` (#293) is the one of the three that never reaches
+   * the host at all: the configured key's on-disk mode no longer matches
+   * what it was imported with, caught before a connection is even
+   * attempted. It is kept distinct from `authentication-failed` on
+   * purpose, the same way that one is kept distinct from
+   * `host-key-changed`: a rejected login is a question for the remote
+   * account, a permission drift is a question for this filesystem, and
+   * collapsing the two would put an operator on the wrong page.
+   *
    * Nothing keyed on this may offer to resume the set. §77 invariant 5
    * makes re-trusting a changed host key an explicit administrator action
    * taken outside this manager, so these banners report and link; they
    * never dismiss, retry or re-trust.
    */
-  haltReason?: "host-key-changed" | "authentication-failed";
+  haltReason?: "host-key-changed" | "authentication-failed" | "key-permissions";
   newestKnownGoodAt: string | null;
   lastRunAt: string | null;
   lastValidation: "passed" | "failed" | "not-run";

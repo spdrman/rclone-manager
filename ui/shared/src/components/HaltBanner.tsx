@@ -47,6 +47,15 @@ const HALT_COPY: Record<NonNullable<BackupSet["haltReason"]>, (host: string) => 
       "The host rejected the credentials this backup set is configured with, so no backup ran " +
       "and no remote artifacts were deleted. Check the key or the account this set uses on the " +
       "server itself; the manager will not try anything else on its own."
+  }),
+  "key-permissions": () => ({
+    eyebrow: "Key permissions",
+    title: "The SSH key for this backup set has the wrong permissions",
+    body:
+      "The private key on disk no longer has the permissions it was imported with, so the " +
+      "manager refused to use it before ever reaching out to the server: no backup ran and no " +
+      "remote artifacts were deleted. Fix the key file's permissions on this machine (or " +
+      "re-import the key) and the next run will pick it up on its own."
   })
 };
 

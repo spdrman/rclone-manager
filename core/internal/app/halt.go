@@ -11,22 +11,29 @@ import (
 // refusal internal/state records, or reports that this error says nothing
 // about whether the manager could connect.
 //
-// # Why only these two categories
+// # Why only these three categories
 //
 // The fact this produces is "the manager could not connect to this backup
 // set, and here is why", not the narrower "the host key changed". The
 // wider one is worth having: an SSH login the server rejects stops the
 // backups exactly as completely as a changed key does, and reporting it as
 // a merely stale backup set is the same operator-facing hole one category
-// along.
+// along. A key_file whose mode has drifted (issue #293) is a third shape
+// of the same fact, worth telling apart from a rejected login for the same
+// reason it was worth adding a second category alongside the first: a
+// rejected login is a question for the remote account, a permission drift
+// is a question for this filesystem, and until KeyPermissions existed both
+// looked identical on an operator's screen, "Backup Manager could not log
+// in".
 //
-// It stops there, though, and the boundary is the point. HostVerification
-// and Authentication are the only FR-22 categories that can only happen
-// BEFORE a session exists: a missing directory, a permission failure on
-// the remote path, a transient network error, an integrity failure are all
-// reachable with a perfectly good connection, so none of them is evidence
-// about the connection. Recording one of those as a refusal would put a
-// sentence on an operator's screen that the manager cannot support.
+// It stops there, though, and the boundary is the point. HostVerification,
+// Authentication and KeyPermissions are the only FR-22 categories that can
+// only happen BEFORE a session exists: a missing directory, a permission
+// failure on the remote path, a transient network error, an integrity
+// failure are all reachable with a perfectly good connection, so none of
+// them is evidence about the connection. Recording one of those as a
+// refusal would put a sentence on an operator's screen that the manager
+// cannot support.
 //
 // Cancellation and an unclassified error say nothing either, for the same
 // reason from the other side: shutting a cycle down mid-flight is a
@@ -44,6 +51,8 @@ func haltReasonFor(err error) (string, bool) {
 		return state.HaltHostKeyChanged, true
 	case transport.Authentication:
 		return state.HaltAuthenticationFailed, true
+	case transport.KeyPermissions:
+		return state.HaltKeyPermissions, true
 	default:
 		return "", false
 	}

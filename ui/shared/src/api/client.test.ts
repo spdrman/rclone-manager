@@ -1405,6 +1405,19 @@ describe("listSets joins the per-set health report (issue #245)", () => {
     expect(set.haltReason).toBe("authentication-failed");
   });
 
+  it("carries a key-permission refusal through under its own reason (#293)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch(
+        [wireSet("production/auth-config", "auth-config")],
+        [wireHealth("production/auth-config", { halt_reason: "KEY_PERMISSIONS" })]
+      )
+    );
+
+    const [set] = await httpApi.listSets();
+    expect(set.haltReason).toBe("key-permissions");
+  });
+
   it("does not render a reason this build does not understand", async () => {
     vi.stubGlobal(
       "fetch",

@@ -9,14 +9,15 @@ import (
 )
 
 // Halt reasons: why the manager could not connect to a backup set at all.
-// These are the values migration 0004's CHECK constraint declares, and the
-// schema is what makes them a closed set: a reason no reader recognises is
-// refused at the write rather than served to an operator later.
+// These are the values the schema's CHECK constraint declares (migration
+// 0004, widened by 0005 to admit HaltKeyPermissions), and the schema is
+// what makes them a closed set: a reason no reader recognises is refused
+// at the write rather than served to an operator later.
 //
 // They are deliberately not a copy of internal/transport's Category
 // vocabulary. Category classifies any transport failure, most of which say
-// nothing about whether a connection was ever established; these two name
-// the manager's own operator-facing conclusion, which is that the
+// nothing about whether a connection was ever established; these three
+// name the manager's own operator-facing conclusion, which is that the
 // connection was refused and therefore that nothing was backed up. The
 // translation from one to the other lives in internal/app, where a cycle's
 // error and its classification already meet (see halt.go there).
@@ -31,6 +32,17 @@ const (
 	// the host answered and rejected the login, so again no session was
 	// established and no backup ran.
 	HaltAuthenticationFailed = "AUTHENTICATION_FAILED"
+
+	// HaltKeyPermissions is issue #293's refusal: the manager never even
+	// tried to reach the host, because the configured key_file's on-disk
+	// mode no longer matches what it was written with (checked in
+	// internal/transport/rclone/ssh.go, before the connection is built).
+	// It is worth telling apart from HaltAuthenticationFailed precisely
+	// because they call for different fixes: a rejected login is a
+	// question for the remote account, a permission drift is a question
+	// for this filesystem, and before this reason existed both looked
+	// identical from the Web UI, "Backup Manager could not log in".
+	HaltKeyPermissions = "KEY_PERMISSIONS"
 )
 
 // BackupSetHalt is one backup set's standing connection refusal: which
