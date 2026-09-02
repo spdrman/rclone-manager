@@ -147,6 +147,34 @@ func TestResolveReachableAncestryRef_AsksEveryRewriteFreeRef(t *testing.T) {
 	})
 }
 
+// TestClassifyUnreachedOutcome_OneUndecidedRefIsNeverSwallowedByANo is the
+// control for the mixed case the fixture above cannot reach: it would need
+// a repository where merge-base fails for exactly one ref in the
+// preference list and succeeds for the rest, which is not a shape git
+// fixtures can be made to produce reliably. The decision logic that
+// matters is pure, though, so it is asserted directly against the two
+// slices ResolveReachableAncestryRef's loop would have produced.
+//
+// Before this test, the code only refused to answer when EVERY asked ref
+// was undecided. A checkout where origin/main and main both cleanly say
+// "not reachable" and origin/release alone cannot decide (a shallow
+// fetch, a missing object on that one ref's path) fell through to a flat
+// "not reachable", which is exactly the false negative the three-outcome
+// contract above the function says must never happen: origin/release not
+// deciding is not evidence that it would have said no.
+func TestClassifyUnreachedOutcome_OneUndecidedRefIsNeverSwallowedByANo(t *testing.T) {
+	asked := []string{"origin/main", "main", "origin/release"}
+	undecided := []string{"origin/release"}
+
+	_, reachable, err := classifyUnreachedOutcome("/repo", "deadbeef", asked, undecided)
+	if err == nil {
+		t.Fatalf("reachable=%v with no error; one ref that could not decide must not be swallowed by the others answering no", reachable)
+	}
+	if !strings.Contains(err.Error(), "origin/release") {
+		t.Errorf("error %q does not name the ref that could not decide", err.Error())
+	}
+}
+
 // TestCommitReachableFromModelsASquashMerge is the positive control.
 //
 // The assertion above is a negative one ("this never happens"), and a

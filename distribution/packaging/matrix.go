@@ -1061,11 +1061,29 @@ func ResolveReachableAncestryRef(repoDir, commit string) (AncestryRef, bool, err
 			return AncestryRef{Ref: ref, Why: releaseAncestryRefWhy[ref]}, true, nil
 		}
 	}
+	return classifyUnreachedOutcome(repoDir, commit, asked, undecided)
+}
+
+// classifyUnreachedOutcome turns the results of asking every rewrite-free
+// ref into the verdict ResolveReachableAncestryRef returns once none of
+// them answered yes. Split out from the loop above so the rule that
+// matters - one undecided ref must not be swallowed by the others
+// answering no - is a fact this package can assert directly, rather than
+// one that only shows up through a git fixture engineered to make merge-base
+// fail for exactly one ref in a preference list and succeed for the rest.
+//
+// A single undecided ref is enough to withhold a "not reachable" verdict.
+// "no" from the refs that did decide is not evidence about the one that
+// did not: that ref could just as easily have said yes, and reporting
+// false here is reporting a fact about the manifest (#174's "unreachable
+// commit") when what actually happened is a fact about the checkout (a
+// shallow clone, a missing object).
+func classifyUnreachedOutcome(repoDir, commit string, asked, undecided []string) (AncestryRef, bool, error) {
 	switch {
 	case len(asked) == 0:
 		return AncestryRef{}, false, fmt.Errorf("none of %v resolves to a commit in %s, so there is nothing to check reachability against", releaseAncestryRefPreference, repoDir)
-	case len(undecided) == len(asked):
-		return AncestryRef{}, false, fmt.Errorf("git could not decide whether %s is reachable from any of %v; that is a fact about this checkout (a shallow clone, a missing object), not about the commit", commit, undecided)
+	case len(undecided) > 0:
+		return AncestryRef{}, false, fmt.Errorf("git could not decide whether %s is reachable from %v (asked %v in total); that is a fact about this checkout (a shallow clone, a missing object), not about the commit", commit, undecided, asked)
 	}
 	return AncestryRef{Why: fmt.Sprintf("asked %v", asked)}, false, nil
 }

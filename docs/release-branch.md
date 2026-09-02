@@ -72,9 +72,21 @@ remote branch was force-pushed yesterday, so no check in this repository can enf
 them.
 
 They are a GitHub ruleset instead, named "release branch is append-only", active,
-targeting `refs/heads/release`, carrying `deletion` and `non_fast_forward`. That blocks
-a force push and blocks deleting the branch, and blocks neither an ordinary push nor
-creating it, which matters: an ordinary push to `release` is the thing that publishes.
+targeting `refs/heads/release`, carrying `deletion`, `non_fast_forward`, and
+`pull_request` (one required approval, merge commits only). `deletion` and
+`non_fast_forward` block a force push and block deleting the branch. `pull_request`
+is what makes rule 3 an enforced fact rather than a stated one: it blocks every direct
+push to `release`, ordinary ones included, so the only way a commit lands there is
+through a pull request somebody approved, and it restricts the merge method to a real
+merge commit, so approving a PR can never become the squash or rebase merge rule 1
+forbids.
+
+That is a change from the branch's first weeks, when the ruleset carried only
+`deletion` and `non_fast_forward` and an ordinary push to `release` was possible with
+no diff reviewed by anyone: the redesign's safety argument ("merging is a stronger
+act than typing a string") held in the doc but not in the ruleset. Cutting `v0.1.0`
+happened under that gap; every cut after it goes through the pull request the
+ruleset now requires.
 
 What the tests above enforce is the consequence of the rules holding, which is the
 useful half. If the ruleset were removed and the branch rewritten, the reachability
@@ -92,7 +104,10 @@ check starts failing, loudly, on the next run rather than months later.
 5. Prove it before you publish it: dispatch the Release workflow with `publish: false`.
    That path runs every guard and the parity rebuild against the real tree and stops
    before the registry.
-6. Fast-forward `release` and push. That publishes.
+6. Open a pull request from `main` into `release` and get it approved. The ruleset
+   refuses a direct push, so this is the only way in; merge it with a real merge
+   commit (the ruleset refuses squash and rebase, which would break rule 1). Merging
+   is what publishes.
 7. Record the digests the run prints into the manifest, flip `image.published` to
    true, regenerate the bundle again and land it on `main`. The manifest test refuses
    a published flag without digests and digests without the flag, so the two cannot
