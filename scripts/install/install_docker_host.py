@@ -2118,7 +2118,7 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> 
     # install only) is exactly this group's.
     runtime.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
                          help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
-    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.1.0",
+    runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.2.0",
                          help="Image reference both services run.")
     runtime.add_argument("--image-archive", type=Path, default=None,
                          help="A `docker save` tarball to load instead of pulling. For a host that cannot reach "
@@ -2195,7 +2195,7 @@ def build_parser() -> argparse.ArgumentParser:
             "      --prefix /volume1/backup-manager \\\n"
             "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
             "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.1.0\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.2.0\n"
         ),
     )
     _add_shared_groups(sp_install)

@@ -1,9 +1,11 @@
 package packaging
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -1289,4 +1291,47 @@ func containsString(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestTheInstallerDefaultsToTheCanonicalImage closes the one gap
+// TestEveryPlatformUsesTheExactCanonicalImage leaves open.
+//
+// That test holds every packaged platform to canonical.json, and it does
+// its job: cutting 0.2.0 made all eight adapters fail until each was
+// moved. scripts/install/install_docker_host.py is not one of those
+// platforms, though. It is a standalone script an operator runs directly,
+// it carries the image reference as an argparse default, and nothing
+// compared it to anything.
+//
+// So it did not move, and the 0.2.0 install on the real NAS pulled 0.1.0
+// and reported success, because a stale default is still a valid
+// reference to an image that really exists. The installer is the one
+// shipped artifact where the failure is silent rather than loud, which is
+// exactly why it needs the pin the adapters already have.
+func TestTheInstallerDefaultsToTheCanonicalImage(t *testing.T) {
+	c := MustLoad()
+
+	src, err := os.ReadFile(Path(filepath.Join("scripts", "install", "install_docker_host.py")))
+	if err != nil {
+		t.Fatalf("cannot read the installer: %v", err)
+	}
+
+	// The argparse default specifically, not merely a mention: the
+	// epilog's worked example names the reference too, and an example
+	// that drifts is a documentation bug, while a drifted default
+	// installs the wrong version.
+	re := regexp.MustCompile(`add_argument\("--image",\s*default="([^"]+)"`)
+	m := re.FindSubmatch(src)
+	if m == nil {
+		t.Fatal("no --image default found in the installer: this test pins that default to canonical.json, so if the flag was renamed or restructured, move the pin with it rather than deleting it")
+	}
+	if got := string(m[1]); got != c.Image.Reference {
+		t.Errorf("the installer defaults --image to %q, want the canonical %q.\n\nThis is what made the 0.2.0 install pull 0.1.0 and still report success. Move it with the tag in distribution/packaging/canonical.json.", got, c.Image.Reference)
+	}
+
+	// The epilog example as well, one severity down but the same source
+	// of truth: an operator who copies it gets the version it names.
+	if !bytes.Contains(src, []byte(c.Image.Reference)) {
+		t.Errorf("the installer never mentions the canonical reference %q at all", c.Image.Reference)
+	}
 }
