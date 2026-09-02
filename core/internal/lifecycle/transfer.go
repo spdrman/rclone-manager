@@ -84,10 +84,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"io/fs"
 	"os"
 
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"

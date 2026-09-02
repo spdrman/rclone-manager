@@ -113,13 +113,13 @@ package retention
 
 import (
 	"fmt"
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -203,7 +203,12 @@ type PruneVerdict struct {
 // naming the two of them as the only places in the project allowed to
 // compute it. Both now delegate to internal/artifactstore, which is the
 // local store's own account of where its bytes live (issue #334), so the
-// formula exists once and the two callers cannot drift apart.
+// two of them cannot drift apart.
+//
+// The two of them, not every join of a root and an artifact name in this
+// file: pruneVerifySafeToDelete ends by joining that name onto the
+// canonicalized root EvalSymlinks handed back, which is deliberately a
+// different computation on a different input. See its own comment there.
 func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) string {
 	return artifactstore.LocalLocator(bs.LocalPath, artifact)
 }
@@ -324,6 +329,14 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 	// joining the canonical directory back onto the artifact's own name
 	// is the fully canonical, safe-to-remove path: no further resolution
 	// of the final component is needed or wanted.
+	//
+	// This is deliberately NOT artifactstore.LocalLocator, even though it
+	// has the same shape. That function answers "where does the configured
+	// root say this artifact goes"; this line answers "what is the
+	// resolved, symlink-free path this function just proved safe", and
+	// routing it back through the configured root would throw away the
+	// resolution the checks above exist to produce. Same shape, different
+	// question, and this one fails closed.
 	return filepath.Join(resolvedRoot, rec.Artifact.Name), nil
 }
 
