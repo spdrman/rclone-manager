@@ -375,6 +375,7 @@ var settingsWriteSurface = map[string]string{
 	"Retention.Tiers.PeriodDays":     "a bounded look-back, read at plan time.",
 	"Retention.Tiers.Keep":           "a bounded count, read at plan time.",
 	"Retention.Tiers.WindowUnit":     "a closed value set, read at plan time.",
+	"Retention.Tiers.Medium":         "the storage medium a tier's artifacts live on (EPIC E, FR-27). Empty means the local backup root, and config.Validate refuses any value that is not a declared storage_mediums id. Nothing reads it yet: no scheduler path, no planner and no delete consults it, so today it can only ever be accepted or refused at save time. When it does acquire a reader it will be the retention planner (#239), and the argument this list exists to make has to be re-made THERE, because a tier pointed at a medium is what eventually authorises deleting the local copy after a verified upload. That is why the disclosure in front of that first save is its own requirement (FR-27's consent rule, #240) rather than something this entry can wave through.",
 	"Retention.ProtectLastKnownGood": "FR-19's protection. The dangerous one, and the reason #171 was asked in the first place: turning it off WIDENS what a later retention apply may delete. That apply is plan-bound (see this file's doc comment), and the scheduler never performs one.",
 
 	// FR-21's capacity block (issue #286). Every one of these four is an

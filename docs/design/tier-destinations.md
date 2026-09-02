@@ -218,26 +218,49 @@ lines above would reasonably have put checks inside their own `Remove`.
 A future adapter owes an equivalent proof in its own terms, on the caller
 side. It does not owe these six.
 
-## Decision: no `destination:` config key yet
+## Decision: no `destination:` config key yet, SUPERSEDED by #234
 
-The obvious next step looks like adding an optional `destination` to
-`RetentionTier`. This deliberately does not.
+The original decision, kept because the reasoning still binds: adding an
+optional `destination` to `RetentionTier` was refused, because such a key
+could only ever have said "local", and selecting the sole existing
+behaviour is not a choice. It would have appeared in the schema, needed
+documenting, and done nothing. #299 removed several Settings and wizard
+fields that were exactly that, decorative and read by nothing. The key
+was to arrive with something that gave it a second value.
 
-Such a key could currently only ever say "local", and selecting the sole
-existing behaviour is not a choice. It would appear in the schema, need
-documenting, and do nothing. This repository has already had that
-problem and named it: #299 removed several Settings and wizard fields
-that were decorative, drawn by the UI and read by nothing. Adding a
-config knob with one legal value would be the same mistake in the same
-file.
+EPIC E's #234 is that arrival, and the key is spelled `medium` rather
+than `destination`. What gives it a second value is the new top-level
+`storage_mediums` list: a tier's `medium` now names a declared S3 medium,
+which validation resolves and refuses when it dangles. So the key is not
+a knob with one legal value.
 
-The key arrives with the first backend that gives it a second value, in
-the same change, so it is never shipped inert.
+It IS still ahead of anything that acts on it, and that is worth stating
+plainly rather than hiding behind the paragraph above. Phase 1 of EPIC E
+builds every load-bearing wall (schema, transport, placements,
+verification) and can still not move or delete anything it could not
+before; the planner that reads a tier's medium is #239 and the mover it
+feeds is #238. The difference from the #299 fields is that these have a
+scheduled reader rather than none, and the phasing is the EPIC's own
+decision, made so the schema is argued in review before a mover is
+depending on it.
 
-When it does arrive, it should follow `Retention.EffectiveTiers`: leave
-the zero value zero in the parsed config so "not configured" stays
-distinguishable from "configured to the default", and resolve through an
-`Effective...` accessor. Absent means the local backup root.
+Two shapes this decision asked for, both kept:
+
+- The zero value stays zero in the parsed config, so "not configured"
+  stays distinguishable from "configured to the default", and resolution
+  happens through accessors: `RetentionTier.EffectiveMedium`,
+  `StorageMedium.EffectiveStorageClass`,
+  `StorageMedium.EffectiveUploadVerification`. Absent means the local
+  backup root. Nothing is written back into the struct, because a default
+  Validate resolves in place is a default the next settings save freezes
+  into the operator's own file (#294).
+- Absent is the ONLY spelling of local. A tier writing `medium: local` is
+  refused, and `local` is reserved as a medium id too. That is what makes
+  FR-35's round-trip rule structural: with local unspellable, the only
+  way a `medium:` key reaches a config file is an operator opting into a
+  real destination, so no settings form can inject one into a file that
+  never configured any. The same `omitempty` treatment `tiers` already
+  carries covers the empty-submission case.
 
 ## Decision: the catalog will own location, and does not yet
 
