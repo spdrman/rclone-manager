@@ -33,10 +33,10 @@ func retentionTestBackupSet(t *testing.T, localDir string) config.BackupSet {
 // through this file's own testConfig, which hardcodes a full daily/weekly/
 // monthly policy) so each test controls exactly which GFS tiers are live.
 func retentionTestConfig(bs config.BackupSet, ret config.Retention) *config.Config {
-	return &config.Config{
+	return resolveTestRetention(&config.Config{
 		Sources:   []config.Source{{Name: bs.ID.Source, BackupSets: []config.BackupSet{bs}}},
 		Retention: ret,
-	}
+	})
 }
 
 // retentionTodayOnlyChain mirrors internal/retention's own
@@ -815,10 +815,10 @@ func TestApplyRetentionPlan_SuccessInvalidatesThisSetsOtherPlans(t *testing.T) {
 	seedCompleteArtifact(t, ctx, journal, first, "a.dump", discoveredAt, "payload-a")
 	seedCompleteArtifact(t, ctx, journal, otherSet, "b.dump", discoveredAt, "payload-b")
 
-	cfg := &config.Config{
+	cfg := resolveTestRetention(&config.Config{
 		Sources:   []config.Source{{Name: "production", BackupSets: []config.BackupSet{first, otherSet}}},
 		Retention: retentionTodayOnlyChain(),
-	}
+	})
 	svc := New(cfg, journal, nil, nil)
 
 	superseded, err := svc.PreviewRetention(ctx, first.ID.Source, first.ID.Set)

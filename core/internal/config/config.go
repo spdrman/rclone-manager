@@ -392,6 +392,66 @@ type BackupSet struct {
 	// twice.
 	ReadOnlyConfig *bool `yaml:"read_only,omitempty"`
 
+	// RetentionConfig is issue #333's per-set override of the top-level
+	// Retention policy: "retain THIS set on this chain, whatever the rest
+	// of the deployment does". It is a pointer for the same reason
+	// ReadOnlyConfig is, and the reason is sharper here: Retention's zero
+	// value is not a policy at all, so a plain struct could never tell an
+	// operator who wrote no retention block apart from one who wrote an
+	// empty one, and validateRetention would resolve the second into the
+	// documented 7/3/12 default chain rather than into inheritance. Nil
+	// means inherit; non-nil means this set decides for itself.
+	//
+	// The override is whole-policy, never a field-by-field merge with the
+	// global one. Merging would produce a chain nobody wrote and nobody
+	// could predict from reading either half, which is the same reasoning
+	// validateRetention already applies when it refuses a config that sets
+	// both the tiers list and the legacy scalars.
+	//
+	// An override has to name a WHOLE chain: a tiers list, or all three
+	// of daily_days, weekly_months and monthly_months. Naming two of the
+	// three would resolve the third to the product default rather than to
+	// the deployment's policy, which is how a set silently ends up
+	// retaining less than the operator who wrote the deployment's policy
+	// believes. resolveBackupSetRetention's doc has the whole rule,
+	// including what an omitted timezone inherits and why.
+	//
+	// Like ReadOnlyConfig, this field is never read directly outside
+	// Validate. Every other consumer reads the resolved Retention field
+	// below.
+	//
+	// Writing one is a one-way door for a deployment that might roll back:
+	// Load's KnownFields(true) makes any key it does not know a parse
+	// error, so a config file carrying a set-level retention block cannot
+	// be read at all by a build from before this field existed. The same
+	// is true of every key this schema has ever gained, which is why
+	// nothing here is emitted unless it was written (omitempty), but this
+	// one is worth saying out loud because retention is the surface an
+	// operator is most likely to reach for during an incident, which is
+	// also when a rollback is most likely.
+	RetentionConfig *Retention `yaml:"retention,omitempty"`
+
+	// Retention is the fully-resolved policy this backup set is actually
+	// retained under, filled in by Validate from RetentionConfig when it
+	// is set and from the Config's own top-level Retention otherwise, on
+	// the same before/after-Validate discipline ID and ReadOnly follow. An
+	// unvalidated BackupSet reads the zero Retention here regardless of
+	// what YAML said.
+	//
+	// This is a resolved copy rather than a pointer to the global policy
+	// on purpose: a later edit to the global Retention must not
+	// retroactively change what an already-resolved set was retained
+	// under without a Validate pass to make it so.
+	//
+	// The rule that falls out of that, and the one thing a caller holding
+	// a *Config has to remember: any mutation of the top-level Retention
+	// has to be followed by Validate (or ResolveBackupSetRetention), or
+	// every set goes on deciding under the policy that was in force when
+	// it was last resolved. cmd/backup-manager's retention override flags
+	// are the live instance of this, and were a silent no-op until they
+	// re-resolved.
+	Retention Retention `yaml:"-"`
+
 	// ReadOnly is the fully-resolved answer to "may this backup set's
 	// remote source ever be deleted", filled in by Validate from
 	// ReadOnlyConfig (when set) or the parent Source's ReadOnly default
@@ -957,6 +1017,36 @@ const (
 // anything that comes later.
 func DefaultRetentionTiers() []RetentionTier {
 	return DefaultTierChain(DefaultDailyDays, DefaultWeeklyMonths, DefaultMonthlyMonths)
+}
+
+// RetentionIsOverride reports whether this backup set declares its own
+// retention policy rather than inheriting the deployment's (issue #333).
+//
+// It reads the raw RetentionConfig rather than comparing the resolved
+// Retention against the global one, because those are different
+// questions: a set may legitimately declare a chain identical to the
+// global policy, and "the operator wrote this here" is what a preview
+// needs to report, not "these two happen to match today".
+func (b BackupSet) RetentionIsOverride() bool {
+	return b.RetentionConfig != nil
+}
+
+// clone returns a Retention that shares no mutable state with the
+// receiver, so resolving inheritance by assignment cannot leave a set's
+// resolved chain aliased to the global policy's backing array. Assigning
+// the struct alone would copy the slice header and leave both pointing at
+// the same tiers, where an edit through either would be visible through
+// the other.
+func (r Retention) clone() Retention {
+	out := r
+	if r.Tiers != nil {
+		out.Tiers = append([]RetentionTier(nil), r.Tiers...)
+	}
+	if r.ProtectLastKnownGood != nil {
+		v := *r.ProtectLastKnownGood
+		out.ProtectLastKnownGood = &v
+	}
+	return out
 }
 
 // EffectiveTiers returns the tier chain this policy actually decides

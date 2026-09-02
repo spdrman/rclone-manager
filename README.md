@@ -714,6 +714,63 @@ This package defers to whatever config supplies rather than hardcoding the EPIC'
 so the honest current default is UTC; set `retention.timezone` explicitly if you want
 something else.
 
+### One backup set on its own retention policy
+
+`retention:` at the top level is the deployment's policy and every backup set is retained
+under it. A set that needs a different one writes its own `retention:` block, at the same
+level as `remote_path` and `include`:
+
+```yaml
+retention:
+  timezone: America/Vancouver
+  daily_days: 90
+  weekly_months: 24
+  monthly_months: 60
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        # no retention block: retained under the deployment's policy above
+        ...
+      - id: scratch-analytics
+        retention:
+          daily_days: 3
+          weekly_months: 1
+          monthly_months: 1
+        ...
+```
+
+**A set-level block replaces the deployment's whole chain.** Writing two of the three
+scalars is refused, not merged: `daily_days: 120` on its own would resolve weekly and
+monthly to the product defaults (3 and 12) rather than to the 24 and 60 three lines up the
+file, which is a set retaining four years less than the operator who wrote the deployment's
+policy believes. So a set-level block names either a `tiers:` list or all three scalars, and
+`backup-manager check` says which one is missing if it does not.
+
+**Everything that is not the chain is inherited.** `timezone`, `week_starts_on` and
+`protect_last_known_good` come from the deployment's resolved policy when the set-level
+block leaves them out, because they decide how *any* chain is reckoned rather than what the
+chain says. That is why the example above keeps `America/Vancouver` without repeating it: a
+set falling back to UTC inside a deployment that deliberately set something else would
+silently move which civil day a restore point belongs to.
+
+**To go back to inheriting, remove the key.** A set inherits when it has no `retention:`
+key at all, and equally when it has an explicitly null one (`retention:` with nothing after
+it, `retention: null`, `retention: ~`). An empty block (`retention: {}`) is refused rather
+than read as either, because "wrote nothing" and "wrote an empty policy" should not resolve
+to the same thing.
+
+`backup-manager retention` marks a set that decides for itself and names the chain it
+decided with; a set with no marker inherited the deployment's. The
+`backup-manager retention` override flags (`-tier`, `-daily-days` and the rest) override
+the *deployment's* policy for that one invocation, so they move every inheriting set and
+leave a set that declares its own alone.
+
+One rollback note: unknown keys are a parse error, so a config file carrying a set-level
+`retention:` block cannot be read by a build from before this feature. Writing one is a
+one-way door for a deployment that might need to go back.
+
 ### Which timestamp puts a backup in a bucket
 
 Two of them, and `KEEP` is the union. Each tier runs its selection twice over the same

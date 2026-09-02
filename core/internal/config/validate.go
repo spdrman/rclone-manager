@@ -66,6 +66,24 @@ func (c *Config) Validate() error {
 	}
 
 	v.validateRetention(&c.Retention)
+
+	// --- Phase 2: inheritance ---
+	//
+	// Everything above is phase 1: each entity validated and defaulted in
+	// isolation, in the order it appears in the file. What follows needs
+	// phase 1 to have finished on the thing being inherited FROM, so it
+	// cannot be folded into the loop above however much it looks like it
+	// belongs there.
+	//
+	// Which phase a field belongs to is decided by where its parent is.
+	// BackupSet.ReadOnly inherits from its own Source, which
+	// validateBackupSet is already holding, so it resolves inline in phase
+	// 1. BackupSet.Retention inherits from the top-level policy, which is
+	// only resolved on the line above this comment, so a set resolved
+	// during phase 1 would inherit the raw policy an operator typed rather
+	// than the defaulted one. It gets its own pass here.
+	c.resolveBackupSetRetentions(v)
+
 	v.validateAlerts(&c.Alerts)
 	v.validateCapacity(&c.Capacity)
 	v.validateKeyEncryption(&c.KeyEncryption)
@@ -724,6 +742,154 @@ func ValidateRetention(r *Retention) error {
 	v := &validator{}
 	v.validateRetention(r)
 	return v.err()
+}
+
+// ResolveBackupSetRetention runs Validate's retention-inheritance phase on
+// its own: every backup set's resolved Retention, from its own override
+// when it declares one and from c.Retention otherwise (issue #333).
+//
+// Validate already does this, and a config that came from
+// LoadAndValidate needs nothing else. This exists for a caller that builds
+// a Config by hand rather than loading one, which the fixtures in
+// internal/app and core/service both do: a hand-built set is left at the
+// zero Retention, and the zero Retention is not an unconfigured policy, it
+// is a chain that keeps nothing. Before this was exported both of those
+// packages carried their own loop claiming to resolve "the way Validate
+// does" and neither did, which is how a whole test layer ended up sharing
+// one tier backing array with the global policy.
+//
+// It assumes c.Retention is already resolved: it is phase 2 of Validate,
+// and phase 2 inherits from phase 1's output. Calling it on a raw policy
+// hands every inheriting set that raw policy.
+func (c *Config) ResolveBackupSetRetention() error {
+	v := &validator{}
+	c.resolveBackupSetRetentions(v)
+	return v.err()
+}
+
+// resolveBackupSetRetentions is the loop both entry points share.
+func (c *Config) resolveBackupSetRetentions(v *validator) {
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			path := fmt.Sprintf("sources[%d].backup_sets[%d]", i, j)
+			v.resolveBackupSetRetention(path, bs, c.Retention)
+		}
+	}
+}
+
+// resolveBackupSetRetention fills in one backup set's resolved Retention
+// (issue #333), from its own override when it declares one and from the
+// already-resolved global policy otherwise.
+//
+// # An override says the whole chain, and inherits everything else
+//
+// validateRetention reads a zero scalar as "fill in the documented
+// default" and an empty timezone as UTC. That rule is right at the top
+// level, where the alternative is no policy at all, and wrong one level
+// down, where there IS another policy: the deployment's, sitting in the
+// same file the override was written into. Left alone it
+// resolves a set writing `retention: {daily_days: 120}` inside a
+// deployment retaining 90/24/60 to 120/3/12, collapsing weekly from 24
+// months to 3 and monthly from 60 to 12, and reporting nothing.
+//
+// So the chain has to be written out in full: a tiers list, or all three
+// scalars. Half a chain is refused, on exactly the reasoning
+// validateRetention already applies to a policy that writes both
+// spellings at once, and for the same reason the PR that added this field
+// said the override is whole-policy rather than a field-by-field merge.
+// An empty `retention: {}` block falls out of that rule too, which is
+// what RetentionConfig's own doc wants: the pointer exists so "wrote no
+// retention block" and "wrote an empty one" stay distinguishable, and
+// silently resolving the second into the product defaults is that
+// confusion moved one layer down rather than removed.
+//
+// Everything that is not the chain is inherited from the resolved global
+// policy instead of being defaulted: the timezone and the week start
+// decide how ANY chain is reckoned rather than what the chain says, and
+// FR-19's protection is a deployment-wide posture. container/compose.yaml
+// already writes down what the timezone one costs when it goes wrong
+// ("the day an operator thinks a restore point belongs to and the day
+// retention assigns it to are silently different for most of the world"),
+// and an override that omits the key must not reintroduce exactly that
+// for one set inside a deployment that got it right.
+//
+// # It validates a copy
+//
+// validateRetention fills defaults in place, so running it over
+// bs.RetentionConfig would write UTC, monday and protect_last_known_good
+// into the operator's own override, which the next settings save would
+// then persist. That is invisible today only because core/service's
+// UpdateSettings happens to marshal before it validates, which makes the
+// round trip a property of one call site's statement order rather than of
+// this function. It resolves into its own copy instead.
+func (v *validator) resolveBackupSetRetention(path string, bs *BackupSet, global Retention) {
+	if bs.RetentionConfig == nil {
+		bs.Retention = global.clone()
+		return
+	}
+
+	v.validateOverrideNamesAWholeChain(path, bs.RetentionConfig)
+
+	resolved := bs.RetentionConfig.clone()
+	if resolved.Timezone == "" {
+		resolved.Timezone = global.Timezone
+	}
+	if resolved.WeekStartsOn == "" {
+		resolved.WeekStartsOn = global.WeekStartsOn
+	}
+	if resolved.ProtectLastKnownGood == nil && global.ProtectLastKnownGood != nil {
+		inherited := *global.ProtectLastKnownGood
+		resolved.ProtectLastKnownGood = &inherited
+	}
+
+	// A sub-validator rather than ValidateRetention's error, so each
+	// problem keeps its own message and its own line in the accumulated
+	// list. Wrapping the joined error instead would fold every problem
+	// with one policy into a single entry and bury the "invalid config:"
+	// header from the inner call inside the outer one's.
+	sub := &validator{}
+	sub.validateRetention(&resolved)
+	for _, p := range sub.problems {
+		v.addf("%s.%v", path, p)
+	}
+
+	bs.Retention = resolved
+}
+
+// validateOverrideNamesAWholeChain refuses a per-set retention block that
+// describes only part of a chain. See resolveBackupSetRetention's doc for
+// why half a chain cannot be resolved honestly; this function is only the
+// bookkeeping that says which halves are missing.
+//
+// A tiers list is whole by construction: it is the chain. The three
+// scalars are sugar for one specific three-tier chain, so all three have
+// to be present for that sugar to spell a whole one. Writing both
+// spellings is validateRetention's own refusal and is left to it.
+func (v *validator) validateOverrideNamesAWholeChain(path string, r *Retention) {
+	if len(r.Tiers) > 0 {
+		return
+	}
+
+	var missing []string
+	if r.DailyDays == 0 {
+		missing = append(missing, "daily_days")
+	}
+	if r.WeeklyMonths == 0 {
+		missing = append(missing, "weekly_months")
+	}
+	if r.MonthlyMonths == 0 {
+		missing = append(missing, "monthly_months")
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	v.addf("%s.retention: a backup set's own policy replaces the deployment's whole chain, so it has to name a whole one: "+
+		"either a tiers list, or all three of daily_days, weekly_months and monthly_months (missing %s). "+
+		"An unnamed tier here would fall back to the product default rather than to the deployment's policy, which is how a set ends up retaining less than the operator who wrote the deployment's policy believes. "+
+		"Remove the retention key from this backup set entirely to inherit the deployment's policy instead",
+		path, strings.Join(missing, ", "))
 }
 
 func (v *validator) validateRetention(r *Retention) {

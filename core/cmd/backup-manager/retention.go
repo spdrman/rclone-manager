@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
 // cmdRetention is `backup-manager retention` / `backup-manager retention
@@ -34,6 +37,11 @@ import (
 // same way --dry-run already only ever affects this one invocation. An
 // operator who wants a policy change to survive past one preview still
 // edits the YAML file, exactly as before this issue.
+//
+// These flags override the deployment's policy. A backup set that
+// declares its own (issue #333) is not moved by them: see the
+// re-resolution step below for why that is a decision rather than an
+// accident.
 func cmdRetention(args []string) int {
 	fs, cfgPath := newFlagSet("retention")
 	dryRun := fs.Bool("dry-run", false, "preview only; see this command's note below about the other mode")
@@ -64,13 +72,53 @@ func cmdRetention(args []string) int {
 		return fail(fmt.Errorf("retention flags: %w", err))
 	}
 
+	// Folding onto cfg.Retention is only half the step, and on its own it
+	// is a silent no-op: since issue #333 every decision reads a backup
+	// set's own resolved bs.Retention, which Validate computed from the
+	// pre-override global policy, so nothing downstream would ever see
+	// these flags. Re-running Validate re-resolves each set from the
+	// folded policy. It is safe to run twice by its own doc (every default
+	// it fills in is only applied to a field still at its zero value), and
+	// TestPerSetRetention_OverrideSurvivesRepeatedValidate pins that for
+	// exactly this field.
+	//
+	// A set that declares its own retention block keeps it, because
+	// resolution reads that block again on this pass. That is the intended
+	// answer, not a side effect: these flags override the DEPLOYMENT's
+	// policy for one invocation, and an operator who wrote a retention
+	// block against one specific backup set wrote it about that set, not
+	// about this command line. An operator who wants to preview a
+	// different chain for such a set edits the set.
+	if err := cfg.Validate(); err != nil {
+		return fail(fmt.Errorf("retention flags: %w", err))
+	}
+
 	reports, err := svc.RetentionPreviewAll(ctx)
 	if err != nil {
 		return fail(err)
 	}
 
 	for _, r := range reports {
-		fmt.Printf("%s:\n", r.Set)
+		// Issue #333: name the policy only when the set overrides the
+		// deployment's, and name what that policy actually IS: "this
+		// set's own policy" tells an operator where to go and edit, and
+		// the chain tells them what they will find when they get there.
+		//
+		// An inheriting set prints exactly what it printed before this
+		// field existed, which matters because this output is pinned by
+		// the black-box contract suite in spdrman/rclone-manager-tests
+		// (suites/cli/cases/retention/), and inheriting is what every case
+		// there does. That asymmetry is a real limitation, not a design:
+		// absence of a marker is the only signal for the common case, and
+		// an inheriting set's chain is not named at all. Naming it on both
+		// branches means moving those pinned cases in lockstep with this
+		// change, which is a cross-repo move worth making on its own
+		// rather than folded into this one.
+		if r.RetentionIsOverride {
+			fmt.Printf("%s: (retained under this set's own policy: %s)\n", r.Set, retentionPolicySummary(r.Retention))
+		} else {
+			fmt.Printf("%s:\n", r.Set)
+		}
 		if len(r.Verdicts) == 0 {
 			fmt.Println("  (no managed, completed backups yet)")
 			continue
@@ -110,4 +158,26 @@ func cmdRetention(args []string) int {
 		fmt.Println("\nnote: local deletion (FR-20) is not implemented anywhere in this codebase yet (issue #21 is open); this is a preview only, identical to --dry-run.")
 	}
 	return 0
+}
+
+// retentionPolicySummary renders a resolved policy as one line: the chain
+// it decides with, and the calendar it reckons that chain in.
+//
+// Tier names are spelled the way the config file spells them, lower case,
+// rather than the way the per-artifact tiers= line spells them (upper
+// case, because those strings are API surface that reaches a client). This line is not a verdict, it is a pointer at the block an
+// operator would go and edit, so it should read like that block.
+//
+// The timezone is on this line rather than left implicit because it is
+// the field an override is most likely to get wrong: omitting it used to
+// resolve a set to UTC inside a deployment that had deliberately set
+// something else, which silently moves which civil day a restore point
+// belongs to.
+func retentionPolicySummary(r config.Retention) string {
+	tiers := r.EffectiveTiers()
+	parts := make([]string, 0, len(tiers))
+	for _, t := range tiers {
+		parts = append(parts, fmt.Sprintf("%s/%d", t.Name, t.Keep))
+	}
+	return fmt.Sprintf("tiers=[%s] timezone=%s", strings.Join(parts, " "), r.Timezone)
 }

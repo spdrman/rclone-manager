@@ -166,6 +166,15 @@ func resolveRetentionFlags(rf *retentionFlags) retentionOverrides {
 // true: applyRetentionOverrides with a zero-valued o is a no-op on an
 // already-resolved r, by construction, not by a special case here.
 //
+// Folding r is only half the step for a caller holding a whole
+// *config.Config. Since issue #333 every retention decision reads a backup
+// set's own resolved config.BackupSet.Retention, which config.Validate
+// computed from the global policy as it stood at load, so a caller that
+// folds onto cfg.Retention and stops has changed nothing any decision
+// reads. cmdRetention re-runs cfg.Validate after this returns; see its own
+// comment for why that is the whole re-resolution step and what it means
+// for a set that declares its own policy.
+//
 // Folding is all-or-nothing: a refused override leaves *r exactly as the
 // caller passed it. That matters most for the two mutual-exclusion
 // refusals below, which used to return with the scalars already written,
