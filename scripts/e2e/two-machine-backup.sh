@@ -249,7 +249,7 @@ teardown() {
   echo ""
   echo "==> two-machine: tearing down"
   for c in "${created_containers[@]:-}"; do
-    [ -n "$c" ] && docker rm -f "$c" >/dev/null 2>&1 || true
+    [ -n "$c" ] && docker rm -fv "$c" >/dev/null 2>&1 || true
   done
   # After the containers, never before: a network with an endpoint on it
   # cannot be removed, and a "network is in use" error at teardown time is
@@ -274,6 +274,20 @@ trap 'teardown $?' EXIT
 trap 'teardown 130; exit 130' INT
 trap 'teardown 143; exit 143' TERM
 
+# -v on every removal, and it is not decoration. docker:28-dind declares
+# VOLUME /var/lib/docker, so every manager machine this script starts
+# creates an anonymous host volume holding that machine's whole inner
+# Docker state, including the image under test after it is loaded in.
+# `docker rm -f` leaves that volume behind: measured directly, starting one
+# manager machine takes the host from 44 volumes to 45 and `docker rm -f`
+# leaves it at 45, while `docker rm -fv` returns it to 44. Four cases a run
+# across several lanes is how a shared Docker disk fills, and it fills
+# invisibly, because nothing references the leftovers. This script found
+# that out the honest way: the installer's own preflight refused a case
+# with "the filesystem holding /opt/rm/deploy/backups has 912 MiB free,
+# and this refuses below 2048 MiB", which was the correct verdict on a
+# Docker VM at 98%.
+#
 # remove_run_dir deletes what this run wrote, by name, then removes the
 # directories. Deliberately not a recursive delete: the files are a known,
 # short list, and `rm -rf` on a path built from variables is how a script
@@ -776,7 +790,7 @@ run_case() {
 release_case() {
   local net="$1"; shift
   for c in "$@"; do
-    docker rm -f "$c" >/dev/null 2>&1 || true
+    docker rm -fv "$c" >/dev/null 2>&1 || true
   done
   # After the containers, never before: a network with an endpoint on it
   # cannot be removed.

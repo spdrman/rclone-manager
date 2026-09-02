@@ -877,6 +877,39 @@ else
   fail "I6 exit 3 and exit 1 from the proof are told apart, got $three_status and $status"
 fi
 
+# I7: every container the proof creates is removed WITH its volumes.
+#
+# Not a stub test, because the property is in the real script rather than
+# in the gate's handling of it. docker:28-dind declares
+# VOLUME /var/lib/docker, so each manager machine gets an anonymous host
+# volume carrying that machine's whole inner Docker state, and
+# `docker rm -f` leaves it behind. Nothing references a leftover, so
+# nothing complains, and the shared Docker disk fills silently until an
+# install refuses on free space. That is not hypothetical: it is how a
+# full run failed, with the installer's own preflight reporting 912 MiB
+# free against its 2048 MiB floor on a Docker VM at 98%.
+#
+# Asserted on the source rather than by running a case, because running
+# one costs a container image build and this has to hold for a removal
+# site somebody adds later, not only for the two that exist today.
+proof_script="$(dirname "$0")/../e2e/two-machine-backup.sh"
+if [ ! -f "$proof_script" ]; then
+  fail "I7 the two-machine proof script is where this expects it"
+else
+  # Comment lines are excluded, and the prose above the teardown quotes
+  # `docker rm -f` on purpose to explain why it is wrong; a check that
+  # cannot tell a command from its own explanation is not a check.
+  bare_removals="$(grep -vE '^[[:space:]]*#' "$proof_script" | grep -nE 'docker rm ' | grep -v -- '-fv' || true)"
+  if [ -z "$bare_removals" ]; then
+    pass "I7 every docker rm in the proof removes the container's volumes too"
+  else
+    fail "I7 every docker rm in the proof removes the container's volumes too, but these do not:
+$bare_removals"
+  fi
+  assert_contains "I7 the proof says why -v is load-bearing" \
+    'VOLUME /var/lib/docker' "$(cat "$proof_script")"
+fi
+
 # ------------------------------------------------------------------ result
 
 echo
