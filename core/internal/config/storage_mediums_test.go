@@ -331,17 +331,38 @@ func TestValidate_MediumCredentialSources(t *testing.T) {
 // that quoted an env var's name is one careless edit away from quoting a
 // value.
 func TestValidate_CredentialProblemsNeverEchoTheValue(t *testing.T) {
-	const canary = "wJalrXUtnFEMIK7MDENGbPxRfiCYCANARYKEY"
-	c := mediumsConfig()
-	// Both of the two sources a careless message could quote, set to the
-	// canary at once so this fires whichever one leaked.
-	c.StorageMediums[0].Credentials = MediumCredentials{File: "/var/lib/" + canary, Env: canary}
-	err := c.Validate()
-	if err == nil {
-		t.Fatal("precondition failed: two credential sources must be refused, or this test asserts nothing")
-	}
-	if strings.Contains(err.Error(), canary) {
-		t.Errorf("the refusal echoed the credential-bearing value back:\n%s", err)
+	const canary = "canary-value-no-message-may-repeat"
+
+	for _, tc := range []struct {
+		name  string
+		creds MediumCredentials
+	}{
+		{
+			// Both sources a careless message could quote, set at once,
+			// so this fires whichever one leaked.
+			"two sources, both carrying the canary",
+			MediumCredentials{File: "/var/lib/" + canary, Env: canary},
+		},
+		{
+			// The argv case. Validate legitimately quotes Command[0], an
+			// executable path, exactly as validateKey does; it must not
+			// widen that to the whole argv, whose later elements are the
+			// reference a secrets manager resolves.
+			"a refused argv carrying the canary as an argument",
+			MediumCredentials{Command: []string{"op", "read", "op://infra/" + canary}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := mediumsConfig()
+			c.StorageMediums[0].Credentials = tc.creds
+			err := c.Validate()
+			if err == nil {
+				t.Fatal("precondition failed: these credentials must be refused, or this test asserts nothing")
+			}
+			if strings.Contains(err.Error(), canary) {
+				t.Errorf("the refusal echoed the credential-bearing value back:\n%s", err)
+			}
+		})
 	}
 }
 
