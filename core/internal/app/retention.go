@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 )
@@ -25,6 +26,14 @@ type RetentionSetReport struct {
 	// override and a global policy that happen to agree produce identical
 	// output.
 	RetentionIsOverride bool
+
+	// Retention is the fully-resolved policy these verdicts were decided
+	// under, whichever of the two it came from. RetentionIsOverride says
+	// WHETHER the set decides for itself; this says WHAT it decided with,
+	// which is the half an operator reading "why is this being deleted"
+	// actually needs. Carrying the policy rather than a rendered sentence
+	// keeps the rendering with the caller that has to fit it on a line.
+	Retention config.Retention
 }
 
 // RetentionPreview computes set's current KEEP/DELETE classification: the
@@ -47,6 +56,20 @@ type RetentionSetReport struct {
 // today (see that command's own note on the CLI still not calling
 // PruneApply for a real, non-dry-run invocation, a separate, narrower gap
 // than this doc comment's own past staleness was).
+// # A set the journal remembers but config no longer names
+//
+// Since issue #333 this method looks the set's configuration up, because
+// the policy it decides under lives on the set. That means it now refuses
+// a set id the journal still carries but config no longer names, where it
+// used to produce a report from the global policy. That is deliberate,
+// and it is the same answer pruneInputsFor already gives for the same
+// question: there is no longer a single deployment-wide policy such a set
+// could be said to be retained under, so reporting one would be inventing
+// the answer rather than finding it. Neither of this method's own callers
+// can reach it (RetentionPreviewAll and the processing cycle both iterate
+// configured sets), so nothing that worked before stops working; a caller
+// holding an id off a journal row gets a *NotFoundError instead of a
+// plausible report.
 func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (RetentionSetReport, error) {
 	records, err := s.Journal.ListByBackupSet(ctx, set)
 	if err != nil {
@@ -70,6 +93,7 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 		Verdicts:            verdicts,
 		LastKnownGood:       lkg,
 		RetentionIsOverride: bs.RetentionIsOverride(),
+		Retention:           bs.Retention,
 	}, nil
 }
 
