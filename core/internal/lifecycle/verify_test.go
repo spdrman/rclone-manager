@@ -748,31 +748,45 @@ const hookTimeoutBudget = 2 * time.Second
 // finished" cannot be true by accident on a slow machine.
 const hookNeverAnswers = 30 * time.Second
 
-// hookReturnBudget bounds how long the call under test may take, and it
-// is the assertion that actually separates a killed hook from an
-// abandoned one. That is not obvious and I got it wrong first time, so it
-// is worth writing down.
+// hookReapBackstop mirrors the c.WaitDelay both implementations set
+// (restorecheck.go and verify.go, "c.WaitDelay = 5 * time.Second"). It is
+// Go's own backstop, not this project's: os/exec kills the child that long
+// after the context is done regardless of what c.Cancel did. Nothing reads
+// it from the production code, so if that value ever changes this constant
+// has to change with it, which is what TestHookTimeoutBudgets_CanStillFail
+// below is for.
+const hookReapBackstop = 5 * time.Second
+
+// hookReturnBudget bounds how long the call under test may take, and it is
+// the only assertion in either of these two tests that can separate a hook
+// that was killed from one that was merely abandoned. That is not obvious,
+// and it is worth writing down because a reasonable-looking number here
+// makes both tests vacuous.
 //
 // The pid read below looks like the proof that the process was killed. It
-// is not. Both implementations set c.WaitDelay = 5s, so os/exec kills the
-// process five seconds after the context is done whatever c.Cancel did or
-// did not do. By the time any of the checks below run, the process is
-// gone either way, and every one of them passes for a build that never
-// killed anything. I checked rather than reasoned: with the SIGKILL taken
-// out of c.Cancel in both restorecheck.go and verify.go, leaving WaitDelay
-// to do the reaping, both tests passed in 7.01s against a 10s budget.
+// is not. Wait does not return until hookReapBackstop has done its own
+// killing, so by the time any check runs the process really is gone and
+// the marker really was never written, whether or not c.Cancel killed
+// anything. Those assertions pass either way.
 //
-// What separates the two is the elapsed time, and the two regimes are far
-// apart. A hook that is killed returns at about hookTimeoutBudget, which
-// is 2s. A hook that is merely abandoned returns at hookTimeoutBudget plus
-// WaitDelay, which is 7s. So the bound goes between them, at 5s: three
-// seconds of slack above the working case, so a descheduled goroutine on a
-// loaded machine does not turn a correct kill into a failure, and two
-// seconds below the broken one, so the broken one cannot slip under it.
-// Widening this past 7s makes both tests vacuous. Found by the author of
-// #382, who reached these two tests from the other direction (issue #371,
-// a cold exec on macOS costing more than the old 200ms budget).
-const hookReturnBudget = 5 * time.Second
+// The elapsed time is what tells them apart, and the two regimes are far
+// apart and both insensitive to load, because each is set by a deadline
+// rather than by the scheduler. A killed hook returns at about
+// hookTimeoutBudget. An abandoned one returns at hookTimeoutBudget plus
+// hookReapBackstop. So the bound goes strictly between them, and it is
+// derived from the budget rather than written out, so the two cannot drift
+// apart: three seconds above a correct run, two below the backstop.
+//
+// I checked both directions rather than reasoning about them. With the
+// SIGKILL taken out of c.Cancel in both implementations and nothing else
+// changed, both tests return in 7.00s: at the old 10s budget they passed,
+// and at this one they fail on this line. With the real implementation
+// they return in 2.00s.
+//
+// Found by the author of #382, who reached these two tests from the other
+// direction (issue #371, a cold exec on macOS costing more than the old
+// 200ms budget) and checked it against this branch.
+const hookReturnBudget = hookTimeoutBudget + 3*time.Second
 
 // pidFileWait is how long timedOutHookPID waits for the killed script's
 // pid to become readable. It starts after the call under test has already
@@ -1078,5 +1092,27 @@ func TestVerify_NoValidatorIDAndNoCommand_StillVerifies(t *testing.T) {
 	}
 	if out.Record.State != string(Verified) {
 		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+}
+
+// TestHookTimeoutBudgets_CanStillFail is a guard on the constants above
+// rather than on any behaviour, because the way these two tests stop
+// working is not a broken assertion, it is a budget quietly widened past
+// the point where it can fail. At hookTimeoutBudget + hookReapBackstop or
+// beyond, a hook that c.Cancel never killed returns inside the budget and
+// every other assertion in both tests passes, so both go green against
+// exactly the defect they are named for. This is the check that says so
+// out loud instead of leaving it to whoever next finds one of them flaky.
+func TestHookTimeoutBudgets_CanStillFail(t *testing.T) {
+	abandoned := hookTimeoutBudget + hookReapBackstop
+	if hookReturnBudget >= abandoned {
+		t.Fatalf("hookReturnBudget is %s, but a hook that was abandoned rather than killed returns at %s (hookTimeoutBudget %s + hookReapBackstop %s). At this budget both timeout tests pass against an implementation whose c.Cancel kills nothing, which is the one thing they exist to prove. Lower it back under %s.",
+			hookReturnBudget, abandoned, hookTimeoutBudget, hookReapBackstop, abandoned)
+	}
+	if hookReturnBudget <= hookTimeoutBudget {
+		t.Fatalf("hookReturnBudget is %s, which is not above hookTimeoutBudget %s: a correct kill returns at about the budget, so this would fail on every run", hookReturnBudget, hookTimeoutBudget)
+	}
+	if hookNeverAnswers <= abandoned {
+		t.Fatalf("hookNeverAnswers is %s, which is not clear of %s: the script has to still be sleeping when both the kill and the backstop would have fired, or \"returned before the sleep finished\" is true by accident", hookNeverAnswers, abandoned)
 	}
 }
