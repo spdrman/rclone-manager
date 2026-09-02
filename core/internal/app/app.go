@@ -335,8 +335,16 @@ func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 		KeyFile:    r.Key.File,
 		KeyEnv:     r.Key.Env,
 		KeyCommand: r.Key.Command,
-		KnownHosts: r.KnownHosts,
-		Root:       bs.RemotePath,
+		// The passphrase's own three sources (#269) travel the same way,
+		// for the same reason: config.Validate has already refused
+		// anything but at most one of them, and forwarding all three here
+		// is what makes key.passphrase.env and key.passphrase.command work
+		// in a real run rather than only in the adapter's own tests.
+		PassphraseFile:    r.Key.Passphrase.File,
+		PassphraseEnv:     r.Key.Passphrase.Env,
+		PassphraseCommand: r.Key.Passphrase.Command,
+		KnownHosts:        r.KnownHosts,
+		Root:              bs.RemotePath,
 	}
 }
 

@@ -930,6 +930,11 @@
             "type": "string",
             "description": "Private key material. Write-only: it is never echoed back by any operation in this contract.",
             "writeOnly": true
+          },
+          "passphrase": {
+            "type": "string",
+            "description": "The passphrase that decrypts private_key_pem, when it is passphrase-protected. Optional: omit it, or send an empty string, for a key that is not encrypted, which is every request this field predates. Checked against private_key_pem at import time, so a wrong passphrase is refused here rather than discovered the first time a cycle tries to connect. Write-only, for the same reason private_key_pem is.",
+            "writeOnly": true
           }
         },
         "required": [

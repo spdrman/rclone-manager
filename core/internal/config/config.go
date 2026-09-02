@@ -442,6 +442,21 @@ type Key struct {
 	// adopts without this project taking a dependency on any of their SDKs
 	// or picking a winner among them.
 	Command []string `yaml:"command"`
+
+	// Passphrase names exactly one way to obtain the passphrase that
+	// decrypts File, Env or Command when the key material they resolve to
+	// is itself passphrase-protected (#269). It is optional: the zero
+	// value means "this key is not passphrase-protected", which is every
+	// config.yaml written before this field existed, so an unencrypted
+	// key.file continues to work with nothing here to configure.
+	//
+	// It offers the same three resolvers (File, Env, Command) that File,
+	// Env and Command above already do, for the same reason those exist: a
+	// bare passphrase field an operator could type directly in YAML would
+	// be one more credential sitting in the clear next to everything else
+	// in this file. See the Passphrase type's own doc for why it is a
+	// separate type rather than a field of type Key.
+	Passphrase Passphrase `yaml:"passphrase"`
 }
 
 // isZero reports whether none of Key's three sources are set, so callers
@@ -449,6 +464,43 @@ type Key struct {
 // empty value in one of its fields.
 func (k Key) isZero() bool {
 	return k.File == "" && k.Env == "" && len(k.Command) == 0
+}
+
+// Passphrase names exactly one way to obtain the passphrase that decrypts a
+// passphrase-protected Key (#269): File, Env or Command, mirroring Key's
+// own three fields both in name and in meaning. It is a separate type from
+// Key, rather than Key growing a field of Key's own type, because Go
+// refuses a struct that directly contains itself; the two are otherwise
+// identical in shape on purpose, "the same three resolvers" the issue
+// itself asked for as the smallest change that keeps Key's existing shape.
+//
+// Exactly one of File, Env or Command may be set when any is; Validate
+// enforces that, mirroring Key's own rule. Unlike Key.File, Passphrase.File
+// IS read by this program: rclone's sftp backend has no option of its own
+// for "read the passphrase from this file", only key_file_pass, which
+// takes the passphrase text itself (internal/transport/rclone/ssh.go). So
+// there is no way to keep a passphrase out of this process's memory the
+// way Key.File keeps the key material out, and this type does not pretend
+// otherwise.
+type Passphrase struct {
+	// File points at a file holding the passphrase, read directly by this
+	// process (see the type doc above for why that differs from Key.File).
+	File string `yaml:"file"`
+
+	// Env names an environment variable this process reads the passphrase
+	// from at connection time.
+	Env string `yaml:"env"`
+
+	// Command is an argv array, run directly and never through a shell,
+	// exactly like Key.Command; its stdout is treated as the passphrase.
+	Command []string `yaml:"command"`
+}
+
+// isZero reports whether none of Passphrase's three sources are set: "this
+// key is not passphrase-protected", the case for every config that
+// predates #269.
+func (p Passphrase) isZero() bool {
+	return p.File == "" && p.Env == "" && len(p.Command) == 0
 }
 
 // Completion selects how a backup set decides a remote artifact is finished

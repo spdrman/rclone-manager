@@ -37,6 +37,12 @@ func mustUnencryptedKeyPEM(t *testing.T) []byte {
 // (ssh-keygen -m PEM, RSA only) instead of the default new-style
 // "BEGIN OPENSSH PRIVATE KEY" container, so both of the two encrypted
 // shapes x/crypto/ssh.ParseRawPrivateKey knows about are actually covered.
+// testEncryptedKeyPassphrase is the passphrase mustEncryptedKeyPEM always
+// encrypts with, named so #269's passphrase-aware tests below can supply
+// the correct one (or a deliberately wrong one) without duplicating the
+// literal.
+const testEncryptedKeyPassphrase = "correct-horse-battery-staple"
+
 func mustEncryptedKeyPEM(t *testing.T, legacyPEM bool) []byte {
 	t.Helper()
 	if _, err := exec.LookPath("ssh-keygen"); err != nil {
@@ -44,7 +50,7 @@ func mustEncryptedKeyPEM(t *testing.T, legacyPEM bool) []byte {
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "encrypted_key")
-	args := []string{"-q", "-N", "correct-horse-battery-staple", "-C", "", "-f", path}
+	args := []string{"-q", "-N", testEncryptedKeyPassphrase, "-C", "", "-f", path}
 	if legacyPEM {
 		args = append(args, "-t", "rsa", "-b", "2048", "-m", "PEM")
 	} else {
@@ -64,7 +70,7 @@ func mustEncryptedKeyPEM(t *testing.T, legacyPEM bool) []byte {
 
 func TestValidateAndWrapKey_AcceptsUnencryptedKey(t *testing.T) {
 	pem := mustUnencryptedKeyPEM(t)
-	secret, err := validateAndWrapKey(pem)
+	secret, err := validateAndWrapKey(pem, "")
 	if err != nil {
 		t.Fatalf("validateAndWrapKey: %v", err)
 	}
@@ -90,7 +96,7 @@ func TestValidateAndWrapKey_RejectsJunk(t *testing.T) {
 		{"truncated pem", []byte("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1r\n")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			secret, err := validateAndWrapKey(tc.raw)
+			secret, err := validateAndWrapKey(tc.raw, "")
 			if err == nil {
 				t.Fatalf("junk input was accepted as a valid key")
 			}
@@ -120,7 +126,7 @@ func TestValidateAndWrapKey_RejectsEncryptedKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := mustEncryptedKeyPEM(t, tc.legacyPEM)
-			secret, err := validateAndWrapKey(raw)
+			secret, err := validateAndWrapKey(raw, "")
 			if err == nil {
 				t.Fatal("an encrypted key was accepted")
 			}
@@ -134,6 +140,69 @@ func TestValidateAndWrapKey_RejectsEncryptedKey(t *testing.T) {
 	}
 }
 
+// --- #269: validateAndWrapKey given a passphrase ---
+
+// TestValidateAndWrapKey_AcceptsEncryptedKeyWithCorrectPassphrase is #269's
+// GREEN case: the exact key TestValidateAndWrapKey_RejectsEncryptedKey
+// proves is refused with no passphrase is accepted once the correct one
+// is supplied, against both encrypted PEM shapes.
+func TestValidateAndWrapKey_AcceptsEncryptedKeyWithCorrectPassphrase(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		legacyPEM bool
+	}{
+		{"new OpenSSH format", false},
+		{"legacy PEM format", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := mustEncryptedKeyPEM(t, tc.legacyPEM)
+			secret, err := validateAndWrapKey(raw, testEncryptedKeyPassphrase)
+			if err != nil {
+				t.Fatalf("validateAndWrapKey with the correct passphrase: %v", err)
+			}
+			if secret.Reveal() != string(raw) {
+				t.Fatal("Reveal() did not round-trip the original (still encrypted) key bytes")
+			}
+		})
+	}
+}
+
+// TestValidateAndWrapKey_RejectsEncryptedKeyWithWrongPassphrase is #269's
+// "refused at configuration time, not silently accepted" requirement: a
+// wrong passphrase must fail clearly, the same way a missing one already
+// does, never be treated as though it decrypted.
+func TestValidateAndWrapKey_RejectsEncryptedKeyWithWrongPassphrase(t *testing.T) {
+	raw := mustEncryptedKeyPEM(t, false)
+	secret, err := validateAndWrapKey(raw, "definitely the wrong passphrase")
+	if err == nil {
+		t.Fatal("an encrypted key with the wrong passphrase was accepted")
+	}
+	if secret.Reveal() != "" {
+		t.Fatal("a rejected key with the wrong passphrase still produced non-empty resolved material")
+	}
+	if strings.Contains(err.Error(), "definitely the wrong passphrase") {
+		t.Fatalf("error echoed the passphrase back: %v", err)
+	}
+}
+
+// TestValidateAndWrapKey_UnencryptedKeyWithPassphraseConfiguredIsRejected
+// covers the operator-error direction: a passphrase was configured, but
+// the key it names does not need one. rclone's own
+// ParseRawPrivateKeyWithPassphrase refuses that combination outright
+// ("ssh: key is not password protected" / "ssh: not an encrypted key");
+// this proves that refusal reaches the caller as an error, not a silent
+// accept that then behaves unpredictably.
+func TestValidateAndWrapKey_UnencryptedKeyWithPassphraseConfiguredIsRejected(t *testing.T) {
+	pem := mustUnencryptedKeyPEM(t)
+	secret, err := validateAndWrapKey(pem, "a passphrase nobody asked this key to have")
+	if err == nil {
+		t.Fatal("an unencrypted key was accepted despite a passphrase being configured for it")
+	}
+	if secret.Reveal() != "" {
+		t.Fatal("a rejected combination still produced non-empty resolved material")
+	}
+}
+
 // --- resolveKeyFromEnv ---
 
 func TestResolveKeyFromEnv_Succeeds(t *testing.T) {
@@ -141,7 +210,7 @@ func TestResolveKeyFromEnv_Succeeds(t *testing.T) {
 	const name = "RCLONE_MANAGER_TEST_KEY_ENV"
 	t.Setenv(name, string(pem))
 
-	secret, err := resolveKeyFromEnv(name)
+	secret, err := resolveKeyFromEnv(name, "")
 	if err != nil {
 		t.Fatalf("resolveKeyFromEnv: %v", err)
 	}
@@ -155,7 +224,7 @@ func TestResolveKeyFromEnv_RejectsMissingVariable(t *testing.T) {
 	if _, ok := os.LookupEnv(name); ok {
 		t.Fatalf("test precondition broken: %s is actually set in this environment", name)
 	}
-	_, err := resolveKeyFromEnv(name)
+	_, err := resolveKeyFromEnv(name, "")
 	if err == nil {
 		t.Fatal("an unset environment variable was accepted")
 	}
@@ -167,12 +236,34 @@ func TestResolveKeyFromEnv_RejectsMissingVariable(t *testing.T) {
 func TestResolveKeyFromEnv_RejectsJunkContent(t *testing.T) {
 	const name = "RCLONE_MANAGER_TEST_KEY_ENV_JUNK"
 	t.Setenv(name, "<html>not a key</html>")
-	_, err := resolveKeyFromEnv(name)
+	_, err := resolveKeyFromEnv(name, "")
 	if err == nil {
 		t.Fatal("junk environment content was accepted as a key")
 	}
 	if strings.Contains(err.Error(), "<html>") {
 		t.Fatalf("error echoed the raw environment value back: %v", err)
+	}
+}
+
+// TestResolveKeyFromEnv_PassphraseProtectedKey is #269's proof that the
+// resolver, not just validateAndWrapKey directly, threads a passphrase
+// through: a real encrypted key served over key.env fails with no
+// passphrase, and succeeds with the correct one.
+func TestResolveKeyFromEnv_PassphraseProtectedKey(t *testing.T) {
+	raw := mustEncryptedKeyPEM(t, false)
+	const name = "RCLONE_MANAGER_TEST_KEY_ENV_ENCRYPTED"
+	t.Setenv(name, string(raw))
+
+	if _, err := resolveKeyFromEnv(name, ""); err == nil {
+		t.Fatal("an encrypted key.env key was accepted with no passphrase configured")
+	}
+
+	secret, err := resolveKeyFromEnv(name, testEncryptedKeyPassphrase)
+	if err != nil {
+		t.Fatalf("resolveKeyFromEnv with the correct passphrase: %v", err)
+	}
+	if secret.Reveal() != string(raw) {
+		t.Fatal("resolved material does not match the environment variable's content")
 	}
 }
 
@@ -186,7 +277,7 @@ func TestResolveKeyFromCommand_Succeeds(t *testing.T) {
 		t.Fatalf("writing test key: %v", err)
 	}
 
-	secret, err := resolveKeyFromCommand([]string{"/bin/cat", keyPath})
+	secret, err := resolveKeyFromCommand([]string{"/bin/cat", keyPath}, "")
 	if err != nil {
 		t.Fatalf("resolveKeyFromCommand: %v", err)
 	}
@@ -195,11 +286,36 @@ func TestResolveKeyFromCommand_Succeeds(t *testing.T) {
 	}
 }
 
+// TestResolveKeyFromCommand_PassphraseProtectedKey mirrors
+// TestResolveKeyFromEnv_PassphraseProtectedKey for the command resolver:
+// a real encrypted key served over key.command fails with no passphrase,
+// and succeeds with the correct one.
+func TestResolveKeyFromCommand_PassphraseProtectedKey(t *testing.T) {
+	raw := mustEncryptedKeyPEM(t, false)
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "encrypted_key.pem")
+	if err := os.WriteFile(keyPath, raw, 0o600); err != nil {
+		t.Fatalf("writing test key: %v", err)
+	}
+
+	if _, err := resolveKeyFromCommand([]string{"/bin/cat", keyPath}, ""); err == nil {
+		t.Fatal("an encrypted key.command key was accepted with no passphrase configured")
+	}
+
+	secret, err := resolveKeyFromCommand([]string{"/bin/cat", keyPath}, testEncryptedKeyPassphrase)
+	if err != nil {
+		t.Fatalf("resolveKeyFromCommand with the correct passphrase: %v", err)
+	}
+	if secret.Reveal() != string(raw) {
+		t.Fatal("resolved material does not match the command's stdout")
+	}
+}
+
 func TestResolveKeyFromCommand_RejectsEmptyArgv(t *testing.T) {
-	if _, err := resolveKeyFromCommand(nil); err == nil {
+	if _, err := resolveKeyFromCommand(nil, ""); err == nil {
 		t.Fatal("an empty argv was accepted")
 	}
-	if _, err := resolveKeyFromCommand([]string{""}); err == nil {
+	if _, err := resolveKeyFromCommand([]string{""}, ""); err == nil {
 		t.Fatal("an argv with an empty executable was accepted")
 	}
 }
@@ -214,7 +330,7 @@ func TestResolveKeyFromCommand_NonZeroExitSurfacesStderr(t *testing.T) {
 	script := mustScript(t, `echo "Error: not authenticated" 1>&2
 exit 1
 `)
-	_, err := resolveKeyFromCommand([]string{script})
+	_, err := resolveKeyFromCommand([]string{script}, "")
 	if err == nil {
 		t.Fatal("a failing command was accepted")
 	}
@@ -229,7 +345,7 @@ exit 1
 // calls out, proven through the real command-execution path rather than
 // validateAndWrapKey directly.
 func TestResolveKeyFromCommand_RejectsJunkStdout(t *testing.T) {
-	_, err := resolveKeyFromCommand([]string{"/bin/echo", "-n", "<html>please sign in</html>"})
+	_, err := resolveKeyFromCommand([]string{"/bin/echo", "-n", "<html>please sign in</html>"}, "")
 	if err == nil {
 		t.Fatal("a command exiting 0 with non-key stdout was accepted")
 	}
@@ -242,7 +358,7 @@ func TestResolveKeyFromCommand_RejectsOutputOverSizeLimit(t *testing.T) {
 	// /bin/dd, not a shell pipeline: this is still our own trusted argv,
 	// exercising the truncation path with a real oversized subprocess
 	// rather than asserting on boundedBuffer in isolation.
-	_, err := resolveKeyFromCommand([]string{"/bin/dd", "if=/dev/zero", "bs=1024", "count=2048"})
+	_, err := resolveKeyFromCommand([]string{"/bin/dd", "if=/dev/zero", "bs=1024", "count=2048"}, "")
 	if err == nil {
 		t.Fatal("output far exceeding the size limit was accepted")
 	}
@@ -258,7 +374,7 @@ func TestResolveKeyFromCommand_Timeout(t *testing.T) {
 
 	script := mustScript(t, "sleep 5\n")
 	start := time.Now()
-	_, err := resolveKeyFromCommand([]string{script})
+	_, err := resolveKeyFromCommand([]string{script}, "")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -307,7 +423,7 @@ cat "$3"
 
 	injected := "$(touch " + pwnedPath + "); `id` | rm -rf " + canaryPath + " #"
 
-	secret, err := resolveKeyFromCommand([]string{script, injected, markerPath, keyPath})
+	secret, err := resolveKeyFromCommand([]string{script, injected, markerPath, keyPath}, "")
 	if err != nil {
 		t.Fatalf("resolveKeyFromCommand with a metacharacter-laden argument: %v", err)
 	}
@@ -344,7 +460,7 @@ func TestResolvedKeyNeverAppearsInLogLine(t *testing.T) {
 
 	const envName = "RCLONE_MANAGER_TEST_KEY_ENV_LOGGING"
 	t.Setenv(envName, string(pem))
-	envSecret, err := resolveKeyFromEnv(envName)
+	envSecret, err := resolveKeyFromEnv(envName, "")
 	if err != nil {
 		t.Fatalf("resolveKeyFromEnv: %v", err)
 	}
@@ -354,7 +470,7 @@ func TestResolvedKeyNeverAppearsInLogLine(t *testing.T) {
 	if err := os.WriteFile(keyPath, pem, 0o600); err != nil {
 		t.Fatalf("writing test key: %v", err)
 	}
-	cmdSecret, err := resolveKeyFromCommand([]string{"/bin/cat", keyPath})
+	cmdSecret, err := resolveKeyFromCommand([]string{"/bin/cat", keyPath}, "")
 	if err != nil {
 		t.Fatalf("resolveKeyFromCommand: %v", err)
 	}
@@ -381,6 +497,84 @@ func TestResolvedKeyNeverAppearsInLogLine(t *testing.T) {
 				t.Fatalf("log line did not contain the expected redaction placeholder: %s", got)
 			}
 		})
+	}
+}
+
+// --- ValidateImportedPrivateKey: POST /ssh-keys' own validation path ---
+
+// TestValidateImportedPrivateKey_UnencryptedKey is the pre-#269 case,
+// unchanged: an unencrypted key needs no passphrase argument and reports
+// its algorithm and fingerprint.
+func TestValidateImportedPrivateKey_UnencryptedKey(t *testing.T) {
+	pem := mustUnencryptedKeyPEM(t)
+	secret, algorithm, fingerprint, err := ValidateImportedPrivateKey(pem, "")
+	if err != nil {
+		t.Fatalf("ValidateImportedPrivateKey: %v", err)
+	}
+	if secret.Reveal() != string(pem) {
+		t.Fatal("Reveal() did not round-trip the original key bytes")
+	}
+	if algorithm != "ssh-ed25519" {
+		t.Fatalf("algorithm = %q, want ssh-ed25519", algorithm)
+	}
+	if !strings.HasPrefix(fingerprint, "SHA256:") {
+		t.Fatalf("fingerprint = %q, want it to start with SHA256:", fingerprint)
+	}
+}
+
+// TestValidateImportedPrivateKey_EncryptedKeyRequiresPassphrase is #269's
+// "POST /ssh-keys gives the same answer as a key.file configuration"
+// acceptance criterion, at the unit level: today's behaviour (no
+// passphrase argument at all) still refuses an encrypted key exactly as
+// it always has, by name, never a raw parse error.
+func TestValidateImportedPrivateKey_EncryptedKeyRequiresPassphrase(t *testing.T) {
+	raw := mustEncryptedKeyPEM(t, false)
+	_, _, _, err := ValidateImportedPrivateKey(raw, "")
+	if err == nil {
+		t.Fatal("an encrypted key was accepted with no passphrase argument")
+	}
+	if !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("error %q does not name the actual problem (passphrase-protected)", err.Error())
+	}
+}
+
+// TestValidateImportedPrivateKey_EncryptedKeyWithCorrectPassphrase is the
+// GREEN case an operator pasting a passphrase-protected key into the
+// wizard's "Import key" step needs: the same key, the correct passphrase,
+// accepted with a real algorithm and fingerprint, not a placeholder.
+func TestValidateImportedPrivateKey_EncryptedKeyWithCorrectPassphrase(t *testing.T) {
+	raw := mustEncryptedKeyPEM(t, false)
+	secret, algorithm, fingerprint, err := ValidateImportedPrivateKey(raw, testEncryptedKeyPassphrase)
+	if err != nil {
+		t.Fatalf("ValidateImportedPrivateKey with the correct passphrase: %v", err)
+	}
+	if secret.Reveal() != string(raw) {
+		t.Fatal("Reveal() did not round-trip the original (still encrypted) key bytes")
+	}
+	if algorithm == "" {
+		t.Fatal("algorithm is empty")
+	}
+	if !strings.HasPrefix(fingerprint, "SHA256:") {
+		t.Fatalf("fingerprint = %q, want it to start with SHA256:", fingerprint)
+	}
+}
+
+// TestValidateImportedPrivateKey_EncryptedKeyWithWrongPassphraseIsRefused
+// is #269's config-time (here, import-time) validation acceptance
+// criterion, proven directly against the function POST /ssh-keys calls: a
+// wrong passphrase must be refused at import, never accepted and left to
+// fail on the first real connection attempt.
+func TestValidateImportedPrivateKey_EncryptedKeyWithWrongPassphraseIsRefused(t *testing.T) {
+	raw := mustEncryptedKeyPEM(t, false)
+	secret, algorithm, fingerprint, err := ValidateImportedPrivateKey(raw, "definitely the wrong passphrase")
+	if err == nil {
+		t.Fatal("an encrypted key with the wrong passphrase was accepted at import")
+	}
+	if secret.Reveal() != "" || algorithm != "" || fingerprint != "" {
+		t.Fatal("a refused import still produced non-empty output")
+	}
+	if strings.Contains(err.Error(), "definitely the wrong passphrase") {
+		t.Fatalf("error echoed the passphrase back: %v", err)
 	}
 }
 

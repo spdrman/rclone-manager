@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/rclone/rclone/fs/config/configmap"
+	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/lib/env"
 
 	"github.com/spdrman/rclone-manager/core/internal/obs"
@@ -51,15 +52,28 @@ import (
 //   - key_pem (#74) IS reachable, but only just: it is set only when Source
 //     names an env or command key resolver instead of key_file, and only
 //     ever with what keysource.go's resolveKeyFromEnv/resolveKeyFromCommand
-//     returned after confirming it parses as an unencrypted SSH private
-//     key. There is no config field anywhere in this repository an operator
-//     can put a value into key_pem with directly: config.Remote's Key type
-//     has File, Env and Command fields, and deliberately nothing an
-//     operator could paste raw key material into (see config.Key's doc).
-//     key_file remains the default and documented preference specifically
-//     because it is the only one of the three sources that never routes
-//     through key_pem at all: rclone opens that file itself, so this
-//     adapter's own memory never holds the key.
+//     returned after confirming it parses (with the resolved passphrase,
+//     see below, when one is configured) as an SSH private key. There is
+//     no config field anywhere in this repository an operator can put a
+//     value into key_pem with directly: config.Remote's Key type has File,
+//     Env and Command fields, and deliberately nothing an operator could
+//     paste raw key material into (see config.Key's doc). key_file remains
+//     the default and documented preference specifically because it is the
+//     only one of the three sources that never routes through key_pem at
+//     all: rclone opens that file itself, so this adapter's own memory
+//     never holds the key.
+//   - key_file_pass (#269) IS reachable, the same way key_pem is: only with
+//     what passphrase.go's resolvePassphrase returned, never with anything
+//     an operator could write into this adapter's option map directly.
+//     Unlike key_pem, it is set regardless of which key source is in play
+//     (rclone honours it for key_file just as much as for key_pem), and
+//     only when Source actually names a passphrase source; a Source with
+//     none of PassphraseFile/PassphraseEnv/PassphraseCommand set produces
+//     no key_file_pass at all, exactly the case for every Source built
+//     before #269 existed. rclone's own key_file_pass option expects an
+//     "obscured" (its own reversible obfuscation, not real encryption)
+//     value, never the plaintext passphrase, so this file always passes
+//     the resolved passphrase through obscure.Obscure before setting it.
 //   - pin_host_key and host_keys (rclone's trust-on-first-use pinning mode)
 //     are never set. TOFU is a legitimate mode for interactive use, but it
 //     means "accept whatever key the server shows the first time", which is
@@ -117,6 +131,44 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		return nil, fmt.Errorf("source %q: exactly one of key_file, key_env or key_command may be set for sftp, not more than one", src.ID)
 	}
 
+	// #269: the passphrase's own three sources get the identical "exactly
+	// one, never more" backstop the key's three sources just got, for the
+	// identical reason -- internal/config/validate.go enforces this same
+	// rule independently for a config built through that package, so this
+	// is the backstop for anything that builds a transport.Source
+	// directly, tests included. Zero is fine here, unlike for the key
+	// itself: most keys are not passphrase-protected at all, and that is
+	// still the default this function assumes when none of the three is
+	// set.
+	passphraseSourceCount := 0
+	if src.PassphraseFile != "" {
+		passphraseSourceCount++
+	}
+	if src.PassphraseEnv != "" {
+		passphraseSourceCount++
+	}
+	if len(src.PassphraseCommand) > 0 {
+		passphraseSourceCount++
+	}
+	if passphraseSourceCount > 1 {
+		return nil, fmt.Errorf("source %q: exactly one of key_passphrase_file, key_passphrase_env or key_passphrase_command may be set for sftp, not more than one", src.ID)
+	}
+
+	// Resolved before the key material itself, and before known_hosts is
+	// even checked: src.KeyEnv/src.KeyCommand's own resolvers (below) need
+	// the passphrase to validate the key they resolve actually decrypts
+	// with it, and a bad passphrase resolver should be reported as a
+	// passphrase problem, not buried behind an unrelated known_hosts
+	// error.
+	passphraseSecret, hasPassphrase, err := resolvePassphrase(src)
+	if err != nil {
+		return nil, fmt.Errorf("source %q: resolving the SSH key passphrase: %w", src.ID, err)
+	}
+	passphrase := ""
+	if hasPassphrase {
+		passphrase = passphraseSecret.Reveal()
+	}
+
 	// keyFileValue and keyPEM are mutually exclusive: exactly one of them
 	// ends up populated by the switch below, and which one decides whether
 	// the cfg built further down sets key_file or key_pem. Resolution
@@ -134,20 +186,26 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		// adapter only ever confirms the file exists and is readable. It
 		// never opens it, so the key itself never enters this process's
 		// memory at all; rclone's own sftp backend reads key_file directly.
+		// A passphrase, if one resolved above, is NOT verified against this
+		// file's content here, for the same reason: verifying it would mean
+		// reading and decrypting the file in this process, exactly what
+		// key_file exists to avoid. rclone itself checks it, with the
+		// key_file_pass option set below, the moment this cfg is actually
+		// used to connect.
 		keyFilePath := env.ShellExpand(src.KeyFile)
 		if _, err := os.Stat(keyFilePath); err != nil {
 			return nil, fmt.Errorf("source %q: key_file %q is not accessible: %w", src.ID, src.KeyFile, err)
 		}
 		keyFileValue = src.KeyFile
 	case src.KeyEnv != "":
-		secret, err := resolveKeyFromEnv(src.KeyEnv)
+		secret, err := resolveKeyFromEnv(src.KeyEnv, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("source %q: resolving the SSH key from environment variable %q: %w", src.ID, src.KeyEnv, err)
 		}
 		keyPEM = secret
 		usingKeyPEM = true
 	case len(src.KeyCommand) > 0:
-		secret, err := resolveKeyFromCommand(src.KeyCommand)
+		secret, err := resolveKeyFromCommand(src.KeyCommand, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("source %q: resolving the SSH key from the configured command: %w", src.ID, err)
 		}
@@ -189,6 +247,21 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		cfg.Set("key_pem", quoteForRclonePem(keyPEM.Reveal()))
 	} else {
 		cfg.Set("key_file", keyFileValue)
+	}
+	if hasPassphrase {
+		// rclone's sftp backend reveals key_file_pass with its own
+		// obscure.Reveal (backend/sftp/sftp.go), which requires the
+		// obscured form, not the plaintext passphrase: Obscure here is the
+		// exact inverse of the Reveal rclone performs when it actually
+		// opens the key, on the same reasoning quoteForRclonePem states for
+		// key_pem's own required transformation. This is honoured
+		// regardless of whether the key came from key_file or key_pem
+		// above; rclone applies key_file_pass to either.
+		obscured, err := obscure.Obscure(passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: obscuring the resolved passphrase for rclone: %w", src.ID, err)
+		}
+		cfg.Set("key_file_pass", obscured)
 	}
 	cfg.Set("known_hosts_file", src.KnownHosts)
 

@@ -64,7 +64,7 @@ type FirstRunClient interface {
 	// exists. Each is the same operation BackupServiceClient exposes, on
 	// a surface that does not need a BackupService to reach it — which is
 	// why SetupClient (below) can hold either one.
-	ImportSSHKey(ctx context.Context, raw []byte) (service.SSHKeyRef, error)
+	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
 
@@ -84,7 +84,7 @@ var _ FirstRunClient = (*service.FirstRun)(nil)
 // handlers_ssh.go call whichever one this deployment currently has
 // instead of each carrying its own branch.
 type SetupClient interface {
-	ImportSSHKey(ctx context.Context, raw []byte) (service.SSHKeyRef, error)
+	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 	ProbeHostKey(ctx context.Context, host string, port int) (service.HostKeyProbe, error)
 	TestConnection(ctx context.Context, req service.ConnectionTestRequest) (service.ConnectionTestResult, error)
 }

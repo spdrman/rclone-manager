@@ -513,6 +513,40 @@ func generateClientSSHKeyPair(t *testing.T) (privateKeyPath string, authorizedKe
 	return privateKeyPath, authorizedKeyLine
 }
 
+// generateEncryptedClientSSHKeyPair is generateClientSSHKeyPair's #269
+// sibling: the same generated ed25519 keypair, but the private key file is
+// encrypted with passphrase using x/crypto/ssh's own
+// MarshalPrivateKeyWithPassphrase, rather than shelling out to ssh-keygen
+// the way keysource_test.go's mustEncryptedKeyPEM does. Every other test
+// in this file already generates its client keys this way (Go-native, no
+// external dependency beyond what this package already imports), so this
+// follows the same convention instead of introducing ssh-keygen as a new
+// dependency of the Docker-fixture suite specifically.
+func generateEncryptedClientSSHKeyPair(t *testing.T, passphrase string) (privateKeyPath string, authorizedKeyLine string) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	sshPub, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatalf("ssh.NewPublicKey: %v", err)
+	}
+	authorizedKeyLine = string(bytes.TrimSpace(ssh.MarshalAuthorizedKey(sshPub)))
+
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "rclone-manager-sftp-test-client-encrypted", []byte(passphrase))
+	if err != nil {
+		t.Fatalf("ssh.MarshalPrivateKeyWithPassphrase: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(block)
+
+	privateKeyPath = filepath.Join(t.TempDir(), "client_ed25519_encrypted")
+	if err := os.WriteFile(privateKeyPath, pemBytes, 0o600); err != nil {
+		t.Fatalf("writing encrypted client private key: %v", err)
+	}
+	return privateKeyPath, authorizedKeyLine
+}
+
 // buildSFTPFixtureImage builds the disposable sshd image used by every
 // subtest below, baking in the given client's authorized_keys entry.
 func buildSFTPFixtureImage(t *testing.T, authorizedKeyLine string) string {
@@ -1232,6 +1266,133 @@ func TestSFTPKeyResolvers(t *testing.T) {
 		if _, err := adapter.List(ctx, src); err != nil {
 			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
 			t.Fatalf("List via the key_command resolver: %v\nserver logs:\n%s", err, logs)
+		}
+	})
+}
+
+// TestSFTPKeyResolvers_Passphrase is #269's end-to-end positive control:
+// a real SFTP connection authenticated with a real, passphrase-protected
+// private key, through each of the three passphrase resolvers, against
+// the real Docker fixture -- the same "prove it against a live server,
+// not just a unit test that produces plausible bytes" standard
+// TestSFTPKeyResolvers already holds #74's three key resolvers to.
+//
+// The fixture's own readiness probe (startFixtureContainer ->
+// waitForFixtureReady -> sshClientConfig) authenticates with
+// ssh.ParsePrivateKey, which cannot load an encrypted key, so a second,
+// unencrypted "readiness" keypair proves the container itself is up; the
+// fixture's authorized_keys trusts both keys, and every actual assertion
+// below authenticates with the encrypted one.
+func TestSFTPKeyResolvers_Passphrase(t *testing.T) {
+	requireDocker(t)
+
+	readinessKeyPath, readinessAuthLine := generateClientSSHKeyPair(t)
+
+	const passphrase = "correct horse battery staple"
+	encryptedKeyPath, encryptedAuthLine := generateEncryptedClientSSHKeyPair(t, passphrase)
+	encryptedPEM, err := os.ReadFile(encryptedKeyPath)
+	if err != nil {
+		t.Fatalf("reading generated encrypted client key: %v", err)
+	}
+
+	image := buildSFTPFixtureImage(t, readinessAuthLine+"\n"+encryptedAuthLine)
+
+	host := "127.0.0.1"
+	port := freeTCPPort(t)
+	knownHostsPath := filepath.Join(t.TempDir(), "known_hosts")
+
+	cont, hostKeyLine := startFixtureContainer(t, image, port, "key-passphrase", readinessKeyPath)
+	t.Cleanup(func() { stopFixtureContainer(cont) })
+	writeKnownHosts(t, knownHostsPath, host, port, hostKeyLine)
+
+	base := transport.Source{
+		ID:         "sftp-key-passphrase",
+		Type:       "sftp",
+		Host:       host,
+		Port:       port,
+		User:       sftpFixtureUser,
+		KnownHosts: knownHostsPath,
+	}
+	adapter := New()
+	ctx := context.Background()
+
+	// RED, and afterwards a permanent regression proof: with no passphrase
+	// configured at all, an encrypted key.file fails clearly -- the exact
+	// production failure #269 reported ("failed to parse private key
+	// file: ... passphrase protected") -- never a hang and never a wrong
+	// success.
+	t.Run("key_file without a configured passphrase fails clearly", func(t *testing.T) {
+		src := base
+		src.KeyFile = encryptedKeyPath
+		_, err := adapter.List(ctx, src)
+		if err == nil {
+			t.Fatal("an encrypted key with no passphrase configured was accepted")
+		}
+		if !strings.Contains(err.Error(), "passphrase") {
+			t.Fatalf("error %q does not name the actual problem (passphrase protected): %v", err.Error(), err)
+		}
+	})
+
+	t.Run("key_file with key.passphrase.env succeeds", func(t *testing.T) {
+		const envName = "RCLONE_MANAGER_TEST_SFTP_PASSPHRASE_ENV"
+		t.Setenv(envName, passphrase)
+		src := base
+		src.KeyFile = encryptedKeyPath
+		src.PassphraseEnv = envName
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via key_file + key.passphrase.env: %v\nserver logs:\n%s", err, logs)
+		}
+	})
+
+	t.Run("key_file with key.passphrase.command succeeds", func(t *testing.T) {
+		src := base
+		src.KeyFile = encryptedKeyPath
+		src.PassphraseCommand = []string{"/bin/echo", "-n", passphrase}
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via key_file + key.passphrase.command: %v\nserver logs:\n%s", err, logs)
+		}
+	})
+
+	t.Run("key_file with key.passphrase.file succeeds", func(t *testing.T) {
+		passphraseFilePath := filepath.Join(t.TempDir(), "passphrase")
+		// A trailing newline, exactly what `echo` (not `echo -n`) would
+		// have produced: passphrase.go's own doc explains why this must
+		// still work.
+		if err := os.WriteFile(passphraseFilePath, []byte(passphrase+"\n"), 0o600); err != nil {
+			t.Fatalf("writing passphrase file: %v", err)
+		}
+		src := base
+		src.KeyFile = encryptedKeyPath
+		src.PassphraseFile = passphraseFilePath
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via key_file + key.passphrase.file: %v\nserver logs:\n%s", err, logs)
+		}
+	})
+
+	t.Run("key_file with the wrong passphrase is refused, not hung or silently accepted", func(t *testing.T) {
+		src := base
+		src.KeyFile = encryptedKeyPath
+		src.PassphraseCommand = []string{"/bin/echo", "-n", "definitely not the right passphrase"}
+		_, err := adapter.List(ctx, src)
+		if err == nil {
+			t.Fatal("a wrong passphrase was accepted")
+		}
+	})
+
+	t.Run("key_env with key.passphrase.env succeeds", func(t *testing.T) {
+		const keyEnvName = "RCLONE_MANAGER_TEST_SFTP_KEY_ENCRYPTED_ENV"
+		const passEnvName = "RCLONE_MANAGER_TEST_SFTP_PASSPHRASE_ENV2"
+		t.Setenv(keyEnvName, string(encryptedPEM))
+		t.Setenv(passEnvName, passphrase)
+		src := base
+		src.KeyEnv = keyEnvName
+		src.PassphraseEnv = passEnvName
+		if _, err := adapter.List(ctx, src); err != nil {
+			logs, _ := exec.Command("docker", "logs", cont).CombinedOutput()
+			t.Fatalf("List via key_env + key.passphrase.env: %v\nserver logs:\n%s", err, logs)
 		}
 	})
 }

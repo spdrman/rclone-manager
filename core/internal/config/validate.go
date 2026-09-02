@@ -263,7 +263,7 @@ func (v *validator) validateRemote(path string, r *Remote) {
 			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
 		}
 	case "local":
-		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || r.KnownHosts != "" || r.Port != 0 {
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 {
 			v.addf("%s: host, port, user, key_file/key and known_hosts are not used for type \"local\"; remove them", path)
 		}
 	case "":
@@ -348,9 +348,49 @@ func (v *validator) validateKey(path string, r *Remote) {
 		}
 	}
 
+	v.validatePassphrase(path, &r.Key.Passphrase)
+
 	if fileValue != "" {
 		r.KeyFile = fileValue
 		r.Key.File = fileValue
+	}
+}
+
+// validatePassphrase checks Key.Passphrase's shape (#269): at most one of
+// File, Env or Command may be set, mirroring validateKey's own rule for
+// Key's three sources, except that zero is fine here -- Passphrase is
+// optional, unlike Key itself, since most keys are not passphrase-
+// protected at all.
+//
+// This never reads Passphrase.File's content, on the same "shape only,
+// nothing this package can decide by opening a file or running a command"
+// principle validateKey's own doc states for Key.Command: whether a
+// passphrase actually decrypts the key it is paired with is a question
+// only internal/transport/rclone can answer, once it can actually reach
+// both.
+func (v *validator) validatePassphrase(path string, p *Passphrase) {
+	sources := 0
+	if p.File != "" {
+		sources++
+	}
+	if p.Env != "" {
+		sources++
+	}
+	if len(p.Command) != 0 {
+		sources++
+	}
+	if sources > 1 {
+		v.addf("%s: exactly one of key.passphrase.file, key.passphrase.env or key.passphrase.command may be set, not more than one", path)
+		return
+	}
+
+	if len(p.Command) != 0 {
+		cmdPath := path + ".key.passphrase.command"
+		if p.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(p.Command[0]) {
+			v.addf("%s: executable %q must be an absolute path", cmdPath, p.Command[0])
+		}
 	}
 }
 

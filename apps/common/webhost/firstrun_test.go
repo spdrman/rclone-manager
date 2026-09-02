@@ -37,7 +37,7 @@ type fakeFirstRun struct {
 
 func (f *fakeFirstRun) Configured() bool { return f.configured }
 
-func (f *fakeFirstRun) ImportSSHKey(_ context.Context, raw []byte) (service.SSHKeyRef, error) {
+func (f *fakeFirstRun) ImportSSHKey(_ context.Context, raw []byte, _ string) (service.SSHKeyRef, error) {
 	f.imported = raw
 	if f.importErr != nil {
 		return service.SSHKeyRef{}, f.importErr

@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "0e76129bfbab67d6eda02dd08e4760dd9866abec2570506d82fa877cf4392fb8"
+const ContractSHA256 = "87084b268650ad7c4997174b07db0a9e419f2cdc768aa3b855d9b651d8a52afc"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -870,6 +870,7 @@ type HostKeyProbeResponse struct {
 // ImportSSHKeyRequest is POST /ssh-keys. Sent once; the caller discards its own copy
 // immediately.
 type ImportSSHKeyRequest struct {
+	Passphrase    string `json:"passphrase"`
 	PrivateKeyPEM string `json:"private_key_pem"`
 }
 

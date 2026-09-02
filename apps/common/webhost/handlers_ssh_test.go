@@ -53,6 +53,43 @@ func TestImportSSHKey_Success_Returns201WithFingerprintNeverTheKey(t *testing.T)
 	}
 }
 
+// TestImportSSHKey_PassphraseFieldReachesTheBackend is #269's wiring
+// proof at the HTTP layer: the request body's "passphrase" field has to
+// actually cross the HTTP-to-core seam, not just decode without error.
+// The real crypto verdict (a correct passphrase accepted, a wrong one
+// refused) is proven against the real implementation in
+// core/service/backupsets_test.go; this fake backend only records what it
+// was called with.
+func TestImportSSHKey_PassphraseFieldReachesTheBackend(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	pem := "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKETESTKEYMATERIAL\n-----END OPENSSH PRIVATE KEY-----"
+	body := `{"private_key_pem":"` + strings.ReplaceAll(pem, "\n", "\\n") + `","passphrase":"correct horse battery staple"}`
+	rec := postSSHKeyImport(t, tr.router, body, true)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if tr.backend.lastImportPassphrase != "correct horse battery staple" {
+		t.Fatalf("backend saw passphrase %q, want it to match the request body", tr.backend.lastImportPassphrase)
+	}
+}
+
+// TestImportSSHKey_OmittedPassphraseFieldForwardsEmptyString is the
+// unencrypted-key regression case: a request with no "passphrase" field
+// at all (every request before #269) still decodes and forwards "",
+// exactly as it always implicitly did.
+func TestImportSSHKey_OmittedPassphraseFieldForwardsEmptyString(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	rec := postSSHKeyImport(t, tr.router, `{"private_key_pem":"x"}`, true)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if tr.backend.lastImportPassphrase != "" {
+		t.Fatalf("backend saw passphrase %q, want empty for a request with no passphrase field", tr.backend.lastImportPassphrase)
+	}
+}
+
 func TestImportSSHKey_EmptyBodyReturns400(t *testing.T) {
 	tr := newBackupSetsTestRouter(t)
 	rec := postSSHKeyImport(t, tr.router, `{"private_key_pem":""}`, true)

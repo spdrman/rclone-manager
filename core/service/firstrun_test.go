@@ -58,7 +58,7 @@ func newTestFirstRun(t *testing.T) (*FirstRun, string, string) {
 
 func firstRunCreateReq(t *testing.T, fr *FirstRun, name string) CreateBackupSetRequest {
 	t.Helper()
-	ref, err := fr.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := fr.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestNewFirstRun_RefusesADeploymentItCannotProduceAValidConfigFor(t *testing
 func TestFirstRun_ImportSSHKeyAndKnownHostsLandBesideTheConfig(t *testing.T) {
 	fr, configPath, _ := newTestFirstRun(t)
 
-	ref, err := fr.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := fr.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestFirstRun_ImportSSHKeyAndKnownHostsLandBesideTheConfig(t *testing.T) {
 func TestFirstRun_ImportSSHKeyRejectsMaterialThatIsNotAPrivateKey(t *testing.T) {
 	fr, configPath, _ := newTestFirstRun(t)
 
-	if _, err := fr.ImportSSHKey(context.Background(), []byte("not a key")); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := fr.ImportSSHKey(context.Background(), []byte("not a key"), ""); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("ImportSSHKey error = %v, want one matching ErrInvalidRequest", err)
 	}
 
@@ -601,7 +601,7 @@ func TestFirstRun_UnderstandsTheConfigDirectorySpelling(t *testing.T) {
 			t.Fatal("Configured() = true on an empty configuration directory; a fresh install would be reported as already set up")
 		}
 
-		ref, err := fr.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+		ref, err := fr.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 		if err != nil {
 			t.Fatalf("ImportSSHKey: %v", err)
 		}

@@ -51,6 +51,7 @@ package rclone
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
@@ -96,9 +97,12 @@ const maxResolvedKeySize = 1 << 20 // 1 MiB
 const maxCapturedStderr = 4 << 10 // 4 KiB
 
 // resolveKeyFromEnv reads name from the environment and returns it wrapped
-// in an obs.Secret, once it has been confirmed to parse as an unencrypted
-// SSH private key.
-func resolveKeyFromEnv(name string) (obs.Secret, error) {
+// in an obs.Secret, once it has been confirmed to parse as an SSH private
+// key. passphrase is "" for an unencrypted key (the common case, and every
+// call site before #269); when non-empty, it is what the resolved key
+// material is expected to decrypt with, checked here rather than left for
+// rclone to discover far away from the actual cause.
+func resolveKeyFromEnv(name, passphrase string) (obs.Secret, error) {
 	val, ok := os.LookupEnv(name)
 	if !ok {
 		return obs.Secret{}, fmt.Errorf("environment variable %q is not set", name)
@@ -112,7 +116,7 @@ func resolveKeyFromEnv(name string) (obs.Secret, error) {
 	buf := []byte(val)
 	defer zeroBytes(buf)
 
-	secret, err := validateAndWrapKey(buf)
+	secret, err := validateAndWrapKey(buf, passphrase)
 	if err != nil {
 		return obs.Secret{}, fmt.Errorf("environment variable %q: %w", name, err)
 	}
@@ -138,7 +142,7 @@ func resolveKeyFromEnv(name string) (obs.Secret, error) {
 // well-tested function that this issue's scope does not require: this
 // resolver's own fixed timeout already bounds how long it can run,
 // independent of whatever the caller's context does.
-func resolveKeyFromCommand(argv []string) (obs.Secret, error) {
+func resolveKeyFromCommand(argv []string, passphrase string) (obs.Secret, error) {
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return obs.Secret{}, errors.New("key command: no executable configured")
 	}
@@ -192,7 +196,7 @@ func resolveKeyFromCommand(argv []string) (obs.Secret, error) {
 		return obs.Secret{}, fmt.Errorf("key command %q: output exceeded %d bytes, refusing to treat truncated output as key material", argv[0], maxResolvedKeySize)
 	}
 
-	secret, err := validateAndWrapKey(stdout.buf.Bytes())
+	secret, err := validateAndWrapKey(stdout.buf.Bytes(), passphrase)
 	if err != nil {
 		return obs.Secret{}, fmt.Errorf("key command %q: %w", argv[0], err)
 	}
@@ -200,23 +204,47 @@ func resolveKeyFromCommand(argv []string) (obs.Secret, error) {
 }
 
 // validateAndWrapKey is the one place raw resolver output is checked and, if
-// it passes, wrapped in an obs.Secret. Both resolvers above call this and
-// only this to turn bytes into a value the rest of ssh.go is allowed to
-// touch.
+// it passes, wrapped in an obs.Secret. Both resolvers above, and
+// ValidateImportedPrivateKey below, call this and only this to turn bytes
+// into a value the rest of ssh.go is allowed to touch.
+//
+// passphrase is "" for the unencrypted case, #74's original and still the
+// documented preference: raw is parsed exactly as before #269, and an
+// encrypted key is refused by name rather than handed to rclone to fail
+// (or hang) on. When passphrase is non-empty (#269), raw is instead
+// required to decrypt with exactly that passphrase; a key that does not
+// need one, or does not decrypt with the one given, is refused just as
+// clearly. Either way this is a config-time check, made once here, rather
+// than a question rclone answers for the first time when a cycle actually
+// tries to connect.
 //
 // raw is never included in a returned error, on purpose: whether it is
 // empty, an HTML login page, an error string from a secrets manager, or a
 // genuinely encrypted key, the failure is reported by naming what kind of
 // problem it is, not by echoing the bytes that had the problem.
-func validateAndWrapKey(raw []byte) (obs.Secret, error) {
+func validateAndWrapKey(raw []byte, passphrase string) (obs.Secret, error) {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return obs.Secret{}, errors.New("resolved key material is empty")
+	}
+
+	if passphrase != "" {
+		if _, err := ssh.ParseRawPrivateKeyWithPassphrase(raw, []byte(passphrase)); err != nil {
+			if errors.Is(err, x509.IncorrectPasswordError) {
+				return obs.Secret{}, errors.New("resolved key did not decrypt with the configured passphrase")
+			}
+			// Same "report the shape of the problem, never the bytes" rule
+			// as the unencrypted branch below: a key that turns out not to
+			// be encrypted at all, one in a format this program does not
+			// support, or genuinely corrupt data, all land here.
+			return obs.Secret{}, fmt.Errorf("resolved key material does not parse as a valid SSH private key with the configured passphrase: %v", err)
+		}
+		return obs.NewSecret(string(raw)), nil
 	}
 
 	if _, err := ssh.ParseRawPrivateKey(raw); err != nil {
 		var passphraseErr *ssh.PassphraseMissingError
 		if errors.As(err, &passphraseErr) {
-			return obs.Secret{}, errors.New("resolved key is passphrase-protected; this program runs unattended and has nowhere to prompt for a passphrase, so an encrypted key can only ever hang or fail, never authenticate")
+			return obs.Secret{}, errors.New("resolved key is passphrase-protected; configure key.passphrase (file, env or command) to supply it")
 		}
 		// Any other parse failure (no PEM block at all, an unsupported key
 		// type, truncated/corrupt data, ...) is reported the same way,
@@ -231,30 +259,43 @@ func validateAndWrapKey(raw []byte) (obs.Secret, error) {
 }
 
 // ValidateImportedPrivateKey checks raw the same way validateAndWrapKey
-// checks a key.env/key.command resolver's output (must parse as an
-// unencrypted SSH private key, never echoed back on failure), and, on
-// success, also reports the key's algorithm and SHA256 fingerprint in
-// the same "SHA256:base64…" form `ssh-keygen -lf` prints and
-// FingerprintDisplay.tsx already renders.
+// checks a key.env/key.command resolver's output (must parse as an SSH
+// private key, with passphrase exactly as validateAndWrapKey's own doc
+// describes, never echoed back on failure), and, on success, also reports
+// the key's algorithm and SHA256 fingerprint in the same "SHA256:base64…"
+// form `ssh-keygen -lf` prints and FingerprintDisplay.tsx already renders.
 //
-// This is issue #146 (B2.7)'s SSH-key-import API surface reusing this
-// file's existing validation rather than a second, parallel
-// implementation of "is this an unencrypted SSH private key" at the HTTP
-// layer: core/service calls this directly (core/service is inside
-// core/'s own module tree, same as every other internal/ caller), and
-// never re-derives the parse/fingerprint logic itself.
+// This is issue #146 (B2.7)'s SSH-key-import API surface (POST /ssh-keys)
+// reusing this file's existing validation rather than a second, parallel
+// implementation of "is this a usable SSH private key" at the HTTP layer:
+// core/service calls this directly (core/service is inside core/'s own
+// module tree, same as every other internal/ caller), and never re-derives
+// the parse/fingerprint logic itself. Reusing validateAndWrapKey here is
+// also what #269's acceptance criteria asks for directly: POST /ssh-keys
+// and a key.file/key.passphrase configuration share this one function's
+// verdict on what decrypts and what does not, so the two can never
+// disagree about whether a given key and passphrase actually work
+// together.
 //
-// The fingerprint is computed with ssh.ParsePrivateKey rather than the
-// ssh.ParseRawPrivateKey validateAndWrapKey already called, because only
-// the former returns an ssh.Signer with a PublicKey() to fingerprint;
-// both calls succeed or fail together for the same input; this function
-// never wraps or returns anything from a validateAndWrapKey failure.
-func ValidateImportedPrivateKey(raw []byte) (secret obs.Secret, algorithm, fingerprint string, err error) {
-	secret, err = validateAndWrapKey(raw)
+// The fingerprint is computed with ssh.ParsePrivateKey/
+// ParsePrivateKeyWithPassphrase rather than the ssh.ParseRawPrivateKey*
+// family validateAndWrapKey already called, because only the former
+// returns an ssh.Signer with a PublicKey() to fingerprint; both calls
+// succeed or fail together for the same input plus passphrase, so this
+// function never wraps or returns anything from a validateAndWrapKey
+// failure.
+func ValidateImportedPrivateKey(raw []byte, passphrase string) (secret obs.Secret, algorithm, fingerprint string, err error) {
+	secret, err = validateAndWrapKey(raw, passphrase)
 	if err != nil {
 		return obs.Secret{}, "", "", err
 	}
-	signer, parseErr := ssh.ParsePrivateKey(raw)
+	var signer ssh.Signer
+	var parseErr error
+	if passphrase != "" {
+		signer, parseErr = ssh.ParsePrivateKeyWithPassphrase(raw, []byte(passphrase))
+	} else {
+		signer, parseErr = ssh.ParsePrivateKey(raw)
+	}
 	if parseErr != nil {
 		// Same "report the shape of the problem, never the bytes" rule
 		// validateAndWrapKey's own doc states: raw is never included here.

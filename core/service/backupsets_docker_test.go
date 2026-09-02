@@ -66,7 +66,7 @@ func TestCreateBackupSet_EndToEndAgainstARealSFTPFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading fixture key file: %v", err)
 	}
-	keyRef, err := svc.ImportSSHKey(context.Background(), keyPEM)
+	keyRef, err := svc.ImportSSHKey(context.Background(), keyPEM, "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}

@@ -45,6 +45,16 @@ type Source struct {
 	// a shell.
 	KeyCommand []string
 
+	// PassphraseFile, PassphraseEnv and PassphraseCommand are the three
+	// ways (#269) an sftp Source may name where the passphrase that
+	// decrypts its key comes from, mirroring KeyFile/KeyEnv/KeyCommand's
+	// own three. At most one may be set; none of them set at all means
+	// this key is not passphrase-protected, which is every Source built
+	// before #269 existed.
+	PassphraseFile    string
+	PassphraseEnv     string
+	PassphraseCommand []string
+
 	KnownHosts string
 	Root       string
 }
