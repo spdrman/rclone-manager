@@ -183,7 +183,13 @@ func TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, configPath := openTestService(t)
+			// The RICH fixture, not openTestService's minimal one: a
+			// whole-struct comparison only proves anything about fields
+			// the fixture actually set, and
+			// TestUpdateBackupSetIsolationFixtureExercisesEveryField
+			// holds this one to setting all of them.
+			configPath := writeRichTestConfigFile(t)
+			svc := openServiceAt(t, configPath)
 			baseline := readBackupSetFromDisk(t, configPath, "production", "postgres-primary")
 
 			if _, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, tc.req); err != nil {
@@ -479,13 +485,31 @@ func TestUpdateBackupSet_MovingOffStableClearsStableFor(t *testing.T) {
 	}
 }
 
-// writeConfigWithPerSetRetention writes a fixture whose ONE backup set
-// carries its own whole-chain retention override (issue #333/#336's
-// config.BackupSet.RetentionConfig), which the ordinary fixture does not.
-// A whole chain, because a partial one is refused: naming two of the
-// three scalars would resolve the third to the product default rather
-// than to the deployment's policy.
-func writeConfigWithPerSetRetention(t *testing.T) string {
+// openServiceAt is openTestService against a config file the caller chose,
+// so a test can run the real service over the rich fixture rather than the
+// minimal one.
+func openServiceAt(t *testing.T, configPath string) *BackupService {
+	t.Helper()
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+	return svc
+}
+
+// writeRichTestConfigFile writes the fixture the isolation tests below
+// run against: one backup set with every field it is possible to set from
+// a config file actually set, rather than the ordinary fixture's minimum.
+//
+// The richness is the point, not thoroughness for its own sake. The
+// isolation test compares the WHOLE persisted config.BackupSet, which
+// only proves anything about a field the fixture actually gave a value
+// to: a field left at its zero value compares equal on both sides
+// whatever the patch applier did to it.
+// TestUpdateBackupSetIsolationFixtureExercisesEveryField enforces that,
+// and this function is what it enforces it against.
+func writeRichTestConfigFile(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	remoteDir := filepath.Join(dir, "remote")
@@ -505,6 +529,8 @@ func writeConfigWithPerSetRetention(t *testing.T) string {
 		"        include:\n          - \"*.dump\"\n" +
 		"        completion:\n          strategy: rename\n" +
 		"        stale_after: 24h\n" +
+		"        read_only: true\n" +
+		"        validation:\n          hash: sha256\n" +
 		"        retention:\n" +
 		"          daily_days: 90\n" +
 		"          weekly_months: 24\n" +
@@ -536,12 +562,8 @@ func writeConfigWithPerSetRetention(t *testing.T) string {
 // process resolving under the old policy is the exact failure #336's own
 // rule ("any mutation must be followed by Validate") names.
 func TestUpdateBackupSet_LeavesAPerSetRetentionOverrideAlone(t *testing.T) {
-	configPath := writeConfigWithPerSetRetention(t)
-	svc, cleanup, err := Open(context.Background(), configPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = cleanup() })
+	configPath := writeRichTestConfigFile(t)
+	svc := openServiceAt(t, configPath)
 
 	newLocal := filepath.Join(t.TempDir(), "moved-local")
 	if _, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
@@ -584,4 +606,79 @@ func mustRead(t *testing.T, path string) string {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	return string(raw)
+}
+
+// exemptFromIsolationFixture names each config.BackupSet field that is
+// legitimately absent from the isolation fixture, with the reason.
+//
+// Everything not named here MUST be non-zero in that fixture, and
+// TestUpdateBackupSetIsolationFixtureExercisesEveryField enforces it.
+// The point is not tidiness, it is that a whole-struct comparison over a
+// field that is nil on BOTH sides proves nothing about that field: it
+// passes forever no matter what the patch applier does to it. That is
+// not hypothetical. It is exactly what happened to RetentionConfig, whose
+// isolation was "covered" by a comparison that could never have caught
+// it being dropped, until issue #333/#336 landed the field and a
+// deliberate fixture was written for it.
+//
+// So a field added to config.BackupSet from here on fails this test until
+// somebody decides which it is: exercised by the fixture, or exempt for a
+// reason written down. That is a ledger, deliberately, because the thing
+// being ledgered is a judgement someone has to make at the moment the
+// field lands rather than a violation to be waved through.
+var exemptFromIsolationFixture = map[string]string{
+	"ID": "assigned by Validate from the source and name, never read off the file, so a fixture cannot set it",
+	"Retention": "the RESOLVED policy, filled in by Validate and carrying yaml:\"-\", so it is never on disk to compare",
+	"ReadOnly": "the RESOLVED answer, filled in by Validate from ReadOnlyConfig; the override is what the fixture sets",
+	"Disabled": "a bool whose zero value IS its ordinary state (an enabled set), so \"non-zero\" cannot be required of it. UpdateBackupSetRequest cannot reach it either: enabling and disabling is POST /enabled's own route",
+	"Revalidation": "issue #315's re-check schedule, which no update-path request field can reach and which config.Validate does not require",
+}
+
+// TestUpdateBackupSetIsolationFixtureExercisesEveryField is a control on
+// the isolation test above rather than a test of the product.
+//
+// TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames compares the
+// WHOLE persisted config.BackupSet, which is what makes it grow with the
+// schema. That is only true while the fixture actually SETS the fields it
+// is comparing: a field the fixture leaves at its zero value is equal on
+// both sides whatever the patch applier does to it, so the guarantee is
+// hollow for exactly the fields nobody thought about.
+//
+// A fixture can therefore hollow out a test without anything about the
+// test looking wrong, which is a level below the vacuous assertions this
+// campaign has been hunting. This is the check that says so out loud.
+func TestUpdateBackupSetIsolationFixtureExercisesEveryField(t *testing.T) {
+	configPath := writeRichTestConfigFile(t)
+	bs := readBackupSetFromDisk(t, configPath, "production", "postgres-primary")
+
+	rt := reflect.TypeOf(bs)
+	rv := reflect.ValueOf(bs)
+	checked := 0
+	for i := 0; i < rt.NumField(); i++ {
+		name := rt.Field(i).Name
+		if reason, exempt := exemptFromIsolationFixture[name]; exempt {
+			if reason == "" {
+				t.Errorf("%s is exempt with no reason recorded; the reason is the whole value of the exemption", name)
+			}
+			continue
+		}
+		checked++
+		if rv.Field(i).IsZero() {
+			t.Errorf("config.BackupSet.%s is at its zero value in the isolation fixture, so TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames compares it equal on both sides no matter what the patch applier does to it.\n"+
+				"Either set it in writeRichTestConfigFile, or add it to exemptFromIsolationFixture with the reason it cannot be set.", name)
+		}
+	}
+
+	if checked == 0 {
+		t.Fatal("every field was exempt, so this control checked nothing")
+	}
+
+	// The exemption list may not name a field that no longer exists,
+	// which is how a ledger rots into a list of excuses for things that
+	// are not there any more.
+	for name := range exemptFromIsolationFixture {
+		if _, ok := rt.FieldByName(name); !ok {
+			t.Errorf("exemptFromIsolationFixture names %q, which config.BackupSet no longer has; remove the entry", name)
+		}
+	}
 }
