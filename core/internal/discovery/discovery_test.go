@@ -239,6 +239,67 @@ func TestDiscover_MarkerStrategy(t *testing.T) {
 	}
 }
 
+// TestDiscover_MarkerStrategy_ConfigurableManifestMarker is issue #291's
+// literal acceptance criterion: "A directory without the marker still
+// holds its artifacts back, proven by a test that adds the marker and
+// watches the same artifacts become complete."
+//
+// The producer is the issue's own example: a Gitea backup on a read-only
+// production host that writes one directory per run and signals it
+// finished with SHA256SUMS, written last, after every artifact -- a name
+// this manager cannot ask the producer to change to "_SUCCESS". Discover
+// runs twice against the same directory and journal: once before
+// SHA256SUMS exists, once after, with nothing else about the directory
+// changing in between.
+func TestDiscover_MarkerStrategy_ConfigurableManifestMarker(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, filepath.Join(root, "run", "gitea-dump.tar.gz"), "dump payload")
+	mustWrite(t, filepath.Join(root, "run", "gitea-db.dump"), "db payload")
+
+	source := transport.Source{ID: "gitea-backup", Type: "local", Root: root}
+	set := backupSet(t, config.Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}, []string{"*.tar.gz", "*.dump"})
+	deps := Deps{Transport: rclone.New(), Journal: openJournal(t), Now: fixedNow(epoch)}
+
+	// Before: the directory has no SHA256SUMS yet. Both artifacts are held
+	// back as Pending, even though the config already names the marker it
+	// is waiting for -- naming it is not the same as it existing.
+	before, err := Discover(context.Background(), deps, source, set)
+	if err != nil {
+		t.Fatalf("Discover (before marker exists): %v", err)
+	}
+	if len(before.Discovered) != 0 {
+		t.Fatalf("before the marker exists, Discovered = %+v, want none", before.Discovered)
+	}
+	pendingBefore := map[string]bool{}
+	for _, p := range before.Pending {
+		pendingBefore[p.RemotePath] = true
+	}
+	for _, want := range []string{"run/gitea-dump.tar.gz", "run/gitea-db.dump"} {
+		if !pendingBefore[want] {
+			t.Fatalf("%q was not Pending before the marker existed; Pending=%+v", want, before.Pending)
+		}
+	}
+
+	// The producer finishes its run and writes its own completion signal.
+	mustWrite(t, filepath.Join(root, "run", "SHA256SUMS"), "checksums")
+
+	after, err := Discover(context.Background(), deps, source, set)
+	if err != nil {
+		t.Fatalf("Discover (after marker exists): %v", err)
+	}
+	discoveredAfter := pathSet(after.Discovered)
+	for _, want := range []string{"run/gitea-dump.tar.gz", "run/gitea-db.dump"} {
+		if !discoveredAfter[want] {
+			t.Fatalf("%q was not Discovered after the marker appeared; Discovered=%+v", want, after.Discovered)
+		}
+	}
+	for _, rec := range after.Discovered {
+		if rec.RemotePath == "run/SHA256SUMS" {
+			t.Fatalf("the marker file itself was discovered as an artifact: %+v", rec)
+		}
+	}
+}
+
 // --- stable strategy -------------------------------------------------------
 
 func TestDiscover_StableStrategy(t *testing.T) {

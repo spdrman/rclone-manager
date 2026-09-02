@@ -212,7 +212,7 @@ func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, se
 		}
 	}
 
-	v.validateCompletion(path+".completion", &bs.Completion)
+	v.validateCompletion(path+".completion", &bs.Completion, bs.Include)
 
 	// A stale_after that parses to the zero Duration must not be read as
 	// "age >= 0 is always true, so every backup is stale": that would make
@@ -343,7 +343,7 @@ func (v *validator) validateKey(path string, r *Remote) {
 	}
 }
 
-func (v *validator) validateCompletion(path string, c *Completion) {
+func (v *validator) validateCompletion(path string, c *Completion, include []string) {
 	switch c.Strategy {
 	case "stable":
 		if c.StableFor.Duration() <= 0 {
@@ -376,17 +376,95 @@ func (v *validator) validateCompletion(path string, c *Completion) {
 		case c.DeleteSafetyDelay.Duration() == 0:
 			c.DeleteSafetyDelay = Duration(DefaultDeleteSafetyDelay)
 		}
-	case "rename", "marker":
+		if c.ManifestMarker != "" {
+			v.addf("%s: manifest_marker is not used by strategy %q; remove it", path, c.Strategy)
+		}
+	case "marker":
 		if c.StableFor.Duration() != 0 {
 			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
 		}
 		if c.DeleteSafetyDelay.Duration() != 0 {
 			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
 		}
+		v.validateManifestMarker(path, c, include)
+	case "rename":
+		if c.StableFor.Duration() != 0 {
+			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.DeleteSafetyDelay.Duration() != 0 {
+			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.ManifestMarker != "" {
+			v.addf("%s: manifest_marker is not used by strategy %q; remove it", path, c.Strategy)
+		}
 	case "":
 		v.addf("%s: strategy must be set (\"rename\", \"marker\" or \"stable\", FR-8)", path)
 	default:
 		v.addf("%s: unsupported strategy %q; must be \"rename\", \"marker\" or \"stable\" (FR-8)", path, c.Strategy)
+	}
+}
+
+// validateManifestMarker checks c.ManifestMarker's shape, resolves it to
+// DefaultManifestMarker if it is unset (issue #291), and then cross-checks
+// the resolved name against this backup set's own include patterns. Only
+// called when c.Strategy == "marker".
+//
+// The shape checks mirror validateBackupSet's Include pattern validation on
+// purpose: an operator-supplied filename read back off a remote listing is
+// exactly the kind of untrusted-adjacent string include patterns already
+// guard (no path separator, since this is a basename never a path; no "."
+// or ".." segment, since those are directory references, not filenames,
+// and model.ArtifactID would refuse them downstream anyway). It is
+// deliberately not run through filepath.Match the way an include pattern
+// is: ManifestMarker is a single literal name, matched by exact string
+// comparison in internal/discovery/complete.go, never a glob, so a
+// character that would be an invalid glob metachar (say, an unmatched "[")
+// is still a perfectly valid literal filename here.
+//
+// include is this backup set's Include, threaded down from
+// validateBackupSet through validateCompletion rather than read off a
+// shared struct, since Completion, unlike BackupSet, has no field for it.
+//
+// The collision check is a safety & reliability finding, not a shape one:
+// before ManifestMarker was operator-configurable it was always the fixed
+// literal "_SUCCESS", implicitly never a real payload name. Now that an
+// operator picks it, nothing stops them picking a name their own Include
+// patterns would otherwise match. discovery.Discover's isMarkerObject
+// check runs before Include filtering and unconditionally skips a match
+// (see discovery.go's Discover), so an undetected collision here would
+// silently and permanently exclude a real artifact from every backup,
+// forever, with no error, no rejection entry, no warning. Matching uses
+// filepath.Match, the same as the Include pattern shape check just above
+// this function's call site: both operands are already guaranteed
+// separator-free basenames by this point, so it agrees with
+// internal/discovery/complete.go's includeMatches (which uses path.Match
+// for GOOS-independence at actual matching time) on every input that
+// reaches here. Only patterns actually configured are checked: an empty
+// Include list has nothing to cross-check against, which is the same "no
+// explicit filter" baseline that let "_SUCCESS" work unconditionally
+// before this field existed.
+func (v *validator) validateManifestMarker(path string, c *Completion, include []string) {
+	markerPath := path + ".manifest_marker"
+	switch {
+	case c.ManifestMarker == "":
+		c.ManifestMarker = DefaultManifestMarker
+	case strings.ContainsAny(c.ManifestMarker, `/\`):
+		// Mirrors the Include pattern message: this matches a remote
+		// directory's basename, never a path, so a value that could
+		// itself contain a path separator invites exactly the kind of
+		// traversal ArtifactID is built to reject downstream.
+		v.addf("%s: %q must be a filename, not a path", markerPath, c.ManifestMarker)
+		return
+	case c.ManifestMarker == "." || c.ManifestMarker == "..":
+		v.addf("%s: %q must not be a directory reference", markerPath, c.ManifestMarker)
+		return
+	}
+
+	for _, pat := range include {
+		if ok, err := filepath.Match(pat, c.ManifestMarker); err == nil && ok {
+			v.addf("%s: %q matches this backup set's own include pattern %q; a real artifact with that name would be silently and permanently excluded from every backup, since discovery treats a manifest-marker match as a completion signal, never a candidate", markerPath, c.ManifestMarker, pat)
+			break
+		}
 	}
 }
 
