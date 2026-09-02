@@ -66,8 +66,8 @@ func TestCommitWalksVerifiedToCommitted(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
-	final := finalPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
+	final := mustFinalPath(t, dir, artifact)
 	content := []byte("durable backup content")
 	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -126,8 +126,8 @@ func TestCommitConvergesAfterACrashBetweenRenameAndDirectorySync(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
-	final := finalPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
+	final := mustFinalPath(t, dir, artifact)
 	content := []byte("durable backup content")
 	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -193,7 +193,7 @@ func TestCommitFinishesWhenAnEarlierAttemptOnlyRecordedCommitting(t *testing.T) 
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
 	if err := os.WriteFile(partial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestCommitFinishesWhenAnEarlierAttemptOnlyRecordedCommitting(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
-	if out.Record.State != string(Committed) || out.Record.LocalPath != finalPath(dir, artifact) {
+	if out.Record.State != string(Committed) || out.Record.LocalPath != mustFinalPath(t, dir, artifact) {
 		t.Fatalf("Record after commit = %+v", out.Record)
 	}
 }
@@ -231,7 +231,7 @@ func TestCommitConvergesWhenCalledAgainAfterFullSuccess(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
 	if err := os.WriteFile(partial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestCommitConvergesWhenCalledAgainAfterFullSuccess(t *testing.T) {
 	if second.Applied {
 		t.Fatal("second Commit: Applied = true, want a converged no-op")
 	}
-	if second.Record.State != string(Committed) || second.Record.LocalPath != finalPath(dir, artifact) {
+	if second.Record.State != string(Committed) || second.Record.LocalPath != mustFinalPath(t, dir, artifact) {
 		t.Fatalf("second Commit record = %+v", second.Record)
 	}
 }
@@ -275,7 +275,7 @@ func TestCommitRefusesAMismatchedLocalDirThenRecoversOnRetry(t *testing.T) {
 	artifact := mustID(t)
 
 	correctDir := t.TempDir()
-	actualPartial := partialPath(correctDir, artifact)
+	actualPartial := mustPartialPath(t, correctDir, artifact)
 	if err := os.WriteFile(actualPartial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -298,7 +298,7 @@ func TestCommitRefusesAMismatchedLocalDirThenRecoversOnRetry(t *testing.T) {
 	if rec.State != string(Committing) {
 		t.Fatalf("journal state after the mismatch = %q, want COMMITTING", rec.State)
 	}
-	if _, statErr := os.Stat(partialPath(wrongDir, artifact)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(mustPartialPath(t, wrongDir, artifact)); !os.IsNotExist(statErr) {
 		t.Fatal("commitFile touched the filesystem despite the mismatch")
 	}
 
@@ -324,7 +324,7 @@ func TestCommitRejectsLocalDirMismatchOnAnAlreadyCommittedRecord(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
 	if err := os.WriteFile(partial, []byte("payload"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}

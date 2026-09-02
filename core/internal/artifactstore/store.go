@@ -7,29 +7,34 @@
 // this package adds is the shape that makes a second implementation
 // possible later (issue #334) without rewriting the pipeline around it.
 //
-// # This interface has no production caller yet, and that is deliberate
+// # The seam is live, and which parts of it are is worth being exact about
 //
-// Everything below reads like a description of a live seam. It is not one,
-// so read this first.
+// This paragraph used to say the opposite. #334 landed the whole interface
+// with NO production caller at all, deliberately, so the contract could be
+// argued once in review rather than discovered under a deadline, and it
+// named the conversion it was deferring: the two places that held a local
+// directory string and composed a path out of it instead of asking a store.
 //
-// The only production use of this package is the package-level function
-// LocalLocator, from exactly two places:
+// #235 did that conversion, so those two now build a Local and ask it:
 //
-//   - internal/lifecycle/transfer.go, in finalPath
+//   - internal/lifecycle/transfer.go, in finalPath, which Commit and
+//     Transfer both reach through
 //   - internal/retention/prune.go, in pruneFinalPath
 //
-// Both of those hold a local directory string rather than a Store, so both
-// bypass the interface entirely. Store, Local, NewLocal, Kind, KindLocal,
-// Stat, Open, Put, Remove, ErrNotPresent and ErrAlreadyPresent have no
-// production callers at all.
+// The free function they used, LocalLocator, is gone from the exported
+// surface: it took a filesystem path, which hard-codes exactly the
+// assumption this interface exists to remove, and leaving it exported once
+// nothing needed it would have been a standing invitation to bypass the
+// seam. NewLocal, Locator, Kind and KindLocal therefore have real
+// production callers now.
 //
-// They are a design fixture: the contract a mover and a second backend get
-// built against, landed before either exists so the shape is argued once,
-// in review, rather than discovered under a deadline. The conversion #334
-// actually needs is therefore deferred rather than done, and it is those
-// two call sites: resolving a Store for the backup set and asking it,
-// instead of composing a path out of LocalPath. The gain from landing this
-// first is that the contract they will convert TO is already written down.
+// Stat, Open, Put and Remove still do not, and that is still deliberate.
+// The FR-12 commit path writes its own .partial and hard-links it because
+// it carries crash-safety obligations Put does not reproduce (see Put's
+// own comment and TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage),
+// and retention deletes through its own FR-20 discipline. The mover that
+// will use those four is #238, the move engine, and it composes them in
+// the one auditable order this package's doc argues for below.
 //
 // # Why the unit is an artifact and not a file
 //
