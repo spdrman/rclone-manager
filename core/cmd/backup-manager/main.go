@@ -49,6 +49,7 @@ var commands = map[string]func([]string) int{
 	"check":      cmdCheck,
 	"status":     cmdStatus,
 	"sources":    cmdSources,
+	"backup-set": cmdBackupSet,
 	"artifacts":  cmdArtifacts,
 	"fetch":      cmdFetch,
 	"retention":  cmdRetention,
@@ -69,6 +70,14 @@ commands:
   check                                          validate config and the state database, then exit
   status                                         report process and backup-set health (FR-24)
   sources                                        list configured sources and backup sets
+  backup-set create <source/backup-set> --host H --user U --remote-path P --local-path P
+                    --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
+                    --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
+                    [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
+                                                  create a backup set, the same operation POST /api/v1/backup-sets
+                                                  performs and through the same service layer. On an instance with
+                                                  no config.yaml yet this writes the first one (#176), and
+                                                  --state-database names the journal it points at
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
