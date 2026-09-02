@@ -38,17 +38,30 @@ func tightBounds(floor time.Duration, factor float64) bounds {
 }
 
 func TestRun_CatchesAGenuineHang(t *testing.T) {
-	const floor = 2 * time.Second
 	const poll = 50 * time.Millisecond
 	dir := filepath.Join("testdata", "fixtures", "hangpkg")
 
-	// Compile the fixture before the watched run starts. The tracker's
-	// clock begins when Run does, so without this the fixture's own
-	// compilation sits inside the very first window, and on a machine
-	// busy enough for that to take longer than the floor the watchdog
-	// trips before the fixture's first test has run at all. That is a
-	// false trip about this test's setup, not about the watchdog.
+	// The tracker's clock starts when Run does, and `go test` spends real
+	// time loading packages, linking and starting the binary before it
+	// emits its first event. That cost sits inside the very first window,
+	// so a floor smaller than it trips the watchdog before the fixture's
+	// first test has run at all: a false trip about this test's setup
+	// rather than about the watchdog. It is what the second failure mode
+	// in #379 was, "reconstructed output does not show TestOne actually
+	// having run".
+	//
+	// So the floor is measured rather than picked. The first call
+	// compiles; the second pays exactly the startup the watched run is
+	// about to pay, on this host, right now, and the floor is four times
+	// that. On a quiet machine it stays at the 2s this test has always
+	// used; on a loaded one it grows with the thing it has to cover.
 	warmBuildCache(t, dir)
+	startup := warmBuildCache(t, dir)
+	floor := 2 * time.Second
+	if measured := 4 * startup; measured > floor {
+		floor = measured
+	}
+	t.Logf("no-progress floor %s, from a warm `go test` startup of %s on this host", floor.Round(time.Millisecond), startup.Round(time.Millisecond))
 
 	lag := startSchedulingLagSampler(poll)
 
@@ -114,11 +127,12 @@ func TestRun_CatchesAGenuineHang(t *testing.T) {
 }
 
 // warmBuildCache compiles a fixture module's test binaries without running
-// anything, so a watched run that follows measures test execution rather
-// than compilation. `-run ^$` matches no test at all, which is the whole
-// point: this is a build step wearing `go test`'s clothes, because only
-// `go test` builds the test binary.
-func warmBuildCache(t *testing.T, dir string) {
+// anything, and reports how long that took. `-run ^$` matches no test at
+// all, which is the whole point: this is `go test` doing everything except
+// running a test, so a second call measures exactly the startup a watched
+// run is about to pay on this host, and the first call is what makes the
+// second one warm.
+func warmBuildCache(t *testing.T, dir string) time.Duration {
 	t.Helper()
 	cmd := exec.Command("go", "test", "-run", "^$", "-count=1", "./...")
 	cmd.Dir = dir
@@ -126,9 +140,12 @@ func warmBuildCache(t *testing.T, dir string) {
 	// module under testdata/, which this repository's go.work does not
 	// and must not list.
 	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if out, err := cmd.CombinedOutput(); err != nil {
+	began := time.Now()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("pre-building the fixture in %s failed, so this test cannot tell a slow compile from a hang: %v\n%s", dir, err, out)
 	}
+	return time.Since(began)
 }
 
 // schedulingLagSampler measures the worst overshoot of a sleep of exactly
