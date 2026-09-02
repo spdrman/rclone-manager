@@ -922,6 +922,41 @@ class TestProbeDefaultsCarryNothingPrivate(unittest.TestCase):
         self.assertEqual(args.probe_port, 443)
 
 
+class TestProbeArgvHygiene(unittest.TestCase):
+    """gateway/probe_host/probe_port used to be interpolated directly into
+    the shell script string run inside the probe container (issue #330).
+    These pin the replacement: the script text is a fixed constant, and
+    the values travel as environment variables instead - never re-parsed
+    as shell syntax on either side."""
+
+    def test_the_shell_script_is_a_fixed_constant(self):
+        """Same script string regardless of what gateway/host/port are,
+        which is only possible if none of them were ever spliced into it."""
+        argv1 = installer._probe_argv("img", "net", "172.17.0.1", "1.1.1.1", 443)
+        argv2 = installer._probe_argv("img", "net", "10.0.0.1; rm -rf /", "$(whoami)", 9999)
+        self.assertEqual(argv1[-1], argv2[-1])
+
+    def test_values_travel_as_environment_variables_not_shell_text(self):
+        argv = installer._probe_argv("img", "net", "172.17.0.1", "1.1.1.1", 443)
+        env_pairs = {argv[i + 1] for i, tok in enumerate(argv) if tok == "-e"}
+        self.assertEqual(env_pairs, {"GATEWAY=172.17.0.1", "PROBE_HOST=1.1.1.1", "PROBE_PORT=443"})
+
+    def test_a_value_with_shell_metacharacters_never_reaches_the_script_text(self):
+        """The regression this class exists for: a value that would have
+        broken out of the old interpolated string must appear ONLY in its
+        own -e argument, never inside the script argparse hands to sh."""
+        hostile = "1.1.1.1; rm -rf / #"
+        argv = installer._probe_argv("img", "net", "172.17.0.1", hostile, 443)
+        script = argv[-1]
+        self.assertNotIn(hostile, script, "a hostile value leaked into the script text")
+        self.assertIn(f"PROBE_HOST={hostile}", argv, "the value should still reach the container, as an env var")
+
+    def test_the_script_references_only_the_environment_variables(self):
+        script = installer._probe_argv("img", "net", "gw", "host", 1)[-1]
+        for name in ("GATEWAY", "PROBE_HOST", "PROBE_PORT"):
+            self.assertIn(f'"${name}"', script, f"the script does not read ${name} at all")
+
+
 
 class TestPersistenceUnit(unittest.TestCase):
     """The unit is the thing that runs unattended for the life of the

@@ -1263,6 +1263,35 @@ def _bridge_interfaces_from_network_inspect(raw: str) -> list[str]:
     return sorted(ifaces)
 
 
+def _probe_argv(image: str, network: str, gateway: str, probe_host: str, probe_port: int) -> list[str]:
+    """The `docker run` argv for BridgeDoctor.probe(), with gateway,
+    probe_host and probe_port passed as environment variables rather than
+    interpolated into the shell script string.
+
+    The script text itself is a fixed constant, never built from these
+    values, so there is nothing here for a value containing shell
+    metacharacters to reach: `sh` expands `"$GATEWAY"` etc. as one quoted
+    word regardless of what is in it, the same way every other privileged
+    invocation in this file builds an argv list rather than a shell
+    string. Practical risk was already low (unprivileged, --rm, these are
+    the operator's own CLI args, never attacker-controlled), but this file
+    is careful about injection everywhere else and this call was the one
+    exception.
+    """
+    script = (
+        'ping -c 3 -W 2 "$GATEWAY" >/dev/null 2>&1; echo "gateway_rc=$?"; '
+        'timeout 6 nc -z "$PROBE_HOST" "$PROBE_PORT" >/dev/null 2>&1; '
+        'echo "egress_rc=$?"'
+    )
+    return [
+        "docker", "run", "--rm", "--network", network,
+        "-e", f"GATEWAY={gateway}",
+        "-e", f"PROBE_HOST={probe_host}",
+        "-e", f"PROBE_PORT={probe_port}",
+        "--entrypoint", "/bin/sh", image, "-c", script,
+    ]
+
+
 class BridgeDoctor:
     """Diagnose, and if asked, repair, Docker bridge networking.
 
@@ -1356,13 +1385,8 @@ class BridgeDoctor:
         """
         image = self.args.probe_image
         gateway = self._gateway_of(network)
-        script = (
-            f"ping -c 3 -W 2 {gateway} >/dev/null 2>&1; echo \"gateway_rc=$?\"; "
-            f"timeout 6 nc -z {self.args.probe_host} {self.args.probe_port} >/dev/null 2>&1; "
-            f"echo \"egress_rc=$?\""
-        )
-        proc = run(["docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
-                    image, "-c", script], check=False, timeout=120)
+        proc = run(_probe_argv(image, network, gateway, self.args.probe_host, self.args.probe_port),
+                   check=False, timeout=120)
         out = proc.stdout + proc.stderr
         result = {"gateway": None, "egress": None, "gateway_ip": gateway, "raw": out.strip()}
         for line in out.splitlines():
