@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
+	"path/filepath"
 	"sort"
 
 	"github.com/rclone/rclone/fs"
@@ -272,11 +272,14 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 		return transport.UploadResult{}, Wrap("upload_from_local", statErr)
 	}
 
-	srcFs, err := fs.NewFs(ctx, path.Dir(localPath))
+	// filepath, not path: localPath is a filesystem path this process was
+	// handed, and splitting it with the slash-only helpers would be
+	// correct only by accident on the platforms this product ships to.
+	srcFs, err := fs.NewFs(ctx, filepath.Dir(localPath))
 	if err != nil {
 		return transport.UploadResult{}, Wrap("upload_from_local", err)
 	}
-	srcObj, err := srcFs.NewObject(ctx, path.Base(localPath))
+	srcObj, err := srcFs.NewObject(ctx, filepath.Base(localPath))
 	if err != nil {
 		return transport.UploadResult{}, Wrap("upload_from_local", err)
 	}
