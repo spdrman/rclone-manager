@@ -1237,8 +1237,14 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 			}
 		}
 
-		if m.Bucket == "" {
+		switch {
+		case m.Bucket == "":
 			v.addf("%s: bucket must not be empty; a medium with no bucket names no destination at all", path)
+		case strings.Contains(m.Bucket, "/"):
+			// One specific mistake, named in words an operator can act
+			// on rather than left to the backend to report as an
+			// unresolvable bucket.
+			v.addf("%s: bucket %q must not contain \"/\"; a key namespace inside the bucket belongs in prefix, not in the bucket name", path, m.Bucket)
 		}
 
 		// Empty means the documented default in both of the next two, and

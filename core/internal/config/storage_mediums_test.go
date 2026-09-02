@@ -83,6 +83,8 @@ func TestValidate_StorageMediumFieldRules(t *testing.T) {
 		{"prefix with a trailing slash", func(m *StorageMedium) { m.Prefix = "rclone-manager/" }, []string{"storage_mediums[0]", "prefix"}},
 		{"prefix with an empty segment", func(m *StorageMedium) { m.Prefix = "rclone//manager" }, []string{"storage_mediums[0]", "prefix"}},
 		{"prefix with a traversal segment", func(m *StorageMedium) { m.Prefix = "rclone/../manager" }, []string{"storage_mediums[0]", "prefix", ".."}},
+		{"prefix with a dot segment", func(m *StorageMedium) { m.Prefix = "rclone/./manager" }, []string{"storage_mediums[0]", "prefix"}},
+		{"bucket carrying a prefix", func(m *StorageMedium) { m.Bucket = "nas-backups/rclone-manager" }, []string{"storage_mediums[0]", "bucket", "prefix"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := mediumsConfig()
@@ -118,12 +120,29 @@ func TestValidate_AcceptsEveryStorageClassAndVerificationMode(t *testing.T) {
 			mustValidate(t, &c)
 		})
 	}
+	for _, typ := range StorageMediumTypes() {
+		t.Run("type "+typ, func(t *testing.T) {
+			c := mediumsConfig()
+			c.StorageMediums[0].Type = typ
+			mustValidate(t, &c)
+		})
+	}
 	t.Run("both omitted", func(t *testing.T) {
 		c := mediumsConfig()
 		c.StorageMediums[0].StorageClass = ""
 		c.StorageMediums[0].UploadVerification = ""
 		mustValidate(t, &c)
 	})
+	// The accepting half of the prefix rules. Without these a validator
+	// that refused every prefix, or every non-empty one, would still pass
+	// the refusal table above.
+	for _, prefix := range []string{"", "rclone-manager", "team/rclone-manager", "a/b/c", "rclone_manager.v2"} {
+		t.Run("prefix "+prefix, func(t *testing.T) {
+			c := mediumsConfig()
+			c.StorageMediums[0].Prefix = prefix
+			mustValidate(t, &c)
+		})
+	}
 }
 
 // TestValidate_RefusesDuplicateMediumIDs: two mediums with one id makes a
@@ -155,6 +174,27 @@ func TestValidate_AnUnreferencedMediumIsLegal(t *testing.T) {
 		Credentials: MediumCredentials{Env: "BACKUP_S3_STAGING"},
 	})
 	mustValidate(t, &c)
+}
+
+// TestValidate_ADeclaredMediumIsLegalWithTheLegacyScalarSpelling is the
+// other half of "an unreferenced medium is legal", in the branch that
+// cannot reference one at all. The three daily_days/weekly_months/
+// monthly_months scalars have no field for a medium, so a config using
+// them plus a declared medium is an operator staging a destination before
+// migrating to the chain spelling, which FR-27 calls legal.
+func TestValidate_ADeclaredMediumIsLegalWithTheLegacyScalarSpelling(t *testing.T) {
+	c := mediumsConfig()
+	c.Retention = Retention{Timezone: "UTC", WeekStartsOn: "monday", DailyDays: 7}
+	mustValidate(t, &c)
+
+	if len(c.StorageMediums) != 1 {
+		t.Fatalf("the fixture lost its medium: %+v", c.StorageMediums)
+	}
+	for i, tier := range c.Retention.EffectiveTiers() {
+		if got := tier.EffectiveMedium(); got != MediumLocal {
+			t.Errorf("the scalar chain's tier %d resolves to %q, want %q", i, got, MediumLocal)
+		}
+	}
 }
 
 // TestValidate_TierMediumReferences covers the tier half of FR-27: absence
@@ -458,6 +498,44 @@ func TestEffectiveMediumDefaults(t *testing.T) {
 	})
 }
 
+// TestEffectiveTiersCarriesTheMedium: EffectiveTiers is the accessor every
+// consumer of the chain reads (internal/retention decides through it, and
+// core/service reports through it), so a medium that did not survive it
+// would be a medium nothing downstream could ever see.
+//
+// The legacy scalar branch is checked in the same test because that is the
+// branch every pre-EPIC-E config takes, and the answer there has to be
+// "local everywhere" rather than an empty string that reads as unset.
+func TestEffectiveTiersCarriesTheMedium(t *testing.T) {
+	t.Run("an explicit chain", func(t *testing.T) {
+		c := mediumsConfig()
+		mustValidate(t, &c)
+		tiers := c.Retention.EffectiveTiers()
+		if len(tiers) != 2 {
+			t.Fatalf("EffectiveTiers() has %d tier(s), want 2", len(tiers))
+		}
+		if tiers[1].Medium != "offsite_s3" {
+			t.Errorf("EffectiveTiers()[1].Medium = %q, want offsite_s3", tiers[1].Medium)
+		}
+		if got := tiers[1].EffectiveMedium(); got != "offsite_s3" {
+			t.Errorf("EffectiveMedium() = %q, want offsite_s3", got)
+		}
+	})
+
+	t.Run("the legacy scalar chain is local throughout", func(t *testing.T) {
+		r := Retention{}
+		mustValidateRetention(t, &r)
+		for i, tier := range r.EffectiveTiers() {
+			if tier.Medium != "" {
+				t.Errorf("the default chain's tier %d carries medium %q; the scalars cannot name one", i, tier.Medium)
+			}
+			if got := tier.EffectiveMedium(); got != MediumLocal {
+				t.Errorf("the default chain's tier %d resolves to %q, want %q", i, got, MediumLocal)
+			}
+		}
+	})
+}
+
 // mediumKeyLine matches a YAML mapping key this change introduces, at any
 // indentation. FR-35 forbids either of them appearing in a file that never
 // configured one.
@@ -467,7 +545,19 @@ var mediumKeyLine = regexp.MustCompile(`(?m)^\s*(storage_mediums|medium):`)
 // held at the one place that can hold it byte for byte: the marshaler
 // core/service's writeConfigAtomically feeds the file from.
 func TestMarshal_ANoMediumConfigGainsNoMediumKeys(t *testing.T) {
-	cfg, err := Load("testdata/retention-tiers.yaml")
+	// Both spellings of a config that never heard of any of this: the
+	// explicit chain (which HAS tiers a medium key could land on) and the
+	// legacy scalars (which have no tiers at all). The second is the
+	// shape of every config written before FR-18, and the first is where
+	// a missing omitempty would actually show.
+	for _, fixture := range []string{"testdata/retention-tiers.yaml", "testdata/minimal.yaml"} {
+		t.Run(fixture, func(t *testing.T) { assertNoMediumKeysSurviveAReMarshal(t, fixture) })
+	}
+}
+
+func assertNoMediumKeysSurviveAReMarshal(t *testing.T, fixture string) {
+	t.Helper()
+	cfg, err := Load(fixture)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

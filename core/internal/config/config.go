@@ -1286,6 +1286,12 @@ type StorageMedium struct {
 	// Bucket is the bucket artifacts are written into. Required: a medium
 	// with no bucket names no destination at all, and there is no
 	// defensible default to invent for one.
+	//
+	// A bucket name carrying a "/" is refused, because that is one
+	// specific mistake worth catching in words an operator can act on:
+	// "nas-backups/rclone-manager" is a bucket and a prefix written into
+	// one field, and the refusal says so rather than letting the backend
+	// report a bucket name it cannot resolve.
 	Bucket string `yaml:"bucket"`
 
 	// Prefix is the key namespace inside Bucket, so one bucket can hold
@@ -1406,13 +1412,6 @@ type MediumCredentials struct {
 	// Manager) is adopted without this project taking a dependency on any
 	// of their SDKs or picking a winner among them.
 	Command []string `yaml:"command,omitempty"`
-}
-
-// isZero reports whether none of MediumCredentials' three sources are set,
-// so a caller can tell "no credentials: block at all" apart from a source
-// carrying an empty value. Mirrors Key.isZero.
-func (c MediumCredentials) isZero() bool {
-	return c.File == "" && c.Env == "" && len(c.Command) == 0
 }
 
 // DefaultFileName is the configuration file's name inside the
