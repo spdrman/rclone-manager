@@ -57,22 +57,31 @@ func cmdFetch(args []string) int {
 		len(result.Discovery.Discovered), len(result.Discovery.AlreadyKnown), len(result.Discovery.Pending),
 		len(result.Discovery.Rejected), len(result.Discovery.Conflicts), len(result.Discovery.Errors), result.FailedArtifacts)
 	fmt.Printf("reconciliation: %d finding(s), %d error(s)\n", len(result.Reconcile.Findings), len(result.Reconcile.Errors))
-	// failed counts artifacts that ended this call in FAILED, QUARANTINED
-	// or QUARANTINED_LOST: either a this-cycle transfer/verify/commit
-	// failure, or a previously-durable artifact reconciliation (above)
-	// found rotten on its own and quarantined before this cycle's own
-	// pipeline ever touched it. Neither case is what
-	// discoveryOrReconcileFailed sees, since that is a systemic discover/
-	// reconcile failure, not a per-artifact outcome, and a reconciliation
-	// pass that successfully finds and records rot returns no error at
-	// all. Checking it here, from the same count the line above just
-	// printed, is what issue #283 asks for: the exit code and the
-	// reported number cannot drift apart, because they are the same
-	// number. cycleFailed (setup.go) is the identical check `run`
-	// (run.go) makes, so the two commands cannot disagree about what a
-	// failed cycle is.
-	discoveryOrReconcileFailed := len(result.Discovery.Errors) > 0 || len(result.Reconcile.Errors) > 0
-	if cycleFailed(discoveryOrReconcileFailed, result.FailedArtifacts) {
+	// walked/through is issue #361's pair: how many artifacts this fetch
+	// had a reason to touch and how many of them ended it with their bytes
+	// on local disk. It is the one line above that can tell "there was
+	// nothing to fetch" apart from "nothing got through", which the
+	// discovery counters cannot, since both of those read discovered=0 on
+	// a pass whose candidates were all refused.
+	fmt.Printf("walked=%d through=%d\n", result.Walked, result.Durable)
+	// The verdict comes from result.Outcome(), built from the same numbers
+	// the two lines above just printed, so the exit code and the report an
+	// operator reads cannot drift apart. cycleFailed (setup.go) is the
+	// identical check `run` (run.go) makes, so the two commands cannot
+	// disagree about what a failed cycle is (issue #283, and issue #361's
+	// fourth acceptance criterion).
+	//
+	// Note what is no longer here: this used to fail the cycle on any
+	// per-candidate discovery error or per-artifact reconcile error, which
+	// `run` never did. That was the two commands disagreeing, in the
+	// direction that pages someone because one remote object out of ten
+	// was briefly unreadable. Those errors now count towards Walked
+	// instead (see app.FetchResult.Outcome), so they still fail the cycle
+	// when they are the whole story and no longer do when the pass got
+	// real work done around them.
+	outcome := result.Outcome()
+	if cycleFailed(outcome) {
+		reportCycleFailure(outcome)
 		return 1
 	}
 	return 0

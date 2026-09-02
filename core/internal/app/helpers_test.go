@@ -89,6 +89,22 @@ type fakeTransport struct {
 	// a post-hoc deleteCallCount() check.
 	poison *testing.T
 
+	// statErrFor makes Stat fail with the given error for exactly these
+	// remote paths and leaves every other method, List included,
+	// untouched. That is the shape issue #361 was reported in: the source
+	// answered the listing and then refused the per-object connections
+	// behind it, so discovery saw every candidate and could capture the
+	// identity of none of them. Discover isolates that into
+	// discovery.Result.Errors rather than failing the pass, which is
+	// exactly why the cycle around it used to call the whole thing a
+	// success.
+	statErrFor map[string]error
+
+	// copyErrFor makes CopyToLocal fail with the given error for exactly
+	// these remote paths, the other half of #361's shape: the one
+	// candidate that did get discovered still could not be fetched.
+	copyErrFor map[string]error
+
 	// remoteHashErr, when non-nil, is what RemoteHash returns instead of
 	// a computed hash, for every remote path. Unlike failForSourceID
 	// above (which fails every method, breaking transfer along with
@@ -134,6 +150,9 @@ func (f *fakeTransport) Stat(ctx context.Context, source transport.Source, remot
 	if f.failsFor(source) {
 		return transport.RemoteArtifact{}, f.failErr
 	}
+	if err, ok := f.statErrFor[remotePath]; ok {
+		return transport.RemoteArtifact{}, err
+	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
 		return transport.RemoteArtifact{}, transport.NewError(transport.NotFound, "stat", errors.New("not found"))
@@ -146,6 +165,9 @@ func (f *fakeTransport) Stat(ctx context.Context, source transport.Source, remot
 
 func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	atomic.AddInt32(&f.copyToLocalCallsCount, 1)
+	if err, ok := f.copyErrFor[remotePath]; ok {
+		return transport.TransferResult{}, err
+	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
 		return transport.TransferResult{}, transport.NewError(transport.NotFound, "copy_to_local", errors.New("not found"))

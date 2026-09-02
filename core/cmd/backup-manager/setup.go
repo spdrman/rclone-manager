@@ -157,25 +157,40 @@ func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 }
 
 // cycleFailed is the one place `run` and `fetch` both decide whether a
-// cycle counts as failed (issue #283): a systemic error (reconcile or
-// discover exhausting its retry budget, a journal listing failing
-// outright, or a shutdown mid-cycle) OR any artifact the cycle walked
-// ending in FAILED, QUARANTINED or QUARANTINED_LOST. Before this existed,
-// each command checked only the systemic half, so a cycle where every
-// artifact discovered fine and then failed verification exited 0 -- the
-// exact bug this function exists to make structurally impossible to
-// reintroduce in one of the two commands without the other.
+// cycle counts as failed (issue #283, extended by issue #361). It takes an
+// internal/app.CycleOutcome, which both commands build from the same
+// method on their own result type, so neither can decide from evidence the
+// other does not have.
 //
-// failedArtifacts (internal/app.processArtifacts) already folds in a
-// loss this cycle's own reconcile pass discovered on its own -- a
-// previously-durable artifact whose local copy turned out corrupted or
-// missing, moved to QUARANTINED or QUARANTINED_LOST -- not just a
-// this-cycle transfer/verify/commit failure: a successful reconciliation
-// pass that finds rot is not a systemic error, but it is a stronger case
-// for a non-zero exit than a single artifact this cycle's own pipeline
-// quarantined, and this function must not let that distinction matter.
-func cycleFailed(systemicFailure bool, failedArtifacts int) bool {
-	return systemicFailure || failedArtifacts > 0
+// The decision itself lives on CycleOutcome.Failed, next to the fields it
+// weighs and next to the full reasoning for each of its three clauses: a
+// systemic failure, an artifact left in a failure state, or a cycle that
+// had artifacts to move and moved none of them to safety. Read that doc
+// before changing anything here; the third clause in particular is
+// carefully bounded so an idle poll cycle stays a success.
+//
+// What stays here is the shape of the seam, which is the part issue #283
+// asked for and issue #361's fourth acceptance criterion asks for again:
+// one function, called by both commands, that neither may work around.
+func cycleFailed(outcome app.CycleOutcome) bool {
+	return outcome.Failed()
+}
+
+// reportCycleFailure prints why a cycle is being called failed, so the
+// reason is not encoded in the exit status alone (issue #361's fifth
+// acceptance criterion). It names the backup set, how many artifacts the
+// cycle walked and how many got through, from the same numbers the exit
+// status was computed from.
+//
+// It writes to stderr. This binary's stdout is the FR-23 newline-delimited
+// JSON event stream (see logger above), and a sentence in the middle of it
+// would break every consumer that parses it.
+func reportCycleFailure(outcome app.CycleOutcome) {
+	if outcome.NothingGotThrough() {
+		fmt.Fprintln(os.Stderr, "backup-manager: this cycle backed nothing up:", outcome.Summary())
+		return
+	}
+	fmt.Fprintln(os.Stderr, "backup-manager: this cycle did not complete cleanly:", outcome.Summary())
 }
 
 // fail prints err to stderr in a consistent shape and returns the exit

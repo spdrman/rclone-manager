@@ -57,6 +57,46 @@ type FetchResult struct {
 	// honestly: --dry-run looks at the remote, never at the journal's
 	// per-artifact outcomes, so it has nothing to report here.
 	FailedArtifacts int
+
+	// Walked and Durable are issue #361's addition, and carry exactly what
+	// their namesakes on BackupSetCycleResult (cycle.go) do, for exactly
+	// the same reason: FailedArtifacts on its own cannot tell a fetch that
+	// found nothing to do apart from one where nothing got through, and
+	// those two deserve opposite exit statuses. A dry-run leaves both at
+	// zero for the same reason it leaves FailedArtifacts there.
+	Walked  int
+	Durable int
+}
+
+// Outcome is this fetch's evidence about whether it succeeded, in the same
+// shape RunCycle produces per backup set (BackupSetCycleResult.Outcome).
+// The two exist so `run` and `fetch` decide from one definition rather than
+// from two that happen to agree today, which is issue #283's structural
+// point and issue #361's fourth acceptance criterion.
+//
+// A dry-run is never a failed cycle, whatever the journal holds: it
+// inspects the remote and records nothing, so it has no cycle to have
+// failed. See TestRun_FetchDryRunExitsZeroRegardlessOfJournalHistory in
+// cmd/backup-manager.
+//
+// Per-candidate discovery errors and per-artifact reconcile errors are not
+// systemic here, and deliberately no longer make a fetch fail on their
+// own. Before #361 they did, which meant `fetch` failed a pass that had
+// backed up nine artifacts out of ten while `run` over the same backup set
+// exited 0: the two commands disagreed, in the direction that pages
+// someone for a remote hiccup. They now count towards Walked instead, so
+// the same errors still fail the cycle when they are the whole story and
+// no longer do when they are not.
+func (r FetchResult) Outcome() CycleOutcome {
+	if r.DryRun {
+		return CycleOutcome{Set: r.Set}
+	}
+	return CycleOutcome{
+		Set:             r.Set,
+		FailedArtifacts: r.FailedArtifacts,
+		Walked:          r.Walked,
+		Durable:         r.Durable,
+	}
 }
 
 // Fetch is `backup-manager fetch --source ... --backup-set ...`'s use
@@ -115,7 +155,10 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	if err != nil {
 		return result, fmt.Errorf("app: fetch: listing %s: %w", bs.ID, err)
 	}
-	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	tally := s.processArtifacts(ctx, source, bs, records)
+	result.FailedArtifacts = tally.Failed
+	result.Walked = tally.Walked + undiscoverableCandidates(discRes, records)
+	result.Durable = tally.Durable
 
 	return result, nil
 }

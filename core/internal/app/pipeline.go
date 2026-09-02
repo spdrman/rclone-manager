@@ -10,6 +10,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
@@ -126,19 +127,33 @@ func attemptKey(rec state.Record) string {
 //
 // # Return value
 //
-// final is rec's lifecycle.State exactly as this call leaves it: whatever
-// state the artifact reached, or was already sitting in, when this call
-// stopped advancing it. Callers that only care about forward progress
-// (which is all of them, before issue #283) can ignore it; processArtifacts
-// below uses it to tell a business outcome (FAILED, QUARANTINED) from
-// everything else, which the two other things that can stop this
-// function early -- an infrastructure error, or ctx being done -- never
-// change rec to reflect, since only a successful Advance call ever
-// reassigns rec.
+// final is the state THE JOURNAL holds for this artifact when this call
+// returns, not the state of this function's own copy of the record. The
+// difference is a bug issue #361 was reported as, and it is worth stating
+// plainly because the two look interchangeable and are not.
+//
+// Every step above can both durably record a verdict and return an error
+// describing it. lifecycle.Transfer is the clearest case: when its copy
+// exhausts the retry budget it writes FAILED to the journal and then
+// returns the copy error, so this function takes its error exit, `rec` is
+// never reassigned (only a successful Advance ever reassigns it), and a
+// `final` read off `rec` would report the artifact as merely
+// un-advanced. That is what let a real cycle whose only artifact ended
+// FAILED report no failed artifacts at all, while `status`, reading the
+// same journal a moment later, correctly called the backup set FAILING.
+// The final-name collision refusal has the same shape.
+//
+// Reading it back from the journal makes the count and the journal one
+// fact rather than two, at the cost of one row read per artifact per
+// cycle, which is nothing next to the network round trips above it. When
+// the journal cannot be read at all (most often a shutdown, since the
+// read runs on the same cancelled ctx) this falls back to rec's own
+// state, which is the behaviour that was there before and is safe because
+// a cancelled cycle already fails on its own systemic error.
 func (s *Service) processArtifact(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record) (final lifecycle.State) {
 	artifact := rec.Artifact
 	base := attemptKey(rec)
-	defer func() { final = lifecycle.State(rec.State) }()
+	defer func() { final = s.journalState(ctx, artifact, rec) }()
 
 	// Live progress (progress.go). Each stage is announced immediately
 	// before the step that performs it, so an observer learns what is
@@ -288,9 +303,17 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 }
 
 // processArtifacts drives every one of records forward via processArtifact
-// and reports how many ended this call in FAILED, QUARANTINED or
-// QUARANTINED_LOST: a business outcome, not the systemic reconcile/
-// discover failure a caller's own Err field already tracks separately.
+// and tallies what became of them: how many it walked, how many ended the
+// call holding a durable local copy, and how many ended in FAILED,
+// QUARANTINED or QUARANTINED_LOST. All three are business outcomes, not
+// the systemic reconcile/discover failure a caller's own Err field
+// already tracks separately.
+//
+// The walked and durable halves are issue #361's: counting only failures
+// cannot tell a cycle that had nothing to do apart from a cycle in which
+// nothing got through, and those two outcomes deserve opposite exit
+// statuses. See CycleOutcome (outcome.go) for the full reasoning and for
+// what a caller does with the three numbers.
 //
 // records is always listed fresh from the journal after this cycle's own
 // FR-17 reconcile pass has already run and written whatever it decided
@@ -319,17 +342,28 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 // own copy, is what makes "run and fetch agree on what a failed cycle is"
 // a structural property instead of two definitions that happen to match
 // today.
-func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) (failed int) {
+func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) artifactTally {
+	var tally artifactTally
 	for _, rec := range records {
 		if ctx.Err() != nil {
 			break
 		}
-		switch s.processArtifact(ctx, source, bs, rec) {
-		case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
-			failed++
-		}
+		tally.count(s.processArtifact(ctx, source, bs, rec))
 	}
-	return failed
+	return tally
+}
+
+// journalState reports the lifecycle state the journal itself holds for
+// artifact, falling back to fallback's own state when the journal cannot
+// be read. See processArtifact's "Return value" section for why the
+// journal, rather than the caller's in-memory record, is the authority
+// here (issue #361).
+func (s *Service) journalState(ctx context.Context, artifact model.ArtifactID, fallback state.Record) lifecycle.State {
+	rec, err := s.Journal.Get(ctx, artifact)
+	if err != nil {
+		return lifecycle.State(fallback.State)
+	}
+	return lifecycle.State(rec.State)
 }
 
 // transferOne runs lifecycle.Transfer with a bounded retry policy (see

@@ -36,9 +36,15 @@ func cmdRun(args []string) int {
 
 	report := svc.RunCycle(ctx)
 
+	// Every backup set is judged, and every failed one is named, before
+	// the code is returned: an operator whose second of five backup sets
+	// stopped backing up should not have to re-run to find out which one,
+	// and stopping at the first would hide the rest.
 	failed := false
-	for _, s := range report.Sets {
-		if cycleFailed(s.Err != nil, s.FailedArtifacts) {
+	for _, set := range report.Sets {
+		outcome := set.Outcome()
+		if cycleFailed(outcome) {
+			reportCycleFailure(outcome)
 			failed = true
 		}
 	}

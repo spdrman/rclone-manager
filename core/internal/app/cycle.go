@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/reconcile"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // BackupSetCycleResult is what one processing cycle did for one backup
@@ -41,6 +43,41 @@ type BackupSetCycleResult struct {
 	Retention       RetentionSetReport
 	Err             error
 	FailedArtifacts int
+
+	// Walked and Durable are issue #361's half of "did this cycle do its
+	// job": how many artifacts this pass had a reason to touch, and how
+	// many of those ended it with their bytes on local disk. FailedArtifacts
+	// alone cannot answer that, because the interesting failure is the one
+	// where nothing failed and nothing got through either: every candidate
+	// refused before discovery could identify it, and the one that was
+	// identified refused its transfer, leaving it pre-durable for a later
+	// cycle exactly as a transient error should. See CycleOutcome
+	// (outcome.go) for what the two numbers mean in detail and for the rule
+	// they feed.
+	Walked  int
+	Durable int
+}
+
+// Outcome is the evidence this backup set's cycle produced about whether
+// it succeeded, in the one shape every caller decides from. Fetch has an
+// identical method (fetch.go) so `run` and `fetch` cannot end up reading
+// different evidence about the same cycle.
+//
+// The discovery candidates that errored are folded in here rather than in
+// processArtifacts, because they are the artifacts that never got as far
+// as being a journal row: a source that answers a listing and then refuses
+// every per-object connection produces a pass where nothing was walked at
+// all by the pipeline, and the only trace of the three artifacts that
+// should have been backed up is in this list. A candidate whose path one
+// of the walked rows already covers is not counted twice.
+func (r BackupSetCycleResult) Outcome() CycleOutcome {
+	return CycleOutcome{
+		Set:             r.Set,
+		SystemicFailure: r.Err != nil,
+		FailedArtifacts: r.FailedArtifacts,
+		Walked:          r.Walked,
+		Durable:         r.Durable,
+	}
 }
 
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per
@@ -209,7 +246,10 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		result.Err = err
 		return result
 	}
-	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	tally := s.processArtifacts(ctx, source, bs, records)
+	result.FailedArtifacts = tally.Failed
+	result.Walked = tally.Walked + undiscoverableCandidates(discRes, records)
+	result.Durable = tally.Durable
 	if ctx.Err() != nil {
 		result.Err = ctx.Err()
 	}
@@ -240,7 +280,61 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	}
 
 	s.recordSuccessfulPoll(bs.ID)
+	s.logCycleOutcome(ctx, result)
 	return result
+}
+
+// undiscoverableCandidates counts the remote objects this pass could not
+// identify at all and that no journal row already accounts for.
+//
+// Both halves matter. A candidate discovery could not stat never became a
+// journal row, so without this the pipeline's own walk would report a pass
+// over an unreachable source as having touched nothing, which is exactly
+// how a cycle that failed to back up three artifacts looked like a cycle
+// with nothing to do. And a candidate whose path a walked row already
+// covers (a re-discovery of something already in flight) is the same
+// artifact seen twice, so counting it again would inflate a number an
+// operator is meant to read literally.
+func undiscoverableCandidates(res discovery.Result, walked []state.Record) int {
+	if len(res.Errors) == 0 {
+		return 0
+	}
+	covered := make(map[string]struct{}, len(walked))
+	for _, rec := range walked {
+		covered[rec.RemotePath] = struct{}{}
+	}
+	n := 0
+	for _, e := range res.Errors {
+		if _, ok := covered[e.RemotePath]; !ok {
+			n++
+		}
+	}
+	return n
+}
+
+// logCycleOutcome is how a cycle that got nothing through reaches an
+// operator who is not reading an exit status, which is every operator
+// running `daemon` (issue #361).
+//
+// This is the whole of the daemon's answer to the question, and it is a
+// deliberate one. `run` is a report and can exit non-zero to tell its cron
+// job the truth; a daemon's entire job is to keep going, so exiting would
+// turn one bad cycle into an outage of its own. What it owes an operator
+// instead is to stop describing a cycle that backed nothing up in the same
+// INFO-level "cycle finished" line as one that worked. It is logged at
+// ERROR, from the same numbers the exit status is computed from, and then
+// the next cycle runs.
+//
+// A cycle that failed systemically already logged its own error at the
+// point of failure, and one with artifacts in a failure state already
+// logged each of those, so this says nothing about either: it fires only
+// for the shape that had no voice of its own.
+func (s *Service) logCycleOutcome(ctx context.Context, result BackupSetCycleResult) {
+	outcome := result.Outcome()
+	if outcome.SystemicFailure || !outcome.NothingGotThrough() {
+		return
+	}
+	s.logger().Error(ctx, "cycle", errors.New("this cycle backed nothing up: "+outcome.Summary()))
 }
 
 // enabledBackupSetCount is how many backup sets RunCycle will actually
