@@ -304,7 +304,7 @@ remove_run_dir() {
     "$run_dir/ssh_host_ed25519_key" "$run_dir/ssh_host_ed25519_key.pub" \
     "$run_dir/ssh_host_rsa_key" "$run_dir/ssh_host_rsa_key.pub" \
     "$run_dir/upload/payload.bin" "$run_dir/upload/schema.sql" "$run_dir/upload/notes.txt" \
-    "$run_dir/product-image.tar" 2>/dev/null || true
+    "$run_dir/product-image.tar" "$run_dir/probe-image.tar" 2>/dev/null || true
   rmdir "$run_dir/upload" "$run_dir" 2>/dev/null || true
   rmdir "$repo_root/.e2e-two-machine" 2>/dev/null || true
 }
@@ -401,6 +401,41 @@ PY
          "reach for a registry or test a published release instead of this working tree."
 note "the installer's --image default is $default_image"
 
+# The same treatment for the installer's network probe (#271), and for a
+# sharper reason. That probe needs a container with a shell, ping and nc,
+# and the installer PULLS one when the host has none. A manager machine is
+# a fresh daemon holding nothing, so without this every case reaches for
+# Docker Hub in the middle of an install, and a rate limit or a dropped
+# connection there fails a run that has nothing to do with either. Not
+# hypothetical: a full gate run died on
+# `Get "https://registry-1.docker.io/...": EOF` with everything else green.
+#
+# Read rather than restated, like the reference above, so the tag this
+# preloads cannot drift from the tag the installer would ask for.
+probe_base="$(python3 - <<'PY'
+import re, sys
+src = open("scripts/install/install_docker_host.py", encoding="utf-8").read()
+m = re.search(r'"--probe-image",\s*default="([^"]+)"', src)
+if not m:
+    sys.exit(1)
+print(m.group(1))
+PY
+)" || die "could not read the installer's own --probe-image default out of scripts/install/install_docker_host.py." \
+         "Without it this cannot preload the probe, and every case would pull it from a registry mid-install."
+
+# Checked here rather than at save time, so a host with no copy and no
+# route to a registry finds out in seconds instead of after the image
+# under test has been built. cannot_run, not die: that host cannot perform
+# this proof, which is the same verdict as no Docker and no privileged
+# containers, and the gate ledgers it rather than reporting a pass for a
+# run that never happened.
+if ! docker image inspect "$probe_base" >/dev/null 2>&1; then
+  docker pull "$probe_base" >/dev/null 2>&1 \
+    || cannot_run "the installer's network probe needs $probe_base, this host has no copy, and it could not be pulled." \
+                  "Pull it once by hand and re-run, or every case will try to reach a registry from inside its own install."
+fi
+note "the installer's --probe-image default is $probe_base, and this host has it"
+
 # ------------------------------------------------------- build the images
 
 step "building the image under test from this working tree"
@@ -442,11 +477,15 @@ DOCKERFILE
 note "source machine:  $source_image"
 note "manager machine: $machine_image"
 
-step "saving the image under test, to move it into the manager machine's own daemon"
+step "saving the images to move into the manager machine's own daemon"
 mkdir -p "$run_dir"
 docker save "$product_image" -o "$run_dir/product-image.tar" \
   || die "docker save $product_image failed."
-note "$(du -h "$run_dir/product-image.tar" | awk '{print $1}') of image to move per case"
+note "$(du -h "$run_dir/product-image.tar" | awk '{print $1}') of image under test to move per case"
+
+docker save "$probe_base" -o "$run_dir/probe-image.tar" \
+  || die "docker save $probe_base failed."
+note "the probe image travels with the run, so no case reaches a registry"
 
 # ------------------------------------------------------- the source's keys
 #
@@ -538,7 +577,15 @@ run_case() {
     || die "could not move $product_image into the manager machine's daemon."
   docker exec "$mgr" docker image inspect "$product_image" >/dev/null \
     || die "$product_image is not on the manager machine after the load."
-  note "$product_image is on the manager machine, and no registry was involved"
+  # The probe image with it, so the install below never reaches for a
+  # registry. Asserted present rather than assumed loaded, because a
+  # missing one does not fail here: it fails several minutes later, inside
+  # the installer, as a pull that times out.
+  docker exec -i "$mgr" docker load < "$run_dir/probe-image.tar" \
+    || die "could not move $probe_base into the manager machine's daemon."
+  docker exec "$mgr" docker image inspect "$probe_base" >/dev/null \
+    || die "$probe_base is not on the manager machine after the load, so the installer's network probe would pull it."
+  note "$product_image and $probe_base are on the manager machine, and no registry was involved"
 
   # The installer, and NOTHING else. No checkout on this machine at all,
   # which is #346's actual criterion: the canonical compose has to come
