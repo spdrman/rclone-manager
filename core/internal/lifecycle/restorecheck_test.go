@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -104,16 +102,17 @@ func TestRunRestoreCheck_Timeout_KillsProcess(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep %d\necho done > %s\n",
+		shQuote(pidFile), killTimeoutSleepSeconds, shQuote(markerFile)))
 
 	start := time.Now()
-	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}, path)
+	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(killTimeoutBudget)}, path)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunRestoreCheck: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("RunRestoreCheck took %s to return; the hook should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > killTimeoutSlack {
+		t.Fatalf("RunRestoreCheck took %s to return; the hook should have been killed well before its %ds sleep finished", elapsed, killTimeoutSleepSeconds)
 	}
 	if result.Passed {
 		t.Fatal("Passed = true, want false: a hook that never answers must fail closed")
@@ -122,26 +121,7 @@ func TestRunRestoreCheck_Timeout_KillsProcess(t *testing.T) {
 		t.Fatalf("Detail = %q, want it to mention the timeout", result.Detail)
 	}
 
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("reading pid file (the hook should have written it immediately on starting): %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatalf("parsing pid: %v", err)
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		killErr := syscall.Kill(pid, 0)
-		if errors.Is(killErr, syscall.ESRCH) {
-			break // confirmed: the process is actually gone
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("hook process %d is still alive well after its timeout; it was abandoned, not killed", pid)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	requireProcessGone(t, "hook", waitForPidFile(t, "hook", pidFile))
 
 	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("marker file exists: the hook ran to completion despite its timeout, so it was not actually killed")

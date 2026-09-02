@@ -683,19 +683,20 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep %d\necho done > %s\n",
+		shQuote(pidFile), killTimeoutSleepSeconds, shQuote(markerFile)))
 
 	start := time.Now()
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
 		Artifact: rec.Artifact, AttemptKey: "a1",
-		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}},
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(killTimeoutBudget)}},
 	})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("Verify took %s to return; the validator should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > killTimeoutSlack {
+		t.Fatalf("Verify took %s to return; the validator should have been killed well before its %ds sleep finished", elapsed, killTimeoutSleepSeconds)
 	}
 	if out.Record.State != string(Quarantined) {
 		t.Fatalf("state = %q, want %q: a validator that never answers must fail closed", out.Record.State, Quarantined)
@@ -704,29 +705,113 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 		t.Fatalf("ValidationDetail = %q, want it to mention the timeout", out.Record.ValidationDetail)
 	}
 
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("reading pid file (the validator should have written it immediately on starting): %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatalf("parsing pid: %v", err)
-	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		killErr := syscall.Kill(pid, 0)
-		if errors.Is(killErr, syscall.ESRCH) {
-			break // confirmed: the process is actually gone
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("validator process %d is still alive well after its timeout; it was abandoned, not killed", pid)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	requireProcessGone(t, "validator", waitForPidFile(t, "validator", pidFile))
 
 	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("marker file exists: the validator ran to completion despite its timeout, so it was not actually killed")
+	}
+}
+
+// killTimeoutScript is the script both timeout tests run, and the three
+// durations around it are chosen together (issue #377).
+//
+// The script writes its pid and then sleeps for far longer than any
+// timeout under test, so "did the timeout fire" and "did the process run
+// to completion" can never be confused for one another.
+//
+// killTimeoutBudget is the timeout handed to the code under test. It used
+// to be 200ms, and 200ms turned out to be the ENTIRE budget for the Go
+// runtime to fork and exec a shell: on a machine busy enough (several
+// concurrent `go test` runs and Docker builds, load average above 10) the
+// deadline fired before the shell had run its first line, the pid file
+// never appeared, and the test failed on an assertion that says nothing
+// about the guarantee it exists to prove. A second and a half is more
+// than seven times that, and still a sixtieth of the sleep, so nothing
+// about what is being measured has moved.
+//
+// It cannot simply be made enormous, which is the part worth reading the
+// slack's own doc for.
+const (
+	killTimeoutSleepSeconds = 90
+	killTimeoutBudget       = 1500 * time.Millisecond
+
+	// killTimeoutSlack is DERIVED from the budget rather than written
+	// out, and the derivation is the assertion.
+	//
+	// Both call sites set exec.Cmd.WaitDelay to 5 seconds, which is Go's
+	// own backstop: with the Cancel func doing nothing at all, the
+	// process still dies, five seconds late, and Wait still returns. So
+	// an implementation that had stopped killing anything would come back
+	// at roughly budget+5s while a correct one comes back at roughly
+	// budget. Anything strictly between the two separates them, and this
+	// sits in the middle with two seconds of headroom on each side.
+	//
+	// A slack that ignored WaitDelay would make this test pass against
+	// an implementation whose Cancel func kills nothing, which is exactly
+	// the guarantee it exists to prove. Checked by mutation, not assumed.
+	killTimeoutSlack = killTimeoutBudget + 2*time.Second
+
+	// killTimeoutReapDeadline is how long the process may take to
+	// disappear after the call returns. Under two seconds deliberately,
+	// and NOT widened: it has to stay below WaitDelay for the same reason
+	// the slack does.
+	killTimeoutReapDeadline = 2 * time.Second
+
+	// killTimeoutStartDeadline is how long the script may take to write
+	// its pid file. It is a different question from either of the two
+	// above (has this machine got round to forking a shell yet, versus
+	// has the code under test killed what it forked) and it is the one
+	// issue #377 was about, so it gets its own, generous number.
+	killTimeoutStartDeadline = 15 * time.Second
+)
+
+// waitForPidFile reads the pid the script wrote, waiting for it to appear
+// rather than assuming it already has.
+//
+// The wait is not the fix for issue #377 on its own (a process killed
+// before it ever ran writes no pid file, however long you wait) but it
+// removes the second half of the same assumption: that a file written by
+// another process is visible to this one the instant that process is
+// scheduled.
+//
+// A pid file that never appears is still a failure, and the message says
+// which failure it is, because "the process was killed before it could
+// start" and "the process was never killed" are opposite outcomes and
+// only one of them is a defect in the code under test.
+func waitForPidFile(t *testing.T, what, pidFile string) int {
+	t.Helper()
+	deadline := time.Now().Add(killTimeoutStartDeadline)
+	for {
+		raw, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if convErr == nil {
+				return pid
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("parsing the pid %s wrote: %v", what, convErr)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("the %s never wrote its pid file, so it was killed before it ran its first line rather than after its timeout. That is this machine being too busy to fork a shell inside %s, not a defect in the code under test (issue #377): %v",
+				what, killTimeoutBudget, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// requireProcessGone waits for pid to actually disappear, which is what
+// separates "killed" from "abandoned".
+func requireProcessGone(t *testing.T, what string, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(killTimeoutReapDeadline)
+	for {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return // confirmed: the process is actually gone
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s process %d is still alive well after its timeout; it was abandoned, not killed", what, pid)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
