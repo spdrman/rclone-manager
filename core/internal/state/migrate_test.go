@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -375,5 +376,51 @@ func TestMigrate_LeavesForeignKeyEnforcementAsItFoundIt(t *testing.T) {
 		if got != want {
 			t.Fatalf("after migrate, PRAGMA foreign_keys = %d, want %d", got, want)
 		}
+	}
+}
+
+// checkForeignKeys is what buys back the safety suspendForeignKeys gives
+// up, so it has to actually catch something. This drives it directly
+// against a transaction holding an orphan, because there is no way to
+// plant a bad migration into the embedded set and a guard nobody has seen
+// refuse anything is not a guard.
+func TestCheckForeignKeysRefusesADanglingReference(t *testing.T) {
+	ctx := context.Background()
+	db, _ := openRaw(t)
+	db.SetMaxOpenConns(1)
+	if err := migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatalf("suspend foreign keys: %v", err)
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // the test never commits this
+
+	// The control: a schema with nothing dangling passes.
+	if err := checkForeignKeys(ctx, tx); err != nil {
+		t.Fatalf("a freshly migrated schema failed the foreign key check: %v", err)
+	}
+
+	// With enforcement off, this insert is accepted and leaves exactly the
+	// dangling reference a table-recreating migration would leave behind
+	// if it forgot to copy the rows across.
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO placements (artifact_id, medium, location, status, created_at, updated_at)
+		 VALUES (777, 'local', '/x', 'ACTIVE', '2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("with foreign keys off this insert should be accepted: %v", err)
+	}
+
+	err = checkForeignKeys(ctx, tx)
+	if err == nil {
+		t.Fatal("checkForeignKeys passed a schema holding an orphan placement, so a migration could leave the journal referentially broken and still be recorded as applied")
+	}
+	if !strings.Contains(err.Error(), "placements") || !strings.Contains(err.Error(), "artifacts") {
+		t.Errorf("error = %q, want it to name the table holding the orphan and the table it points at", err)
 	}
 }

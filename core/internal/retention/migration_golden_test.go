@@ -152,7 +152,7 @@ func verdictsAfterOpening(t *testing.T, ctx context.Context, path string) []stri
 	if err != nil {
 		t.Fatalf("state.Open: %v", err)
 	}
-	defer j.Close()
+	defer func() { _ = j.Close() }()
 
 	set, err := model.NewBackupSetID("golden", "baseline")
 	if err != nil {

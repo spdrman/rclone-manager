@@ -51,6 +51,12 @@ type CatalogRebuildFinding struct {
 	Artifact model.ArtifactID
 	Action   CatalogRebuildAction
 
+	// ManifestPath is the sidecar this finding came from. It is here for
+	// the same reason CatalogRebuildError carries one: a caller reporting
+	// a conflict has to be able to say WHICH file disagrees, and an
+	// operator with shell access is that report's only audience.
+	ManifestPath string
+
 	// Conflicts names each way the sidecar and the existing journal row
 	// disagree, one plain sentence each, and is non-empty exactly when
 	// Action is CatalogRebuildConflict. It reports the disagreement, it
@@ -231,6 +237,7 @@ func (s *Service) RebuildCatalog(ctx context.Context, set model.BackupSetID, dry
 			})
 			continue
 		}
+		finding.ManifestPath = recovery.ManifestPath(bs.LocalPath, m.ArtifactName)
 		report.Findings = append(report.Findings, finding)
 	}
 	return report, nil

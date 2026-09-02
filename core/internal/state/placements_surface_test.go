@@ -24,7 +24,7 @@ func openJournal(t *testing.T) (*state.Journal, string) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 	return j, path
 }
 
@@ -377,7 +377,7 @@ func TestLocalBytesInUseCountsOnlyCopiesThatAreActuallyLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	total, err = reopened.LocalBytesInUse(ctx, states)
 	if err != nil {
 		t.Fatalf("LocalBytesInUse after retiring one copy: %v", err)

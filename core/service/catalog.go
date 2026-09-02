@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
@@ -35,6 +36,12 @@ type CatalogReport struct {
 	// non-zero Reconstructed is an ordinary partial result, not a
 	// contradiction: rebuild continues past a bad manifest rather than
 	// abandoning the artifacts it can still recover.
+	//
+	// A sidecar that disagrees with a journal row that already exists
+	// lands here too (FR-32). It is not a read failure, but it is a
+	// manifest the pass could not apply, and it is the one outcome an
+	// operator most needs to see: the alternative is a rebuild quietly
+	// choosing the database's version of events over the disk's.
 	Failures []CatalogFailure
 }
 
@@ -100,6 +107,21 @@ func (b *BackupService) catalogPass(ctx context.Context, dryRun bool) (CatalogRe
 					out.Reconstructed++
 				case app.CatalogRebuildAlreadyPresent:
 					out.AlreadyPresent++
+				case app.CatalogRebuildConflict:
+					// A conflicting sidecar is a manifest this pass could
+					// not apply, which is what Failures means, and it must
+					// not be silently absent from the report: FR-32's whole
+					// point is that a disagreement between a sidecar and a
+					// journal row is reported rather than resolved. It is
+					// deliberately NOT counted as AlreadyPresent, which
+					// reads as "the journal already had this and all is
+					// well".
+					out.Failures = append(out.Failures, CatalogFailure{
+						BackupSetID: bs.ID.String(),
+						Path:        f.ManifestPath,
+						Reason: fmt.Sprintf("%s already has a journal row and this sidecar disagrees with it; nothing was changed: %s",
+							f.Artifact, strings.Join(f.Conflicts, "; ")),
+					})
 				}
 			}
 			for _, e := range report.Errors {

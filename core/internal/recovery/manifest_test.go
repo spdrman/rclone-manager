@@ -38,7 +38,7 @@ func TestManifestFieldsExcludeSecrets(t *testing.T) {
 // names would have gone on passing while a placement grew an Endpoint.
 func checkNoSecretFields(t *testing.T, typ reflect.Type, path string, forbidden []string) {
 	t.Helper()
-	for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
+	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
 		typ = typ.Elem()
 	}
 	if typ.Kind() != reflect.Struct || typ == reflect.TypeOf(time.Time{}) {

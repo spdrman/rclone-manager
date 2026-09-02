@@ -201,6 +201,12 @@ func migrate(ctx context.Context, db *sql.DB) error {
 // reference is refused and rolled back rather than quietly written down.
 // The pragma has to be toggled out here rather than inside that
 // transaction because SQLite makes it a no-op while one is open.
+//
+// It is a per-CONNECTION setting, so this depends on the single-connection
+// pinning Open establishes (db.SetMaxOpenConns(1), see this package's
+// Journal doc): with a pool, the connection this turns the pragma off on
+// and the connection a migration then runs on would not have to be the
+// same one. Open is the only caller, and it pins the pool before calling.
 func suspendForeignKeys(ctx context.Context, db *sql.DB) (restore func(), err error) {
 	var was int
 	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&was); err != nil {
