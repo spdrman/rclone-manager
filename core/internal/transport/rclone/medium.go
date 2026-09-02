@@ -98,6 +98,15 @@ const mediumRetries = 2
 // has to wrap the context the Fs is BUILT with as well as the one the
 // operation runs under: the s3 backend reads LowLevelRetries once, at
 // construction, to size the AWS SDK's retryer.
+//
+// Every method here also releases its Fs on the way out (shutdownFs), the
+// discipline #264 established for the Transport half after an Fs per
+// operation with nothing ever releasing one turned into a failed backup
+// against a host that refuses a third connection. An s3 Fs holds an HTTP
+// client and a pacer rather than a pool of SSH sessions, so the failure it
+// leaks toward is gentler, but "build one per operation and never release
+// it" is the same shape, and one adapter should not have two answers to
+// it.
 func mediumContext(ctx context.Context) context.Context {
 	bounded, config := fs.AddConfig(ctx)
 	config.LowLevelRetries = mediumRetries
@@ -158,6 +167,17 @@ func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs,
 
 	f, err := info.NewFs(ctx, medium.ID, medium.Bucket, withBackendDefaults(cfg, info))
 	if err != nil {
+		// A backend may hand back a LIVE Fs alongside an error, which is
+		// the leak "release on the way out of each operation" cannot
+		// catch: no caller ever sees this Fs, so no caller ever defers a
+		// shutdown for it. newFs learned this from rclone's sftp backend
+		// in #264; the s3 backend's own NewFs has the same
+		// `return f, err` shape when the root names an object rather
+		// than a bucket, so it gets the same treatment rather than an
+		// argument about which backends do it.
+		if f != nil {
+			shutdownFs(ctx, f)
+		}
 		return nil, Wrap("medium_fs", fmt.Errorf("medium %q: %w", medium.ID, err))
 	}
 	return f, nil
@@ -187,6 +207,7 @@ func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key s
 	if err != nil {
 		return transport.ObjectInfo{}, err
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
 		return transport.ObjectInfo{}, Wrap("stat_object", err)
@@ -215,12 +236,14 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 	if err != nil {
 		return transport.UploadResult{}, err
 	}
+	defer shutdownFs(ctx, dstFs)
 
 	srcDir, srcName := splitPath(localPath)
 	srcFs, err := fs.NewFs(ctx, srcDir)
 	if err != nil {
 		return transport.UploadResult{}, Wrap("upload_from_local", err)
 	}
+	defer shutdownFs(ctx, srcFs)
 	srcObj, err := srcFs.NewObject(ctx, srcName)
 	if err != nil {
 		return transport.UploadResult{}, Wrap("upload_from_local", err)
@@ -245,13 +268,39 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
+		shutdownFs(ctx, f)
 		return nil, Wrap("open_object", err)
 	}
 	rc, err := o.Open(ctx)
 	if err != nil {
+		shutdownFs(ctx, f)
 		return nil, Wrap("open_object", err)
 	}
-	return rc, nil
+	// This is the one method whose Fs cannot be released on the way out:
+	// the reader it returns is still reading through it. So the release
+	// rides on the reader's own Close, which the caller is already
+	// obliged to call, rather than being skipped because this method has
+	// no convenient place for a defer.
+	return &fsBoundReadCloser{ReadCloser: rc, fs: f, ctx: ctx}, nil
+}
+
+// fsBoundReadCloser releases an Fs when the reader taken from it is
+// closed.
+//
+// Closing the Fs happens whatever the reader's own Close reports, and that
+// error is the one returned: a failure to hang up cleanly must not mask a
+// failure to finish reading, and it must not turn a completed read into a
+// reported failure either.
+type fsBoundReadCloser struct {
+	io.ReadCloser
+	fs  fs.Fs
+	ctx context.Context
+}
+
+func (r *fsBoundReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	shutdownFs(r.ctx, r.fs)
+	return err
 }
 
 // ObjectChecksum asks the medium for its own digest of the WHOLE object.
@@ -272,6 +321,7 @@ func (a *Adapter) ObjectChecksum(ctx context.Context, medium transport.Medium, k
 	if err != nil {
 		return transport.ChecksumAttestation{}, err
 	}
+	defer shutdownFs(ctx, f)
 	if !f.Hashes().Contains(hash.SHA256) {
 		return transport.ChecksumAttestation{}, Wrap("object_checksum", fmt.Errorf(
 			"%w: medium %q (type %s) cannot attest a full-object %s",
@@ -309,6 +359,7 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 	if err != nil {
 		return err
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
 		if wrapped := Wrap("delete_object", err); isNotFound(wrapped) {
@@ -332,6 +383,7 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 	if err != nil {
 		return nil, err
 	}
+	defer shutdownFs(ctx, f)
 	objs, _, err := walk.GetAll(ctx, f, prefix, true, -1)
 	if err != nil {
 		if wrapped := Wrap("list_objects", err); isNotFound(wrapped) {

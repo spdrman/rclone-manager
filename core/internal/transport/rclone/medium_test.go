@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -165,5 +166,72 @@ func TestClassifyTreatsAnUnresolvableEndpointAsConfiguration(t *testing.T) {
 	timeout := &net.DNSError{Err: "i/o timeout", Name: "s3.example.com", IsTimeout: true}
 	if got := rclone.Classify(timeout); got == transport.Configuration {
 		t.Error("Classify(a DNS timeout) = configuration; a lookup that timed out may well succeed on the next attempt")
+	}
+}
+
+// TestEveryMediumOperationReleasesItsFs is #264's discipline held for the
+// MediumStore half: every operation builds its own Fs, and an Fs nobody
+// releases is a resource that grows with the number of operations a cycle
+// performs and is bounded by nothing.
+//
+// It is a source scan rather than a live leak test, deliberately. The
+// live proof for sftp works because a connection pool is observable from
+// outside the process; an s3 Fs holds an HTTP client and a pacer, which
+// are not, so a behavioural test here would be asserting something it
+// cannot see. What CAN be checked, and is exactly the thing a future
+// method would get wrong, is whether each operation released what it
+// built.
+func TestEveryMediumOperationReleasesItsFs(t *testing.T) {
+	source, err := os.ReadFile("medium.go")
+	if err != nil {
+		t.Fatalf("reading medium.go: %v", err)
+	}
+	text := string(source)
+
+	// OpenObject is the one method that cannot release on the way out:
+	// the reader it returns is still reading through the Fs, so the
+	// release rides on that reader's own Close instead.
+	byReader := map[string]bool{"OpenObject": true}
+
+	for _, method := range []string{"StatObject", "UploadFromLocal", "OpenObject", "ObjectChecksum", "DeleteObject", "ListObjects"} {
+		t.Run(method, func(t *testing.T) {
+			start := strings.Index(text, "func (a *Adapter) "+method+"(")
+			if start < 0 {
+				t.Fatalf("medium.go declares no %s; if it moved, move this check with it rather than dropping the method from the scan", method)
+			}
+			end := strings.Index(text[start:], "\n}\n")
+			if end < 0 {
+				t.Fatalf("could not find the end of %s", method)
+			}
+			body := text[start : start+end]
+
+			if !strings.Contains(body, "a.mediumFs(ctx, ") && !strings.Contains(body, "a.mediumFs(ctx, dstMedium)") {
+				t.Skipf("%s builds no Fs of its own", method)
+			}
+			switch {
+			case byReader[method]:
+				if !strings.Contains(body, "fsBoundReadCloser") {
+					t.Errorf("%s builds an Fs and hands back a reader without binding the Fs's release to that reader's Close", method)
+				}
+			case !strings.Contains(body, "defer shutdownFs("):
+				t.Errorf("%s builds an Fs and never releases it; every operation in this file releases what it built (#264)", method)
+			}
+		})
+	}
+}
+
+// TestTheFsReleaseScanCanActuallyFail is the positive control: the scan
+// above is an absence-shaped check over hand-written method names, which
+// passes silently if the names stop matching.
+func TestTheFsReleaseScanCanActuallyFail(t *testing.T) {
+	source, err := os.ReadFile("medium.go")
+	if err != nil {
+		t.Fatalf("reading medium.go: %v", err)
+	}
+	if !strings.Contains(string(source), "defer shutdownFs(") {
+		t.Fatal("medium.go contains no deferred release at all, so the scan above cannot be distinguishing anything")
+	}
+	if strings.Count(string(source), "func (a *Adapter) ") < 6 {
+		t.Fatal("medium.go declares fewer than six adapter methods, so the scan's method list no longer matches the file")
 	}
 }
