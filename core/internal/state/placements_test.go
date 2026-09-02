@@ -329,6 +329,113 @@ func TestMigration0007InterruptedLeavesTheSchemaVersionUnadvanced(t *testing.T) 
 	}
 }
 
+// TestMigration0007InterruptedMidFileLeavesNoHalfBuiltSchema is the
+// interruption that the whole-file one above cannot reach.
+//
+// That test appends a failing statement AFTER the real migration, which
+// proves the transaction wraps the file. This one cuts the file in half:
+// it applies everything up to and including `CREATE TABLE placements` and
+// then fails, which is the shape of a process killed partway through. The
+// dangerous survivor would be a `placements` table with no
+// `placement_moves` beside it and no backfill in it, because a later start
+// would then find a table that exists, is empty, and is not what any
+// reader expects. It also checks the artifacts rows are untouched, since
+// this migration's transaction covers them too.
+func TestMigration0007InterruptedMidFileLeavesNoHalfBuiltSchema(t *testing.T) {
+	db, _ := openRaw(t)
+	migrateUpTo(t, db, placementsMigrationVersion-1)
+	seedArtifacts(t, db)
+	ctx := context.Background()
+
+	before := countArtifacts(t, db)
+	if before == 0 {
+		t.Fatal("the fixture seeded no artifacts, so an interruption over them proves nothing")
+	}
+
+	real := migrationSQL(t, placementsMigrationVersion)
+	statements := splitStatements(real.sql)
+	cut := -1
+	for i, stmt := range statements {
+		if strings.Contains(stmt, "CREATE TABLE placements") {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		t.Fatal("no CREATE TABLE placements statement in migration 0007; this test is cutting the file in a place that no longer exists")
+	}
+	if cut == len(statements)-1 {
+		t.Fatal("CREATE TABLE placements is the last statement, so cutting after it is not a mid-file interruption")
+	}
+
+	partial := real
+	partial.sql = strings.Join(statements[:cut+1], ";\n") + ";\nINSERT INTO placements (artifact_id) SELECT id FROM a_table_that_does_not_exist;\n"
+
+	// The positive control, without which "placements does not exist
+	// afterwards" would pass just as happily on a cut that never reached
+	// the CREATE at all. On a database where the same statements run
+	// outside applyMigration's transaction, the table IS there.
+	control, _ := openRaw(t)
+	migrateUpTo(t, control, placementsMigrationVersion-1)
+	for _, stmt := range statements[:cut+1] {
+		if _, err := control.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("the control could not run the statements up to the cut: %v", err)
+		}
+	}
+	if !tableExists(t, control, "placements") {
+		t.Fatal("the statements up to the cut do not create placements, so this test is cutting the migration somewhere that proves nothing")
+	}
+
+	if err := applyMigration(ctx, db, partial); err == nil {
+		t.Fatal("a migration interrupted after its first CREATE TABLE reported success")
+	}
+
+	applied, err := appliedMigrations(ctx, db)
+	if err != nil {
+		t.Fatalf("appliedMigrations: %v", err)
+	}
+	if _, recorded := applied[placementsMigrationVersion]; recorded {
+		t.Errorf("schema_migrations records version %d after an interruption partway through it", placementsMigrationVersion)
+	}
+
+	for _, table := range []string{"placements", "placement_moves"} {
+		if tableExists(t, db, table) {
+			t.Errorf("%s survived an interruption partway through the migration; a later start would find a table nothing finished building", table)
+		}
+	}
+
+	if after := countArtifacts(t, db); after != before {
+		t.Errorf("the artifacts table went from %d rows to %d across an interrupted migration", before, after)
+	}
+
+	// The restart. This is the whole point of leaving the version
+	// unadvanced, so it is checked rather than assumed.
+	if err := migrate(ctx, db); err != nil {
+		t.Fatalf("migrating after an interruption partway through: %v", err)
+	}
+	if countPlacements(t, db) == 0 {
+		t.Error("the restart backfilled nothing")
+	}
+}
+
+func tableExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&n); err != nil {
+		t.Fatalf("looking for table %s: %v", name, err)
+	}
+	return n > 0
+}
+
+func countArtifacts(t *testing.T, db *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&n); err != nil {
+		t.Fatalf("counting artifacts: %v", err)
+	}
+	return n
+}
+
 // retentionSnapshot is every column FR-18 reads to decide whether an
 // artifact is kept, plus the identity it is keyed by.
 type retentionSnapshot map[string]string
