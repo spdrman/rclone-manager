@@ -39,6 +39,13 @@
 # the daemon; CI_LOCAL_SKIP_DOCKER=1 is the out-loud opt-out and ends
 # INCOMPLETE.
 #
+# A missing Playwright Chromium is the third instance of the same shape,
+# and gets the same answer: the browser e2e step refuses and names the
+# install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that
+# ledgers. See scripts/e2e/run-tests-repo-gate.sh, which is where that
+# suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
+# is why it runs at all).
+#
 # The two-machine end-to-end backup proof (#356) is the fourth, with one
 # extra state. Docker being absent is the same shape as everything above.
 # A Docker daemon that is present and refuses a PRIVILEGED container is a
@@ -47,13 +54,6 @@
 # host rather than onto a fresh machine. The script says CANNOT RUN and
 # exits 3 for both, this gate ledgers that, and CI_LOCAL_SKIP_TWO_MACHINE=1
 # is the out-loud opt-out.
-#
-# A missing Playwright Chromium is the third instance of the same shape,
-# and gets the same answer: the browser e2e step refuses and names the
-# install command, and CI_LOCAL_SKIP_E2E=1 is the out-loud opt-out that
-# ledgers. See scripts/e2e/run-tests-repo-gate.sh, which is where that
-# suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
-# is why it runs at all).
 #
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
