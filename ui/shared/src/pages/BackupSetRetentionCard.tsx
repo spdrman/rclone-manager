@@ -7,7 +7,8 @@ import type {
   BackupSetRetention,
   RetentionOverride,
   RetentionSchema,
-  RetentionSettings
+  RetentionSettings,
+  RetentionTierSetting
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
@@ -305,8 +306,15 @@ function RetentionPanel({
   );
 }
 
-/** One resolved policy, rendered the way `backup-manager backup-set
- *  retention` prints it: the calendar, then the chain, in chain order. */
+/**
+ * One resolved policy: the chain in chain order, then the calendar it is
+ * reckoned in.
+ *
+ * The chain is in chain ORDER rather than sorted, because order is not
+ * presentational: the first tier that selects an artifact names the
+ * medium it lives on (config.Retention.Tiers' own doc), so a reordered
+ * rendering would describe a policy the deployment does not have.
+ */
 function PolicyChain({ policy }: { policy: RetentionSettings }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -314,13 +322,7 @@ function PolicyChain({ policy }: { policy: RetentionSettings }) {
         {policy.tiers.map((t) => (
           <li key={t.name} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <span className="mono">{t.name}</span>
-            <span style={{ color: "var(--text-2)" }}>
-              {"keep " + t.keep + " " + granularityLabel(t.windowUnit ?? t.granularity).toLowerCase() +
-                (t.keep === 1 ? "" : "s") +
-                " of " + granularityLabel(t.granularity).toLowerCase() +
-                (t.granularity === "days" && t.periodDays ? " (" + t.periodDays + ")" : "") +
-                " buckets"}
-            </span>
+            <span style={{ color: "var(--text-2)" }}>{tierSentence(t)}</span>
           </li>
         ))}
       </ul>
@@ -332,6 +334,26 @@ function PolicyChain({ policy }: { policy: RetentionSettings }) {
       </div>
     </div>
   );
+}
+
+/** One tier as a sentence, in the vocabulary FR-18 uses: what it buckets
+ *  by, and how far back it looks.
+ *
+ *  The look-back unit is a separate field from the bucket granularity and
+ *  the default weekly tier uses both (buckets by week, looks back over
+ *  calendar months), so a rendering that collapsed them would describe the
+ *  product's own default policy wrongly. A custom period reads as its
+ *  length in days, because "6 custom periods" says nothing an operator can
+ *  check against their configuration file. */
+function tierSentence(t: RetentionTierSetting): string {
+  const unit = t.windowUnit && t.windowUnit !== t.granularity ? t.windowUnit : t.granularity;
+  const plural = t.keep === 1 ? "" : "s";
+  if (t.granularity === "days" && t.periodDays)
+    return "keeps " + t.keep + " × " + t.periodDays + "-day period" + plural;
+  const window = "keeps " + t.keep + " " + granularityLabel(unit).toLowerCase() + plural;
+  return unit === t.granularity
+    ? window
+    : window + " of " + granularityLabel(t.granularity).toLowerCase() + " buckets";
 }
 
 /**
