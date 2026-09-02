@@ -411,7 +411,7 @@ func (h *handlers) setBackupSetEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	id := backupSetIDFromRoute(r)
 	updated, err := h.backend.SetBackupSetEnabled(r.Context(), id, body.Enabled)
 	if err != nil {
 		if errors.Is(err, service.ErrBackupSetNotFound) {
@@ -455,7 +455,7 @@ func (h *handlers) setBackupSetReadOnly(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	id := backupSetIDFromRoute(r)
 	updated, err := h.backend.SetBackupSetReadOnly(r.Context(), id, body.ReadOnly)
 	if err != nil {
 		if errors.Is(err, service.ErrBackupSetNotFound) {
@@ -556,7 +556,7 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 		req.ValidatorID = &id
 	}
 
-	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	id := backupSetIDFromRoute(r)
 	updated, err := h.backend.UpdateBackupSet(r.Context(), id, req)
 	if err != nil {
 		if errors.Is(err, service.ErrBackupSetNotFound) {

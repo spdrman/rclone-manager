@@ -68,13 +68,6 @@ export function BackupSetRetentionSection({
     () => api.getBackupSetRetention(source, setName),
     [api, source, setName]
   );
-  // The schema the editor builds its pickers and bounds from, served
-  // beside the deployment's settings rather than written out here, for
-  // the reason RetentionPolicyCard's own defaultChain records: a second
-  // copy of the product's rules is free to drift, and drifting in the
-  // retention direction shortens a window.
-  const settings = useAsync<AppSettings>(() => api.getSettings(), [api]);
-
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   // What the editor's own save just persisted, so the summary above it
@@ -135,45 +128,14 @@ export function BackupSetRetentionSection({
         <>
           {/* The whole editor, not a second one: same validation, same
               schema-driven pickers, same confirmation in front of turning
-              FR-19 protection off. Keyed on the chain so a reload
-              re-initialises its draft rather than synchronising into it. */}
-          {settings.data ? (
-            <RetentionPolicyEditor
-              key={policyKey(current.policy)}
-              loaded={current.policy}
-              schema={settings.data.schema.retention}
-              readOnly={readOnly || busy}
-              saver={{
-                write: (policy: RetentionSettings) =>
-                  api
-                    .setBackupSetRetention(source, setName, {
-                      tiers: policy.tiers,
-                      timezone: policy.timezone,
-                      weekStartsOn: policy.weekStartsOn,
-                      protectLastKnownGood: policy.protectLastKnownGood
-                    })
-                    .then((r) => {
-                      setSaved(r.policy);
-                      return r.policy;
-                    }),
-                intro: (
-                  <>
-                    This set&rsquo;s own chain. It is a whole policy rather than a change to the
-                    deployment&rsquo;s, so it is saved in one piece: half a chain would resolve
-                    its missing half to the product default rather than to the deployment&rsquo;s
-                    policy, which shortens retention without saying so.
-                  </>
-                ),
-                saveLabel: "Save this set's retention policy",
-                savedNote: (
-                  <>
-                    Saved. This backup set is now retained under this chain, and editing the
-                    deployment&rsquo;s policy will not move it.
-                  </>
-                )
-              }}
-            />
-          ) : null}
+              FR-19 protection off. */}
+          <OverrideEditor
+            source={source}
+            setName={setName}
+            policy={current.policy}
+            readOnly={readOnly || busy}
+            onSaved={setSaved}
+          />
           <div>
             <button
               className="btn"
@@ -219,6 +181,78 @@ export function BackupSetRetentionSection({
         </div>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The editor, plus the settings read it needs.
+ *
+ * Its own component so that read happens only while an operator is
+ * actually editing an override. GET /settings is served for the schema
+ * the editor builds its pickers and bounds from (rather than a second
+ * copy of the product's rules written out here, for the reason
+ * RetentionPolicyCard's own defaultChain records: a copy is free to
+ * drift, and drifting in the retention direction shortens a window). It
+ * is not needed to READ a policy, so putting it in the parent would have
+ * made every visit to a backup set's detail page fetch the deployment's
+ * settings for a form nobody had opened.
+ */
+function OverrideEditor({
+  source,
+  setName,
+  policy,
+  readOnly,
+  onSaved
+}: {
+  source: string;
+  setName: string;
+  policy: RetentionSettings;
+  readOnly: boolean;
+  onSaved(policy: RetentionSettings): void;
+}) {
+  const api = useApi();
+  const settings = useAsync<AppSettings>(() => api.getSettings(), [api]);
+  if (!settings.data) return null;
+  return (
+    <RetentionPolicyEditor
+      // Keyed on the chain so a reload re-initialises the draft rather
+      // than synchronising into it. Deliberately NOT re-keyed by this
+      // component's own save: that would remount the editor and take
+      // away the confirmation it had just shown.
+      key={policyKey(policy)}
+      loaded={policy}
+      schema={settings.data.schema.retention}
+      readOnly={readOnly}
+      saver={{
+        write: (next: RetentionSettings) =>
+          api
+            .setBackupSetRetention(source, setName, {
+              tiers: next.tiers,
+              timezone: next.timezone,
+              weekStartsOn: next.weekStartsOn,
+              protectLastKnownGood: next.protectLastKnownGood
+            })
+            .then((r) => {
+              onSaved(r.policy);
+              return r.policy;
+            }),
+        intro: (
+          <>
+            This set&rsquo;s own chain. It is a whole policy rather than a change to the
+            deployment&rsquo;s, so it is saved in one piece: half a chain would resolve its
+            missing half to the product default rather than to the deployment&rsquo;s policy,
+            which shortens retention without saying so.
+          </>
+        ),
+        saveLabel: "Save this set's retention policy",
+        savedNote: (
+          <>
+            Saved. This backup set is now retained under this chain, and editing the
+            deployment&rsquo;s policy will not move it.
+          </>
+        )
+      }}
+    />
   );
 }
 

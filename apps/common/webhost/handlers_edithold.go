@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -66,7 +64,7 @@ func toRunningWorkResponse(w *service.RunningWork) *runningWorkResponse {
 // at, and the whole point of splitting the read from the write is that an
 // operator can be shown what they are about to stop and then decline.
 func (h *handlers) getBackupSetEditHold(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	id := backupSetIDFromRoute(r)
 	st, err := h.backend.BackupSetEditState(r.Context(), id)
 	if err != nil {
 		writeEditHoldError(w, err)
@@ -101,7 +99,7 @@ func (h *handlers) getBackupSetEditHold(w http.ResponseWriter, r *http.Request) 
 // edit a backup set at all, which is the opposite of what the gate is
 // for.
 func (h *handlers) takeBackupSetEditHold(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	id := backupSetIDFromRoute(r)
 	hold, err := h.backend.BeginBackupSetEdit(r.Context(), id)
 	if err != nil {
 		writeEditHoldError(w, err)
@@ -129,7 +127,7 @@ func (h *handlers) takeBackupSetEditHold(w http.ResponseWriter, r *http.Request)
 // says so: several routes out of edit mode fire for one edit, and a
 // duplicate release must not be something a client has to avoid.
 func (h *handlers) releaseBackupSetEditHold(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	id := backupSetIDFromRoute(r)
 	if err := h.backend.EndBackupSetEdit(r.Context(), id); err != nil {
 		writeEditHoldError(w, err)
 		return
