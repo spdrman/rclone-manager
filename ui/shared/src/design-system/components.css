@@ -57,13 +57,13 @@
   position: relative; display: flex;
   /* One number, two rules. The toggle's width and the padding that keeps
      the value from running under it are the same measurement, and a
-     stylesheet that spells it twice is a stylesheet where they drift. The
-     1px is the input's own border, which the absolutely positioned button
-     sits inside rather than on top of. */
+     stylesheet that spells it twice is a stylesheet where they drift.
+     Inherited, so both rules below read it. */
   --password-toggle-width: 36px;
 }
 .password-field__input {
   flex: 1; min-width: 0;
+  /* The toggle, plus the 1px it is inset by, plus 1px of daylight. */
   padding-right: calc(var(--password-toggle-width) + 2px);
 }
 .password-field__toggle {

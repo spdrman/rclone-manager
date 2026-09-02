@@ -132,9 +132,11 @@ export function PasswordInput({
   return (
     <span className="password-field">
       {/* First child on purpose: a <label> binds to its first labelable
-          descendant, and HelpField wraps this whole thing in one. If the
-          button came first it would steal the association and the field
-          would lose its name even with aria-labelledby set. */}
+          descendant, and HelpField wraps this whole thing in one. The
+          explicit aria-labelledby below means the input would keep its NAME
+          either way now, but the binding is more than the name: it is also
+          what makes clicking the label text focus the field. Put the button
+          first and that click activates the toggle instead. */}
       <input
         ref={input}
         className="input password-field__input"
