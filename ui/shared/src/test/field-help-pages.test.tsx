@@ -40,16 +40,27 @@ const VERSION: VersionInfo = {
 };
 
 /** The control names its copy, all three parts of it, and nothing that is
- *  not copy. */
+ *  not copy.
+ *
+ *  aria-describedby is an id LIST, and since #344 the password fields use
+ *  it as one: their validation warnings are referenced there rather than
+ *  left inside the field's <label> to be swept into its name. Resolving it
+ *  with a single getElementById worked only for as long as every control
+ *  named exactly one node, and would have started returning null the first
+ *  time a test rendered one of those warnings, which reads as "the help
+ *  copy is gone" rather than as "the helper cannot parse a list". */
 function expectHelp(control: HTMLElement, copy: FieldHelpCopy) {
   const describedBy = control.getAttribute("aria-describedby");
   expect(describedBy, "the control carries no aria-describedby").toBeTruthy();
 
-  const described = document.getElementById(describedBy ?? "");
-  expect(described, "aria-describedby points at nothing").not.toBeNull();
-  expect(described?.textContent).toContain(copy.what);
-  expect(described?.textContent).toContain(copy.example);
-  expect(described?.textContent).toContain(copy.effect);
+  const ids = (describedBy ?? "").split(/\s+/).filter(Boolean);
+  const described = ids.map((id) => document.getElementById(id));
+  expect(described.every((n) => n !== null), "aria-describedby points at nothing").toBe(true);
+
+  const text = described.map((n) => n?.textContent ?? "").join(" ");
+  expect(text).toContain(copy.what);
+  expect(text).toContain(copy.example);
+  expect(text).toContain(copy.effect);
 }
 
 function seedSets(sets: BackupSet[]) {
@@ -89,6 +100,30 @@ describe("every explained field is wired to its own copy", () => {
     expectHelp(screen.getByLabelText("Username"), FIELD_HELP.enrollUsername);
     expectHelp(screen.getByLabelText("Password"), FIELD_HELP.enrollPassword);
     expectHelp(screen.getByLabelText("Confirm password"), FIELD_HELP.enrollConfirm);
+  });
+
+  it("on first-run enrolment, with a validation warning showing too", () => {
+    render(
+      <MemoryRouter>
+        <ApiProvider api={createMockApi()}>
+          <EnrollmentPage onEnrolled={() => {}} />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+
+    // #344 put the two warnings into aria-describedby, which is the state
+    // this file never rendered: every other case here has empty fields, so
+    // every control named exactly one node and a one-id describedby was
+    // indistinguishable from a correct one. Typing a too-short password is
+    // what makes it a list.
+    const password = screen.getByLabelText("Password");
+    fireEvent.change(password, { target: { value: "short" } });
+
+    expectHelp(password, FIELD_HELP.enrollPassword);
+    const ids = (password.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+    expect(ids.length).toBe(2);
+    const text = ids.map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
+    expect(text).toContain("Minimum 12 characters.");
   });
 
   it("on the retention policy form, including the tier a chain is built from", async () => {
