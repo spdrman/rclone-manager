@@ -36,7 +36,7 @@ machine can decide into tests rather than sentences (see
 ### The engine and the CLI are real
 
 `core/` is a working backup engine with a working command line. `backup-manager` registers
-fourteen commands, and the list below is checked against the dispatch table in
+fifteen commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
@@ -57,6 +57,7 @@ the way its predecessor did.
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
+| `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
 | `version` | report the binary, Go and embedded rclone versions |
 
 <!-- END CLI-COMMANDS -->
@@ -227,8 +228,15 @@ retry` and `quarantine reinstate`. `backup-manager settings` reports the live, r
 FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
 table above has both), and `backup-manager settings patch [flags]` changes one in place,
 hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
-replacement stays a config-file edit; every other retention and capacity field is reachable
-through `settings patch` without a restart.
+replacement of the *deployment's* policy stays a config-file edit; every other retention and
+capacity field is reachable through `settings patch` without a restart.
+
+**A backup set's own retention policy is not a config-file edit either (issue #333).**
+`backup-manager backup-set retention` shows which policy a set is retained under, gives the
+set a whole policy of its own, and `--inherit` takes it back off. It is the same three
+operations `GET`/`PUT`/`DELETE /api/v1/backup-sets/{source}/{set}/retention` expose and the
+same three the Web UI draws, all through one method in `core/service`. See [One backup set
+on its own retention policy](#one-backup-set-on-its-own-retention-policy).
 
 **What is not covered here: authentication and account management.** `/auth/enroll`,
 `/auth/login` and `/auth/password` are genuinely out of scope for a CLI wrapper, not merely
@@ -766,6 +774,39 @@ decided with; a set with no marker inherited the deployment's. The
 `backup-manager retention` override flags (`-tier`, `-daily-days` and the rest) override
 the *deployment's* policy for that one invocation, so they move every inheriting set and
 leave a set that declares its own alone.
+
+**None of this needs a config-file edit any more (issue #333).** The three operations are
+show, set and clear, and they are the same three on every surface:
+
+```bash
+backup-manager backup-set retention production/scratch-analytics
+# which policy is in force, where it came from, and (for a set that overrides)
+# the deployment's policy beside it, so you can see what clearing returns you to
+
+backup-manager backup-set retention production/scratch-analytics \
+    --daily-days 3 --weekly-months 1 --monthly-months 1
+
+backup-manager backup-set retention production/scratch-analytics --policy-file ./policy.yaml
+# the contents of a retention: block, key omitted; the only way to name a tiers chain,
+# because a compact command-line grammar for one would be a second spelling of something
+# this project already spells exactly one way. "-" reads standard input.
+
+backup-manager backup-set retention production/scratch-analytics --inherit
+# back to the deployment's policy, with no residue of the chain it declared
+```
+
+Over HTTP the same three are `GET`, `PUT` and `DELETE` on
+`/api/v1/backup-sets/{source}/{set}/retention`. `PUT` rather than `PATCH` because an
+override replaces the whole chain and is never merged with it; `DELETE` because "go back to
+inheriting" has no spelling on a request where an absent field already means "leave this
+alone". In the Web UI it is the Retention section of a backup set's own page, which names
+the policy in force on both branches and shows the deployment's chain beside an override
+before you clear it.
+
+All three surfaces reach one method in `core/service`, and none of them validates anything
+itself: a submitted policy goes through the identical `config.Validate` a hand-edited
+`config.yaml` goes through at boot, so half a chain is refused with the same sentence in
+the browser, at the terminal and in the file.
 
 One rollback note: unknown keys are a parse error, so a config file carrying a set-level
 `retention:` block cannot be read by a build from before this feature. Writing one is a

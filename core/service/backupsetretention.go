@@ -34,8 +34,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 
@@ -449,4 +452,44 @@ func toConfigRetention(o RetentionOverride) config.Retention {
 		r.ProtectLastKnownGood = &protect
 	}
 	return r
+}
+
+// ParseRetentionOverride reads a backup set's retention policy from the
+// same YAML spelling config.yaml carries it in: the CONTENTS of a
+// `retention:` block, without the key itself.
+//
+// This exists so a caller outside this package (cmd/backup-manager's
+// `backup-set retention --policy-file`) can accept a whole chain, tiers
+// included, without inventing a second grammar for one. A compact
+// command-line spelling of a tier chain would be exactly that: a second
+// way to write something this project already has one way to write, free
+// to drift from it, and one an operator would have to learn on top of the
+// YAML they already know. Reading the real thing means the file an
+// operator pastes in is the file they would have hand-edited.
+//
+// It is STRICT about unknown keys, for the reason config.Load is: a
+// misspelled key in a retention policy is silent data loss, since the
+// value the operator meant to set simply is not set and the resulting
+// policy is a valid one that keeps something else. `retention:` written
+// at the top of the file is an unknown key here and is refused by name,
+// which is the likeliest mistake this flag has.
+//
+// It resolves nothing and validates nothing beyond the parse. Whether
+// what comes back is a whole policy is config.Validate's question, asked
+// by SetBackupSetRetention over the whole config, which is what keeps one
+// rule in one place.
+func ParseRetentionOverride(data []byte) (RetentionOverride, error) {
+	var r config.Retention
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&r); err != nil {
+		if errors.Is(err, io.EOF) {
+			// An empty document decodes to no error and an untouched
+			// zero value on some paths and to io.EOF on others. Both mean
+			// the same thing here, and neither is a policy.
+			return RetentionOverride{}, fmt.Errorf("%w: the policy is empty", ErrInvalidRequest)
+		}
+		return RetentionOverride{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	return toRetentionOverride(r), nil
 }

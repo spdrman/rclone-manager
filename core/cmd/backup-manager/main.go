@@ -57,6 +57,7 @@ var commands = map[string]func([]string) int{
 	"catalog":    cmdCatalog,
 	"quarantine": cmdQuarantine,
 	"settings":   cmdSettings,
+	"backup-set": cmdBackupSet,
 	"version":    cmdVersion,
 }
 
@@ -87,6 +88,15 @@ commands:
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
                                                   report the live retention/capacity settings, or change one in place;
                                                   a full retention tier-chain replacement is still a config-file edit
+  backup-set retention <source/backup-set> [--inherit] [--policy-file F]
+                       [--timezone T] [--week-starts-on D]
+                       [--daily-days N] [--weekly-months N] [--monthly-months N]
+                       [--protect-last-known-good=BOOL]
+                                                  report which retention policy this backup set is retained under and
+                                                  where it came from; with a policy flag, give the set a whole policy of
+                                                  its own; with --inherit, remove that policy so it is retained under the
+                                                  deployment's again. An override replaces the deployment's whole chain
+                                                  and is never merged with it, so it has to name a whole one
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;
