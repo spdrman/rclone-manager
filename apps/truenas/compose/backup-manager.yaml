@@ -16,10 +16,11 @@
 # Substitute, in this file only:
 #   * "tank" in every host path, for your own pool;
 #   * 568:568, if your datasets are owned by a different uid/gid;
-#   * the image reference, if you have not pushed to the recorded one
-#     (the registry is settled and nothing has been pushed to it yet;
-#     distribution/packaging/canonical.json is the single source of truth
-#     for the reference and records image.published: false).
+#   * the image reference, only if you want to run a locally-built image
+#     instead of the released one (the recorded reference is real,
+#     published, keyless-signed and SBOM-attested --
+#     distribution/packaging/canonical.json records image.published: true
+#     -- and resolves as pulled with no push or side-load needed).
 #
 # distribution/packaging holds this file to the shared source of truth on
 # every commit: image reference, container-side mount points, port, and

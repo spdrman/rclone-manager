@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "ec68e31bc182920db1d91c5ca5b4bec2a95d4ed7abc2dc1364b979f49cd22cc5",
+    "sha256": "abe090fb018e4e5c7d444d29688b39b5df0c11e89245152f638163f18bf89a95",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -73,7 +73,7 @@
     {
       "target": "openmediavault",
       "path": "apps/openmediavault/compose/backup-manager.env",
-      "sha256": "32027b138b6bbaab02aa4f230fc542536639d27c76738b88911e2525a68723bb"
+      "sha256": "00020f3680f08ce2463586ac6d63a9223799986e8d8103fed273e24a0169b533"
     },
     {
       "target": "openmediavault",
@@ -103,7 +103,7 @@
     {
       "target": "proxmox",
       "path": "apps/proxmox/compose/backup-manager.env",
-      "sha256": "8973fb3184273f69a66e0f60ed28131be30956ee346c2b447b5dcfe399fdc6bc"
+      "sha256": "d1f11c921a0a032b52d3e3a34365b21d5c0d5c96d4c12d3719c7274a7812072c"
     },
     {
       "target": "proxmox",
@@ -133,7 +133,7 @@
     {
       "target": "truenas",
       "path": "apps/truenas/compose/backup-manager.yaml",
-      "sha256": "0367c69ae98088dd58af694aa56212b28ef3024689dccd8d041475f81094ed00"
+      "sha256": "c1d6d4abbcddfeb6aec410584d5499a3951c810418b2c1fabfbecafc70941a92"
     },
     {
       "target": "unraid",

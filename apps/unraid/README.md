@@ -214,14 +214,12 @@ package and must not be changed.
 
 ## The image reference
 
-The registry is settled and nothing has been pushed to it yet, so
-`ghcr.io/spdrman/backup-manager:0.1.0` is the intended publish target rather than
-something that resolves today. `distribution/packaging/canonical.json` is the
-single source of truth for the reference and records `image.published: false`,
-and `container/release-manifest.json` carries a `registry_digest` of `null` per
-architecture for exactly as long as that stays false. Step 0 of the acceptance
-procedure covers pushing to your own registry or side-loading a saved image in
-the meantime. It is one `<Repository>` element per template, editable in Unraid's
+`ghcr.io/spdrman/backup-manager:0.1.0` is real: it is published, keyless-signed,
+and SBOM-attested (`distribution/packaging/canonical.json` records
+`image.published: true`, and `container/release-manifest.json` carries a real
+`registry_digest` per architecture). Pull it directly; the acceptance
+procedure's own step about pushing or side-loading a build is only needed for a
+locally-built image, not the released one. It is one `<Repository>` element per template, editable in Unraid's
 own template editor.
 
 ## Community Applications

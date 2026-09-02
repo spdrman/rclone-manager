@@ -38,13 +38,12 @@ it. If you skip it, the UI container starts, serves the static bundle, and then
 
 ### 0.1 Make the canonical image resolvable
 
-The registry is settled and nothing has been pushed to it yet. The reference is
-`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the
-single source of truth for it), and that file records `image.published: false`;
-`container/release-manifest.json` records the same fact as a `registry_digest` of
-`null` on every architecture. So `<Repository>` in the templates resolves to
-nothing today, not because no registry exists but because the first push has not
-happened (issue #88). Until it does, either push to your own registry:
+`ghcr.io/spdrman/backup-manager:0.1.0` is real: it is published, keyless-signed and
+SBOM-attested. `distribution/packaging/canonical.json` records
+`image.published: true`, and `container/release-manifest.json` carries a real
+`registry_digest` per architecture. So `<Repository>` in the templates resolves to resolves
+today by pulling the released image; no push or side-load is needed. The steps below are only needed to test a locally-built image instead of the
+released one -- either push to your own registry:
 
 ```bash
 docker buildx build \

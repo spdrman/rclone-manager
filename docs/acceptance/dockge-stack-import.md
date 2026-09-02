@@ -27,11 +27,11 @@ Dockge packaging, so nothing here is a migration from an earlier one.
 
 ### 0.2 Make the canonical image resolvable
 
-`distribution/packaging/canonical.json` records `published: false`: no registry
-is configured for this repository yet, so `ghcr.io/spdrman/backup-manager:0.1.0`
-resolves to nothing until you make it resolve. Either push a build to a registry
-this host can reach and change the image reference in one place, or build
-elsewhere and load it:
+`ghcr.io/spdrman/backup-manager:0.1.0` is real and resolves as pulled --
+`distribution/packaging/canonical.json` records `published: true`, keyless-signed
+and SBOM-attested. Pull it directly. The steps below (pushing a build to a
+registry this host can reach, or building elsewhere and loading it) are only
+needed to test a locally-built image instead of the released one:
 
 ```bash
 docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t backup-manager:acceptance .

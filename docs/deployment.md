@@ -594,17 +594,17 @@ found by hand.
 The manifest checked in today was produced this way at `8ad3100`, and a second run from
 the same clean checkout reproduced its binary hashes exactly.
 
-**What this doesn't record**: a registry digest. The registry is settled,
-`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the single
-source of truth for the reference), so the gap is no longer that no registry exists. It
-is that nothing has been pushed to it, which `canonical.json` records as
-`image.published: false`. The manifest carries an explicit `registry_digest` slot per
-architecture, `null` while that stays false, and
-`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` makes the two move
-together: the day a release is pushed and `published` flips to `true`, the manifest is
-required to carry the digest `docker buildx build --push` printed (or
-`docker buildx imagetools inspect ghcr.io/spdrman/backup-manager:<tag>` reads back).
-`local_image_id_sha256` stays what it always was, the local Docker image ID that build
-produced, which resolves nowhere but the machine that built it and is never a stand-in
-for a digest. Doing the push, and signing and attesting what it points at, is issue
-#88's work.
+**What this now records too**: a registry digest. `ghcr.io/spdrman/backup-manager:0.1.0`
+is real, `distribution/packaging/canonical.json` records `image.published: true`, and
+the manifest carries the `registry_digest` `docker buildx imagetools inspect` read back
+per architecture, not the digest the push's own output printed: the push says what it
+believes it sent, the registry says what it holds. The multi-architecture index those
+two manifests sit under is `sha256:533e7540`, keylessly signed through the release
+workflow's own OIDC identity with the SBOM attested beside it.
+`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` is what held the flag
+and the digests together while `published` was still false, and keeps holding them
+together now: a published flag with no digest and a digest with no published flag are
+both half-truths.
+`local_image_id_sha256` stays what it always was, the local Docker image ID the
+recording build produced, which resolves nowhere but the machine that built it and is
+never a stand-in for a digest.
