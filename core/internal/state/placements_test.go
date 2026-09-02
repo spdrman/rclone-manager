@@ -717,3 +717,144 @@ func TestListingABackupSetAcrossSeveralPlacementBatches(t *testing.T) {
 		}
 	}
 }
+
+// journalShape renders every artifact row's retention- and
+// lifecycle-relevant content, plus its placements, as comparable text.
+func journalShape(t *testing.T, j *Journal, set model.BackupSetID) map[string]string {
+	t.Helper()
+	records, err := j.ListByBackupSet(context.Background(), set)
+	if err != nil {
+		t.Fatalf("ListByBackupSet: %v", err)
+	}
+	out := map[string]string{}
+	for _, rec := range records {
+		var placements []string
+		for _, p := range rec.Placements {
+			size := "nil"
+			if p.Size != nil {
+				size = fmt.Sprint(*p.Size)
+			}
+			placements = append(placements, strings.Join([]string{p.Medium, p.Location, size, p.Hash, p.HashAlg, p.VerificationClass, p.Status}, ","))
+		}
+		out[rec.Artifact.Name] = strings.Join([]string{
+			rec.State, rec.RemotePath, rec.LocalPath, rec.LocalHash, rec.LocalHashAlg,
+			rec.RetentionTier, rec.DiscoveredAt.UTC().Format(time.RFC3339Nano),
+			"[" + strings.Join(placements, " | ") + "]",
+		}, "|")
+	}
+	return out
+}
+
+// driveOneArtifact runs the nominal lifecycle sequence for one artifact,
+// discover through complete, recording the durable local placement at
+// COMMITTED exactly as internal/lifecycle's Commit does.
+func driveOneArtifact(t *testing.T, j *Journal, set model.BackupSetID, name string, at time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	artifact, err := model.NewArtifactID(set, name)
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	size := int64(4096)
+	final := "/backups/postgres-primary/" + name
+
+	if _, err := j.Discover(ctx, artifact, name+":discover", "incoming/"+name, RemoteIdentity{Size: &size}, at); err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	partial := final + ".partial"
+	for _, tr := range []Transition{
+		{Artifact: artifact, Key: name + ":transferring", From: "DISCOVERED", To: "TRANSFERRING", OccurredAt: at, LocalPath: &partial},
+		{Artifact: artifact, Key: name + ":transferred", From: "TRANSFERRING", To: "TRANSFERRED", OccurredAt: at, Transfer: &TransferResult{BytesTransferred: size}},
+		{Artifact: artifact, Key: name + ":verifying", From: "TRANSFERRED", To: "VERIFYING", OccurredAt: at},
+		{Artifact: artifact, Key: name + ":verified", From: "VERIFYING", To: "VERIFIED", OccurredAt: at, Hashes: &HashUpdate{Hash: "abc123", Alg: "sha256"}},
+		{Artifact: artifact, Key: name + ":committing", From: "VERIFIED", To: "COMMITTING", OccurredAt: at},
+		{Artifact: artifact, Key: name + ":committed", From: "COMMITTING", To: "COMMITTED", OccurredAt: at, LocalPath: &final,
+			Placement: &PlacementUpdate{Medium: MediumLocal, Location: final, Size: &size, Hash: "abc123", HashAlg: "sha256",
+				VerificationClass: VerificationContent, Status: PlacementActive}},
+		{Artifact: artifact, Key: name + ":pending", From: "COMMITTED", To: "REMOTE_DELETE_PENDING", OccurredAt: at},
+		{Artifact: artifact, Key: name + ":complete", From: "REMOTE_DELETE_PENDING", To: "COMPLETE", OccurredAt: at,
+			Retention: &RetentionUpdate{Tier: "daily"}},
+	} {
+		if _, err := j.RecordTransition(ctx, tr); err != nil {
+			t.Fatalf("-> %s: %v", tr.To, err)
+		}
+	}
+}
+
+// TestAFullRunOnAMigratedDatabaseMatchesAFullRunOnAFreshOne is #236's
+// INTEGRATION step: a pipeline run over a database that was migrated from
+// the pre-placements schema, with rows already in it, has to produce
+// exactly the journal rows a run on a brand new database produces, plus
+// the placement rows.
+//
+// The pre-existing rows are checked too, and that is the half that would
+// catch the failure worth catching: a migration that quietly altered
+// artifacts it backfilled would show up here as a difference in rows the
+// new run never touched.
+func TestAFullRunOnAMigratedDatabaseMatchesAFullRunOnAFreshOne(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 5, 6, 7, 8, 9, 0, time.UTC)
+
+	set, err := model.NewBackupSetID("production", "postgres-primary")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+
+	// A database that came up on the current schema from nothing.
+	freshPath := filepath.Join(t.TempDir(), "fresh.db")
+	fresh, err := Open(ctx, freshPath)
+	if err != nil {
+		t.Fatalf("Open fresh: %v", err)
+	}
+	t.Cleanup(func() { _ = fresh.Close() })
+	driveOneArtifact(t, fresh, set, "new-artifact.dump", at)
+	freshShape := journalShape(t, fresh, set)
+
+	// A database that existed before placements did, with artifacts in it,
+	// migrated in place.
+	migratedPath := filepath.Join(t.TempDir(), "migrated.db")
+	raw, err := sql.Open(driverName, migratedPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	migrateUpTo(t, raw, placementsMigrationVersion-1)
+	seedArtifacts(t, raw)
+	beforeMigration := snapshotRetention(t, raw)
+	if err := raw.Close(); err != nil {
+		t.Fatalf("closing the raw handle: %v", err)
+	}
+
+	migrated, err := Open(ctx, migratedPath)
+	if err != nil {
+		t.Fatalf("Open migrated: %v", err)
+	}
+	t.Cleanup(func() { _ = migrated.Close() })
+	driveOneArtifact(t, migrated, set, "new-artifact.dump", at)
+
+	migratedShape := journalShape(t, migrated, set)
+
+	// The new artifact must look identical on both.
+	got, ok := migratedShape["new-artifact.dump"]
+	if !ok {
+		t.Fatal("the run on the migrated database produced no row for the new artifact")
+	}
+	if want := freshShape["new-artifact.dump"]; got != want {
+		t.Errorf("a full run produced a different row on a migrated database:\n  migrated: %s\n  fresh:    %s", got, want)
+	}
+	if !strings.Contains(got, "local,/backups/postgres-primary/new-artifact.dump,4096,abc123,sha256,content,ACTIVE") {
+		t.Errorf("the new artifact carries no ACTIVE local placement: %s", got)
+	}
+
+	// And the rows that were already there are exactly as they were.
+	raw2, err := sql.Open(driverName, migratedPath)
+	if err != nil {
+		t.Fatalf("sql.Open again: %v", err)
+	}
+	t.Cleanup(func() { _ = raw2.Close() })
+	afterRun := snapshotRetention(t, raw2)
+	for name, want := range beforeMigration {
+		if got := afterRun[name]; got != want {
+			t.Errorf("pre-existing artifact %q changed across the migration and a full run:\n  before: %s\n  after:  %s", name, want, got)
+		}
+	}
+}
