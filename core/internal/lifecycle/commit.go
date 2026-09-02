@@ -295,11 +295,41 @@ func writeRecoveryManifest(localDir string, rec state.Record) error {
 		ChecksumAlgorithm:  rec.LocalHashAlg,
 		ValidationPassed:   rec.ValidationPassed,
 		ValidationDetail:   rec.ValidationDetail,
+		Placements:         manifestPlacements(rec),
 	}
 	if err := recovery.WriteManifest(localDir, m); err != nil {
 		return fmt.Errorf("lifecycle: commit %s: writing recovery manifest: %w", rec.Artifact, err)
 	}
 	return nil
+}
+
+// manifestPlacements copies rec's FR-29 placements into the sidecar's own
+// shape, field for field, with nothing added and nothing derived.
+//
+// Only the medium ID travels, never anything about how to reach that
+// medium: a sidecar lives in the user backup root, which is a different
+// security domain from private state (EPIC-B section 19.1), and FR-33's
+// rule is that no endpoint and no credential is ever written there.
+// recovery.ManifestPlacement has nowhere to put one, which is what makes
+// this a copy rather than a filter.
+func manifestPlacements(rec state.Record) []recovery.ManifestPlacement {
+	if len(rec.Placements) == 0 {
+		return nil
+	}
+	out := make([]recovery.ManifestPlacement, 0, len(rec.Placements))
+	for _, p := range rec.Placements {
+		out = append(out, recovery.ManifestPlacement{
+			Medium:            p.Medium,
+			Location:          p.Location,
+			SizeBytes:         p.SizeBytes,
+			Checksum:          p.Hash,
+			ChecksumAlgorithm: p.HashAlg,
+			VerificationClass: p.VerificationClass,
+			VerifiedAt:        p.VerifiedAt,
+			Status:            p.Status,
+		})
+	}
+	return out
 }
 
 // commitFile performs FR-14 steps 3 through 5: fsync the transferred file's

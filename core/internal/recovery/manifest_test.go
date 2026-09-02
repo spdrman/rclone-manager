@@ -19,15 +19,60 @@ import (
 // future field name even looks like it could carry one, for every field
 // this package writes.
 func TestManifestFieldsExcludeSecrets(t *testing.T) {
-	typ := reflect.TypeOf(Manifest{})
-	forbidden := []string{"key", "token", "password", "secret", "credential", "passphrase", "auth"}
+	// The list grew with EPIC E. A manifest already had to carry no SSH
+	// key, no token, no password and no secret env value; FR-33 adds that
+	// nothing about how to REACH a storage medium may be written into the
+	// user backup root either, which is what the second row rules out. A
+	// medium is named by its configured id and by nothing else, so where
+	// it lives and how to sign for it stay in config and in private state.
+	forbidden := []string{
+		"key", "token", "password", "secret", "credential", "passphrase", "auth",
+		"endpoint", "bucket", "region", "url", "host", "login", "signature", "session",
+	}
+	checkNoSecretFields(t, reflect.TypeOf(Manifest{}), "Manifest", forbidden)
+}
+
+// checkNoSecretFields walks a manifest type and every struct it contains,
+// slices and pointers included. The recursion is the point: Manifest gained
+// a []ManifestPlacement, and a check that only looked at top-level field
+// names would have gone on passing while a placement grew an Endpoint.
+func checkNoSecretFields(t *testing.T, typ reflect.Type, path string, forbidden []string) {
+	t.Helper()
+	for typ.Kind() == reflect.Ptr || typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
+		typ = typ.Elem()
+	}
+	if typ.Kind() != reflect.Struct || typ == reflect.TypeOf(time.Time{}) {
+		return
+	}
 	for i := 0; i < typ.NumField(); i++ {
-		name := strings.ToLower(typ.Field(i).Name)
+		field := typ.Field(i)
+		name := strings.ToLower(field.Name)
 		for _, f := range forbidden {
 			if strings.Contains(name, f) {
-				t.Errorf("Manifest field %q looks like it could carry a secret (matches %q); EPIC-B section 19.3 forbids SSH private keys, auth tokens, remote passwords and secret env values in recovery manifests", typ.Field(i).Name, f)
+				t.Errorf("%s.%s looks like it could carry a secret or a way to reach a medium (matches %q); EPIC-B section 19.3 and FR-33 forbid SSH private keys, auth tokens, remote passwords, secret env values, endpoints and credentials in recovery manifests and sidecar objects",
+					path, field.Name, f)
 			}
 		}
+		checkNoSecretFields(t, field.Type, path+"."+field.Name, forbidden)
+	}
+}
+
+// The positive control for the walk above: it has to actually reach a
+// nested field, or the recursion proves nothing and a placement could grow
+// an endpoint tomorrow with the suite still green.
+func TestManifestSecretCheckReachesNestedFields(t *testing.T) {
+	type nastyPlacement struct {
+		Medium     string
+		S3Endpoint string
+	}
+	type nastyManifest struct {
+		ArtifactName string
+		Placements   []nastyPlacement
+	}
+	probe := &testing.T{}
+	checkNoSecretFields(probe, reflect.TypeOf(nastyManifest{}), "nastyManifest", []string{"endpoint"})
+	if !probe.Failed() {
+		t.Fatal("the field walk did not reach a nested placement field, so it cannot be trusted to catch one")
 	}
 }
 

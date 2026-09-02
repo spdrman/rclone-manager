@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -134,7 +135,107 @@ type Manifest struct {
 	// artifact.
 	ValidationPassed *bool  `json:"validation_passed,omitempty"`
 	ValidationDetail string `json:"validation_detail,omitempty"`
+
+	// Placements is every durable copy of this artifact the journal knew
+	// about when the manifest was written (FR-29), so a catalog rebuilt
+	// from sidecars can propose where the bytes are and not only that they
+	// once existed.
+	//
+	// It is omitempty and FormatVersion is deliberately NOT bumped for it.
+	// The field is purely additive: encoding/json ignores a key it has
+	// never heard of, so a binary predating EPIC E reads a manifest
+	// carrying placements and reconstructs exactly the row it reconstructs
+	// today. Bumping the version would instead make every manifest this
+	// build writes unreadable to the build an operator might roll back to,
+	// which is a real cost paid for no information.
+	Placements []ManifestPlacement `json:"placements,omitempty"`
 }
+
+// ManifestPlacement is one durable copy of an artifact as a sidecar
+// records it: enough to FIND the copy and to say what was known about it,
+// and deliberately nothing about how to authenticate to wherever it lives.
+//
+// FR-33's rule is that a credential never reaches a recovery manifest or a
+// sidecar object, and the way this type keeps that rule is by not having
+// anywhere to put one. It names the medium by its configured id and stops:
+// no endpoint, no bucket, no region, no access key, no session token, no
+// URL. Everything needed to actually reach the medium lives in config.yaml
+// and in private state, where it already lives, and a sidecar sitting in
+// the user backup root (a different security domain, see this package's
+// own doc) is precisely the wrong place for any of it.
+//
+// TestManifestFieldsExcludeSecrets walks this struct too, recursively, so
+// a field added here later has to survive the same name check the
+// top-level ones do.
+type ManifestPlacement struct {
+	// Medium is the configured medium id ("local", or the id of one of
+	// config.StorageMediums). It is an identifier, not a location: what
+	// that id resolves to is config's business.
+	Medium string `json:"medium"`
+
+	// Location is the absolute path of a local copy, or the object key of
+	// a copy on a medium. A key is not a credential and not an endpoint:
+	// it is where inside an already-authenticated medium to look, and a
+	// rebuild that cannot say that can only propose that an artifact
+	// exists somewhere.
+	Location string `json:"location"`
+
+	// SizeBytes is what this product measured when it wrote this copy, or
+	// nil when it never measured one.
+	SizeBytes *int64 `json:"size_bytes,omitempty"`
+
+	// Checksum and ChecksumAlgorithm are this copy's recorded content
+	// hash, the same value and the same meaning as the manifest's own
+	// top-level pair.
+	Checksum          string `json:"checksum,omitempty"`
+	ChecksumAlgorithm string `json:"checksum_algorithm,omitempty"`
+
+	// VerificationClass is FR-31's ladder value, empty when nothing has
+	// been proven about this copy, and VerifiedAt is when that class was
+	// last achieved, nil when it never was. A rebuild treats both as an
+	// untrusted proposal like everything else in the file: a sidecar
+	// claiming "content" is a claim written by whoever wrote the file, not
+	// a verification this process performed.
+	VerificationClass string     `json:"verification_class,omitempty"`
+	VerifiedAt        *time.Time `json:"verified_at,omitempty"`
+
+	// Status is the placement status the journal recorded (ACTIVE,
+	// DELETE_PENDING, GONE).
+	Status string `json:"status"`
+}
+
+// ObjectManifestKeyFor derives the sidecar key for an artifact's object
+// key on a medium (FR-28's layout, FR-29's sidecar): the artifact at
+// <prefix>/<source>/<set>/<name> gets its manifest at
+// <prefix>/<source>/<set>/.manifest/<name>.json.
+//
+// It takes the object key rather than building one from a prefix, source
+// and set, so there is exactly one place in the product that decides an
+// artifact's key (the MediumStore's, #235) and this composes onto whatever
+// that decides instead of computing a second, drifting answer to the same
+// question. The layout is deterministic and carries no timestamp and no
+// random component, so re-uploading a sidecar targets the same object.
+//
+// Nothing writes one yet: the upload path is #235's and the move engine
+// that would trigger it is #238's. The format and the key are settled here
+// because a rebuild has to be able to read them, and a format decided by
+// whoever happens to write the first one is how two halves of a recovery
+// story end up disagreeing.
+func ObjectManifestKeyFor(objectKey string) string {
+	dir, name := path.Split(objectKey)
+	return dir + objectManifestDir + "/" + name + objectManifestSuffix
+}
+
+// objectManifestDir and objectManifestSuffix spell FR-28's
+// ".manifest/<artifact-name>.json". They are separate from manifestSuffix
+// above because the two sidecars live differently on purpose: the local
+// one sits beside its artifact so a directory listing shows the pair, and
+// the object one sits in its own key namespace so a plain prefix listing
+// of a bucket returns artifacts and not a manifest for every one of them.
+const (
+	objectManifestDir    = ".manifest"
+	objectManifestSuffix = ".json"
+)
 
 // ManifestPath computes the sidecar path for one artifact, exactly the
 // way internal/lifecycle/transfer.go's finalPath/partialPath compute the
@@ -176,8 +277,56 @@ func (m Manifest) Validate() error {
 	if _, err := model.NewArtifactID(set, m.ArtifactName); err != nil {
 		return fmt.Errorf("recovery: manifest artifact identity: %w", err)
 	}
+	for i, p := range m.Placements {
+		if err := p.validate(); err != nil {
+			return fmt.Errorf("recovery: manifest placements[%d]: %w", i, err)
+		}
+	}
 	return nil
 }
+
+// validate checks the shape of one recorded placement. It deliberately
+// does NOT check that the medium is one this deployment has configured, or
+// that anything is actually at the location: a sidecar is untrusted input
+// (FR-32) and a rebuild's job is to propose what it says, not to believe
+// it. What is checked here is only that the file is not garbled: a
+// placement with no medium names nothing, and a status outside the
+// vocabulary is a value nothing downstream can interpret.
+func (p ManifestPlacement) validate() error {
+	switch {
+	case p.Medium == "":
+		return fmt.Errorf("needs a non-empty medium")
+	case p.SizeBytes != nil && *p.SizeBytes < 0:
+		return fmt.Errorf("size_bytes must not be negative, got %d", *p.SizeBytes)
+	}
+	switch p.Status {
+	case PlacementActive, PlacementDeletePending, PlacementGone:
+	default:
+		return fmt.Errorf("status %q is not one of %s, %s, %s", p.Status, PlacementActive, PlacementDeletePending, PlacementGone)
+	}
+	switch p.VerificationClass {
+	case "", VerificationExistence, VerificationAttested, VerificationContent:
+	default:
+		return fmt.Errorf("verification_class %q is not one this build understands", p.VerificationClass)
+	}
+	return nil
+}
+
+// The placement vocabularies a sidecar may spell, mirroring
+// internal/state's own. This package cannot import internal/state (it is a
+// leaf both internal/lifecycle and internal/app depend on, and state
+// depends on neither), so the two are pinned to each other by a test, the
+// same arrangement config and artifactstore already use for the local
+// medium id.
+const (
+	PlacementActive        = "ACTIVE"
+	PlacementDeletePending = "DELETE_PENDING"
+	PlacementGone          = "GONE"
+
+	VerificationExistence = "existence"
+	VerificationAttested  = "attested"
+	VerificationContent   = "content"
+)
 
 // Artifact rebuilds the model.ArtifactID m describes. Callers use this
 // instead of reaching into Source/BackupSet/ArtifactName by hand, so

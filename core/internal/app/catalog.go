@@ -27,6 +27,22 @@ const (
 	// RebuildCatalog left it untouched rather than risk overwriting
 	// whatever normal processing has since done to it.
 	CatalogRebuildAlreadyPresent CatalogRebuildAction = "ALREADY_PRESENT"
+
+	// CatalogRebuildConflict is CatalogRebuildAlreadyPresent plus a
+	// disagreement: a journal row already existed AND the sidecar next to
+	// the artifact says something different about it.
+	//
+	// The row is left exactly as untouched as in the plain already-present
+	// case; this action changes what is REPORTED, never what is written.
+	// FR-32 is the reason it exists at all: sidecar contents are untrusted
+	// proposals, and "conflicts with an existing journal row are reported
+	// rather than resolved silently" is not satisfied by quietly
+	// classifying a disagreeing manifest as already-present and moving on.
+	// Someone has to be told, because the two most likely causes are a
+	// manifest hand-copied from another machine and a journal that has
+	// genuinely diverged from what is on disk, and an operator can tell
+	// those apart where this function cannot.
+	CatalogRebuildConflict CatalogRebuildAction = "CONFLICT"
 )
 
 // CatalogRebuildFinding is RebuildCatalog's outcome for one sidecar
@@ -34,6 +50,12 @@ const (
 type CatalogRebuildFinding struct {
 	Artifact model.ArtifactID
 	Action   CatalogRebuildAction
+
+	// Conflicts names each way the sidecar and the existing journal row
+	// disagree, one plain sentence each, and is non-empty exactly when
+	// Action is CatalogRebuildConflict. It reports the disagreement, it
+	// does not resolve it: nothing here is ever written to the row.
+	Conflicts []string
 }
 
 // CatalogRebuildError reports one sidecar manifest RebuildCatalog could
@@ -226,9 +248,12 @@ func (s *Service) RebuildCatalog(ctx context.Context, set model.BackupSetID, dry
 // empty, exactly the same honest degrade FR-16 already documents for a
 // backend that never reported a hash at all.
 func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact model.ArtifactID, m recovery.Manifest, dryRun bool) (CatalogRebuildFinding, error) {
-	_, err := s.Journal.Get(ctx, artifact)
+	existing, err := s.Journal.Get(ctx, artifact)
 	switch {
 	case err == nil:
+		if conflicts := manifestConflicts(m, existing); len(conflicts) > 0 {
+			return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildConflict, Conflicts: conflicts}, nil
+		}
 		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildAlreadyPresent}, nil
 	case errors.Is(err, state.ErrArtifactNotFound):
 		// fall through: this artifact needs reconstructing.
@@ -279,6 +304,65 @@ func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact mode
 	}
 
 	return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed}, nil
+}
+
+// manifestConflicts names every way m disagrees with the journal row that
+// already exists for the same artifact.
+//
+// It compares only fields where a difference actually means something is
+// wrong, and where the manifest is making a claim rather than recording a
+// moment: the remote path the artifact came from, its content hash, its
+// size, and where its copies are. It deliberately does NOT compare
+// updated_at or the lifecycle state, which are supposed to move on after a
+// manifest is written and would otherwise report a conflict for every
+// artifact that simply carried on through its pipeline.
+//
+// A field the manifest does not carry is not a disagreement. An empty
+// checksum in a sidecar means "this manifest records no hash", which is
+// silence, and treating silence as a contradiction of a journal that does
+// have one would report a conflict on every artifact whose manifest
+// predates FR-13 hashing.
+//
+// Nothing here reads the filesystem. A conflict is between two records,
+// and resolving it against the bytes on disk is what `check` and FR-17
+// reconciliation already exist for.
+func manifestConflicts(m recovery.Manifest, rec state.Record) []string {
+	var out []string
+
+	if m.RemotePath != "" && m.RemotePath != rec.RemotePath {
+		out = append(out, fmt.Sprintf("manifest says the remote path is %q, journal says %q", m.RemotePath, rec.RemotePath))
+	}
+	if m.Checksum != "" && rec.LocalHash != "" && m.Checksum != rec.LocalHash {
+		out = append(out, fmt.Sprintf("manifest says the checksum is %q, journal says %q", m.Checksum, rec.LocalHash))
+	}
+	if m.ChecksumAlgorithm != "" && rec.LocalHashAlg != "" && m.ChecksumAlgorithm != rec.LocalHashAlg {
+		out = append(out, fmt.Sprintf("manifest says the checksum algorithm is %q, journal says %q", m.ChecksumAlgorithm, rec.LocalHashAlg))
+	}
+	if m.SizeBytes > 0 && rec.Transfer != nil && m.SizeBytes != rec.Transfer.BytesTransferred {
+		out = append(out, fmt.Sprintf("manifest says the size is %d bytes, journal says %d", m.SizeBytes, rec.Transfer.BytesTransferred))
+	}
+	if !m.RetentionTimestamp.IsZero() && !m.RetentionTimestamp.Equal(rec.DiscoveredAt) {
+		out = append(out, fmt.Sprintf("manifest says the retention timestamp is %s, journal says %s",
+			m.RetentionTimestamp.UTC().Format(time.RFC3339), rec.DiscoveredAt.UTC().Format(time.RFC3339)))
+	}
+
+	journalled := make(map[string]state.Placement, len(rec.Placements))
+	for _, p := range rec.Placements {
+		journalled[p.Medium] = p
+	}
+	for _, mp := range m.Placements {
+		p, ok := journalled[mp.Medium]
+		if !ok {
+			out = append(out, fmt.Sprintf("manifest records a copy on medium %q at %q that the journal does not know about",
+				mp.Medium, mp.Location))
+			continue
+		}
+		if mp.Location != p.Location {
+			out = append(out, fmt.Sprintf("manifest says the %s copy is at %q, journal says %q", mp.Medium, mp.Location, p.Location))
+		}
+	}
+
+	return out
 }
 
 func validationUpdateFrom(m recovery.Manifest) *state.ValidationUpdate {

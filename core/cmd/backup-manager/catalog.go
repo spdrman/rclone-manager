@@ -91,6 +91,20 @@ func cmdCatalogRebuild(configPath string, dryRun bool) int {
 					total++
 				case app.CatalogRebuildAlreadyPresent:
 					fmt.Printf("%s: %s already has a journal row, left untouched\n", bs.ID, f.Artifact)
+				case app.CatalogRebuildConflict:
+					// Reported, never resolved (FR-32): the journal row is
+					// left exactly as untouched as in the plain
+					// already-present case above, in a dry run and in a
+					// real one alike. It goes to stderr and sets a
+					// non-zero exit because a sidecar disagreeing with the
+					// journal is something an operator has to look at, and
+					// a line on stdout in the middle of a long rebuild is
+					// how that gets missed.
+					fmt.Fprintf(os.Stderr, "%s: %s already has a journal row and the sidecar disagrees with it; nothing was changed:\n", bs.ID, f.Artifact)
+					for _, c := range f.Conflicts {
+						fmt.Fprintf(os.Stderr, "    %s\n", c)
+					}
+					exitCode = 1
 				}
 			}
 			for _, e := range report.Errors {

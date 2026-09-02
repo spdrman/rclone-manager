@@ -13,6 +13,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/recovery"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -293,5 +294,25 @@ func TestLocalMediumIdIsSpelledTheSameEverywhere(t *testing.T) {
 	}
 	if state.MediumLocal != string(artifactstore.KindLocal) {
 		t.Errorf("state.MediumLocal = %q but artifactstore.KindLocal = %q", state.MediumLocal, artifactstore.KindLocal)
+	}
+}
+
+// A sidecar spells the placement vocabularies itself because internal/
+// recovery is a leaf package that cannot import this one. A sidecar
+// written under one spelling and read under another is a recovery manifest
+// that fails validation on the very build that wrote it, so the two lists
+// are pinned to each other here.
+func TestSidecarAndJournalAgreeOnThePlacementVocabulary(t *testing.T) {
+	for _, pair := range []struct{ journal, sidecar, what string }{
+		{state.PlacementActive, recovery.PlacementActive, "ACTIVE"},
+		{state.PlacementDeletePending, recovery.PlacementDeletePending, "DELETE_PENDING"},
+		{state.PlacementGone, recovery.PlacementGone, "GONE"},
+		{state.VerificationExistence, recovery.VerificationExistence, "existence"},
+		{state.VerificationAttested, recovery.VerificationAttested, "attested"},
+		{state.VerificationContent, recovery.VerificationContent, "content"},
+	} {
+		if pair.journal != pair.sidecar {
+			t.Errorf("%s: the journal spells it %q and a sidecar spells it %q", pair.what, pair.journal, pair.sidecar)
+		}
 	}
 }
