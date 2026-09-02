@@ -544,7 +544,7 @@ func TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext(t *testing.T) {
 		t.Fatal("openTestService's config unexpectedly configured a key_encryption source")
 	}
 
-	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -580,7 +580,7 @@ func TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext(t *testing.T) {
 func TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured(t *testing.T) {
 	svc, _ := openTestService(t)
 
-	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
