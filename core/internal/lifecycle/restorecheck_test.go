@@ -104,17 +104,17 @@ func TestRunRestoreCheck_Timeout_KillsProcess(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, warmingPrelude+fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, warmingPrelude+fmt.Sprintf("echo $$ > %s\nsleep 30\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
 	mustWarmScript(t, script)
 
 	start := time.Now()
-	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}, path)
+	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(2 * time.Second)}, path)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunRestoreCheck: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("RunRestoreCheck took %s to return; the hook should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > 5*time.Second {
+		t.Fatalf("RunRestoreCheck took %s to return. That is the assertion that actually catches an abandoned process: os/exec's own WaitDelay kills it 5s after the context is done, so a hook that was abandoned rather than killed returns at about 7s while one that was killed returns at about 2s", elapsed)
 	}
 	if result.Passed {
 		t.Fatal("Passed = true, want false: a hook that never answers must fail closed")

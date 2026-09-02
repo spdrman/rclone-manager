@@ -226,6 +226,36 @@ const warmingPrelude = "case \"$1\" in " + warmArgument + ") exit 0;; esac\n"
 // A failed warm-up is fatal rather than ignored: silently skipping it would
 // put the flake straight back, and this is exactly the shape of check that
 // passes for the wrong reason when nobody looks.
+//
+// Warming alone turned out not to be enough, and the reason is worth
+// recording. It removes the 200ms-odd systematic cost, but the two tests
+// also run inside the gate's own repository-structure proof, which is a
+// full parallel `go test ./...` over a copy of the module, and under that
+// much process contention even a warm exec plus one `echo` did not
+// reliably finish inside a 200ms window. So the timeout those two tests
+// hand the code went to two seconds and their scripts now sleep for
+// thirty.
+//
+// # What actually catches an abandoned process, which is not what I
+// # thought it was
+//
+// Lengthening the window nearly cost both tests the thing they exist for,
+// and it is worth writing down so the next person to touch these numbers
+// does not repeat it. The pid check reads like the assertion that proves
+// the process was killed. It is not: os/exec's own WaitDelay kills the
+// process five seconds after the context is done whatever c.Cancel did,
+// so by the time a long-windowed run gets to the pid check the process is
+// gone either way, and the check passes for a build that never killed
+// anything.
+//
+// The assertion that actually separates the two is the ELAPSED time. A
+// killed process returns at about the timeout; an abandoned one returns
+// at the timeout plus WaitDelay. With a two-second timeout that is two
+// seconds against seven, and the bound sits at five: three seconds of
+// slack above the working case, two below the broken one. I checked both
+// directions rather than reasoning about them, by removing the
+// process-group kill from both implementations and watching these two
+// tests fail on exactly that line.
 func mustWarmScript(t *testing.T, path string) {
 	t.Helper()
 	if err := exec.Command(path, warmArgument).Run(); err != nil {
@@ -728,20 +758,20 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, warmingPrelude+fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, warmingPrelude+fmt.Sprintf("echo $$ > %s\nsleep 30\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
 	mustWarmScript(t, script)
 
 	start := time.Now()
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
 		Artifact: rec.Artifact, AttemptKey: "a1",
-		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}},
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(2 * time.Second)}},
 	})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("Verify took %s to return; the validator should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > 5*time.Second {
+		t.Fatalf("Verify took %s to return. That is the assertion that actually catches an abandoned process: os/exec's own WaitDelay kills it 5s after the context is done, so a validator that was abandoned rather than killed returns at about 7s while one that was killed returns at about 2s", elapsed)
 	}
 	if out.Record.State != string(Quarantined) {
 		t.Fatalf("state = %q, want %q: a validator that never answers must fail closed", out.Record.State, Quarantined)
