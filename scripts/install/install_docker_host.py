@@ -196,13 +196,22 @@ class Refusal(Exception):
 # ---------------------------------------------------------------------
 
 
-def run(argv, *, check=True, timeout=None, cwd=None, env=None):
+def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
     """Run a command and keep BOTH streams.
 
     A subprocess whose stderr is discarded is how an installer reports
     success on a failed step, so nothing here uses DEVNULL and every
     non-zero exit that matters is turned into a Refusal carrying what the
     command actually said.
+
+    `input`, when given, is text delivered on the subprocess's stdin, the
+    same as `subprocess.run(..., input=...)`. It exists so a caller that
+    needs to pipe a script into a command's stdin - `Sudo.run_script()`'s
+    `/bin/sh -s` chief among them - gets the SAME FileNotFoundError and
+    TimeoutExpired translation every other call in this file gets, rather
+    than calling subprocess.run directly and letting a hang on a live,
+    SSH-only, sudo-escalated host surface as a raw traceback instead of a
+    coded Refusal.
     """
     try:
         proc = subprocess.run(
@@ -225,6 +234,7 @@ def run(argv, *, check=True, timeout=None, cwd=None, env=None):
             timeout=timeout,
             cwd=cwd,
             env=env,
+            input=input,
         )
     except FileNotFoundError as exc:
         raise Refusal(
@@ -696,6 +706,50 @@ def detect_existing(args):
     return payload, containers
 
 
+def _other_containers_from_ps_ndjson(raw: str, project: str):
+    """Every entry in a `docker ps --format json` NDJSON stream that is
+    NOT part of `project`, as (name, image) pairs.
+
+    Split out from other_running_containers() so the filtering logic - by
+    the same com.docker.compose.project label detect_existing() already
+    keys off - is a fact this test suite can pin against canned NDJSON,
+    the same way _bridge_interfaces_from_network_inspect() is pinned
+    against a canned network inspect array.
+    """
+    others = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if f"com.docker.compose.project={project}" in (entry.get("Labels") or ""):
+            continue
+        others.append((entry.get("Names", "?"), entry.get("Image", "?")))
+    return others
+
+
+def other_running_containers(project: str):
+    """Every running container NOT part of `project`, as (name, image)
+    pairs, or None if `docker ps` itself could not be asked.
+
+    Exists so restarting the Docker daemon - which restarts EVERY
+    container on the host, not just this project's - can say what else
+    it is about to disrupt before it does it. The platforms this
+    installer targets (CasaOS, TrueNAS, Portainer, Unraid, ZimaOS, OMV)
+    are appliances whose whole point is running many unrelated
+    workloads, so "install just this one backup tool" and "bounce every
+    other container on this machine" are not the same ask, and an
+    operator is owed the difference.
+    """
+    proc = run(["docker", "ps", "--format", "json"], check=False, timeout=60)
+    if proc.returncode != 0:
+        return None
+    return _other_containers_from_ps_ndjson(proc.stdout, project)
+
+
 def stage_payload(args) -> None:
     args.prefix.mkdir(parents=True, exist_ok=True)
     for path in args.host_dirs.values():
@@ -962,15 +1016,34 @@ PRIVILEGED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # comment). Nothing else in the ruleset is ever touched.
 RULE_TAG = "rclone-manager-bridge"
 
-# Docker's own bridge interfaces. docker0 is the default bridge; every
-# user-defined bridge network is br-<12 hex>, so `br-+` is iptables' own
-# wildcard for exactly that set and matches no plausible host bridge such
-# as br0 or br-lan... which is why the pattern keeps the hyphen.
-DOCKER_BRIDGE_MATCHES = ("docker0", "br-+")
+# docker0 is the default bridge's interface, unconditionally: it is a
+# hardcoded name in the Docker daemon rather than something derived from a
+# network's id, so nothing enumerated below ever needs to produce it.
+#
+# There used to be a second entry here, the iptables wildcard `br-+`,
+# standing in for every user-defined bridge (which Docker names
+# `br-<12 hex>`). `+` is iptables' own PREFIX wildcard, not an
+# exact-suffix guard: `-i br-+` matches ANY interface whose name starts
+# with `br-`, not only the twelve-hex-character ones Docker's bridge
+# driver creates. A host bridge an operator named `br-lan` (common on
+# router and embedded platforms, and not implausible on the NAS class
+# this installer targets) would get the same DOCKER-USER RETURN and INPUT
+# ACCEPT this class installs for Docker's own bridges: a real widening of
+# what INPUT accepts and what DOCKER-USER lets skip isolation, on an
+# interface this installer knows nothing about. BridgeDoctor now asks
+# Docker for the exact interfaces instead (see bridge_interfaces()
+# below), and every rule names one, never a pattern.
+DOCKER_DEFAULT_BRIDGE = "docker0"
 
 # The chains Docker installs. Their ABSENCE is the one finding that points
 # at a restart rather than at a rule, so it is checked as its own question.
 DOCKER_CHAINS = ("DOCKER", "DOCKER-USER", "DOCKER-ISOLATION-STAGE-1")
+
+# Docker's own chain in the NAT table, separate from the filter-table
+# DOCKER chain above (same name, different table). diagnose_and_fix()
+# used to print "the NAT rules are intact" on the strength of the filter
+# table alone, which is a claim about a table it never read.
+DOCKER_NAT_CHAINS = ("DOCKER",)
 
 
 def find_tool(name: str):
@@ -1015,14 +1088,17 @@ class Sudo:
 
     def passwordless(self) -> bool:
         """True when sudo needs no password at all. A read-only probe:
-        `sudo -n true` never prompts and never runs anything else."""
+        `sudo -n true` never prompts and never runs anything else.
+
+        Through run() rather than a direct subprocess.run, so a hang here
+        gets the same coded Refusal every other subprocess call in this
+        file gets instead of a raw TimeoutExpired traceback.
+        """
         if self._passwordless is None:
             if not self.available():
                 self._passwordless = False
             else:
-                proc = subprocess.run([self.sudo, "-n", "true"],
-                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      text=True, timeout=30)
+                proc = run([self.sudo, "-n", "true"], check=False, timeout=30)
                 self._passwordless = proc.returncode == 0
         return self._passwordless
 
@@ -1048,6 +1124,16 @@ class Sudo:
         never appears in the process table. Every command inside it is
         printed first, in full, because an operator being asked for a
         password is owed the list of what it will be spent on.
+
+        Through run() rather than a direct subprocess.run: this is the
+        one path that escalates to root, on a host reachable only over
+        the SSH session the operator is currently using, inserting
+        firewall rules. A `sudo -p ... /bin/sh -s` that hangs for the
+        full timeout used to raise a raw TimeoutExpired here instead of
+        one of this file's own coded exit statuses, the only subprocess
+        call in it that did. check=False because the returncode-specific
+        classify() below needs proc.stderr even on failure, which
+        run()'s own check=True Refusal would have consumed first.
         """
         if not self.available():
             raise Refusal(
@@ -1069,9 +1155,9 @@ class Sudo:
             say("    sudo will prompt on this terminal. The password is read by sudo itself: this")
             say("    installer never sees it, never stores it and never writes it anywhere.")
         say("")
-        proc = subprocess.run(
+        proc = run(
             [self.sudo, "-p", "[sudo] password for %p (rclone-manager installer): ", "/bin/sh", "-s"],
-            input=script, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout,
+            input=script, check=False, timeout=timeout,
         )
         if proc.returncode != 0:
             code = self.classify(proc.stderr)
@@ -1144,14 +1230,99 @@ def _int_or_zero(value: str) -> int:
         return 0
 
 
+def _bridge_interfaces_from_network_inspect(raw: str) -> list[str]:
+    """The exact interface name Docker gave each bridge network in a
+    `docker network inspect <id> [<id> ...]` JSON array.
+
+    Split out from the method that calls docker so the parsing itself is
+    a fact this test suite can pin against a canned array, the same way
+    Ruleset is pinned against a canned iptables dump rather than a live
+    ruleset.
+
+    The default bridge network is always named "bridge" and its interface
+    is always "docker0" - a name the daemon hardcodes rather than derives,
+    so it is matched by name here rather than by the derivation below.
+    Every other bridge network either carries a custom
+    `com.docker.network.bridge.name` option, or Docker names its
+    interface `br-` followed by the network id's first twelve characters,
+    which is the same convention the iptables wildcard this replaces used
+    to trust blindly.
+    """
+    ifaces = {DOCKER_DEFAULT_BRIDGE}
+    for net in json.loads(raw):
+        if net.get("Name") == "bridge":
+            continue
+        name = (net.get("Options") or {}).get("com.docker.network.bridge.name")
+        if not name:
+            net_id = net.get("Id", "")
+            if len(net_id) >= 12:
+                name = f"br-{net_id[:12]}"
+        if name:
+            ifaces.add(name)
+    return sorted(ifaces)
+
+
 class BridgeDoctor:
-    """Diagnose, and if asked, repair, Docker bridge networking."""
+    """Diagnose, and if asked, repair, Docker bridge networking.
+
+    Deliberately not a Preflight check, despite asking an overlapping
+    "must this hold before we proceed" question. Preflight's checks are
+    pure: they read and refuse, and nothing about running one changes the
+    host. This class's repair path does the opposite on purpose - it
+    escalates through sudo and mutates the host firewall - so folding it
+    into Preflight would blur the one property that makes Preflight safe
+    to run speculatively: that running it is never itself the risk.
+    """
 
     def __init__(self, args, sudo=None) -> None:
         self.args = args
         self.sudo = sudo or Sudo()
         self.iptables = find_tool("iptables")
         self.findings = []
+        # Discovered lazily and memoized by bridge_interfaces() below.
+        # Tests set this directly, the same way they override self.iptables,
+        # so rule_specs() never needs a live Docker daemon to be asserted
+        # against.
+        self._bridge_interfaces = None
+
+    def bridge_interfaces(self) -> list[str]:
+        """Every interface that is actually one of Docker's own bridges on
+        this host right now, asked of Docker rather than trusted from an
+        iptables wildcard (see DOCKER_DEFAULT_BRIDGE's comment for why
+        that mattered).
+        """
+        if self._bridge_interfaces is None:
+            ls = run(["docker", "network", "ls", "--filter", "driver=bridge", "-q"],
+                     check=False, timeout=60)
+            if ls.returncode != 0:
+                raise Refusal(
+                    EXIT_NETWORK_UNDIAGNOSED,
+                    "could not list this host's Docker networks, so the exact bridge "
+                    f"interfaces to scope a firewall rule to cannot be known:\n"
+                    f"{(ls.stderr or ls.stdout).strip()}",
+                    "Check the Docker daemon is responsive, or run with --fix-network=never.",
+                )
+            ids = ls.stdout.split()
+            if not ids:
+                self._bridge_interfaces = [DOCKER_DEFAULT_BRIDGE]
+            else:
+                inspect = run(["docker", "network", "inspect", *ids], check=False, timeout=60)
+                if inspect.returncode != 0:
+                    raise Refusal(
+                        EXIT_NETWORK_UNDIAGNOSED,
+                        f"could not inspect this host's bridge networks:\n"
+                        f"{(inspect.stderr or inspect.stdout).strip()}",
+                        "Check the Docker daemon is responsive, or run with --fix-network=never.",
+                    )
+                try:
+                    self._bridge_interfaces = _bridge_interfaces_from_network_inspect(inspect.stdout)
+                except json.JSONDecodeError as exc:
+                    raise Refusal(
+                        EXIT_NETWORK_UNDIAGNOSED,
+                        f"docker network inspect did not print JSON this installer could parse: {exc}",
+                        "Check the Docker daemon is responsive, or run with --fix-network=never.",
+                    ) from exc
+        return self._bridge_interfaces
 
     # -- reading the ruleset ------------------------------------------
 
@@ -1162,12 +1333,12 @@ class BridgeDoctor:
         reader outright ("Permission denied (you must be root)"), which
         is not something a fallback can work around.
         """
-        script = f"{self.iptables} -L -n -v --line-numbers\n"
+        script = f"{self.iptables} -w 5 -L -n -v --line-numbers\n"
         proc = self.sudo.run_script(script, purpose="Read the firewall ruleset (read-only)")
         return Ruleset(proc.stdout)
 
     def _nat_dump(self):
-        script = f"{self.iptables} -t nat -L -n -v --line-numbers\n"
+        script = f"{self.iptables} -w 5 -t nat -L -n -v --line-numbers\n"
         proc = self.sudo.run_script(script, purpose="Read the NAT table (read-only)")
         return Ruleset(proc.stdout)
 
@@ -1268,9 +1439,10 @@ class BridgeDoctor:
         container may talk to its own gateway.
         """
         specs = []
-        for iface in DOCKER_BRIDGE_MATCHES:
+        ifaces = self.bridge_interfaces()
+        for iface in ifaces:
             specs.append(("DOCKER-USER", ["-i", iface, "-m", "comment", "--comment", RULE_TAG, "-j", "RETURN"]))
-        for iface in DOCKER_BRIDGE_MATCHES:
+        for iface in ifaces:
             specs.append(("INPUT", ["-i", iface, "-m", "comment", "--comment", RULE_TAG, "-j", "ACCEPT"]))
         return specs
 
@@ -1286,14 +1458,16 @@ class BridgeDoctor:
         lines = ["set -e"]
         for chain, spec in self.rule_specs():
             tail = " ".join(spec)
-            lines.append(f"{self.iptables} -C {chain} {tail} 2>/dev/null || {self.iptables} -I {chain} 1 {tail}")
+            lines.append(f"{self.iptables} -w 5 -C {chain} {tail} 2>/dev/null || "
+                         f"{self.iptables} -w 5 -I {chain} 1 {tail}")
         return "\n".join(lines) + "\n"
 
     def delete_script(self) -> str:
         lines = []
         for chain, spec in self.rule_specs():
             tail = " ".join(spec)
-            lines.append(f"{self.iptables} -C {chain} {tail} 2>/dev/null && {self.iptables} -D {chain} {tail} || true")
+            lines.append(f"{self.iptables} -w 5 -C {chain} {tail} 2>/dev/null && "
+                         f"{self.iptables} -w 5 -D {chain} {tail} || true")
         return "\n".join(lines) + "\n"
 
     def restart_docker_script(self) -> str:
@@ -1395,12 +1569,35 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
     # rather than a rule problem. When the chains are all present, a
     # restart reinstalls what is already there and cannot help, so it is
     # skipped rather than tried out of ritual.
+    #
+    # "All present" is checked in both tables Docker actually installs
+    # into, filter and nat, not just the one the rest of this function was
+    # already reading. The nat table used to go unread while a message
+    # claimed it was intact anyway.
     missing = [c for c in DOCKER_CHAINS if c not in before.chains]
-    if missing:
+    nat = doctor._nat_dump()
+    nat_missing = [c for c in DOCKER_NAT_CHAINS if c not in nat.chains]
+    if missing or nat_missing:
         say("")
-        say(f"==> Docker's own chains are missing ({', '.join(missing)}), which points at the host's")
-        say("    firewall having flushed them after dockerd installed them. Trying the least invasive")
-        say("    correction first: restarting Docker so it reinstalls them.")
+        say(f"==> Docker's own chains are missing ({', '.join(missing + nat_missing)}), which points at")
+        say("    the host's firewall having flushed them after dockerd installed them. Trying the least")
+        say("    invasive correction first: restarting Docker so it reinstalls them.")
+        others = other_running_containers(args.project)
+        if others is None:
+            say("")
+            say("    Could not list what else is running on this host (docker ps failed), so the blast")
+            say("    radius of a daemon restart below is unknown rather than confirmed small.")
+        elif others:
+            say("")
+            say(f"    Restarting the Docker daemon restarts EVERY container on this host, not only this")
+            say(f"    project's. {len(others)} other container(s) are currently running and will be")
+            say("    restarted too:")
+            for name, image in others:
+                say(f"      {name:<30} {image}")
+        else:
+            say("")
+            say("    No other containers are currently running on this host, so the restart below only")
+            say("    affects this project's own.")
         doctor.sudo.run_script(doctor.restart_docker_script(),
                                purpose="Restart Docker so it reinstalls its own chains")
         time.sleep(10)
@@ -1413,8 +1610,9 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
         say("==> Restarting Docker did not fix it. Falling through to scoped rules.")
     else:
         say("")
-        say("==> Every Docker chain is present and the NAT rules are intact, so this is not a flushed")
-        say("    ruleset and restarting Docker would reinstall what is already there. Skipping it.")
+        say("==> Every Docker chain is present in both the filter and NAT tables, so this is not a")
+        say("    flushed ruleset and restarting Docker would reinstall what is already there. Skipping")
+        say("    it.")
 
     doctor.sudo.run_script(doctor.insert_script(),
                            purpose="Insert scoped rules for Docker's bridge interfaces")
@@ -1498,13 +1696,23 @@ def cmd_status(args) -> int:
 
 
 def cmd_uninstall(args) -> int:
-    """Remove what the installer created, and nothing else.
+    """Remove what the installer created, and nothing else - with one
+    exception, printed below rather than left for an operator to discover.
 
     `docker compose down` rather than deleting paths, and the state,
     config and backup directories are left where they are unless the
     operator says otherwise in as many words. Those hold the SQLite
     journal, the administrator record and the backups; an uninstall that
     takes them by default is a data-loss bug with a friendly name.
+
+    The exception: if `install` or `network-doctor` ever repaired this
+    host's bridge networking (the default, `--fix-network=auto`), that
+    repair inserted rclone-manager-bridge-tagged iptables rules directly
+    on the host firewall. Detecting whether they are still there needs
+    the same root read `_iptables_dump()` does, which this command has
+    never otherwise needed - uninstall stays a command that touches only
+    what this account already owns. So this prints the exact remedy
+    instead of silently claiming a contract nothing here checks.
     """
     payload, containers = detect_existing(args)
     if not payload and not containers:
@@ -1531,6 +1739,11 @@ def cmd_uninstall(args) -> int:
         say(f"  {label:<14} {path}")
     say("They hold the SQLite journal, the administrator record and the backups themselves.")
     say("Remove them by hand if that is really what you want.")
+    say("")
+    say("NOT removed by this command: if `install` or `network-doctor` ever repaired this host's")
+    say("bridge networking, the rclone-manager-bridge-tagged iptables rules it inserted are still on")
+    say("the host firewall. Remove exactly those, and nothing else, with:")
+    say("  python3 install_docker_host.py network-undo")
     return EXIT_OK
 
 
@@ -1620,7 +1833,8 @@ def build_parser() -> argparse.ArgumentParser:
     net.add_argument("--probe-port", type=int, default=443, help="Port for the egress probe.")
     net.add_argument("--probe-network", default="bridge",
                      help="Docker network the probe container joins. The rules this installer inserts "
-                          "match docker0 and every br-* bridge, so one pass covers networks made later.")
+                          "are scoped to docker0 and every bridge network Docker itself reports at "
+                          "repair time, so re-running after a network is created covers it too.")
 
     runtime.add_argument("--if-installed", choices=["converge", "refuse"], default="converge",
                          help="What to do when an install is already here. converge rewrites the deployment "

@@ -523,6 +523,133 @@ class TestCounterDeltaNamesTheRule(unittest.TestCase):
         self.assertEqual(self.deltas(REAL_RULESET_BEFORE, REAL_RULESET_BEFORE), [])
 
 
+# A realistic `docker ps --format json` NDJSON stream on an appliance
+# running this project alongside other, unrelated workloads: one
+# container this project's own compose project labelled, and two it did
+# not.
+PS_NDJSON_MIXED_HOST = (
+    '{"Names": "backup-manager", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
+    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=backup-manager"}\n'
+    '{"Names": "backup-manager-ui", "Image": "ghcr.io/spdrman/backup-manager:0.1.0", '
+    '"Labels": "com.docker.compose.project=rclone-manager,com.docker.compose.service=backup-manager-ui"}\n'
+    '{"Names": "plex", "Image": "plexinc/pms-docker:latest", "Labels": "com.docker.compose.project=media"}\n'
+    '{"Names": "portainer", "Image": "portainer/portainer-ce:latest", "Labels": ""}\n'
+)
+
+
+class TestOtherRunningContainers(unittest.TestCase):
+    """Restarting the Docker daemon restarts EVERY container on the host,
+    not just this project's, and the appliances this installer targets
+    (CasaOS, TrueNAS, Portainer, Unraid, ZimaOS, OMV) exist to run many
+    unrelated workloads at once. These assert the daemon-restart branch
+    can say what else it is about to disrupt."""
+
+    def test_this_projects_own_containers_are_excluded(self):
+        got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "rclone-manager")
+        names = [name for name, _ in got]
+        self.assertNotIn("backup-manager", names)
+        self.assertNotIn("backup-manager-ui", names)
+
+    def test_containers_from_another_project_or_no_project_label_are_named(self):
+        got = installer._other_containers_from_ps_ndjson(PS_NDJSON_MIXED_HOST, "rclone-manager")
+        names = {name for name, _ in got}
+        self.assertEqual(names, {"plex", "portainer"},
+                         "a differently-labelled container and an unlabelled one both count as "
+                         "'other': the daemon restart does not spare either")
+
+    def test_a_host_with_no_other_containers_reports_none(self):
+        got = installer._other_containers_from_ps_ndjson(
+            '{"Names": "backup-manager", "Image": "x", '
+            '"Labels": "com.docker.compose.project=rclone-manager"}\n',
+            "rclone-manager",
+        )
+        self.assertEqual(got, [])
+
+
+# A realistic `docker network ls --filter driver=bridge -q` on this host
+# would print the two ids below; INSPECT_TWO_NETWORKS is the JSON
+# `docker network inspect` prints for exactly those two, abbreviated to
+# the fields _bridge_interfaces_from_network_inspect actually reads.
+INSPECT_TWO_NETWORKS = """
+[
+  {
+    "Name": "bridge",
+    "Id": "f7ab26d71dbd4b3aa74e3f6c9d1e2a5b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f",
+    "Driver": "bridge",
+    "Options": {}
+  },
+  {
+    "Name": "rclone-manager_internal",
+    "Id": "3f2e1a9c8b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f",
+    "Driver": "bridge",
+    "Options": {}
+  }
+]
+"""
+
+
+class TestBridgeInterfaceDiscovery(unittest.TestCase):
+    """`-i br-+` is iptables' own PREFIX wildcard, not an exact-suffix
+    guard: it matches ANY interface starting with `br-`, not only the
+    twelve-hex-character ones Docker's bridge driver creates. A host
+    bridge an operator named `br-lan` (common on router and embedded
+    platforms) would get the same DOCKER-USER RETURN and INPUT ACCEPT
+    this installer adds for Docker's own bridges, on an interface it
+    knows nothing about. These assert the replacement asks Docker for
+    the exact interfaces instead of trusting a pattern.
+    """
+
+    def test_the_default_bridge_is_named_docker0_by_name_not_derivation(self):
+        got = installer._bridge_interfaces_from_network_inspect(INSPECT_TWO_NETWORKS)
+        self.assertIn("docker0", got)
+        # f7ab26d71dbd is what deriving from the default network's own id
+        # would produce, and it is not this host's interface: the default
+        # bridge's name is hardcoded in the daemon, never derived.
+        self.assertNotIn("br-f7ab26d71dbd", got)
+
+    def test_a_user_defined_network_derives_its_interface_from_the_id(self):
+        got = installer._bridge_interfaces_from_network_inspect(INSPECT_TWO_NETWORKS)
+        self.assertIn("br-3f2e1a9c8b7d", got)
+
+    def test_a_custom_bridge_name_option_wins_over_derivation(self):
+        raw = """
+        [{"Name": "custom", "Id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "Driver": "bridge", "Options": {"com.docker.network.bridge.name": "br-custom0"}}]
+        """
+        got = installer._bridge_interfaces_from_network_inspect(raw)
+        self.assertIn("br-custom0", got)
+        self.assertNotIn("br-aaaaaaaaaaaa", got)
+
+    def test_nothing_it_returns_is_a_wildcard(self):
+        """The regression this whole class exists for: whatever Docker's
+        real bridges turn out to be, the returned list is exact interface
+        names, never a `+` pattern that could over-match a host bridge
+        Docker did not create."""
+        got = installer._bridge_interfaces_from_network_inspect(INSPECT_TWO_NETWORKS)
+        for iface in got:
+            self.assertNotIn("+", iface, f"{iface} is a wildcard, not a discovered interface")
+
+    def test_an_unrelated_host_bridge_never_appears(self):
+        """br-lan is not one of Docker's own networks and never appears in
+        `docker network inspect`'s output, so it must never appear in the
+        discovered list either - which is the whole point: the old `br-+`
+        wildcard could not tell it apart from a real Docker bridge, and
+        this replacement never even asks the question of an interface
+        Docker itself did not create."""
+        got = installer._bridge_interfaces_from_network_inspect(INSPECT_TWO_NETWORKS)
+        self.assertNotIn("br-lan", got)
+        self.assertNotIn("br0", got)
+
+    def test_bridge_interfaces_is_settable_without_a_live_docker_daemon(self):
+        """The seam BridgeDoctor's own tests use: bridge_interfaces()
+        memoizes into _bridge_interfaces, which a test can set directly
+        the same way it already overrides self.iptables."""
+        fx = Fixture(self)
+        d = installer.BridgeDoctor(fx.args())
+        d._bridge_interfaces = ["docker0", "br-deadbeef0000"]
+        self.assertEqual(d.bridge_interfaces(), ["docker0", "br-deadbeef0000"])
+
+
 class TestRemediationIsSafe(unittest.TestCase):
     """Every one of these is a way to lock somebody out of a NAS reachable
     only over SSH, asserted as absent rather than avoided by care."""
@@ -532,6 +659,10 @@ class TestRemediationIsSafe(unittest.TestCase):
         args = fx.args()
         d = installer.BridgeDoctor(args)
         d.iptables = "/sbin/iptables"
+        # Set directly, the same way d.iptables is above: rule_specs()
+        # asks bridge_interfaces(), and nothing in this class should need
+        # a live Docker daemon to be exercised.
+        d._bridge_interfaces = ["docker0", "br-0123456789ab"]
         return d
 
     def test_nothing_flushes_changes_a_policy_or_restores_a_ruleset(self):
@@ -546,8 +677,12 @@ class TestRemediationIsSafe(unittest.TestCase):
         for chain, spec in d.rule_specs():
             self.assertIn("-i", spec, f"{chain} rule is not scoped to an interface: {spec}")
             iface = spec[spec.index("-i") + 1]
-            self.assertIn(iface, installer.DOCKER_BRIDGE_MATCHES,
-                          f"{iface} is not one of Docker's own bridges")
+            self.assertIn(iface, d.bridge_interfaces(),
+                          f"{iface} is not one of the interfaces bridge_interfaces() discovered")
+            self.assertNotIn("+", iface,
+                             f"{iface} is a wildcard, not a discovered interface: `-i br-+` matches ANY "
+                             "interface starting with br-, not only Docker's own, which is the bug "
+                             "bridge_interfaces() replaced this constant to close")
 
     def test_the_forward_rule_returns_rather_than_accepts(self):
         """An ACCEPT in DOCKER-USER ends the FORWARD traversal and takes
@@ -578,6 +713,19 @@ class TestRemediationIsSafe(unittest.TestCase):
         for line in lines:
             self.assertIn(" -C ", line, f"inserts without checking first: {line}")
             self.assertIn("||", line, f"the insert is not conditional on the check: {line}")
+
+    def test_every_iptables_invocation_waits_for_the_xtables_lock(self):
+        """The stated threat model is literally that the host's own
+        firewall management process may be rewriting the ruleset around
+        the same time this installer reads or writes it. Without -w, two
+        processes racing for the xtables lock is a plain failure
+        ("Resource temporarily unavailable") rather than one of them
+        waiting its turn."""
+        d = self.doctor()
+        for script in (d.insert_script(), d.delete_script()):
+            for line in script.splitlines():
+                if "iptables" in line:
+                    self.assertIn(" -w ", line, f"races the xtables lock instead of waiting for it: {line}")
 
     def test_deletion_removes_only_tagged_rules(self):
         d = self.doctor()
@@ -628,6 +776,30 @@ class TestSudoRefusals(unittest.TestCase):
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_SUDO_NOT_PERMITTED)
         self.assertIn("--fix-network=never", exc.remedy)
+
+    def test_a_hang_refuses_rather_than_raising_a_raw_traceback(self):
+        """The one path that escalates to root, on a host reachable only
+        over the SSH session the operator is currently using, inserting
+        firewall rules. run_script() used to call subprocess.run directly
+        rather than through this file's own run(), so a `sudo ... /bin/sh
+        -s` that hung for its full timeout raised an uncaught
+        TimeoutExpired instead of one of this file's own coded exit
+        statuses - the only subprocess call in the file that did."""
+        stub = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+        self.addCleanup(os.unlink, stub.name)
+        # run_script() calls passwordless() first, which invokes this same
+        # stub with `-n true`: answer that one immediately so the test
+        # stays fast, and hang only on the real call (`-p ... /bin/sh -s`),
+        # the way a sudo prompting on a terminal nobody is watching would.
+        # subprocess's own timeout kills it well before the sleep finishes.
+        stub.write("#!/bin/sh\ncase \"$1\" in -n) exit 0 ;; *) sleep 5 ;; esac\n")
+        stub.close()
+        os.chmod(stub.name, 0o755)
+
+        s = installer.Sudo(sudo_path=stub.name)
+        exc = refusal_from(s.run_script, "true\n", purpose="test", timeout=0.2)
+        self.assertIsNotNone(exc, "a hang must raise a Refusal, not propagate TimeoutExpired uncaught")
+        self.assertEqual(exc.code, installer.EXIT_RUNTIME)
 
 
 class TestHealthyHostIsANoOp(unittest.TestCase):
