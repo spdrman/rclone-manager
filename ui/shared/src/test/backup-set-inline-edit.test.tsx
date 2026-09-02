@@ -367,6 +367,42 @@ describe("issue #350: Edit is an inline mode, not a dialog", () => {
     await waitFor(() => expect(release).toHaveBeenCalledWith(first.source, first.set));
   });
 
+  // Two per-box Saves can overlap: press one, press another before the
+  // first answers. Each button has to keep reporting its OWN request, or
+  // the first one springs back to "Save", enabled, while it is still in
+  // flight, inviting exactly the double submit the disabled state exists
+  // to prevent.
+  it("keeps each box's Save reporting its own request when two overlap", async () => {
+    const api = createMockApi();
+    const resolvers: (() => void)[] = [];
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    vi.spyOn(api, "updateBackupSet").mockImplementation(
+      () => new Promise((resolve) => resolvers.push(() => resolve({ ...target })))
+    );
+
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "overlap-a.internal" } });
+    fireEvent.change(screen.getByLabelText("User"), { target: { value: "overlap-b" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save host" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save user" }));
+    });
+
+    expect(screen.getByRole("button", { name: "Save host" }).textContent).toBe("Saving\u2026");
+    expect(screen.getByRole("button", { name: "Save user" }).textContent).toBe("Saving\u2026");
+
+    // Let the FIRST one answer. The second is still in flight, so its
+    // button must still say so.
+    await act(async () => {
+      resolvers[0]();
+    });
+    expect(screen.getByRole("button", { name: "Save user" }).textContent).toBe("Saving\u2026");
+    expect(screen.getByRole("button", { name: "Save host" }).textContent).toBe("Save");
+  });
+
   it("has no edit dialog left to open", async () => {
     const api = createMockApi();
     const target = await firstSet();
