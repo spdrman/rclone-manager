@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { bootstrapTokenFromLocation } from "@shared/api/client";
@@ -7,7 +7,7 @@ import type { OperatorFailure } from "@shared/api/failure";
 import { AuthFrame } from "./LoginPage";
 import { ErrorState } from "@shared/components/EmptyState";
 import { HelpField } from "@shared/components/FieldHelp";
-import { PasswordInput } from "../components/PasswordInput";
+import { PasswordInput } from "@shared/components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 const MIN_LENGTH = 12;
@@ -83,6 +83,15 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
 
   const tooShort = password.length > 0 && password.length < MIN_LENGTH;
   const mismatch = confirm.length > 0 && confirm !== password;
+  // These two warnings render inside their field's own <label>, which used
+  // to be how they reached a screen reader: the wrapping label named the
+  // input by walking its subtree and swept them up along the way. The
+  // inputs carry an explicit aria-labelledby now (PasswordInput's doc says
+  // why), so the walk no longer happens and the copy has to be referenced
+  // to stay announced. A description is where a validation message belongs
+  // anyway; it was only ever in the name by accident.
+  const tooShortId = useId();
+  const mismatchId = useId();
   const valid = username.length > 0 && password.length >= MIN_LENGTH && confirm === password;
 
   const submit = (e: React.FormEvent) => {
@@ -112,11 +121,11 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
           )}
         </HelpField>
         <HelpField label="Password" help={FIELD_HELP.enrollPassword}>
-          {(helpId) => (
+          {(helpId, field) => (
             <>
-              <PasswordInput label="Password" autoComplete="new-password" describedBy={helpId} value={password} onChange={setPassword} required />
+              <PasswordInput label={field.label} labelledBy={field.id} autoComplete="new-password" describedBy={tooShort ? helpId + " " + tooShortId : helpId} value={password} onChange={setPassword} required />
               {tooShort ? (
-                <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                <span id={tooShortId} style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                   {"Minimum " + MIN_LENGTH + " characters."}
                 </span>
               ) : null}
@@ -124,11 +133,11 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
           )}
         </HelpField>
         <HelpField label="Confirm password" help={FIELD_HELP.enrollConfirm}>
-          {(helpId) => (
+          {(helpId, field) => (
             <>
-              <PasswordInput label="Confirm password" autoComplete="new-password" describedBy={helpId} value={confirm} onChange={setConfirm} required />
+              <PasswordInput label={field.label} labelledBy={field.id} autoComplete="new-password" describedBy={mismatch ? helpId + " " + mismatchId : helpId} value={confirm} onChange={setConfirm} required />
               {mismatch ? (
-                <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+                <span id={mismatchId} style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                   Passwords do not match.
                 </span>
               ) : null}

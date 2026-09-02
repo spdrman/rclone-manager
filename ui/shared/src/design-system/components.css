@@ -53,10 +53,22 @@
    own box rather than beside it, so a revealable field keeps the same
    footprint and baseline as every other field on the form. .field is a
    column flex, so the wrapper re-establishes a row for the two to share. */
-.password-field { position: relative; display: flex; }
-.password-field__input { flex: 1; min-width: 0; padding-right: 38px; }
+.password-field {
+  position: relative; display: flex;
+  /* One number, two rules. The toggle's width and the padding that keeps
+     the value from running under it are the same measurement, and a
+     stylesheet that spells it twice is a stylesheet where they drift. The
+     1px is the input's own border, which the absolutely positioned button
+     sits inside rather than on top of. */
+  --password-toggle-width: 36px;
+}
+.password-field__input {
+  flex: 1; min-width: 0;
+  padding-right: calc(var(--password-toggle-width) + 2px);
+}
 .password-field__toggle {
-  position: absolute; right: 1px; top: 1px; bottom: 1px; width: 36px;
+  position: absolute; right: 1px; top: 1px; bottom: 1px;
+  width: var(--password-toggle-width);
   display: flex; align-items: center; justify-content: center;
   background: none; border: 0; padding: 0;
   color: var(--text-3); cursor: pointer;
@@ -64,6 +76,11 @@
 }
 .password-field__toggle:hover:not(:disabled) { color: var(--text); }
 .password-field__toggle:disabled { cursor: not-allowed; opacity: 0.5; }
+/* The global :focus-visible ring is drawn 2px OUTSIDE the element, and this
+   button is inset 1px from the input's border, so the shared rule would put
+   the ring on top of that border and read as the input being focused rather
+   than the toggle. Negative offset draws it inside the button instead. */
+.password-field__toggle:focus-visible { outline-offset: -2px; }
 
 .table { width: 100%; border-collapse: collapse; font-size: var(--text-base); }
 .table thead tr { background: var(--surface-2); }

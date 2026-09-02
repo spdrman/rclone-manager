@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -26,9 +27,10 @@ function Harness({ label = "Password", disabled = false }: { label?: string; dis
       label={label}
       help={{ what: "A password.", example: "correct-horse-battery", effect: "Signs you in." }}
     >
-      {(helpId) => (
+      {(helpId, field) => (
         <PasswordInput
-          label={label}
+          label={field.label}
+          labelledBy={field.id}
           value="hunter2-and-then-some"
           onChange={() => {}}
           autoComplete="current-password"
@@ -40,21 +42,59 @@ function Harness({ label = "Password", disabled = false }: { label?: string; dis
   );
 }
 
+/** The reset rules are about a value that changes, so they need a harness
+ *  that owns one. Shaped like the pages that actually do this: a form whose
+ *  submit handler either clears the field (SettingsPage's rotation) or
+ *  leaves it alone (LoginPage's failed sign-in). */
+function StatefulHarness({ clearOnSubmit }: { clearOnSubmit: boolean }) {
+  const [password, setPassword] = useState("");
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (clearOnSubmit) setPassword("");
+      }}
+    >
+      <HelpField
+        label="Password"
+        help={{ what: "A password.", example: "correct-horse-battery", effect: "Signs you in." }}
+      >
+        {(helpId, field) => (
+          <PasswordInput
+            label={field.label}
+            labelledBy={field.id}
+            value={password}
+            onChange={setPassword}
+            autoComplete="current-password"
+            describedBy={helpId}
+          />
+        )}
+      </HelpField>
+      <button type="submit">Sign in</button>
+    </form>
+  );
+}
+
 afterEach(cleanup);
 
 describe("password reveal toggle", () => {
   it("starts masked", () => {
     render(<Harness />);
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "password");
-    expect(screen.getByRole("button", { name: "Show password" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Show password" })).toBeInTheDocument();
   });
 
-  it("reveals the value and reports itself pressed", async () => {
+  it("reveals the value and renames itself for the next activation", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Show password" }));
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "text");
-    expect(screen.getByRole("button", { name: "Hide password" })).toHaveAttribute("aria-pressed", "true");
+    // The name is the whole state announcement. It deliberately does not
+    // also carry aria-pressed: a name that says what the next activation
+    // will do, beside a pressed state that says what the current one is,
+    // announces the same fact twice in two tenses, which WAI-ARIA's button
+    // pattern says to pick one of.
+    expect(screen.getByRole("button", { name: "Hide password" })).not.toHaveAttribute("aria-pressed");
   });
 
   it("masks again on a second activation", async () => {
@@ -63,7 +103,7 @@ describe("password reveal toggle", () => {
     await user.click(screen.getByRole("button", { name: "Show password" }));
     await user.click(screen.getByRole("button", { name: "Hide password" }));
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "password");
-    expect(screen.getByRole("button", { name: "Show password" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Show password" })).toBeInTheDocument();
   });
 
   it("does not carry the revealed state across a remount", async () => {
@@ -106,6 +146,82 @@ describe("password reveal toggle", () => {
     // Inside <form>, a button with no explicit type defaults to submit, and
     // every one of these fields lives in a form with a real submit button.
     expect(screen.getByRole("button", { name: "Show password" })).toHaveAttribute("type", "button");
+  });
+
+  it("keeps the input's own accessible name to the field label alone", () => {
+    render(<Harness label="Confirm password" />);
+    // Measured in Chromium over the exact DOM these components emit: a
+    // <label> that wraps an embedded control folds that control's own text
+    // alternative into the name it gives the field, so without this the
+    // input answers to "Confirm password Show confirm password Passwords do
+    // not match." rather than to its label. Neither jsdom nor Playwright's
+    // getByLabel can see that, because both read the wrapping label's
+    // textContent, which an aria-hidden SVG button contributes nothing to.
+    // So the assertion is on the mechanism that fixes it: an explicit
+    // aria-labelledby, which the accname algorithm resolves before it ever
+    // walks the label's subtree.
+    const input = screen.getByLabelText(/^Confirm password/);
+    const ids = (input.getAttribute("aria-labelledby") ?? "").split(" ").filter(Boolean);
+    expect(ids.length).toBeGreaterThan(0);
+    const named = ids.map((id) => document.getElementById(id));
+    expect(named.every((n) => n !== null)).toBe(true);
+    expect(named.map((n) => n?.textContent).join(" ")).toBe("Confirm password");
+  });
+
+  it("stays out of the browser features that skip a password field", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const input = screen.getByLabelText(/^Password/);
+    // Chrome's and Edge's enhanced spellcheck send the contents of a text
+    // field to a remote service and exempt type=password explicitly, so a
+    // revealed field is the state where these three matter: revealing is
+    // what makes the secret eligible to leave the machine. Autocapitalize
+    // is the mobile half of the same problem, silently upper-casing the
+    // first character of a password typed while it is readable.
+    // BackupSetWizardPage does exactly this for the private-key field.
+    for (const [attr, value] of [["spellcheck", "false"], ["autocorrect", "off"], ["autocapitalize", "off"]]) {
+      expect(input).toHaveAttribute(attr, value);
+    }
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(input).toHaveAttribute("type", "text");
+    for (const [attr, value] of [["spellcheck", "false"], ["autocorrect", "off"], ["autocapitalize", "off"]]) {
+      expect(input).toHaveAttribute(attr, value);
+    }
+  });
+
+  it("re-masks when the value it was revealing is cleared", async () => {
+    const user = userEvent.setup();
+    render(<StatefulHarness clearOnSubmit />);
+    const input = screen.getByLabelText(/^Password/);
+
+    await user.type(input, "a-long-enough-passphrase");
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(input).toHaveAttribute("type", "text");
+
+    // SettingsPage's rotation: on success it sets all three fields back to
+    // "" without unmounting anything, which used to leave the operator with
+    // empty fields still in type="text", ready for the NEXT password to be
+    // typed in the clear.
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(input).toHaveValue("");
+    expect(input).toHaveAttribute("type", "password");
+  });
+
+  it("re-masks on submit even when the value survives it", async () => {
+    const user = userEvent.setup();
+    render(<StatefulHarness clearOnSubmit={false} />);
+    const input = screen.getByLabelText(/^Password/);
+
+    await user.type(input, "a-long-enough-passphrase");
+    await user.click(screen.getByRole("button", { name: "Show password" }));
+    expect(input).toHaveAttribute("type", "text");
+
+    // LoginPage's failed sign-in: no remount, no clear, so the password
+    // stayed readable on screen through the failure and for as long as the
+    // operator left the page open afterwards.
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(input).toHaveValue("a-long-enough-passphrase");
+    expect(input).toHaveAttribute("type", "password");
   });
 
   it("is disabled with the field it belongs to", () => {
