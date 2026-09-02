@@ -9,14 +9,16 @@ import { useEffect, useRef, useState } from "react";
  *  rather than left for a locator author to rediscover:
  *
  *    - Select the INPUT with a leading-anchored regex on the field label,
- *      `getByLabel(/^Confirm password/)`, not a bare substring and not
- *      `{ exact: true }`. Substring is out because `getByLabel` is a
- *      case-insensitive substring match by default, so "Confirm password"
- *      also matches this button's own "Show confirm password" and fails
- *      Playwright's strict mode. Exact is out wherever HelpField's label
- *      also wraps a validation message, because the name grows to
- *      "Confirm passwordPasswords do not match." the moment one renders.
- *      A leading anchor survives both.
+ *      `getByLabel(/^Confirm password/)`. What is banned is the bare
+ *      substring: `getByLabel` is a case-insensitive substring match by
+ *      default, so `getByLabel("Confirm password")` also matches this
+ *      button's own "Show confirm password" and fails Playwright's strict
+ *      mode. `{ exact: true }` works too, but only because of the
+ *      `labelledBy` below, which is what stops the name growing to
+ *      "Confirm passwordPasswords do not match." when a validation message
+ *      renders inside the same label. The leading anchor is the shape to
+ *      reach for because it survives that either way, and it is what the
+ *      suite uses.
  *    - Select the TOGGLE by role and its full name, "Show password". That
  *      name does NOT change when the field is revealed, so a locator does
  *      not have to know which state the field is in; `aria-pressed` is what
