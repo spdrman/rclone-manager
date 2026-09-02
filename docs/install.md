@@ -23,7 +23,7 @@ python3 scripts/install/install_docker_host.py install \
     --image ghcr.io/spdrman/backup-manager:0.2.0
 ```
 
-That is the whole install. **One file, and no checkout.** Copy
+**One file, and no checkout.** Copy
 `scripts/install/install_docker_host.py` to the machine on its own and run it: it needs
 no repository beside it, nothing else from this project on disk, and nothing outside the
 Python standard library. It used to refuse with exit 19 here, because it copied
