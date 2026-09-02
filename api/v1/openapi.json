@@ -2173,8 +2173,7 @@
         },
         "required": [
           "backup_set_id",
-          "held",
-          "running"
+          "held"
         ]
       },
       "BackupSetEditHold": {
@@ -2196,8 +2195,7 @@
         },
         "required": [
           "backup_set_id",
-          "expires_at",
-          "stopped"
+          "expires_at"
         ]
       }
     },

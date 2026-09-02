@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "433d7867edb269292a1a03d3153c93297002d9f4f226258b09950ea304f4ea20";
+export const CONTRACT_SHA256 = "e46a0e70cb02ca5eececa85fc805863739ce4535097de4140224d3cc67763331";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1006,7 +1006,7 @@ export interface WireBackupSet {
 export interface WireBackupSetEditHold {
   backup_set_id: string;
   expires_at: string;
-  stopped: WireRunningWork;
+  stopped?: WireRunningWork;
 }
 
 /** GET /backup-sets/{source}/{set}/edit-hold. What entering edit mode
@@ -1018,7 +1018,7 @@ export interface WireBackupSetEditHoldState {
   backup_set_id: string;
   expires_at?: string;
   held: boolean;
-  running: WireRunningWork;
+  running?: WireRunningWork;
 }
 
 /** One backup set's freshness verdict. This is the backup half of
