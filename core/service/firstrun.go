@@ -277,6 +277,20 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 	// resolved numbers into the file instead would freeze them, so an
 	// operator who never touched retention would silently keep an old
 	// release's policy across an upgrade.
+	//
+	// So cfg is encoded HERE, before anything below mutates it.
+	// config.Validate resolves Retention and Alerts IN PLACE
+	// (validateRetention's own doc says so), and cfg is the same pointer
+	// Validate is about to be called on, so capturing the bytes first is
+	// what actually keeps the promise the paragraph above makes. This is
+	// the same fix settings.go's UpdateSettings and backupsetenabled.go's
+	// toggle already carry for the identical re-marshal-after-Validate
+	// shape; see UpdateSettings' own comment for the full reasoning.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return BackupSet{}, fmt.Errorf("service: encoding the first configuration: %w", err)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		// cfg.Validate's message is built from internal/config's own field
 		// descriptions and this caller's own values, never from a state or
@@ -306,10 +320,12 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 		return BackupSet{}, err
 	}
 
-	encoded, err := yaml.Marshal(cfg)
-	if err != nil {
-		return BackupSet{}, fmt.Errorf("service: encoding the first configuration: %w", err)
-	}
+	// encoded was captured above, before cfg.Validate resolved Retention
+	// and Alerts in place, so this write carries the operator's own
+	// omissions rather than a copy of today's defaults; see the comment
+	// beside that capture for why. cfg itself stays fully resolved for
+	// planValidatorCatalog above and findBackupSet below — only the bytes
+	// on disk differ from it.
 	if err := writeConfigExclusively(f.defaults.ConfigPath, encoded); err != nil {
 		return BackupSet{}, err
 	}

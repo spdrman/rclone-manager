@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -269,11 +270,21 @@ func TestCreateBackupSet_InvalidCompletionStrategyIsCaughtByConfigValidate(t *te
 // stable path at all before this test: the one completion test here uses
 // "marker" on purpose.
 //
-// The three assertions are one claim each: the create succeeds, the
-// operator's own stable_for survives the round trip, and the FR-15 delete
-// gate ends up armed at the documented default rather than at a literal
-// zero, which would be the same as having no gate. The last one is what
-// keeps "make it load again" from being fixed the wrong way.
+// The assertions are one claim each: the create succeeds, the operator's
+// own stable_for survives the round trip, and the FR-15 delete gate ends
+// up armed at the documented default rather than at a literal zero,
+// which would be the same as having no gate. The last one is what keeps
+// "make it load again" from being fixed the wrong way.
+//
+// completion.delete_safety_delay is checked against a RELOAD of the
+// file, not the raw bytes it wrote, because of issue #294: CreateBackupSet
+// now encodes cfg before cfg.Validate resolves its defaults in place
+// (this field's own doc gives the identical reasoning validateRetention
+// does — a zero here means "never chose one", not "the gate is off" — see
+// backupsets.go's comment beside cfg.Validate for the full fix), so a
+// value nobody chose stays zero ON DISK and is only resolved when the
+// file is loaded. Checking the raw bytes for 1h would now fail even
+// though the gate is correctly armed.
 func TestCreateBackupSet_StableStrategy(t *testing.T) {
 	svc, configPath := openTestService(t)
 	req := validCreateReq(t, svc, "stable-set")
@@ -293,18 +304,8 @@ func TestCreateBackupSet_StableStrategy(t *testing.T) {
 		t.Fatalf("yaml.Unmarshal(configPath): %v", err)
 	}
 
-	var created *config.BackupSet
-	for i, src := range onDisk.Sources {
-		if src.Name != "api" {
-			continue
-		}
-		for j := range onDisk.Sources[i].BackupSets {
-			if onDisk.Sources[i].BackupSets[j].Name == "stable-set" {
-				created = &onDisk.Sources[i].BackupSets[j]
-			}
-		}
-	}
-	if created == nil {
+	created := findBackupSet(&onDisk, "api", "stable-set")
+	if created.Name == "" {
 		t.Fatalf("the on-disk config file does not contain the new stable backup set:\n%s", raw)
 	}
 
@@ -314,8 +315,17 @@ func TestCreateBackupSet_StableStrategy(t *testing.T) {
 	if got, want := created.Completion.StableFor.Duration(), 10*time.Minute; got != want {
 		t.Errorf("persisted completion.stable_for = %s, want %s", got, want)
 	}
-	if got := created.Completion.DeleteSafetyDelay.Duration(); got != config.DefaultDeleteSafetyDelay {
-		t.Errorf("persisted completion.delete_safety_delay = %s, want the default %s; a zero here disarms the FR-15 stable-completion delete gate entirely", got, config.DefaultDeleteSafetyDelay)
+
+	reloaded, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	reloadedSet := findBackupSet(reloaded, "api", "stable-set")
+	if reloadedSet.Name == "" {
+		t.Fatalf("the reloaded config no longer contains the new stable backup set")
+	}
+	if got := reloadedSet.Completion.DeleteSafetyDelay.Duration(); got != config.DefaultDeleteSafetyDelay {
+		t.Errorf("reloaded completion.delete_safety_delay = %s, want the default %s; a zero here disarms the FR-15 stable-completion delete gate entirely", got, config.DefaultDeleteSafetyDelay)
 	}
 }
 
@@ -582,6 +592,76 @@ func TestProbeHostKey_UnreachableHostReturnsAnError(t *testing.T) {
 // config.Validate refuses (the two spellings are mutually exclusive), and
 // a refused config means LoadAndValidate fails, no BackupService is
 // constructed, and there is no UI left to undo it from.
+// TestCreateBackupSet_DoesNotFreezeResolvedDefaultsIntoAFileThatNeverChoseThem
+// is issue #294's second half. CreateBackupSet re-reads the config file,
+// folds in the new backup set, and validates the WHOLE result before
+// writing -- its own comment on cfg.Validate says so -- and
+// config.Validate resolves Retention/Alerts IN PLACE. A config file that
+// never named a retention or alerts choice (a hand-written file, or one
+// CreateInitialConfig produced now that #294 is fixed) must come back
+// from adding an unrelated backup set with that same omission, not with
+// today's resolved numbers silently pinned into it, or every deployment
+// set up and then extended through the API/CLI would drift onto whatever
+// release happened to be running the day the second set was added.
+func TestCreateBackupSet_DoesNotFreezeResolvedDefaultsIntoAFileThatNeverChoseThem(t *testing.T) {
+	configPath := writeTestConfigFileWithRetention(t, "")
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	if _, err := svc.CreateBackupSet(context.Background(), validCreateReq(t, svc, "second-set")); err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	written := string(raw)
+
+	// The write did happen: without this the absences below would be
+	// satisfied by a no-op.
+	if !strings.Contains(written, "second-set") {
+		t.Fatalf("precondition failed: CreateBackupSet's write did not reach the file:\n%s", written)
+	}
+
+	frozen := []string{
+		"timezone: UTC",
+		"week_starts_on: monday",
+		"daily_days:",
+		"weekly_months:",
+		"monthly_months:",
+		"protect_last_known_good: true",
+		"repeated_failure_threshold: " + strconv.Itoa(config.DefaultRepeatedFailureThreshold),
+	}
+	for _, spelling := range frozen {
+		if strings.Contains(written, spelling) {
+			t.Errorf("CreateBackupSet froze the resolved default %q into a file that never chose retention or alerts:\n%s", spelling, written)
+		}
+	}
+
+	// Positive control, the same shape settings_test.go's
+	// TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile
+	// uses for the identical claim: encoding the VALIDATED config does
+	// produce every spelling above, so their absence from the file is not
+	// vacuous.
+	validated, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	encoded, err := yaml.Marshal(validated)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, spelling := range frozen {
+		if !strings.Contains(string(encoded), spelling) {
+			t.Errorf("control failed: encoding the validated config does not produce %q, so the absence assertions above prove nothing", spelling)
+		}
+	}
+}
+
 func TestCreateBackupSet_ConfigRoundTripKeepsOneRetentionSpelling(t *testing.T) {
 	roundTrip := func(t *testing.T, retention string) string {
 		t.Helper()
