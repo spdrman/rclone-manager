@@ -276,7 +276,7 @@ func resolveKeyAndTrust(ctx context.Context, svc backupSetCreatePrereqs, keyFile
 		if req.Host == "" {
 			return errors.New("--trust-host-key needs a --host to probe")
 		}
-		probe, err := svc.ProbeHostKey(ctx, req.Host, req.Port)
+		probe, err := svc.ProbeHostKey(ctx, req.Host, probePortFor(req.Port))
 		if err != nil {
 			return fmt.Errorf("probing %s for its host key: %w", req.Host, err)
 		}
@@ -288,6 +288,32 @@ func resolveKeyAndTrust(ctx context.Context, svc backupSetCreatePrereqs, keyFile
 	}
 	return nil
 }
+
+// probePortFor resolves the port a host-key probe should dial.
+//
+// A backup set stores port 0 to mean "whatever the default SSH port is",
+// which is what config.Remote.Port has always meant and what an operator
+// who does not pass --port is saying. A probe cannot dial that: it opens a
+// real TCP connection, so it needs a number, and
+// internal/transport/rclone.ProbeHostKey refuses 0 as out of range rather
+// than guessing. Resolving it HERE, for the probe only, keeps both true:
+// the connection is made to 22 and the persisted set still says 0, so a
+// future release that changed the default would carry this set with it
+// rather than freezing today's answer into the configuration.
+//
+// The trust anchor comes out the same either way: the probe formats its
+// known_hosts line through knownhosts.Line, which normalises away an
+// explicit :22, so the line this produces is exactly the line a set with
+// no port configured verifies against.
+func probePortFor(port int) int {
+	if port == 0 {
+		return defaultSSHPort
+	}
+	return port
+}
+
+// defaultSSHPort is what a backup set with no configured port connects to.
+const defaultSSHPort = 22
 
 // splitBackupSetID splits "source/name" into its two halves, reporting
 // false for anything that is not exactly that. An id with no slash, two

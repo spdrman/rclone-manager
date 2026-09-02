@@ -97,3 +97,4 @@ __pycache__/
 # have to delete, and nothing this repository's tooling creates should need
 # a recursive delete outside the workspace to clean up after itself.
 /.e2e-gate/
+/.e2e-two-machine/

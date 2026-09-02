@@ -292,3 +292,19 @@ func withoutFlag(args []string, flag string) []string {
 	}
 	return out
 }
+
+// TestProbePortFor pins the one place the CLI resolves "no port
+// configured" into a number. A backup set stores 0 to mean the default
+// SSH port, and a host-key probe opens a real connection, so it cannot
+// carry the 0 through. Getting this wrong is not subtle in production and
+// was not subtle here either: --trust-host-key against a set with no
+// --port failed with "port 0 is out of range" from inside the engine
+// container, which names the symptom and not the decision.
+func TestProbePortFor(t *testing.T) {
+	if got := probePortFor(0); got != 22 {
+		t.Errorf("probePortFor(0) = %d, want 22", got)
+	}
+	if got := probePortFor(2222); got != 2222 {
+		t.Errorf("probePortFor(2222) = %d, want it left alone", got)
+	}
+}
