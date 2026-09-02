@@ -193,7 +193,7 @@ func TestResolveMediumCredentials_EnvWithSessionToken(t *testing.T) {
 }
 
 func TestResolveMediumCredentials_EnvUnset(t *testing.T) {
-	os.Unsetenv("RCLONE_MANAGER_TEST_S3_CREDS_ABSENT")
+	_ = os.Unsetenv("RCLONE_MANAGER_TEST_S3_CREDS_ABSENT")
 	_, err := resolveMediumCredentials(mediumWith(transport.MediumCredentials{Env: "RCLONE_MANAGER_TEST_S3_CREDS_ABSENT"}))
 	if err == nil {
 		t.Fatal("an unset environment variable was accepted")

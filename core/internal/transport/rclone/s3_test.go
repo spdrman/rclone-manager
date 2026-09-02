@@ -371,6 +371,6 @@ func clearAmbientAWSEnvironment(t *testing.T) {
 		// os.Unsetenv then makes the variable genuinely absent for the
 		// duration, which is not the same as present-and-empty.
 		t.Setenv(name, "")
-		os.Unsetenv(name)
+		_ = os.Unsetenv(name)
 	}
 }

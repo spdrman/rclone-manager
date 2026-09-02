@@ -31,25 +31,39 @@ symlink-free path the safety checks just proved, and routing it back
 through the configured root would throw that resolution away. It stays
 where it is and it fails closed.
 
-**The interface itself has no production caller.** Be blunt about it,
-because everything below reads like a description of a live seam. The
-only production use of the package is the package-level function
-`artifactstore.LocalLocator`, from `lifecycle/transfer.go` and
-`retention/prune.go`, and both of those hold a directory string rather
-than a `Store`, so both bypass `Store` entirely. `Store`, `Local`,
-`NewLocal`, `Kind`, `Stat`, `Open`, `Put`, `Remove`, `ErrNotPresent` and
-`ErrAlreadyPresent` are a design fixture: the contract a mover and a
-second backend get built against, landed before either exists so the
-shape is argued once, in review, rather than discovered under a deadline.
+When this document was written, the interface itself had **no production
+caller at all**, and it said so bluntly because everything below reads
+like a description of a live seam. The only production use was the
+package-level function `artifactstore.LocalLocator`, from
+`lifecycle/transfer.go` and `retention/prune.go`, and both of those held
+a directory string rather than a `Store`, so both bypassed `Store`
+entirely. The conversion was named as relocated rather than reduced:
+those two call sites, resolving a `Store` for the backup set and asking
+it instead of composing a path out of `LocalPath`.
 
-So the conversion #334 needs is relocated, not reduced. Those two call
-sites are it: resolving a `Store` for the backup set and asking it,
-instead of composing a path out of `LocalPath`. What landing the contract
-first buys is that the thing they convert *to* is already written down.
+**#235 did that conversion.** Both call sites now build a `Local` and ask
+it, and `LocalLocator` is unexported, because an exported way to compute
+an artifact's location without going through a store, once nothing needs
+one, is a standing invitation to bypass the seam. `NewLocal`, `Locator`,
+`Kind` and `KindLocal` have real callers now.
 
-No behaviour changed. The lifecycle and retention suites pass unmodified,
-which is the point: an existing deployment computes exactly the same
-paths it did before.
+`Stat`, `Open`, `Put` and `Remove` still do not, and that is still
+deliberate. FR-12's commit path writes its own `.partial` and hard-links
+it because it carries crash-safety obligations `Put` does not reproduce,
+and retention deletes through its own FR-20 discipline. The mover that
+uses those four is #238.
+
+The conversion did change behaviour, in the one direction #334 predicted:
+`finalPath` and `pruneFinalPath` now return an error, because `NewLocal`
+refuses an empty root and `Locator` refuses an artifact it cannot
+address. Before, `finalPath("", artifact)` returned the artifact's bare
+name, which is a path relative to whatever directory the daemon started
+in. `config.Validate` refuses an empty `local_path`, so nothing that got
+as far as running a cycle could reach it; that is why deferring the
+change was safe and why leaving it was not. On the prune path the failure
+becomes `PruneRefuse` rather than `PruneKeep`, because those are
+different claims: KEEP asserts a tier selected the artifact, and a refusal
+asserts nothing was decided at all.
 
 ## Decision: the unit is an artifact, not a file
 
@@ -279,13 +293,62 @@ It lands with the mover. Until then, an artifact's location is
 `KindLocal` by construction, which is exactly what every existing
 deployment means.
 
+## What #235 built on top of this, and what it decided differently
+
+E1.3 added the second place an artifact's bytes can live, and it did
+**not** do it by writing a second `artifactstore.Store`. That is worth
+recording, because it looks like the obvious move and it is the wrong
+one.
+
+The S3 medium is `transport.MediumStore`, a separate manager-owned
+interface beside `transport.Transport`, implemented by the rclone
+adapter. The two seams sit at different altitudes on purpose:
+`artifactstore.Store` is per-backup-set, artifact-addressed, and its
+configuration arrives at construction; `MediumStore` is key-addressed and
+takes the medium on every call, exactly as `Transport` takes a `Source`,
+which keeps the adapter stateless and keeps "which medium" visible at
+every call site. That matters most for `DeleteObject`: a delete whose
+destination is implicit in a value built somewhere else is a delete
+nobody reviewing the call can check.
+
+A `Store` implemented over a medium would additionally have to fake
+`Put`'s `io.Reader` contract, because `MediumStore.UploadFromLocal` takes
+a path (the medium needs the size before it starts, and a reader that
+fails halfway is a class of partial upload a file does not have).
+Satisfying it would mean spooling a whole artifact through a temporary
+file to cross an interface, which is a real operational cost hidden
+behind an abstraction nothing yet needs: the move engine (#238) holds a
+local path by definition and uses both seams directly. When "resolve a
+store from a placement record" becomes a real requirement, that is #236,
+and it can add one with a caller attached.
+
+Two findings from building it that a future adapter author should have:
+
+- **An absent capability must be reported, not approximated.** rclone's
+  s3 backend reports MD5 and nothing else, and that MD5 is the object's
+  ETag, which FR-32 says is never a content hash. So FR-31's `attested`
+  verification class is not reachable through the embedded rclone at
+  v1.75, and `ObjectChecksum` returns an explicit capability error rather
+  than an ETag wearing an attestation's name. Read-back is the only
+  honest verification against S3 today.
+- **Ask what the error translation throws away.** rclone turns a 404 into
+  its own filesystem-shaped sentinels, which flattens "this key is
+  absent" and "this bucket does not exist" into one answer. Measured
+  against a real MinIO, that made a delete against a mistyped bucket
+  report success and a listing report an empty medium. A backend author
+  should assume the wrapper's error vocabulary is lossier than the
+  protocol's and check.
+
 ## What a future adapter still needs
 
 Beyond implementing `Store`:
 
 - **Credentials handled like the SSH key.** Never in the repository,
   never in a log, never in the config file's tracked form. See how
-  `Key`/`KeyEncryption` are resolved for the pattern to copy.
+  `Key`/`KeyEncryption` are resolved for the pattern to copy, and see
+  `transport/rclone/credentials.go`, which #235 built by reusing that
+  machinery outright rather than standing up a second copy: the command
+  runner is literally the same function.
 - **Identity on the far side.** The lifecycle already refuses a remote
   delete it cannot confirm, reporting `verdict=unconfirmed,
   confidence=weak` when size and mtime agree but no hash or backend

@@ -524,7 +524,7 @@ func clearAmbientAWSEnvironment(t *testing.T) {
 		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_CREDENTIALS_FULL_URI",
 	} {
 		t.Setenv(name, "")
-		os.Unsetenv(name)
+		_ = os.Unsetenv(name)
 	}
 }
 
