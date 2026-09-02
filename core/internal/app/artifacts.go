@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -113,6 +116,81 @@ func (s *Service) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]s
 				return out, fmt.Errorf("app: artifacts: listing %s: %w", bs.ID, err)
 			}
 			out = append(out, records...)
+		}
+	}
+	return out, nil
+}
+
+// ArtifactDetail is one artifact's full journal row plus, when it is
+// currently FAILED, QUARANTINED or QUARANTINED_LOST, the literal
+// diagnostic sentence internal/lifecycle recorded on the transition that
+// put it there (issue #284).
+//
+// FailureReason is deliberately not the same thing as
+// internal/lifecycle.QuarantineReason: that function is a best-effort
+// reconstruction from whatever else the record happens to carry, built
+// specifically because its author declined to read state_transitions
+// directly (see its own doc). FailureReason is the literal text, read
+// from the one place it actually lives, and it is populated for FAILED
+// the same way it is for the two quarantine states, since FR-10 gives
+// FAILED no reason field anywhere else at all.
+type ArtifactDetail struct {
+	state.Record
+
+	// FailureReason is empty for any state other than FAILED, QUARANTINED
+	// or QUARANTINED_LOST. It can still be empty for one of those three:
+	// that means the transition that produced the current state was
+	// recorded with no Detail, not that this call failed.
+	FailureReason string
+
+	// FailureReasonAt is when the transition that produced FailureReason
+	// happened. Only meaningful when FailureReason is non-empty.
+	FailureReasonAt time.Time
+}
+
+// GetArtifactDetail is `backup-manager artifacts <source/backup-set/name>`'s
+// use case (issue #284): until this existed, sqlite3 against the state
+// database directly was the only way for an operator to learn why one
+// specific artifact reached FAILED or QUARANTINED, because
+// state_transitions.detail is written there and read back nowhere else in
+// this codebase (see internal/state's LastEnteredDetail, which this
+// calls, and internal/lifecycle/quarantine.go's QuarantineReason doc for
+// why nothing else durably carries that text).
+//
+// # Redaction
+//
+// FailureReason is whatever text the lifecycle step that produced the
+// transition wrote (internal/lifecycle/verify.go, quarantine.go,
+// internal/reconcile, internal/revalidate, or an operator-triggered
+// internal/app.ValidateArtifact call). None of those construct that text
+// from an obs.Secret's revealed value (key material only ever leaves its
+// Secret wrapper in internal/transport/rclone/ssh.go, to build rclone's
+// own connection config, never to build an error or a Detail string), so
+// this method cannot surface key material or a known_hosts path. It CAN
+// surface whatever those callers' own upstream errors already contain,
+// which for a source configured with a non-default port is the port
+// itself (issue #295, tracked separately: state_transitions.detail
+// already carries that today, independent of this method existing to
+// read it back). Once #295's redaction lands where those callers build
+// their Detail text, this method inherits it automatically, since it only
+// reads back what was written; it does not itself decide what belongs in
+// the clear.
+func (s *Service) GetArtifactDetail(ctx context.Context, id model.ArtifactID) (ArtifactDetail, error) {
+	rec, err := s.Journal.Get(ctx, id)
+	if err != nil {
+		return ArtifactDetail{}, fmt.Errorf("app: artifact detail: %s: %w", id, err)
+	}
+	out := ArtifactDetail{Record: rec}
+
+	switch lifecycle.State(rec.State) {
+	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
+		detail, at, found, err := s.Journal.LastEnteredDetail(ctx, id, rec.State)
+		if err != nil {
+			return ArtifactDetail{}, fmt.Errorf("app: artifact detail: %s: %w", id, err)
+		}
+		if found {
+			out.FailureReason = detail
+			out.FailureReasonAt = at
 		}
 	}
 	return out, nil

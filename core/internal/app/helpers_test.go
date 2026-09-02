@@ -88,6 +88,15 @@ type fakeTransport struct {
 	// is the strongest form of that this package can build, stronger than
 	// a post-hoc deleteCallCount() check.
 	poison *testing.T
+
+	// remoteHashErr, when non-nil, is what RemoteHash returns instead of
+	// a computed hash, for every remote path. Unlike failForSourceID
+	// above (which fails every method, breaking transfer along with
+	// verification), this targets only the hash-comparison call, so a
+	// test can drive a real FR-13 layer-2 capability-absence failure
+	// (issue #284's own reproduction: a hardened SFTP account that
+	// cannot compute a hash) through an otherwise-successful transfer.
+	remoteHashErr error
 }
 
 func newFakeTransport() *fakeTransport {
@@ -151,6 +160,9 @@ func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source
 }
 
 func (f *fakeTransport) RemoteHash(ctx context.Context, source transport.Source, remotePath string, algorithm transport.HashAlgorithm) (string, error) {
+	if f.remoteHashErr != nil {
+		return "", f.remoteHashErr
+	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
 		return "", transport.NewError(transport.NotFound, "remote_hash", errors.New("not found"))
