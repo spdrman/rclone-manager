@@ -43,6 +43,12 @@ const (
 // log anything, the same way a nil map is safe to read from.
 type Logger struct {
 	base *slog.Logger
+
+	// redact, when non-nil, is run over msg and every string-valued attr
+	// in emit before either reaches base. See WithRedaction and
+	// Redactor's own doc (redact.go); a nil value here is "redact
+	// nothing", exactly the default a Logger built by New starts at.
+	redact *Redactor
 }
 
 // New builds a Logger that writes newline-delimited JSON to w, one JSON
@@ -84,7 +90,29 @@ func (l *Logger) With(args ...any) *Logger {
 	if l == nil || l.base == nil {
 		return l
 	}
-	return &Logger{base: l.base.With(args...)}
+	return &Logger{base: l.base.With(args...), redact: l.redact}
+}
+
+// WithRedaction returns a Logger that runs every event's message and every
+// string-valued attribute through r before it reaches base, in addition to
+// whatever With has already attached. r is typically built by
+// obs.NewRedactor from the endpoints a deployment has opted into
+// (config.Remote.Sensitive, issue #295); passing nil is how a caller turns
+// redaction back off, not merely how one declines to turn it on, which
+// matters for internal/app.New calling this again on every hot config
+// reload with whatever the newly loaded configuration's own redactor is.
+//
+// Like With, this returns a new Logger rather than mutating l, and is
+// nil-receiver-safe: WithRedaction on a nil *Logger returns nil, exactly
+// as every other method on this type does (see the type's own doc for why
+// that has to hold).
+func (l *Logger) WithRedaction(r *Redactor) *Logger {
+	if l == nil {
+		return l
+	}
+	cp := *l
+	cp.redact = r
+	return &cp
 }
 
 // Event is the escape hatch for anything FR-23 asks for that does not
@@ -108,6 +136,17 @@ func (l *Logger) Event(ctx context.Context, level Level, event, msg string, attr
 // (LogAttrs, not the reflect-based Log/Printf-style variadic path), which
 // avoids the boxing that passing []any would otherwise cost on every single
 // call.
+//
+// It is also issue #295's one seam for the log line: msg and every
+// string-valued attr are run through l.redact.Filter here, and nowhere
+// else, before either reaches base. Every named helper in events.go funnels
+// through this one function, so a redaction rule applied here covers every
+// event this package can emit, present or future, without any of those
+// helpers, or their callers throughout this repository, needing to know
+// redaction exists at all. Filter is nil-receiver-safe (redact.go), so this
+// runs unconditionally rather than branching on whether l.redact is set:
+// a deployment that never configured one pays a nil check per string attr,
+// not a different code path.
 func (l *Logger) emit(ctx context.Context, level Level, event, msg string, attrs ...slog.Attr) {
 	if l == nil || l.base == nil {
 		return
@@ -117,6 +156,11 @@ func (l *Logger) emit(ctx context.Context, level Level, event, msg string, attrs
 	}
 	all := make([]slog.Attr, 0, len(attrs)+1)
 	all = append(all, slog.String(fieldEvent, event))
-	all = append(all, attrs...)
-	l.base.LogAttrs(ctx, level, msg, all...)
+	for _, a := range attrs {
+		if a.Value.Kind() == slog.KindString {
+			a = slog.String(a.Key, l.redact.Filter(a.Value.String()))
+		}
+		all = append(all, a)
+	}
+	l.base.LogAttrs(ctx, level, l.redact.Filter(msg), all...)
 }

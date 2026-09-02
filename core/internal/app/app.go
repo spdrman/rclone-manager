@@ -203,7 +203,34 @@ type Service struct {
 // that do not need them; New itself never rejects a nil value here, since
 // which fields a given CLI command actually needs is that command's own
 // business (see cmd/backup-manager).
+//
+// # Issue #295's redaction wiring
+//
+// New is the one place a *config.Config, a Journal and an *obs.Logger are
+// all in hand together, for every caller this package has: cmd/backup-
+// manager's own openService and service.Open both call this directly, and
+// service.New wraps it, so a config hot-reload (service/backupsets.go,
+// settings.go, backupsetenabled.go all call app.New again against the
+// SAME long-lived journal and a fresh cfg) rewires redaction exactly as a
+// fresh process start does. That makes this the correct, single seam to
+// read cfg.Sources for every config.Remote.Sensitive opt-in and build the
+// obs.Redactor both the returned Service's Logger and journal (when it is
+// a concrete *state.Journal) filter their rendered output through, rather
+// than something every one of those callers would otherwise have to
+// remember to do itself.
+//
+// journal is only ever a *state.Journal in production (see the
+// var _ Journal = (*state.Journal)(nil) assertion above); the type
+// assertion below is what lets this stay a plain function call instead of
+// growing Journal a SetRedactor method every fake implementing that
+// interface across this repository's tests would then have to satisfy
+// just to keep compiling, for a capability only the real journal needs.
 func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *obs.Logger) *Service {
+	redactor := obs.NewRedactor(sensitiveEndpoints(cfg)...)
+	logger = logger.WithRedaction(redactor)
+	if sj, ok := journal.(*state.Journal); ok {
+		sj.SetRedactor(redactor)
+	}
 	return &Service{
 		Config:    cfg,
 		Journal:   journal,
@@ -211,6 +238,30 @@ func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *ob
 		Logger:    logger,
 		Capacity:  thresholdsFrom(cfg),
 	}
+}
+
+// sensitiveEndpoints collects the obs.Endpoint for every configured Remote
+// that opted into issue #295's redaction (config.Remote.Sensitive), across
+// every Source and BackupSet cfg carries. This is the one place that
+// translation happens, mirroring sourceFor just below: internal/obs must
+// not import internal/config (see redact.go's own containment argument),
+// so this package, which already imports both, is where the two
+// vocabularies meet.
+func sensitiveEndpoints(cfg *config.Config) []obs.Endpoint {
+	if cfg == nil {
+		return nil
+	}
+	var out []obs.Endpoint
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			r := bs.Remote
+			if !r.Sensitive {
+				continue
+			}
+			out = append(out, obs.Endpoint{Host: r.Host, Port: r.Port, User: r.User})
+		}
+	}
+	return out
 }
 
 // thresholdsFrom translates internal/config's capacity block into the plain

@@ -288,6 +288,13 @@ where practical." (`key.env` and `key.command` are the exception: there is
 nothing to mount for either, since the key never lives in a file backup-manager
 reads on this host at all.)
 
+If this remote's host, port or account name must never appear in a log line
+or a journal detail (issue #295), for example a deployment where the port
+itself is treated as a credential, add `sensitive_endpoint: true` alongside
+the fields above. It defaults to false: most deployments would rather a
+connection failure said what it couldn't reach, so this is something a
+config asks for, not something backup-manager decides on its own.
+
 ## 6. Verify it end to end before pointing it at anything real
 
 Before trusting this setup with production data, do a manual sanity check
