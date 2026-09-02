@@ -478,3 +478,110 @@ func TestUpdateBackupSet_MovingOffStableClearsStableFor(t *testing.T) {
 		t.Errorf("completion.stable_for = %s after moving to the rename strategy, want it cleared", onDisk.Completion.StableFor)
 	}
 }
+
+// writeConfigWithPerSetRetention writes a fixture whose ONE backup set
+// carries its own whole-chain retention override (issue #333/#336's
+// config.BackupSet.RetentionConfig), which the ordinary fixture does not.
+// A whole chain, because a partial one is refused: naming two of the
+// three scalars would resolve the third to the product default rather
+// than to the deployment's policy.
+func writeConfigWithPerSetRetention(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	remoteDir := filepath.Join(dir, "remote")
+	if err := os.MkdirAll(remoteDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	configPath := filepath.Join(dir, "config.yaml")
+	content := "poll_interval: 15m\n" +
+		"state:\n  database: " + filepath.Join(dir, "state.db") + "\n" +
+		"sources:\n" +
+		"  - id: production\n" +
+		"    backup_sets:\n" +
+		"      - id: postgres-primary\n" +
+		"        remote:\n          type: local\n" +
+		"        remote_path: " + remoteDir + "\n" +
+		"        local_path: " + filepath.Join(dir, "local") + "\n" +
+		"        include:\n          - \"*.dump\"\n" +
+		"        completion:\n          strategy: rename\n" +
+		"        stale_after: 24h\n" +
+		"        retention:\n" +
+		"          daily_days: 90\n" +
+		"          weekly_months: 24\n" +
+		"          monthly_months: 60\n" +
+		"retention:\n" +
+		"  timezone: UTC\n" +
+		"  week_starts_on: monday\n" +
+		"  daily_days: 7\n" +
+		"  weekly_months: 3\n" +
+		"  monthly_months: 12\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return configPath
+}
+
+// TestUpdateBackupSet_LeavesAPerSetRetentionOverrideAlone is the same
+// per-box guarantee, aimed at the field this codebase gained most
+// recently (issue #333/#336's per-set retention override). It is worth
+// its own case rather than trusting the whole-struct comparison above,
+// because this field is the one where getting it wrong is silent and
+// expensive: a set retaining 90/24/60 that quietly reverts to the
+// deployment's 7/3/12 deletes restore points the operator believes are
+// kept, and reports nothing at all while doing it.
+//
+// It checks BOTH copies. On disk, because that is what outlives the
+// process and what a rollback would read. And through the running
+// service, because a write that kept the file right while leaving this
+// process resolving under the old policy is the exact failure #336's own
+// rule ("any mutation must be followed by Validate") names.
+func TestUpdateBackupSet_LeavesAPerSetRetentionOverrideAlone(t *testing.T) {
+	configPath := writeConfigWithPerSetRetention(t)
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	newLocal := filepath.Join(t.TempDir(), "moved-local")
+	if _, err := svc.UpdateBackupSet(context.Background(), fixtureSetID, UpdateBackupSetRequest{
+		LocalPath: strPtr(newLocal),
+	}); err != nil {
+		t.Fatalf("UpdateBackupSet: %v", err)
+	}
+
+	// The override is still the set's own, still whole, still on disk.
+	onDisk := readBackupSetFromDisk(t, configPath, "production", "postgres-primary")
+	if onDisk.RetentionConfig == nil {
+		t.Fatalf("the set's own retention override was dropped by an update that never named it:\n%s", mustRead(t, configPath))
+	}
+	if got := onDisk.RetentionConfig.DailyDays; got != 90 {
+		t.Errorf("on-disk daily_days = %d, want 90", got)
+	}
+	if got := onDisk.RetentionConfig.WeeklyMonths; got != 24 {
+		t.Errorf("on-disk weekly_months = %d, want 24", got)
+	}
+	if got := onDisk.RetentionConfig.MonthlyMonths; got != 60 {
+		t.Errorf("on-disk monthly_months = %d, want 60", got)
+	}
+	if onDisk.LocalPath != newLocal {
+		t.Errorf("on-disk local_path = %q, want %q; the field the request DID name must still have landed", onDisk.LocalPath, newLocal)
+	}
+
+	// And this process is deciding under it, not under the deployment's
+	// 7/3/12, which is what the hot reload's own Validate pass is for.
+	resolved := svc.state.Load().inner.Config.Sources[0].BackupSets[0].Retention
+	if resolved.DailyDays != 90 || resolved.WeeklyMonths != 24 || resolved.MonthlyMonths != 60 {
+		t.Errorf("after the update this service resolves the set to %d/%d/%d, want 90/24/60: the hot reload left it deciding under the deployment's policy",
+			resolved.DailyDays, resolved.WeeklyMonths, resolved.MonthlyMonths)
+	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	return string(raw)
+}
