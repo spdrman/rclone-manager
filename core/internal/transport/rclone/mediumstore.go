@@ -99,7 +99,71 @@ func objectInfo(ctx context.Context, o fs.Object) transport.ObjectInfo {
 	return info
 }
 
+// errBucketAbsent is what confirmBucket reports when the medium's bucket
+// does not exist. It is a Configuration failure rather than a NotFound one
+// (FR-28), and it exists as a sentinel so this file states the fact once.
+var errBucketAbsent = errors.New("rclone: the medium's bucket does not exist")
+
+// confirmBucket answers the question rclone's own error handling throws
+// away: is this key absent, or is the whole BUCKET absent?
+//
+// # Why this is needed at all
+//
+// rclone's s3 backend translates a 404 into its own filesystem-shaped
+// sentinels before this adapter ever sees it (backend/s3/s3.go turns a
+// 404 from HeadObject into fs.ErrorObjectNotFound and a 404 from
+// ListObjects into fs.ErrorDirNotFound), and in doing so it discards the
+// S3 error code, which is the only thing that separates NoSuchKey from
+// NoSuchBucket. Those are the same status and completely different
+// problems: one is a fact about a single artifact, the other is a typo
+// somebody has to go and fix.
+//
+// Measured against a real MinIO, before this existed:
+//
+//   - DeleteObject against a nonexistent bucket returned nil. The delete
+//     reported SUCCESS, because NewObject said not-found and DeleteObject
+//     correctly treats an already-absent object as success. Under FR-30's
+//     medium-aware prune that would mark every placement GONE on a medium
+//     whose bucket name had been mistyped in a config edit.
+//   - StatObject and OpenObject against a nonexistent bucket both reported
+//     NotFound, which a reconciler reads as "the medium lost the artifact".
+//   - ListObjects against a nonexistent bucket returned an empty listing
+//     and no error at all.
+//
+// # Why a list is a sound probe
+//
+// Because the two cases are distinguishable at THIS layer even though they
+// are not distinguishable at the object layer, which the same measurement
+// showed: walk over a prefix with nothing under it in a real bucket comes
+// back with a nil error and no entries, and walk over any prefix in a
+// missing bucket comes back with fs.ErrorDirNotFound. That holds because a
+// ListObjectsV2 against an existing bucket answers 200 with no contents
+// however empty the prefix is, and only a missing bucket makes it 404,
+// which is the single case rclone's list path turns into ErrorDirNotFound.
+//
+// # What it costs
+//
+// One extra list, only on the path that was ABOUT to report not-found, so
+// never on a successful stat, read or delete. UploadFromLocal deliberately
+// does not call it: its own pre-flight stat returns not-found on every
+// healthy upload, so probing there would add a round trip to the hot path
+// to answer a question PutObject answers by itself, with the real
+// NoSuchBucket code intact.
+func (a *Adapter) confirmBucket(ctx context.Context, f fs.Fs, medium transport.Medium) error {
+	if _, err := f.List(ctx, ""); err != nil {
+		if errors.Is(err, fs.ErrorDirNotFound) {
+			return fmt.Errorf("%w: medium %q names bucket %q, and the endpoint does not have it", errBucketAbsent, medium.ID, medium.Bucket)
+		}
+		return err
+	}
+	return nil
+}
+
 // StatObject reports what the medium holds at key, or a NotFound error.
+//
+// A not-found is confirmed against the bucket before it is reported, so
+// "this artifact is not on the medium" and "this medium's bucket does not
+// exist" never reach a caller as the same answer. See confirmBucket.
 func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key string) (transport.ObjectInfo, error) {
 	f, err := a.fsForMedium(ctx, medium)
 	if err != nil {
@@ -107,9 +171,22 @@ func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key s
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
+		if isObjectAbsent(err) {
+			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+				return transport.ObjectInfo{}, Wrap("stat_object", berr)
+			}
+		}
 		return transport.ObjectInfo{}, Wrap("stat_object", err)
 	}
 	return objectInfo(ctx, o), nil
+}
+
+// isObjectAbsent reports whether err is rclone's way of saying "there is
+// nothing here", in either of the two shapes its s3 backend produces for a
+// 404. It is a helper rather than an inline pair of checks because getting
+// only one of the two is a silent half-fix.
+func isObjectAbsent(err error) bool {
+	return errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound)
 }
 
 // UploadFromLocal puts the file at localPath under key.
@@ -185,8 +262,12 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 	switch _, statErr := f.NewObject(ctx, key); {
 	case statErr == nil:
 		return transport.UploadResult{}, Wrap("upload_from_local", fmt.Errorf("%w: %s", ErrObjectAlreadyPresent, key))
-	case errors.Is(statErr, fs.ErrorObjectNotFound), errors.Is(statErr, fs.ErrorDirNotFound):
-		// Nothing there. Proceed.
+	case isObjectAbsent(statErr):
+		// Nothing there. Proceed, WITHOUT a confirmBucket probe: this
+		// branch is the healthy path of every upload, and PutObject
+		// answers the bucket question by itself a moment later with the
+		// real NoSuchBucket code intact (measured). Probing here would
+		// buy nothing and cost a round trip per artifact.
 	default:
 		return transport.UploadResult{}, Wrap("upload_from_local", statErr)
 	}
@@ -232,6 +313,11 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
+		if isObjectAbsent(err) {
+			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+				return nil, Wrap("open_object", berr)
+			}
+		}
 		return nil, Wrap("open_object", err)
 	}
 	rc, err := o.Open(ctx)
@@ -332,7 +418,16 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		if errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound) {
+		if isObjectAbsent(err) {
+			// An absent object is success ONLY once the bucket it would
+			// have been in is known to exist. Without this, a delete
+			// against a mistyped bucket reports success and FR-30's prune
+			// marks the placement GONE for an artifact nobody deleted.
+			// Measured: this returned nil against a real MinIO before
+			// confirmBucket existed.
+			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+				return Wrap("delete_object", berr)
+			}
 			return nil
 		}
 		return Wrap("delete_object", err)
@@ -342,16 +437,15 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 
 // ListObjects enumerates objects under prefix.
 //
-// An empty result is not an error. S3 has no directories, so "nothing is
-// stored under this prefix" is an ordinary answer and not a missing thing:
-// rclone models a prefix with no keys as fs.ErrorDirNotFound because that
-// is the filesystem shape its interface is built around, and translating
-// that into a failure here would make a first upload to a new backup set
-// look like a broken medium.
+// An empty result is not an error. A prefix with nothing under it is an
+// ordinary answer on the first upload to a new backup set, and rclone
+// reports it as a nil error with no entries, so nothing has to be
+// translated for that case to work.
 //
-// A missing BUCKET is a different fact and does not arrive here as
-// ErrorDirNotFound alone; see errors.go's classification, which reads the
-// S3 error code where the backend leaves one visible.
+// A missing BUCKET is a completely different fact and does arrive here as
+// fs.ErrorDirNotFound, which is why the branch below refuses instead of
+// returning an empty slice. See confirmBucket for the measurement behind
+// that distinction.
 //
 // Recursive, with the same walk.GetAll call and the same reasoning
 // Adapter.List uses: a partial listing that silently omits anything below
@@ -366,7 +460,21 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 	objs, _, err := walk.GetAll(ctx, f, prefix, true, -1)
 	if err != nil {
 		if errors.Is(err, fs.ErrorDirNotFound) {
-			return nil, nil
+			// NOT an empty answer. An earlier version of this returned
+			// (nil, nil) here on the theory that S3 has no directories to
+			// be missing, and measuring it against a real MinIO showed
+			// what that actually did: a listing against a NONEXISTENT
+			// BUCKET came back as "this medium holds nothing", silently,
+			// which is the worst possible answer for a catalog rebuild or
+			// a reconciler.
+			//
+			// The empty-prefix case does not need the mapping anyway: a
+			// prefix with nothing under it in a real bucket comes back
+			// with a nil error and no entries, because ListObjectsV2
+			// answers 200 however empty the prefix is. So ErrorDirNotFound
+			// from an s3 listing means the bucket, and it is reported as
+			// the configuration problem it is.
+			return nil, Wrap("list_objects", fmt.Errorf("%w: medium %q names bucket %q, and the endpoint does not have it", errBucketAbsent, medium.ID, medium.Bucket))
 		}
 		return nil, Wrap("list_objects", err)
 	}

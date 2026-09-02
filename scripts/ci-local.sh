@@ -106,7 +106,7 @@ if [ "$FAST" != "1" ]; then
 fi
 
 if [ "$FAST" = "1" ]; then
-  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix and the SFTP integration tests), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
+  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests and the MinIO storage-medium suite), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
 fi
 
 gate_step "core/ go build"
@@ -122,21 +122,29 @@ if [ "$FAST" = "1" ]; then
   gate_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
   (cd core && GOWORK=off go test ./internal/...)
 else
-  # tests/crashmatrix and tests/sftpintegration run separately, under
-  # cmd/gotestwatch instead of `go test`'s own default -timeout (10m per
-  # package). Both drive real Docker/SFTP work through a real subprocess
-  # (tests/crashmatrix's own harness, or a real rclone transfer against
-  # the SFTP fixture container), so their wall-clock time tracks real
+  # tests/crashmatrix, tests/sftpintegration and tests/miniointegration run
+  # separately, under cmd/gotestwatch instead of `go test`'s own default
+  # -timeout (10m per package). All three drive real Docker work through a
+  # real subprocess (tests/crashmatrix's own harness, a real rclone transfer
+  # against the SFTP fixture container, or a real rclone s3 transfer against
+  # the MinIO fixture container), so their wall-clock time tracks real
   # machine load rather than a fixed budget; issue #256 is a real gate
   # run hitting go test's fixed 10m default under load. gotestwatch
   # bounds them with a no-progress window derived from this run's own
   # measured pace instead (issue #247's reasoning, one layer out; see
   # core/cmd/gotestwatch/doc.go), so there is no fixed number to outgrow.
-  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration, run next)"
-  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration)$'))
+  #
+  # tests/miniointegration joined that list with EPIC E's storage mediums
+  # (#235). It is much lighter than the SFTP suite, a couple of seconds
+  # against a minute and a half, but it is container-backed and this gate
+  # runs three times over inside the two architecture checks' throwaway
+  # worktrees, so it belongs with the suites whose budget is measured
+  # rather than fixed.
+  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration, run next)"
+  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration)$'))
 
-  gate_step "core/ tests/crashmatrix + tests/sftpintegration under gotestwatch (issue #256: no fixed go test -timeout)"
-  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/...)
+  gate_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration under gotestwatch (issue #256: no fixed go test -timeout)"
+  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/...)
 fi
 
 gate_step "apps/common go build, vet, test"

@@ -59,6 +59,16 @@ type Fixtures interface {
 	// created.
 	NewMedium(t *testing.T) transport.Medium
 
+	// Context returns the context every operation in the suite runs under.
+	//
+	// It exists so a container-backed fixture can hand the suite its
+	// fail-fast channel: tests/sftpfixture learned in #161 that once setup
+	// succeeds, nothing notices the server has gone, and the operation
+	// under test retries against a corpse until `go test` kills the whole
+	// package twenty-five minutes later. A fixture with no such concern
+	// returns context.Background().
+	Context(t *testing.T) context.Context
+
 	// AttestsChecksums reports whether this backend can produce a
 	// full-object SHA-256 attestation.
 	//
@@ -92,7 +102,7 @@ func Run(t *testing.T, store transport.MediumStore, fx Fixtures) {
 // --- the cases ---
 
 func testUploadAndStat(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	body := randomBytes(t, 4096)
 	local := writeLocal(t, "backup.dump", body)
@@ -123,7 +133,7 @@ func testUploadAndStat(t *testing.T, store transport.MediumStore, fx Fixtures) {
 // upload that replaced what was there could destroy an artifact's only
 // remaining copy, and no other method on this interface can do that.
 func testUploadRefusesOccupied(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	first := randomBytes(t, 1024)
 	second := randomBytes(t, 2048)
@@ -159,7 +169,7 @@ func testUploadRefusesOccupied(t *testing.T, store transport.MediumStore, fx Fix
 }
 
 func testUploadRefusesMissingLocal(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	missing := filepath.Join(t.TempDir(), "not-there.dump")
 	if _, err := store.UploadFromLocal(ctx, medium, missing, keyFor(t, medium, "not-there.dump")); err == nil {
@@ -173,7 +183,7 @@ func testUploadRefusesMissingLocal(t *testing.T, store transport.MediumStore, fx
 // confuses them can delete an origin copy on the strength of a network
 // failure.
 func testStatAbsent(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 
 	info, err := store.StatObject(ctx, medium, keyFor(t, medium, "never-uploaded.dump"))
@@ -189,7 +199,7 @@ func testStatAbsent(t *testing.T, store transport.MediumStore, fx Fixtures) {
 }
 
 func testOpenRoundTrip(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	// Deliberately bigger than a single read, so a partial implementation
 	// that returns the first chunk is caught.
@@ -214,7 +224,7 @@ func testOpenRoundTrip(t *testing.T, store transport.MediumStore, fx Fixtures) {
 }
 
 func testOpenAbsent(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	rc, err := store.OpenObject(ctx, medium, keyFor(t, medium, "never-uploaded.dump"))
 	if err == nil {
@@ -230,7 +240,7 @@ func testOpenAbsent(t *testing.T, store transport.MediumStore, fx Fixtures) {
 // and nothing else, never widen the target". The sibling keys share a
 // prefix on purpose: a prefix delete, or a recursive one, takes them too.
 func testDeleteIsNarrow(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 
 	target := keyFor(t, medium, "2026-09-01.dump")
@@ -258,7 +268,7 @@ func testDeleteIsNarrow(t *testing.T, store transport.MediumStore, fx Fixtures) 
 }
 
 func testDeleteAbsent(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	if err := store.DeleteObject(ctx, medium, keyFor(t, medium, "never-uploaded.dump")); err != nil {
 		t.Errorf("DeleteObject of an absent object returned %v; the caller's intent, that these bytes not be on this medium, is already true, and a re-run of an interrupted delete has to be safe", err)
@@ -266,7 +276,7 @@ func testDeleteAbsent(t *testing.T, store transport.MediumStore, fx Fixtures) {
 }
 
 func testListObjects(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 
 	want := []string{
@@ -302,7 +312,7 @@ func testListObjects(t *testing.T, store transport.MediumStore, fx Fixtures) {
 // which is an ordinary answer on the first upload to a new backup set, not
 // a missing thing.
 func testListEmpty(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	got, err := store.ListObjects(ctx, medium, prefixFor(t, medium))
 	if err != nil {
@@ -316,7 +326,7 @@ func testListEmpty(t *testing.T, store transport.MediumStore, fx Fixtures) {
 // testChecksum is FR-31's honesty rule as a test. There are exactly two
 // acceptable outcomes and "something weaker, quietly" is not one of them.
 func testChecksum(t *testing.T, store transport.MediumStore, fx Fixtures) {
-	ctx := context.Background()
+	ctx := fx.Context(t)
 	medium := fx.NewMedium(t)
 	body := randomBytes(t, 8192)
 	key := keyFor(t, medium, "attested.dump")
@@ -363,7 +373,7 @@ func testCancel(t *testing.T, store transport.MediumStore, fx Fixtures) {
 	local := writeLocal(t, "cancelled.dump", body)
 	key := keyFor(t, medium, "cancelled.dump")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(fx.Context(t))
 	cancel()
 
 	_, err := store.UploadFromLocal(ctx, medium, local, key)

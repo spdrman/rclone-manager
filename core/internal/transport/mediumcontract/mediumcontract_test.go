@@ -1,6 +1,7 @@
 package mediumcontract_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -27,6 +28,8 @@ func (f *filesystemFixtures) NewMedium(t *testing.T) transport.Medium {
 		StorageClass: "STANDARD",
 	}
 }
+
+func (f *filesystemFixtures) Context(*testing.T) context.Context { return context.Background() }
 
 func (f *filesystemFixtures) AttestsChecksums() bool { return f.store.AttestsChecksums() }
 

@@ -158,7 +158,19 @@ var s3ErrorCategories = map[string]transport.Category{
 	// same thing an operator has to go and fix, and PermissionDenied in
 	// this vocabulary means a remote-side refusal reached over a
 	// perfectly good session (see internal/app/halt.go's haltReasonFor).
-	"AccessDenied":                transport.Authentication,
+	"AccessDenied": transport.Authentication,
+	// "Forbidden" and "Unauthorized" are not S3 error codes at all, they
+	// are HTTP reason phrases, and the SDK synthesises a code from the
+	// status line when a response carries no body to read one out of. A
+	// HEAD response never has a body, so every 403 on a HeadObject arrives
+	// as "Forbidden" with the real AccessDenied nowhere in sight.
+	// Measured against a real MinIO: bad credentials on StatObject,
+	// OpenObject and DeleteObject all produced api error Forbidden and,
+	// before this entry existed, classified as Permanent, which tells an
+	// operator with a wrong access key to go and look at anything except
+	// their access key.
+	"Forbidden":                   transport.Authentication,
+	"Unauthorized":                transport.Authentication,
 	"InvalidAccessKeyId":          transport.Authentication,
 	"SignatureDoesNotMatch":       transport.Authentication,
 	"InvalidSecurity":             transport.Authentication,
@@ -325,6 +337,10 @@ func Classify(err error) transport.Category {
 	// a way that makes this operation ambiguous". See the package comment:
 	// this adapter's current surface has no reachable path to it, but the
 	// sentinel is real and cheap to recognize regardless.
+	if errors.Is(err, errBucketAbsent) {
+		return transport.Configuration
+	}
+
 	if errors.Is(err, rclonefs.ErrorDirExists) || errors.Is(err, ErrObjectAlreadyPresent) {
 		return transport.Conflict
 	}
