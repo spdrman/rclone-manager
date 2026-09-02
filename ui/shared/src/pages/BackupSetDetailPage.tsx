@@ -24,7 +24,14 @@ const COMPLETION_COPY = {
 } as const;
 
 export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
-  const { setId = "" } = useParams();
+  // The route is two segments (App.tsx: /sets/:source/:set), matching a
+  // real backup set id's own shape (model.BackupSetID.String() joins them
+  // with "/" — core/internal/model/ids.go). Rejoining them here is the
+  // same join that produces core's own id string, and it is safe: neither
+  // half may contain "/" (model.validPart), so there is exactly one way
+  // to read this pair back as one id (issue #285).
+  const { source = "", set: setName = "" } = useParams();
+  const setId = source && setName ? source + "/" + setName : "";
   const api = useApi();
   const navigate = useNavigate();
   // B2.2 (#97) — graph-backed, not page-local useAsync state: an edit
@@ -45,7 +52,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   if (set.error) return <ErrorState {...set.error} onRetry={set.reload} />;
   // Both checks matter, same as BackupDetailPage.tsx's equivalent fix
   // (B2.4 mandatory review): React Router does not remount this
-  // component for a :setId change alone, so navigating set A -> set B
+  // component for a :source/:set change alone, so navigating set A -> set B
   // re-triggers this fetch while `data` still holds set A until the new
   // fetch resolves. Gating on `loading` too closes that window instead
   // of rendering set A's fields under set B's url.

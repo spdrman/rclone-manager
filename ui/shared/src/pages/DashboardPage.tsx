@@ -17,6 +17,22 @@ import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
+import { backupSetPath } from "@shared/utilities/routes";
+
+/**
+ * The one evidence-navigating action each halt reason actually has on the
+ * backup set's own detail page (issue #285's second defect). Host-key-
+ * changed has a fingerprint panel there ("Connection", FingerprintDisplay)
+ * to send an operator to; authentication-failed has no equivalent
+ * evidence section, so it carries no entry here rather than borrowing the
+ * fingerprint one. HaltBanner's own doc is the rule this map exists to
+ * satisfy: actions are for navigating to the evidence, never a stand-in
+ * for it, and a reason with no matching entry gets no action at all
+ * rather than the wrong one.
+ */
+const HALT_ACTION_LABEL: Partial<Record<NonNullable<BackupSet["haltReason"]>, string>> = {
+  "host-key-changed": "Review fingerprint"
+};
 
 export function DashboardPage({
   health,
@@ -125,9 +141,14 @@ export function DashboardPage({
         <HaltBanner
           set={haltedSet}
           actions={
-            <button className="btn btn--sm" onClick={() => navigate("/sets/" + haltedSet.id)}>
-              Review fingerprint
-            </button>
+            haltedSet.haltReason && HALT_ACTION_LABEL[haltedSet.haltReason] ? (
+              <button
+                className="btn btn--sm"
+                onClick={() => navigate(backupSetPath(haltedSet.source, haltedSet.set))}
+              >
+                {HALT_ACTION_LABEL[haltedSet.haltReason]}
+              </button>
+            ) : null
           }
         />
       ) : null}

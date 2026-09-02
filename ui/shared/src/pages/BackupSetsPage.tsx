@@ -9,6 +9,7 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
+import { backupSetPath } from "@shared/utilities/routes";
 
 export function BackupSetsPage({
   sets,
@@ -158,7 +159,7 @@ export function BackupSetsPage({
               key={set.id}
               set={set}
               currentOperation={currentOperation}
-              onOpen={() => navigate("/sets/" + set.id)}
+              onOpen={() => navigate(backupSetPath(set.source, set.set))}
               onTest={() => api.testConnection(set.id)}
               actionsDisabled={readOnly}
             />

@@ -52,7 +52,7 @@ const defaultRetention = {
 
 const SETS: BackupSet[] = [
   {
-    id: "set_pg_prod", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
+    id: "production/postgres-primary", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
     excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker",
@@ -69,7 +69,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-08-02T10:14:00+02:00"
   },
   {
-    id: "set_mysql_billing", source: "production", set: "billing-mysql", name: "Billing MySQL",
+    id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
     excludePatterns: ["*.part"], completionMethod: "atomic-rename",
@@ -86,7 +86,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-07-19T09:02:00+02:00"
   },
   {
-    id: "set_auth_cfg", source: "production", set: "auth-config", name: "Auth service config",
+    id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
     excludePatterns: [], completionMethod: "stable-size",
@@ -104,7 +104,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: null
   },
   {
-    id: "set_media", source: "media", set: "weekly-archive", name: "Media archive",
+    id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
     excludePatterns: [], completionMethod: "completion-marker",
@@ -124,7 +124,7 @@ const SETS: BackupSet[] = [
 
 const ARTIFACTS: BackupArtifact[] = [
   {
-    id: "art_01J9F4M2QK8Z", setId: "set_pg_prod", setName: "Production PostgreSQL",
+    id: "art_01J9F4M2QK8Z", setId: "production/postgres-primary", setName: "Production PostgreSQL",
     filename: "postgres-prod-20260828.dump.zst",
     remoteOriginalPath: "prod-db-01:/backups/postgresql/postgres-prod-20260828.dump.zst",
     localPath: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
@@ -136,7 +136,7 @@ const ARTIFACTS: BackupArtifact[] = [
     remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
   },
   {
-    id: "art_01J9F2A7BC44", setId: "set_mysql_billing", setName: "Billing MySQL",
+    id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260827.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260827.sql.gz",
     localPath: "/data/backups/production/billing/2026/08/billing-20260827.sql.gz",
@@ -148,7 +148,7 @@ const ARTIFACTS: BackupArtifact[] = [
     remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null
   },
   {
-    id: "art_01J9E8QP4R21", setId: "set_auth_cfg", setName: "Auth service config",
+    id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
     filename: "auth-config-20260826.tar.zst",
     remoteOriginalPath: "prod-db-01:/etc/auth-service/backups/auth-config-20260826.tar.zst",
     localPath: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
@@ -161,7 +161,7 @@ const ARTIFACTS: BackupArtifact[] = [
     quarantine: { reason: "checksum-mismatch", detectedAt: "2026-08-26T04:14:10+02:00", remoteSourceRetained: true }
   },
   {
-    id: "art_01J9C1XY7T09", setId: "set_mysql_billing", setName: "Billing MySQL",
+    id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260824.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260824.sql.gz",
     localPath: "/data/backups/production/billing/quarantine/billing-20260824.sql.gz",
@@ -173,7 +173,7 @@ const ARTIFACTS: BackupArtifact[] = [
     quarantine: { reason: "validation-failed", detectedAt: "2026-08-24T02:19:02+02:00", remoteSourceRetained: true }
   },
   {
-    id: "art_01J98MN3V5KK", setId: "set_media", setName: "Media archive",
+    id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
     filename: "media-week34.tar",
     remoteOriginalPath: "media-01:/export/weekly/media-week34.tar",
     localPath: "/data/backups/media/2026/w34/media-week34.tar",
@@ -194,13 +194,13 @@ const ARTIFACTS: BackupArtifact[] = [
 // the dev server has to be able to show both.
 const OPERATIONS: Operation[] = [
   {
-    id: "op_transfer_1", setId: "set_pg_prod", setName: "Production PostgreSQL",
+    id: "op_transfer_1", setId: "production/postgres-primary", setName: "Production PostgreSQL",
     kind: "transfer", label: "Transferring backup", status: "running",
     progress: {
       observedAt: "2026-08-29T02:01:14+02:00",
       sequence: 412,
       stage: "transferring",
-      backupSetId: "set_pg_prod",
+      backupSetId: "production/postgres-primary",
       backupSetsDone: 1,
       backupSetsTotal: 4,
       artifact: "postgres-primary-2026-08-29.dump.zst",
@@ -212,7 +212,7 @@ const OPERATIONS: Operation[] = [
     nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00"
   },
   {
-    id: "op_recon_1", setId: "set_media", setName: "Media archive",
+    id: "op_recon_1", setId: "media/weekly-archive", setName: "Media archive",
     kind: "reconciliation", label: "Reconciling catalog against storage",
     status: "running", progress: null,
     nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00"
@@ -220,18 +220,18 @@ const OPERATIONS: Operation[] = [
 ];
 
 const ACTIVITY: ActivityEvent[] = [
-  { id: "ev_1", at: "2026-08-29T04:12:08+02:00", type: "host-key-changed", severity: "error", setId: "set_auth_cfg", setName: "Auth service config", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", correlationId: "cid_9f2a41" },
-  { id: "ev_2", at: "2026-08-29T03:40:22+02:00", type: "validation-failed", severity: "warn", setId: "set_mysql_billing", setName: "Billing MySQL", text: "Backup stale", detail: "no verified backup for 31 hours", correlationId: "cid_71bc03" },
-  { id: "ev_3", at: "2026-08-29T02:01:01+02:00", type: "remote-source-deleted", severity: "ok", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Remote source deleted", detail: "after durable commit", correlationId: "cid_4ad812" },
-  { id: "ev_4", at: "2026-08-29T02:01:00+02:00", type: "backup-committed", severity: "ok", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Backup committed", detail: "14.2 GB fsynced", correlationId: "cid_4ad812" },
-  { id: "ev_5", at: "2026-08-29T02:00:59+02:00", type: "verification-passed", severity: "ok", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Verification passed", detail: "SHA-256 matched manifest", correlationId: "cid_4ad812" },
-  { id: "ev_6", at: "2026-08-29T02:00:53+02:00", type: "transfer-complete", severity: "info", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Transfer complete", detail: "1m 03s at 118 MB/s", correlationId: "cid_4ad812" },
-  { id: "ev_7", at: "2026-08-29T02:00:11+02:00", type: "backup-discovered", severity: "info", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Backup discovered", detail: "completion manifest present", correlationId: "cid_4ad812" },
-  { id: "ev_8", at: "2026-08-29T01:35:40+02:00", type: "retention-completed", severity: "ok", setId: "set_media", setName: "Media archive", text: "Retention completed", detail: "4 deleted, 51.8 GB reclaimed", correlationId: "cid_22e7f9" },
-  { id: "ev_9", at: "2026-08-28T22:14:03+02:00", type: "validation-failed", severity: "warn", setId: "set_auth_cfg", setName: "Auth service config", text: "Validation failed", detail: "artifact quarantined", correlationId: "cid_50cc18" },
-  { id: "ev_10", at: "2026-08-28T19:02:55+02:00", type: "configuration-updated", severity: "info", setId: "set_media", setName: "Media archive", text: "Configuration updated", detail: "weekly retention 8 to 13", correlationId: "cid_1b9d64" },
+  { id: "ev_1", at: "2026-08-29T04:12:08+02:00", type: "host-key-changed", severity: "error", setId: "production/auth-config", setName: "Auth service config", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", correlationId: "cid_9f2a41" },
+  { id: "ev_2", at: "2026-08-29T03:40:22+02:00", type: "validation-failed", severity: "warn", setId: "production/billing-mysql", setName: "Billing MySQL", text: "Backup stale", detail: "no verified backup for 31 hours", correlationId: "cid_71bc03" },
+  { id: "ev_3", at: "2026-08-29T02:01:01+02:00", type: "remote-source-deleted", severity: "ok", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Remote source deleted", detail: "after durable commit", correlationId: "cid_4ad812" },
+  { id: "ev_4", at: "2026-08-29T02:01:00+02:00", type: "backup-committed", severity: "ok", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Backup committed", detail: "14.2 GB fsynced", correlationId: "cid_4ad812" },
+  { id: "ev_5", at: "2026-08-29T02:00:59+02:00", type: "verification-passed", severity: "ok", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Verification passed", detail: "SHA-256 matched manifest", correlationId: "cid_4ad812" },
+  { id: "ev_6", at: "2026-08-29T02:00:53+02:00", type: "transfer-complete", severity: "info", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Transfer complete", detail: "1m 03s at 118 MB/s", correlationId: "cid_4ad812" },
+  { id: "ev_7", at: "2026-08-29T02:00:11+02:00", type: "backup-discovered", severity: "info", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Backup discovered", detail: "completion manifest present", correlationId: "cid_4ad812" },
+  { id: "ev_8", at: "2026-08-29T01:35:40+02:00", type: "retention-completed", severity: "ok", setId: "media/weekly-archive", setName: "Media archive", text: "Retention completed", detail: "4 deleted, 51.8 GB reclaimed", correlationId: "cid_22e7f9" },
+  { id: "ev_9", at: "2026-08-28T22:14:03+02:00", type: "validation-failed", severity: "warn", setId: "production/auth-config", setName: "Auth service config", text: "Validation failed", detail: "artifact quarantined", correlationId: "cid_50cc18" },
+  { id: "ev_10", at: "2026-08-28T19:02:55+02:00", type: "configuration-updated", severity: "info", setId: "media/weekly-archive", setName: "Media archive", text: "Configuration updated", detail: "weekly retention 8 to 13", correlationId: "cid_1b9d64" },
   { id: "ev_11", at: "2026-08-28T12:44:17+02:00", type: "storage-critical", severity: "warn", setId: null, setName: "System", text: "Storage warning", detail: "81% of pool used", correlationId: "cid_88fa02" },
-  { id: "ev_12", at: "2026-08-28T02:00:04+02:00", type: "transfer-started", severity: "info", setId: "set_mysql_billing", setName: "Billing MySQL", text: "Transfer started", detail: "3.4 GB", correlationId: "cid_71bc03" }
+  { id: "ev_12", at: "2026-08-28T02:00:04+02:00", type: "transfer-started", severity: "info", setId: "production/billing-mysql", setName: "Billing MySQL", text: "Transfer started", detail: "3.4 GB", correlationId: "cid_71bc03" }
 ];
 
 const HEALTH: SystemHealth = {
