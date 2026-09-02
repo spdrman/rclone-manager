@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>First run, screen by screen: rclone-manager</title>
+  <meta name="description" content="Every screen of the rclone-manager first-run flow, with an example for each field and what that entry actually does once it reaches config.yaml.">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="topbar.css">
+  <script src="topbar.js" defer></script>
+</head>
+<body>
+
+<header class="topbar" id="topbar">
+  <div class="topbar-content">
+    <a class="topbar-brand" href="index.html">
+      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
+    </a>
+  </div>
+
+  <button class="topbar-burger" id="topbarBurger" type="button"
+          aria-label="Toggle menu" aria-expanded="false" aria-controls="topbar-menu">
+    <span class="burger-icon" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topbar-menu" id="topbar-menu" aria-hidden="true">
+    <div class="topbar-menu-inner">
+      <a href="index.html" class="nav-item nav-item-home">
+        <svg class="nav-icon nav-icon-home" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3z"/>
+        </svg>
+        <span class="nav-label nav-label-full">Home</span>
+      </a>
+
+      <a href="first-run.html" class="nav-item is-current">
+        <span class="nav-label nav-label-full">First-run tutorial</span>
+        <span class="nav-label nav-label-short">First run</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+        <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="nav-label nav-label-full">GitHub</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Deployment</span>
+        <span class="nav-label nav-label-short">Deploy</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/ssh-setup.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">SSH setup</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Issues</span>
+      </a>
+
+      <hr class="menu-divider">
+
+      <button type="button" class="topbar-theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme">
+        <span class="theme-glyph" aria-hidden="true">&#9790;</span>
+        <span class="theme-label">Dark mode</span>
+        <span class="theme-slider" aria-hidden="true">
+          <span class="theme-slider-track">
+            <span class="theme-slider-sun">&#9728;</span>
+            <span class="theme-slider-moon">&#9790;</span>
+            <span class="theme-slider-knob"></span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <section>
+    <span class="step-eyebrow">Tutorial</span>
+    <h2 id="top" style="font-size:1.75rem;border:none;padding-bottom:0;margin-bottom:0.5rem;">First run, screen by screen</h2>
+    <p>Every screen a freshly installed instance shows, in the order it shows them, with an example for each field and a sentence on what that entry causes the product to do. Not what the label says. What the entry does.</p>
+    <p>The worked example throughout is a UGREEN NAS running the canonical Docker Compose deployment, pulling finished backup archives off two VPS over SFTP. The first run configures the first of the two. <a href="#second-vps">The second one</a> is an ordinary backup set added afterwards.</p>
+
+    <div class="note">
+      <span class="note-label">Where these pictures came from</span>
+      <p>Every screenshot on this page was taken against <code>ui/shared</code>'s development server, whose API is the in-memory fixture in <code>src/api/mock.ts</code>. The component tree, the layout and every word of copy are the real product's. The <em>data</em> is not: fingerprints, key ids and anything numeric are fixtures.</p>
+      <p>They were deliberately not taken from a real instance. Completing this flow claims the administrator account and writes a configuration file, and the enrolment token that opens it is single use, so a screenshot run against a live deployment would finish somebody's setup for them. <a href="#reshoot">Re-shooting them</a> is one command.</p>
+    </div>
+
+    <div class="note warn">
+      <span class="note-label">Two known defects on this path</span>
+      <p>Both are open and both are on screens below. <a href="https://github.com/spdrman/rclone-manager/issues/274">#274</a>: an expired enrolment token reports &ldquo;The administrator account could not be created&rdquo;, which blames your password for a problem with the link. <a href="https://github.com/spdrman/rclone-manager/issues/275">#275</a>: the wizard draws a &ldquo;Cancel and return to backup sets&rdquo; control during first run that cannot do anything. Each is called out where it appears.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="before">Before you open a browser</h2>
+    <p>Three things have to be true, and none of them is checked for you in a way that produces a useful message if it is not.</p>
+    <ol>
+      <li><strong>The host directories exist and the container can write them.</strong> The runtime image is distroless with no root step, and a bind mount does not chown its source, so create the state, backup and config directories on the NAS and chown them to the container's uid and gid yourself. The config directory is mounted as a writable <em>directory</em>, not a read-only file, which is exactly what lets setup write <code>config.yaml</code> into it.</li>
+      <li><strong>The config directory is empty.</strong> Setup is a one-time door. If anything is already at <code>/etc/backup-manager/config/config.yaml</code>, however it got there, the first-run write refuses rather than overwriting it, and the instance serves the ordinary application instead of the setup flow.</li>
+      <li><strong>The remote server has an account to pull from.</strong> A dedicated, shell-less, chrooted SFTP account is what the project's own <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/ssh-setup.md">SSH setup guide</a> recommends, and it has a consequence worth knowing before you get to step 5: against that account shape a remote checksum cannot be computed at all, so verification is transfer verification, not a remote-versus-local hash comparison.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2 id="contents">The screens</h2>
+    <div class="toc">
+      <ol>
+        <li><a href="#log">The enrolment link in the log</a></li>
+        <li><a href="#enrol">Create the administrator</a></li>
+        <li><a href="#step1">Step 1: Source</a></li>
+        <li><a href="#step2">Step 2: Authentication</a></li>
+        <li><a href="#step3">Step 3: Verify server</a></li>
+        <li><a href="#step4">Step 4: Backup discovery</a></li>
+        <li><a href="#step5">Step 5: Storage, retention, validation</a></li>
+        <li><a href="#step6">Step 6: Review, and Finish setup</a></li>
+        <li><a href="#after">What you get next</a></li>
+        <li><a href="#again">Coming back later</a></li>
+        <li><a href="#second-vps">Adding the second VPS</a></li>
+        <li><a href="#gaps">Screens not pictured here</a></li>
+      </ol>
+    </div>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 0</span>
+    <h2 id="log">The enrolment link in the log</h2>
+    <p>There is no screen for this one. On first start, before any browser is involved, the engine prints a one-time enrolment secret to its own stdout. Read it from the engine container, not the web one:</p>
+    <pre><code>docker compose logs rclone-manager | grep enroll</code></pre>
+    <p>What comes back looks like this:</p>
+    <pre><code><span class="cm">backup-manager: no administrator account exists yet. Open</span>
+<span class="cm">http://localhost:8080/enroll?token=</span>&lt;a long random string&gt;<span class="cm"> to create one</span>
+<span class="cm">(valid 30 minutes, single use).</span></code></pre>
+
+    <table class="fields">
+      <thead><tr><th>Thing</th><th>Value</th><th>What it means for you</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>The host in the link</strong></td>
+          <td>localhost:8080</td>
+          <td>The shipped Compose file sets <code>PUBLIC_BASE_URL</code> to <code>http://localhost:${LISTEN_PORT}</code>, and <code>localhost</code> only resolves correctly if you open the link <em>on the NAS itself</em>. <span class="does">From a laptop, swap the host for the NAS address and keep the token exactly as printed.</span> Set <code>PUBLIC_BASE_URL</code> in <code>.env</code> to your NAS address to get a link that is correct next time.</td>
+        </tr>
+        <tr>
+          <td><strong>The token</strong></td>
+          <td>24 random bytes, base64url</td>
+          <td>Reaching the port is deliberately not sufficient to claim the administrator account. <span class="does">The token is what proves you can read the container's own log, which is the thing an attacker on the LAN cannot do.</span></td>
+        </tr>
+        <tr>
+          <td><strong>Valid 30 minutes</strong></td>
+          <td>hard expiry</td>
+          <td><span class="does">After 30 minutes the token stops working and enrolment fails</span>, currently with a message that does not say so. See the callout on the next screen.</td>
+        </tr>
+        <tr>
+          <td><strong>Single use</strong></td>
+          <td>consumed atomically</td>
+          <td>It cannot succeed twice. <span class="does">A restart before enrolment completes mints a fresh token and silently invalidates the old one</span>, so an old link in your scrollback is dead even inside its 30 minutes.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note">
+      <span class="note-label">If nothing was printed</span>
+      <p>The notice is printed only while enrolment is still open. Nothing in the log means an administrator already exists, and the answer is to sign in rather than to hunt for a token. Restarting the engine mints a new token only when no administrator has enrolled.</p>
+    </div>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 1</span>
+    <h2 id="enrol">Create the administrator</h2>
+    <p>Open the link. This account manages Backup Manager and nothing else. It is not your NAS operating-system account, and it is stored on the NAS as an Argon2id hash in <code>/data/state/local-auth.json</code>, in the same volume as the lifecycle journal, so it survives a container restart without a second volume.</p>
+
+    <figure>
+      <img src="screens/01-enrolment-empty.png" alt="The Create Backup Manager administrator form, empty, with Username, Password and Confirm password fields and a disabled Create administrator button" loading="lazy">
+      <figcaption>The enrolment form as the link lands on it. The Create administrator button stays disabled until all three fields are valid, so there is no way to submit a half-filled form.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Field</th><th>Example</th><th>What the entry does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Username</strong></td>
+          <td>nas-admin</td>
+          <td>Becomes the single administrator record for this instance. <span class="does">Enrolment is one-shot and irreversible: once this record exists, the enrolment route is closed for good and there is no second account and no self-service way back.</span> Pick something you will recognise in a log line.</td>
+        </tr>
+        <tr>
+          <td><strong>Password</strong></td>
+          <td>a passphrase of 12 characters or more</td>
+          <td>Hashed with Argon2id and written to the state volume. The plaintext is never stored and never leaves the NAS. Twelve characters is a floor the form enforces, not a recommendation.</td>
+        </tr>
+        <tr>
+          <td><strong>Confirm password</strong></td>
+          <td>the same again</td>
+          <td>Client-side only. You can change this password later from Settings, but that asks for the current one: <span class="does">there is no reset for a password nobody knows</span>, so a typo you confirm twice is a reinstall. That is the reason this field exists at all.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <figure>
+      <img src="screens/02-enrolment-password-too-short.png" alt="The enrolment form showing the message Minimum 12 characters below a short password" loading="lazy">
+      <figcaption>Below-minimum passwords are refused inline before submission, and the submit button stays disabled.</figcaption>
+    </figure>
+
+    <figure>
+      <img src="screens/03-enrolment-ready.png" alt="The enrolment form with all three fields filled and the Create administrator button enabled" loading="lazy">
+      <figcaption>All three valid. Pressing Create administrator sends the username, the password and the token from the URL, and on success signs you straight in.</figcaption>
+    </figure>
+
+    <div class="note danger">
+      <span class="note-label">If it says the account could not be created</span>
+      <p>Read that message as <em>the token</em>, not the password. When the enrolment secret is missing, expired or already used, the API answers <code>BOOTSTRAP_TOKEN_INVALID</code> with &ldquo;missing, expired or already-used bootstrap token&rdquo;, and the page currently discards that and shows &ldquo;The administrator account could not be created&rdquo; instead. Trying a different password cannot help.</p>
+      <p>The fix is a fresh token: restart the engine container, read the new link out of the log, and open that one. If the token was already <em>used</em>, an administrator exists and you should sign in instead.</p>
+      <p>The correlation id shown on that error, <code>cid_enroll</code>, is a hardcoded literal and does not match the one in the response, so it will not find anything in a log. This is <a href="https://github.com/spdrman/rclone-manager/issues/274">#274</a> and it is being fixed.</p>
+    </div>
+
+    <div class="note">
+      <span class="note-label">A cosmetic one, same screen</span>
+      <p>Error banners in this build render their leading glyph as the literal six characters <code>&#92;u2715</code> rather than as a cross. It is four sites of a JSX escape used as element content instead of inside a string, tracked as <a href="https://github.com/spdrman/rclone-manager/issues/257">#257</a>, and it means nothing about the error you are reading.</p>
+    </div>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 2 &middot; wizard step 1 of 6</span>
+    <h2 id="step1">Step 1: Source</h2>
+    <p>Enrolment drops you straight here. The setup surface is the ordinary add-backup-set wizard with a short explanation above it, deliberately rather than a separate flow, because the questions are the same either way and a second parallel form would be a second place for them to drift.</p>
+
+    <figure>
+      <img src="screens/04-first-run-step-1-source.png" alt="The FIRST RUN header reading Set up Backup Manager above the six-step Add backup set wizard, on step 1 Source" loading="lazy">
+      <figcaption>The first-run header, the six-step tracker, and step 1 pre-filled with the product's own example values. Everything visible here is a text field you are expected to overwrite.</figcaption>
+    </figure>
+
+    <div class="note warn">
+      <span class="note-label">Ignore the Cancel link</span>
+      <p>&ldquo;Cancel and return to backup sets&rdquo; does nothing during first run. It changes the address bar to <code>/sets</code> and the page stays where it is, because which surface renders is decided by whether the instance is configured, not by the route. There is nowhere to cancel to: there is no backup-sets list until there is a configuration. This is <a href="https://github.com/spdrman/rclone-manager/issues/275">#275</a>, and the fix is to stop drawing the control in this mode.</p>
+    </div>
+
+    <figure>
+      <img src="screens/05-step-1-source-filled.png" alt="Step 1 Source filled in with a backup set name, a hostname, a placeholder SSH port and a username" loading="lazy">
+      <figcaption>Step 1 filled in for the worked example. The SSH port shown is a placeholder, not a real port; put your own number there. See the warning below about what happens if you leave text in that field.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Field</th><th>Example</th><th>What the entry does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Backup set name</strong></td>
+          <td>api-server-nightly</td>
+          <td>Becomes the backup set's <code>id</code> in <code>config.yaml</code>, and half of its permanent identity: a backup set is identified by source plus set, never by the set name alone. <span class="does">It also becomes part of a filename on disk</span>, because the trust anchor from step 3 is written to <code>known_hosts.d/&lt;source&gt;_&lt;name&gt;_known_hosts</code>, so keep it to something filename-shaped.</td>
+        </tr>
+        <tr>
+          <td><strong>Server hostname</strong></td>
+          <td>api-server.example.net</td>
+          <td>The VPS this NAS pulls from. <span class="does">Editing it after you have trusted a host key on step 3 revokes that trust</span>, deliberately, so that trusting server A cannot leave server B showing as trusted.</td>
+        </tr>
+        <tr>
+          <td><strong>SSH port</strong></td>
+          <td>your own port</td>
+          <td>Written to <code>remote.port</code>. <span class="does">Anything that is not a number becomes 22.</span> The wizard converts this field with a numeric coercion that falls back to 22, silently, so a typo here does not produce an error, it produces a connection attempt against the wrong port.</td>
+        </tr>
+        <tr>
+          <td><strong>Username</strong></td>
+          <td>backup-agent</td>
+          <td>The SFTP account on the remote server. <span class="does">This account only ever needs read access plus the right to delete the artifacts it produced</span>, because the manager pulls and then removes the source. It is never given write access to your data.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note danger">
+      <span class="note-label">The port is the one field to double-check</span>
+      <p>Because a non-numeric port silently becomes 22, and because 22 will usually be reachable on a VPS, a mistyped port can produce a wizard that appears to work while pointing somewhere you did not intend. Check <code>remote.port</code> in the written <code>config.yaml</code> once setup finishes.</p>
+    </div>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 3 &middot; wizard step 2 of 6</span>
+    <h2 id="step2">Step 2: Authentication</h2>
+    <p>Three options are offered. <strong>Only one of them can save.</strong></p>
+
+    <figure>
+      <img src="screens/06-step-2-authentication.png" alt="Step 2 Authentication with three key-source choices and Generate dedicated SSH key selected, showing a public key to copy" loading="lazy">
+      <figcaption>The default selection, &ldquo;Generate dedicated SSH key&rdquo;, shows a public key and offers to copy it. In this build the key shown is a fixed example string and generation on save is not implemented, so choosing this option and pressing Finish setup on step 6 returns an error telling you to import a key instead.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Choice</th><th>State today</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Generate dedicated SSH key</strong></td>
+          <td>not implemented</td>
+          <td>Marked &ldquo;Recommended&rdquo; and selected by default, but saving with it selected fails with &ldquo;Generating a key on save isn't available yet&rdquo;. <span class="does">The public key it displays is a hardcoded example, so do not install it on your server.</span></td>
+        </tr>
+        <tr>
+          <td><strong>Use managed key</strong></td>
+          <td>not implemented</td>
+          <td>The dropdown lists example entries. Saving with it selected fails the same way.</td>
+        </tr>
+        <tr>
+          <td><strong>Import key</strong></td>
+          <td>works</td>
+          <td><span class="does">The only choice that produces a saveable configuration.</span> Paste the private key of an account you have already installed the matching public key for.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <figure>
+      <img src="screens/07-step-2-import-key.png" alt="Step 2 with Import key selected, showing an empty private key textarea and a disabled Import key button" loading="lazy">
+      <figcaption>Import key selected. The field is shown empty on purpose: a screenshot of a private key, even a fake one, is not a picture worth publishing.</figcaption>
+    </figure>
+
+    <p>Paste an unencrypted OpenSSH or PEM private key and press <strong>Import key</strong>. What happens then is worth knowing precisely, because it is the only moment key material exists anywhere near a browser:</p>
+    <ul>
+      <li>The key goes straight to the backend in one call. The page discards its own copy the instant that call returns and holds only the returned <em>id</em> and fingerprint from then on.</li>
+      <li>The backend validates it as a real unencrypted private key, then writes it to <code>&lt;config dir&gt;/ssh_keys/&lt;id&gt;</code> with mode 0600. The configuration file only ever names that path. <span class="does">There is no field in the schema for raw key bytes at all</span>, by design, so a key can never end up inline in <code>config.yaml</code>.</li>
+      <li>Spellcheck, autocomplete, autocorrect and autocapitalise are all switched off on that textarea, because browser &ldquo;enhanced&rdquo; spellcheck sends the contents of an unmasked text field to a third-party service as you type.</li>
+      <li>It cannot be shown again. Replacing it means pasting a different key.</li>
+    </ul>
+
+    <figure>
+      <img src="screens/08-step-2-key-imported.png" alt="Step 2 showing a green Key imported banner with an algorithm and fingerprint, and a Replace button" loading="lazy">
+      <figcaption>After import: the algorithm and fingerprint of what was stored, and a note that the pasted material has already been discarded. Check this fingerprint against <code>ssh-keygen -lf</code> on your own copy of the key before continuing.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 4 &middot; wizard step 3 of 6</span>
+    <h2 id="step3">Step 3: Verify server</h2>
+    <p>This step fetches the remote server's host key and asks you to trust it. It is the step people click through, and it is the one that decides whether a future man-in-the-middle is caught or ignored.</p>
+
+    <figure>
+      <img src="screens/09-step-3-verify-server.png" alt="Step 3 Verify server showing host, algorithm, fingerprint and Not yet trusted, with Trust host and Re-fetch fingerprint buttons" loading="lazy">
+      <figcaption>The probe result for the host and port from step 1. The fingerprint in this picture is the development fixture's; yours will be your server's. Changing the hostname or port on step 1 re-probes automatically and drops any trust already granted.</figcaption>
+    </figure>
+
+    <p>The instruction on the screen is the whole point of the step: <em>confirm this fingerprint through a channel other than this connection</em>. Run <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the VPS itself, over a session you already trust, and compare. A fingerprint that only ever came down the connection you are trying to authenticate proves nothing.</p>
+
+    <figure>
+      <img src="screens/10-step-3-host-trusted.png" alt="Step 3 after pressing Trust host, showing a trusted timestamp and the button now reading Host trusted" loading="lazy">
+      <figcaption>After Trust host. The button is now inert and the record shows when trust was granted.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Control</th><th>Example</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Trust host</strong></td>
+          <td>press once, after comparing</td>
+          <td>Captures the probed <code>known_hosts</code> line. <span class="does">On save it is written to <code>&lt;config dir&gt;/known_hosts.d/&lt;source&gt;_&lt;set&gt;_known_hosts</code> and named by <code>remote.known_hosts</code>, and every later connection is checked against that file.</span> This is the trust anchor, not display text.</td>
+        </tr>
+        <tr>
+          <td><strong>Re-fetch fingerprint</strong></td>
+          <td>after a legitimate server rebuild</td>
+          <td>Re-runs the probe. It does not grant trust; you still have to press Trust host, and if the key has changed the button becomes a destructive-confirm variant reading &ldquo;Trust new fingerprint&rdquo;.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note danger">
+      <span class="note-label">What a changed host key costs later</span>
+      <p>If this fingerprint ever changes, the backup set halts. Backup operations for it stop, and remote artifact deletion is blocked, until an administrator verifies the new fingerprint independently. That is the intended behaviour and it is why this step exists: the alternative is a manager that keeps deleting remote originals while talking to a server that is no longer yours.</p>
+    </div>
+
+    <p>Host-key verification cannot be switched off. A configuration that names a <code>known_hosts</code> value which would disable it is refused outright at load time, so there is no accepted spelling of &ldquo;skip this&rdquo;.</p>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 5 &middot; wizard step 4 of 6</span>
+    <h2 id="step4">Step 4: Backup discovery</h2>
+    <p>Where artifacts appear, which of them are yours, and how the manager knows one has finished being written.</p>
+
+    <figure>
+      <img src="screens/11-step-4-discovery.png" alt="Step 4 Backup discovery with remote folder, include patterns, exclude patterns and three completion-method choices" loading="lazy">
+      <figcaption>Step 4 filled in for the worked example. Note that the Exclude patterns field is display-only in this build.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Field</th><th>Example</th><th>What the entry does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Remote folder</strong></td>
+          <td>/var/backups/</td>
+          <td>Becomes <code>remote_path</code>. <span class="does">This is the directory on the VPS that gets emptied.</span> Every file in it that matches an include pattern and passes the completion check is pulled and then deleted from the VPS, so point it at a directory whose only job is holding finished backups, never at a working directory.</td>
+        </tr>
+        <tr>
+          <td><strong>Include patterns</strong></td>
+          <td>*.tar.zst</td>
+          <td>Becomes <code>include</code>, a list. Comma-separated here, split and trimmed on save. <span class="does">A file that matches nothing is invisible to the manager: it is never pulled and never deleted</span>, which is the safe direction but also means a producer that changes its output extension quietly stops being backed up.</td>
+        </tr>
+        <tr>
+          <td><strong>Exclude patterns</strong></td>
+          <td>none to give</td>
+          <td><span class="does">Display only. Nothing you type here is sent or stored</span>, because the configuration schema has no exclude field. Narrow your includes instead.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="completion">Completion method, and why it is the consequential choice on this step</h3>
+    <p>A backup artifact that is still being written looks exactly like one that is finished. Getting this wrong means pulling a half-written archive, verifying the half, and then deleting the remote original. The three answers are not equivalent.</p>
+
+    <figure>
+      <img src="screens/12-step-4-completion-atomic-rename.png" alt="Step 4 with Atomic rename selected under the Recommended heading" loading="lazy">
+      <figcaption>Atomic rename selected. The two options under &ldquo;Recommended&rdquo; both require the producer to signal completion; the one under &ldquo;Advanced&rdquo; infers it.</figcaption>
+    </figure>
+
+    <div class="scroll-x">
+      <table>
+        <thead><tr><th>Choice</th><th>Written as</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Atomic rename</strong></td>
+            <td><code>completion.strategy: rename</code></td>
+            <td>Your producer writes to a temporary name and renames into place when it is done. <span class="does">The rename is the completion signal, and on a POSIX filesystem it is atomic</span>, so a partially written file is never visible under a name the manager will match. Pick this if you control the producer.</td>
+          </tr>
+          <tr>
+            <td><strong>Completion marker / manifest</strong></td>
+            <td><code>completion.strategy: marker</code></td>
+            <td>Your producer writes a sidecar file once the artifact is complete. <span class="does">The manager waits for the marker, so an artifact with no marker is never touched</span>, however old it is. Equally safe, and the right answer when your producer cannot rename.</td>
+          </tr>
+          <tr>
+            <td><strong>Stable file size / timestamp</strong></td>
+            <td><code>completion.strategy: stable</code></td>
+            <td>The manager infers completion from a size and mtime that have stopped moving. <span class="does">This is a heuristic, and it is the only strategy that can be wrong.</span> A producer that stalls mid-write for long enough looks finished.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note warn">
+      <span class="note-label">If you choose stable size</span>
+      <p>Two different timers apply, and conflating them is the mistake to avoid. <code>stable_for</code> answers &ldquo;has this looked done long enough to start processing it&rdquo;, and the wizard sends one hour for it. A separate <code>delete_safety_delay</code>, defaulting to one hour and applied only to this strategy, answers a different and more dangerous question: &ldquo;has it looked done long enough to destroy the only other copy&rdquo;. The remote delete waits for that second timer on top of everything else.</p>
+      <p>The other two strategies carry a producer-provided completion signal, so they do not need it.</p>
+    </div>
+
+    <p>One field on this step has no control at all: <code>stale_after</code>, which decides when a backup set with no fresh artifact starts reporting as stale, is set to 48 hours for every set the wizard creates. Change it by editing <code>config.yaml</code> if your producer runs less often than that.</p>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 6 &middot; wizard step 5 of 6</span>
+    <h2 id="step5">Step 5: Storage, retention and validation</h2>
+    <p>This step has the most controls and the fewest of them are connected. Read the table before you spend time on it.</p>
+
+    <figure>
+      <img src="screens/13-step-5-storage-retention.png" alt="Step 5 showing NAS destination, four retention controls, a protect-known-good checkbox, two verification toggles and an application validation dropdown" loading="lazy">
+      <figcaption>Step 5 for the worked example. Of the nine controls visible, two are wired to the request: the NAS destination and the Application validation dropdown.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Control</th><th>Example</th><th>What the entry does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>NAS destination</strong></td>
+          <td>/data/backups/api-server/</td>
+          <td>Becomes <code>local_path</code>. <span class="does">This is a path inside the container, not on the NAS filesystem.</span> The Compose file mounts your NAS backup share at <code>/data/backups</code>, so this example lands at <code>&lt;your BACKUP_DIR&gt;/api-server/</code> on the NAS. Give each backup set its own subdirectory: this path also becomes the containment root that the local prune refuses to delete outside of.</td>
+        </tr>
+        <tr>
+          <td><strong>Validate path</strong></td>
+          <td>none to give</td>
+          <td>On a platform with no native storage picker the button is labelled this way rather than pretending to offer a browser the integration does not have. The hint below the field names the mounted path for you.</td>
+        </tr>
+        <tr>
+          <td><strong>Daily / Weekly / Monthly / Week starts</strong></td>
+          <td>none to give</td>
+          <td><span class="does">Display only. Nothing you type or select here is sent.</span> They show the product's defaults, and the defaults are what you get. See below for what actually governs deletion.</td>
+        </tr>
+        <tr>
+          <td><strong>Protect newest known-good backup</strong></td>
+          <td>none to give</td>
+          <td><span class="does">Display only, and on by default in the written configuration anyway.</span> The protection is real; this checkbox is not the thing that turns it on.</td>
+        </tr>
+        <tr>
+          <td><strong>Transfer verification</strong></td>
+          <td>none to give</td>
+          <td>Display only, and correctly labelled &ldquo;always on&rdquo;. It cannot be switched off.</td>
+        </tr>
+        <tr>
+          <td><strong>Checksum verification &middot; SHA-256</strong></td>
+          <td>none to give</td>
+          <td><span class="does">Display only, and the configuration is written with hashing off.</span> That is a deliberate choice, not an oversight: see the note below.</td>
+        </tr>
+        <tr>
+          <td><strong>Application validation</strong></td>
+          <td>None, or an id from the list</td>
+          <td>Really sent, as <code>validation.validator_id</code>. The list is the backend's own registered catalogue, and the option labels are the ids themselves because an id is what ends up in <code>config.yaml</code>. <span class="does">A validator runs against every artifact after transfer and checksum, and rejecting one quarantines the artifact and leaves the remote copy in place</span>, which is the whole reason to use one.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="note warn">
+      <span class="note-label">Why checksum verification is written off</span>
+      <p>Comparing a local hash against a remote one requires the remote to compute a hash, and against the chrooted, shell-less, forced-internal-sftp account the project's own setup guide recommends, that is not possible at all. Turning hashing on against that account shape does not make verification stronger, it fails every artifact at the verification stage, every time. So a wizard-created backup set is written with <code>validation.hash: ""</code>, meaning transfer verification alone, which is the honest posture when hash capability is absent.</p>
+      <p>If your SFTP account is <em>not</em> hardened that way and does support hashing, set <code>validation.hash: sha256</code> by hand in <code>config.yaml</code>.</p>
+    </div>
+
+    <h3 id="retention">What actually decides deletion</h3>
+    <p>Retention is a single global policy for the whole configuration, not a per-backup-set setting, and it governs deletion of the <em>NAS</em> copies. It is unrelated to the remote delete, which is gated by the lifecycle rule and happens as soon as a verified local copy is durable.</p>
+    <p>A wizard-created configuration is written with the default chain, three tiers:</p>
+    <div class="scroll-x">
+      <table>
+        <thead><tr><th>Tier</th><th>Buckets by</th><th>Window</th><th>What it keeps</th></tr></thead>
+        <tbody>
+          <tr><td><code>daily</code></td><td>day</td><td>7 days</td><td>The newest good artifact in each of today and the six days before it.</td></tr>
+          <tr><td><code>weekly</code></td><td>week</td><td>3 months</td><td>The newest good artifact in each week, looking back over three calendar months. The window is counted in months, not weeks, which is why this tier needs its own <code>window_unit</code>.</td></tr>
+          <tr><td><code>monthly</code></td><td>month</td><td>12 months</td><td>The newest good artifact in each of the last twelve calendar months.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Each bucket contributes at most one artifact, and what is kept is the <strong>union</strong> of every tier's selections plus the protected last-known-good. <span class="does">Anything the union does not claim is a delete candidate, including artifacts that fell in a gap between two tiers' windows rather than outside all of them.</span> Tier order never changes which artifacts survive, only the order tier names appear in a verdict.</p>
+    <div class="note">
+      <span class="note-label">Before you change it</span>
+      <p>There is no spelling of &ldquo;keep nothing&rdquo; in the schema. Emptying the tier list does not disable retention, it reinstates the default daily/weekly/monthly policy, which is the fail-safe direction. Retention is turned off by not running a retention pass. And <code>backup-manager retention</code> previews the decisions without acting on them, which is the right way to check a chain edit before it deletes anything.</p>
+    </div>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 7 &middot; wizard step 6 of 6</span>
+    <h2 id="step6">Step 6: Review, and Finish setup</h2>
+
+    <figure>
+      <img src="screens/14-step-6-review.png" alt="Step 6 Review showing a summary grid, the remote source handling panel with its lifecycle chain, an unticked acknowledgement and a disabled Finish setup button" loading="lazy">
+      <figcaption>The review summary, and the remote-source-handling panel. Finish setup is disabled until the acknowledgement is ticked.</figcaption>
+    </figure>
+
+    <p>The summary grid reads back what will be written. Check three things in it specifically, because they are the three the earlier steps make easy to get wrong:</p>
+    <ul>
+      <li><strong>Source</strong> shows the hostname and the remote folder. It does not show the port, so verify that separately after the write.</li>
+      <li><strong>Host trust</strong> must read &ldquo;Trusted&rdquo;. If it reads &ldquo;Not yet trusted&rdquo;, go back to step 3; saving will refuse.</li>
+      <li><strong>Validation</strong> lists the completion method you chose, spelled out, alongside the verification terms.</li>
+    </ul>
+
+    <p>The panel below the summary is the product stating its own most dangerous behaviour before you agree to it, and the chain it draws is the real order of operations: <em>discovered, transferred, verified, committed, safe state persisted, remote artifact deleted</em>. The delete is last and the journal write is before it, so a crash in between leaves two copies rather than none.</p>
+
+    <figure>
+      <img src="screens/15-step-6-acknowledged.png" alt="Step 6 with the acknowledgement ticked and both Finish setup and Save disabled buttons enabled" loading="lazy">
+      <figcaption>Acknowledged. During first run there are two buttons, not three: &ldquo;Save, enable &amp; run&rdquo; is deliberately absent, because there is no running service to submit a run to yet.</figcaption>
+    </figure>
+
+    <table class="fields">
+      <thead><tr><th>Button</th><th>When to use it</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Finish setup</strong></td>
+          <td>the normal path</td>
+          <td>Writes the configuration and enables the backup set. <span class="does">The write is an exclusive create, not a rename over whatever is there</span>, so if something else produced a config file in the meantime this refuses rather than destroying it.</td>
+        </tr>
+        <tr>
+          <td><strong>Save disabled</strong></td>
+          <td>when the remote side is not ready</td>
+          <td>Writes exactly the same configuration with <code>disabled: true</code>. <span class="does">The set is excluded from every processing cycle until you enable it</span>, so nothing is pulled and nothing is deleted. Useful if you want the configuration in place before the producer starts writing.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>If a button is disabled, the sentence beside it names the reason: an un-imported key, an untrusted host, or the unticked acknowledgement each get their own message rather than a single generic one.</p>
+
+    <h3 id="written">What lands on disk</h3>
+    <p>Everything that can fail happens before anything is persisted: the request is validated, the key is resolved, the whole assembled configuration goes through the same validation a hand-edited file goes through at boot, the state directory is checked, and any chosen validator is resolved. Only then is the file created. A configuration the process refuses to finish is never the configuration left behind.</p>
+    <p>For the worked example, this is the file:</p>
+    <pre><code><span class="key">poll_interval</span>: 1h0m0s
+<span class="key">state</span>:
+    <span class="key">database</span>: /data/state/state.db
+<span class="key">sources</span>:
+    - <span class="key">id</span>: api
+      <span class="key">backup_sets</span>:
+        - <span class="key">id</span>: api-server-nightly
+          <span class="key">remote</span>:
+            <span class="key">type</span>: sftp
+            <span class="key">host</span>: api-server.example.net
+            <span class="key">port</span>: 22            <span class="cm"># whatever you typed on step 1</span>
+            <span class="key">user</span>: backup-agent
+            <span class="key">key_file</span>: /etc/backup-manager/config/ssh_keys/6f2a1c92-7d40-4b18-9a6e-1e0c5f3b77aa
+            <span class="key">key</span>:
+                <span class="key">file</span>: /etc/backup-manager/config/ssh_keys/6f2a1c92-7d40-4b18-9a6e-1e0c5f3b77aa
+                <span class="key">env</span>: <span class="str">""</span>
+                <span class="key">command</span>: []
+            <span class="key">known_hosts</span>: /etc/backup-manager/config/known_hosts.d/api_api-server-nightly_known_hosts
+          <span class="key">remote_path</span>: /var/backups/
+          <span class="key">local_path</span>: /data/backups/api-server/
+          <span class="key">include</span>:
+            - <span class="str">'*.tar.zst'</span>
+          <span class="key">completion</span>:
+            <span class="key">strategy</span>: rename
+            <span class="key">stable_for</span>: 0s
+            <span class="key">delete_safety_delay</span>: 0s
+          <span class="key">stale_after</span>: 48h0m0s
+          <span class="key">disabled</span>: <span class="num">false</span>
+          <span class="key">validation</span>:
+            <span class="key">hash</span>: <span class="str">""</span>
+            <span class="key">validator_id</span>: <span class="str">""</span>
+            <span class="key">command</span>: null
+          <span class="key">revalidation</span>:
+            <span class="key">interval</span>: 0s
+            <span class="key">max_per_cycle</span>: 0
+            <span class="key">hash</span>: <span class="num">false</span>
+            <span class="key">command</span>: null
+<span class="key">retention</span>:
+    <span class="key">timezone</span>: UTC
+    <span class="key">week_starts_on</span>: monday
+    <span class="key">daily_days</span>: <span class="num">7</span>
+    <span class="key">weekly_months</span>: <span class="num">3</span>
+    <span class="key">monthly_months</span>: <span class="num">12</span>
+    <span class="key">protect_last_known_good</span>: <span class="num">true</span>
+<span class="key">alerts</span>:
+    <span class="key">enabled</span>: <span class="num">false</span>
+    <span class="key">repeated_failure_threshold</span>: <span class="num">3</span></code></pre>
+
+    <p>Four things in that file are worth noticing, none of which any screen mentioned:</p>
+    <ul>
+      <li><strong>Your backup set is grouped under a source called <code>api</code>.</strong> The wizard has no concept of a source, so everything it creates lands under that one name. The set's real identity is <code>api/api-server-nightly</code>.</li>
+      <li><strong><code>key_file</code> and <code>key.file</code> both appear</strong>, holding the same path. The first is a deprecated alias kept in step with the second so an older binary can still read the file.</li>
+      <li><strong>The retention numbers are written out, not left blank.</strong> Validation resolves the defaults in place before the file is marshalled, so 7/3/12, UTC and monday are frozen into your configuration rather than tracking whatever the product's defaults become later.</li>
+      <li><strong>Alerting is off.</strong> <code>alerts.enabled: false</code> means nothing notifies you about a stale backup, a repeated failure, a changed host key or critical storage pressure. Turn it on by hand if you want any of that.</li>
+    </ul>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 8</span>
+    <h2 id="after">What you get next</h2>
+    <p>The configuration is durably on disk the moment Finish setup returns. The instance then tries to bring a real service up against it in the same process, so you do not have to restart a container you just installed, and on success you land in the application.</p>
+
+    <div class="note danger">
+      <span class="note-label">This picture is fixture data</span>
+      <p>The screenshot below is the dashboard as the development mock renders it, which means five backup sets, an active transfer, two quarantined artifacts and a host-key alert. <strong>A real instance one second after first run has one backup set and no artifacts at all.</strong> Nothing in the numbers below is a claim about your deployment. It is here for the shape: the section navigation, the platform named in the footer, and where things live.</p>
+    </div>
+
+    <figure>
+      <img src="screens/16-configured-dashboard.png" alt="The configured application dashboard with sidebar navigation, a health summary, metric cards, active operations and a recent activity list" loading="lazy">
+      <figcaption>The application after setup completes, rendering the development fixture's data. Structurally accurate, factually fictional. The <code>&#92;u2715</code> and <code>&#92;u25b2</code> strings in the status chips are <a href="https://github.com/spdrman/rclone-manager/issues/257">#257</a>.</figcaption>
+    </figure>
+
+    <p>What to actually do first on a real instance:</p>
+    <ol>
+      <li><strong>Check the port.</strong> Open Settings or read <code>config.yaml</code> and confirm <code>remote.port</code> is the number you meant, given that a non-numeric entry became 22.</li>
+      <li><strong>Run one cycle by hand</strong> before trusting the schedule, and watch it reach the end. The default poll interval a wizard-written configuration gets is one hour.</li>
+      <li><strong>Watch the first artifact all the way through</strong> to remote deletion. That is the first moment the whole rule is exercised, and it is the cheapest time to find out that the include pattern matched nothing.</li>
+    </ol>
+  </section>
+
+  <section>
+    <span class="step-eyebrow">Screen 9</span>
+    <h2 id="again">Coming back later</h2>
+    <p>Once an administrator exists, the enrolment page is closed and this is what the address answers with.</p>
+
+    <figure>
+      <img src="screens/17-sign-in.png" alt="The Backup Manager sign-in page with username and password fields and a link reading First time here? Create the administrator account" loading="lazy">
+      <figcaption>The sign-in page. It is deliberately not styled like a NAS system login, and it says so, because an operator must never believe they are handing NAS operating-system credentials to this application.</figcaption>
+    </figure>
+
+    <p>The &ldquo;First time here? Create the administrator account&rdquo; link at the bottom goes to the enrolment page without a token. That is the right destination on a genuinely fresh install reached without the printed link, and on an instance that already has an administrator it will fail, correctly, with the message discussed <a href="#enrol">above</a>.</p>
+  </section>
+
+  <section>
+    <h2 id="second-vps">Adding the second VPS</h2>
+    <p>First run configures exactly one backup set, because the point of it is to turn an unconfigured instance into a serviceable one, not to finish the whole deployment. The second VPS is an ordinary addition afterwards.</p>
+    <p>Go to <strong>Backup sets</strong>, press <strong>Add backup set</strong>, and you get the same six steps you have just walked, with two differences:</p>
+    <ul>
+      <li>The <strong>Cancel</strong> control works this time, because there is now a backup-sets list to return to.</li>
+      <li>There is a third button on step 6, <strong>Save, enable &amp; run</strong>, which starts a cycle immediately. If the save succeeds but the run does not start, the page says so and stays put rather than navigating away and letting you believe a backup is running.</li>
+    </ul>
+    <p>Give the second set its own <code>local_path</code>, for example <code>/data/backups/cicd/</code>. Two backup sets sharing a destination directory would put two prune containment roots on the same tree, which is not a configuration worth having.</p>
+    <p>Both sets will land under the same <code>api</code> source, so their identities become <code>api/api-server-nightly</code> and <code>api/&lt;your second set&gt;</code>. Retention stays a single global policy applied to both.</p>
+  </section>
+
+  <section>
+    <h2 id="gaps">Screens not pictured here</h2>
+    <p>Three states on this path exist in the product and are not on this page, because the development mock cannot produce them. They are described rather than quietly omitted.</p>
+    <ul>
+      <li><strong>The enrolment failure from <a href="https://github.com/spdrman/rclone-manager/issues/274">#274</a>.</strong> The fixture's enrolment call always succeeds, so the error banner cannot be reached locally. Its text is quoted verbatim in the callout on <a href="#enrol">screen 1</a>.</li>
+      <li><strong>&ldquo;Configuration saved&rdquo;, the restart-required screen.</strong> Reached when the configuration is written but the instance cannot start serving it in the same process. It reads: &ldquo;Your configuration has been written and is safe. This instance could not start serving it without a restart, so restart the Backup Manager container or service and open this page again. You do not need to enter any of it a second time.&rdquo; The fixture always reports that activation succeeded, so this state is unreachable locally. If you see it, restart the container and sign back in; do not run the wizard again.</li>
+      <li><strong>The real post-setup dashboard.</strong> One backup set, no artifacts, nothing in the activity feed. See the warning on <a href="#after">screen 8</a>.</li>
+    </ul>
+    <div class="note">
+      <span class="note-label">This page will move under you</span>
+      <p>Both defects called out above are being fixed as this is written, so screens 1 and 2 are the two most likely to look different from these pictures. Nothing else on the path is under active change. Re-shoot rather than hand-editing a caption.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="reshoot">Re-shooting these</h2>
+    <p>From a checkout with <code>ui/shared</code>'s dependencies installed:</p>
+    <pre><code>node docs/site/tools/capture-first-run.mjs</code></pre>
+    <p>It starts the development server on a port it proved free, drives the whole flow, and overwrites every PNG in <code>docs/site/screens/</code>, printing one line per screen. It borrows Playwright from the checkout the repository's own e2e gate already maintains rather than adding a dependency back to <code>ui/shared</code>, so if it reports that it has nothing to borrow, run the gate once first. The script's header comment explains the two things that are not obvious: why the flow is driven against the fixture API rather than a real instance, and why one network route has to be stubbed for the application to consider itself signed in.</p>
+  </section>
+
+</main>
+
+<footer>
+  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>Screenshots taken against the development fixture API. No screenshot on this page is evidence about a running engine.</p>
+</footer>
+
+</body>
+</html>
