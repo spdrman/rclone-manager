@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import contextlib
+import io
 import os
 import socket
 import sys
@@ -2714,6 +2716,237 @@ class TestTheSuiteRunsEveryTestItDefines(unittest.TestCase):
 
     def test_nothing_is_defined_after_the_installer_runs_itself(self):
         self.assert_nothing_follows_the_entrypoint(Path(installer.__file__))
+
+
+class TestNoArgumentInstallHasWhatItNeeds(unittest.TestCase):
+    """Issue #347: the three flags that made a bare `install` impossible.
+
+    `--prefix` defaulted to a guessed NAS path, and `--ssh-key` and
+    `--known-hosts` had no defaults that existed anywhere, so the
+    documented no-argument install refused three times before doing any
+    work. These prove it now completes, and that the two places where
+    refusing is still correct kept refusing.
+    """
+
+    def _bare(self, command="install"):
+        return installer.resolve(installer.build_parser().parse_args([command]))
+
+    def test_the_default_prefix_is_under_the_invoking_users_home(self):
+        args = self._bare()
+        self.assertEqual(args.prefix, Path.home() / "rclone-manager")
+        self.assertNotIn("/volume1", str(args.prefix),
+                         "the old default guessed one NAS's layout and was wrong even on that NAS")
+
+    def test_the_credential_paths_default_under_the_prefix(self):
+        args = self._bare()
+        self.assertEqual(args.ssh_key, (args.prefix / "secrets" / "id_ed25519").expanduser())
+        self.assertEqual(args.known_hosts, (args.prefix / "secrets" / "known_hosts").expanduser())
+        self.assertFalse(args.ssh_key_supplied)
+        self.assertFalse(args.known_hosts_supplied)
+
+    def test_a_defaulted_key_is_generated_and_its_public_half_is_printed(self):
+        """The generated key is useless until it reaches the source host,
+        so the public half and where it goes are printed, not left to be
+        found."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager")]))
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.ensure_credentials(args)
+        printed = out.getvalue()
+
+        self.assertTrue(args.ssh_key.is_file(), "a defaulted key that is absent gets generated")
+        self.assertEqual(args.ssh_key.stat().st_mode & 0o777, 0o600)
+        pub = args.ssh_key.with_suffix(args.ssh_key.suffix + ".pub")
+        self.assertTrue(pub.is_file())
+        self.assertIn(pub.read_text().strip(), printed,
+                      "the public key itself is printed, not just its path")
+        self.assertIn("authorized_keys", printed)
+        self.assertRegex(printed, r"(?i)host you are backing up",
+                         "printing a key without saying where it goes is a riddle")
+        self.assertNotIn(args.ssh_key.read_text().split("\n")[1], printed,
+                         "the PRIVATE half must never be printed")
+
+    def test_a_defaulted_known_hosts_is_created_empty(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager")]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.ensure_credentials(args)
+        self.assertTrue(args.known_hosts.is_file())
+        self.assertEqual(args.known_hosts.read_text(), "",
+                         "empty is correct: host keys are pinned when a source is added")
+
+    def test_an_explicitly_named_missing_key_is_still_refused(self):
+        """The distinction the whole change rests on. A path an operator
+        typed that is not there is a typo, and generating a DIFFERENT key
+        under it would hand them a key the far host has never seen while
+        reporting success."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        named = Path(tmp.name) / "typo" / "id_ed25519"
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager"),
+             "--ssh-key", str(named)]))
+        self.assertTrue(args.ssh_key_supplied)
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.ensure_credentials(args)
+        self.assertFalse(named.exists(), "an explicitly named path is never generated into")
+
+        exc = refusal_from(installer.Preflight(args).check_credentials)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn(str(named), exc.message)
+
+    def test_an_existing_key_is_never_replaced(self):
+        """Regenerating over a key already trusted by a source would break
+        every backup silently."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix = Path(tmp.name) / "rclone-manager"
+        (prefix / "secrets").mkdir(parents=True)
+        key = prefix / "secrets" / "id_ed25519"
+        key.write_text("the key a source already trusts\n")
+        os.chmod(key, 0o600)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(prefix)]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.ensure_credentials(args)
+        self.assertEqual(key.read_text(), "the key a source already trusts\n")
+
+
+class TestEveryDirectoryIsBornWithoutGroupOrWorldWrite(unittest.TestCase):
+    """The engine refuses a key whose ancestry is group- or world-writable,
+    and it walks the WHOLE chain. Installing onto the UGREEN it refused
+    three times running, naming one directory further up each time.
+
+    Asserted under umask 0, which is the only way this test can fail
+    against a mkdir that trusts the umask: at the umask a developer
+    machine happens to have, a directory created with no explicit mode
+    looks correct and the bug ships.
+    """
+
+    def setUp(self):
+        self.old_umask = os.umask(0)
+        self.addCleanup(os.umask, self.old_umask)
+
+    def test_the_created_chain_has_no_group_or_world_write(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "install-root"
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(root)]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.ensure_credentials(args)
+
+        # Both sides resolved. macOS hands tempfile a /var path that the
+        # installer canonicalises to /private/var, so comparing the two
+        # unresolved never matches and the walk runs off the top of the
+        # prefix and up to /.
+        stop = root.resolve()
+        created = args.ssh_key.parent.resolve()
+        seen = []
+        while True:
+            mode = created.stat().st_mode & 0o777
+            seen.append(created)
+            self.assertEqual(mode & 0o022, 0,
+                             f"{created} is mode {mode:o}: the engine walks the whole ancestry "
+                             f"and refuses the key over any group- or world-writable link in it")
+            if created == stop or created == created.parent:
+                break
+            created = created.parent
+        self.assertIn(stop, seen, "the walk has to actually reach the install root")
+        self.assertGreaterEqual(len(seen), 2, "prefix and secrets are both checked")
+
+    def test_a_writable_directory_above_the_prefix_is_named_not_silently_fixed(self):
+        """Directories above the prefix belong to whoever set the machine
+        up. Tightening a share root because a backup tool was installed
+        under it is not an installer's call, so it warns with the exact
+        chmod instead."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        share = Path(tmp.name) / "share"
+        share.mkdir()
+        os.chmod(share, 0o777)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(share / "rclone-manager")]))
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.ensure_credentials(args)
+
+        self.assertIn(str(share), out.getvalue())
+        self.assertIn("chmod go-w", out.getvalue(), "the warning carries the fix, not just the complaint")
+        self.assertEqual(share.stat().st_mode & 0o777, 0o777,
+                         "it warns about a directory it does not own, it does not change it")
+
+    def test_stage_payload_creates_the_data_directories_securely_too(self):
+        """The directory the engine actually refused over.
+
+        host_dirs carries ssh_keys, and stage_payload used a bare mkdir,
+        so on the UGREEN it inherited a permissive umask and produced the
+        0777 that the engine then refused three cycles running. Creating
+        the key correctly is not enough if the directory it is handed to
+        is made wrong a moment later.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name) / "install-root"
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(root), "--compose-file", str(CANONICAL_COMPOSE)]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.ensure_credentials(args)
+            installer.stage_payload(args)
+
+        # ssh_keys is not a host_dirs entry of its own: the engine creates
+        # it under --config-dir, which is why its refusal on the UGREEN
+        # named config/ssh_keys, then config, then the install root. The
+        # installer owns the two ancestors, so those are what it has to
+        # get right.
+        self.assertIn("--config-dir", args.host_dirs)
+        for label, path in args.host_dirs.items():
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode & 0o022, 0,
+                             f"{label} at {path} is mode {mode:o}, which the engine refuses over")
+
+        # The exact ancestry the engine walks, spelled out rather than
+        # inferred from the loop above.
+        config = args.host_dirs["--config-dir"]
+        for d in (config / "ssh_keys", config, root):
+            if d.is_dir():
+                self.assertEqual(d.stat().st_mode & 0o777 & 0o022, 0, f"{d} is writable beyond its owner")
+
+    def test_an_existing_directory_keeps_its_read_bits_and_only_loses_write(self):
+        """Group-readable is an operator's call and no risk to the key.
+        Group-writable is what lets someone replace it."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        existing = Path(tmp.name) / "backups"
+        existing.mkdir()
+        os.chmod(existing, 0o775)
+        installer.make_secure_dir(existing)
+        self.assertEqual(existing.stat().st_mode & 0o777, 0o755,
+                         "write dropped, read kept: 0775 becomes 0755, not 0700")
+
+
+class TestPreflightDoesNotCryAboutWhatInstallWillCreate(unittest.TestCase):
+    def test_a_defaulted_missing_key_is_reported_as_pending_not_refused(self):
+        """preflight is a dry run of install. Refusing on a fresh host for
+        the one thing install creates by itself reports the machine as
+        broken for doing nothing wrong."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["preflight", "--prefix", str(Path(tmp.name) / "rclone-manager")]))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.Preflight(args).check_credentials()
+        self.assertIn("install creates it", out.getvalue())
+        self.assertIn(str(args.ssh_key), out.getvalue())
 
 
 if __name__ == "__main__":
