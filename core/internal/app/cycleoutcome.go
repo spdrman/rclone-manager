@@ -169,11 +169,18 @@ func foldDiscoveryErrors(walk artifactWalk, discovered discovery.Result) CyclePr
 // here would double-count them on an operator's screen.
 func (s *Service) reportBarrenSets(ctx context.Context, report CycleReport) {
 	for _, set := range report.Sets {
-		v := set.Verdict()
-		if !v.NothingGotThrough() {
-			continue
-		}
-		s.logger().Error(ctx, "cycle", fmt.Errorf("%s backed nothing up this cycle: %d walked, %d got through",
-			v.Set, v.Progress.Walked, v.Progress.Durable))
+		s.reportBarrenSet(ctx, set.Verdict())
 	}
+}
+
+// reportBarrenSet is the one-backup-set form, so an on-demand Fetch puts
+// the same fact in the same stream a scheduled cycle does. A manual fetch
+// prints to a terminal as well, but the stream is what a log shipper
+// reads, and it should not depend on which command produced the cycle.
+func (s *Service) reportBarrenSet(ctx context.Context, v CycleVerdict) {
+	if !v.NothingGotThrough() {
+		return
+	}
+	s.logger().Error(ctx, "cycle", fmt.Errorf("%s backed nothing up this cycle: %d walked, %d got through",
+		v.Set, v.Progress.Walked, v.Progress.Durable))
 }

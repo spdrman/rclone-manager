@@ -128,6 +128,7 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	// function over exactly the same walk (issue #361), so the two
 	// commands cannot report different numbers for the same cycle.
 	result.Progress = foldDiscoveryErrors(walk, discRes)
+	s.reportBarrenSet(ctx, result.Verdict())
 
 	return result, nil
 }

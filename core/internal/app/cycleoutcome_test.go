@@ -519,3 +519,32 @@ func TestRunCycle_ATransientReadOfAFinishedReadOnlyArtifactIsNotWork(t *testing.
 		t.Errorf("Verdict().NothingGotThrough() = true for a read-only set whose only artifact is already safe and whose remote it re-reads every cycle by design")
 	}
 }
+
+// TestFetch_SaysSoInTheEventStreamWhenNothingGotThrough is the same fact
+// through the on-demand command. A manual fetch prints to a terminal too,
+// but what a log shipper reads should not depend on which command
+// produced the cycle.
+func TestFetch_SaysSoInTheEventStreamWhenNothingGotThrough(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+	svc.Capacity = capacity.Thresholds{CapBytes: 1}
+
+	result, err := svc.Fetch(context.Background(), "production", bs.Name, false)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if !result.Verdict().NothingGotThrough() {
+		t.Fatalf("precondition: this fetch was supposed to get nothing through: %+v", result.Progress)
+	}
+	if !strings.Contains(stream.String(), "backed nothing up") {
+		t.Errorf("nothing in the event stream says this fetch backed nothing up.\nstream:\n%s", stream.String())
+	}
+}
