@@ -20,6 +20,7 @@ const health: SystemHealth = {
   newestVerifiedBackupAt: new Date().toISOString(),
   oldestSetFreshnessHours: 31,
   setsHealthy: 5, setsDegraded: 0, setsStale: 1, setsFailing: 0, quarantinedCount: 0,
+  readOnlyRetainedCount: 0,
   storageFreeBytes: 1_800_000_000_000, storageTotalBytes: 6_200_000_000_000,
   storageState: "nominal", storageReadingsUnavailable: 0
 };
@@ -34,6 +35,19 @@ describe("health rendering", () => {
   it("states the reason in words, not only colour", () => {
     render(<HealthSummary health={health} />);
     expect(screen.getByText(/No verified backup received for 31 hours/)).toBeTruthy();
+  });
+
+  // Issue #316's RED case for this component: before this badge existed,
+  // readOnlyRetainedCount had nowhere on this page to be shown at all,
+  // even though the field already carries a real number.
+  it("shows the read-only-retained badge only when the count is nonzero", () => {
+    render(<HealthSummary health={{ ...health, readOnlyRetainedCount: 4 }} />);
+    expect(screen.getByText(/4 retained \(read-only source\)/)).toBeTruthy();
+  });
+
+  it("omits the read-only-retained badge when nothing is retained under it", () => {
+    render(<HealthSummary health={health} />);
+    expect(screen.queryByText(/retained \(read-only source\)/)).toBeNull();
   });
 });
 

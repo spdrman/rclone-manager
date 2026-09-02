@@ -421,3 +421,48 @@ func TestCreateBackupSet_WithoutAValidatorSendsNone(t *testing.T) {
 		t.Errorf("service.CreateBackupSetRequest.ValidatorID = %q, want empty", tr.backend.lastCreate.ValidatorID)
 	}
 }
+
+// TestCreateBackupSet_ReadOnly_CarriesThroughToTheServiceAndTheResponse is
+// issue #316's RED case at the HTTP layer: before this, backupSetSpec had
+// no read_only field at all, so a wizard/API request had no way to ask for
+// a read-only backup set — POST /api/v1/backup-sets silently ignored
+// anything named "read_only" in the body. Mirrors
+// TestCreateBackupSet_CarriesValidatorIDThroughToTheService above.
+func TestCreateBackupSet_ReadOnly_CarriesThroughToTheServiceAndTheResponse(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	body := strings.Replace(validCreateBody,
+		`"completion_strategy": "marker"`,
+		`"completion_strategy": "marker",
+	"read_only": true`, 1)
+
+	rec := postBackupSet(t, tr.router, body, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if !tr.backend.lastCreate.ReadOnly {
+		t.Error("service.CreateBackupSetRequest.ReadOnly = false, want true")
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshalling the response: %v", err)
+	}
+	if resp["read_only"] != true {
+		t.Errorf("response read_only = %v, want true", resp["read_only"])
+	}
+}
+
+// TestCreateBackupSet_WithoutReadOnlySendsFalse is the control for the
+// test above: an omitted read_only must reach the service as false,
+// exactly what every request before this issue already meant, never a
+// default this layer invented.
+func TestCreateBackupSet_WithoutReadOnlySendsFalse(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	rec := postBackupSet(t, tr.router, validCreateBody, true)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if tr.backend.lastCreate.ReadOnly {
+		t.Error("service.CreateBackupSetRequest.ReadOnly = true, want false")
+	}
+}

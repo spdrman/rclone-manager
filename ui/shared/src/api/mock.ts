@@ -60,7 +60,7 @@ const SETS: BackupSet[] = [
     validations: ["transfer", "checksum", "application"],
     state: "healthy",
     stateNote: "Verified nightly dump; application validation passed 42 minutes ago.",
-    enabled: true,
+    enabled: true, readOnly: false, readOnlyRetainedCount: 0,
     newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
     lastRunAt: "2026-08-29T02:01:01+02:00",
     lastValidation: "passed", expectedIntervalHours: 24,
@@ -77,7 +77,7 @@ const SETS: BackupSet[] = [
     validations: ["transfer", "checksum"],
     state: "stale",
     stateNote: "No verified backup received for 31 hours. Expected within 24 hours.",
-    enabled: true,
+    enabled: true, readOnly: false, readOnlyRetainedCount: 0,
     newestKnownGoodAt: "2026-08-27T21:10:00+02:00",
     lastRunAt: "2026-08-28T02:00:04+02:00",
     lastValidation: "passed", expectedIntervalHours: 24,
@@ -95,7 +95,7 @@ const SETS: BackupSet[] = [
     validations: ["transfer", "checksum"],
     state: "failing",
     stateNote: "Halted — the SSH host key changed. Remote artifacts are untouched.",
-    enabled: true, haltReason: "host-key-changed",
+    enabled: true, readOnly: false, readOnlyRetainedCount: 0, haltReason: "host-key-changed",
     newestKnownGoodAt: "2026-08-29T00:14:00+02:00",
     lastRunAt: "2026-08-29T04:12:08+02:00",
     lastValidation: "not-run", expectedIntervalHours: 24,
@@ -112,7 +112,12 @@ const SETS: BackupSet[] = [
     retention: { ...defaultRetention, daily: 0, weekly: 8, monthly: 24 },
     validations: ["transfer", "checksum"],
     state: "healthy", stateNote: "Weekly cold archive; checksum verification only.",
-    enabled: true,
+    // This fixture is the one read-only set (issue #282, #316): a cold
+    // archive is exactly the shape "pull from here, never delete here"
+    // was written for, and it is what exercises the wizard/detail-page
+    // controls and the retained-count displays in dev mode without a
+    // real backend.
+    enabled: true, readOnly: true, readOnlyRetainedCount: 3,
     newestKnownGoodAt: "2026-08-26T01:30:00+02:00",
     lastRunAt: "2026-08-26T01:30:00+02:00",
     lastValidation: "passed", expectedIntervalHours: 168,
@@ -257,6 +262,10 @@ const HEALTH: SystemHealth = {
   oldestSetFreshnessHours: 31,
   setsHealthy: 5, setsDegraded: 0, setsStale: 1, setsFailing: 1,
   quarantinedCount: 2,
+  // Issue #316: the media archive fixture below is declared read-only,
+  // so this is not a permanently-resting zero the way it is for most
+  // deployments (BackupSet.readOnlyRetainedCount's own doc).
+  readOnlyRetainedCount: 3,
   storageFreeBytes: 1.8 * TB, storageTotalBytes: 6.2 * TB,
   storageState: "nominal",
   storageReadingsUnavailable: 0
@@ -430,6 +439,8 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     state: "healthy",
     stateNote: "Created just now; no runs yet.",
     enabled: !req.disabled,
+    readOnly: !!req.readOnly,
+    readOnlyRetainedCount: 0,
     newestKnownGoodAt: null,
     lastRunAt: null,
     lastValidation: "not-run",
@@ -623,7 +634,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           include: set.includePatterns,
           completionStrategy: req.completionStrategy,
           validatorId: req.validatorId,
-          disabled: !!req.disabled
+          disabled: !!req.disabled,
+          readOnly: !!req.readOnly
         },
         restartRequired: false
       });
@@ -632,7 +644,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getHealth: () =>
       delay(
         empty
-          ? { ...HEALTH, backupHealth: "healthy", backupHealthReason: "No backup sets configured yet.", setsHealthy: 0, setsStale: 0, setsFailing: 0, retainedCount: 0, retainedBytes: 0, quarantinedCount: 0 }
+          ? { ...HEALTH, backupHealth: "healthy", backupHealthReason: "No backup sets configured yet.", setsHealthy: 0, setsStale: 0, setsFailing: 0, retainedCount: 0, retainedBytes: 0, quarantinedCount: 0, readOnlyRetainedCount: 0 }
           : scenario === "storage-critical"
             ? { ...HEALTH, storageState: "critical", storageFreeBytes: 0.28 * TB, backupHealth: "failing", backupHealthReason: "Storage is critically low; ingestion has been paused to protect existing backups." }
             : HEALTH
@@ -664,6 +676,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     runCycle: () => delay(undefined),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
     setEnabled: () => delay(undefined),
+    setReadOnly: () => delay(undefined),
 
     createBackupSet: (req: CreateBackupSetRequest): Promise<CreatedBackupSet> => {
       const set = mockBackupSetFromCreateRequest(req);
@@ -687,6 +700,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         completionStrategy: req.completionStrategy,
         validatorId: req.validatorId,
         disabled: !!req.disabled,
+        readOnly: !!req.readOnly,
         operation: runImmediately ? { operationId: "op_mock_" + set.id, status: "completed" } : undefined
       });
     },

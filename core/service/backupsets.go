@@ -111,6 +111,15 @@ type BackupSet struct {
 	ValidatorID ValidatorID
 
 	Disabled bool
+
+	// ReadOnly is the fully-resolved answer to issue #282's "may this
+	// backup set's remote source ever be deleted" (config.BackupSet.ReadOnly,
+	// already resolved from that set's own override or its source's
+	// default by config.Validate before this is ever read). A caller
+	// outside core/ never sees the per-set override or the source-level
+	// default separately, and never needs to: it never has to reconstruct
+	// what a hand-edited config.yaml already answered.
+	ReadOnly bool
 }
 
 // CreateBackupSetRequest is what a caller submits to persist one new
@@ -181,6 +190,17 @@ type CreateBackupSetRequest struct {
 	// Disabled excludes this backup set from RunCycle from the moment
 	// it is created ("Save disabled", the wizard's third save tier).
 	Disabled bool
+
+	// ReadOnly declares this backup set's remote source read-only from
+	// the moment it is created: issue #282's "pull from here, never
+	// delete here", set through the API/wizard rather than by
+	// hand-editing config.yaml (issue #316). It is always persisted as
+	// this ONE set's own explicit override (config.BackupSet.ReadOnlyConfig),
+	// never as a change to its source's default — the wizard has no UI
+	// concept of source (see defaultSourceName's own doc), so there is
+	// no source-level answer here for it to express, only this set's
+	// own.
+	ReadOnly bool
 
 	// RunImmediately submits a run_cycle operation (the same one
 	// SubmitRunCycle exposes) immediately after this backup set is
@@ -297,6 +317,19 @@ func newBackupSetFor(configPath, sourceName, keyFile string, req CreateBackupSet
 		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
 	}
+	// A pointer to a fresh local, never &req.ReadOnly: req is this
+	// function's own by-value parameter, so its address is safe to persist
+	// here, but taking it directly would make newSet.ReadOnlyConfig alias
+	// the caller's request struct for no reason. This is always an
+	// explicit override (see CreateBackupSetRequest.ReadOnly's own doc),
+	// never a nil left for the parent source's default to fill in: unlike
+	// a hand-edited config.yaml, an API/wizard request has always given an
+	// explicit answer (false is what every request before this issue, and
+	// every wizard save that leaves the new checkbox unticked, already
+	// means), and cfg.Validate resolves it into newSet.ReadOnly right
+	// after this function returns.
+	readOnly := req.ReadOnly
+	newSet.ReadOnlyConfig = &readOnly
 	if req.CompletionStrategy == "stable" {
 		newSet.Completion.StableFor = config.Duration(req.StableFor)
 	}
@@ -622,6 +655,15 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		CompletionStrategy: bs.Completion.Strategy,
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
+		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
+		// resolved answer, the same discipline this field's own doc in
+		// config.go documents for every other consumer. Every bs this
+		// function is ever handed has already gone through cfg.Validate
+		// (CreateBackupSet calls it before newBackupSetFor's result is
+		// ever re-read back with findBackupSet, and ListBackupSets/
+		// GetBackupSet read from a state built from an already-validated
+		// Config), so this is never the pre-resolution zero value.
+		ReadOnly: bs.ReadOnly,
 	}
 }
 

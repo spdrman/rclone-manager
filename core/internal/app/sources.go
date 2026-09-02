@@ -27,6 +27,9 @@ type BackupSetSummary struct {
 	LocalPath  string
 	StaleAfter time.Duration
 	Disabled   bool
+	// ReadOnly is issue #282's resolved answer (config.BackupSet.ReadOnly)
+	// for whether this set's remote source may ever be deleted.
+	ReadOnly bool
 }
 
 // Sources lists every configured source and its backup sets. This never
@@ -44,6 +47,7 @@ func (s *Service) Sources() []SourceSummary {
 				LocalPath:  bs.LocalPath,
 				StaleAfter: bs.StaleAfter.Duration(),
 				Disabled:   bs.Disabled,
+				ReadOnly:   bs.ReadOnly,
 			})
 		}
 		out = append(out, sum)

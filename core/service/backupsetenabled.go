@@ -117,6 +117,107 @@ func (b *BackupService) SetBackupSetEnabled(_ context.Context, id string, enable
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }
 
+// SetBackupSetReadOnly turns issue #282's read-only declaration on or off
+// for one already-persisted backup set, through the API/wizard rather
+// than by hand-editing config.yaml (issue #316). It persists the change
+// to the configuration file this BackupService was opened from and
+// hot-reloads, following exactly the sequence SetBackupSetEnabled above
+// documents in full and for the same reasons.
+//
+// # What this always sets, and what it never touches
+//
+// This always writes this ONE backup set's own explicit override
+// (config.BackupSet.ReadOnlyConfig), never its source's ReadOnly default:
+// an API caller names one backup set, and there is no "every set under
+// this source" concept anywhere in the CRUD surface for it to mean
+// instead. A source-level default set by hand in config.yaml is left
+// exactly as it is; this only ever adds or changes THIS set's own
+// override on top of it, the same way a hand-edited per-set `read_only:`
+// line would.
+//
+// # What "read-only" means, and what turning it off does not do
+//
+// See config.BackupSet.ReadOnly's own doc for the full contract: while
+// true, FR-15's delete step is structurally never reached for this set
+// (core/internal/app's pipeline routes it to lifecycle.RetainRemote
+// instead of lifecycle.DeleteRemote), and an artifact that already
+// reached REMOTE_RETAINED under it stays retained — turning this back off
+// does not reach back and make an already-retained artifact eligible for
+// deletion again, the same one-way-per-artifact shape #227's
+// reinstatement already established for this codebase. It only changes
+// what happens to artifacts THIS backup set commits from here on.
+func (b *BackupService) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (BackupSet, error) {
+	if b.configPath == "" {
+		return BackupSet{}, ErrConfigNotFileBacked
+	}
+	sourceName, setName, ok := splitBackupSetID(id)
+	if !ok {
+		return BackupSet{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	b.configMu.Lock()
+	defer b.configMu.Unlock()
+
+	cfg, err := config.Load(b.configPath)
+	if err != nil {
+		return BackupSet{}, fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	found := false
+	for i := range cfg.Sources {
+		if cfg.Sources[i].Name != sourceName {
+			continue
+		}
+		for j := range cfg.Sources[i].BackupSets {
+			if cfg.Sources[i].BackupSets[j].Name != setName {
+				continue
+			}
+			// A pointer to a fresh local, per iteration: reusing one
+			// variable's address across the loop (or across calls) would
+			// have every backup set's ReadOnlyConfig alias the same bool,
+			// silently rewriting an earlier match's answer whenever a
+			// later one is set.
+			ro := readOnly
+			cfg.Sources[i].BackupSets[j].ReadOnlyConfig = &ro
+			found = true
+		}
+	}
+	if !found {
+		return BackupSet{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	// Encoded before Validate, which resolves defaults in place; see
+	// SetBackupSetEnabled's own comment above for the full reasoning.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return BackupSet{}, fmt.Errorf("service: encoding configuration: %w", err)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return BackupSet{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+
+	applyValidators, err := planValidatorCatalog(cfg)
+	if err != nil {
+		return BackupSet{}, err
+	}
+
+	if err := writeConfigBytesAtomically(b.configPath, encoded); err != nil {
+		return BackupSet{}, fmt.Errorf("service: persisting configuration: %w", err)
+	}
+
+	applyValidators()
+
+	prevInner := b.state.Load().inner
+	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
+	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
+		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
+	}
+	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+
+	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
+}
+
 // TestBackupSetConnection runs the same non-destructive reachability and
 // authentication check TestConnection performs, against an ALREADY
 // PERSISTED backup set rather than a candidate a caller is still filling

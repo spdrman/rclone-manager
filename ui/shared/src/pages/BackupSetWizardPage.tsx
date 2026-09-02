@@ -118,6 +118,14 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // rule).
   const [completion, setCompletion] = useState<CompletionMethod>("completion-marker");
   const [acknowledged, setAcknowledged] = useState(false);
+  // Issue #316: "pull from here, never delete here" (#282), declared at
+  // save time rather than only by hand-editing config.yaml afterward.
+  // Read at Review below to swap the remote-source-handling copy, and in
+  // saveDisabled below to waive the deletion acknowledgement — there is
+  // nothing to acknowledge deleting when this is checked, the same
+  // reasoning "Save disabled" already gets for free by being its own
+  // button (see saveDisabled's own comment).
+  const [readOnlySource, setReadOnlySource] = useState(false);
 
   // Host trust is local too, but it needs to remember WHICH host/port it
   // was granted for, not just whether it was granted: editing the
@@ -211,8 +219,16 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
   // instead of the button structurally refusing to be clicked in the
   // first place — the exact clickable-then-rejected shape this
   // safety-tool's own review flags everywhere else it appears.
+  // readOnlySource waives the acknowledgement, not canSave/keySource/
+  // trustedKnownHostsLine: a read-only set still needs a real, trusted
+  // connection to pull backups FROM — declaring it read-only only takes
+  // away the one thing there would otherwise be to acknowledge deleting.
   const saveDisabled =
-    !canSave || !acknowledged || keySource !== "import" || !importedKeyId || !trustedKnownHostsLine;
+    !canSave ||
+    (!acknowledged && !readOnlySource) ||
+    keySource !== "import" ||
+    !importedKeyId ||
+    !trustedKnownHostsLine;
 
   const trustHost = () => {
     setHostTrusted(true);
@@ -342,6 +358,7 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
         validatorId: validatorId || undefined,
         stableForSeconds: completion === "stable-size" ? 3600 : undefined,
         disabled,
+        readOnly: readOnlySource,
         runImmediately: firstRun ? false : runImmediately
       };
       if (firstRun) {
@@ -903,50 +920,86 @@ export function BackupSetWizardPage({ readOnly, firstRun = false, onFirstRunComp
                   </span>
                 </div>
                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 14 }}>
-                  <p style={{ margin: 0, fontSize: 13.5, maxWidth: "78ch" }}>
-                    After a backup has been successfully transferred, verified, durably
-                    committed to this NAS, and recorded as safe, Backup Manager will
-                    delete the original backup artifact from the remote server.
-                  </p>
-                  <ol
-                    className="mono"
+                  {/* Issue #316: declared here, at the point this page
+                      already explains what deleting the remote source
+                      means, rather than as an unexplained toggle earlier
+                      in the flow. Checking it changes what the rest of
+                      this box says, because there is no deletion left to
+                      walk through or acknowledge once it is checked. */}
+                  <label
                     style={{
-                      margin: 0, padding: 0, listStyle: "none", display: "flex",
-                      flexWrap: "wrap", alignItems: "center", gap: 8,
-                      fontSize: "var(--text-xs)", color: "var(--text-2)"
+                      display: "flex", gap: 10, padding: "13px 14px",
+                      border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)",
+                      background: "var(--surface-2)", fontSize: 13, cursor: "pointer"
                     }}
                   >
-                    {["Discovered", "Transferred", "Verified", "Committed", "Safe state persisted"].map((p) => (
-                      <li key={p} style={{ display: "flex", gap: 8 }}>
-                        <span>{p}</span>
-                        <span aria-hidden="true">→</span>
-                      </li>
-                    ))}
-                    <li style={{ color: "var(--warn)", fontWeight: 600 }}>Remote artifact deleted</li>
-                  </ol>
-                  <FieldHelp label="Acknowledgement" help={FIELD_HELP.wizardAcknowledge}>
-                    {(helpId) => (
-                      <label
+                    <input
+                      type="checkbox"
+                      checked={readOnlySource}
+                      onChange={(e) => setReadOnlySource(e.target.checked)}
+                      style={{ marginTop: 2, accentColor: "var(--accent)" }}
+                    />
+                    <span>
+                      This source is read-only — pull backups from here, but never delete
+                      the remote original.
+                    </span>
+                  </label>
+
+                  {readOnlySource ? (
+                    <p style={{ margin: 0, fontSize: 13.5, maxWidth: "78ch" }}>
+                      Backup Manager will keep every backup from this source's remote
+                      copy for good, however completely it passes transfer, verification
+                      and commit. Releasing that storage, if it is ever wanted, is a
+                      decision made outside this manager.
+                    </p>
+                  ) : (
+                    <>
+                      <p style={{ margin: 0, fontSize: 13.5, maxWidth: "78ch" }}>
+                        After a backup has been successfully transferred, verified, durably
+                        committed to this NAS, and recorded as safe, Backup Manager will
+                        delete the original backup artifact from the remote server.
+                      </p>
+                      <ol
+                        className="mono"
                         style={{
-                          display: "flex", gap: 10, padding: "13px 14px",
-                          border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)",
-                          background: "var(--surface-2)", fontSize: 13, cursor: "pointer"
+                          margin: 0, padding: 0, listStyle: "none", display: "flex",
+                          flexWrap: "wrap", alignItems: "center", gap: 8,
+                          fontSize: "var(--text-xs)", color: "var(--text-2)"
                         }}
                       >
-                        <input
-                          type="checkbox"
-                          aria-describedby={helpId}
-                          checked={acknowledged}
-                          onChange={(e) => setAcknowledged(e.target.checked)}
-                          style={{ marginTop: 2, accentColor: "var(--accent)" }}
-                        />
-                        <span>
-                          I understand the remote backup will be removed only after the NAS
-                          copy has been safely committed.
-                        </span>
-                      </label>
-                    )}
-                  </FieldHelp>
+                        {["Discovered", "Transferred", "Verified", "Committed", "Safe state persisted"].map((p) => (
+                          <li key={p} style={{ display: "flex", gap: 8 }}>
+                            <span>{p}</span>
+                            <span aria-hidden="true">→</span>
+                          </li>
+                        ))}
+                        <li style={{ color: "var(--warn)", fontWeight: 600 }}>Remote artifact deleted</li>
+                      </ol>
+                      <FieldHelp label="Acknowledgement" help={FIELD_HELP.wizardAcknowledge}>
+                        {(helpId) => (
+                          <label
+                            style={{
+                              display: "flex", gap: 10, padding: "13px 14px",
+                              border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)",
+                              background: "var(--surface-2)", fontSize: 13, cursor: "pointer"
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              aria-describedby={helpId}
+                              checked={acknowledged}
+                              onChange={(e) => setAcknowledged(e.target.checked)}
+                              style={{ marginTop: 2, accentColor: "var(--accent)" }}
+                            />
+                            <span>
+                              I understand the remote backup will be removed only after the NAS
+                              copy has been safely committed.
+                            </span>
+                          </label>
+                        )}
+                      </FieldHelp>
+                    </>
+                  )}
                 </div>
               </div>
 

@@ -175,3 +175,51 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
     expect(await screen.findByText(/doesn.t yet support saving/i)).toBeTruthy();
   });
 });
+
+// Issue #316's RED case for this page: before this control existed,
+// there was no way to declare an already-persisted backup set read-only
+// (or withdraw it) anywhere in the UI — only by hand-editing config.yaml.
+describe("declaring a backup set read-only (issue #316)", () => {
+  afterEach(() => {
+    resetGraphForTests();
+  });
+
+  it("shows 'No' for a set that is not read-only, and flips it on with a call to api.setReadOnly", async () => {
+    const api = createMockApi();
+    const sets = await createMockApi().listSets();
+    // The fixture's first set (postgres-primary) is not read-only —
+    // see mock.ts's own SETS literal.
+    const target = sets[0];
+    const spy = vi.spyOn(api, "setReadOnly");
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    expect(screen.getByText("No")).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Declare source read-only" });
+
+    fireEvent.click(toggle);
+
+    expect(spy).toHaveBeenCalledWith(target.source, target.set, true);
+  });
+
+  it("shows the retained count and offers to turn it back off for a set that is already read-only", async () => {
+    const api = createMockApi();
+    const sets = await createMockApi().listSets();
+    // The media-archive fixture is the mock's one read-only set, with a
+    // nonzero retained count — see mock.ts's own SETS literal.
+    const target = sets.find((s) => s.readOnly);
+    if (!target) throw new Error("fixture setup: no read-only set in the mock data");
+    const spy = vi.spyOn(api, "setReadOnly");
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    expect(screen.getByText(/Yes.*retained/)).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Allow remote deletion again" });
+
+    fireEvent.click(toggle);
+
+    expect(spy).toHaveBeenCalledWith(target.source, target.set, false);
+  });
+});

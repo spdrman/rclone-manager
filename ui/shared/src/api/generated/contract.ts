@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "279de1206d524fa715dd46ca28d47116cb27ef3f04a3f494de4269820771f333";
+export const CONTRACT_SHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -348,6 +348,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     destructiveGate: false,
     concurrency: "",
     requestSchema: "SetEnabledRequest",
+    responseSchema: "BackupSet",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "setBackupSetReadOnly",
+    method: "POST",
+    path: "/backup-sets/{source}/{set}/read-only",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "SetReadOnlyRequest",
     responseSchema: "BackupSet",
     successStatus: 200,
     errorCodes: {
@@ -896,6 +916,7 @@ export interface WireBackupSet {
   local_path: string;
   name: string;
   port: number;
+  read_only: boolean;
   remote_path: string;
   source_name: string;
   user: string;
@@ -917,6 +938,7 @@ export interface WireBackupSetHealth {
   pending_deletes: number;
   quarantined_count: number;
   quarantined_lost_count: number;
+  read_only_retained_count: number;
   reason: string;
   reinstated_remote_retained_count: number;
   set_name: string;
@@ -947,6 +969,7 @@ export interface WireBackupSetSpec {
   local_path: string;
   name: string;
   port: number;
+  read_only?: boolean;
   remote_path: string;
   source_name?: string;
   ssh_key_id: string;
@@ -1315,6 +1338,15 @@ export interface WireSessionResponse {
  *  which is why this is state-changing but not destructive. */
 export interface WireSetEnabledRequest {
   enabled: boolean;
+}
+
+/** POST /backup-sets/{id}/read-only. Declares, or withdraws, a backup
+ *  set's read-only status (issue #282). Turning it on only prevents a
+ *  future deletion; turning it back off does not retroactively
+ *  authorise deleting anything already retained under it, so this is
+ *  state-changing but not destructive. */
+export interface WireSetReadOnlyRequest {
+  read_only: boolean;
 }
 
 /** GET and PATCH /settings both return this: the settings now in

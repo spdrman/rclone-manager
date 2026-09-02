@@ -137,6 +137,24 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <Cell label="Expected cadence" value={"every " + s.expectedIntervalHours + "h"} mono />
               <Cell label="State" value={s.stateNote} />
               <Cell label="Remote cleanup" value={s.enabled ? "Enabled after commit" : "Disabled"} />
+              {/* Issue #282/#316: a second, independent axis from "Remote
+                  cleanup" above — a disabled set still keeps its remote
+                  cleanup policy for whenever it runs again, while a
+                  read-only set never deletes the remote source at all,
+                  running or not. Retained count only when it is nonzero
+                  and read-only, the same "a permanent zero is a line an
+                  operator stops seeing" reasoning `status`'s own CLI
+                  output already follows for this exact figure. */}
+              <Cell
+                label="Read-only source"
+                value={
+                  s.readOnly
+                    ? s.readOnlyRetainedCount > 0
+                      ? "Yes — " + s.readOnlyRetainedCount + " retained"
+                      : "Yes"
+                    : "No"
+                }
+              />
             </dl>
           </Section>
 
@@ -224,6 +242,22 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <button className="btn btn--caution" disabled={readOnly} onClick={() => api.setEnabled(s.source, s.set, !s.enabled).then(set.reload)}>
                 {s.enabled ? "Disable backup set" : "Enable backup set"}
+              </button>
+              {/* Issue #316: the read-only counterpart to the
+                  enable/disable toggle above, following the same
+                  CRUD-parity shape (a dedicated toggle route, not a
+                  generic edit). Turning this ON only prevents a FUTURE
+                  deletion; turning it back off does not reach back and
+                  delete anything already retained under it
+                  (core/service.SetBackupSetReadOnly's own doc) — so it
+                  sits in the caution tier beside Disable, not the
+                  destructive one below. */}
+              <button
+                className="btn btn--caution"
+                disabled={readOnly}
+                onClick={() => api.setReadOnly(s.source, s.set, !s.readOnly).then(set.reload)}
+              >
+                {s.readOnly ? "Allow remote deletion again" : "Declare source read-only"}
               </button>
               <button className="btn btn--destructive" disabled={readOnly} onClick={() => setPreviewOpen(true)}>
                 Apply retention now…

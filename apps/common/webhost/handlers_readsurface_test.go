@@ -719,6 +719,54 @@ func TestSystemHealth_ReportsReinstatedRemoteRetainedCount(t *testing.T) {
 	}
 }
 
+// TestSystemHealth_ReportsReadOnlyRetainedCount is issue #316's RED case
+// for GET /api/v1/system/health's read-only population, mirroring
+// TestSystemHealth_ReportsReinstatedRemoteRetainedCount above: before
+// this, service.BackupSetHealth.ReadOnlyRetainedCount (already computed
+// by core/internal/health since issue #282) never reached the HTTP
+// response at all, so a set held as read-only had no HTTP-visible way to
+// say how many backups it was currently retaining because of it.
+func TestSystemHealth_ReportsReadOnlyRetainedCount(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.health = service.HealthReport{
+		GeneratedAt: time.Date(2026, 8, 30, 10, 0, 0, 0, time.UTC),
+		BackupSets: []service.BackupSetHealth{
+			{
+				BackupSetID: "production/archive", SourceName: "production", SetName: "archive",
+				State: "HEALTHY", Reason: "fresh", StaleAfter: 24 * time.Hour,
+				ReadOnlyRetainedCount: 4,
+			},
+			{
+				BackupSetID: "production/postgres", SourceName: "production", SetName: "postgres",
+				State: "HEALTHY", Reason: "fresh", StaleAfter: 24 * time.Hour,
+			},
+		},
+	}
+
+	rec := rt.get(t, "/api/v1/system/health")
+	mustStatus(t, rec, http.StatusOK)
+
+	var body healthResponse
+	decodeInto(t, rec, &body)
+	if len(body.BackupSets) != 2 {
+		t.Fatalf("len = %d, want 2", len(body.BackupSets))
+	}
+	if body.BackupSets[0].ReadOnlyRetainedCount != 4 {
+		t.Errorf("ReadOnlyRetainedCount = %d, want 4", body.BackupSets[0].ReadOnlyRetainedCount)
+	}
+	if body.BackupSets[1].ReadOnlyRetainedCount != 0 {
+		t.Errorf("second set ReadOnlyRetainedCount = %d, want 0", body.BackupSets[1].ReadOnlyRetainedCount)
+	}
+
+	second, err := json.Marshal(body.BackupSets[1])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(second), `"read_only_retained_count":0`) {
+		t.Errorf("a set holding nothing under a read-only declaration omitted the count instead of reporting 0: %s", second)
+	}
+}
+
 // Issue #245. A backup set the transport refuses to connect to backs up
 // nothing on every cycle, and until this landed no read surface could say
 // so: the alert pass computed the fact transiently and handed it to a
@@ -890,6 +938,60 @@ func TestSetBackupSetEnabled_AMalformedBodyIs400(t *testing.T) {
 	rt := newReadSurfaceRouter(t)
 
 	rec := rt.post(t, "/api/v1/backup-sets/production/postgres/enabled", `{"enabled":`)
+	mustStatus(t, rec, http.StatusBadRequest)
+	if code := errorCodeOf(t, rec); code != "INVALID_REQUEST" {
+		t.Errorf("code = %q, want INVALID_REQUEST", code)
+	}
+}
+
+// ------------------------------------------- declaring a set read-only ---
+
+// TestSetBackupSetReadOnly_PassesTheIdAndFlagThrough is issue #316's RED
+// case for POST /api/v1/backup-sets/{source}/{set}/read-only: before this
+// route existed, there was no HTTP path at all to flip an
+// already-persisted backup set's read-only declaration. Mirrors
+// TestSetBackupSetEnabled_PassesTheIdAndFlagThrough field for field.
+func TestSetBackupSetReadOnly_PassesTheIdAndFlagThrough(t *testing.T) {
+	for _, readOnly := range []bool{true, false} {
+		t.Run(fmt.Sprintf("read_only=%v", readOnly), func(t *testing.T) {
+			rt := newReadSurfaceRouter(t)
+
+			rec := rt.post(t, "/api/v1/backup-sets/production/postgres/read-only",
+				fmt.Sprintf(`{"read_only":%v}`, readOnly))
+			mustStatus(t, rec, http.StatusOK)
+
+			got := rt.backend.lastSetReadOnly
+			if got.id != "production/postgres" {
+				t.Errorf("id = %q, want production/postgres", got.id)
+			}
+			if got.readOnly != readOnly {
+				t.Errorf("readOnly = %v, want %v", got.readOnly, readOnly)
+			}
+
+			var body backupSetResponse
+			decodeInto(t, rec, &body)
+			if body.ReadOnly != readOnly {
+				t.Errorf("the response reports ReadOnly = %v for read_only = %v", body.ReadOnly, readOnly)
+			}
+		})
+	}
+}
+
+func TestSetBackupSetReadOnly_UnknownSetIs404(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+	rt.backend.errOnSetReadOnly = fmt.Errorf("%w: gone", service.ErrBackupSetNotFound)
+
+	rec := rt.post(t, "/api/v1/backup-sets/production/gone/read-only", `{"read_only":true}`)
+	mustStatus(t, rec, http.StatusNotFound)
+	if code := errorCodeOf(t, rec); code != "BACKUP_SET_NOT_FOUND" {
+		t.Errorf("code = %q, want BACKUP_SET_NOT_FOUND", code)
+	}
+}
+
+func TestSetBackupSetReadOnly_AMalformedBodyIs400(t *testing.T) {
+	rt := newReadSurfaceRouter(t)
+
+	rec := rt.post(t, "/api/v1/backup-sets/production/postgres/read-only", `{"read_only":`)
 	mustStatus(t, rec, http.StatusBadRequest)
 	if code := errorCodeOf(t, rec); code != "INVALID_REQUEST" {
 		t.Errorf("code = %q, want INVALID_REQUEST", code)

@@ -228,7 +228,8 @@ function wireBackupSetSpec(req: CreateBackupSetRequest): WireBackupSetSpec {
     validator_id: req.validatorId,
     stable_for_seconds: req.stableForSeconds,
     stale_after_seconds: req.staleAfterSeconds,
-    disabled: req.disabled
+    disabled: req.disabled,
+    read_only: req.readOnly
   };
 }
 
@@ -263,6 +264,7 @@ function fromWireCreateBackupSetResponse(body: WireCreateBackupSetResponse): Cre
     completionStrategy: body.completion_strategy,
     validatorId: body.validator_id,
     disabled: body.disabled,
+    readOnly: body.read_only,
     operation: body.operation
       ? { operationId: body.operation.operation_id, status: body.operation.status }
       : undefined,
@@ -353,6 +355,13 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
       ? health.reason
       : "Health details are not yet reported by the server for this backup set.",
     enabled: !bs.disabled,
+    readOnly: bs.read_only,
+    // 0, not undefined, when health could not be read for this set — the
+    // same "old placeholder rather than a guess" choice this mapper's own
+    // doc above makes for state/stateNote, applied to a count instead of
+    // a verdict: a health endpoint nobody could ask is not evidence this
+    // set is retaining nothing.
+    readOnlyRetainedCount: health?.read_only_retained_count ?? 0,
     // Spread, not `haltReason: undefined`. A key that is present and
     // undefined still reads as the mapper having an opinion; this way a
     // set with no refusal on record simply does not carry the field.
@@ -614,6 +623,7 @@ function fromWireHealth(body: WireHealthResponse, now: number): SystemHealth {
   let newestVerified: string | null = null;
   let lastCompleted: string | null = null;
   let quarantined = 0;
+  let readOnlyRetained = 0;
   let freeBytes = 0;
   let totalBytes = 0;
   let unavailable = 0;
@@ -625,6 +635,7 @@ function fromWireHealth(body: WireHealthResponse, now: number): SystemHealth {
     newestVerified = laterOf(newestVerified, stampOrNull(set.newest_good_backup_at));
     lastCompleted = laterOf(lastCompleted, stampOrNull(set.last_completed_backup_at));
     quarantined += set.quarantined_count + set.quarantined_lost_count;
+    readOnlyRetained += set.read_only_retained_count;
 
     if (set.free_bytes_known) {
       freeBytes += set.free_bytes ?? 0;
@@ -662,6 +673,7 @@ function fromWireHealth(body: WireHealthResponse, now: number): SystemHealth {
     setsStale: counts.stale,
     setsFailing: counts.failing,
     quarantinedCount: quarantined,
+    readOnlyRetainedCount: readOnlyRetained,
     storageFreeBytes: freeBytes,
     storageTotalBytes: totalBytes,
     storageState: STORAGE_STATE[STORAGE_ORDER[worstStorage]],
@@ -1000,6 +1012,8 @@ export const httpApi: BackupManagerApi = {
       body: JSON.stringify({ backup_set_id: id })
     }),
   setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
+  setReadOnly: (source, set, readOnly) =>
+    post(backupSetPath(source, set) + "/read-only", { read_only: readOnly }),
 
   createBackupSet: (req) =>
     request<WireCreateBackupSetResponse>("/backup-sets", {

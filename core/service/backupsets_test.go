@@ -161,6 +161,85 @@ func TestCreateBackupSet_PersistsAndIsImmediatelyVisible(t *testing.T) {
 	}
 }
 
+// TestCreateBackupSet_ReadOnly_PersistsAsAnExplicitPerSetOverride is issue
+// #316's create-side RED case: before this, CreateBackupSetRequest had no
+// ReadOnly field at all, so there was no way to create a read-only backup
+// set through the API/wizard — only by hand-editing config.yaml after the
+// fact. This proves the request field reaches config.BackupSet.ReadOnly
+// (resolved), is durable on disk as this ONE set's own `read_only: true`
+// line (not a change to its source's default), and is visible again
+// through GetBackupSet/ListBackupSets with no restart.
+func TestCreateBackupSet_ReadOnly_PersistsAsAnExplicitPerSetOverride(t *testing.T) {
+	svc, configPath := openTestService(t)
+
+	req := validCreateReq(t, svc, "readonly-set")
+	req.ReadOnly = true
+
+	result, err := svc.CreateBackupSet(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+	if !result.Set.ReadOnly {
+		t.Error("Set.ReadOnly = false, want true")
+	}
+
+	got, err := svc.GetBackupSet(context.Background(), "api/readonly-set")
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	if !got.ReadOnly {
+		t.Error("GetBackupSet: ReadOnly = false, want true")
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var onDisk config.Config
+	if err := yaml.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	found := false
+	for _, src := range onDisk.Sources {
+		if src.Name != "api" {
+			continue
+		}
+		if src.ReadOnly {
+			t.Error("the source itself was marked read_only: this must be a per-set override, not a source-level default")
+		}
+		for _, bs := range src.BackupSets {
+			if bs.Name == "readonly-set" {
+				found = true
+				if bs.ReadOnlyConfig == nil || !*bs.ReadOnlyConfig {
+					t.Errorf("on-disk read_only for readonly-set = %v, want an explicit true", bs.ReadOnlyConfig)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the new backup set is not on disk:\n%s", raw)
+	}
+}
+
+// TestCreateBackupSet_ReadOnlyDefaultsFalse is this issue's regression
+// guarantee at the CRUD layer: a request that never mentions ReadOnly (the
+// zero value, exactly what every request before this issue already sent)
+// creates a set that is NOT read-only, the identical delete-eligible
+// behaviour every existing deployment and every earlier wizard save
+// already has.
+func TestCreateBackupSet_ReadOnlyDefaultsFalse(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	req := validCreateReq(t, svc, "ordinary-set")
+	result, err := svc.CreateBackupSet(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+	if result.Set.ReadOnly {
+		t.Error("Set.ReadOnly = true for a request that never set it, want false")
+	}
+}
+
 // TestCreateBackupSet_RunImmediately_SubmitsARunCycleOperation is "Save,
 // enable & run": the new set's config takes effect (hot reload) BEFORE
 // the run_cycle operation this call also submits, so that operation's

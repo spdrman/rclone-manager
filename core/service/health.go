@@ -58,6 +58,23 @@ type BackupSetHealth struct {
 	// that the size is not known.
 	ReinstatedRemoteRetainedCount int
 
+	// ReadOnlyRetainedCount is how many artifacts in this set currently
+	// hold a remote source this manager will never delete because the
+	// set itself is declared read-only (config.BackupSet.ReadOnly, issue
+	// #282), not because any one of them was individually reinstated.
+	// Unlike ReinstatedRemoteRetainedCount above, this can go back down:
+	// turning a set's read-only declaration off does not retroactively
+	// authorise deleting what it already retained (see
+	// SetBackupSetReadOnly's own doc), but an artifact discovered after
+	// that toggle is no longer routed to REMOTE_RETAINED at all, so the
+	// count this set reports naturally stops growing and, over the
+	// journal's retention window, falls as older REMOTE_RETAINED rows are
+	// superseded.
+	//
+	// There is no bytes figure beside it, for the identical reason
+	// ReinstatedRemoteRetainedCount has none: see that field's own doc.
+	ReadOnlyRetainedCount int
+
 	// FreeBytes is a live reading of the local destination's free space,
 	// and FreeBytesKnown is false when that reading could not be taken
 	// (the path does not exist yet, or the platform refused). A zero with
@@ -179,6 +196,7 @@ func toServiceBackupSetHealth(bs health.BackupSetHealth) BackupSetHealth {
 		QuarantinedLostCount: bs.QuarantinedLostCount,
 
 		ReinstatedRemoteRetainedCount: bs.ReinstatedRemoteRetainedCount,
+		ReadOnlyRetainedCount:         bs.ReadOnlyRetainedCount,
 	}
 	if bs.NewestGoodBackupAt != nil {
 		out.NewestGoodBackupAt = *bs.NewestGoodBackupAt

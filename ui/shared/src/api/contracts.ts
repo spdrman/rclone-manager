@@ -131,6 +131,11 @@ export interface CreateBackupSetRequest {
   /** "Save disabled" — excludes the set from every run cycle until an
    *  operator re-enables it. */
   disabled?: boolean;
+  /** Declares this backup set's remote source read-only from creation
+   *  (issue #282): pull backups from here, but never delete the remote
+   *  original. Omitted or false means exactly what every request meant
+   *  before this field existed. Issue #316's wizard control for it. */
+  readOnly?: boolean;
   /** "Save, enable & run" — submits a run_cycle operation immediately
    *  after this set is persisted. Ignored (never runs anything) when
    *  disabled is true. */
@@ -165,6 +170,10 @@ export interface CreatedBackupSet {
    *  Empty when none was chosen. */
   validatorId?: string;
   disabled: boolean;
+  /** The read-only declaration this set was actually saved with (issue
+   *  #282, #316), echoed back so a caller can render what it just
+   *  persisted without a second fetch. */
+  readOnly: boolean;
   /** Present only when the request's runImmediately was set AND
    *  honoured (never when disabled was also set — see
    *  CreateBackupSetRequest.runImmediately's own doc). */
@@ -522,6 +531,17 @@ export interface BackupManagerApi {
    * exactly those two path segments rather than on the flat `id`.
    */
   setEnabled(source: string, set: string, enabled: boolean): Promise<void>;
+  /**
+   * Declares, or withdraws, one backup set's read-only status (issue
+   * #282, #316), through the API/detail-page control rather than by
+   * hand-editing config.yaml. Turning it on only prevents a FUTURE
+   * deletion; turning it back off does not retroactively authorise
+   * deleting anything this manager already retained under it.
+   *
+   * `source`/`set` are BackupSet's own two-part identity, the same pair
+   * setEnabled above takes.
+   */
+  setReadOnly(source: string, set: string, readOnly: boolean): Promise<void>;
 
   /** Issue #146 (B2.7): the wizard's three Save buttons. */
   createBackupSet(req: CreateBackupSetRequest): Promise<CreatedBackupSet>;

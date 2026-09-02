@@ -200,7 +200,7 @@ describe("an instance with no configuration is an application, not a wall", () =
       backupSet: {
         id: "set_x", sourceName: "api", name: "x", host: "h", port: 22, user: "u",
         remotePath: "/r", localPath: "/l", include: [], completionStrategy: "marker",
-        validatorId: undefined, disabled: false
+        validatorId: undefined, disabled: false, readOnly: false
       },
       restartRequired: true
     });
