@@ -43,18 +43,15 @@ function Harness({ label = "Password", disabled = false }: { label?: string; dis
 }
 
 /** The reset rules are about a value that changes, so they need a harness
- *  that owns one. Shaped like the pages that actually do this: a form whose
- *  submit handler either clears the field (SettingsPage's rotation) or
- *  leaves it alone (LoginPage's failed sign-in). */
-function StatefulHarness({ clearOnSubmit }: { clearOnSubmit: boolean }) {
+ *  that owns one. It offers the two triggers SEPARATELY, on purpose: a
+ *  submit that leaves the value alone, and a plain button that clears it
+ *  without submitting. Exercising both through one submit would let either
+ *  rule pass for the other, and the whole point of finding #2 was that the
+ *  reset which is documented is not the reset that happens. */
+function StatefulHarness() {
   const [password, setPassword] = useState("");
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (clearOnSubmit) setPassword("");
-      }}
-    >
+    <form onSubmit={(e) => e.preventDefault()}>
       <HelpField
         label="Password"
         help={{ what: "A password.", example: "correct-horse-battery", effect: "Signs you in." }}
@@ -71,6 +68,9 @@ function StatefulHarness({ clearOnSubmit }: { clearOnSubmit: boolean }) {
         )}
       </HelpField>
       <button type="submit">Sign in</button>
+      <button type="button" onClick={() => setPassword("")}>
+        Clear
+      </button>
     </form>
   );
 }
@@ -190,7 +190,7 @@ describe("password reveal toggle", () => {
 
   it("re-masks when the value it was revealing is cleared", async () => {
     const user = userEvent.setup();
-    render(<StatefulHarness clearOnSubmit />);
+    render(<StatefulHarness />);
     const input = screen.getByLabelText(/^Password/);
 
     await user.type(input, "a-long-enough-passphrase");
@@ -200,15 +200,17 @@ describe("password reveal toggle", () => {
     // SettingsPage's rotation: on success it sets all three fields back to
     // "" without unmounting anything, which used to leave the operator with
     // empty fields still in type="text", ready for the NEXT password to be
-    // typed in the clear.
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    // typed in the clear. Cleared here by a plain button rather than by the
+    // submit, so this is the value rule on its own and the submit rule
+    // cannot cover for it.
+    await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(input).toHaveValue("");
     expect(input).toHaveAttribute("type", "password");
   });
 
   it("re-masks on submit even when the value survives it", async () => {
     const user = userEvent.setup();
-    render(<StatefulHarness clearOnSubmit={false} />);
+    render(<StatefulHarness />);
     const input = screen.getByLabelText(/^Password/);
 
     await user.type(input, "a-long-enough-passphrase");
