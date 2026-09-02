@@ -16,6 +16,15 @@ type RetentionSetReport struct {
 	Set           model.BackupSetID
 	Verdicts      []retention.GFSVerdict
 	LastKnownGood retention.LastKnownGoodResult
+
+	// RetentionIsOverride reports whether these verdicts were decided
+	// under this set's own retention policy rather than the deployment's
+	// (issue #333). "Why is this artifact being deleted" has a different
+	// answer depending on which one was in force, and an operator reading
+	// a preview cannot tell the two apart from the verdicts alone: a set
+	// override and a global policy that happen to agree produce identical
+	// output.
+	RetentionIsOverride bool
 }
 
 // RetentionPreview computes set's current KEEP/DELETE classification: the
@@ -43,12 +52,25 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 	if err != nil {
 		return RetentionSetReport{}, fmt.Errorf("app: retention: listing %s: %w", set, err)
 	}
-	verdicts, lkg, err := retention.DecideKeep(s.now(), s.Config.Retention, set, records)
+	// Issue #333: retain under this set's own resolved policy. Validate
+	// fills that in from the set's override when it declares one and from
+	// the global policy otherwise, so this one read covers both and the
+	// global policy is never consulted directly here.
+	_, bs, ok := s.backupSetConfigFor(set)
+	if !ok {
+		return RetentionSetReport{}, &NotFoundError{Kind: "backup set", Name: set.String()}
+	}
+	verdicts, lkg, err := retention.DecideKeep(s.now(), bs.Retention, set, records)
 	if err != nil {
 		return RetentionSetReport{}, fmt.Errorf("app: retention: %s: %w", set, err)
 	}
 	s.recordRetentionRun(set)
-	return RetentionSetReport{Set: set, Verdicts: verdicts, LastKnownGood: lkg}, nil
+	return RetentionSetReport{
+		Set:                 set,
+		Verdicts:            verdicts,
+		LastKnownGood:       lkg,
+		RetentionIsOverride: bs.RetentionIsOverride(),
+	}, nil
 }
 
 // RetentionPreviewAll computes RetentionPreview for every configured backup

@@ -12,7 +12,36 @@ import (
 
 func testConfig(t *testing.T, sources ...config.Source) *config.Config {
 	t.Helper()
-	return &config.Config{Sources: sources, Retention: testRetention()}
+	c := &config.Config{Sources: sources, Retention: testRetention()}
+	// Issue #333: resolve each set's effective retention the way Validate
+	// does, for the same reason testRetention mirrors validateRetention's
+	// defaults. These fixtures are built by hand rather than loaded, so
+	// nothing else fills the resolved field in, and a set left at the zero
+	// Retention is not merely unconfigured, it is a different policy.
+	resolveTestRetention(c)
+	return c
+}
+
+// resolveTestRetention fills in every backup set's resolved Retention the
+// way config.Validate does, for fixtures built by hand rather than loaded.
+//
+// A test that changes the global policy after building its config has to
+// call this again: not resolving is exactly what #333 guarantees in
+// production, where an already-resolved set does not silently follow a
+// later edit to the global policy, so the fixture has to re-resolve to
+// mean "and this is the policy in force" rather than relying on the read
+// happening to be live.
+func resolveTestRetention(c *config.Config) {
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			if bs.RetentionConfig != nil {
+				bs.Retention = *bs.RetentionConfig
+			} else {
+				bs.Retention = c.Retention
+			}
+		}
+	}
 }
 
 // testRetention mirrors the defaults config.Validate fills in for a config

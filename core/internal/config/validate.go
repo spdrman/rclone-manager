@@ -66,6 +66,23 @@ func (c *Config) Validate() error {
 	}
 
 	v.validateRetention(&c.Retention)
+
+	// Issue #333: resolve every backup set's effective retention policy,
+	// after the global one above has been validated and had its own
+	// defaults filled in, so a set that inherits inherits the RESOLVED
+	// policy rather than the raw one an operator typed. This is a second
+	// pass over the sources rather than part of validateBackupSet for
+	// exactly that ordering reason: validateBackupSet runs before the
+	// global policy has been resolved, so it has nothing complete to
+	// inherit from yet.
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			path := fmt.Sprintf("sources[%d].backup_sets[%d]", i, j)
+			v.resolveBackupSetRetention(path, bs, c.Retention)
+		}
+	}
+
 	v.validateAlerts(&c.Alerts)
 	v.validateCapacity(&c.Capacity)
 	v.validateKeyEncryption(&c.KeyEncryption)
@@ -724,6 +741,37 @@ func ValidateRetention(r *Retention) error {
 	v := &validator{}
 	v.validateRetention(r)
 	return v.err()
+}
+
+// resolveBackupSetRetention fills in one backup set's resolved Retention
+// (issue #333), from its own override when it declares one and from the
+// already-resolved global policy otherwise.
+//
+// An override goes through ValidateRetention, which is the same
+// validateRetention this file's Validate runs over the global policy, so
+// a chain that would be refused at the top level is refused here for the
+// same reason and in the same words. The set's path is prepended so the
+// message says which set it came from, which a global policy has no need
+// to say; the reason itself is not restated or reworded here, because a
+// second wording is the first step towards a second rule.
+func (v *validator) resolveBackupSetRetention(path string, bs *BackupSet, global Retention) {
+	if bs.RetentionConfig == nil {
+		bs.Retention = global.clone()
+		return
+	}
+
+	// A sub-validator rather than ValidateRetention's error, so each
+	// problem keeps its own message and its own line in the accumulated
+	// list. Wrapping the joined error instead would fold every problem
+	// with one policy into a single entry and bury the "invalid config:"
+	// header from the inner call inside the outer one's.
+	sub := &validator{}
+	sub.validateRetention(bs.RetentionConfig)
+	for _, p := range sub.problems {
+		v.addf("%s.%v", path, p)
+	}
+
+	bs.Retention = bs.RetentionConfig.clone()
 }
 
 func (v *validator) validateRetention(r *Retention) {

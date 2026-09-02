@@ -30,6 +30,14 @@ type PrunePlan struct {
 	Set      model.BackupSetID
 	Verdicts []retention.PruneVerdict
 	Records  []state.Record
+
+	// RetentionIsOverride reports whether this plan was computed under the
+	// set's own retention policy rather than the deployment's (issue
+	// #333), for the same reason RetentionSetReport carries it: the
+	// verdicts alone cannot distinguish an override from a global policy
+	// that agrees with it, and the answer changes what an operator should
+	// go and edit.
+	RetentionIsOverride bool
 }
 
 // PrunePreview computes set's current FR-20 KEEP/DELETE/REFUSE verdicts via
@@ -71,11 +79,15 @@ func (s *Service) PrunePreviewAt(ctx context.Context, set model.BackupSetID, at 
 	if err != nil {
 		return PrunePlan{}, err
 	}
-	verdicts, err := retention.PruneDecide(at, s.Config.Retention, bs, records)
+	// Issue #333: the set's own resolved policy, which Validate filled
+	// in from its override when it declares one and from the global
+	// policy otherwise. Reading s.Config.Retention here instead would
+	// silently ignore every per-set override.
+	verdicts, err := retention.PruneDecide(at, bs.Retention, bs, records)
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune preview: %s: %w", set, err)
 	}
-	return PrunePlan{Set: set, Verdicts: verdicts, Records: records}, nil
+	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride()}, nil
 }
 
 // PruneApply computes set's current FR-20 verdicts and deletes the local
@@ -117,12 +129,12 @@ func (s *Service) PruneApplySnapshot(ctx context.Context, set model.BackupSetID,
 	if !ok {
 		return PrunePlan{}, &NotFoundError{Kind: "backup set", Name: set.String()}
 	}
-	verdicts, err := retention.PruneApply(at, s.Config.Retention, bs, records)
+	verdicts, err := retention.PruneApply(at, bs.Retention, bs, records)
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune apply: %s: %w", set, err)
 	}
 	s.recordRetentionRun(set)
-	return PrunePlan{Set: set, Verdicts: verdicts, Records: records}, nil
+	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride()}, nil
 }
 
 // pruneInputsFor loads the two things PruneDecide/PruneApply both need for

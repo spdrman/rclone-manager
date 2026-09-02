@@ -79,6 +79,7 @@ func TestPrunePreviewAndApply_KeepsNewestDropsOld(t *testing.T) {
 
 	cfg := testConfig(t, testSource("production", bs))
 	cfg.Retention = pruneDailyOnlyRetention()
+	resolveTestRetention(cfg)
 	svc := New(cfg, journal, tr, nil)
 
 	svc.Now = fixedNow(oldDay)

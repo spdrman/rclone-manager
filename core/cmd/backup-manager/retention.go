@@ -70,7 +70,17 @@ func cmdRetention(args []string) int {
 	}
 
 	for _, r := range reports {
-		fmt.Printf("%s:\n", r.Set)
+		// Issue #333: name the policy only when the set overrides the
+		// deployment's. An inheriting set prints exactly what it printed
+		// before this field existed, which matters because this output is
+		// pinned by the black-box contract suite in
+		// spdrman/rclone-manager-tests (suites/cli/cases/retention/), and
+		// inheriting is what every case there does.
+		if r.RetentionIsOverride {
+			fmt.Printf("%s: (retained under this set's own policy)\n", r.Set)
+		} else {
+			fmt.Printf("%s:\n", r.Set)
+		}
 		if len(r.Verdicts) == 0 {
 			fmt.Println("  (no managed, completed backups yet)")
 			continue
