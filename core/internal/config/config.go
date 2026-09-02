@@ -408,9 +408,27 @@ type BackupSet struct {
 	// validateRetention already applies when it refuses a config that sets
 	// both the tiers list and the legacy scalars.
 	//
+	// An override has to name a WHOLE chain: a tiers list, or all three
+	// of daily_days, weekly_months and monthly_months. Naming two of the
+	// three would resolve the third to the product default rather than to
+	// the deployment's policy, which is how a set silently ends up
+	// retaining less than the operator who wrote the deployment's policy
+	// believes. resolveBackupSetRetention's doc has the whole rule,
+	// including what an omitted timezone inherits and why.
+	//
 	// Like ReadOnlyConfig, this field is never read directly outside
 	// Validate. Every other consumer reads the resolved Retention field
 	// below.
+	//
+	// Writing one is a one-way door for a deployment that might roll back:
+	// Load's KnownFields(true) makes any key it does not know a parse
+	// error, so a config file carrying a set-level retention block cannot
+	// be read at all by a build from before this field existed. The same
+	// is true of every key this schema has ever gained, which is why
+	// nothing here is emitted unless it was written (omitempty), but this
+	// one is worth saying out loud because retention is the surface an
+	// operator is most likely to reach for during an incident, which is
+	// also when a rollback is most likely.
 	RetentionConfig *Retention `yaml:"retention,omitempty"`
 
 	// Retention is the fully-resolved policy this backup set is actually
@@ -424,6 +442,14 @@ type BackupSet struct {
 	// on purpose: a later edit to the global Retention must not
 	// retroactively change what an already-resolved set was retained
 	// under without a Validate pass to make it so.
+	//
+	// The rule that falls out of that, and the one thing a caller holding
+	// a *Config has to remember: any mutation of the top-level Retention
+	// has to be followed by Validate (or ResolveBackupSetRetention), or
+	// every set goes on deciding under the policy that was in force when
+	// it was last resolved. cmd/backup-manager's retention override flags
+	// are the live instance of this, and were a silent no-op until they
+	// re-resolved.
 	Retention Retention `yaml:"-"`
 
 	// ReadOnly is the fully-resolved answer to "may this backup set's
