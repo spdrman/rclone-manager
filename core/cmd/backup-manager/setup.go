@@ -110,6 +110,32 @@ func openService(ctx context.Context, configPath string, withTransport bool) (*a
 	return svc, cfg, cleanup, nil
 }
 
+// openBackupService is openService's counterpart for the handful of
+// subcommands (today, just `settings`) whose use case lives on
+// core/service.BackupService rather than internal/app.Service: anything
+// that needs a file-backed configPath to persist a change to (see
+// BackupService.configPath's own doc), which internal/app.Service, built
+// directly from an already-loaded *config.Config, has no notion of at
+// all. service.Open is the identical production constructor
+// apps/common/webhost's Open uses, so a CLI-driven settings write goes
+// through the exact same persist-then-hot-reload sequence
+// (BackupService.UpdateSettings's own doc) an HTTP PATCH would.
+//
+// The returned cleanup func closes the journal (via BackupService.Close);
+// callers should always `defer cleanup()` immediately.
+func openBackupService(ctx context.Context, configPath string) (*service.BackupService, func(), error) {
+	svc, closeFn, err := service.Open(ctx, configPath)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	cleanup := func() {
+		if err := closeFn(); err != nil {
+			fmt.Fprintf(os.Stderr, "backup-manager: closing state database: %v\n", err)
+		}
+	}
+	return svc, cleanup, nil
+}
+
 // logger builds the FR-23 structured-observability sink every Service
 // this binary constructs shares: newline-delimited JSON on stdout, so the
 // process's own supervisor (systemd, a container runtime) owns rotation

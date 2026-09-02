@@ -36,7 +36,7 @@ machine can decide into tests rather than sentences (see
 ### The engine and the CLI are real
 
 `core/` is a working backup engine with a working command line. `backup-manager` registers
-twelve commands, and the list below is checked against the dispatch table in
+fourteen commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
@@ -55,6 +55,8 @@ the way its predecessor did.
 | `reconcile` | run FR-17 reconciliation for every backup set |
 | `validate` | re-check one artifact's durable local copy |
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
+| `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
+| `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `version` | report the binary, Go and embedded rclone versions |
 
 <!-- END CLI-COMMANDS -->
@@ -136,10 +138,14 @@ bindings, and `client.ts` is hand-written on top of them.
   the canonical image carries the five provider bundles the shipped adapters name. What is
   still not exposed is a sixth: the image budget has room for these five and not another,
   and `ugos` carries its own in EPIC D's UPK, which does not exist here.
-- `serve` refuses to start without a valid config file, because `core/service.Open` loads
-  and validates one before anything else happens. An app-store install that has never been
-  configured therefore cannot get as far as a setup screen. #176 implements the engine half
-  of a first-run experience and is not merged yet.
+- This bullet used to say `serve` refuses to start without a valid config file and that an
+  app-store install could not reach a setup screen. #176 fixed that (merged as #195):
+  `core/service.Open` still refuses a config file that exists and does not validate, but no
+  config file at all is read as a fresh install, and `serve` serves the first-run setup flow
+  from `core/service.FirstRun` instead of exiting. The CLI has never had this problem in the
+  first place, since it has no server to start: see
+  [Doing everything from the CLI](#doing-everything-from-the-cli-issue-277) below for why
+  "no config file yet" is not a distinct first-run case there at all.
 - A packaged container can write its own configuration, since #169 carried #196's
   mount-role change: every adapter now bind-mounts the config DIRECTORY, writable, at
   `/etc/backup-manager/config` rather than the single `config.yaml` read-only. The three
@@ -148,6 +154,93 @@ bindings, and `client.ts` is hand-written on top of them.
   still has to do by hand is make the host directory writable by the container's uid/gid
   before the first start: a bind mount does not chown its source, and the runtime image is
   distroless with no root step, so each acceptance procedure's step 0 says so.
+
+### Doing everything from the CLI (issue #277)
+
+The requirement is plain: everything must be doable from the CLI, and the Web UI must be
+completely optional. This section is #277's own investigation, confirmed by actually
+running each of these against a real deployment rather than by reading the code, and it is
+the answer for every capability that turned out to already exist. Two gaps #277 found real
+and unreachable got their own CLI commands in the same change (`quarantine` and `settings`,
+both documented in their own sections above); one gap turned out to need real new product
+work and is out of scope here (see the bottom of this section).
+
+**Creating or editing a backup set is a config-file edit, on purpose, and this is that
+answer written down.** `POST /backup-sets` is what the setup wizard calls; the CLI's answer
+is that a wizard is unnecessary, not that one is missing. Write `config.yaml` by hand
+(`core/internal/config`'s own doc comments are the fullest explanation of the schema in this
+tree, and `core/internal/config/testdata/full.yaml` is a worked, if terse, example), then:
+
+```bash
+backup-manager check --config ./config.yaml      # validates the file and the state database
+backup-manager sources --config ./config.yaml    # renders what was actually understood
+backup-manager fetch --config ./config.yaml --source S --backup-set B --dry-run
+                                                  # proves it really reaches the host (see below)
+```
+
+That is a create-and-verify loop with no browser in it. There is no `backup-manager sets
+add` command and none is planned: `validate` and `check` exist specifically so a hand-edited
+file does not have to be trusted blind.
+
+**First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
+exists because the Web UI has no config file to read yet and needs an in-browser wizard to
+produce its first one; `core/service.FirstRun.CreateInitialConfig`'s own doc says plainly
+that it writes exactly the config a hand-edited file would, with retention and alerting left
+at their zero values "exactly as a configuration nobody has edited yet should mean." The CLI
+has never needed a first-run ceremony at all: `check`, `sources`, `fetch`, every other
+command just reads `config.yaml`, whether that file is the first one ever written for this
+deployment or the hundredth edit of an existing one. Write the file, run `check`; there is no
+"unconfigured" state for the CLI to be in.
+
+**Enabling or disabling a backup set is a config-file field.** `POST
+/backup-sets/{source}/{set}/enabled` flips `config.BackupSet.Disabled`. Set `disabled: true`
+(or remove the key, or set it `false`) in `config.yaml` and confirm it with `sources`, which
+prints `status=enabled` or `status=disabled` for exactly this field.
+
+**Testing a connection is `fetch --dry-run`, and it is a good one.** `POST
+/backup-sets/test-connection` authenticates, verifies the host key and lists the remote.
+`fetch --config ./config.yaml --source S --backup-set B --dry-run` does the same real
+authenticate-and-list, against the exact transport code path a real cycle would use, and
+prints every object it finds with its size, which is strictly more than the API route
+returns. It only works for a backup set already in `config.yaml`; to check a *candidate*
+before committing to it, add it to the file (nothing is destructive about an entry that is
+merely present) and run `check` then `fetch --dry-run` against it, removing or fixing the
+entry if it does not check out.
+
+**Provisioning an SSH key and capturing a host key are already fully documented, in
+`docs/ssh-setup.md`, and this is the missing cross-reference.** `POST /ssh-keys` exists so a
+browser, which cannot write a file to the NAS's own disk, can hand backup-manager a pasted
+private key over HTTP; an operator with a shell already has filesystem access and does not
+need that indirection; `docs/ssh-setup.md`'s ["Generate a dedicated SSH key
+pair"](docs/ssh-setup.md#1-generate-a-dedicated-ssh-key-pair) section is the CLI-native
+answer: `ssh-keygen`, then point `config.yaml`'s `key.file` straight at the result. Likewise
+`POST /ssh/host-key-probe` exists so that same browser can show a fingerprint before an
+operator trusts it; `docs/ssh-setup.md`'s ["Capture the server's host key, verified, not
+just trusted"](docs/ssh-setup.md#4-capture-the-servers-host-key-verified-not-just-trusted)
+section is `ssh-keyscan` plus `ssh-keygen -lf` to verify the fingerprint out-of-band, which
+is the identical outcome (a real, readable `known_hosts` file) through tools every NAS ships
+with already.
+
+**Quarantine actions and settings were the two gaps #277 found real, and both now have a
+command.** See [Quarantine](#quarantine) above for `quarantine revalidate`, `quarantine
+retry` and `quarantine reinstate`. `backup-manager settings` reports the live, resolved
+FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
+table above has both), and `backup-manager settings patch [flags]` changes one in place,
+hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
+replacement stays a config-file edit; every other retention and capacity field is reachable
+through `settings patch` without a restart.
+
+**What is not covered here: authentication and account management.** `/auth/enroll`,
+`/auth/login` and `/auth/password` are genuinely out of scope for a CLI wrapper, not merely
+undocumented. They are `apps/common/auth/local`'s session/cookie/CSRF/rate-limit subsystem,
+constructed fresh inside the running web server process (the single-use enrollment token
+itself lives in that process's memory, not on disk), so there is no config file or
+already-open state database a separate `backup-manager` invocation could act on the way
+every command above does. An operator who never intends to use the Web UI never needs any of
+this, since the CLI talks to `config.yaml` and the state database directly and never makes
+an HTTP request at all. An operator who does want the Web UI available later still has no
+way to provision that first administrator account without opening a browser at least once
+today; that is real, and it is #322 rather than something built here.
 
 ### What has actually been exercised on real hardware
 
@@ -579,8 +672,24 @@ moved; only the `artifacts.state` column changes, to `QUARANTINED` or `QUARANTIN
 The file stays exactly where it was, its `.partial` path if quarantined before commit, or
 its final committed path if quarantined afterward by reconciliation. See
 [The lifecycle](#the-lifecycle) above for the states themselves. `core/internal/quarantine`
-turns those rows into a countable, actionable picture, and `backup-manager validate` is how
-you re-check one artifact's durable local copy by hand.
+turns those rows into a countable, actionable picture, and `backup-manager quarantine` is
+how an operator acts on one by hand, in one of three ways (issue #277):
+
+- `quarantine revalidate <source/backup-set/artifact>` re-runs the durable-local-copy
+  checks and reports the verdict, moving nothing either way. **This is not `validate` under
+  a new name.** `backup-manager validate` only ever re-checks a *healthy* restore point
+  (`COMMITTED`, `REMOTE_DELETE_PENDING` or `COMPLETE`) and refuses a `QUARANTINED` or
+  `QUARANTINED_LOST` artifact outright; `quarantine revalidate` is the mirror image, and
+  only ever accepts one of those two.
+- `quarantine retry <source/backup-set/artifact>` puts a `QUARANTINED` artifact back into
+  `DISCOVERED` so the ordinary pipeline attempts it again from a fresh fetch.
+  `QUARANTINED_LOST` is refused: the remote source is already gone, so there is nothing
+  left to re-fetch from.
+- `quarantine reinstate <source/backup-set/artifact> [--note TEXT]` is #220's reinstatement
+  lever: it re-checks the durable local copy and, if the evidence is enough, trusts the
+  artifact again in place (`QUARANTINED` back to `COMMITTED`, `QUARANTINED_LOST` back to
+  `COMPLETE`) without re-fetching anything. A reinstated artifact never authorises a remote
+  delete again, ever.
 
 ## Retention
 
@@ -779,8 +888,12 @@ needs the data, not as something to retry.
 
 If it's `QUARANTINED` (not `_LOST`): the remote copy may still exist, so this can self-heal.
 `backup-manager reconcile` and the next `run` or `daemon` cycle against that backup set are
-what try; `backup-manager validate <source/backup-set/artifact>` re-checks one artifact's
-durable local copy without waiting for a cycle.
+what try automatically. To act on it yourself right now, without waiting for a cycle, see
+[Quarantine](#quarantine) above: `quarantine revalidate <source/backup-set/artifact>`
+re-checks the durable local copy and reports the verdict without moving anything,
+`quarantine retry` re-enters the pipeline from a fresh fetch, and `quarantine reinstate`
+trusts the local copy again in place. (`backup-manager validate` is a different command: it
+only ever re-checks a *healthy* restore point and refuses a `QUARANTINED` artifact outright.)
 
 If a row has been sitting at `REMOTE_DELETE_PENDING` for longer than you'd expect, look at
 its `remote_delete_error` column before assuming something is stuck. Given the deployment
