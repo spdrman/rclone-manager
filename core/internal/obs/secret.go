@@ -69,6 +69,34 @@ const redacted = "[REDACTED]"
 // asserts the raw bytes never appear in any rendering, rather than trusting
 // this comment.
 //
+// # The one gap: a Secret in an UNEXPORTED field of another struct
+//
+// Everything above is true of a Secret fmt is handed directly, or one
+// reached through an EXPORTED field of a struct being formatted. It is NOT
+// true of a Secret in an unexported field, and that exception is worth
+// stating plainly because the list above reads like it covers everything.
+//
+// fmt walks a struct with reflection, and calls Formatter/Stringer on a
+// field only when it can take an interface from it. reflect's
+// CanInterface() is false for an unexported field, so fmt never asks, and
+// prints the underlying data instead. Measured:
+//
+//	type holder struct{ s Secret }   // unexported
+//	fmt.Sprintf("%v", holder{NewSecret("hunter2")})   =>  {{hunter2}}
+//	fmt.Sprintf("%+v", holder{NewSecret("hunter2")})  =>  {s:{v:hunter2}}
+//
+//	type Holder struct{ S Secret }   // exported
+//	fmt.Sprintf("%v", Holder{NewSecret("hunter2")})   =>  {[REDACTED]}
+//
+// There is no hook Secret can implement to change that; the decision is
+// made by fmt before Secret is consulted at all. So the rule for a type
+// holding a Secret in an unexported field is that the type must reassert
+// the redaction itself, implementing the same interfaces this one does.
+// internal/transport/rclone's resolvedCredentials is the worked example,
+// and TestSecretInAnUnexportedFieldIsNotProtected below pins this boundary
+// so it stays a documented limitation rather than folklore rediscovered by
+// whoever next reads that list and believes it.
+//
 // # What this does not claim to defend against
 //
 // Reveal itself, called by a caller that then does log it anyway. Nothing

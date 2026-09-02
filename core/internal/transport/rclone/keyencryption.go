@@ -398,6 +398,21 @@ type keyEncryptionSecretCacheEntry struct {
 	err    error
 }
 
+// Format keeps this entry from rendering its cached secret in the clear.
+//
+// It is not defending against a leak that exists today (nothing formats a
+// cache entry), it is closing one that costs four lines to close. obs.Secret
+// protects a value fmt is handed directly or reaches through an exported
+// field, and NOT one in an unexported field of another struct, which is
+// exactly what `secret` is here: fmt cannot take an interface from an
+// unexported field, so it never asks Secret anything and prints the wrapped
+// string. See obs.Secret's own doc, which now states that boundary, and
+// credentials.go's resolvedCredentials, where a canary test found this
+// happening for real.
+func (e keyEncryptionSecretCacheEntry) Format(f fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(f, "keyEncryptionSecretCacheEntry{ok:%t, err:%v, secret:%v}", e.ok, e.err, e.secret)
+}
+
 // keyEncryptionSourceIdentity returns a string that uniquely identifies
 // which of src's three key_encryption sources resolveKeyEncryptionSecret
 // would resolve. Two Sources with the same file path, the same env var

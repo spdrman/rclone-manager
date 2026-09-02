@@ -368,9 +368,9 @@ func TestResolveKeyFromCommand_RejectsOutputOverSizeLimit(t *testing.T) {
 }
 
 func TestResolveKeyFromCommand_Timeout(t *testing.T) {
-	old := keyCommandTimeout
-	keyCommandTimeout = 200 * time.Millisecond
-	defer func() { keyCommandTimeout = old }()
+	old := resolverCommandTimeout
+	resolverCommandTimeout = 200 * time.Millisecond
+	defer func() { resolverCommandTimeout = old }()
 
 	script := mustScript(t, "sleep 5\n")
 	start := time.Now()

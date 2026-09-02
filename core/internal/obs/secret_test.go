@@ -229,3 +229,45 @@ func TestSecretThroughLoggerEndToEnd(t *testing.T) {
 
 	assertNeverLeaked(t, "obs.Logger end-to-end", buf.String())
 }
+
+// TestSecretInAnUnexportedFieldIsNotProtected pins the one gap in the list
+// Secret's doc gives, so that list is read with its exception attached.
+//
+// This test asserts a LIMITATION rather than a guarantee, which is unusual
+// and deliberate. The alternative is a doc paragraph, and a doc paragraph
+// does not notice when a future Go release changes fmt's behaviour. If this
+// test ever fails because the raw value stopped appearing, that is good
+// news and the doc above should be corrected in the same change.
+//
+// Found the hard way: internal/transport/rclone's medium credentials wrap
+// every field in a Secret and a canary test still found the raw value in
+// `%v` of the containing struct, because every one of those fields is
+// unexported.
+func TestSecretInAnUnexportedFieldIsNotProtected(t *testing.T) {
+	const canary = "unexported-field-canary-4471"
+
+	type unexportedHolder struct{ s Secret }
+	type ExportedHolder struct{ S Secret }
+
+	// The gap. Both of these carry the raw value today.
+	for _, verb := range []string{"%v", "%+v"} {
+		got := fmt.Sprintf(verb, unexportedHolder{s: NewSecret(canary)})
+		if !strings.Contains(got, canary) {
+			t.Errorf("fmt %s of a struct with an UNEXPORTED Secret field rendered %q, which no longer carries the raw value.\n"+
+				"That is an improvement, not a failure: correct Secret's doc and delete this half of the test",
+				verb, got)
+		}
+	}
+
+	// And the boundary: through an EXPORTED field the protection holds, so
+	// this is about field visibility rather than about Secret.
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		got := fmt.Sprintf(verb, ExportedHolder{S: NewSecret(canary)})
+		if strings.Contains(got, canary) {
+			t.Errorf("fmt %s of a struct with an EXPORTED Secret field leaked the raw value: %q", verb, got)
+		}
+		if !strings.Contains(got, redacted) {
+			t.Errorf("fmt %s of a struct with an EXPORTED Secret field rendered %q, which does not contain the placeholder", verb, got)
+		}
+	}
+}

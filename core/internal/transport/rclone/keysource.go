@@ -66,20 +66,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
-// keyCommandTimeout bounds how long a `command` key resolver is allowed to
-// run before it is killed. A secrets-manager CLI call is expected to be a
-// single round trip (read one secret, print it, exit), not a long-running
-// operation, so this is generous for that shape of work without leaving a
-// misbehaving resolver free to hang a connection attempt indefinitely.
+// resolverCommandTimeout bounds how long a `command` resolver is allowed to
+// run before it is killed, whether it is resolving an SSH key (#74) or a
+// storage medium's S3 credentials (#235, FR-33). A secrets-manager CLI call
+// is expected to be a single round trip (read one secret, print it, exit),
+// not a long-running operation, so this is generous for that shape of work
+// without leaving a misbehaving resolver free to hang a connection attempt
+// indefinitely.
+//
+// One constant for both because it is one kind of work with one shape, and
+// two knobs that always want the same value are two things to keep in sync.
 //
 // This is a fixed constant in production, not a config field, on purpose:
 // #74's proposed shape has no timeout knob for `command`, and adding one
-// here would be scope this issue does not ask for. A resolver command's own
+// here would be scope neither issue asks for. A resolver command's own
 // context.Background()-rooted deadline (rather than one derived from a
-// caller's ctx) is the same trade-off; see resolveKeyFromCommand's doc for
-// why. It is a var, not a const, only so keysource_test.go can shorten it
-// for TestResolveKeyFromCommand_Timeout without an actual 15-second test.
-var keyCommandTimeout = 15 * time.Second
+// caller's ctx) is the same trade-off; see runResolverCommand's doc for
+// why. It is a var, not a const, only so tests can shorten it without an
+// actual 15-second test.
+var resolverCommandTimeout = 15 * time.Second
 
 // maxResolvedKeySize bounds how many bytes of a command's stdout, or an
 // environment variable's value, this resolver will accept. The largest
@@ -143,11 +148,60 @@ func resolveKeyFromEnv(name, passphrase string) (obs.Secret, error) {
 // resolver's own fixed timeout already bounds how long it can run,
 // independent of whatever the caller's context does.
 func resolveKeyFromCommand(argv []string, passphrase string) (obs.Secret, error) {
+	stdout, done, err := runResolverCommand(argv, "key command", "key material", maxResolvedKeySize)
+	if err != nil {
+		return obs.Secret{}, err
+	}
+	defer done()
+
+	secret, verr := validateAndWrapKey(stdout, passphrase)
+	if verr != nil {
+		return obs.Secret{}, fmt.Errorf("key command %q: %w", argv[0], verr)
+	}
+	return secret, nil
+}
+
+// runResolverCommand runs argv under the discipline this file's package doc
+// describes and returns whatever it printed on stdout, for a caller to
+// validate by shape.
+//
+// It exists because #235 needed the identical discipline for a storage
+// medium's S3 credentials, and the honest way to reuse a security control
+// is to have one copy of it rather than a second one that starts out
+// identical. Everything the SSH key resolver relied on is here and applies
+// to both callers unchanged: argv is exec'd directly so no shell exists for
+// a metacharacter to mean anything to, the environment is fixed and minimal
+// rather than this process's own, the child gets its own process group so
+// the timeout can kill whatever it spawned, stdout and stderr are both
+// bounded, and stdout is zeroed on every path out.
+//
+// what names the resolver in error messages ("key command", "credentials
+// command") and material names what its output was meant to be ("key
+// material", "credential material"), so a failure reads as a sentence about
+// the thing that actually failed.
+//
+// The returned done() zeroes the captured stdout. A caller must defer it
+// immediately, and must not retain the returned slice past that call: the
+// bytes it points at are the ones done() overwrites.
+//
+// stdout is NEVER included in a returned error, on any path. Stderr is,
+// because stderr is diagnostic text by convention and is the only thing an
+// operator debugging a broken resolver has to go on. That distinction is
+// the same one internal/lifecycle/verify.go's external validator draws
+// between its exit code and its captured output.
+//
+// The deadline is rooted in context.Background() rather than a caller's
+// context, because neither caller has one to give: sftpConfig and s3Config
+// are both called from a place that does not thread a context down this far
+// (see adapter.go's fsFor, which owns the context this call chain runs under
+// but does not pass it), and this resolver's own fixed timeout already
+// bounds how long it can run regardless of what the caller's context does.
+func runResolverCommand(argv []string, what, material string, limit int) (stdout []byte, done func(), err error) {
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
-		return obs.Secret{}, errors.New("key command: no executable configured")
+		return nil, func() {}, fmt.Errorf("%s: no executable configured", what)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), keyCommandTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), resolverCommandTimeout)
 	defer cancel()
 
 	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -175,32 +229,30 @@ func resolveKeyFromCommand(argv []string, passphrase string) (obs.Secret, error)
 	}
 	c.WaitDelay = 5 * time.Second
 
-	stdout := &boundedBuffer{limit: maxResolvedKeySize}
-	stderr := &boundedBuffer{limit: maxCapturedStderr}
-	c.Stdout = stdout
-	c.Stderr = stderr
-	defer stdout.zero() // whatever happens below, never leave resolved bytes sitting in this buffer
+	out := &boundedBuffer{limit: limit}
+	errOut := &boundedBuffer{limit: maxCapturedStderr}
+	c.Stdout = out
+	c.Stderr = errOut
 
 	runErr := c.Run()
 
 	switch {
 	case ctx.Err() != nil:
-		return obs.Secret{}, fmt.Errorf("key command %q: killed after exceeding its %s timeout", argv[0], keyCommandTimeout)
+		out.zero()
+		return nil, func() {}, fmt.Errorf("%s %q: killed after exceeding its %s timeout", what, argv[0], resolverCommandTimeout)
 	case runErr != nil:
 		// Infrastructure failure (bad executable, non-zero exit, ...): the
 		// command's own diagnosis of what went wrong, not its stdout,
 		// which is never surfaced here regardless of whether it happened
 		// to contain anything sensitive.
-		return obs.Secret{}, fmt.Errorf("key command %q: %v (stderr: %s)", argv[0], runErr, stderr.String())
-	case stdout.truncated:
-		return obs.Secret{}, fmt.Errorf("key command %q: output exceeded %d bytes, refusing to treat truncated output as key material", argv[0], maxResolvedKeySize)
+		out.zero()
+		return nil, func() {}, fmt.Errorf("%s %q: %v (stderr: %s)", what, argv[0], runErr, errOut.String())
+	case out.truncated:
+		out.zero()
+		return nil, func() {}, fmt.Errorf("%s %q: output exceeded %d bytes, refusing to treat truncated output as %s", what, argv[0], limit, material)
 	}
 
-	secret, err := validateAndWrapKey(stdout.buf.Bytes(), passphrase)
-	if err != nil {
-		return obs.Secret{}, fmt.Errorf("key command %q: %w", argv[0], err)
-	}
-	return secret, nil
+	return out.buf.Bytes(), out.zero, nil
 }
 
 // validateAndWrapKey is the one place raw resolver output is checked and, if
