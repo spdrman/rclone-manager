@@ -4,8 +4,12 @@ import { useApi } from "@shared/api/ApiContext";
 import { useResource } from "@shared/state/resource";
 import { graph, useCausl } from "@shared/state/graph";
 import { versionNode } from "@shared/state/appNodes";
-import { currentSetActivityNode, currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
-import { captureSetEditSnapshot, isSetEditStale } from "@shared/state/backupSetDetailNodes";
+import {
+  captureSetEditSnapshot,
+  currentSetActivityNode,
+  currentSetDetailNode,
+  isSetEditStale
+} from "@shared/state/backupSetDetailNodes";
 import type { SetEditSnapshot } from "@shared/state/backupSetDetailNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
@@ -127,7 +131,25 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   useEffect(() => {
     if (!editing || !setId) return;
     const timer = setInterval(() => {
-      void api.takeEditHold(source, setName).catch(() => {});
+      void api
+        .takeEditHold(source, setName)
+        // A renewal usually stops nothing, because the set is already
+        // held. It stops something in exactly one case, and it is a real
+        // one: the lease lapsed while nobody was renewing (a sleeping
+        // laptop, a network that came back), a cycle started against this
+        // set in the meantime, and this renewal cancelled it. Reporting
+        // that through the same banner an initial hold uses is the
+        // difference between an operator knowing a backup was interrupted
+        // and finding out from the artifact list later.
+        .then((hold) => {
+          if (hold.stopped) setStopped(hold.stopped);
+        })
+        // Swallowed on purpose. A failed renewal is not an operator's
+        // problem to act on: the lease simply lapses and the set resumes
+        // backing up, which is the safe direction to fail in (a set left
+        // permanently paused because a heartbeat could not get through is
+        // a backup silently not happening).
+        .catch(() => {});
     }, HOLD_HEARTBEAT_MS);
     return () => {
       clearInterval(timer);
