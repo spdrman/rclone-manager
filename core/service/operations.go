@@ -407,19 +407,43 @@ var runCycle = func(inner *app.Service, ctx context.Context) app.CycleReport {
 }
 
 // cycleSummary is the opaque JSON blob stored in a completed run_cycle
-// operation's Result. It is deliberately narrow: a count and a duration,
+// operation's Result. It is deliberately narrow: counts and a duration,
 // nothing that reaches back into internal/discovery, internal/reconcile or
 // internal/retention's own report types, exactly as this package's own
 // doc requires (nothing from core/internal leaks past this boundary).
+//
+// ArtifactsWalked and ArtifactsThrough are issue #361's addition, and they
+// are here because "completed" on this row means something narrower than
+// anyone reading it is likely to assume. An operation completes when the
+// cycle ran, which is a deliberate decision this package already made and
+// tests: an artifact's own quarantine is a business outcome, not an
+// operation failure. That decision is defensible and this issue is not the
+// place to overturn it. What it does mean is that a cycle which backed
+// nothing up finishes here looking exactly like one that backed
+// everything up, which is the same lie `backup-manager run` was telling
+// its cron job, told to whoever is reading the Web UI instead. These two
+// numbers are what tell the two apart, in the same terms the CLI now
+// prints and exits on: how many artifacts the cycle had a reason to
+// touch, and how many of those ended it with their bytes on local disk.
 type cycleSummary struct {
 	BackupSetsProcessed int    `json:"backup_sets_processed"`
+	ArtifactsWalked     int    `json:"artifacts_walked"`
+	ArtifactsThrough    int    `json:"artifacts_through"`
 	DurationMillis      int64  `json:"duration_ms"`
 	StartedAt           string `json:"started_at"`
 }
 
 func summarizeCycle(report app.CycleReport) string {
+	walked, through := 0, 0
+	for _, set := range report.Sets {
+		progress := set.Verdict().Progress
+		walked += progress.Walked
+		through += progress.Durable
+	}
 	b, err := json.Marshal(cycleSummary{
 		BackupSetsProcessed: len(report.Sets),
+		ArtifactsWalked:     walked,
+		ArtifactsThrough:    through,
 		DurationMillis:      report.Duration.Milliseconds(),
 		StartedAt:           report.StartedAt.Format(time.RFC3339Nano),
 	})

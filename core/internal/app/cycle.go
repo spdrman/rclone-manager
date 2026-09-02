@@ -41,6 +41,11 @@ type BackupSetCycleResult struct {
 	Retention       RetentionSetReport
 	Err             error
 	FailedArtifacts int
+
+	// Progress is issue #361's count of what this cycle actually
+	// achieved for this backup set (see CycleProgress): how much work
+	// was in front of it, and how much of that moved.
+	Progress CycleProgress
 }
 
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per
@@ -135,6 +140,13 @@ sourcesLoop:
 		}
 	}
 
+	// Issue #361's verdict, in the event stream, before anything that
+	// reads the cycle's state. `run` turns this into an exit status too
+	// (cmd/backup-manager/setup.go), but `daemon` has no exit status to
+	// turn it into, and a cycle that backed nothing up has to be visible
+	// to whatever is shipping these logs either way.
+	s.reportBarrenSets(ctx, report)
+
 	// What this cycle learned about which backup sets can be connected to
 	// at all, written down before the alert pass so the health report the
 	// alert pass then builds already carries it (issue #245). Like
@@ -209,7 +221,9 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		result.Err = err
 		return result
 	}
-	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	walk := s.processArtifacts(ctx, source, bs, records)
+	result.FailedArtifacts = walk.Failed
+	result.Progress = foldDiscoveryErrors(walk, discRes)
 	if ctx.Err() != nil {
 		result.Err = ctx.Err()
 	}
