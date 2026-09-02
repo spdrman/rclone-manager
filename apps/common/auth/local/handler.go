@@ -60,7 +60,31 @@ type authErrorResponse struct {
 	CorrelationID string `json:"correlationId"`
 }
 
+// errorCodeStatus binds each of this package's own error codes to the one
+// HTTP status it is always served at. writeAuthError below checks every
+// call against it, so a call site that passes a status other than the one
+// this package has already committed to for that code fails immediately
+// (in whichever test exercises that call site) instead of shipping
+// quietly - which is what let BOOTSTRAP_TOKEN_INVALID drift to 403 while
+// api/v1/openapi.json still declared it a 401 (#289). contract_test.go
+// checks this same map against the contract itself, so the two
+// comparisons together cover both edges: handler-vs-registry here,
+// registry-vs-contract there.
+var errorCodeStatus = map[string]int{
+	"UNAUTHENTICATED":         http.StatusUnauthorized,
+	"BOOTSTRAP_TOKEN_INVALID": http.StatusUnauthorized,
+	"ENROLLMENT_CLOSED":       http.StatusForbidden,
+	"CSRF_TOKEN_MISSING":      http.StatusForbidden,
+	"CSRF_TOKEN_MISMATCH":     http.StatusForbidden,
+	"INVALID_REQUEST":         http.StatusBadRequest,
+	"RATE_LIMITED":            http.StatusTooManyRequests,
+	"INTERNAL_ERROR":          http.StatusInternalServerError,
+}
+
 func writeAuthError(w http.ResponseWriter, status int, code, message string) {
+	if want, ok := errorCodeStatus[code]; ok && want != status {
+		panic(fmt.Sprintf("local: writeAuthError: %q is registered at status %d, called with %d", code, want, status))
+	}
 	cid := correlationID()
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	// ui/shared/src/api/client.ts reads this off every non-2xx response's
@@ -229,7 +253,14 @@ func (s *Service) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !s.bootstrap.consume(r.Header.Get(BootstrapTokenHeader)) {
-		writeAuthError(w, http.StatusForbidden, "BOOTSTRAP_TOKEN_INVALID", "missing, expired or already-used bootstrap token")
+		// 401, not 403: this is a credential the caller presented that
+		// wasn't accepted (the bootstrap token), same class of refusal as
+		// UNAUTHENTICATED, which is exactly where api/v1/openapi.json's
+		// own x-error-classes files it (issue #289). ENROLLMENT_CLOSED
+		// above stays a 403 - that one really is "you are who you say,
+		// but this route isn't open to you," a genuine authorization
+		// refusal rather than a rejected credential.
+		writeAuthError(w, http.StatusUnauthorized, "BOOTSTRAP_TOKEN_INVALID", "missing, expired or already-used bootstrap token")
 		return
 	}
 
