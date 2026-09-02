@@ -177,6 +177,49 @@ func TestPatchSettings_PersistsARetentionChainAndReturnsTheRunningPolicy(t *test
 	}
 }
 
+// TestPatchSettings_ARoundTrippedChainKeepsATiersMedium is the hole
+// issue #333 found in this route while modelling the per-set one on it.
+//
+// A chain write REPLACES the whole chain, so a field the wire cannot
+// carry is a field the save DELETES from the operator's configuration
+// file. RetentionTier had no `medium` on the wire at all, so a settings
+// form that read the running policy, changed daily's keep and wrote it
+// back would quietly have moved monthly's artifacts off their storage
+// medium and onto local disk: a configuration change nobody asked for,
+// made by the act of changing something else.
+//
+// The assertion is on what crossed the seam, in BOTH directions, because
+// either half alone would pass against a route that dropped it: the
+// response has to carry the medium so a client can send it back, and the
+// request has to carry it so the backend keeps it.
+func TestPatchSettings_ARoundTrippedChainKeepsATiersMedium(t *testing.T) {
+	tr := newSettingsTestRouter(t)
+
+	rec := tr.patch(t, `{"retention":{"tiers":[
+		{"name":"daily","granularity":"day","keep":7},
+		{"name":"monthly","granularity":"month","keep":12,"medium":"cold-offsite"}
+	]}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	req := tr.backend.lastUpdate
+	if req.Retention == nil || len(req.Retention.Tiers) != 2 {
+		t.Fatalf("the submitted chain did not reach the seam: %+v", req.Retention)
+	}
+	if req.Retention.Tiers[1].Medium != "cold-offsite" {
+		t.Fatalf("the medium was dropped on the way in: %+v", req.Retention.Tiers[1])
+	}
+
+	got := decodeSettings(t, rec)
+	if len(got.Retention.Tiers) != 2 {
+		t.Fatalf("tiers = %+v, want 2", got.Retention.Tiers)
+	}
+	if got.Retention.Tiers[1].Medium != "cold-offsite" {
+		t.Fatalf("the medium was dropped on the way out, so a client could not send it back: %+v", got.Retention.Tiers[1])
+	}
+}
+
 // TestPatchSettings_AnUnnamedFieldIsLeftAlone is the whole point of a
 // generic partial-update endpoint: a client that only wants to flip one
 // toggle must not have to send back a policy it never read, and the
