@@ -855,6 +855,10 @@
               "stable"
             ]
           },
+          "stable_for_seconds": {
+            "type": "integer",
+            "description": "The window the \"stable\" completion strategy waits for, and 0 for every other strategy. Served so an edit surface offering the strategy can offer the window with it: selecting \"stable\" without one is a configuration this service refuses."
+          },
           "validator_id": {
             "type": "string"
           },
@@ -878,7 +882,8 @@
           "completion_strategy",
           "validator_id",
           "disabled",
-          "read_only"
+          "read_only",
+          "stable_for_seconds"
         ]
       },
       "CreateBackupSetResponse": {

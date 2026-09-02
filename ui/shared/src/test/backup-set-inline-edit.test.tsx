@@ -5,7 +5,7 @@ import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import { BackupManagerError } from "@shared/api/contracts";
-import { createMockApi } from "@shared/api/mock";
+import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
@@ -58,6 +58,7 @@ async function saveLanded(label: string) {
 describe("issue #350: Edit is an inline mode, not a dialog", () => {
   afterEach(() => {
     resetGraphForTests();
+    resetMockFixtures();
     vi.restoreAllMocks();
   });
 
@@ -265,6 +266,58 @@ describe("issue #350: Edit is an inline mode, not a dialog", () => {
     expect((screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
+  // The completion method's window is the one box that only exists for
+  // one value of another box. Without it, choosing "Stable file size"
+  // would produce a Save that can only fail: core refuses a set whose
+  // strategy is "stable" and whose window is zero, exactly as it refuses
+  // one at creation. So this checks both halves, that it appears with the
+  // method and that it is never part of a patch while it is hidden.
+  it("reveals the stable-size window when that method is chosen, and never sends it otherwise", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    // The fixture's first set is not stable-size, so the window is absent.
+    expect(target.completionMethod).not.toBe("stable-size");
+    expect(screen.queryByLabelText("Stable for (seconds)")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    const window = (await screen.findByLabelText("Stable for (seconds)")) as HTMLInputElement;
+    expect(window.value).toBe(String(target.stableForSeconds));
+
+    fireEvent.change(window, { target: { value: "300" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+
+    expect(update.mock.calls[0][2]).toEqual({ completionMethod: "stable-size", stableForSeconds: 300 });
+  });
+
+  it("does not send the stable-size window as part of a patch that hides it", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet");
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    // Turn the conditional box on, dirty it, then turn it back off. Its
+    // draft value is still non-baseline, so a dirty check that walked the
+    // whole field table rather than the visible one would ship it.
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+    fireEvent.change(await screen.findByLabelText("Stable for (seconds)"), { target: { value: "999" } });
+    fireEvent.change(screen.getByLabelText("Completion method"), {
+      target: { value: target.completionMethod }
+    });
+    expect(screen.queryByLabelText("Stable for (seconds)")).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "elsewhere.internal" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+
+    expect(update.mock.calls[0][2]).toEqual({ host: "elsewhere.internal" });
+  });
+
   it("has no edit dialog left to open", async () => {
     const api = createMockApi();
     const target = await firstSet();
@@ -277,6 +330,7 @@ describe("issue #350: Edit is an inline mode, not a dialog", () => {
 describe("issue #350: entering edit mode stops the cycle, and says so first", () => {
   afterEach(() => {
     resetGraphForTests();
+    resetMockFixtures();
     vi.restoreAllMocks();
   });
 

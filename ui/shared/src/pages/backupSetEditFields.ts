@@ -35,7 +35,8 @@ export type EditFieldKey =
   | "remotePath"
   | "localPath"
   | "include"
-  | "completion";
+  | "completion"
+  | "stableFor";
 
 export interface ParsedField {
   /** The patch this field contributes, or undefined when `error` is set. */
@@ -56,8 +57,21 @@ export interface EditField {
    *  input with that HTML input type. */
   control: "text" | "number" | "select";
   options?: { value: string; label: string }[];
+  /** When present, this field is only rendered (and only dirty-checked,
+   *  and only ever saved) while it returns true for the CURRENT draft.
+   *  The draft rather than the persisted set, so choosing a completion
+   *  method reveals its window immediately instead of after a save. */
+  shownWhen?(draft: Record<EditFieldKey, string>): boolean;
   read(set: BackupSet): string;
   parse(raw: string): ParsedField;
+}
+
+/** The fields on screen for a given draft: everything unconditional, plus
+ *  whichever conditional ones this draft has turned on. Dirty-checking,
+ *  SAVE ALL and the per-box Saves all walk THIS rather than EDIT_FIELDS,
+ *  so a hidden field can never be part of a patch. */
+export function visibleEditFields(draft: Record<EditFieldKey, string>): EditField[] {
+  return EDIT_FIELDS.filter((f) => !f.shownWhen || f.shownWhen(draft));
 }
 
 const COMPLETION_OPTIONS: { value: CompletionMethod; label: string }[] = [
@@ -146,6 +160,29 @@ export const EDIT_FIELDS: EditField[] = [
     options: COMPLETION_OPTIONS,
     read: (s) => s.completionMethod,
     parse: (raw) => ({ patch: { completionMethod: raw as CompletionMethod } })
+  },
+  {
+    key: "stableFor",
+    label: "Stable for (seconds)",
+    help: FIELD_HELP.editSetStableFor,
+    control: "number",
+    // Shown only while the completion method in the DRAFT is
+    // stable-size. Not because it is noise otherwise, but because the
+    // alternative was a Save that could only fail: core refuses a backup
+    // set whose strategy is "stable" and whose window is zero, exactly as
+    // it refuses one at creation, so a completion-method box offered
+    // without this one is a control whose "Stable file size" option is
+    // unusable on every set that is not already on it.
+    shownWhen: (draft) => draft.completion === "stable-size",
+    read: (s) => String(s.stableForSeconds),
+    parse: (raw) => {
+      const trimmed = raw.trim();
+      const value = Number(trimmed);
+      if (trimmed === "" || !Number.isInteger(value) || value <= 0) {
+        return { error: "Stable for must be a whole number of seconds greater than zero." };
+      }
+      return { patch: { stableForSeconds: value } };
+    }
   }
 ];
 

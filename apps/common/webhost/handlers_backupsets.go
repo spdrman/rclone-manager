@@ -97,7 +97,14 @@ type backupSetResponse struct {
 	RemotePath         string   `json:"remote_path"`
 	LocalPath          string   `json:"local_path"`
 	Include            []string `json:"include"`
-	CompletionStrategy string   `json:"completion_strategy"`
+	CompletionStrategy string `json:"completion_strategy"`
+	// StableForSeconds is the window the "stable" completion strategy
+	// waits for, and 0 for every other strategy. Served (issue #350)
+	// because an edit surface offering the strategy has to be able to
+	// offer the window with it: without this a client could select
+	// "stable" and had nothing to send alongside it, which core refuses,
+	// so the only possible outcome was a save that failed.
+	StableForSeconds int `json:"stable_for_seconds"`
 	// ValidatorID is the registered validator this backup set selected,
 	// or "" for none. The id only: what it resolves to is a server-side
 	// path, and this package never puts one on the wire (see
@@ -125,6 +132,7 @@ func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 		LocalPath:          bs.LocalPath,
 		Include:            bs.Include,
 		CompletionStrategy: bs.CompletionStrategy,
+		StableForSeconds:   int(bs.StableFor / time.Second),
 		ValidatorID:        string(bs.ValidatorID),
 		Disabled:           bs.Disabled,
 		ReadOnly:           bs.ReadOnly,

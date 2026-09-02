@@ -102,6 +102,15 @@ type BackupSet struct {
 	Include    []string
 
 	CompletionStrategy string // "rename", "marker" or "stable"
+	// StableFor is the window the "stable" strategy waits for, and is
+	// zero for every other strategy (config.Completion.StableFor; a
+	// non-stable set never carries one, see newBackupSetFor). It is
+	// reported because an edit surface that offers the strategy has to be
+	// able to offer the window with it: selecting "stable" on a set that
+	// has no window is a configuration validateCreateRequest refuses, so
+	// a UI that could not read or set the window could only ever produce
+	// a save that fails (issue #350).
+	StableFor time.Duration
 
 	// ValidatorID is the registered application validator this backup set
 	// selected (validator.go), or "" for none. It is the id, never the
@@ -663,6 +672,7 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		LocalPath:          bs.LocalPath,
 		Include:            bs.Include,
 		CompletionStrategy: bs.Completion.Strategy,
+		StableFor:          bs.Completion.StableFor.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the

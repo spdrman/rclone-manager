@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { createMockApi } from "@shared/api/mock";
+import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { graph, resetGraphForTests } from "@shared/state/graph";
@@ -73,6 +73,7 @@ function seedSets(sets: BackupSet[]) {
 
 describe("every explained field is wired to its own copy", () => {
   afterEach(() => {
+    resetMockFixtures();
     cleanup();
     resetGraphForTests();
   });
@@ -217,6 +218,13 @@ describe("every explained field is wired to its own copy", () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     });
     await screen.findByRole("button", { name: "SAVE ALL & EXIT EDIT" });
+
+    // The stable-size window is a conditional box, shown only while that
+    // completion method is selected. Selecting it here is what makes this
+    // loop cover EVERY field rather than every unconditional one, which
+    // is the difference between a test that grows with the table and one
+    // that quietly stops covering whatever is added conditionally.
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
 
     for (const field of EDIT_FIELDS) {
       expectHelp(screen.getByLabelText(field.label), field.help);
