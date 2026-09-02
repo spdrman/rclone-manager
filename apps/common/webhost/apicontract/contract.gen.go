@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7"
+const ContractSHA256 = "c98f22e0a7935d9e8ebad39acc21ea1023d6ab1e145a00193946838f5d61fccc"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -321,6 +321,43 @@ var Endpoints = []Endpoint{
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "clearBackupSetRetention", Method: "DELETE", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "getBackupSetRetention", Method: "GET", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "setBackupSetRetention", Method: "PUT", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "RetentionOverride", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -713,6 +750,20 @@ type BackupSetHealth struct {
 	TotalBytes                    uint64 `json:"total_bytes,omitempty"`
 }
 
+// BackupSetRetention is which retention policy one backup set is retained under, and where
+// that policy came from. All of it is served together because 'what
+// is deciding' and 'is that this set's own or the deployment's' are
+// one question for an operator reading a preview that is about to
+// delete something, and answering it in two calls is how a surface
+// shows a chain beside the wrong attribution.
+type BackupSetRetention struct {
+	BackupSetID string             `json:"backup_set_id"`
+	Deployment  RetentionSettings  `json:"deployment"`
+	Effective   RetentionSettings  `json:"effective"`
+	IsOverride  bool               `json:"is_override"`
+	Override    *RetentionOverride `json:"override"`
+}
+
 // BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads
 // from, where it writes to, how it decides a file is complete, and
 // whether it starts enabled. ssh_key_id and known_hosts_line carry
@@ -1018,19 +1069,42 @@ type OperationProgress struct {
 	Stage            string `json:"stage"`
 }
 
+// RetentionOverride is one backup set's OWN retention policy, exactly as its
+// configuration file carries it: unresolved, with every omitted
+// field still omitted. An override names the WHOLE chain (a tiers
+// list, or all three of daily_days, weekly_months and
+// monthly_months) and half a chain is refused, because completing
+// the missing half from the product defaults is how a set silently
+// ends up retaining less than the operator who wrote the
+// deployment's policy believes. Everything that is not the chain
+// inherits from the deployment's resolved policy when omitted, so an
+// override that names no timezone is reckoned in the deployment's,
+// not in UTC.
+type RetentionOverride struct {
+	DailyDays            int             `json:"daily_days,omitempty"`
+	MonthlyMonths        int             `json:"monthly_months,omitempty"`
+	ProtectLastKnownGood *bool           `json:"protect_last_known_good"`
+	Tiers                []RetentionTier `json:"tiers,omitempty"`
+	Timezone             string          `json:"timezone,omitempty"`
+	WeekStartsOn         string          `json:"week_starts_on,omitempty"`
+	WeeklyMonths         int             `json:"weekly_months,omitempty"`
+}
+
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
 // id; it never proposes what to delete.
 type RetentionPlan struct {
-	BackupSetID       string             `json:"backup_set_id"`
-	ConfigRevision    string             `json:"config_revision"`
-	DeleteCount       int                `json:"delete_count"`
-	ExpiresAt         string             `json:"expires_at"`
-	InventoryRevision string             `json:"inventory_revision"`
-	KeepCount         int                `json:"keep_count"`
-	OperationID       string             `json:"operation_id,omitempty"`
-	PlanID            string             `json:"plan_id"`
-	ReclaimBytes      int64              `json:"reclaim_bytes"`
-	Verdicts          []RetentionVerdict `json:"verdicts"`
+	BackupSetID         string             `json:"backup_set_id"`
+	ConfigRevision      string             `json:"config_revision"`
+	DeleteCount         int                `json:"delete_count"`
+	ExpiresAt           string             `json:"expires_at"`
+	InventoryRevision   string             `json:"inventory_revision"`
+	KeepCount           int                `json:"keep_count"`
+	OperationID         string             `json:"operation_id,omitempty"`
+	PlanID              string             `json:"plan_id"`
+	ReclaimBytes        int64              `json:"reclaim_bytes"`
+	Retention           RetentionSettings  `json:"retention"`
+	RetentionIsOverride bool               `json:"retention_is_override"`
+	Verdicts            []RetentionVerdict `json:"verdicts"`
 }
 
 // RetentionSchema is the closed value sets and bounds a retention chain is validated
@@ -1056,10 +1130,14 @@ type RetentionSettings struct {
 
 // RetentionTier is one link in the retention chain, on the wire. The same shape is
 // read and written, so a client round-trips exactly what it was
-// served.
+// served. That round trip is why every field a tier can carry is
+// here: a chain write REPLACES the whole chain, so a field this
+// shape omits is a field the save deletes from the operator's
+// configuration file.
 type RetentionTier struct {
 	Granularity string `json:"granularity"`
 	Keep        int    `json:"keep"`
+	Medium      string `json:"medium,omitempty"`
 	Name        string `json:"name"`
 	PeriodDays  int    `json:"period_days,omitempty"`
 	WindowUnit  string `json:"window_unit,omitempty"`
@@ -1235,6 +1313,7 @@ var SchemaTypes = map[string]any{
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
 	"BackupSetHealth":             BackupSetHealth{},
+	"BackupSetRetention":          BackupSetRetention{},
 	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
 	"CapacitySettings":            CapacitySettings{},
@@ -1262,6 +1341,7 @@ var SchemaTypes = map[string]any{
 	"ManagerStorage":              ManagerStorage{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
+	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
 	"RetentionSettings":           RetentionSettings{},

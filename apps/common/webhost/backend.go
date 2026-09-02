@@ -155,6 +155,24 @@ type BackupServiceClient interface {
 	// does and, in particular, does not undo.
 	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
 
+	// BackupSetRetention, SetBackupSetRetention and
+	// ClearBackupSetRetention back GET/PUT/DELETE
+	// /api/v1/backup-sets/{source}/{set}/retention (issue #333): read
+	// which retention policy one backup set is retained under, give that
+	// set a whole policy of its own, or remove it so the set inherits the
+	// deployment's again.
+	//
+	// Three methods rather than one sparse update, because "give this set
+	// no policy of its own" cannot be a value on a request where a nil
+	// field already means "leave this alone" — see
+	// core/service/backupsetretention.go's own package doc. State-changing
+	// but not destructive: this writes configuration, and the retention
+	// apply it can change the outcome of stays behind the destructive gate
+	// and re-reads the policy at plan time.
+	BackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+	SetBackupSetRetention(ctx context.Context, id string, o service.RetentionOverride) (service.BackupSetRetention, error)
+	ClearBackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same
 	// non-destructive reachability check TestConnection performs, against

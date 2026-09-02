@@ -168,6 +168,36 @@ var destructiveGateExemptRoutes = map[string]bool{
 	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,
 	"POST /api/v1/catalog/scan":                                true,
 	"POST /api/v1/catalog/rebuild":                             true,
+
+	// Issue #333: giving one backup set its own retention policy, and
+	// taking that policy back off.
+	//
+	// This entry needs the second sentence reinstate needed, and for a
+	// sharper reason than any other line on this list. Every other entry
+	// argues that the route cannot reach a deletion in EITHER direction.
+	// These two cannot reach a deletion at all, they only write
+	// configuration, but they do change what a LATER retention apply
+	// would delete, and unlike read-only they can change it in the
+	// dangerous direction: clearing an override whose chain was WIDER
+	// than the deployment's leaves the set retaining less.
+	//
+	// They are exempt anyway, and PATCH /api/v1/settings above is the
+	// precedent that decides it rather than an argument invented here.
+	// Turning FR-19's protect_last_known_good off through that route
+	// widens what a later apply may delete in exactly the same way, and
+	// the reasoning recorded there applies here word for word: the apply
+	// is the gated act, it re-reads the policy at plan time, and no
+	// artifact is deleted without an operator confirming a plan computed
+	// under whatever policy is in force by then. Gating a policy edit
+	// here would gate the wrong thing while leaving the identical hazard
+	// reachable one route up.
+	//
+	// What that leaves is a surface obligation rather than a gate one:
+	// the client has to show the two chains before the change is made.
+	// Both responses carry the deployment's policy beside the set's own
+	// for exactly that (BackupSetRetention.deployment).
+	"PUT /api/v1/backup-sets/{source}/{set}/retention":    true,
+	"DELETE /api/v1/backup-sets/{source}/{set}/retention": true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

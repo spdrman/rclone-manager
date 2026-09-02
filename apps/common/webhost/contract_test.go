@@ -94,17 +94,25 @@ var contractBindings = map[string]contractBinding{
 	// these has a FIXED arity and three of them need a literal tail
 	// ("/enabled", "/revalidate", "/retry") that a catch-all would
 	// swallow.
-	"getSystemHealth":           {"/api/v1/system/health", nil, healthResponse{}, "/api/v1/system/health"},
-	"listOperations":            {"/api/v1/operations", nil, listOperationsResponse{}, "/api/v1/operations"},
-	"listArtifacts":             {"/api/v1/backups", nil, listArtifactsResponse{}, "/api/v1/backups"},
-	"getArtifact":               {"/api/v1/backups/{source}/{set}/{name}", nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
-	"listActivity":              {"/api/v1/activity", nil, listActivityResponse{}, "/api/v1/activity"},
-	"listQuarantine":            {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
-	"revalidateArtifact":        {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
-	"retryArtifactIngestion":    {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
-	"reinstateArtifact":         {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
-	"setBackupSetEnabled":       {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
-	"setBackupSetReadOnly":      {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+	"getSystemHealth":        {"/api/v1/system/health", nil, healthResponse{}, "/api/v1/system/health"},
+	"listOperations":         {"/api/v1/operations", nil, listOperationsResponse{}, "/api/v1/operations"},
+	"listArtifacts":          {"/api/v1/backups", nil, listArtifactsResponse{}, "/api/v1/backups"},
+	"getArtifact":            {"/api/v1/backups/{source}/{set}/{name}", nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
+	"listActivity":           {"/api/v1/activity", nil, listActivityResponse{}, "/api/v1/activity"},
+	"listQuarantine":         {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
+	"revalidateArtifact":     {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
+	"retryArtifactIngestion": {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
+	"reinstateArtifact":      {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
+	"setBackupSetEnabled":    {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"setBackupSetReadOnly":   {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+
+	// Issue #333. Three operations on one path, which is the point of a
+	// sub-resource: the method is what says whether the policy is being
+	// read, replaced or removed, and none of the three is a field on the
+	// backup set itself.
+	"getBackupSetRetention":     {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"setBackupSetRetention":     {"/api/v1/backup-sets/{source}/{set}/retention", retentionOverrideBody{}, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"clearBackupSetRetention":   {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
 	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
 	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
 	"getRetentionErrorEnvelope": {"", nil, errorResponse{}, ""},
