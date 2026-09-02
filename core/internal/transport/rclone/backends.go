@@ -13,9 +13,40 @@ import (
 // shipping unnoticed. Widening this list on purpose is the "explicit
 // feature/architecture decision" FR-4 asks for.
 
-// RequiredBackends are the backends FR-4 actually asks for. Each one has a
-// direct blank import in adapter.go.
-var RequiredBackends = []string{"local", "sftp"}
+// RequiredBackends are the backends this product actually asks for. Each
+// one has a direct blank import in adapter.go.
+//
+// s3 is EPIC E's addition (FR-28), and it is the FR-4 "explicit
+// feature/architecture decision" that FR asks for, recorded here rather
+// than left as an import line somebody has to notice. It is the whole S3
+// implementation: no AWS SDK is imported by any file in this repository,
+// in Go or in TypeScript, and the transitive one rclone's own backend
+// carries is rclone's dependency, upgraded when rclone is.
+//
+// # What it cost
+//
+// Measured the way the crypt precedent was measured, on a linux/arm64,
+// CGO_ENABLED=0 build of core/cmd/backup-manager, with this one blank
+// import as the only difference between the two builds:
+//
+//	without backend/s3   29,646,334 bytes
+//	with backend/s3      42,664,008 bytes
+//	delta                13,017,674 bytes, 12.4 MiB, +43.9%
+//
+// That is a big number, twenty-seven times crypt's ~470KB, and it is worth
+// saying plainly rather than burying: registering s3 pulls in the AWS SDK
+// for Go v2 (its S3 service client, signer, and the smithy runtime under
+// it), which is most of the delta. It buys the only non-local storage
+// medium this product has.
+//
+// The alternative was not "a smaller build", it was an AWS SDK dependency
+// of this repository's own, which costs the same binary space, adds a
+// second HTTP, credential and retry stack beside the one already embedded,
+// and puts a provider SDK inside the FR-3 boundary that exists to keep
+// upstream churn in exactly one adapter. What would genuinely shrink it is
+// not shipping S3 at all, and that is the decision FR-28 made the other
+// way, out loud, with this measurement attached.
+var RequiredBackends = []string{"local", "s3", "sftp"}
 
 // AcceptedTransitiveBackends maps the name of a backend that registers
 // itself even though nothing in this package imports it directly, to the
