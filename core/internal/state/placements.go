@@ -219,17 +219,54 @@ func loadPlacements(ctx context.Context, q querier, artifactRowID int64) ([]Plac
 	return out, nil
 }
 
-// loadPlacementsFor reads the placements for many artifact rows in one
-// query and returns them keyed by artifact row id.
+// placementBatchSize bounds how many artifact ids go into one IN clause.
 //
-// One query rather than one per record, because the list paths
+// SQLite has a hard ceiling on bound parameters per statement
+// (SQLITE_MAX_VARIABLE_NUMBER), and a query built from one placeholder per
+// artifact walks straight into it, because "every artifact in this backup
+// set" is exactly the list the retention cycle asks for.
+//
+// I measured where that ceiling actually is on the driver this project
+// embeds rather than repeating the number everyone quotes: modernc.org/
+// sqlite v1.57.0 accepts 5,000 placeholders and refuses 40,000 with "too
+// many SQL variables", so the historical 999 does not apply here and an
+// unbatched query would only fail on a backup set holding tens of
+// thousands of artifacts. That is a large set, not an impossible one:
+// hourly artifacts for four years reaches it, and the failure would then
+// appear as a listing error on exactly the deployments that can least
+// afford one, and never on any deployment small enough to have caught it
+// in testing.
+//
+// So this is a defensive bound rather than a fix for a bug anyone has hit.
+// 500 keeps the statement far away from any build's limit and is large
+// enough that even a very large backup set is a handful of queries rather
+// than one per artifact.
+const placementBatchSize = 500
+
+// loadPlacementsFor reads the placements for many artifact rows and
+// returns them keyed by artifact row id.
+//
+// Batched rather than one query per record, because the list paths
 // (ListByState, ListByBackupSet) are what a retention cycle runs over every
 // backup set, and an N+1 there is a real cost on a NAS with thousands of
 // artifacts.
 func loadPlacementsFor(ctx context.Context, q querier, artifactRowIDs []int64) (map[int64][]Placement, error) {
 	out := map[int64][]Placement{}
+	for start := 0; start < len(artifactRowIDs); start += placementBatchSize {
+		end := start + placementBatchSize
+		if end > len(artifactRowIDs) {
+			end = len(artifactRowIDs)
+		}
+		if err := loadPlacementBatch(ctx, q, artifactRowIDs[start:end], out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func loadPlacementBatch(ctx context.Context, q querier, artifactRowIDs []int64, out map[int64][]Placement) error {
 	if len(artifactRowIDs) == 0 {
-		return out, nil
+		return nil
 	}
 
 	placeholders := make([]string, len(artifactRowIDs))
@@ -243,7 +280,7 @@ func loadPlacementsFor(ctx context.Context, q querier, artifactRowIDs []int64) (
 			` FROM placements WHERE artifact_id IN (`+join(placeholders, ", ")+`) ORDER BY artifact_id, medium`,
 		args...)
 	if err != nil {
-		return nil, fmt.Errorf("state: read placements: %w", err)
+		return fmt.Errorf("state: read placements: %w", err)
 	}
 	defer rows.Close()
 
@@ -258,18 +295,18 @@ func loadPlacementsFor(ctx context.Context, q querier, artifactRowIDs []int64) (
 		)
 		if err := rows.Scan(&artifactRowID, &medium, &location, &size, &hash, &hashAlg,
 			&verificationClass, &verifiedAt, &status, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("state: scan placement: %w", err)
+			return fmt.Errorf("state: scan placement: %w", err)
 		}
 		p, err := buildPlacement(medium, location, size, hash, hashAlg, verificationClass, verifiedAt, status, createdAt, updatedAt)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		out[artifactRowID] = append(out[artifactRowID], p)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("state: read placements: %w", err)
+		return fmt.Errorf("state: read placements: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
 func scanPlacement(row scanRow) (Placement, error) {

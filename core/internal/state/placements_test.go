@@ -646,3 +646,74 @@ func TestRecordTransitionWritesThePlacementItIsGiven(t *testing.T) {
 		t.Errorf("recording the same placement twice produced %d rows, want 1", len(rec.Placements))
 	}
 }
+
+// TestListingABackupSetAcrossSeveralPlacementBatches proves the batched
+// read stitches back together: every artifact in a set spanning several
+// batches comes back with its own placement and not somebody else's.
+//
+// It deliberately does NOT claim to reach the driver's parameter ceiling.
+// I measured that (see placementBatchSize's doc: 5,000 placeholders are
+// accepted and 40,000 are refused on this driver), so a test that actually
+// crossed it would have to write tens of thousands of artifacts and would
+// cost the gate more than the risk is worth. What this covers is the thing
+// batching can plausibly get wrong, which is losing or misattributing a
+// batch, and it fails loudly if the fixture ever stops crossing a boundary
+// at all.
+func TestListingABackupSetAcrossSeveralPlacementBatches(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "journal.db")
+	j, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+
+	set, err := model.NewBackupSetID("production", "postgres-primary")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+
+	const count = 1200
+	if count <= placementBatchSize {
+		t.Fatalf("the fixture writes %d artifacts and the batch size is %d, so this test never crosses a batch boundary", count, placementBatchSize)
+	}
+
+	at := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("artifact-%04d.dump", i)
+		artifact, err := model.NewArtifactID(set, name)
+		if err != nil {
+			t.Fatalf("NewArtifactID: %v", err)
+		}
+		if _, err := j.RecordTransition(ctx, Transition{
+			Artifact: artifact, Key: name + ":discover", From: "", To: "DISCOVERED",
+			RemotePath: "/remote/" + name, OccurredAt: at,
+		}); err != nil {
+			t.Fatalf("discovering %s: %v", name, err)
+		}
+		final := "/backups/pg/" + name
+		if _, err := j.RecordTransition(ctx, Transition{
+			Artifact: artifact, Key: name + ":committed", From: "DISCOVERED", To: "COMMITTED",
+			OccurredAt: at, LocalPath: &final,
+			Placement: &PlacementUpdate{Medium: MediumLocal, Location: final, Status: PlacementActive},
+		}); err != nil {
+			t.Fatalf("committing %s: %v", name, err)
+		}
+	}
+
+	records, err := j.ListByBackupSet(ctx, set)
+	if err != nil {
+		t.Fatalf("ListByBackupSet over %d artifacts: %v", count, err)
+	}
+	if len(records) != count {
+		t.Fatalf("ListByBackupSet returned %d records, want %d", len(records), count)
+	}
+	for _, rec := range records {
+		if len(rec.Placements) != 1 {
+			t.Fatalf("artifact %s came back with %d placements, want 1; a batched read that dropped a batch would look exactly like this", rec.Artifact, len(rec.Placements))
+		}
+		if got, ok := rec.ReadableLocalPath(); !ok || got != "/backups/pg/"+rec.Artifact.Name {
+			t.Fatalf("artifact %s resolved to %q (ok=%v)", rec.Artifact, got, ok)
+		}
+	}
+}
