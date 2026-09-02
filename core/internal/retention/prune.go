@@ -119,6 +119,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -196,13 +197,20 @@ type PruneVerdict struct {
 // pruneFinalPath computes the same final local path lifecycle's own
 // unexported finalPath (transfer.go) computes for the same (LocalDir,
 // Artifact) pair: the artifact's basename, joined directly under the
-// backup set's configured local directory. Duplicated here for the same
-// reason prunePartialSuffix is (this package cannot reach lifecycle's
-// unexported helper, and file scope keeps it that way): this formula, and
-// lifecycle's own copy of it, are the only two places in the whole
-// project allowed to compute it.
+// backup set's configured local directory.
+//
+// It used to duplicate that join, with a comment here and another there
+// naming the two of them as the only places in the project allowed to
+// compute it. Both now delegate to internal/artifactstore, which is the
+// local store's own account of where its bytes live (issue #334), so the
+// two of them cannot drift apart.
+//
+// The two of them, not every join of a root and an artifact name in this
+// file: pruneVerifySafeToDelete ends by joining that name onto the
+// canonicalized root EvalSymlinks handed back, which is deliberately a
+// different computation on a different input. See its own comment there.
 func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) string {
-	return filepath.Join(bs.LocalPath, artifact.Name)
+	return artifactstore.LocalLocator(bs.LocalPath, artifact)
 }
 
 // pruneVerifySafeToDelete runs every one of FR-20's checks against one
@@ -321,6 +329,14 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 	// joining the canonical directory back onto the artifact's own name
 	// is the fully canonical, safe-to-remove path: no further resolution
 	// of the final component is needed or wanted.
+	//
+	// This is deliberately NOT artifactstore.LocalLocator, even though it
+	// has the same shape. That function answers "where does the configured
+	// root say this artifact goes"; this line answers "what is the
+	// resolved, symlink-free path this function just proved safe", and
+	// routing it back through the configured root would throw away the
+	// resolution the checks above exist to produce. Same shape, different
+	// question, and this one fails closed.
 	return filepath.Join(resolvedRoot, rec.Artifact.Name), nil
 }
 

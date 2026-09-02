@@ -86,8 +86,8 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -173,8 +173,14 @@ func (e *FinalNameCollisionError) Error() string {
 // artifact under one backup set's local directory. Artifact.Name is already
 // validated as a plain basename (model.NewArtifactID refuses "/", "\\", and
 // "." / ".."), so joining it directly is safe.
+//
+// The join itself now lives in internal/artifactstore, which is the local
+// store's own account of where its bytes go (issue #334). This function
+// stays because FR-12's .partial name is derived from it and because
+// callers here should not need to know a store exists to compute a path
+// they have always computed.
 func finalPath(localDir string, artifact model.ArtifactID) string {
-	return filepath.Join(localDir, artifact.Name)
+	return artifactstore.LocalLocator(localDir, artifact)
 }
 
 func partialPath(localDir string, artifact model.ArtifactID) string {
