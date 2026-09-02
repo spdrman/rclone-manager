@@ -96,6 +96,15 @@ class TestArchitectureRefusal(unittest.TestCase):
         # equally against a check that refuses everything.
         fx = Fixture(self)
         real_uname = os.uname
+        self.addCleanup(lambda: setattr(os, "uname", real_uname))
+        # addCleanup, not a plain assignment after the loop: if assertEqual
+        # ever fails inside the loop -- exactly what happens when this test
+        # is doing its job, catching a real architecture-mapping regression
+        # -- the exception used to propagate with os.uname still
+        # monkeypatched to the last FakeUname, and every later test in this
+        # same process that touches check_arch() would then run against a
+        # fake architecture: a cascade of unrelated failures masking the
+        # original one.
         for machine, want in (("x86_64", "amd64"), ("aarch64", "arm64")):
             with self.subTest(machine=machine):
                 class FakeUname:
@@ -105,7 +114,6 @@ class TestArchitectureRefusal(unittest.TestCase):
                 pf = installer.Preflight(fx.args())
                 pf.check_arch()
                 self.assertEqual(pf.arch, want)
-        os.uname = real_uname
 
 
 class TestCredentialRefusals(unittest.TestCase):
@@ -178,6 +186,39 @@ class TestPathRefusals(unittest.TestCase):
         self.assertIsNotNone(exc)
         self.assertEqual(exc.code, installer.EXIT_PREREQ_PATHS)
         self.assertIn("chown", exc.remedy)
+        self.assertIn("will not call sudo", exc.remedy)
+
+    def test_prefix_owned_by_someone_else_is_refused_before_staging_ever_runs(self):
+        """#268's own review: --prefix (where compose.yaml/.env/
+        compose.image.yaml are staged) was never validated here, only the
+        three DATA directories were, so an unwritable --prefix surfaced as
+        an unhandled OSError deep inside stage_payload() instead of a clean
+        Refusal here. Same fixture shape as the --state-dir case above,
+        aimed at --prefix instead."""
+        fx = Fixture(self)
+        args = fx.args()
+        real_stat = Path.stat
+        target = args.host_dirs["--prefix"]
+        # Unlike --state-dir (a sibling case below), the Fixture already
+        # creates --prefix itself (it holds secrets/), so there is nothing
+        # to mkdir here -- the whole point is that this directory already
+        # exists and is merely mis-owned.
+
+        class FakeStat:
+            st_uid = os.getuid() + 4242
+            st_mode = 0o40755
+
+        def fake_stat(self, *a, **kw):
+            if self == target:
+                return FakeStat()
+            return real_stat(self, *a, **kw)
+
+        Path.stat = fake_stat  # type: ignore[assignment]
+        self.addCleanup(lambda: setattr(Path, "stat", real_stat))
+        exc = refusal_from(installer.Preflight(args).check_paths)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_PATHS)
+        self.assertIn("--prefix", exc.message)
         self.assertIn("will not call sudo", exc.remedy)
 
     def test_a_file_where_a_directory_belongs_is_refused(self):

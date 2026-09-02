@@ -180,7 +180,19 @@ def run(argv, *, check=True, timeout=None, cwd=None, env=None):
             argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            # utf-8/replace, not the platform-default strict decoding
+            # text=True alone would use: a headless account on an
+            # appliance can plausibly run under a C/POSIX locale, and
+            # docker/docker compose output (image names, error text) can
+            # carry non-ASCII bytes. A strict-decode failure here would be
+            # an unhandled UnicodeDecodeError, not a Refusal, defeating the
+            # whole coded-exit-status contract this function exists to
+            # provide -- on exactly the calls (docker compose up, docker
+            # pull) whose failure the operator most needs a clear message
+            # for. probe_web_ui's HTTP body reads already use this same
+            # decode discipline for the identical reason.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=cwd,
             env=env,
@@ -326,12 +338,20 @@ class Preflight:
     def check_paths(self) -> None:
         """Every host directory, and whether THIS uid can actually use it.
 
-        The image has no shell, no root step and no init process, so
-        nothing inside the container can fix ownership at startup: a
-        directory owned by somebody else is a write failure at the first
-        SQLite commit, hours later, reported as a database error. With no
-        passwordless sudo there is also nothing this installer could do
-        about it, so it has to be a refusal rather than a repair.
+        The three data directories (state, backup, config) are bind-mounted
+        into the image, which has no shell, no root step and no init
+        process, so nothing inside the container can fix ownership at
+        startup: a directory owned by somebody else is a write failure at
+        the first SQLite commit, hours later, reported as a database error.
+        --prefix is not mounted into the container -- it is where THIS
+        process itself writes compose.yaml/.env/compose.image.yaml before
+        ever invoking `docker compose` -- but it fails the exact same way
+        for the exact same structural reason (this account cannot chown or
+        sudo its way past a directory it does not own), so it is checked
+        here rather than left to surface as an unhandled OSError partway
+        through staging. With no passwordless sudo there is also nothing
+        this installer could do about any of these, so it has to be a
+        refusal rather than a repair.
         """
         uid, gid = os.getuid(), os.getgid()
         for label, path in self.args.host_dirs.items():
@@ -453,6 +473,15 @@ class Preflight:
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
+                # Discarded, not silently: a schema drift in `docker
+                # compose ... --format json` across versions (this
+                # function's own triple-fallback parsing below already
+                # suggests that has happened once) would otherwise make
+                # this return a confidently wrong False -- a misleading
+                # "port already in use by something that is not this
+                # project" refusal on a re-run where the port genuinely IS
+                # held by this project's own stack.
+                say(f"     (docker compose ps line did not parse as JSON, ignoring it: {line!r})")
                 continue
             entries = entry if isinstance(entry, list) else [entry]
             for item in entries:
@@ -629,6 +658,10 @@ def detect_existing(args):
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
+                # See _port_is_ours's identical discard: logged, not
+                # silent, so a schema drift is visible instead of just
+                # producing a wrong verdict about what is installed.
+                say(f"     (docker compose ps -a line did not parse as JSON, ignoring it: {line!r})")
                 continue
             containers.extend(entry if isinstance(entry, list) else [entry])
     return payload, containers
@@ -988,6 +1021,7 @@ def resolve(args):
     if args.public_base_url is None:
         args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
     args.host_dirs = {
+        "--prefix": args.prefix,
         "--state-dir": args.state_dir,
         "--backup-dir": args.backup_dir,
         "--config-dir": args.config_dir,
