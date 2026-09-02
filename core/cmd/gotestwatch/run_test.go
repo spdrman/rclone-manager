@@ -16,6 +16,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,7 +39,18 @@ func tightBounds(floor time.Duration, factor float64) bounds {
 
 func TestRun_CatchesAGenuineHang(t *testing.T) {
 	const floor = 2 * time.Second
+	const poll = 50 * time.Millisecond
 	dir := filepath.Join("testdata", "fixtures", "hangpkg")
+
+	// Compile the fixture before the watched run starts. The tracker's
+	// clock begins when Run does, so without this the fixture's own
+	// compilation sits inside the very first window, and on a machine
+	// busy enough for that to take longer than the floor the watchdog
+	// trips before the fixture's first test has run at all. That is a
+	// false trip about this test's setup, not about the watchdog.
+	warmBuildCache(t, dir)
+
+	lag := startSchedulingLagSampler(poll)
 
 	var stdout, stderr bytes.Buffer
 	start := time.Now()
@@ -45,11 +58,12 @@ func TestRun_CatchesAGenuineHang(t *testing.T) {
 		Dir:    dir,
 		Args:   []string{"-count=1", "./..."},
 		Bounds: tightBounds(floor, defaultBounds.stepFactor),
-		Poll:   50 * time.Millisecond,
+		Poll:   poll,
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
 	elapsed := time.Since(start)
+	worstLag := lag.stop()
 	if err != nil {
 		t.Fatalf("Run returned an error instead of a trip: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
 	}
@@ -68,21 +82,95 @@ func TestRun_CatchesAGenuineHang(t *testing.T) {
 	if !strings.Contains(res.Trip.String(), "TestHang") {
 		t.Fatalf("the trip's own failure text does not name TestHang:\n%v", res.Trip)
 	}
-	// Promptly, not eventually: this asserts on the watchdog's own
-	// reaction time (sinceLast, close to the floor), not on wall-clock
-	// time, so this test does not reintroduce the exact defect issue #256
-	// is about by failing on a machine that is merely busy while it runs.
-	// The multiplier is generous (not 2x or 3x) for the same reason: this
-	// test's own poll goroutine can itself be descheduled under real host
-	// contention (observed: 6.091s against a tighter 3x/6s bound on a
-	// heavily loaded machine, a false failure from exactly the class of
-	// defect this file exists to prove gotestwatch no longer has), and a
-	// prompt-catch assertion that itself flakes under load is not a
-	// prompt-catch assertion.
-	if res.Trip.sinceLast > 10*floor {
-		t.Fatalf("the watchdog took %s to notice a %s window had closed; that is not a prompt catch", res.Trip.sinceLast.Round(time.Millisecond), floor)
+	// Promptly, and promptly against the watchdog's OWN window rather
+	// than against a number chosen here (issue #379).
+	//
+	// The window is derived, not fixed: max(stepFloor, stepFactor x the
+	// slowest recent step), and stepFactor is 12. On a loaded machine the
+	// fixture's own TestOne measures slower, so the derived window grows
+	// with it, by design. The previous bound here was 10 x the FLOOR,
+	// which is unrelated to that, and it was wrong in both directions: it
+	// would have passed a watchdog that noticed five times later than it
+	// should have on a quiet machine, and it failed a perfectly prompt
+	// one on a busy one (observed: sinceLast 34.61s against a window of
+	// almost exactly the same, tripping on the first check after its own
+	// window closed, which is the behaviour this test exists to prove).
+	//
+	// What promptness means is the overshoot past the window: one poll
+	// interval to notice, plus whatever this host stole from a goroutine
+	// trying to wake up on that same interval, which the sampler above
+	// measured rather than guessed. On a quiet machine this is a much
+	// tighter assertion than the old one.
+	promptness := res.Trip.window + 3*poll + worstLag
+	if res.Trip.sinceLast > promptness {
+		t.Fatalf("the watchdog took %s to notice its own %s window had closed, which is %s of overshoot; at most %s is prompt here (3 poll intervals plus the %s this host stole from a goroutine sleeping on the same interval)",
+			res.Trip.sinceLast.Round(time.Millisecond), res.Trip.window.Round(time.Millisecond),
+			(res.Trip.sinceLast - res.Trip.window).Round(time.Millisecond),
+			promptness.Round(time.Millisecond), worstLag.Round(time.Millisecond))
 	}
-	t.Logf("planted hang caught %s after Run started: %v", elapsed.Round(time.Millisecond), res.Trip)
+	t.Logf("planted hang caught %s after Run started, %s past its own %s window, on a host whose worst %s scheduling lag was %s: %v",
+		elapsed.Round(time.Millisecond), (res.Trip.sinceLast - res.Trip.window).Round(time.Millisecond),
+		res.Trip.window.Round(time.Millisecond), poll, worstLag.Round(time.Millisecond), res.Trip)
+}
+
+// warmBuildCache compiles a fixture module's test binaries without running
+// anything, so a watched run that follows measures test execution rather
+// than compilation. `-run ^$` matches no test at all, which is the whole
+// point: this is a build step wearing `go test`'s clothes, because only
+// `go test` builds the test binary.
+func warmBuildCache(t *testing.T, dir string) {
+	t.Helper()
+	cmd := exec.Command("go", "test", "-run", "^$", "-count=1", "./...")
+	cmd.Dir = dir
+	// GOWORK=off for the same reason Run sets it: the fixture is its own
+	// module under testdata/, which this repository's go.work does not
+	// and must not list.
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("pre-building the fixture in %s failed, so this test cannot tell a slow compile from a hang: %v\n%s", dir, err, out)
+	}
+}
+
+// schedulingLagSampler measures the worst overshoot of a sleep of exactly
+// the watchdog's poll interval, for as long as it runs.
+//
+// It exists because the quantity this file has to bound, how long the
+// watchdog took to notice its window had closed, is measured BY the
+// watchdog's own poll goroutine, and on a starved host that goroutine is
+// precisely what stops being scheduled. A fixed allowance cannot be right
+// for both an idle laptop and a machine running nine builds at once. A
+// second goroutine asking the same host for the same interval can say how
+// much it is actually giving, and that number is what the bound is built
+// from.
+type schedulingLagSampler struct {
+	done    chan struct{}
+	stopped chan time.Duration
+}
+
+func startSchedulingLagSampler(interval time.Duration) *schedulingLagSampler {
+	s := &schedulingLagSampler{done: make(chan struct{}), stopped: make(chan time.Duration, 1)}
+	go func() {
+		var worst time.Duration
+		for {
+			select {
+			case <-s.done:
+				s.stopped <- worst
+				return
+			default:
+			}
+			began := time.Now()
+			time.Sleep(interval)
+			if over := time.Since(began) - interval; over > worst {
+				worst = over
+			}
+		}
+	}()
+	return s
+}
+
+func (s *schedulingLagSampler) stop() time.Duration {
+	close(s.done)
+	return <-s.stopped
 }
 
 func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
