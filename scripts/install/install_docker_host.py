@@ -1801,7 +1801,7 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
             say("    radius of a daemon restart below is unknown rather than confirmed small.")
         elif others:
             say("")
-            say(f"    Restarting the Docker daemon restarts EVERY container on this host, not only this")
+            say("    Restarting the Docker daemon restarts EVERY container on this host, not only this")
             say(f"    project's. {len(others)} other container(s) are currently running and will be")
             say("    restarted too:")
             for name, image in others:
