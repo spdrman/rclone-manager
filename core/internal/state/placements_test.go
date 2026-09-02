@@ -455,7 +455,7 @@ func TestRecordCarriesItsPlacements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 
 	set, err := model.NewBackupSetID("production", "postgres-primary")
 	if err != nil {
@@ -571,7 +571,7 @@ func TestRecordTransitionWritesThePlacementItIsGiven(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	t.Cleanup(func() { j.Close() })
+	t.Cleanup(func() { _ = j.Close() })
 
 	set, err := model.NewBackupSetID("production", "postgres-primary")
 	if err != nil {

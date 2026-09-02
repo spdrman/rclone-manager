@@ -39,6 +39,33 @@ const (
 	PlacementGone = "GONE"
 )
 
+// The verification classes a placement can have ACHIEVED (FR-31's ladder).
+//
+// The names live here because 0007_placements.sql constrains the column to
+// exactly this set, and a vocabulary the schema enforces should be spelled
+// once, beside the schema that enforces it. What each class MEANS, what it
+// costs, and what it takes to earn one is core/internal/placement's (#237):
+// this package only stores the answer, the same division of labour
+// Record.State already has with core/internal/lifecycle. #237 carries the
+// test that pins its ladder against this list, so the two cannot drift.
+//
+// Empty is a fourth value and the default: nothing has verified this copy.
+// It is not a class, which is why it has no constant: a caller reaching for
+// a name for "unverified" is usually about to record it as a weak pass,
+// and the point of the ladder is that a class is something achieved.
+const (
+	// VerificationContent means the bytes were read back and hashed, and
+	// they match the hash the journal recorded.
+	VerificationContent = "content"
+	// VerificationAttested means the medium's own stored full-object
+	// checksum equals the recorded hash. One metadata call, no egress,
+	// and it trusts the endpoint.
+	VerificationAttested = "attested"
+	// VerificationExistence means the object exists at the recorded size.
+	// One HEAD request, and it proves nothing about the bytes.
+	VerificationExistence = "existence"
+)
+
 // Placement is one durable copy of one artifact (EPIC E, FR-29).
 //
 // It exists as a row of its own rather than as columns on the artifact
@@ -65,12 +92,7 @@ type Placement struct {
 
 	// VerificationClass is the strongest class of verification this copy
 	// has ACHIEVED, never the strongest one configured (FR-31). Empty
-	// means nothing has verified it.
-	//
-	// It is a plain string, not a named type owned here, for exactly the
-	// reason Record.State is one: the vocabulary belongs to
-	// core/internal/placement (#237), and this package only stores what
-	// that package produces.
+	// means nothing has verified it. See the Verification* constants.
 	VerificationClass string
 
 	// VerifiedAt is when VerificationClass was last achieved, or nil.
