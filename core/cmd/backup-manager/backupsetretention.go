@@ -70,10 +70,13 @@ func cmdBackupSetRetention(args []string) int {
 	if err != nil {
 		return 2
 	}
-	if len(operands) != 1 {
-		return usageError("backup-set retention: expected exactly one backup set id")
+	// The verb itself is operands[0], because cmdBackupSet hands every
+	// handler the whole argument list: see backupSetVerbs' own doc for
+	// why slicing it off would silently drop a flag written before it.
+	if len(operands) != 2 || operands[0] != "retention" {
+		return usageError(`backup-set retention: expected "retention <source/backup-set>" and exactly one backup set id`)
 	}
-	id := operands[0]
+	id := operands[1]
 	if !isBackupSetID(id) {
 		return usageError("backup-set retention: %q is not a backup set id; a backup set id is exactly source/name", id)
 	}

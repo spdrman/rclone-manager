@@ -32,17 +32,27 @@ import (
 // three operations the API's own sub-resource has, for the same reason:
 // see core/service/backupsetretention.go's package doc, and
 // backupsetretention.go beside this file.
-func cmdBackupSet(args []string) int {
-	if len(args) == 0 {
-		return usageError(`backup-set: expected a verb; the only one this build has is "retention" (see --help)`)
-	}
+// backupSetVerbs is every verb this command dispatches on, and the map is
+// where a new one is added rather than a new branch in a switch.
+//
+// Each handler is given the WHOLE argument list, its own verb included,
+// and finds that verb as its first operand. That is what lets flags
+// appear on either side of it, so `backup-set --config X retention a/b`
+// works exactly as `settings --config X patch` already does. A dispatcher
+// that sliced the verb off would silently drop every flag written before
+// it, which reads as a command that ran against the wrong configuration
+// file rather than as an error.
+var backupSetVerbs = map[string]func([]string) int{
+	"retention": cmdBackupSetRetention,
+}
 
-	switch args[0] {
-	case "retention":
-		return cmdBackupSetRetention(args[1:])
-	default:
-		return usageError("backup-set: unknown verb %q", args[0])
+func cmdBackupSet(args []string) int {
+	for _, a := range args {
+		if verb, ok := backupSetVerbs[a]; ok {
+			return verb(args)
+		}
 	}
+	return usageError(`backup-set: expected a verb; the only one this build has is "retention" (see --help)`)
 }
 
 // isBackupSetID reports whether id has a backup set id's shape.

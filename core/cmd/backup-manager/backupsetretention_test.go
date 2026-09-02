@@ -41,6 +41,29 @@ func retentionArgs(configPath string, rest ...string) []string {
 	return append([]string{"backup-set", "retention", "--config", configPath, cliSet}, rest...)
 }
 
+// TestRun_BackupSetRetentionAcceptsFlagsOnEitherSideOfTheVerb pins what
+// the dispatcher exists for.
+//
+// parseFlagsAroundOperands accepts flags before the operands, and
+// `settings --config X patch` already works that way, so a dispatcher
+// that took the verb off the front and passed the rest on would drop
+// --config here. That does not fail loudly: it runs against the DEFAULT
+// configuration path, which on a developer machine is a file that is not
+// there and on a real deployment is the live one.
+func TestRun_BackupSetRetentionAcceptsFlagsOnEitherSideOfTheVerb(t *testing.T) {
+	configPath := writeTestConfigWithDeploymentPolicy(t)
+
+	out := captureStdout(t, func() {
+		args := []string{"backup-set", "--config", configPath, "retention", cliSet}
+		if got := run(args); got != 0 {
+			t.Fatalf("run(%v) = %d, want 0", args, got)
+		}
+	})
+	if !strings.Contains(out, "retained under: the deployment's policy (inherited)") {
+		t.Errorf("a flag before the verb did not reach the command:\n%s", out)
+	}
+}
+
 // TestRun_BackupSetRetentionShowsWhichPolicyIsInForce is the show
 // operation, and the assertion is on the ATTRIBUTION as much as on the
 // chain.
