@@ -441,3 +441,109 @@ func (h *handlers) setBackupSetReadOnly(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
 }
+
+// updateBackupSetRequest is PATCH /api/v1/backup-sets/{source}/{set}'s
+// body: issue #350's edit surface, and a sparse one.
+//
+// Every field is a pointer, and that is load-bearing rather than
+// stylistic. encoding/json leaves a pointer nil when its key is absent
+// and sets it when the key is present, which is what lets this route
+// carry "change only remote_path" as a request that is structurally
+// incapable of also moving local_path. A value-typed body could not: a
+// missing "port" and an explicit "port": 0 would arrive identically, and
+// 0 is a real answer here (it selects the default port), so the Web UI's
+// per-box Save would end up shipping every other box's current contents
+// alongside the one an operator actually pressed Save on.
+//
+// It deliberately carries no name/source_name, no ssh_key_id and no
+// known_hosts_line. See core/service/backupsetupdate.go's own package doc
+// for why each of those is not an edit.
+type updateBackupSetRequest struct {
+	Host       *string   `json:"host"`
+	Port       *int      `json:"port"`
+	User       *string   `json:"user"`
+	RemotePath *string   `json:"remote_path"`
+	LocalPath  *string   `json:"local_path"`
+	Include    *[]string `json:"include"`
+
+	CompletionStrategy *string `json:"completion_strategy"`
+	StableForSeconds   *int    `json:"stable_for_seconds"`
+	StaleAfterSeconds  *int    `json:"stale_after_seconds"`
+
+	ValidatorID *string `json:"validator_id"`
+}
+
+// updateBackupSet is PATCH /api/v1/backup-sets/{source}/{set} (issue
+// #350): change one already-persisted backup set's definition.
+//
+// PATCH rather than PUT, and PATCH rather than a POST tail like /enabled
+// and /read-only beside it. Those two are single-valued toggles with a
+// name; this is a partial edit of a resource, which is what PATCH means,
+// and this package already uses it for exactly that shape at PATCH
+// /api/v1/settings. A PUT would promise whole-resource replacement, which
+// this route deliberately does not offer: a client that sent a PUT
+// missing a field would be asking for it to be cleared, and in a backup
+// tool that is the kind of promise that quietly empties an include list.
+//
+// requireCSRF and NOT requireDestructiveGate, following createBackupSet's
+// own tier (destructiveGateExemptRoutes, router_test.go). §50 puts
+// "create/edit backup set" in one bucket, and nothing reachable from here
+// touches, moves or deletes a byte of backup data: the config file
+// changes, and the next cycle acts on the new definition. The gate exists
+// for run_immediately and for retention apply, not for writing a set.
+//
+// The id comes from two named segments rather than the catch-all
+// getBackupSet uses, exactly like /enabled and /read-only: a backup set
+// id is always exactly source/name, a fixed arity, so a route that says
+// so lets chi answer a malformed id with a 404 instead of a handler
+// having to interpret one.
+func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxCreateBackupSetBodyBytes)
+
+	var body updateBackupSetRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDecodeError(w, err, maxCreateBackupSetBodyBytes)
+		return
+	}
+
+	req := service.UpdateBackupSetRequest{
+		Host:               body.Host,
+		Port:               body.Port,
+		User:               body.User,
+		RemotePath:         body.RemotePath,
+		LocalPath:          body.LocalPath,
+		Include:            body.Include,
+		CompletionStrategy: body.CompletionStrategy,
+		StableFor:          secondsPointerToDuration(body.StableForSeconds),
+		StaleAfter:         secondsPointerToDuration(body.StaleAfterSeconds),
+	}
+	if body.ValidatorID != nil {
+		id := service.ValidatorID(*body.ValidatorID)
+		req.ValidatorID = &id
+	}
+
+	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	updated, err := h.backend.UpdateBackupSet(r.Context(), id, req)
+	if err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
+		writeBackupSetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
+}
+
+// secondsPointerToDuration is secondsToDuration for a field that has to
+// keep telling "absent" apart from "zero". It returns nil for nil, so a
+// body that never mentioned stable_for_seconds reaches core/service as a
+// nil *time.Duration rather than as a pointer to zero, which
+// core/service would read as an operator asking for zero.
+func secondsPointerToDuration(s *int) *time.Duration {
+	if s == nil {
+		return nil
+	}
+	d := secondsToDuration(*s)
+	return &d
+}

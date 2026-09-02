@@ -105,6 +105,10 @@ var contractBindings = map[string]contractBinding{
 	"reinstateArtifact":         {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
 	"setBackupSetEnabled":       {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
 	"setBackupSetReadOnly":      {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+	// Issue #350's edit route. It shares its path template with
+	// getBackupSet's "/api/v1/backup-sets/*" catch-all and does not
+	// collide with it, because chi routes on the method too.
+	"updateBackupSet": {"/api/v1/backup-sets/{source}/{set}", updateBackupSetRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1"},
 	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
 	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
 	"getRetentionErrorEnvelope": {"", nil, errorResponse{}, ""},

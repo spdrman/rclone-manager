@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7"
+const ContractSHA256 = "fe30be6850d387054c31cdfcd43b96380f6690e5046e14f94c4e89d688fa04fe"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -297,6 +297,18 @@ var Endpoints = []Endpoint{
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "updateBackupSet", Method: "PATCH", Path: "/backup-sets/{source}/{set}",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "UpdateBackupSetRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
 		},
 	},
 	{
@@ -1173,6 +1185,30 @@ type TestConnectionResponse struct {
 	OK      bool   `json:"ok"`
 }
 
+// UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
+// already-persisted backup set (issue #350): every property is
+// optional, and a property this body omits is left exactly as it is
+// rather than cleared. That is what lets the Web UI's per-box Save
+// persist only the box it belongs to. It deliberately carries no
+// name/source_name (a backup set's identity keys every journal row,
+// artifact id and recovery manifest it has ever produced, so a
+// rename is a migration rather than an edit) and no
+// ssh_key_id/known_hosts_line (those are the results of the import
+// and probe steps, and re-trusting a host is a trust decision rather
+// than an edit).
+type UpdateBackupSetRequest struct {
+	CompletionStrategy *string   `json:"completion_strategy"`
+	Host               *string   `json:"host"`
+	Include            *[]string `json:"include"`
+	LocalPath          *string   `json:"local_path"`
+	Port               *int      `json:"port"`
+	RemotePath         *string   `json:"remote_path"`
+	StableForSeconds   *int      `json:"stable_for_seconds"`
+	StaleAfterSeconds  *int      `json:"stale_after_seconds"`
+	User               *string   `json:"user"`
+	ValidatorID        *string   `json:"validator_id"`
+}
+
 // UpdateCapacitySettings is A PARTIAL capacity update. An omitted field is left exactly as the
 // running configuration has it. An explicit 0 is a request, not an
 // omission: on this block zero means "no cap" and "no warning line",
@@ -1278,6 +1314,7 @@ var SchemaTypes = map[string]any{
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
 	"TestConnectionResponse":      TestConnectionResponse{},
+	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":      UpdateCapacitySettings{},
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},
 	"UpdateSettingsRequest":       UpdateSettingsRequest{},
