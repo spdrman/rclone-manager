@@ -216,10 +216,11 @@ function RetentionPanel({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 11, fontSize: 13 }}>
-      <div
-        className={r.isOverride ? "banner" : "banner banner--ok"}
-        style={{ fontSize: "var(--text-sm)" }}
-      >
+      {/* banner--info on BOTH branches, deliberately. Neither state is a
+          warning and neither is a success, so the two are told apart by
+          what the sentence says rather than by colour, which this UI does
+          not rely on alone anywhere. */}
+      <div className="banner banner--info" style={{ fontSize: "var(--text-sm)" }}>
         <span>
           {r.isOverride
             ? "Retained under this backup set's own policy. Editing the deployment's retention policy will not change it."
