@@ -748,11 +748,31 @@ const hookTimeoutBudget = 2 * time.Second
 // finished" cannot be true by accident on a slow machine.
 const hookNeverAnswers = 30 * time.Second
 
-// hookReturnBudget bounds how long the call under test may take. Well
-// under hookNeverAnswers, so it still proves the sleep was cut short,
-// and well over hookTimeoutBudget, so a descheduled goroutine does not
-// turn a correct kill into a failure.
-const hookReturnBudget = 10 * time.Second
+// hookReturnBudget bounds how long the call under test may take, and it
+// is the assertion that actually separates a killed hook from an
+// abandoned one. That is not obvious and I got it wrong first time, so it
+// is worth writing down.
+//
+// The pid read below looks like the proof that the process was killed. It
+// is not. Both implementations set c.WaitDelay = 5s, so os/exec kills the
+// process five seconds after the context is done whatever c.Cancel did or
+// did not do. By the time any of the checks below run, the process is
+// gone either way, and every one of them passes for a build that never
+// killed anything. I checked rather than reasoned: with the SIGKILL taken
+// out of c.Cancel in both restorecheck.go and verify.go, leaving WaitDelay
+// to do the reaping, both tests passed in 7.01s against a 10s budget.
+//
+// What separates the two is the elapsed time, and the two regimes are far
+// apart. A hook that is killed returns at about hookTimeoutBudget, which
+// is 2s. A hook that is merely abandoned returns at hookTimeoutBudget plus
+// WaitDelay, which is 7s. So the bound goes between them, at 5s: three
+// seconds of slack above the working case, so a descheduled goroutine on a
+// loaded machine does not turn a correct kill into a failure, and two
+// seconds below the broken one, so the broken one cannot slip under it.
+// Widening this past 7s makes both tests vacuous. Found by the author of
+// #382, who reached these two tests from the other direction (issue #371,
+// a cold exec on macOS costing more than the old 200ms budget).
+const hookReturnBudget = 5 * time.Second
 
 // pidFileWait is how long timedOutHookPID waits for the killed script's
 // pid to become readable. It starts after the call under test has already
