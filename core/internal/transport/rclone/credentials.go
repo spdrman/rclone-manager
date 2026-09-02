@@ -75,6 +75,22 @@ const (
 	credKeySessionToken    = "aws_session_token"
 )
 
+// configErrorf builds a transport.Configuration failure.
+//
+// Every refusal in this file and in s3.go that is a fact about what an
+// operator WROTE goes through it, rather than falling through Classify to
+// Permanent. The two are different messages to whoever is on the other end:
+// Permanent means this code did not recognise the failure, and
+// Configuration means somebody has a typo and no retry will help. FR-28
+// added the category for exactly this, and a category nothing produces is
+// a category nothing can act on.
+//
+// A permission failure is NOT one of these: it keeps transport.KeyPermissions,
+// which is its own considered verdict with its own remediation.
+func configErrorf(format string, args ...any) error {
+	return transport.NewError(transport.Configuration, "medium_configuration", fmt.Errorf(format, args...))
+}
+
 // resolvedCredentials is one medium's credentials, after resolution.
 //
 // # Why this type carries its own redaction, when its fields are already obs.Secret
@@ -199,9 +215,9 @@ func resolveMediumCredentials(medium transport.Medium) (resolvedCredentials, err
 	}
 	switch {
 	case sources == 0:
-		return resolvedCredentials{}, fmt.Errorf("medium %q: exactly one of credentials.file, credentials.env or credentials.command is required (there is no anonymous access and no ambient-credential fallback)", medium.ID)
+		return resolvedCredentials{}, configErrorf("medium %q: exactly one of credentials.file, credentials.env or credentials.command is required (there is no anonymous access and no ambient-credential fallback)", medium.ID)
 	case sources > 1:
-		return resolvedCredentials{}, fmt.Errorf("medium %q: exactly one of credentials.file, credentials.env or credentials.command may be set, not more than one", medium.ID)
+		return resolvedCredentials{}, configErrorf("medium %q: exactly one of credentials.file, credentials.env or credentials.command may be set, not more than one", medium.ID)
 	}
 
 	switch {
@@ -259,10 +275,10 @@ func resolveCredentialsFile(mediumID, configured string) (string, error) {
 	path := env.ShellExpand(configured)
 	info, err := os.Stat(path)
 	if err != nil {
-		return "", fmt.Errorf("medium %q: credentials file %q is not accessible: %w", mediumID, configured, err)
+		return "", configErrorf("medium %q: credentials file %q is not accessible: %v", mediumID, configured, err)
 	}
 	if info.IsDir() {
-		return "", fmt.Errorf("medium %q: credentials file %q is a directory, not a file", mediumID, configured)
+		return "", configErrorf("medium %q: credentials file %q is a directory, not a file", mediumID, configured)
 	}
 	if mode := info.Mode().Perm(); mode&0o077 != 0 {
 		return "", transport.NewError(transport.KeyPermissions, "medium_credentials_permissions", fmt.Errorf(
@@ -274,7 +290,112 @@ func resolveCredentialsFile(mediumID, configured string) (string, error) {
 	if err := checkKeyDirChainMode(mediumID, configured, path); err != nil {
 		return "", err
 	}
+	if err := checkCredentialsFileHasADefaultProfile(mediumID, configured, path); err != nil {
+		return "", err
+	}
 	return path, nil
+}
+
+// checkCredentialsFileHasADefaultProfile refuses a credentials file that
+// does not carry a profile named exactly `default`.
+//
+// # Why this exists, and it is not a style rule
+//
+// Measured against a real MinIO. A file whose only profile is
+// `[cold-storage]`, or `[profile cold-storage]`, does not fail: it HANGS.
+// rclone reaches the file through the AWS SDK's credential chain, the
+// chain finds no profile it was asked for, and it keeps walking, and the
+// last link is EC2 instance metadata. On any host that is not an EC2
+// instance, that is a connection to the link-local address 169.254.169.254
+// which nothing answers, so the operation stalls for as long as the caller
+// allows it to. Timed: 12 seconds against a 12-second deadline, and it
+// would have been an hour against an hour.
+//
+//	default.creds     took=7ms       err=<nil>
+//	named.creds       took=12.002s   err=... context deadline exceeded
+//	profiled.creds    took=12s       err=... context deadline exceeded
+//
+// A backup medium that stalls silently is precisely the
+// protection-dies-quietly failure this product exists to prevent, and a
+// deployment would experience it as "backups got slow" rather than as a
+// typo in a profile name. There is no rclone option and no SDK option
+// reachable from here that shortens it: the SDK's own switch is the
+// AWS_EC2_METADATA_DISABLED environment variable, and a library may not
+// mutate its process's environment.
+//
+// # What this reads, and what it does not
+//
+// This is the one place this process opens a credentials file, so the
+// property that makes `file` the preferred source deserves restating
+// exactly rather than being quietly weakened.
+//
+// It reads the file's LINES to find its profile headers. It retains only
+// the header names, compares them against one literal, and zeroes its
+// buffer on the way out. It never parses a setting, never wraps a value,
+// never returns one, and never hands one to rclone: rclone still opens the
+// file itself for the actual credentials, which is the part that matters.
+// A key's bytes do pass through a buffer this function owns for the
+// duration of one scan and are then overwritten, which is a strictly
+// smaller exposure than the env and command sources accept for their whole
+// operation.
+//
+// The trade is worth naming plainly: a few microseconds of a secret in a
+// buffer this code zeroes, against a medium that hangs instead of failing.
+//
+// # Why `default` and not "any single profile"
+//
+// Because there is no profile field in config.MediumCredentials to select
+// with, and rclone passes the configured path through
+// awsconfig.WithSharedConfigFiles, so the SDK looks for whichever profile
+// it was told to use, which with nothing set is `default`. The env and
+// command sources accept a single profile under any name because THIS
+// package parses those itself and can simply take the one profile there
+// is; the file source's selection happens inside the SDK, where this
+// package has no say.
+func checkCredentialsFileHasADefaultProfile(mediumID, configured, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return configErrorf("medium %q: credentials file %q could not be read: %v", mediumID, configured, err)
+	}
+	defer f.Close()
+
+	var profiles []string
+	found := false
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 4096)
+	scanner.Buffer(buf, maxResolvedCredentialsSize)
+	defer zeroBytes(buf[:cap(buf)])
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "[") || !strings.HasSuffix(line, "]") {
+			// Not a header. Nothing about this line is looked at, kept,
+			// or reported.
+			continue
+		}
+		name := strings.TrimSpace(line[1 : len(line)-1])
+		profiles = append(profiles, name)
+		if name == "default" {
+			found = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return configErrorf("medium %q: credentials file %q could not be read as text", mediumID, configured)
+	}
+	if found {
+		return nil
+	}
+	// The profile NAMES are reported, because a name is not a secret and is
+	// the whole content of the fix. No value ever is.
+	switch len(profiles) {
+	case 0:
+		return configErrorf("medium %q: credentials file %q has no [profile] header at all; it must carry a [default] profile, "+
+			"because there is no profile setting to select any other one with", mediumID, configured)
+	default:
+		return configErrorf("medium %q: credentials file %q declares %v but no [default] profile. "+
+			"Rename it to [default]: there is no profile setting to select another one with, and a file the credential chain "+
+			"cannot resolve does not fail, it falls through to EC2 instance metadata and stalls until the operation times out",
+			mediumID, configured, profiles)
+	}
 }
 
 // resolveCredentialsFromEnv reads name from the environment and validates
@@ -289,7 +410,7 @@ func resolveCredentialsFile(mediumID, configured string) (string, error) {
 func resolveCredentialsFromEnv(name string) (resolvedCredentials, error) {
 	val, ok := os.LookupEnv(name)
 	if !ok {
-		return resolvedCredentials{}, fmt.Errorf("environment variable %q is not set", name)
+		return resolvedCredentials{}, configErrorf("environment variable %q is not set", name)
 	}
 	buf := []byte(val)
 	defer zeroBytes(buf)

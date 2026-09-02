@@ -3,6 +3,7 @@ package rclone
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -57,6 +58,38 @@ func TestS3Config_OnlyAllowlistedKeysAreSet(t *testing.T) {
 				// of rclone's own option defaults, exactly as sftpConfig's
 				// subsystem/chunk_size/concurrency do. Without them NewFs
 				// refuses outright or an upload deadlocks. See s3Config.
+				"chunk_size":         true,
+				"upload_cutoff":      true,
+				"copy_cutoff":        true,
+				"upload_concurrency": true,
+				"max_upload_parts":   true,
+				"list_chunk":         true,
+			},
+		},
+		{
+			// The session-token case is its own row rather than a field
+			// added to the row above, because the test asserts that every
+			// allowed key IS set as well as that no other one is: a
+			// medium with no session token must not produce an empty
+			// session_token, and one with a token must produce it. Two
+			// allowlists is the only way to say both.
+			name: "resolved credentials carrying a session token",
+			medium: func(t *testing.T) transport.Medium {
+				t.Helper()
+				t.Setenv("RCLONE_MANAGER_TEST_S3_CREDS", canaryCredentialsINI()+"aws_session_token = "+canaryToken+"\n")
+				return mediumWith(transport.MediumCredentials{Env: "RCLONE_MANAGER_TEST_S3_CREDS"})
+			},
+			allowed: map[string]bool{
+				"provider":           true,
+				"region":             true,
+				"endpoint":           true,
+				"env_auth":           true,
+				"access_key_id":      true,
+				"secret_access_key":  true,
+				"session_token":      true,
+				"storage_class":      true,
+				"force_path_style":   true,
+				"no_check_bucket":    true,
 				"chunk_size":         true,
 				"upload_cutoff":      true,
 				"copy_cutoff":        true,
@@ -372,5 +405,103 @@ func clearAmbientAWSEnvironment(t *testing.T) {
 		// duration, which is not the same as present-and-empty.
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)
+	}
+}
+
+// TestS3Config_RefusalsAreConfigurationNotPermanent pins the category on
+// every refusal that is a fact about what an operator wrote.
+//
+// It matters because Permanent and Configuration say different things to
+// whoever is on the other end: Permanent means this classifier did not
+// recognise the failure, and Configuration means somebody has a typo and no
+// retry will help. FR-28 added the category for exactly this, and a
+// category nothing ever produces is a category nothing can act on.
+//
+// Before this, every one of these fell through Classify to Permanent, which
+// is the label for "we do not know what this was" attached to the cases we
+// know best.
+func TestS3Config_RefusalsAreConfigurationNotPermanent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		medium func(*testing.T) transport.Medium
+	}{
+		{"no bucket", func(t *testing.T) transport.Medium {
+			m := s3MediumWithEnvCredentials(t)
+			m.Bucket = ""
+			return m
+		}},
+		{"a bucket and a prefix in one field", func(t *testing.T) transport.Medium {
+			m := s3MediumWithEnvCredentials(t)
+			m.Bucket = "nas-backups/rclone-manager"
+			return m
+		}},
+		{"a medium type this adapter does not implement", func(t *testing.T) transport.Medium {
+			m := s3MediumWithEnvCredentials(t)
+			m.Type = "azure"
+			return m
+		}},
+		{"no credential source at all", func(t *testing.T) transport.Medium {
+			return mediumWith(transport.MediumCredentials{})
+		}},
+		{"two credential sources", func(t *testing.T) transport.Medium {
+			return mediumWith(transport.MediumCredentials{File: "/tmp/x", Env: "Y"})
+		}},
+		{"an environment variable that is not set", func(t *testing.T) transport.Medium {
+			t.Helper()
+			_ = os.Unsetenv("RCLONE_MANAGER_TEST_S3_CREDS_MISSING")
+			return mediumWith(transport.MediumCredentials{Env: "RCLONE_MANAGER_TEST_S3_CREDS_MISSING"})
+		}},
+		{"a credentials file that is not there", func(t *testing.T) transport.Medium {
+			t.Helper()
+			clearAmbientAWSEnvironment(t)
+			return mediumWith(transport.MediumCredentials{File: filepath.Join(t.TempDir(), "absent")})
+		}},
+		{"a credentials file with no default profile", func(t *testing.T) transport.Medium {
+			t.Helper()
+			clearAmbientAWSEnvironment(t)
+			return mediumWith(transport.MediumCredentials{File: writeCredentialsFile(t, "[cold]\naws_access_key_id = a\naws_secret_access_key = b\n")})
+		}},
+		{"an ambient AWS key in the environment", func(t *testing.T) transport.Medium {
+			t.Helper()
+			clearAmbientAWSEnvironment(t)
+			t.Setenv("AWS_ACCESS_KEY_ID", "somebody-elses-account")
+			return mediumWith(transport.MediumCredentials{File: writeCredentialsFile(t, canaryCredentialsINI())})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s3Config(tc.medium(t))
+			if err == nil {
+				t.Fatal("expected a refusal")
+			}
+			category, ok := transport.CategoryOf(err)
+			if !ok {
+				t.Fatalf("the refusal carries no manager-owned category at all: %v", err)
+			}
+			if category != transport.Configuration {
+				t.Errorf("category = %s, want %s; this is a fact about what an operator wrote, and no retry changes it\nerror: %v", category, transport.Configuration, err)
+			}
+			if category.Retryable() {
+				t.Error("this refusal reports itself retryable")
+			}
+		})
+	}
+}
+
+// TestS3Config_APermissionRefusalKeepsItsOwnVerdict is the bound on the
+// test above. A credentials file anyone can read is not filed under
+// Configuration: KeyPermissions is its own considered verdict with its own
+// remediation, and #293 argued it at length for the SSH key.
+func TestS3Config_APermissionRefusalKeepsItsOwnVerdict(t *testing.T) {
+	clearAmbientAWSEnvironment(t)
+	path := writeCredentialsFile(t, canaryCredentialsINI())
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	_, err := s3Config(mediumWith(transport.MediumCredentials{File: path}))
+	if err == nil {
+		t.Fatal("a world-readable credentials file was accepted")
+	}
+	if category, _ := transport.CategoryOf(err); category != transport.KeyPermissions {
+		t.Errorf("category = %s, want %s", category, transport.KeyPermissions)
 	}
 }

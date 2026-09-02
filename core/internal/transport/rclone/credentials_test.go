@@ -387,3 +387,73 @@ func writeScript(t *testing.T, body string) string {
 	}
 	return path
 }
+
+// TestResolveMediumCredentials_FileNeedsADefaultProfile is the guard on the
+// failure mode that does not look like a failure.
+//
+// Measured against a real MinIO: a credentials file whose only profile is
+// named anything but `default` does not get refused by the AWS SDK, it
+// falls through the credential chain to EC2 instance metadata and stalls
+// until the caller's deadline expires. Twelve seconds against a twelve
+// second deadline; an hour against an hour. See
+// checkCredentialsFileHasADefaultProfile.
+func TestResolveMediumCredentials_FileNeedsADefaultProfile(t *testing.T) {
+	body := "aws_access_key_id = " + canaryKeyID + "\naws_secret_access_key = " + canarySecret + "\n"
+	for _, tc := range []struct {
+		name   string
+		body   string
+		expect string
+	}{
+		{"a profile named after the bucket", "[cold-storage]\n" + body, "cold-storage"},
+		{"the config-file spelling of a named profile", "[profile cold-storage]\n" + body, "profile cold-storage"},
+		{"no profile header at all", body, "no [profile] header"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeCredentialsFile(t, tc.body)
+			_, err := resolveMediumCredentials(mediumWith(transport.MediumCredentials{File: path}))
+			if err == nil {
+				t.Fatal("a credentials file the AWS credential chain cannot resolve was accepted; it does not fail, it stalls")
+			}
+			if !strings.Contains(err.Error(), tc.expect) {
+				t.Errorf("error %q does not name %q, which is what an operator has to change", err, tc.expect)
+			}
+			// The profile NAME is reported on purpose. The values never are.
+			assertNoCanary(t, err.Error(), "a missing-default-profile refusal")
+		})
+	}
+}
+
+// TestResolveMediumCredentials_FileAcceptsADefaultProfileAmongOthers is the
+// bound. A real ~/.aws/credentials holds several profiles, and as long as
+// one of them is `default` the SDK resolves it, so refusing the file would
+// be refusing a configuration that works.
+func TestResolveMediumCredentials_FileAcceptsADefaultProfileAmongOthers(t *testing.T) {
+	body := "[cold-storage]\naws_access_key_id = other\naws_secret_access_key = other\n\n" +
+		"[default]\naws_access_key_id = " + canaryKeyID + "\naws_secret_access_key = " + canarySecret + "\n"
+	path := writeCredentialsFile(t, body)
+	if _, err := resolveMediumCredentials(mediumWith(transport.MediumCredentials{File: path})); err != nil {
+		t.Fatalf("a credentials file carrying a [default] profile alongside others was refused: %v", err)
+	}
+}
+
+// TestCredentialsFileShapeCheckReadsNoSetting proves what the shape check
+// is allowed to see. It reports profile NAMES, which are not secrets and
+// are the entire content of the fix, and it must never report a setting's
+// name or its value: the header scan exists so that a file with an
+// unresolvable profile fails fast, not so this process learns what is in
+// it.
+func TestCredentialsFileShapeCheckReadsNoSetting(t *testing.T) {
+	body := "[cold-storage]\naws_access_key_id = " + canaryKeyID + "\naws_secret_access_key = " + canarySecret +
+		"\nregion = us-east-1\nrole_arn = arn:aws:iam::1234:role/secret-role-name\n"
+	path := writeCredentialsFile(t, body)
+	_, err := resolveMediumCredentials(mediumWith(transport.MediumCredentials{File: path}))
+	if err == nil {
+		t.Fatal("expected a refusal, so this check had nothing to look at")
+	}
+	for _, leaked := range []string{"aws_access_key_id", "aws_secret_access_key", "region", "role_arn", "secret-role-name", "us-east-1"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Errorf("the refusal names %q, which is a SETTING from inside the file; this check reads headers and nothing else", leaked)
+		}
+	}
+	assertNoCanary(t, err.Error(), "a shape-check refusal")
+}

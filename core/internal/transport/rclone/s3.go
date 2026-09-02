@@ -140,18 +140,29 @@ const (
 //     AWS_CONTAINER_CREDENTIALS_FULL_URI: further links in the chain, which
 //     take effect when the file yields nothing.
 //
-// # The one residual, stated rather than hidden
+// # The one residual, stated rather than hidden, and corrected
 //
 // EC2 instance metadata is the last link and there is no variable to refuse
 // that turns it off: the SDK's own switch is AWS_EC2_METADATA_DISABLED,
 // which would have to be SET rather than absent, and a library may not
-// mutate its process's environment. So if the configured file exists,
-// passes the checks in credentials.go, and still yields no credentials, an
-// EC2 deployment can reach IMDS. What happens then is an AccessDenied
-// against a bucket an instance role has no reason to be able to touch, so
-// the outcome is a loud failure rather than a silent write to the wrong
-// account. That is a worse diagnostic than it could be, not a data-safety
-// hole.
+// mutate its process's environment.
+//
+// An earlier version of this comment said the consequence was a loud
+// AccessDenied against a bucket no instance role can touch. That was wrong,
+// and measuring it is what showed the real behaviour: a chain that resolves
+// nothing does not fail, it STALLS, because on a host that is not an EC2
+// instance the metadata request goes to the link-local address
+// 169.254.169.254 and nothing answers. Timed against a real MinIO with a
+// credentials file whose profile was not named default: 12 seconds against
+// a 12-second deadline, and it would have been an hour against an hour.
+//
+// So the residual is narrowed by making the reachable cause impossible
+// rather than by documenting it. credentials.go's
+// checkCredentialsFileHasADefaultProfile refuses a file the chain could not
+// resolve, up front and by name, which removes the one way an ordinary
+// misconfiguration reaches IMDS. What is left needs a file that has a
+// [default] profile AND that the SDK still cannot use, which is a much
+// narrower shape than "somebody named their profile after their bucket".
 var ambientAWSCredentialEnvVars = []string{
 	"AWS_ACCESS_KEY_ID",
 	"AWS_ACCESS_KEY",
@@ -222,16 +233,16 @@ var ambientAWSCredentialEnvVars = []string{
 // credentials it is handed.
 func s3Config(medium transport.Medium) (configmap.Simple, error) {
 	if medium.ID == "" {
-		return nil, fmt.Errorf("a storage medium needs an id before it can be used; it is what a placement record names")
+		return nil, configErrorf("a storage medium needs an id before it can be used; it is what a placement record names")
 	}
 	if medium.Type != transport.MediumTypeS3 {
-		return nil, fmt.Errorf("medium %q: type %q is not %q, and this adapter implements no other", medium.ID, medium.Type, transport.MediumTypeS3)
+		return nil, configErrorf("medium %q: type %q is not %q, and this adapter implements no other", medium.ID, medium.Type, transport.MediumTypeS3)
 	}
 	if medium.Bucket == "" {
-		return nil, fmt.Errorf("medium %q: bucket is required; a medium with no bucket names no destination at all", medium.ID)
+		return nil, configErrorf("medium %q: bucket is required; a medium with no bucket names no destination at all", medium.ID)
 	}
 	if strings.Contains(medium.Bucket, "/") {
-		return nil, fmt.Errorf("medium %q: bucket %q contains %q, which usually means a bucket and a prefix were written into one field; put the namespace in prefix instead", medium.ID, medium.Bucket, "/")
+		return nil, configErrorf("medium %q: bucket %q contains %q, which usually means a bucket and a prefix were written into one field; put the namespace in prefix instead", medium.ID, medium.Bucket, "/")
 	}
 
 	creds, err := resolveMediumCredentials(medium)
@@ -324,7 +335,7 @@ func refuseAmbientAWSCredentialEnvironment(mediumID string) error {
 	}
 	// The variable NAMES, never their values. A name is what an operator
 	// needs in order to act; a value is very often the credential itself.
-	return fmt.Errorf(
+	return configErrorf(
 		"medium %q: credentials.file cannot be used while this process's environment carries %s: "+
 			"reading the file means asking the AWS SDK's credential chain for it, and the environment sits AHEAD of the file in that chain, "+
 			"so the backup would silently run as whichever account those variables name. "+
