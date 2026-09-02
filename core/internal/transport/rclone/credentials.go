@@ -330,17 +330,28 @@ func resolveCredentialsFile(mediumID, configured string) (string, error) {
 // exactly rather than being quietly weakened.
 //
 // It reads the file's LINES to find its profile headers. It retains only
-// the header names, compares them against one literal, and zeroes its
-// buffer on the way out. It never parses a setting, never wraps a value,
-// never returns one, and never hands one to rclone: rclone still opens the
-// file itself for the actual credentials, which is the part that matters.
-// A key's bytes do pass through a buffer this function owns for the
-// duration of one scan and are then overwritten, which is a strictly
-// smaller exposure than the env and command sources accept for their whole
-// operation.
+// the header names and compares them against one literal. It never parses
+// a setting, never wraps a value, never returns one, and never hands one to
+// rclone: rclone still opens the file itself for the actual credentials,
+// which is the part that carries the property.
 //
-// The trade is worth naming plainly: a few microseconds of a secret in a
-// buffer this code zeroes, against a medium that hangs instead of failing.
+// What it does NOT claim, in keysource.go's own words about the same
+// problem: the bytes are not reliably erased. The scanner's initial buffer
+// is zeroed here, and a credentials file's lines are far shorter than it,
+// so in practice that is the buffer the data passed through. But
+// bufio.Scanner allocates a larger one if a line ever outgrows it, and
+// Scanner.Text returns a freshly allocated string per line that Go gives no
+// supported way to overwrite. So the honest statement is: a key's bytes
+// pass through memory this function owns, for the duration of one scan of
+// one small file, and are best-effort overwritten, which defends against an
+// accidental later reuse of freed memory and not against an attacker who
+// already has this process's live memory. That is strictly less exposure
+// than the env and command sources accept for their whole operation, and
+// pretending it is zero would be a less honest kind of undefended than
+// saying so.
+//
+// The trade is worth naming plainly: a small, bounded, best-effort-erased
+// window against a medium that hangs instead of failing.
 //
 // # Why `default` and not "any single profile"
 //
