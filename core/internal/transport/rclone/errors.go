@@ -282,6 +282,16 @@ var s3Categories = map[string]transport.Category{
 	"ExpiredToken":          transport.Authentication,
 	"InvalidToken":          transport.Authentication,
 	"TokenRefreshRequired":  transport.Authentication,
+	// Forbidden and Unauthorized are not S3 codes at all, they are what
+	// the SDK synthesizes from the HTTP status when the response has no
+	// body to read a code out of. A HEAD is exactly that response, and a
+	// HEAD is how this adapter stats an object, so this is the code a
+	// wrong credential actually produces on the most common call: proved
+	// against MinIO in core/tests/miniointegration, and missing from an
+	// earlier version of this table that was written from the S3
+	// documentation alone.
+	"Forbidden":    transport.Authentication,
+	"Unauthorized": transport.Authentication,
 
 	// The object is not there. NotFound is what a HEAD returns; NoSuchKey
 	// is what a GET returns; both mean the same thing to this product.

@@ -71,6 +71,39 @@ var _ transport.MediumStore = (*Adapter)(nil)
 // that key verbatim; splitting the prefix between the Fs root and the key
 // would give the same object two spellings depending on which side of the
 // boundary you asked.
+// mediumRetries is how many times rclone, and the AWS SDK underneath it,
+// may retry one low-level request before giving the failure back.
+//
+// rclone's own default is 10, and against an endpoint that is simply not
+// there that default costs almost four minutes of silence per call: rclone
+// retries the operation, the SDK retries each attempt, and the two
+// multiply. That was measured, not guessed (an unreachable endpoint took
+// 235 seconds to report through this adapter before this bound existed).
+//
+// Two is the right number here because this product already has a retry
+// policy of its own, one layer up: transport/retry's bounded backoff acts
+// on the FR-22 category, which is the level at which "should this be tried
+// again" is actually a decision. rclone's low-level retries are for
+// smoothing a flaky byte stream, not for waiting out an outage, and a
+// medium operation that cannot get through needs to say so while a cycle
+// still has time to do something else.
+//
+// It is applied to the medium path only. fsFor's Transport path keeps
+// rclone's default, because changing what an sftp transfer does under a
+// flaky link is a real behavioural change with a live integration suite
+// pinned to it, and it belongs to its own issue.
+const mediumRetries = 2
+
+// mediumContext bounds rclone's own retrying for one medium operation. It
+// has to wrap the context the Fs is BUILT with as well as the one the
+// operation runs under: the s3 backend reads LowLevelRetries once, at
+// construction, to size the AWS SDK's retryer.
+func mediumContext(ctx context.Context) context.Context {
+	bounded, config := fs.AddConfig(ctx)
+	config.LowLevelRetries = mediumRetries
+	return bounded
+}
+
 func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs, error) {
 	if medium.ID == "" {
 		return nil, transport.NewError(transport.Configuration, "medium_fs", errors.New("medium has no id"))
@@ -123,7 +156,7 @@ func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs,
 			fmt.Errorf("backend %q is not registered in this binary: %w", backend, err))
 	}
 
-	f, err := info.NewFs(ctx, medium.ID, medium.Bucket, cfg)
+	f, err := info.NewFs(ctx, medium.ID, medium.Bucket, withBackendDefaults(cfg, info))
 	if err != nil {
 		return nil, Wrap("medium_fs", fmt.Errorf("medium %q: %w", medium.ID, err))
 	}
@@ -149,6 +182,7 @@ func toObjectInfo(ctx context.Context, o fs.Object) transport.ObjectInfo {
 }
 
 func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key string) (transport.ObjectInfo, error) {
+	ctx = mediumContext(ctx)
 	f, err := a.mediumFs(ctx, medium)
 	if err != nil {
 		return transport.ObjectInfo{}, err
@@ -167,6 +201,7 @@ func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key s
 // that the destination verified (FR-30). This method has no opinion about
 // when that is; it just never takes the decision away.
 func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, localPath, key string, opts transport.UploadOptions) (transport.UploadResult, error) {
+	ctx = mediumContext(ctx)
 	if key == "" {
 		return transport.UploadResult{}, transport.NewError(transport.Configuration, "upload_from_local",
 			errors.New("an upload needs a destination key"))
@@ -203,6 +238,7 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 }
 
 func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key string) (io.ReadCloser, error) {
+	ctx = mediumContext(ctx)
 	f, err := a.mediumFs(ctx, medium)
 	if err != nil {
 		return nil, err
@@ -225,6 +261,7 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 // stronger name. See this file's package comment for why an s3 medium
 // always takes the second one on rclone v1.75.0.
 func (a *Adapter) ObjectChecksum(ctx context.Context, medium transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+	ctx = mediumContext(ctx)
 	if alg != transport.SHA256 {
 		return transport.ChecksumAttestation{}, Wrap("object_checksum", fmt.Errorf(
 			"%w: this boundary attests %s and nothing else, so an ETag's MD5 can never be compared to a recorded hash: %q",
@@ -267,6 +304,7 @@ func (a *Adapter) ObjectChecksum(ctx context.Context, medium transport.Medium, k
 // resuming after a crash must be able to finish a delete it may already
 // have completed.
 func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key string) error {
+	ctx = mediumContext(ctx)
 	f, err := a.mediumFs(ctx, medium)
 	if err != nil {
 		return err
@@ -289,6 +327,7 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 // caller rebuilding a catalog has to be able to tell it apart from "the
 // medium could not be reached".
 func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, prefix string) ([]transport.ObjectInfo, error) {
+	ctx = mediumContext(ctx)
 	f, err := a.mediumFs(ctx, medium)
 	if err != nil {
 		return nil, err
@@ -319,4 +358,58 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 func isNotFound(err error) bool {
 	category, ok := transport.CategoryOf(err)
 	return ok && category == transport.NotFound
+}
+
+// withBackendDefaults layers a backend's own option defaults underneath
+// the options this adapter set, and layers nothing else underneath those.
+//
+// # Why this is needed at all
+//
+// Handing info.NewFs a bare configmap.Simple, the way fsFor has always
+// done for sftp, means every option this adapter did not set explicitly
+// arrives at the backend as its ZERO value rather than as the default
+// rclone documents. sftp survives that because its zero values are
+// workable; s3 does not, and it says so immediately: an unset chunk_size
+// arrives as 0 and the backend refuses to build at all with "chunk size:
+// 0 is less than 5Mi". Multipart thresholds, concurrency, the list
+// chunk, the copy cutoff and a dozen other knobs are in the same
+// position, and the ones that do not refuse outright would silently run
+// at zero.
+//
+// # Why not rclone's own fs.ConfigMap
+//
+// Because it layers in three things this adapter refuses to have: the
+// rclone config FILE for this remote name, remote-specific environment
+// variables (RCLONE_CONFIG_<NAME>_*), and backend-wide ones
+// (RCLONE_S3_*). Every one of those is ambient state outside this
+// product's configuration that could change where a backup is written or
+// which credentials write it, which is exactly what fsFor's own doc
+// promises does not happen. So this composes the one layer that is wanted,
+// defaults, and none of the ones that are not.
+//
+// It is deliberately not retrofitted onto fsFor's sftp path here. That
+// path has worked this way since the adapter was written and its behaviour
+// is pinned by a live SFTP integration suite; changing what options an
+// sftp Fs is built with is a real behavioural change and belongs to its
+// own issue, not to a drive-by in a change about mediums.
+func withBackendDefaults(overrides configmap.Simple, info *fs.RegInfo) *configmap.Map {
+	m := configmap.New()
+	m.AddGetter(overrides, configmap.PriorityNormal)
+	m.AddGetter(backendDefaults{options: info.Options}, configmap.PriorityDefault)
+	return m
+}
+
+// backendDefaults answers with a backend option's documented default, and
+// only ever with that.
+type backendDefaults struct {
+	options fs.Options
+}
+
+func (d backendDefaults) Get(key string) (string, bool) {
+	for i := range d.options {
+		if d.options[i].Name == key {
+			return d.options[i].String(), true
+		}
+	}
+	return "", false
 }

@@ -330,8 +330,7 @@ func observableOutputs(t *testing.T, medium transport.Medium) string {
 	// routes, so both are exercised: the failure through its error, the
 	// success through everything it may have logged on the way.
 	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
-		out.WriteString(fmt.Sprintf(verb, medium))
-		out.WriteString("\n")
+		fmt.Fprintf(&out, verb+"\n", medium)
 	}
 	encoded, err := json.Marshal(medium)
 	if err != nil {
