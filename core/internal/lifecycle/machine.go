@@ -184,6 +184,18 @@ var Transitions = []Transition{
 	{From: Committed, To: Quarantined},
 	{From: RemoteDeletePending, To: Quarantined},
 
+	// RemoteRetained -> Quarantined: issue #315. A retained artifact's
+	// remote copy is never examined by this manager (see state.go), but
+	// its local copy is exactly as durable-restore-point-shaped as a
+	// COMMITTED one, and bit rot does not care that the set is read-only.
+	// This is what lets reconcile.go and internal/revalidate actually
+	// notice a corrupted local copy for one of these artifacts instead of
+	// the permanent no-op they were before: the remote is presumptively
+	// still there (this manager was never going to delete it either way),
+	// so, like Committed/RemoteDeletePending, this routes to the
+	// recoverable QUARANTINED, never to QUARANTINED_LOST.
+	{From: RemoteRetained, To: Quarantined},
+
 	// --- the sole entry into QUARANTINED_LOST: source is confirmed gone ---
 	{From: Complete, To: QuarantinedLost},
 
@@ -204,6 +216,26 @@ var Transitions = []Transition{
 	// taking either edge permanently forfeits the artifact's remote delete.
 	{From: Quarantined, To: Committed},
 	{From: QuarantinedLost, To: Complete},
+
+	// Quarantined -> RemoteRetained: issue #315's second reinstatement
+	// exit out of QUARANTINED, alongside Quarantined -> Committed above.
+	// QUARANTINED now has two lineages that must never be confused with
+	// each other: an artifact quarantined out of an ordinary COMMITTED (or
+	// REMOTE_DELETE_PENDING) belongs back at COMMITTED, but one quarantined
+	// out of REMOTE_RETAINED belongs back at REMOTE_RETAINED specifically,
+	// never at COMMITTED, which would misrepresent a read-only-source
+	// artifact as delete-eligible again the moment its owning backup set's
+	// ReadOnly flag were ever unset. Declaring this edge in the table is
+	// only half of what makes that safe: which of the two targets applies
+	// to one specific artifact depends on which state it was quarantined
+	// FROM, a fact this table cannot express (it is not per-artifact), so
+	// ReinstateFromQuarantine (quarantine.go) resolves the actual target by
+	// reading the append-only transition log for the exact edge that led
+	// THIS artifact into QUARANTINED, rather than by asking
+	// HasReinstatementExit below, which -- now that QUARANTINED has two
+	// declared exits into a durable state -- only confirms that at least
+	// one of them exists, not which one applies.
+	{From: Quarantined, To: RemoteRetained},
 }
 
 // quarantineStates is the set of states that mean "this artifact's content
@@ -221,16 +253,25 @@ func IsQuarantineState(s State) bool { return quarantineStates[s] }
 
 // durableRestorePoints is the set of states in which a durable local final
 // copy exists and the artifact counts as a restore point. It is the same
-// set internal/health's decideState, internal/retention's
-// gfsIsManagedComplete and internal/revalidate's eligibleStates each
-// already keep their own copy of; this one exists so that
+// set internal/health's decideState and internal/retention's
+// gfsIsManagedComplete already keep their own copy of, and, as of issue
+// #315, internal/revalidate's eligibleStates too; this one exists so that
 // ReinstatementEdges can be derived from the table rather than
 // hand-listed, and it is stated here, next to the table, because whether a
 // state is a restore point is a property of the graph.
+//
+// RemoteRetained (issue #282) belongs here for the same reason the other
+// three do: a durable local final copy exists, this manager just never
+// deletes the remote copy alongside it. Adding it here is what makes
+// Quarantined -> RemoteRetained (issue #315) count as a reinstatement edge
+// below, so the FR-15 delete gate's permanent forfeiture and FR-24's
+// reinstated-artifact reporting both cover it automatically, the same way
+// they already cover Quarantined -> Committed.
 var durableRestorePoints = map[State]bool{
 	Committed:           true,
 	RemoteDeletePending: true,
 	Complete:            true,
+	RemoteRetained:      true,
 }
 
 // IsDurableRestorePoint reports whether s is a state in which the artifact
@@ -265,21 +306,35 @@ func ReinstatementEdges() []Transition {
 	return append([]Transition(nil), reinstatementEdges...)
 }
 
-// ReinstatementTarget reports the state a quarantined artifact is returned
-// to when it is reinstated, and whether from is a quarantine state that has
-// such an exit at all.
+// HasReinstatementExit reports whether from is a quarantine state that has
+// at least one reinstatement exit declared in Transitions.
 //
-// There is exactly one target per quarantine state, and it is always a
-// state the artifact already held: QUARANTINED came from COMMITTED or
-// REMOTE_DELETE_PENDING (reinstating to the earlier of the two, see the
-// Transitions doc), and QUARANTINED_LOST came from COMPLETE.
-func ReinstatementTarget(from State) (State, bool) {
+// This function used to be ReinstatementTarget and returned (State, bool):
+// before issue #315 there was exactly one target per quarantine state, so
+// naming it was safe -- QUARANTINED_LOST -> COMPLETE, and QUARANTINED ->
+// COMMITTED regardless of which of COMMITTED, REMOTE_DELETE_PENDING or (as
+// of #315) REMOTE_RETAINED the artifact had actually been quarantined
+// FROM. That is no longer true for QUARANTINED, which now declares two
+// reinstatement edges (see Transitions): a from-state-only answer would
+// have to pick one of them arbitrarily, silently misrouting whichever
+// artifacts' real lineage points at the other edge. This function keeps
+// only the part of the old contract that is still safe to expose:
+// existence. quarantineactions.go's ReinstateQuarantined is the one
+// caller, and it only needs to know an exit exists at all, as a guard
+// before it gathers evidence, not which one applies. A caller that needs
+// the actual target for one specific artifact, the way
+// ReinstateFromQuarantine itself does, must not use this: it has to
+// resolve the target per artifact by reading which exact edge led that
+// artifact into QUARANTINED (see quarantine.go's origin-aware
+// resolution), because no from-state-only answer can tell two quarantined
+// artifacts' lineages apart.
+func HasReinstatementExit(from State) bool {
 	for _, t := range reinstatementEdges {
 		if t.From == from {
-			return t.To, true
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 var transitionSet = func() map[Transition]bool {

@@ -240,30 +240,63 @@ func TestQuarantinedEntryPoints(t *testing.T) {
 	// COMMITTED / REMOTE_DELETE_PENDING: reconciliation found the durable,
 	// final-named local copy corrupted after the fact, but before the
 	// remote delete has actually happened, so a source may still exist.
+	// REMOTE_RETAINED (issue #315): the same finding, for a retained,
+	// read-only-source artifact this manager was never going to delete
+	// the remote copy of anyway; the remote is presumptively still there
+	// since it was never touched, on purpose.
 	// COMPLETE is deliberately excluded here: by then the remote is
 	// confirmed gone, so that case routes to QUARANTINED_LOST instead (see
 	// TestOnlyCompletePrecedesQuarantinedLost).
 	// FAILED: the retry budget is exhausted and this needs a human instead
 	// of another automatic attempt.
 	assertStateSet(t, "Predecessors(Quarantined)", Predecessors(Quarantined),
-		Verifying, Committed, RemoteDeletePending, Failed)
+		Verifying, Committed, RemoteDeletePending, RemoteRetained, Failed)
 }
 
-// QUARANTINED has exactly two exits, and they answer two different
+// QUARANTINED has exactly three exits, and they answer two different
 // questions. DISCOVERED re-ingests: throw the local copy away and fetch the
 // artifact again from the remote, which is the right answer when the local
-// copy really is bad. COMMITTED reinstates: keep the local copy and trust
-// it again, which is the right answer when the local copy is provably
-// intact and the remote may be gone (issue #220). Neither is automatic;
-// both are operator decisions, and the reinstatement one additionally
-// requires evidence that could have failed and forfeits the artifact's
-// remote delete permanently (see quarantine.go and remotedelete.go).
+// copy really is bad. COMMITTED and REMOTE_RETAINED (issue #315) each
+// reinstate: keep the local copy and trust it again, which is the right
+// answer when the local copy is provably intact and the remote may be gone
+// (issue #220) or is retained by policy and was never examined (issue
+// #315). Neither reinstatement target is automatic; both are operator
+// decisions gated on evidence that could have failed, and both forfeit the
+// artifact's remote delete permanently (see quarantine.go and
+// remotedelete.go). Which of the two applies to one specific artifact is
+// resolved per artifact, from its own history, not by this table: see
+// quarantine.go's quarantineOrigins.
 func TestQuarantinedHasExits(t *testing.T) {
 	exits := Successors(Quarantined)
 	if len(exits) == 0 {
 		t.Fatal("QUARANTINED has no declared successors; an artifact that's quarantined would be stuck there forever, which is a leak")
 	}
-	assertStateSet(t, "Successors(Quarantined)", exits, Discovered, Committed)
+	assertStateSet(t, "Successors(Quarantined)", exits, Discovered, Committed, RemoteRetained)
+}
+
+// HasReinstatementExit only promises existence, never a resolved target
+// (see its own doc for why that is all it is safe to promise now that
+// QUARANTINED declares two reinstatement edges). This pins down that
+// existence answer for both quarantine states and for a sample of states
+// that were never quarantined at all.
+func TestHasReinstatementExit(t *testing.T) {
+	cases := []struct {
+		from State
+		want bool
+	}{
+		{Quarantined, true},
+		{QuarantinedLost, true},
+		{Discovered, false},
+		{Verifying, false},
+		{Failed, false},
+		{Committed, false},
+		{Complete, false},
+	}
+	for _, c := range cases {
+		if got := HasReinstatementExit(c.from); got != c.want {
+			t.Errorf("HasReinstatementExit(%s) = %v, want %v", c.from, got, c.want)
+		}
+	}
 }
 
 // The hole this whole package exists to close: a quarantined artifact must

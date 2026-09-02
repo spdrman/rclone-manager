@@ -793,12 +793,13 @@ func TestFailingValidatorBlocksSourceDeletion(t *testing.T) {
 		t.Fatalf("state = %q, want %q", out.Record.State, Quarantined)
 	}
 
-	// Structural proof #1: Quarantined reaches exactly two states, and
-	// neither is REMOTE_DELETE_PENDING or COMPLETE. DISCOVERED re-ingests
-	// from scratch; COMMITTED is issue #220's operator-only reinstatement,
-	// which proofs #2 and #3 below show cannot help this artifact reach a
-	// delete either.
-	assertStateSet(t, "Successors(Quarantined)", Successors(Quarantined), Discovered, Committed)
+	// Structural proof #1: Quarantined reaches exactly three states, and
+	// none is REMOTE_DELETE_PENDING or COMPLETE. DISCOVERED re-ingests from
+	// scratch; COMMITTED and REMOTE_RETAINED (issue #315) are the two
+	// operator-only reinstatement targets issue #220 and #315 add, which
+	// proofs #2 and #3 below show cannot help this artifact reach a delete
+	// either.
+	assertStateSet(t, "Successors(Quarantined)", Successors(Quarantined), Discovered, Committed, RemoteRetained)
 
 	// Structural proof #2: Advance itself, backed by the real journal,
 	// refuses every attempt to move straight from Quarantined to a

@@ -11,16 +11,26 @@ import (
 
 // eligibleStates are the lifecycle states worth re-checking: a durable
 // local final file has to actually exist for there to be anything to
-// re-read. This is the same three-state set FR-19's last-known-good
+// re-read. This is the same four-state set FR-19's last-known-good
 // protection and internal/health's FR-24 computation already call known
 // good. This package does not import either of those (health owns FR-24,
 // retention owns FR-19, and this package's selection policy is allowed to
 // agree with them by definition, both being grounded in the same "durable
 // local copy exists" fact, rather than by a shared dependency neither of
 // them exports for this purpose).
+//
+// RemoteRetained (issue #282) was missing here until issue #315: a
+// read-only backup set's artifacts have exactly as durable a local final
+// copy as a COMMITTED one, and Phase 4's whole reason to exist, bit rot
+// does not announce itself, applies to them no less. Before this fix
+// Phase 4 simply never looked at them again once retained, which is the
+// gap issue #315 closes: a corrupted local copy for a read-only source is
+// often undetectable any other way, since this manager never re-examines
+// the remote either.
 var eligibleStates = map[lifecycle.State]bool{
 	lifecycle.Committed:           true,
 	lifecycle.RemoteDeletePending: true,
+	lifecycle.RemoteRetained:      true,
 	lifecycle.Complete:            true,
 }
 
