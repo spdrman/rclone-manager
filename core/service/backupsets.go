@@ -597,48 +597,58 @@ func validateCreateRequest(req CreateBackupSetRequest) error {
 			problems = append(problems, err.Error())
 		}
 	}
-	if req.Host == "" {
-		problems = append(problems, "host is required")
-	}
-	if req.User == "" {
-		problems = append(problems, "user is required")
-	}
+	problems = appendProblem(problems, requiredFieldProblem("host", req.Host))
+	problems = appendProblem(problems, requiredFieldProblem("user", req.User))
 	if req.SSHKeyID == "" {
 		problems = append(problems, "ssh_key_id is required (import an SSH key first)")
 	}
 	if req.KnownHostsLine == "" {
 		problems = append(problems, "known_hosts_line is required (probe and trust the host key first)")
 	}
-	if req.RemotePath == "" {
-		problems = append(problems, "remote_path is required")
+	problems = appendProblem(problems, requiredFieldProblem("remote_path", req.RemotePath))
+	problems = appendProblem(problems, requiredFieldProblem("local_path", req.LocalPath))
+	problems = append(problems, completionProblems(req.CompletionStrategy, req.StableFor)...)
+	problems = appendProblem(problems, validatorIDProblem(req.ValidatorID))
+	return joinProblems(problems)
+}
+
+// requiredFieldProblem, completionProblems and validatorIDProblem are the
+// individual field rules validateCreateRequest above is made of, pulled
+// out so UpdateBackupSet (backupsetupdate.go) can run the SAME checks
+// rather than a second list that happens to agree today. The issue that
+// asked for the update path asked for "validation equal to creation's"
+// specifically; sharing the checks is what makes that structural instead
+// of a claim in a comment.
+func requiredFieldProblem(field, value string) string {
+	if value == "" {
+		return field + " is required"
 	}
-	if req.LocalPath == "" {
-		problems = append(problems, "local_path is required")
-	}
-	switch req.CompletionStrategy {
+	return ""
+}
+
+func completionProblems(strategy string, stableFor time.Duration) []string {
+	var problems []string
+	switch strategy {
 	case "rename", "marker", "stable":
 	default:
 		problems = append(problems, `completion_strategy must be "rename", "marker" or "stable"`)
 	}
-	if req.CompletionStrategy == "stable" && req.StableFor <= 0 {
+	if strategy == "stable" && stableFor <= 0 {
 		problems = append(problems, `stable_for must be positive when completion_strategy is "stable"`)
 	}
-	if req.ValidatorID != "" && !isRegisteredValidator(req.ValidatorID) {
+	return problems
+}
+
+func validatorIDProblem(id ValidatorID) string {
+	if id != "" && !isRegisteredValidator(id) {
 		// Deliberately does not echo the value back. An unregistered id is
 		// refused structurally, whatever it looks like, and repeating a
 		// caller-supplied string that may well BE an attempted executable
 		// path into an error a UI renders is not worth the marginally
 		// better message.
-		problems = append(problems, "validator_id is not a registered validator; choose one the validator catalog lists")
+		return "validator_id is not a registered validator; choose one the validator catalog lists"
 	}
-	if len(problems) == 0 {
-		return nil
-	}
-	msg := problems[0]
-	for _, p := range problems[1:] {
-		msg += "; " + p
-	}
-	return errors.New(msg)
+	return ""
 }
 
 func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
