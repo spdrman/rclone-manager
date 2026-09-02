@@ -12,6 +12,16 @@ python3 scripts/install/install_docker_host.py install \
     --image ghcr.io/spdrman/backup-manager:0.2.0
 ```
 
+That is the whole install. **One file, and no checkout.** Copy
+`scripts/install/install_docker_host.py` to the machine on its own and run it: it needs
+no repository beside it, nothing else from this project on disk, and nothing outside the
+Python standard library. It used to refuse with exit 19 here, because it copied
+`container/compose.yaml` and that file only exists inside a git checkout, which is the
+one thing an operator installing onto a NAS does not have. It now carries that
+definition itself (see [It derives from the canonical
+definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
+what keeps the copy honest).
+
 Six subcommands: `preflight` checks and creates nothing, `install` checks then
 installs, `status` reports, `uninstall` removes what the installer made,
 `network-doctor` diagnoses (and, asked to, repairs) Docker bridge networking, and
@@ -62,7 +72,7 @@ parsing prose.
 | 16 | too little free space on the backup volume |
 | 17 | the SSH key or `known_hosts` is missing, is not a file, or the key is readable beyond its owner |
 | 18 | the image is neither present, nor loadable from an archive, nor pullable |
-| 19 | `container/compose.yaml` is not where the installer was told to find it |
+| 19 | `--compose-file` names a path that is not there, or this installer's own embedded runtime definition does not match the digest recorded beside it |
 | 20 | an install is already here and the mode did not settle what to do about it, a factory reset was not confirmed, or this run's directories are not the installed ones |
 | 21 | the install here is newer than the version this installer carries |
 | 30 | a Docker command failed |
@@ -176,8 +186,38 @@ with no mode flag at all is the other case, and that one exits 20 and names `--m
 
 `container/compose.yaml` is the canonical runtime contract (issue #167), and
 `distribution/compose` fails the build when a derived artifact stops matching it. The
-installer copies that file byte for byte and lays one override beside it carrying two
+installer stages that file byte for byte and lays one override beside it carrying two
 keys per service: `image`, and `pull_policy: never`.
+
+Byte for byte, from one of two places, and never a template. Templating a compose file
+here would create a second definition of the runtime that no gate compares to the first,
+and the two would drift the moment either changed.
+
+| `--compose-file` | what gets staged |
+|---|---|
+| not given | the copy embedded in the installer, generated from `container/compose.yaml` |
+| a real file | that file, copied verbatim |
+| a path with no file there | nothing: exit 19 |
+
+The embedded copy is generated, not written. `scripts/install/embed_compose.py` is the
+only supported way to move it, the block it writes carries a `DO NOT EDIT BY HAND`
+banner naming that command, and two tests hold it to the canonical file: one compares
+the two as **bytes** (not as decoded text, which would normalise line endings and cannot
+even be read in a non-UTF-8 locale, since the file has a section sign and em dashes in
+it), and one compares the recorded `EMBEDDED_COMPOSE_SHA256` against the same file.
+
+Those tests only exist inside a checkout, and the point of embedding is that the
+installer travels without one, so the shipped artifact also checks itself: `preflight`
+and `install` verify the embedded definition against that digest before anything is
+staged, and refuse with exit 19 if the script has been edited since it was generated.
+Truncation would be loud anyway, because Python stops parsing. A changed mount, network
+or healthcheck would not be, and that is the one the digest catches.
+
+Running the installer **from inside a checkout does not install that checkout's**
+`container/compose.yaml`. It installs the embedded copy, like everywhere else, because
+"whichever directory the script happens to sit in" is exactly the location-dependent
+behaviour embedding removed. Preflight says so when the two differ, and names the flag:
+pass `--compose-file container/compose.yaml` to install an uncommitted runtime change.
 
 `pull_policy` is there because the canonical file has a `build:` block, which is right
 for a file written to be built from a checkout and wrong for a host that has no
