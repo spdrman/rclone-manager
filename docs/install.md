@@ -219,24 +219,118 @@ stands between this installer and the firewall. What it buys is that the escalat
 explicit, announced and auditable rather than arriving quietly through the container
 runtime.
 
-### Persistence, which is a decision rather than an oversight
+### Persistence
 
-**These rules do not survive a reboot.** They are raw `iptables` inserts, and a host
-firewall that rewrites its own ruleset on boot will drop them, as will any later rewrite.
-After a reboot the containers come back and the hop is broken again, silently, because
-nothing re-runs the installer.
+`--fix-network=auto`, the default, inserts runtime rules and they are **lost on reboot**,
+and lost again whenever the host firewall rewrites its own set. The containers come back
+either way, so the deployment stops working silently and nothing re-runs the installer.
 
-The installer says so at the end of every run that changes anything, and `status`
-re-checks the hop with no root and no password so the loss is discoverable:
+`--fix-network=persist` fixes that. It does everything `auto` does and additionally
+installs a systemd unit and timer that re-assert the same four rules.
+
+`auto` is the default and `persist` has to be asked for, because installing a systemd
+unit is a larger commitment than inserting a runtime rule and an operator should get to
+choose. There is deliberately no second flag: persistence is a value of `--fix-network`,
+not a knob that can disagree with it.
+
+#### Why not `netfilter-persistent save`
+
+The mechanism is right there. On the target host `netfilter-persistent.service` is
+installed, enabled and active, and `/etc/iptables/rules.v4` exists.
+
+It is also zero bytes, and that is the whole argument in one fact. `netfilter-persistent
+save` snapshots the **entire live ruleset**, so the first save takes `UG_INPUT`,
+`UG_FORWARD`, `UG_SSH_INPUT` and everything else UGOS owns and writes them into a file
+this project would then restore at every boot. That is taking ownership of a copy of
+somebody else's firewall. It fights the Control Panel the moment anything is changed
+there, it silently restores stale UGOS rules after a UGOS update, and it breaks the one
+property the rules above are careful to keep: never own, reorder or replace a ruleset
+this installer did not create.
+
+A test asserts no generated script ever invokes it, or `iptables-save`.
+
+#### What is installed instead
+
+```
+/etc/systemd/system/rclone-manager-bridge.service
+/etc/systemd/system/rclone-manager-bridge.timer
+```
+
+The service owns exactly the four tagged rules and nothing else. Each is one `ExecStart`
+running the same `iptables -C … || iptables -I …` the interactive path uses, so it is
+idempotent, and one line per rule so systemd names the one that failed. `systemctl cat`
+shows every command that will ever run.
+
+It is ordered `After=net_serv.service netfilter-persistent.service nftables.service
+docker.service`, so it runs on top of whatever those build rather than underneath it.
+`After=` only, never `Requires=`: a host without one of them should still get its rules
+rather than a failed unit.
+
+**oneshot plus timer**, and the alternatives were weighed rather than skipped:
+
+- `Restart=` needs a process to restart, and there is nothing here that stays alive: the
+  work is four checks that take milliseconds. A `Type=oneshot` unit with `Restart=always`
+  and a `RestartSec` is a timer built out of the wrong primitive, and it reports as
+  perpetually activating rather than as a scheduled job anyone can read.
+- A `.path` unit watches the filesystem, and netfilter rules are not a file. There is no
+  path whose modification corresponds to the host rewriting the live ruleset, and
+  `/etc/iptables/rules.v4` is zero bytes and never written here, so watching it would
+  watch nothing happen.
+- oneshot plus timer is legible afterwards: `systemctl cat` for what runs,
+  `systemctl list-timers` for when it last did and next will. For something that edits a
+  firewall unattended, that matters more than being clever.
+
+**The interval is two minutes**, chosen rather than inherited. The work is four
+`iptables -C` calls, single-digit milliseconds, so cost is not what sets it. The failure
+mode is: the host rewriting its ruleset is human-triggered, plausibly whenever the
+Control Panel is touched, so the question is how long someone may be left with a
+deployment that has quietly stopped working. Two minutes is well inside the time it takes
+anyone to notice, and a small fraction of the engine's own default one-hour poll interval,
+so a gap cannot swallow a backup cycle.
+
+The service is also enabled in its own right, so at boot the rules are in place as part
+of the boot sequence rather than up to a timer interval later; the timer's `OnBootSec` is
+the safety net for a host where that ordering turns out not to be enough.
+
+#### Quiet when there is nothing to do
+
+`iptables -C` prints nothing when the rule is already there, and `LogLevelMax=warning`
+keeps systemd's own start and finish lines out of the journal too. Measured on the target
+host: `journalctl -u rclone-manager-bridge.service --since -12min` is empty across
+several fires.
+
+#### What it still does not guarantee
+
+The host can rewrite its ruleset between fires, and the hop is down until the next one.
+Two minutes is a bound, not a promise. The durable fix is in the host firewall's own
+configuration, which is the administrator's to make: this installer does not write into
+it, because an application installer editing a NAS appliance's firewall config behind its
+owner's back is a worse failure than the one it is fixing.
+
+**A lead worth following.** `netevent.service`, described as "ugos netlink_route event
+listener", is in `failed` state on this host. That is UGOS's own network-event watcher,
+and a plausible reason its firewall never reacted to `docker0` appearing in the first
+place. Nothing here touches it, and anyone chasing the root cause of this whole class of
+problem should start there.
+
+#### Removing it
+
+```
+python3 install_docker_host.py network-undo
+```
+
+Stops and disables the timer and the service, deletes both unit files, reloads systemd,
+and deletes the four tagged rules, in that order. Units first, because the other order
+leaves a window in which the timer fires and puts back rules that were just deleted.
+Every step tolerates the thing already being gone, so undo works on a half-installed
+machine too.
+
+`status` reports whether persistence is in place, unprivileged:
 
 ```
 bridge networking: ok (gateway yes, egress yes)
+  persistence: rclone-manager-bridge.timer enabled, next fire Mon 2026-08-31 22:26:26
 ```
-
-The durable fix belongs in the host firewall's own configuration, which is the host
-administrator's to make. The installer does not write into it, because a NAS appliance's
-firewall configuration is not something an application installer should be editing
-behind its owner's back.
 
 ### Verified, not assumed
 
