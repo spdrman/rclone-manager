@@ -279,3 +279,37 @@ func TestRunCycle_AnIdleCycleSaysNothingAtAll(t *testing.T) {
 		t.Errorf("an idle cycle logged the nothing-got-through error; on a poll interval that is a page every fifteen minutes.\nlogged:\n%s", logged.String())
 	}
 }
+
+// TestRunCycle_AReadOnlyBackupSetCountsItsRetainedArtifactsAsThroughput
+// guards the one state that would have made this whole rule a disaster if
+// I had missed it. A backup set declared read-only (issue #282) never
+// deletes its remote source, so its artifacts finish at REMOTE_RETAINED
+// rather than COMPLETE. Their bytes are on local disk, verified and
+// committed, so they are backed up in every sense that matters; a rule
+// that only recognised COMPLETE would call every read-only cycle a
+// failure, forever, on the exact posture a VPS being backed up actually
+// wants. #356's two-machine end-to-end run uses --read-only, so this is
+// also what stops that harness reading a healthy run as a failed one.
+func TestRunCycle_AReadOnlyBackupSetCountsItsRetainedArtifactsAsThroughput(t *testing.T) {
+	bs := testBackupSet(t, t.TempDir())
+	bs.ReadOnly = true
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "read-only payload", epoch.Unix())
+	tr.poison = t // DeleteRemote must never be reached for a read-only set.
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	set := svc.RunCycle(context.Background()).Sets[0]
+
+	if set.Walked != 1 {
+		t.Fatalf("Walked = %d, want 1", set.Walked)
+	}
+	if set.Durable != 1 {
+		t.Errorf("Durable = %d, want 1: a REMOTE_RETAINED artifact's bytes are on local disk, so this cycle delivered a backup", set.Durable)
+	}
+	if set.Outcome().Failed() {
+		t.Errorf("a read-only cycle that backed its artifact up was called failed: %s", set.Outcome().Summary())
+	}
+}
