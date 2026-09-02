@@ -157,6 +157,24 @@ type RetentionPlan struct {
 	// is. Empty on a plan PreviewRetention returns: a preview creates no
 	// operation, only an apply does.
 	OperationID string
+
+	// Retention is the policy these verdicts were decided under, and
+	// RetentionIsOverride says whether that policy is this backup set's
+	// own or the deployment's (issue #333).
+	//
+	// Both are on the plan rather than left to a second call because the
+	// question a preview is being read to answer is "why is this artifact
+	// about to be deleted", and that has a different answer, and a
+	// different fix, depending on which policy was in force. A client
+	// that fetched the attribution separately could render a chain beside
+	// the wrong source: a plan is pinned to the configuration revision it
+	// was computed against, and a second read is not.
+	//
+	// Retention is the RESOLVED policy (tiers expanded, calendar
+	// inherited), which is the only form that can be shown beside a
+	// verdict without the reader having to resolve it themselves.
+	Retention           RetentionSettings
+	RetentionIsOverride bool
 }
 
 // ApplyRetentionRequest is what a caller submits to ApplyRetentionPlan.
@@ -614,6 +632,12 @@ func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, co
 		ReclaimBytes:      reclaimBytes,
 		Verdicts:          verdicts,
 		OperationID:       operationID,
+		// Issue #333: taken from the plan the decision was actually made
+		// on, not re-read from the running config here. A hot reload
+		// between the two would attribute these verdicts to a policy that
+		// did not decide them.
+		Retention:           toRetentionSettings(plan.Retention),
+		RetentionIsOverride: plan.RetentionIsOverride,
 	}
 }
 
