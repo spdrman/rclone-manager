@@ -131,6 +131,10 @@ EXIT_PREREQ_IMAGE = 18
 EXIT_PREREQ_PAYLOAD = 19
 
 EXIT_EXISTING_INSTALL = 20
+# A refused downgrade is its own answer, not a generic existing-install
+# refusal: the remedy is different (there is none short of a restore),
+# and a caller scripting an upgrade wants to tell the two apart.
+EXIT_DOWNGRADE_REFUSED = 21
 EXIT_RUNTIME = 30
 EXIT_VERIFY = 31
 
@@ -679,6 +683,281 @@ def compose_argv(args):
     ]
 
 
+# The three things `install` can be asked to do. One flag with three
+# values rather than three flags, for the reason --fix-network already
+# demonstrates in this file: two knobs for one decision is how they end
+# up disagreeing, and #330's review found exactly that defect here.
+#
+# --if-installed {converge,refuse} is GONE, reconciled into these rather
+# than left beside them as a second opinion about the same question:
+#
+#   converge  ->  --mode upgrade. Converging IS the no-op end of
+#                 upgrading, which is why "already this version" still
+#                 runs the upgrade path and says so rather than pretending
+#                 a version moved.
+#   refuse    ->  --mode fresh. fresh means nothing is here, so meeting an
+#                 install is a refusal by definition, and no separate flag
+#                 is needed to ask for one.
+#
+# That is a breaking change for anyone re-running the installer in a
+# script, because the old default converged silently and the new default
+# refuses rather than guess. It is documented as such in docs/install.md,
+# and the refusal names the flag that settles it.
+INSTALL_MODES = ("fresh", "upgrade", "factory-reset")
+
+
+def image_tag(reference: str) -> str:
+    """The tag out of an image reference, or "" when it carries none.
+
+    Not a naive rsplit on ":": a registry port is a colon too, and
+    "localhost:5000/backup-manager" has no tag at all. The tag can only
+    live in the last path segment, so that is the only place looked.
+    """
+    last = reference.rsplit("/", 1)[-1]
+    return last.split(":", 1)[1] if ":" in last else ""
+
+
+def _semver(tag: str):
+    """(major, minor, patch) for an orderable tag, else None.
+
+    None is a real answer and is treated as one everywhere it is used:
+    "latest", a branch name and a digest order against nothing, and
+    claiming otherwise is how an installer offers to "upgrade" a host
+    onto an older build.
+    """
+    core = (tag or "").split("+", 1)[0].split("-", 1)[0]
+    parts = core.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def compare_versions(installed: str, target: str) -> str:
+    """Where `installed` sits relative to `target`: older, same, newer or
+    unknown.
+
+    Numeric per component, never lexical: "0.10.0" is newer than "0.9.0"
+    and sorts the other way as a string, so a string comparison here gets
+    the one case that matters backwards.
+    """
+    a, b = _semver(installed), _semver(target)
+    if a is None or b is None:
+        return "unknown"
+    return "same" if a == b else ("older" if a < b else "newer")
+
+
+def installed_version(containers) -> str:
+    """The tag the installed stack is actually running, or "".
+
+    Read off the containers rather than the deployment files, because the
+    files say what the next `up` would use and the containers say what is
+    serving right now, and an upgrade is a statement about the latter.
+    """
+    for c in containers:
+        tag = image_tag(str(c.get("Image", "")))
+        if tag:
+            return tag
+    return ""
+
+
+def decide_install_mode(*, requested, installed, installed_version,
+                        target_version, interactive):
+    """Which mode to run, and whether an operator has to be asked first.
+
+    Returns (mode, needs_prompt). (None, True) means the caller must ask;
+    nothing is decided until the answer comes back.
+
+    The rule this exists to enforce: an unanswerable question is a
+    refusal, never a default. One of upgrade and factory-reset destroys
+    data and the other does not, so guessing between them is the one
+    thing this must never do.
+    """
+    if not installed:
+        # Nothing here, so nothing to decide, including for factory-reset:
+        # asking for a clean install on an already-clean host is not an
+        # error, it is just a fresh install with a stricter name.
+        return (requested or "fresh"), False
+
+    if requested == "fresh":
+        raise Refusal(
+            EXIT_EXISTING_INSTALL,
+            f"--mode fresh means nothing is installed here, and something is: "
+            f"version {installed_version or 'unknown'} at {target_version}'s prefix.",
+            "Use --mode upgrade to keep the users, backup sets and catalog, or "
+            "--mode factory-reset to discard them and start clean.",
+        )
+
+    if requested == "factory-reset":
+        return "factory-reset", False
+
+    if requested == "upgrade":
+        if compare_versions(installed_version, target_version) == "newer":
+            raise Refusal(
+                EXIT_DOWNGRADE_REFUSED,
+                f"the install here is newer ({installed_version}) than the version this "
+                f"installer carries ({target_version}), so this would move it backwards.",
+                "A catalog written by a newer build is not something this can promise to "
+                "read back. Install the newer version, or --mode factory-reset if the "
+                "data is genuinely disposable.",
+            )
+        # "unknown" deliberately proceeds. A host on :latest cannot be
+        # ordered, and refusing to touch it would strand it forever; the
+        # direction is unknown, which is not the same as backwards.
+        return "upgrade", False
+
+    if interactive:
+        return None, True
+
+    raise Refusal(
+        EXIT_EXISTING_INSTALL,
+        f"an install is already here (version {installed_version or 'unknown'}), this "
+        f"installer carries {target_version}, and no mode was given.",
+        "There is no terminal to ask on, and guessing between keeping the data and "
+        "wiping it is not something this will do. Pass --mode upgrade to keep the "
+        "users, backup sets and catalog, or --mode factory-reset to discard them.",
+    )
+
+
+def archive_plan(args):
+    """Every path an archive captures, whether or not it exists yet.
+
+    A plan rather than a listing, so the same answer drives the upgrade
+    copy, the factory-reset move and the tests, and so a path that is
+    absent today cannot silently drop out of tomorrow's archive.
+
+    The retained artifacts under the backup root are deliberately absent.
+    They are the product's entire purpose and can be enormous, an upgrade
+    does not modify them, and copying them would double disk usage to
+    protect against nothing. Their location is reported instead.
+    """
+    return [
+        args.state_dir / "state.db",
+        args.state_dir / "local-auth.json",
+        args.config_dir / "config.yaml",
+        args.config_dir / "ssh_keys",
+        args.config_dir / "known_hosts.d",
+    ]
+
+
+def _count_catalogued_artifacts(db: Path) -> int:
+    """Rows in the catalog, or -1 when it cannot be read.
+
+    Best effort on purpose: the schema belongs to the engine, not to this
+    installer, so the table is discovered rather than assumed and an
+    unreadable database reports that it is unreadable instead of zero.
+    Zero and "I could not tell" are different numbers to show an operator
+    about to destroy something.
+    """
+    if not db.is_file():
+        return 0
+    try:
+        import sqlite3
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            names = [r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            for candidate in ("artifacts", "artifact", "catalog"):
+                if candidate in names:
+                    return int(con.execute(f"SELECT COUNT(*) FROM {candidate}").fetchone()[0])
+            return -1
+        finally:
+            con.close()
+    except Exception:
+        return -1
+
+
+def destroy_preview(args):
+    """What a factory reset is about to destroy, by name and by count.
+
+    The same reasoning as the sudo path printing every command before
+    asking for a password: "this will delete 1 administrator account and
+    47 catalogued artifacts" is a decision an operator can make, and
+    "Factory reset? [y/N]" is not.
+
+    The retained backups are never listed, because a factory reset does
+    not delete them. It drops the catalog that describes them, and the
+    files stay where they are. Claiming to destroy them would be worse
+    than saying nothing.
+    """
+    lines = []
+    auth = args.state_dir / "local-auth.json"
+    if auth.is_file():
+        lines.append("1 administrator account (state/local-auth.json)")
+    db = args.state_dir / "state.db"
+    if db.is_file():
+        n = _count_catalogued_artifacts(db)
+        counted = f"{n} catalogued artifact(s)" if n >= 0 else "an unreadable number of catalogued artifacts"
+        lines.append(f"the catalog and {counted} (state/state.db)")
+    cfg = args.config_dir / "config.yaml"
+    if cfg.is_file():
+        lines.append("every configured backup set (config/config.yaml)")
+    keys = args.config_dir / "ssh_keys"
+    if keys.is_dir():
+        n = len([p for p in keys.iterdir() if p.is_file()])
+        lines.append(f"{n} imported SSH key(s) (config/ssh_keys)")
+    known = args.config_dir / "known_hosts.d"
+    if known.is_dir():
+        n = len([p for p in known.iterdir() if p.is_file()])
+        lines.append(f"{n} pinned host key file(s) (config/known_hosts.d)")
+    if not lines:
+        return ["nothing: no administrator record, catalog or configuration is here to destroy"]
+    lines.append(f"NOT destroyed: the retained backups under {args.backup_dir}, which stay where they are")
+    return lines
+
+
+def archive_state(args, *, move: bool):
+    """Put everything in archive_plan() into one timestamped directory.
+
+    One directory rather than a scatter of `.superseded` suffixes beside
+    the originals: it is one operation, it is one thing to point an
+    operator at afterwards, and it does not accumulate in the working
+    directories where the next run has to read past it.
+
+    `move` is the difference between the two modes that call this, and it
+    is the whole difference. An upgrade COPIES, because the state has to
+    survive into the upgraded install and the archive is only insurance.
+    A factory reset MOVES, because removing it is the point, and moving
+    rather than deleting is what makes the decision recoverable.
+    """
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    archive = args.prefix / f"archive-{stamp}"
+    archive.mkdir(parents=True, exist_ok=True)
+    os.chmod(archive, 0o700)
+    captured = []
+    for src in archive_plan(args):
+        if not src.exists():
+            continue
+        dest = archive / src.parent.name / src.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if move:
+            shutil.move(str(src), str(dest))
+        elif src.is_dir():
+            shutil.copytree(str(src), str(dest))
+        else:
+            shutil.copy2(str(src), str(dest))
+        captured.append(src)
+    return archive, captured
+
+
+def tighten_config_ancestry(args) -> None:
+    """Take the group and world write bit off the config chain.
+
+    The engine refuses to use an SSH key whose containing directory is
+    group- or world-writable, and it walks the whole ancestry: on the
+    real NAS it named config/ssh_keys, then config, then the install root
+    on three successive cycles. Every mode runs this, because a first
+    cycle that fails on a permission the installer could have fixed is a
+    failure the installer caused.
+    """
+    for d in (args.prefix, args.config_dir,
+              args.config_dir / "ssh_keys", args.config_dir / "known_hosts.d"):
+        if d.is_dir():
+            try:
+                os.chmod(d, os.stat(d).st_mode & ~0o022)
+            except OSError as exc:
+                say(f"     (could not tighten {d}: {exc})")
+
+
 def detect_existing(args):
     """What is already here, as three separate facts.
 
@@ -842,6 +1121,36 @@ def cmd_preflight(args) -> int:
     return EXIT_OK
 
 
+def _ask_install_mode(args, here: str, target: str) -> str:
+    """Ask, on a terminal, the question decide_install_mode() refused to
+    guess at.
+
+    Only reached when a terminal exists, an install exists and no mode was
+    given. Everything else is decided without asking, because a prompt
+    that can block a cron job forever is worse than a refusal that names
+    the flag to pass.
+    """
+    say("")
+    say(f"    An install is already here (version {here or 'unknown'}) and no --mode was given.")
+    say(f"    upgrade        keep every user, backup set and catalogued artifact, moving to {target}")
+    say( "    factory-reset  discard the administrator record, catalog and configuration")
+    say( "    abort          change nothing")
+    say("")
+    for _ in range(3):
+        try:
+            answer = input("    upgrade / factory-reset / abort: ").strip().lower()
+        except EOFError:
+            answer = "abort"
+        if answer in ("upgrade", "u"):
+            return "upgrade"
+        if answer in ("factory-reset", "factory", "f"):
+            return "factory-reset"
+        if answer in ("abort", "a", "", "n", "no"):
+            raise Refusal(EXIT_EXISTING_INSTALL, "aborted at the prompt; nothing was changed.", "")
+        say("    Answer upgrade, factory-reset or abort.")
+    raise Refusal(EXIT_EXISTING_INSTALL, "no usable answer after three attempts; nothing was changed.", "")
+
+
 def cmd_install(args) -> int:
     say("==> Preflight")
     pf = Preflight(args)
@@ -849,25 +1158,41 @@ def cmd_install(args) -> int:
 
     payload, containers = detect_existing(args)
     running = [c for c in containers if str(c.get("State", "")).lower() == "running"]
-    if payload or containers:
-        # The decision, stated rather than implied: a second run
-        # CONVERGES. It rewrites the deployment files from the current
-        # inputs and brings the stack up again, which `docker compose up
-        # -d` already does idempotently, and it never touches the state,
-        # config or backup directories. Those hold the SQLite journal, the
-        # administrator's Argon2id record and the backups themselves, and
-        # an installer that can destroy any of them by being run twice is
-        # an installer nobody can safely re-run after a reboot.
-        if args.if_installed == "refuse":
-            raise Refusal(
-                EXIT_EXISTING_INSTALL,
-                f"an install is already here: {len(containers)} container(s), "
-                f"{len(running)} running, payload at {args.prefix} "
-                f"{'present' if payload else 'absent'}.",
-                "Re-run without --if-installed=refuse to converge it in place, or `uninstall` first.",
-            )
-        say(f"==> An install is already here ({len(containers)} container(s), {len(running)} running). "
-            f"Converging it in place; state, config and backups are not touched.")
+    installed = bool(payload or containers)
+    here = installed_version(containers)
+    target = image_tag(args.image)
+
+    # Reported in every mode, including a plain fresh install, because
+    # "which version is this" is the first question anyone debugging a
+    # deployment asks and the installer is the one place that knows both
+    # halves of the answer at once.
+    if installed:
+        say(f"==> An install is already here: {len(containers)} container(s), {len(running)} running, "
+            f"version {here or 'unknown'}. This installer carries {target or 'unknown'} "
+            f"({compare_versions(here, target)}).")
+
+    mode, needs_prompt = decide_install_mode(
+        requested=args.mode, installed=installed, installed_version=here,
+        target_version=target, interactive=sys.stdin.isatty() and sys.stdout.isatty())
+    if needs_prompt:
+        mode = _ask_install_mode(args, here, target)
+    say(f"==> Mode: {mode}")
+
+    if mode == "factory-reset":
+        say("==> factory-reset will destroy:")
+        for line in destroy_preview(args):
+            say(f"     {line}")
+        archive, captured = archive_state(args, move=True)
+        say(f"==> Moved {len(captured)} item(s) out to {archive}. Recoverable from there, and gone from here.")
+    elif mode == "upgrade" and installed:
+        archive, captured = archive_state(args, move=False)
+        say(f"==> Archived {len(captured)} item(s) to {archive} before touching anything.")
+        say(f"     The retained backups under {args.backup_dir} are not copied: an upgrade does not "
+            f"modify them and duplicating them would protect nothing.")
+        if compare_versions(here, target) == "same":
+            say(f"==> Already {target}. Converging in place rather than claiming a version moved.")
+
+    tighten_config_ancestry(args)
 
     # Before anything is staged, and before the stack comes up, because a
     # host that cannot pass container-originated traffic fails the Web-UI
@@ -2207,9 +2532,16 @@ def build_parser() -> argparse.ArgumentParser:
                           "(persist) is still a larger commitment than a runtime rule and needs asking for.")
     _add_probe_flags(sp_install)
     existing = sp_install.add_argument_group("existing install")
-    existing.add_argument("--if-installed", choices=["converge", "refuse"], default="converge",
-                          help="What to do when an install is already here. converge rewrites the deployment "
-                               "files and brings the stack up again, never touching state, config or backups.")
+    existing.add_argument("--mode", choices=list(INSTALL_MODES), default=None,
+                          help="What to do about what is already here. fresh (the default when nothing is "
+                               "installed) refuses to run over an existing install. upgrade keeps every user, "
+                               "backup set and catalogued artifact, archiving them first, and converges when "
+                               "the version already matches. factory-reset discards the administrator record, "
+                               "the catalog and the configuration, archiving them first, and leaves the "
+                               "retained backups on disk. Left unset with an install already here, this asks "
+                               "on a terminal and refuses without one, because guessing between keeping the "
+                               "data and wiping it is not something an installer should do. Replaces "
+                               "--if-installed: its converge is --mode upgrade and its refuse is --mode fresh.")
 
     sp_status = subparsers.add_parser(
         "status", formatter_class=_HelpFormatter,

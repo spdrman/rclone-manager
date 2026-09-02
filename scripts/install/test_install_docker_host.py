@@ -1195,11 +1195,15 @@ class TestSubcommandFlagScoping(unittest.TestCase):
         return {opt for a in _subparser(installer.build_parser(), command)._actions
                 for opt in a.option_strings}
 
-    def test_if_installed_exists_only_on_install(self):
+    def test_mode_exists_only_on_install(self):
+        """--if-installed used to be the flag here. It was reconciled into
+        --mode (issue #343) rather than left beside it, so the scoping
+        assertion moved with it: only install decides anything about an
+        install that is already here."""
         for command in ("preflight", "status", "uninstall", "network-doctor", "network-undo"):
-            self.assertNotIn("--if-installed", self.flags_of(command),
-                             f"{command} does not converge or refuse an existing install")
-        self.assertIn("--if-installed", self.flags_of("install"))
+            self.assertNotIn("--mode", self.flags_of(command),
+                             f"{command} does not install, upgrade or reset anything")
+        self.assertIn("--mode", self.flags_of("install"))
 
     def test_fix_network_exists_only_on_install_and_network_doctor(self):
         for command in ("preflight", "status", "uninstall", "network-undo"):
@@ -1419,3 +1423,201 @@ class TestFixNetworkVocabulary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVersionOrdering(unittest.TestCase):
+    """The installer could not previously tell an upgrade from a
+    downgrade from a reinstall, because it never read what was running.
+    String comparison is not enough: "0.10.0" sorts before "0.9.0"
+    lexically and after it numerically, and getting that backwards means
+    offering to "upgrade" a host onto an older build."""
+
+    def test_a_tag_is_read_out_of_a_full_reference(self):
+        self.assertEqual(installer.image_tag("ghcr.io/spdrman/backup-manager:0.2.0"), "0.2.0")
+        self.assertEqual(installer.image_tag("backup-manager:1.4.2"), "1.4.2")
+
+    def test_a_registry_port_is_not_mistaken_for_a_tag(self):
+        """A colon in a reference is not always a tag separator."""
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager"), "")
+        self.assertEqual(installer.image_tag("localhost:5000/backup-manager:0.3.1"), "0.3.1")
+
+    def test_ordering_is_numeric_and_not_lexical(self):
+        self.assertEqual(installer.compare_versions("0.9.0", "0.10.0"), "older")
+        self.assertEqual(installer.compare_versions("0.10.0", "0.9.0"), "newer")
+        self.assertEqual(installer.compare_versions("0.2.0", "0.2.0"), "same")
+
+    def test_a_tag_that_is_not_a_version_is_unknown_rather_than_guessed(self):
+        """latest, a digest or a branch name orders against nothing. Saying
+        so is the only honest answer, and it is what stops the installer
+        claiming a direction it cannot know."""
+        for tag in ("latest", "main", "sha256-abc123", ""):
+            self.assertEqual(installer.compare_versions(tag, "0.2.0"), "unknown",
+                             f"{tag!r} is not a version and must not be ordered")
+
+
+class TestInstallModeDecision(unittest.TestCase):
+    """The whole point is that the installer never guesses between
+    upgrading and wiping. One of those destroys data and the other does
+    not, so an unanswerable question is a refusal, not a default."""
+
+    def decide(self, **kw):
+        base = dict(requested=None, installed=False, installed_version=None,
+                    target_version="0.2.0", interactive=False)
+        base.update(kw)
+        return installer.decide_install_mode(**base)
+
+    def test_nothing_installed_and_no_mode_installs_fresh(self):
+        self.assertEqual(self.decide()[0], "fresh")
+
+    def test_nothing_installed_needs_no_prompt_even_on_a_terminal(self):
+        mode, prompt = self.decide(interactive=True)
+        self.assertEqual(mode, "fresh")
+        self.assertFalse(prompt, "there is no decision to make when nothing is here")
+
+    def test_an_existing_install_with_no_mode_and_no_terminal_refuses(self):
+        exc = refusal_from(self.decide, installed=True, installed_version="0.1.0")
+        self.assertIsNotNone(exc, "guessing here either destroys data or silently declines to upgrade")
+        self.assertEqual(exc.code, installer.EXIT_EXISTING_INSTALL)
+        self.assertIn("--mode", exc.remedy, "the refusal has to name the flag that settles it")
+        self.assertIn("0.1.0", exc.message, "both versions belong in the message")
+        self.assertIn("0.2.0", exc.message)
+
+    def test_an_existing_install_with_no_mode_on_a_terminal_asks(self):
+        mode, prompt = self.decide(installed=True, installed_version="0.1.0", interactive=True)
+        self.assertTrue(prompt, "an operator who can answer should be asked, not refused")
+        self.assertIsNone(mode, "nothing is decided until the answer comes back")
+
+    def test_fresh_onto_an_existing_install_refuses(self):
+        """fresh means nothing is here. This is where the old
+        --if-installed=refuse went."""
+        exc = refusal_from(self.decide, requested="fresh", installed=True, installed_version="0.1.0")
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_EXISTING_INSTALL)
+
+    def test_upgrade_onto_an_older_install_proceeds(self):
+        self.assertEqual(self.decide(requested="upgrade", installed=True,
+                                     installed_version="0.1.0")[0], "upgrade")
+
+    def test_upgrade_onto_the_same_version_still_proceeds(self):
+        """It converges, which is what the old --if-installed=converge did,
+        and it should say so rather than claim to have upgraded anything."""
+        self.assertEqual(self.decide(requested="upgrade", installed=True,
+                                     installed_version="0.2.0")[0], "upgrade")
+
+    def test_upgrade_onto_a_newer_install_refuses(self):
+        """Moving a catalog backwards is not something this can promise."""
+        exc = refusal_from(self.decide, requested="upgrade", installed=True, installed_version="0.9.0")
+        self.assertIsNotNone(exc)
+        self.assertIn("newer", exc.message.lower())
+
+    def test_an_unorderable_installed_version_does_not_block_an_upgrade(self):
+        """A host running :latest cannot be ordered, but refusing to touch
+        it would strand it. The direction is unknown, not backwards."""
+        self.assertEqual(self.decide(requested="upgrade", installed=True,
+                                     installed_version="latest")[0], "upgrade")
+
+    def test_factory_reset_proceeds_whatever_is_installed(self):
+        for v in ("0.1.0", "0.2.0", "0.9.0", None):
+            self.assertEqual(self.decide(requested="factory-reset", installed=True,
+                                         installed_version=v)[0], "factory-reset")
+
+    def test_factory_reset_on_an_empty_host_is_not_an_error(self):
+        self.assertEqual(self.decide(requested="factory-reset")[0], "factory-reset")
+
+
+class TestWhatEachModeTouches(unittest.TestCase):
+    """Learned by doing all three by hand on the real NAS: users are not
+    in the database, and the retained artifacts must never be copied."""
+
+    def paths(self, fx):
+        args = fx.args(command="install")
+        return installer.archive_plan(args)
+
+    def test_the_administrator_record_is_archived_not_only_the_database(self):
+        """Wiping state.db alone leaves local-auth.json, and the engine
+        then reports an administrator already exists and issues no
+        enrollment link, producing an install nobody can log into."""
+        fx = Fixture(self)
+        names = {p.name for p in self.paths(fx)}
+        self.assertIn("state.db", names)
+        self.assertIn("local-auth.json", names,
+                      "users live here, not in the database: a reset that misses this locks the host out")
+
+    def test_the_imported_keys_and_pinned_host_keys_are_archived(self):
+        fx = Fixture(self)
+        names = {p.name for p in self.paths(fx)}
+        self.assertIn("ssh_keys", names)
+        self.assertIn("known_hosts.d", names)
+        self.assertIn("config.yaml", names)
+
+    def test_the_retained_artifacts_are_never_archived(self):
+        """They are the product's whole purpose, they can be enormous, and
+        an upgrade does not modify them. Copying them would double disk
+        usage and protect nothing."""
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        for p in installer.archive_plan(args):
+            self.assertNotEqual(p, args.backup_dir,
+                                "the backup root must never be copied into an archive")
+            self.assertFalse(str(p).startswith(str(args.backup_dir) + os.sep),
+                             f"{p} lives under the backup root and must not be archived")
+
+
+class TestDestroyPreview(unittest.TestCase):
+    """factory-reset states what it destroys by name and count before it
+    does it, in the same spirit as the sudo path printing every command it
+    is about to run. "Factory reset? [y/N]" is not a decision anyone can
+    make."""
+
+    def test_it_counts_the_administrator_record(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username":"rom"}')
+        lines = installer.destroy_preview(args)
+        self.assertTrue(any("administrator" in l.lower() for l in lines),
+                        f"the administrator record has to be named: {lines}")
+
+    def test_it_says_plainly_when_there_is_nothing_to_destroy(self):
+        fx = Fixture(self)
+        lines = installer.destroy_preview(fx.args(command="install"))
+        self.assertTrue(any("nothing" in l.lower() for l in lines), lines)
+
+    def test_it_never_claims_the_retained_artifacts_are_destroyed(self):
+        """factory-reset drops the catalog, not the backups themselves.
+        Saying otherwise would be worse than saying nothing."""
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        args.backup_dir.mkdir(parents=True, exist_ok=True)
+        (args.backup_dir / "artifact.dump").write_text("retained bytes")
+        joined = " ".join(installer.destroy_preview(args)).lower()
+        self.assertNotIn("artifact.dump", joined,
+                         "a retained backup file is not destroyed by a factory reset")
+
+
+class TestModeFlagReplacesIfInstalled(unittest.TestCase):
+    def flags_of(self, command):
+        return {opt for a in _subparser(installer.build_parser(), command)._actions
+                for opt in a.option_strings}
+
+    def test_if_installed_is_gone_entirely(self):
+        """Reconciled into --mode rather than left beside it. Two knobs for
+        one decision is how they end up disagreeing, which is the defect
+        #330's review already found in this same file."""
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            self.assertNotIn("--if-installed", self.flags_of(command))
+
+    def test_mode_exists_only_on_install(self):
+        for command in ("preflight", "status", "uninstall", "network-doctor", "network-undo"):
+            self.assertNotIn("--mode", self.flags_of(command),
+                             f"{command} does not install anything")
+        self.assertIn("--mode", self.flags_of("install"))
+
+    def test_the_three_values_and_the_default(self):
+        action = next(a for a in _subparser(installer.build_parser(), "install")._actions
+                      if "--mode" in a.option_strings)
+        self.assertEqual(set(action.choices), {"fresh", "upgrade", "factory-reset"})
+        self.assertIsNone(action.default,
+                          "the default is decided against what is actually installed, not by argparse: "
+                          "unset has to stay distinguishable from an explicit --mode fresh")

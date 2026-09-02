@@ -63,7 +63,8 @@ parsing prose.
 | 17 | the SSH key or `known_hosts` is missing, is not a file, or the key is readable beyond its owner |
 | 18 | the image is neither present, nor loadable from an archive, nor pullable |
 | 19 | `container/compose.yaml` is not where the installer was told to find it |
-| 20 | an install is already here and `--if-installed=refuse` was given |
+| 20 | an install is already here and the mode did not settle what to do about it |
+| 21 | the install here is newer than the version this installer carries |
 | 30 | a Docker command failed |
 | 31 | the stack started but did not reach the state that counts as installed |
 | 40 | sudo has no terminal to prompt on |
@@ -76,6 +77,52 @@ parsing prose.
 Compose v1 is refused rather than tolerated because the deployment gates the Web UI on
 `depends_on: condition: service_healthy`, and v1 ignores that. It would appear to work
 and would start the UI before the engine was listening.
+
+## Install modes, and what each one keeps
+
+`install` has three modes, chosen with one flag rather than three, because two knobs
+for one decision is how they end up disagreeing.
+
+| `--mode` | keeps | destroys | archives first |
+|---|---|---|---|
+| `fresh` | nothing to keep | nothing | nothing |
+| `upgrade` | users, backup sets, catalog, retained backups | nothing | state, users, config, imported keys, pinned host keys |
+| `factory-reset` | retained backups | administrator record, catalog, configuration | the same set, moved rather than copied |
+
+`fresh` is the default when nothing is installed, and it refuses when something is:
+fresh means the host is empty, so meeting an install contradicts the instruction.
+
+`upgrade` copies the state aside before touching anything and reports where. It does
+not copy the retained backups: they are the point of the product, they can be
+enormous, and an upgrade does not modify them, so duplicating them would double the
+disk usage and protect against nothing. Upgrading onto the version already installed
+converges and says so, rather than claiming a version moved. Upgrading onto an
+**older** version is refused, because a catalog written by a newer build is not
+something this can promise to read back.
+
+`factory-reset` prints what it will destroy, by name and count, before it does it. It
+moves that state into a timestamped archive rather than deleting it, so the decision
+stays recoverable. It leaves the retained backups on disk: it drops the catalog that
+describes them, not the files.
+
+**With an install already here and no `--mode` given**, the installer asks on a
+terminal and refuses without one. It will not guess, because one of the two answers
+destroys data and the other does not, and a prompt that blocks a cron job forever is
+worse than a refusal that names the flag.
+
+## Compatibility: `--if-installed` is gone
+
+`--if-installed {converge,refuse}` was removed and reconciled into `--mode`:
+
+- `--if-installed converge` is now `--mode upgrade`. Converging is the no-op end of
+  upgrading, which is why upgrading onto the same version still runs that path.
+- `--if-installed refuse` is now `--mode fresh`.
+
+**This is a breaking change for scripted re-runs.** The old default converged
+silently; the new behaviour refuses rather than guess. A script or cron job that
+re-runs the installer over an existing deployment must now pass `--mode upgrade`
+explicitly. The refusal names the flag, and exits 20, so the failure is loud rather
+than silent.
 
 ## It derives from the canonical definition, it does not restate it
 
