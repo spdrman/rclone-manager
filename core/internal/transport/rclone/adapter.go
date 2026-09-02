@@ -92,6 +92,35 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 	return f, nil
 }
 
+// shutdownFs releases the backend resources an Fs holds, which for sftp
+// means its pool of open SSH connections (#264).
+//
+// Every operation in this file builds its own Fs, and before this existed
+// nothing ever released one, so the connections a cycle held open grew with
+// the number of operations it performed and were bounded by nothing at all.
+// Against a host that queues connections that is merely wasteful. Against
+// one that rejects them it is a failed backup: both production sources this
+// manager pulls from reject a third simultaneous connection from one
+// address with a TCP reset, so listing succeeded on the first pool and the
+// transfer's pool was refused before it sent a byte.
+//
+// Releasing after each operation rather than caching the Fs is deliberate.
+// rclone captures the ambient ConfigInfo into an Fs at construction and
+// never re-reads it, so a cached Fs silently applies the first caller's
+// bandwidth limit and cancellation wiring to every later one. The
+// mid-transfer cancellation gate in gate_test.go catches that, and a backup
+// tool that cannot cancel a transfer is a worse outcome than an extra
+// connection setup per operation.
+//
+// The error is deliberately swallowed. This runs on the way out of an
+// operation that has already produced its answer, and a failure to hang up
+// cleanly must not turn a good backup into a reported failure.
+func shutdownFs(ctx context.Context, f fs.Fs) {
+	if do, ok := f.(fs.Shutdowner); ok {
+		_ = do.Shutdown(ctx)
+	}
+}
+
 func toArtifact(o fs.Object) transport.RemoteArtifact {
 	return transport.RemoteArtifact{
 		Path:    o.Remote(),
@@ -141,6 +170,7 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 	if err != nil {
 		return nil, Wrap("list", err)
 	}
+	defer shutdownFs(ctx, f)
 	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
 	if err != nil {
 		return nil, Wrap("list", err)
@@ -198,6 +228,7 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 	if err != nil {
 		return transport.RemoteArtifact{}, Wrap("stat", err)
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
 		return transport.RemoteArtifact{}, Wrap("stat", err)
@@ -225,6 +256,7 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 	if err != nil {
 		return transport.TransferResult{}, Wrap("copy_to_local", err)
 	}
+	defer shutdownFs(ctx, srcFs)
 	o, err := srcFs.NewObject(ctx, remotePath)
 	if err != nil {
 		return transport.TransferResult{}, Wrap("copy_to_local", err)
@@ -259,6 +291,7 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	if err != nil {
 		return "", Wrap("remote_hash", err)
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
 		return "", Wrap("remote_hash", err)
@@ -313,6 +346,7 @@ func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remote
 	if err != nil {
 		return Wrap("delete_remote", err)
 	}
+	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
 		return Wrap("delete_remote", err)

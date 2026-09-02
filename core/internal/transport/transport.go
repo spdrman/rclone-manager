@@ -73,7 +73,29 @@ type Source struct {
 	KeyEncryptionCommand []string
 
 	KnownHosts string
-	Root       string
+
+	// MaxConnections caps how many simultaneous SFTP connections this
+	// source may open, mapping to rclone's sftp `connections` option. Zero
+	// means unset, which is rclone's own default of unlimited and is what
+	// every Source built before #264 existed means.
+	//
+	// This is not the same setting as the per-file request window (rclone's
+	// `concurrency`, which internal/transport/rclone pins at 64). That one
+	// governs how many requests are outstanding inside one connection and
+	// says nothing about how many connections get opened, which is exactly
+	// the confusion that let this go unnoticed: a source can look
+	// thoroughly tuned for concurrency and still open an unbounded number
+	// of connections.
+	//
+	// It exists because a hardened host can refuse the connection rather
+	// than queue it. Both production sources this manager pulls from carry
+	// an iptables rule rejecting a third simultaneous SSH connection from
+	// one address with a TCP reset, so an unbounded transfer does not run
+	// slowly, it fails, and it fails as a bare "connection refused" that
+	// names nothing an operator could act on.
+	MaxConnections int
+
+	Root string
 }
 
 // RemoteArtifact is the identity of a remote object at a point in time.

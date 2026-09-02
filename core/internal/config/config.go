@@ -526,6 +526,23 @@ type Remote struct {
 	// what this manager does, only what its own observability output is
 	// allowed to contain.
 	Sensitive bool `yaml:"sensitive_endpoint,omitempty"`
+
+	// MaxConnections caps how many simultaneous SFTP connections this
+	// remote may open. Zero, including by omission, means unlimited, which
+	// is rclone's own default and is what every config written before this
+	// field existed means, so adding it changes no existing deployment.
+	//
+	// It is per remote rather than global because whether a host caps
+	// concurrent connections is a fact about that host, not about this
+	// manager: a hardened VPS and a NAS on the same LAN are free to differ,
+	// the same reasoning sensitive_endpoint above is built on.
+	//
+	// Setting this matters more than it looks. A host that caps connections
+	// usually REJECTS the surplus rather than queueing it, so exceeding the
+	// cap is not slow, it is a failed backup reported as a bare connection
+	// error. See issue #264, where both production sources reject a third
+	// simultaneous connection from one address with a TCP reset.
+	MaxConnections int `yaml:"max_connections,omitempty"`
 }
 
 // Key names exactly one way for an sftp Remote to obtain its SSH private

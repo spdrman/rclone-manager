@@ -324,9 +324,16 @@ func (v *validator) validateRemote(path string, r *Remote) {
 		if r.Port < 0 || r.Port > 65535 {
 			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
 		}
+		// #264: a negative ceiling is the only value rclone cannot take.
+		// Zero is meaningful and correct (it is rclone's own unlimited
+		// default, and what every config written before this field existed
+		// means), so it is deliberately not refused here.
+		if r.MaxConnections < 0 {
+			v.addf("%s: max_connections %d cannot be negative (omit it, or set 0, for no ceiling)", path, r.MaxConnections)
+		}
 	case "local":
-		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 {
-			v.addf("%s: host, port, user, key_file/key and known_hosts are not used for type \"local\"; remove them", path)
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 || r.MaxConnections != 0 {
+			v.addf("%s: host, port, user, key_file/key, known_hosts and max_connections are not used for type \"local\"; remove them", path)
 		}
 	case "":
 		v.addf("%s: type must be set (\"local\" or \"sftp\")", path)

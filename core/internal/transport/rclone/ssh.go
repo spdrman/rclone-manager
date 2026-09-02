@@ -346,6 +346,25 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	cfg.Set("chunk_size", "32Ki")
 	cfg.Set("concurrency", "64")
 
+	// #264: `connections` is a different setting from `concurrency` above,
+	// and the difference is the whole point. concurrency is the per-file
+	// request window inside ONE connection; connections is how many
+	// connections the pool may open at once, and rclone's default for it is
+	// 0, meaning unlimited. Against a host that caps simultaneous SSH
+	// connections and rejects the surplus, unlimited is not a performance
+	// setting, it is a failed transfer: listing needs one connection and
+	// succeeds, then the transfer opens more and gets a TCP reset, which
+	// surfaces as "connection refused" with nothing pointing at the cause.
+	//
+	// Left at zero this sets nothing at all, so rclone's default stands and
+	// no existing deployment changes.
+	if src.MaxConnections < 0 {
+		return nil, fmt.Errorf("source %q: max_connections is %d, but a connection ceiling cannot be negative (leave it unset, or zero, for rclone's unlimited default)", src.ID, src.MaxConnections)
+	}
+	if src.MaxConnections > 0 {
+		cfg.Set("connections", strconv.Itoa(src.MaxConnections))
+	}
+
 	return cfg, nil
 }
 
