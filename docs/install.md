@@ -19,6 +19,16 @@ installs, `status` reports, `uninstall` removes what the installer made,
 [Known-good, and known-bad](#known-good-and-known-bad) below for what the last two
 are for.
 
+Flags are scoped to the subcommand that reads them, so `<subcommand> --help` lists only
+what that subcommand actually uses. A flag valid on one is not necessarily valid on
+another: `--ssh-key`, `--image` and the rest of the install prerequisites exist on
+`preflight` and `install` alone, since nothing else ever reads a credential path or an
+image reference. If you have a script from before this scoping, the one rename to know
+about is on `status`, which used to take `--fix-network` to decide whether to run its
+read-only bridge check and now takes its own `--check-network` instead. Anything else
+that moved fails loudly at parse time with "unrecognized arguments" rather than being
+quietly ignored.
+
 ## What it assumes about the machine, and what it does not
 
 It assumes Python 3.8 or newer, Docker, Compose v2 or newer, and an account that can
@@ -225,17 +235,24 @@ runtime.
 
 ### Persistence
 
-`--fix-network=auto`, the default, inserts runtime rules and they are **lost on reboot**,
-and lost again whenever the host firewall rewrites its own set. The containers come back
-either way, so the deployment stops working silently and nothing re-runs the installer.
+`--fix-network=auto`, which is `install`'s own default, inserts runtime rules and they
+are **lost on reboot**, and lost again whenever the host firewall rewrites its own set.
+The containers come back either way, so the deployment stops working silently and
+nothing re-runs the installer.
 
 `--fix-network=persist` fixes that. It does everything `auto` does and additionally
 installs a systemd unit and timer that re-assert the same four rules.
 
-`auto` is the default and `persist` has to be asked for, because installing a systemd
-unit is a larger commitment than inserting a runtime rule and an operator should get to
-choose. There is deliberately no second flag: persistence is a value of `--fix-network`,
-not a knob that can disagree with it.
+`auto` is `install`'s default and `persist` has to be asked for, because installing a
+systemd unit is a larger commitment than inserting a runtime rule and an operator should
+get to choose. There is deliberately no second flag: persistence is a value of
+`--fix-network`, not a knob that can disagree with it.
+
+Run stand-alone, `network-doctor` defaults to `--fix-network=diagnose` instead, because
+a command named "doctor" should report rather than escalate to root and rewrite a
+firewall on its own. Ask for `--fix-network=auto` or `persist` explicitly when you want
+it to repair. `install`'s default is unchanged: a healthy host is a no-op there either
+way, and `persist` is the value that needs asking for.
 
 #### Why not `netfilter-persistent save`
 

@@ -1277,10 +1277,22 @@ def _probe_argv(image: str, network: str, gateway: str, probe_host: str, probe_p
     the operator's own CLI args, never attacker-controlled), but this file
     is careful about injection everywhere else and this call was the one
     exception.
+
+    The `--` before each value closes the other half, which quoting does
+    not reach: quoting stops the SHELL re-parsing a value as syntax, but
+    ping and nc still parse their own argv, so a --probe-host beginning
+    with a dash was read as a flag rather than a hostname. Confirmed
+    against the default --probe-image (busybox:stable, BusyBox v1.36.1):
+    `nc -z -4 9` fails with "invalid option -- '4'", `nc -z -- -4 9` fails
+    with "bad address '-4'", and both applets accept `--` normally
+    otherwise. Not a security boundary either way, since these are the
+    operator's own arguments on their own machine, but a probe that
+    reports a flag-parsing error as an egress failure is a misleading
+    diagnostic, which is the thing this file most tries not to ship.
     """
     script = (
-        'ping -c 3 -W 2 "$GATEWAY" >/dev/null 2>&1; echo "gateway_rc=$?"; '
-        'timeout 6 nc -z "$PROBE_HOST" "$PROBE_PORT" >/dev/null 2>&1; '
+        'ping -c 3 -W 2 -- "$GATEWAY" >/dev/null 2>&1; echo "gateway_rc=$?"; '
+        'timeout 6 nc -z -- "$PROBE_HOST" "$PROBE_PORT" >/dev/null 2>&1; '
         'echo "egress_rc=$?"'
     )
     return [
@@ -2086,10 +2098,6 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> 
     and network-undo never touch a credential path, an image reference or
     a listen port, so they no longer declare these flags at all.
     """
-    layout = sp.add_argument_group("layout")
-    layout.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
-                        help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
-
     creds = sp.add_argument_group("credentials (paths only, never contents)")
     creds.add_argument("--ssh-key", type=Path, default=None,
                        help="Host path to the SFTP client private key. Never read, never generated, never "
@@ -2101,6 +2109,15 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> 
                             "repository (issue #264).")
 
     runtime = sp.add_argument_group("runtime")
+    # Here rather than in a second group of its own titled "layout": argparse
+    # renders every add_argument_group() call as its own section and never
+    # merges two by title, so a second "layout" group put this flag under a
+    # duplicate heading in `install --help` and `preflight --help`, which is
+    # the opposite of what splitting the parser was for. It reads as runtime
+    # anyway: it names the runtime definition, and its scope (preflight and
+    # install only) is exactly this group's.
+    runtime.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
+                         help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
     runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.1.0",
                          help="Image reference both services run.")
     runtime.add_argument("--image-archive", type=Path, default=None,
@@ -2246,6 +2263,17 @@ def resolve(args):
     state_dir, backup_dir, config_dir, project) stays unconditional: every
     subcommand declares it, and host_dirs below needs all four regardless
     of which command is running.
+
+    KEEP THESE TWO IN STEP: every hasattr()-guarded field below must also
+    be reachable from
+    TestSubcommandFlagScoping.test_resolve_never_raises_for_a_command_missing_install_prereq_flags,
+    which resolves all six real subparsers. argparse gives no static signal
+    here, so a guard nothing exercises is a guard nobody has checked, and
+    the failure it is meant to prevent (an AttributeError deep inside a
+    privileged repair path, mid-run) only surfaces when that command is
+    actually invoked. Adding a seventh subcommand with its own scoped flag
+    and a computed default here means adding it to that test in the same
+    change.
     """
     args.prefix = args.prefix.expanduser().resolve()
     args.state_dir = (args.state_dir or args.prefix / "state").expanduser()

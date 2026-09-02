@@ -957,6 +957,19 @@ class TestProbeArgvHygiene(unittest.TestCase):
         for name in ("GATEWAY", "PROBE_HOST", "PROBE_PORT"):
             self.assertIn(f'"${name}"', script, f"the script does not read ${name} at all")
 
+    def test_every_value_is_passed_after_an_end_of_options_marker(self):
+        """Quoting stops the shell re-parsing a value as syntax; it does
+        not stop ping and nc parsing their own argv. A --probe-host
+        starting with a dash was read as a flag, so the probe reported a
+        flag-parsing error as an egress failure. Confirmed against
+        busybox:stable (the default --probe-image): `nc -z -4 9` gives
+        "invalid option", `nc -z -- -4 9` gives "bad address"."""
+        script = installer._probe_argv("img", "net", "gw", "host", 1)[-1]
+        self.assertIn('ping -c 3 -W 2 -- "$GATEWAY"', script,
+                      "ping reads $GATEWAY without an end-of-options marker")
+        self.assertIn('nc -z -- "$PROBE_HOST" "$PROBE_PORT"', script,
+                      "nc reads $PROBE_HOST without an end-of-options marker")
+
 
 
 class TestPersistenceUnit(unittest.TestCase):
@@ -1236,6 +1249,29 @@ class TestSubcommandFlagScoping(unittest.TestCase):
         for command in ("preflight", "install"):
             self.assertTrue(install_prereqs <= self.flags_of(command),
                             f"{command} needs every install-prerequisite flag")
+
+    def test_no_subcommand_renders_the_same_group_title_twice(self):
+        """argparse renders every add_argument_group() call as its own
+        section and never merges two by title, so two groups sharing a
+        title print the same heading twice with the flags split between
+        them. That happened here: _add_shared_groups() titled its group
+        "layout" and _add_install_prereq_groups() opened a second "layout"
+        holding only --compose-file, so `install --help` and `preflight
+        --help` both grew a duplicate heading with one orphaned flag under
+        it - the exact clutter splitting the parser was meant to remove.
+
+        Every other test in this class reads flags out of _actions/
+        option_strings, which is blind to how they are grouped, so nothing
+        caught it. This asserts on the grouping itself."""
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            with self.subTest(command=command):
+                titles = [g.title for g in _subparser(installer.build_parser(), command)._action_groups
+                          if g.title and g._group_actions]
+                duplicates = {t for t in titles if titles.count(t) > 1}
+                self.assertFalse(duplicates,
+                                 f"{command} --help renders {sorted(duplicates)} more than once, "
+                                 "splitting one section's flags across two identical headings")
 
     def test_resolve_never_raises_for_a_command_missing_install_prereq_flags(self):
         """The regression this whole split depends on: resolve() used to
