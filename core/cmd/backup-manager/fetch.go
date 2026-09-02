@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 )
@@ -71,9 +72,5 @@ func cmdFetch(args []string) int {
 	// number. cycleFailed (setup.go) is the identical check `run`
 	// (run.go) makes, so the two commands cannot disagree about what a
 	// failed cycle is.
-	discoveryOrReconcileFailed := len(result.Discovery.Errors) > 0 || len(result.Reconcile.Errors) > 0
-	if cycleFailed(discoveryOrReconcileFailed, result.FailedArtifacts) {
-		return 1
-	}
-	return 0
+	return cycleExit(os.Stdout, result.Verdict())
 }

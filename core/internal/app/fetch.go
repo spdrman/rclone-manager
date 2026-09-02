@@ -57,6 +57,13 @@ type FetchResult struct {
 	// honestly: --dry-run looks at the remote, never at the journal's
 	// per-artifact outcomes, so it has nothing to report here.
 	FailedArtifacts int
+
+	// Progress is issue #361's count of what this fetch actually
+	// achieved (see CycleProgress). It comes from the same walk `run`
+	// counts, so the two commands cannot disagree about whether a cycle
+	// got anything through. A dry-run never sets it, for the same reason
+	// it never sets FailedArtifacts.
+	Progress CycleProgress
 }
 
 // Fetch is `backup-manager fetch --source ... --backup-set ...`'s use

@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
@@ -174,8 +175,23 @@ func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 // pass that finds rot is not a systemic error, but it is a stronger case
 // for a non-zero exit than a single artifact this cycle's own pipeline
 // quarantined, and this function must not let that distinction matter.
-func cycleFailed(systemicFailure bool, failedArtifacts int) bool {
-	return systemicFailure || failedArtifacts > 0
+func cycleFailed(v app.CycleVerdict) bool {
+	return v.Systemic || v.ReconcileErrors > 0 || v.FailedArtifacts > 0
+}
+
+// cycleExit turns one cycle's per-backup-set verdicts into the exit
+// status `run` and `fetch` both return, and prints the reason for any
+// non-zero one it can name. Both commands go through this single
+// function so neither can grow its own idea of what a failed cycle is.
+func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
+	code := 0
+	for _, v := range verdicts {
+		if !cycleFailed(v) {
+			continue
+		}
+		code = 1
+	}
+	return code
 }
 
 // fail prints err to stderr in a consistent shape and returns the exit

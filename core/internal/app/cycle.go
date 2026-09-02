@@ -41,6 +41,11 @@ type BackupSetCycleResult struct {
 	Retention       RetentionSetReport
 	Err             error
 	FailedArtifacts int
+
+	// Progress is issue #361's count of what this cycle actually
+	// achieved for this backup set (see CycleProgress): how much work
+	// was in front of it, and how much of that moved.
+	Progress CycleProgress
 }
 
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per

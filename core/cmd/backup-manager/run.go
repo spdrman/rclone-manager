@@ -36,14 +36,9 @@ func cmdRun(args []string) int {
 
 	report := svc.RunCycle(ctx)
 
-	failed := false
+	verdicts := make([]app.CycleVerdict, 0, len(report.Sets))
 	for _, s := range report.Sets {
-		if cycleFailed(s.Err != nil, s.FailedArtifacts) {
-			failed = true
-		}
+		verdicts = append(verdicts, s.Verdict())
 	}
-	if failed {
-		return 1
-	}
-	return 0
+	return cycleExit(os.Stdout, verdicts...)
 }
