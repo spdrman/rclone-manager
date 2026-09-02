@@ -22,9 +22,28 @@ import (
 	_ "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
+// resolveTestRetention fills in every backup set's resolved Retention the
+// way config.Validate does (issue #333). These fixtures build a Config by
+// hand rather than loading one, so nothing else fills that field in, and a
+// set left at the zero Retention is not an unconfigured policy, it is an
+// invalid one that DecideKeep refuses outright.
+func resolveTestRetention(c *config.Config) *config.Config {
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			if bs.RetentionConfig != nil {
+				bs.Retention = *bs.RetentionConfig
+			} else {
+				bs.Retention = c.Retention
+			}
+		}
+	}
+	return c
+}
+
 func testConfig(sources ...config.Source) *config.Config {
 	protect := true
-	return &config.Config{
+	return resolveTestRetention(&config.Config{
 		Sources: sources,
 		Retention: config.Retention{
 			Timezone:             "UTC",
@@ -34,7 +53,7 @@ func testConfig(sources ...config.Source) *config.Config {
 			MonthlyMonths:        12,
 			ProtectLastKnownGood: &protect,
 		},
-	}
+	})
 }
 
 func openTestJournal(t *testing.T) *state.Journal {
