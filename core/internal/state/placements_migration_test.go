@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/spdrman/rclone-manager/core/internal/model"
 	"testing"
 )
 
@@ -410,4 +412,103 @@ func TestPlacementMoves_PinTheFR30Phases(t *testing.T) {
 	); err == nil {
 		t.Fatal("an unknown move phase was accepted")
 	}
+}
+
+// A backfilled placement is not a special kind of row, and the journal's
+// own writer has to be able to carry on with it. This is the join between
+// the two halves of the "no artifact with zero placements" guarantee: the
+// migration creates a placement, and then ordinary transitions have to
+// update that placement rather than the one insertArtifact would have
+// made.
+func TestMigrate0007_ABackfilledPlacementIsUpdatedByLaterTransitions(t *testing.T) {
+	ctx := context.Background()
+	db, path := openLikeProduction(t)
+	applyUpTo(t, ctx, db, schemaVersionBeforePlacements)
+
+	// One artifact mid-pipeline, so a later transition genuinely has
+	// somewhere to move it to.
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO artifacts (id, source, backup_set, artifact_name, remote_path, local_path, state,
+		                       discovered_at, updated_at, transfer_bytes)
+		VALUES (1, 'nas', 'daily', 'db.dump', '/remote/db.dump', '/backups/daily/db.dump.partial', 'VERIFYING',
+		        '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 4096)`); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	// Open is what a real deployment does on the upgrade: migrate, then
+	// carry on.
+	j, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = j.Close() }()
+
+	artifact := mustArtifact(t, "nas", "daily", "db.dump")
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	p, ok := rec.LocalPlacement()
+	if !ok {
+		t.Fatal("the backfilled artifact has no local placement")
+	}
+	if p.Location != "/backups/daily/db.dump.partial" || p.VerificationClass != VerificationNone {
+		t.Fatalf("backfilled placement = %+v, want the recorded partial path and no verification class", p)
+	}
+
+	final := "/backups/daily/db.dump"
+	verifiedAt, err := parseTime("2026-01-03T00:00:00Z")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if _, err := j.RecordTransition(ctx, Transition{
+		Artifact: artifact, Key: "post-upgrade-verify", From: "VERIFYING", To: "VERIFIED",
+		Hashes: &HashUpdate{Hash: "cafe", Alg: "sha256"}, OccurredAt: verifiedAt,
+	}); err != nil {
+		t.Fatalf("VERIFIED: %v", err)
+	}
+	committedAt, err := parseTime("2026-01-03T00:01:00Z")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	out, err := j.RecordTransition(ctx, Transition{
+		Artifact: artifact, Key: "post-upgrade-commit", From: "VERIFIED", To: "COMMITTING",
+		LocalPath: &final, OccurredAt: committedAt,
+	})
+	if err != nil {
+		t.Fatalf("COMMITTING: %v", err)
+	}
+
+	if len(out.Record.Placements) != 1 {
+		t.Fatalf("after two transitions the artifact has %d placements, want 1: the writer must update the backfilled row, not add a second", len(out.Record.Placements))
+	}
+	p = out.Record.Placements[0]
+	switch {
+	case p.Location != final:
+		t.Errorf("placement location = %q, want the new final path %q", p.Location, final)
+	case p.Hash != "cafe" || p.HashAlg != "sha256":
+		t.Errorf("placement hash = %q/%q, want cafe/sha256", p.Hash, p.HashAlg)
+	case p.VerificationClass != VerificationContent:
+		t.Errorf("placement class = %q, want %q after a real read-back", p.VerificationClass, VerificationContent)
+	case p.VerifiedAt == nil || !p.VerifiedAt.Equal(verifiedAt):
+		t.Errorf("placement verified_at = %v, want the moment of the VERIFIED transition", p.VerifiedAt)
+	case p.CreatedAt.IsZero():
+		t.Error("the backfilled created_at was lost")
+	}
+}
+
+func mustArtifact(t *testing.T, source, set, name string) model.ArtifactID {
+	t.Helper()
+	s, err := model.NewBackupSetID(source, set)
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	a, err := model.NewArtifactID(s, name)
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	return a
 }
