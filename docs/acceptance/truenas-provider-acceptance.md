@@ -36,13 +36,12 @@ reach.
 
 ### 0.1 Make the canonical image resolvable
 
-The registry is settled and nothing has been pushed to it yet. The reference is
-`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the single
-source of truth for it), and that file records `image.published: false`;
-`container/release-manifest.json` records the same fact as a `registry_digest` of
-`null` on every architecture. So the reference resolves to nothing today, not because
-no registry exists but because the first push has not happened (issue #88). Until it
-does, pick one:
+`ghcr.io/spdrman/backup-manager:0.1.0` is real: it is published, keyless-signed and
+SBOM-attested. `distribution/packaging/canonical.json` records
+`image.published: true`, and `container/release-manifest.json` carries a real
+`registry_digest` per architecture. So the reference resolves today by pulling the
+released image; no push or side-load is needed. The steps below are only needed to
+test a locally-built image instead of the released one -- pick one:
 
 **Option A, your own registry.** Build and push both architectures, then override
 the image reference at install time:

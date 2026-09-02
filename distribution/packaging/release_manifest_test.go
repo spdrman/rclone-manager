@@ -295,15 +295,15 @@ func newSquashMergeFixture(t *testing.T) squashMergeFixture {
 // local_image_id_sha256 is a local Docker image ID and not a registry
 // digest "because no registry is configured for this repository yet".
 //
-// That premise is no longer true. The registry is settled: ghcr.io, and
+// That premise is no longer true, on both halves of the manifest this
+// test holds together. The registry is settled: ghcr.io, and
 // ghcr.io/spdrman/backup-manager, which canonical.json already carries.
-// What is still true is that nothing has been pushed there, which
-// canonical.json records as image.published false. So the manifest now
-// carries an explicit registry_digest slot per architecture, null while
-// nothing is published, and this test makes the two statements move
-// together instead of drifting into the pair of half-truths the issue
-// objected to. The day a release is actually pushed and published flips
-// to true, this test starts demanding the digests, unprompted.
+// And as of the 0.1.0 push, canonical.json records image.published true,
+// so this test now demands what it used to only promise it would: a real
+// registry_digest per architecture, and a real top-level index_digest for
+// the multi-architecture index those manifests sit under. Never
+// separately: a published flag with a digest missing anywhere in that set
+// is exactly the pair of half-truths the issue objected to.
 func TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag(t *testing.T) {
 	m, err := ReadReleaseManifest()
 	if err != nil {
@@ -311,39 +311,47 @@ func TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag(t *testing.T
 	}
 	c := MustLoad()
 
-	for _, complaint := range registryDigestComplaints(c.Image.Reference, c.Image.Published, m.Architectures) {
+	for _, complaint := range registryDigestComplaints(c.Image.Reference, c.Image.Published, m.IndexDigest, m.Architectures) {
 		t.Error(complaint)
 	}
 }
 
 // registryDigestComplaints says every way a recorded set of
-// architectures disagrees with canonical.json's image.published flag.
+// architectures, and the top-level index digest they sit under, disagree
+// with canonical.json's image.published flag.
 //
 // It is a function rather than a loop inside the test above for the
 // reason releaseManifestIntegrity is one: against the real file only a
-// single arm can run. image.published is false and every registry_digest
-// is null, so the two arms carrying the actual contract, published with
-// no digest and a digest that is not a sha256: value, have never
-// executed and cannot until the day of the first real push. That day is
-// the worst moment to find out that a field name does not unmarshal or
-// that an assertion was written backwards. The table test below runs all
-// of them today.
+// single arm can run at a time. The table test below runs every arm,
+// including the ones a real push has already retired (an unpublished
+// manifest carrying a digest anyway) and cannot exercise again against
+// the real file.
 //
 // The empty case is not padding either. The whole guard is a loop over
 // the architectures, so a manifest recording none satisfies it by having
 // nothing to iterate, and the coupling then rests on an invariant
-// asserted in a different file.
-//
-// Schema note: registry_digest sits inside each architecture entry while
-// `docker buildx build --push` prints one image index digest for the
-// whole multi-arch image, so a top-level slot may be added or may
-// replace this one (#88). This table is pinned to the shape the manifest
-// carries today, and moves with it.
-func registryDigestComplaints(reference string, published bool, arches []ReleaseArchitecture) []string {
+// asserted in a different file. It is checked before the index digest
+// too: a manifest with no architectures at all is a different failure
+// than a missing index digest, and RecordsEveryBinary is where that one
+// is caught.
+func registryDigestComplaints(reference string, published bool, indexDigest *string, arches []ReleaseArchitecture) []string {
 	if len(arches) == 0 {
 		return []string{"the release manifest records no architecture at all, so the registry-digest guard has nothing to check and passes by default"}
 	}
 	var complaints []string
+	switch {
+	case !published:
+		if indexDigest != nil {
+			complaints = append(complaints, fmt.Sprintf("the manifest records index_digest %q while canonical.json says image.published is false; one of the two is lying about whether %s exists in a registry",
+				*indexDigest, reference))
+		}
+	case indexDigest == nil:
+		complaints = append(complaints, fmt.Sprintf("canonical.json says %s is published, and the manifest records no index_digest, so the multi-architecture image cosign signed and attested an SBOM for is not identified by anything a verifier can pin",
+			reference))
+	case !strings.HasPrefix(*indexDigest, "sha256:"):
+		complaints = append(complaints, fmt.Sprintf("the manifest records index_digest %q, which is not a sha256: digest; an index digest is what `docker buildx imagetools inspect %s` prints for the multi-arch manifest, not a local image ID",
+			*indexDigest, reference))
+	}
 	for _, a := range arches {
 		switch {
 		case !published:
@@ -370,24 +378,34 @@ func TestRegistryDigestComplaints_CoversEveryCombination(t *testing.T) {
 	arch := func(name string, d *string) []ReleaseArchitecture {
 		return []ReleaseArchitecture{{Architecture: name, RegistryDigest: d}}
 	}
+	// A valid index digest and a valid per-architecture digest, so a case
+	// aimed at the other half of the manifest does not also trip this
+	// one and turn a one-complaint case into two.
+	validIndex := digest("sha256:" + strings.Repeat("e", 64))
+	validArchOnly := arch("amd64", digest("sha256:"+strings.Repeat("c", 64)))
 
 	cases := []struct {
-		name      string
-		published bool
-		arches    []ReleaseArchitecture
-		want      string // a substring the single complaint must carry, or "" for no complaint
+		name        string
+		published   bool
+		indexDigest *string
+		arches      []ReleaseArchitecture
+		want        string // a substring the single complaint must carry, or "" for no complaint
 	}{
-		{"nothing published and no digest recorded, which is today", false, arch("amd64", nil), ""},
-		{"nothing published but a digest appeared anyway", false, arch("amd64", digest("sha256:"+strings.Repeat("a", 64))), "image.published is false"},
-		{"published with no digest at all", true, arch("amd64", nil), "records no registry_digest"},
-		{"published with a local image ID where a digest belongs", true, arch("amd64", digest(strings.Repeat("b", 64))), "which is not a sha256: digest"},
-		{"published with a real digest", true, arch("amd64", digest("sha256:"+strings.Repeat("c", 64))), ""},
-		{"no architectures at all, unpublished", false, nil, "records no architecture at all"},
-		{"no architectures at all, published", true, []ReleaseArchitecture{}, "records no architecture at all"},
+		{"nothing published and no digest recorded, which is today", false, nil, arch("amd64", nil), ""},
+		{"nothing published but a digest appeared anyway", false, nil, arch("amd64", digest("sha256:"+strings.Repeat("a", 64))), "image.published is false"},
+		{"published with no digest at all", true, validIndex, arch("amd64", nil), "records no registry_digest"},
+		{"published with a local image ID where a digest belongs", true, validIndex, arch("amd64", digest(strings.Repeat("b", 64))), "which is not a sha256: digest"},
+		{"published with a real digest", true, validIndex, arch("amd64", digest("sha256:"+strings.Repeat("c", 64))), ""},
+		{"no architectures at all, unpublished", false, nil, nil, "records no architecture at all"},
+		{"no architectures at all, published", true, validIndex, []ReleaseArchitecture{}, "records no architecture at all"},
+		{"nothing published but an index digest appeared anyway", false, digest("sha256:"+strings.Repeat("a", 64)), arch("amd64", nil), "image.published is false"},
+		{"published with no index digest at all", true, nil, validArchOnly, "records no index_digest"},
+		{"published with a local image ID where an index digest belongs", true, digest(strings.Repeat("b", 64)), validArchOnly, "which is not a sha256: digest"},
+		{"published with a real index digest", true, validIndex, validArchOnly, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := registryDigestComplaints("ghcr.io/spdrman/backup-manager", tc.published, tc.arches)
+			got := registryDigestComplaints("ghcr.io/spdrman/backup-manager", tc.published, tc.indexDigest, tc.arches)
 			if tc.want == "" {
 				if len(got) != 0 {
 					t.Fatalf("expected no complaint, got %v", got)
@@ -405,7 +423,7 @@ func TestRegistryDigestComplaints_CoversEveryCombination(t *testing.T) {
 
 	// Every architecture is judged, not just the first: a manifest whose
 	// second entry is the broken one has to complain about that entry.
-	got := registryDigestComplaints("ghcr.io/spdrman/backup-manager", true, []ReleaseArchitecture{
+	got := registryDigestComplaints("ghcr.io/spdrman/backup-manager", true, validIndex, []ReleaseArchitecture{
 		{Architecture: "amd64", RegistryDigest: digest("sha256:" + strings.Repeat("d", 64))},
 		{Architecture: "arm64", RegistryDigest: nil},
 	})

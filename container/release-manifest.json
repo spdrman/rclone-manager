@@ -1,26 +1,27 @@
 {
-  "version": "8ad3100",
-  "commit": "8ad310014b5be92e75789c8cff4167942d0c8e42",
-  "generated_at": "2026-08-31T06:52:45Z",
-  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script now refuses to record a commit that is not an ancestor of origin/main and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled. registry_digest is the digest ghcr.io assigns ghcr.io/spdrman/backup-manager on push (docker buildx build --push prints it, docker buildx imagetools inspect reads it back), and it is null on every architecture below because nothing has been pushed yet; distribution/packaging/canonical.json records the same fact as image.published false, and the two move together. local_image_id_sha256 is not a stand-in for it: it is the local Docker image ID this build produced, which identifies the image on the machine that built it and nowhere else. Filling registry_digest in from a real push, and signing and attesting what it points at, is issue #88's work, not this file's.",
+  "version": "0.1.0",
+  "commit": "13ed7108c0459228d4c251cdd941b96137154556",
+  "generated_at": "2026-09-01T00:07:37Z",
+  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script refuses to record a commit that is not reachable from a rewrite-free ref and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled, and scripts/release/verify-manifest-parity.sh rebuilds and re-hashes them before any push, so a manifest describing different bytes cannot be published (#260). registry_digest is what ghcr.io assigned each architecture's manifest on the 0.1.0 push, read back with docker buildx imagetools inspect rather than taken from the push's own output: the push says what it believes it sent and the registry says what it holds. index_digest is the multi-architecture image index those two sit under, and it is what cosign signed and attached the SBOM attestation to. local_image_id_sha256 is none of these: it is the local Docker image ID the recording build produced, which identifies the image on the machine that built it and nowhere else. Deploy by digest, never by tag.",
   "architectures": [
     {
       "architecture": "amd64",
       "binary_sha256": {
-        "backup-manager": "cee62fbc3d09244343420bb284062fcb53cc69090d2d326212823b609a5a6284",
-        "backup-manager-web": "779fe41252fba1019c568bfa7253e320f21d77929a571032f0819d0e4f701496"
+        "backup-manager": "2e8153cb77e7412a17cbc97322df3daea1dbdd448aef89890d2b46744e4b87bc",
+        "backup-manager-web": "001b5dc8a0cdb44c341570c4c87c0ed411f05a1eae016b95537ea186574b79d9"
       },
-      "local_image_id_sha256": "669978eac696ce6e2f8ebac22fcad63638f97224194243c56b4ba3a7751dc4cc",
-      "registry_digest": null
+      "local_image_id_sha256": "6fd441d024ab58fb42e4b31c8481ce2dfe6533664c3c2f8a4109d9f6ee4d050b",
+      "registry_digest": "sha256:67781dcb5148f9613891da87d08ea14b7656a668247f0b483bea5c02a15be81a"
     },
     {
       "architecture": "arm64",
       "binary_sha256": {
-        "backup-manager": "e317a7cfc6471813fe7c58af17126886ec3939f8858b85b11556800379677061",
-        "backup-manager-web": "cb2630ed7dc8d11dca9622d8f45e4cb8e4af387cf98fb07e4900aa6883a4b2b0"
+        "backup-manager": "19d31a44dc2e02257e977e9469d475cf2bb5e37c51062b64e4ce8233237db05e",
+        "backup-manager-web": "31faa542448efec3bdcbb65ebadcd4862cfe6cbec3853d3ccf8922dbd841db43"
       },
-      "local_image_id_sha256": "be69e08202b121a2309891a4735becceadf8a926e67a731728b475dd9799ac63",
-      "registry_digest": null
+      "local_image_id_sha256": "79baf5babdd0ceb25deae016449c0e3345ff98be78945da5550834fd18e9c907",
+      "registry_digest": "sha256:a8a1f7227c57db8545c81c7dc7d031ba9535c287e69f25fbd2cb01c6b02bfd67"
     }
-  ]
+  ],
+  "index_digest": "sha256:533e7540e3b4c496de56d56d1e5bc54ed17d050d7d3296f266f10c852d6381cb"
 }

@@ -20,8 +20,8 @@ train: community
 # app_version is the upstream application version; version is this catalog
 # entry's own. Both are pinned, and neither is `latest`: §8's canonical
 # image rule forbids deploying a floating tag.
-app_version: "1.0.0"
-version: "1.0.0"
+app_version: "0.1.0"
+version: "0.1.0"
 
 categories:
   - backup

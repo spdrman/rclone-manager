@@ -323,7 +323,7 @@ func TestImageTagUnderstandsEveryFloatingForm(t *testing.T) {
 const canonicalCompose = `
 services:
   backup-manager:
-    image: ghcr.io/spdrman/backup-manager:1.0.0
+    image: ghcr.io/spdrman/backup-manager:0.1.0
     command: ["/backup-manager-web", "serve"]
     user: "568:568"
     read_only: true
@@ -340,7 +340,7 @@ services:
       - "/host/id_ed25519:/etc/backup-manager/id_ed25519:ro"
       - "/host/known_hosts:/etc/backup-manager/known_hosts:ro"
   backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:1.0.0
+    image: ghcr.io/spdrman/backup-manager:0.1.0
     command: ["/backup-manager-web", "serve-ui"]
     user: "568:568"
     read_only: true
@@ -391,7 +391,7 @@ func TestEveryDriftElementFailsOnADeliberateMismatch(t *testing.T) {
 		{
 			capability: "drift-image-reference",
 			provider:   "truenas",
-			mutate:     func(s string) string { return strings.ReplaceAll(s, "backup-manager:1.0.0", "backup-manager:9.9.9") },
+			mutate:     func(s string) string { return strings.ReplaceAll(s, "backup-manager:0.1.0", "backup-manager:9.9.9") },
 			wants:      "9.9.9",
 		},
 		{
