@@ -287,6 +287,13 @@ export const FIELD_HELP = {
       "Saving this box writes only the completion method. Stable file size infers completion rather than being told about it, which is materially less assurance than a producer-provided rename or marker, and the page says so beside the value."
   },
 
+  editSetStableFor: {
+    what: "How long a file's size and timestamp have to stay unchanged before Backup Manager treats it as finished. Only used by the stable file size method.",
+    example: "300",
+    effect:
+      "Saving this box writes only the window. Too short and a slow write can be copied half-finished; too long and every backup waits that much longer before it is collected. This is the setting that makes the stable-size method usable at all, which is why it appears the moment you choose that method."
+  },
+
   // ------------------------------------------------------------- wizard
 
   wizardSetName: {

@@ -5,7 +5,7 @@ import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import type { BackupManagerApi } from "@shared/api/contracts";
 import { BackupManagerError } from "@shared/api/contracts";
-import { createMockApi } from "@shared/api/mock";
+import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import { resetGraphForTests } from "@shared/state/graph";
 import { backupSetPath } from "@shared/utilities/routes";
@@ -122,6 +122,7 @@ describe("backup set detail page reads the set", () => {
 describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", () => {
   afterEach(() => {
     resetGraphForTests();
+    resetMockFixtures();
     vi.restoreAllMocks();
   });
 

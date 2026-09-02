@@ -17,7 +17,7 @@ import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
-import { EDIT_FIELDS, readEditFields } from "./backupSetEditFields";
+import { EDIT_FIELDS, readEditFields, visibleEditFields } from "./backupSetEditFields";
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
 import { describeFailure } from "@shared/api/failure";
@@ -115,8 +115,16 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const [methodLabel, methodDetail] = COMPLETION_COPY[s.completionMethod];
   const events = (activity.data ?? []).filter((e) => e.setId === s.id).slice(0, 6);
 
+  // visibleEditFields, not EDIT_FIELDS: a conditional box that is not on
+  // screen (the stable-size window, when another completion method is
+  // selected) must never end up in a patch. Walking the full table here
+  // would send whatever that hidden box happened to hold.
   const dirtyKeys = (): EditFieldKey[] =>
-    !draft || !baseline ? [] : EDIT_FIELDS.filter((f) => draft[f.key] !== baseline[f.key]).map((f) => f.key);
+    !draft || !baseline
+      ? []
+      : visibleEditFields(draft)
+          .filter((f) => draft[f.key] !== baseline[f.key])
+          .map((f) => f.key);
 
   // Takes the hold, then opens the mode. In that order and never the
   // other way round: the hold is what actually stops a cycle running
@@ -421,7 +429,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           {editing && draft && baseline ? (
             <Section title="Edit this backup set">
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {EDIT_FIELDS.map((field) => (
+                {visibleEditFields(draft).map((field) => (
                   <EditRow
                     key={field.key}
                     field={field}

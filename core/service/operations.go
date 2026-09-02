@@ -338,13 +338,21 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	// one to hand a client that is polling every second.
 	live := b.progress.begin(operationID)
 	defer b.progress.end(operationID)
+	defer b.runOnce.Unlock()
 	// The process-wide reading beside the operation-scoped one, so
 	// "what would entering edit mode for this set stop" can be answered
 	// for an API-submitted cycle and a scheduled one identically
 	// (edithold.go's cycleWatch).
+	//
+	// Registered AFTER b.runOnce.Unlock above, so that it runs BEFORE it:
+	// defers unwind in reverse, and releasing the single-flight lock
+	// first would let a scheduled tick take it, call cycleWatch.begin and
+	// publish its first reading, only for this deferred end() to wipe it.
+	// The window is microseconds and self-heals on the next reading, but
+	// it is the kind of thing that is free to get right here and
+	// expensive to diagnose later.
 	b.cycleWatch.begin()
 	defer b.cycleWatch.end()
-	defer b.runOnce.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error(context.Background(), "execute-run-cycle-panic", fmt.Errorf("recovered panic: %v", r))

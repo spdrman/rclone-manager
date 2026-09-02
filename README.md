@@ -197,10 +197,19 @@ Only the flags you pass are changed; anything you leave out is left exactly as i
 is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
 one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
 cannot drift. The change is validated against the same `config.Validate` a hand-edited file
-goes through at boot, written through the same atomic replace, and hot-reloaded, so a
-running daemon picks it up without a restart. A set's name and source are deliberately not
-patchable: they key every journal row, artifact id and recovery manifest the set has ever
-produced, so renaming one is a migration rather than an edit.
+goes through at boot and written through the same atomic replace.
+
+One thing to be plain about, because it is the same for `settings patch` and is easy to
+assume otherwise: the hot reload is in-process. A change made through the API takes effect
+immediately in the engine that served it, because that engine is also the thing running the
+schedule. A change made by a separate `backup-manager backup-set patch` invocation writes
+`config.yaml` and reloads that invocation's own view of it, and a `daemon` already running
+in another process keeps using the configuration it loaded at start until it is restarted.
+There is no config watcher and no SIGHUP reload in this build.
+
+A set's name and source are deliberately not patchable: they key every journal row, artifact
+id and recovery manifest the set has ever produced, so renaming one is a migration rather
+than an edit.
 
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to

@@ -31,6 +31,16 @@
 // liveProgress (progress.go) and the retention plan store (retention.go)
 // and for the same reason.
 //
+// # What an authenticated caller can do with this, said out loud
+//
+// Any authenticated caller can hold any backup set, and can keep renewing
+// it, which pauses that set's backups for as long as they keep going.
+// That is worth stating rather than leaving to be discovered, and it is
+// not an escalation: the same caller can already turn the set off
+// outright through POST /backup-sets/{source}/{set}/enabled, which is
+// both easier and more durable. The lease is what bounds the accidental
+// version of it, which is the one that actually happens.
+//
 // # No token, and why that is the right trade here
 //
 // Any authenticated caller can renew or release any hold. A token would
@@ -45,6 +55,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -347,15 +358,11 @@ func (b *BackupService) requireBackupSet(id string) error {
 	return wrapNotFound(id)
 }
 
+// wrapNotFound is the same %w-wrap every other method in this package
+// uses for this condition (GetBackupSet, SetBackupSetEnabled,
+// UpdateBackupSet), rather than a bespoke error type: a caller gets
+// errors.Is(err, ErrBackupSetNotFound) and a message naming what was
+// asked for, and one spelling means one thing to read.
 func wrapNotFound(id string) error {
-	return &notFoundError{id: id}
+	return fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
 }
-
-// notFoundError carries the id alongside ErrBackupSetNotFound, so a
-// caller gets both errors.Is(err, ErrBackupSetNotFound) and a message
-// naming what was asked for, without fmt.Errorf allocating on a path
-// three routes poll.
-type notFoundError struct{ id string }
-
-func (e *notFoundError) Error() string { return ErrBackupSetNotFound.Error() + ": " + e.id }
-func (e *notFoundError) Unwrap() error { return ErrBackupSetNotFound }
