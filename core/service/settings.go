@@ -81,6 +81,18 @@ type RetentionTier struct {
 	// WindowUnit measures the look-back in a unit other than Granularity;
 	// empty means "the same as Granularity", which is the ordinary case.
 	WindowUnit string
+	// Medium names the storage medium this tier's artifacts live on
+	// (EPIC E, FR-27); empty means the local backup root, which is what
+	// every tier of every configuration written before EPIC E means.
+	//
+	// It is carried here for a reason stronger than symmetry with the
+	// config schema. RetentionUpdate.Tiers REPLACES the whole chain, so
+	// a field this type cannot hold is a field a settings save deletes
+	// from the operator's file: editing daily's keep would have quietly
+	// moved monthly's artifacts back onto local disk. A lossy boundary
+	// between the file and the form is a configuration change nobody
+	// asked for, made by the act of changing something else.
+	Medium string
 }
 
 // RetentionSettings is the FR-18/FR-19 policy as it is actually
@@ -550,6 +562,14 @@ func applyRetentionUpdate(r *config.Retention, u RetentionUpdate) {
 				PeriodDays:  t.PeriodDays,
 				Keep:        t.Keep,
 				WindowUnit:  t.WindowUnit,
+				// Carried through rather than dropped: this assignment
+				// replaces the operator's whole chain, so a field left
+				// out here is a field the save deletes from their file.
+				// Whether the named medium exists is config.Validate's
+				// question, asked over the whole config a few lines
+				// after this one; nothing here second-guesses it, which
+				// is what keeps every medium rule in one package.
+				Medium: t.Medium,
 			})
 		}
 		// The three scalars are sugar for the default chain, and
@@ -577,6 +597,7 @@ func toRetentionTiers(in []config.RetentionTier) []RetentionTier {
 			PeriodDays:  t.PeriodDays,
 			Keep:        t.Keep,
 			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
 		})
 	}
 	return out

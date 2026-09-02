@@ -65,6 +65,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	declaredMediums := v.validateStorageMediums(c.StorageMediums)
 	v.validateRetention(&c.Retention)
 
 	// --- Phase 2: inheritance ---
@@ -83,6 +84,17 @@ func (c *Config) Validate() error {
 	// during phase 1 would inherit the raw policy an operator typed rather
 	// than the defaulted one. It gets its own pass here.
 	c.resolveBackupSetRetentions(v)
+
+	// Phase 2 as well, and for a related reason: resolving a tier's medium
+	// needs BOTH halves finished, the declared list and every chain that
+	// might name one. Per-set overrides (#333) are chains too, so this has
+	// to come after the line above or a set's own tiers go unchecked. Only
+	// a whole Config knows the declared list at all, which is why this is
+	// here rather than inside validateRetention; ValidateRetention, the
+	// CLI's own override entry point, holds a Retention and nothing else,
+	// so see validateTierMedium for how the rules are split to keep that
+	// path checking everything it can.
+	v.validateMediumReferences(c, declaredMediums)
 
 	v.validateAlerts(&c.Alerts)
 	v.validateCapacity(&c.Capacity)
@@ -1157,6 +1169,8 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 			v.addf("%s: keep must not exceed %d look-back units (got %d); a longer window overflows the calendar arithmetic that walks it back from today, and a tier that overflows selects nothing at all", path, retentionTierKeepMax, t.Keep)
 		}
 
+		v.validateTierMedium(path, t)
+
 		switch {
 		case t.WindowUnit == "":
 			// Defaults to the tier's own granularity.
@@ -1166,6 +1180,280 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 			v.addf("%s: window_unit %q is not one of: %s", path, t.WindowUnit, retentionGranularityList)
 		}
 	}
+}
+
+// validateStorageMediums checks EPIC E's FR-27 medium declarations and
+// FR-33's credential custody shape, and returns the set of ids that were
+// successfully declared so validateTierMediumReferences can resolve a
+// tier's reference against it.
+//
+// It returns a set rather than recording one on the validator because
+// "which mediums exist" is an answer, not a problem, and the only caller
+// that needs it is three lines further down in Validate.
+//
+// An id that failed its own shape rules is still added to the set. That is
+// deliberate: an operator who typed "OffsiteS3" in both places has one
+// mistake, and reporting it as two (a malformed id AND a tier pointing at
+// nothing) buries the fix under a consequence of itself. The malformed id
+// is already refused, so nothing downstream can act on the pairing.
+func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]bool {
+	declared := make(map[string]bool, len(mediums))
+	seen := map[string]int{} // medium id -> the index that first declared it
+
+	for i := range mediums {
+		m := &mediums[i]
+		path := fmt.Sprintf("storage_mediums[%d]", i)
+
+		switch {
+		case m.ID == "":
+			v.addf("%s: id must not be empty", path)
+		case !storageMediumIDPattern.MatchString(m.ID):
+			v.addf("%s: id %q must be lower_snake_case (letters, digits and underscores, starting with a letter)", path, m.ID)
+		case m.ID == MediumLocal:
+			// Reserved. Two answers to "where is local" is a placement
+			// record nothing can interpret, and FR-29 stores exactly that
+			// string against every artifact in every deployment.
+			v.addf("%s: id %q is reserved for the implicit local medium (a backup set's own local_path) and cannot name a configured one", path, m.ID)
+		default:
+			if first, dup := seen[m.ID]; dup {
+				v.addf("%s: duplicate medium id %q (already used by storage_mediums[%d])", path, m.ID, first)
+			}
+			seen[m.ID] = i
+		}
+		if m.ID != "" {
+			declared[m.ID] = true
+		}
+
+		// The type set is closed and grows only by a future FR, because a
+		// new backend is an architecture decision rather than an import
+		// line (FR-28). Accepting a type nothing implements would let an
+		// operator write a config this product can validate and never
+		// serve.
+		if !validStorageMediumTypes[m.Type] {
+			if m.Type == "" {
+				v.addf("%s: type must be set to one of: %s", path, storageMediumTypeList)
+			} else {
+				v.addf("%s: type %q is not one of: %s", path, m.Type, storageMediumTypeList)
+			}
+		}
+
+		if m.Bucket == "" {
+			v.addf("%s: bucket must not be empty; a medium with no bucket names no destination at all", path)
+		}
+
+		// Empty means the documented default in both of the next two, and
+		// the default is resolved by an accessor rather than written back
+		// into the struct here. Writing it back would freeze today's
+		// default into an operator's own file on the next settings save
+		// (issue #294), and for the same reason nothing below fills in a
+		// value: this function only ever refuses.
+		if m.StorageClass != "" && !validStorageClasses[m.StorageClass] {
+			v.addf("%s: storage_class %q is not one of: %s", path, m.StorageClass, storageClassList)
+		}
+		if m.UploadVerification != "" && !validUploadVerifications[m.UploadVerification] {
+			v.addf("%s: upload_verification %q is not one of: %s", path, m.UploadVerification, uploadVerificationList)
+		}
+
+		v.validateMediumPrefix(path, m.Prefix)
+		v.validateMediumCredentials(path, m.Credentials)
+	}
+
+	return declared
+}
+
+// validateMediumPrefix checks the key namespace a medium writes under.
+//
+// FR-28 fixes the key layout as <prefix>/<source>/<set>/<artifact-name>,
+// joined with "/". Every rule here is about that join: a leading, trailing
+// or doubled slash produces an empty key segment, which means two
+// spellings of the same object and a locator that does not round-trip.
+//
+// The ".." refusal is the one rule that is not about tidiness. S3 has no
+// traversal to exploit, but a key is not only ever a key: restoring an
+// artifact writes it to a local path derived from that key, and a key
+// namespace that cannot contain ".." is one fewer place for that to go
+// wrong. Refusing it in the schema costs an operator nothing, since a ".."
+// segment in a prefix has no meaning worth having.
+func (v *validator) validateMediumPrefix(path, prefix string) {
+	if prefix == "" {
+		return
+	}
+	if strings.HasPrefix(prefix, "/") || strings.HasSuffix(prefix, "/") {
+		v.addf("%s: prefix %q must not start or end with \"/\"; the key layout joins it with \"/\" already, so a slash here produces an empty key segment", path, prefix)
+		return
+	}
+	for _, seg := range strings.Split(prefix, "/") {
+		switch seg {
+		case "":
+			v.addf("%s: prefix %q must not contain an empty segment (\"//\")", path, prefix)
+			return
+		case ".", "..":
+			v.addf("%s: prefix %q must not contain a \".\" or \"..\" segment; a key namespace has no traversal to express, and a restore writes to a local path derived from the key", path, prefix)
+			return
+		}
+	}
+}
+
+// validateMediumCredentials checks FR-33's custody shape: three sources,
+// exactly one set.
+//
+// Exactly one, not at most one, which is where this differs from
+// validatePassphrase and validateKeyEncryption and matches validateKey
+// instead. Those two are optional by nature (most keys carry no
+// passphrase, most deployments encrypt nothing at rest), while a medium
+// with no credentials is a medium nothing can reach: there is no ambient
+// authentication in this schema, deliberately, since an instance-profile
+// or environment-inherited spelling is its own decision with its own
+// threat model and is not one this issue gets to make in passing.
+//
+// This never reads File's content and never runs Command. It is shape
+// only, on the principle validateKey's own doc states: whether a resolved
+// credential actually authenticates is a question only
+// internal/transport/rclone can answer, once it can reach the endpoint.
+//
+// Nothing here echoes a credential-bearing value into a message. File and
+// Env name where a secret lives rather than being one, but a path or a
+// variable name is close enough to the secret that quoting it in an error
+// is a habit worth not starting, and FR-33's rule is that a resolver
+// failure is reported by the shape of the problem rather than by the
+// content that failed. The one value quoted below is Command[0], an
+// executable path, which is the same thing validateKey already quotes.
+func (v *validator) validateMediumCredentials(path string, c MediumCredentials) {
+	credPath := path + ".credentials"
+
+	sources := 0
+	if c.File != "" {
+		sources++
+	}
+	if c.Env != "" {
+		sources++
+	}
+	if len(c.Command) != 0 {
+		sources++
+	}
+
+	switch {
+	case sources == 0:
+		v.addf("%s: one of file, env or command is required; there is no field for a literal key, on purpose, and no ambient-credential spelling in this schema", credPath)
+		return
+	case sources > 1:
+		v.addf("%s: exactly one of file, env or command may be set, not more than one", credPath)
+		return
+	}
+
+	if len(c.Command) != 0 {
+		cmdPath := credPath + ".command"
+		if c.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(c.Command[0]) {
+			// validateKey's identical rule, for the identical reason: a
+			// resolver has to resolve to exactly one binary regardless of
+			// the process's working directory or $PATH at the moment a
+			// credential is actually needed.
+			v.addf("%s: executable %q must be an absolute path", cmdPath, c.Command[0])
+		}
+	}
+}
+
+// validateTierMedium checks a tier's medium key for everything decidable
+// from the tier alone: its spelling, and that it is not the reserved local
+// id.
+//
+// The split between this and validateTierMediumReferences is what lets the
+// CLI's override path (ValidateRetention, which holds a Retention and no
+// Config) still catch a malformed medium name. Resolving the reference
+// needs the declared list, so that half can only run from Validate.
+func (v *validator) validateTierMedium(path string, t *RetentionTier) {
+	switch {
+	case t.Medium == "":
+		// Absent means local. See RetentionTier.Medium's own doc for why
+		// that is the only spelling of local.
+	case t.Medium == MediumLocal:
+		v.addf("%s: medium %q is the implicit local medium and cannot be named explicitly; omit the medium key instead, which is what keeps a settings save from writing this key into a config that never configured a medium", path, t.Medium)
+	case !storageMediumIDPattern.MatchString(t.Medium):
+		v.addf("%s: medium %q must be lower_snake_case (letters, digits and underscores, starting with a letter), the same rule a storage_mediums id follows", path, t.Medium)
+	}
+}
+
+// validateMediumReferences resolves every tier's medium, in every chain a
+// config can carry, against the mediums it declared.
+//
+// There are two such chains since #333, and missing the second is the
+// easy mistake: the deployment-wide policy, and a per-backup-set override.
+// An override is a whole chain in its own right, so a set writing
+// "retention: {tiers: [...]}" can name a medium exactly as the global
+// policy can, and a check that only walked the global one would accept a
+// dangling reference in the per-set chain and store the artifacts of that
+// set nowhere it could say.
+//
+// A set with no override is deliberately skipped rather than walked
+// through its RESOLVED chain, which is a clone of the global one: walking
+// it would report one dangling global medium once per backup set, turning
+// a single mistake into as many messages as the deployment has sets.
+func (v *validator) validateMediumReferences(c *Config, declared map[string]bool) {
+	v.validateTierMediumReferences("retention", &c.Retention, declared)
+
+	for i := range c.Sources {
+		for j := range c.Sources[i].BackupSets {
+			bs := &c.Sources[i].BackupSets[j]
+			if bs.RetentionConfig == nil {
+				continue
+			}
+			// The resolved chain rather than the raw override, because
+			// that is the one that decides, and the path still points at
+			// the operator's own key: an override that spells its chain
+			// with a tiers list resolves index for index.
+			path := fmt.Sprintf("sources[%d].backup_sets[%d].retention", i, j)
+			v.validateTierMediumReferences(path, &bs.Retention, declared)
+		}
+	}
+}
+
+// validateTierMediumReferences resolves each tier's medium against the
+// mediums the config actually declared.
+//
+// A dangling reference is an error rather than a fall-back to local,
+// because falling back would mean storing artifacts somewhere other than
+// where the operator wrote, silently, which is the wrong direction on the
+// one decision this field exists to make.
+//
+// Only the explicit chain is walked. The legacy daily_days/weekly_months/
+// monthly_months spelling cannot name a medium at all (it has no field
+// for one), so the chain those scalars stand for is local throughout, and
+// walking EffectiveTiers here would check three synthesised tiers that no
+// operator wrote.
+//
+// A declared medium that no tier references is deliberately NOT reported.
+// FR-27 calls it legal: an operator staging a destination before pointing
+// a tier at it has written a valid config, and refusing it would mean the
+// only way to add a medium is to adopt it in the same edit.
+func (v *validator) validateTierMediumReferences(path string, r *Retention, declared map[string]bool) {
+	for i := range r.Tiers {
+		t := &r.Tiers[i]
+		if t.Medium == "" || t.Medium == MediumLocal {
+			continue // resolved, or already refused by validateTierMedium
+		}
+		if !declared[t.Medium] {
+			v.addf("%s.tiers[%d]: medium %q is not declared by any storage_mediums entry; a tier's medium must name one, and there is no fall-back to local for a name that does not resolve", path, i, t.Medium)
+		}
+	}
+}
+
+// validStorageMediumTypes is the closed set StorageMedium.Type accepts.
+// One entry today; see StorageMediumTypeS3 for why the set is closed and
+// what adding to it costs.
+var validStorageMediumTypes = map[string]bool{
+	StorageMediumTypeS3: true,
+}
+
+var storageMediumTypes = []string{StorageMediumTypeS3}
+
+var storageMediumTypeList = strings.Join(storageMediumTypes, ", ")
+
+// StorageMediumTypes returns every value StorageMedium.Type accepts. See
+// StorageClasses for why this is exported.
+func StorageMediumTypes() []string {
+	return append([]string(nil), storageMediumTypes...)
 }
 
 // validStorageClasses is the closed set StorageMedium.StorageClass
