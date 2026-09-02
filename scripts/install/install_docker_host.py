@@ -2057,13 +2057,14 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
     pass
 
 
-def _add_shared_groups(sp: argparse.ArgumentParser, repo_root: Path) -> None:
-    """layout, credentials and runtime: every subcommand gets these, because
-    resolve() below populates prefix/state_dir/backup_dir/config_dir/
-    ssh_key/known_hosts/compose_file/image/puid/pgid/timezone/
-    public_base_url unconditionally, regardless of which command runs -
-    splitting these per-command would mean splitting resolve() too, which
-    is a bigger and riskier change than #330 asked for.
+def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
+    """layout: every subcommand gets these, and only these, unconditionally.
+
+    resolve() below always builds host_dirs from prefix/state_dir/
+    backup_dir/config_dir, and every cmd_* handler needs at least prefix
+    and project (compose_argv() and detect_existing() both read only
+    these five) - this is the true common floor, not "everything install
+    happens to need" the way this function used to define it.
     """
     layout = sp.add_argument_group("layout")
     layout.add_argument("--prefix", type=Path, default=Path("/volume1/backup-manager"),
@@ -2076,6 +2077,16 @@ def _add_shared_groups(sp: argparse.ArgumentParser, repo_root: Path) -> None:
                         help="Host directory holding config.yaml. Defaults to <prefix>/config. May be empty: "
                              "a fresh install serves a first-run flow (issue #176).")
     layout.add_argument("--project", default=DEFAULT_PROJECT, help="Compose project name.")
+
+
+def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> None:
+    """credentials and the rest of runtime: only preflight and install read
+    any of these (every check in the Preflight class, and everything
+    cmd_install stages and brings up). status, uninstall, network-doctor
+    and network-undo never touch a credential path, an image reference or
+    a listen port, so they no longer declare these flags at all.
+    """
+    layout = sp.add_argument_group("layout")
     layout.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
                         help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
 
@@ -2155,7 +2166,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_preflight = subparsers.add_parser(
         "preflight", formatter_class=_HelpFormatter,
         help="Check every prerequisite and exit. Changes nothing on the host.")
-    _add_shared_groups(sp_preflight, repo_root)
+    _add_shared_groups(sp_preflight)
+    _add_install_prereq_groups(sp_preflight, repo_root)
 
     sp_install = subparsers.add_parser(
         "install", formatter_class=_HelpFormatter,
@@ -2169,7 +2181,8 @@ def build_parser() -> argparse.ArgumentParser:
             "      --image ghcr.io/spdrman/backup-manager:0.1.0\n"
         ),
     )
-    _add_shared_groups(sp_install, repo_root)
+    _add_shared_groups(sp_install)
+    _add_install_prereq_groups(sp_install, repo_root)
     _add_fix_network_flag(
         sp_install, default="auto",
         why_this_default="auto is the default because a healthy host is a strict no-op either way, so "
@@ -2184,7 +2197,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp_status = subparsers.add_parser(
         "status", formatter_class=_HelpFormatter,
         help="Report what's here, and whether bridge networking still works. Read-only.")
-    _add_shared_groups(sp_status, repo_root)
+    _add_shared_groups(sp_status)
     check = sp_status.add_argument_group("bridge networking (issue #271)")
     check.add_argument("--check-network", choices=["auto", "never"], default="auto",
                        help="auto asks, unprivileged and read-only, whether a bridged container can still "
@@ -2198,12 +2211,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp_uninstall = subparsers.add_parser(
         "uninstall", formatter_class=_HelpFormatter,
         help="Remove what install created (docker compose down), and nothing else.")
-    _add_shared_groups(sp_uninstall, repo_root)
+    _add_shared_groups(sp_uninstall)
 
     sp_doctor = subparsers.add_parser(
         "network-doctor", formatter_class=_HelpFormatter,
         help="Diagnose Docker bridge networking, and repair it if --fix-network says to.")
-    _add_shared_groups(sp_doctor, repo_root)
+    _add_shared_groups(sp_doctor)
     _add_fix_network_flag(
         sp_doctor, default="diagnose",
         why_this_default="diagnose is the default here, unlike install's auto: a command named \"doctor\" "
@@ -2215,41 +2228,58 @@ def build_parser() -> argparse.ArgumentParser:
     sp_undo = subparsers.add_parser(
         "network-undo", formatter_class=_HelpFormatter,
         help="Remove exactly the firewall rules and persistence unit this installer added, and nothing else.")
-    _add_shared_groups(sp_undo, repo_root)
+    _add_shared_groups(sp_undo)
 
     return parser
 
 
 def resolve(args):
+    """Fill in every default this installer computes from --prefix and the
+    account it runs as.
+
+    Guarded with hasattr() past the layout group: since #330's subparsers
+    split, only preflight and install declare --ssh-key, --compose-file
+    and the rest of the install-prerequisite flags (status, uninstall,
+    network-doctor and network-undo never read a credential path or an
+    image reference), so those attributes are simply absent from the
+    Namespace for the other four commands. layout itself (prefix,
+    state_dir, backup_dir, config_dir, project) stays unconditional: every
+    subcommand declares it, and host_dirs below needs all four regardless
+    of which command is running.
+    """
     args.prefix = args.prefix.expanduser().resolve()
     args.state_dir = (args.state_dir or args.prefix / "state").expanduser()
     args.backup_dir = (args.backup_dir or args.prefix / "backups").expanduser()
     args.config_dir = (args.config_dir or args.prefix / "config").expanduser()
-    args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
-    args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
-    args.compose_file = args.compose_file.expanduser()
-    if args.image_archive is not None:
-        args.image_archive = args.image_archive.expanduser()
-    if args.puid is None:
-        args.puid = os.getuid()
-    if args.pgid is None:
-        args.pgid = os.getgid()
-    if args.timezone is None:
-        tzfile = Path("/etc/timezone")
-        args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
-    if args.public_base_url is None:
-        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
     args.host_dirs = {
         "--prefix": args.prefix,
         "--state-dir": args.state_dir,
         "--backup-dir": args.backup_dir,
         "--config-dir": args.config_dir,
     }
-    # The tag compose resolves for VERSION, taken from the reference so
-    # the .env cannot claim a different release from the image.
-    ref = args.image
-    args.image_tag = ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"
-    args.image_commit = "none"
+    if hasattr(args, "ssh_key"):
+        args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
+    if hasattr(args, "known_hosts"):
+        args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
+    if hasattr(args, "compose_file"):
+        args.compose_file = args.compose_file.expanduser()
+    if hasattr(args, "image_archive") and args.image_archive is not None:
+        args.image_archive = args.image_archive.expanduser()
+    if hasattr(args, "puid") and args.puid is None:
+        args.puid = os.getuid()
+    if hasattr(args, "pgid") and args.pgid is None:
+        args.pgid = os.getgid()
+    if hasattr(args, "timezone") and args.timezone is None:
+        tzfile = Path("/etc/timezone")
+        args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
+    if hasattr(args, "public_base_url") and args.public_base_url is None:
+        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
+    if hasattr(args, "image"):
+        # The tag compose resolves for VERSION, taken from the reference so
+        # the .env cannot claim a different release from the image.
+        ref = args.image
+        args.image_tag = ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"
+        args.image_commit = "none"
     return args
 
 

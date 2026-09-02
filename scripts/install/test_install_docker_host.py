@@ -57,14 +57,15 @@ class Fixture:
         self.known.write_text("# pinned host keys go here\n")
 
     def args(self, *extra: str, command: str = "preflight"):
-        argv = [
-            command,
-            "--prefix", str(self.prefix),
-            "--ssh-key", str(self.key),
-            "--known-hosts", str(self.known),
-            "--compose-file", str(CANONICAL_COMPOSE),
-            *extra,
-        ]
+        argv = [command, "--prefix", str(self.prefix)]
+        # --ssh-key/--known-hosts/--compose-file only exist on preflight and
+        # install's own subparsers (issue #330): only Preflight's checks and
+        # cmd_install's staging ever read a credential path or the canonical
+        # compose file, so the other four commands no longer declare them.
+        if command in ("preflight", "install"):
+            argv += ["--ssh-key", str(self.key), "--known-hosts", str(self.known),
+                    "--compose-file", str(CANONICAL_COMPOSE)]
+        argv += list(extra)
         return installer.resolve(installer.build_parser().parse_args(argv))
 
 
@@ -1170,11 +1171,12 @@ class TestSubcommandFlagScoping(unittest.TestCase):
     """Real argparse subparsers (issue #330): before this, every flag from
     every subcommand was on one flat parser, so `network-doctor --help`
     showed `--ssh-key`, `--if-installed` and everything else irrelevant to
-    it. These assert the flags that ARE cleanly separable (bridge-network
-    policy, the probe flags, --if-installed) actually only appear on the
-    subcommands that read them - not that every flag is now scoped, since
-    layout/credentials/runtime stay shared across all six commands on
-    purpose (resolve() needs them for every command uniformly)."""
+    it. Only `--prefix`/`--state-dir`/`--backup-dir`/`--config-dir`/
+    `--project` are truly universal (compose_argv() and detect_existing()
+    read only these five, and resolve() always builds host_dirs from the
+    first four); credentials, --compose-file and the rest of runtime are
+    scoped to preflight and install, the only two commands that ever read
+    a credential path or an image reference at all."""
 
     def flags_of(self, command):
         return {opt for a in _subparser(installer.build_parser(), command)._actions
@@ -1208,16 +1210,46 @@ class TestSubcommandFlagScoping(unittest.TestCase):
             self.assertTrue(probe_flags <= self.flags_of(command),
                             f"{command} needs every probe flag")
 
-    def test_every_command_still_resolves_the_fields_resolve_needs(self):
-        """The flags resolve() populates unconditionally stay on every
-        subcommand - the point of #330 was to remove IRRELEVANT flags,
-        not to break resolve()'s own uniform behavior."""
-        shared = {"--prefix", "--state-dir", "--backup-dir", "--config-dir", "--ssh-key",
-                  "--known-hosts", "--compose-file", "--image", "--image-archive",
-                  "--puid", "--pgid", "--timezone", "--public-base-url", "--listen-port"}
+    def test_the_true_common_floor_stays_on_every_command(self):
+        """compose_argv() and detect_existing() are the only two functions
+        every subcommand's path can reach, and both read only these five -
+        the actual floor resolve() and every handler need, not "everything
+        install happens to need" the way this shared group used to be
+        defined."""
+        floor = {"--prefix", "--state-dir", "--backup-dir", "--config-dir", "--project"}
         for command in ("preflight", "install", "status", "uninstall",
                         "network-doctor", "network-undo"):
-            self.assertTrue(shared <= self.flags_of(command), f"{command} is missing a shared flag")
+            self.assertTrue(floor <= self.flags_of(command), f"{command} is missing a floor flag")
+
+    def test_credentials_and_the_rest_of_runtime_exist_only_on_preflight_and_install(self):
+        """Only Preflight's own checks and cmd_install's staging ever read
+        a credential path, --compose-file, an image reference, a listen
+        port or a puid/pgid/timezone override. status, uninstall,
+        network-doctor and network-undo never construct a Preflight and
+        never stage a deployment, so they no longer declare any of this."""
+        install_prereqs = {"--ssh-key", "--known-hosts", "--compose-file", "--image",
+                           "--image-archive", "--no-pull", "--listen-port", "--public-base-url",
+                           "--profile", "--timezone", "--puid", "--pgid", "--timeout"}
+        for command in ("status", "uninstall", "network-doctor", "network-undo"):
+            self.assertFalse(install_prereqs & self.flags_of(command),
+                             f"{command} never reads a credential, an image reference or a port")
+        for command in ("preflight", "install"):
+            self.assertTrue(install_prereqs <= self.flags_of(command),
+                            f"{command} needs every install-prerequisite flag")
+
+    def test_resolve_never_raises_for_a_command_missing_install_prereq_flags(self):
+        """The regression this whole split depends on: resolve() used to
+        touch args.ssh_key/args.compose_file/args.image unconditionally,
+        which would be an AttributeError the moment a subcommand stopped
+        declaring them. Exercised against all six commands for real,
+        not just the two that still have every flag."""
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            with self.subTest(command=command):
+                args = installer.resolve(installer.build_parser().parse_args(
+                    [command, "--prefix", "/tmp/rm-resolve-test"]))
+                self.assertEqual(args.command, command)
+                self.assertIn("--prefix", args.host_dirs)
 
     def test_docs_install_md_names_every_real_subcommand(self):
         """docs/install.md's opening paragraph used to say "Four
