@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
 import { ApiProvider } from "@shared/api/ApiContext";
 import type { BackupManagerApi } from "@shared/api/contracts";
@@ -316,6 +316,55 @@ describe("issue #350: Edit is an inline mode, not a dialog", () => {
     });
 
     expect(update.mock.calls[0][2]).toEqual({ host: "elsewhere.internal" });
+  });
+
+  // React Router does not remount this page for a :source/:set change, so
+  // edit mode has to notice the change itself. It does not, and A's draft
+  // stays on screen under B's heading, a Save there writes A's values to
+  // B, which is the worst outcome available on this page.
+  it("closes edit mode, and releases the hold, when the route moves to another set", async () => {
+    const api = createMockApi();
+    const release = vi.spyOn(api, "releaseEditHold");
+    const sets = await createMockApi().listSets();
+    const [first, second] = sets;
+
+    // A real in-router navigation, the same shape backup-set-detail-page's
+    // own "no unmount" case uses: React Router keeps this component
+    // mounted across it, which is the whole point.
+    function Harness() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button onClick={() => navigate(backupSetPath(second.source, second.set))}>go to second</button>
+          <Routes>
+            <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
+          </Routes>
+        </>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={[backupSetPath(first.source, first.set)]}>
+        <ApiProvider api={api}>
+          <Harness />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await screen.findByText(first.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
+    await screen.findByRole("button", { name: "SAVE ALL & EXIT EDIT" });
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "belongs-to-the-first-set" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "go to second" }));
+    });
+
+    await screen.findByText(second.name);
+    expect(screen.queryByRole("button", { name: "SAVE ALL & EXIT EDIT" })).toBeNull();
+    expect(screen.queryByDisplayValue("belongs-to-the-first-set")).toBeNull();
+    await waitFor(() => expect(release).toHaveBeenCalledWith(first.source, first.set));
   });
 
   it("has no edit dialog left to open", async () => {
