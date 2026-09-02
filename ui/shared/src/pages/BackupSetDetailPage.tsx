@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
 import { useResource } from "@shared/state/resource";
-import { useCausl } from "@shared/state/graph";
+import { graph, useCausl } from "@shared/state/graph";
 import { versionNode } from "@shared/state/appNodes";
 import { currentSetActivityNode, currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
+import { captureSetEditSnapshot, isSetEditStale } from "@shared/state/backupSetDetailNodes";
+import type { SetEditSnapshot } from "@shared/state/backupSetDetailNodes";
 import { PageHeader } from "@shared/components/PageHeader";
 import { HealthBadge } from "@shared/components/StatusBadge";
 import { FingerprintDisplay } from "@shared/components/FingerprintDisplay";
@@ -12,10 +14,24 @@ import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
+import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
-import { EditBackupSetDialog } from "./EditBackupSetDialog";
+import { EDIT_FIELDS, readEditFields } from "./backupSetEditFields";
+import type { EditField, EditFieldKey } from "./backupSetEditFields";
+import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
+import { describeFailure } from "@shared/api/failure";
 import { bytes, relativeAge } from "@shared/utilities/format";
+
+/**
+ * How often an open edit form renews its hold (issue #350).
+ *
+ * A third of the server's own 90-second lease, so two consecutive
+ * heartbeats can be lost to a slow or flapping network before the set
+ * resumes under an operator who is still typing. Renewing is the cheap
+ * direction to be wrong in; letting the lease lapse is not.
+ */
+const HOLD_HEARTBEAT_MS = 30_000;
 
 const COMPLETION_COPY = {
   "atomic-rename": ["Atomic rename", "Producer writes to a temporary name, then renames into place."],
@@ -47,7 +63,44 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const version = useCausl(versionNode);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
-  const [editOpen, setEditOpen] = useState(false);
+
+  // ------------------------------------------------------- issue #350
+  //
+  // Edit is a mode this page enters, not a dialog it opens. `baseline` is
+  // what each box held when the mode opened and `draft` is what it holds
+  // now; a box's Save is armed by draft !== baseline, which is the
+  // issue's own rule (compared against the value LOADED, so typing a
+  // character and deleting it leaves Save inactive) and is why both are
+  // strings.
+  const [editing, setEditing] = useState(false);
+  const [baseline, setBaseline] = useState<Record<EditFieldKey, string> | null>(null);
+  const [draft, setDraft] = useState<Record<EditFieldKey, string> | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<EditFieldKey, string>>>({});
+  const [savingFields, setSavingFields] = useState<EditFieldKey[]>([]);
+  const [snapshot, setSnapshot] = useState<SetEditSnapshot | null>(null);
+  const [stale, setStale] = useState(false);
+  const [enterError, setEnterError] = useState<string | null>(null);
+  const [warnAbout, setWarnAbout] = useState<RunningWork | null>(null);
+  const [stopped, setStopped] = useState<RunningWork | null>(null);
+
+  // The hold's lifetime, tied to `editing` rather than to any one button.
+  // The cleanup runs when edit mode is left by ANY route, this component
+  // unmounting included, which is the issue's "exiting edit mode releases
+  // the hold, whether by SAVE ALL & EXIT EDIT or by leaving edit mode any
+  // other way". The heartbeat covers the routes a browser cannot report
+  // at all: a closed laptop or a lost network stops renewing, and the
+  // server's own lease lapses. A set left permanently paused because
+  // somebody closed a tab is a backup silently not happening.
+  useEffect(() => {
+    if (!editing || !setId) return;
+    const timer = setInterval(() => {
+      void api.takeEditHold(source, setName).catch(() => {});
+    }, HOLD_HEARTBEAT_MS);
+    return () => {
+      clearInterval(timer);
+      void api.releaseEditHold(source, setName).catch(() => {});
+    };
+  }, [editing, api, source, setName, setId]);
 
   if (set.error) return <ErrorState {...set.error} onRetry={set.reload} />;
   // Both checks matter, same as BackupDetailPage.tsx's equivalent fix
@@ -61,6 +114,158 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const s = set.data;
   const [methodLabel, methodDetail] = COMPLETION_COPY[s.completionMethod];
   const events = (activity.data ?? []).filter((e) => e.setId === s.id).slice(0, 6);
+
+  const dirtyKeys = (): EditFieldKey[] =>
+    !draft || !baseline ? [] : EDIT_FIELDS.filter((f) => draft[f.key] !== baseline[f.key]).map((f) => f.key);
+
+  // Takes the hold, then opens the mode. In that order and never the
+  // other way round: the hold is what actually stops a cycle running
+  // against this set, so a form that opened first would be editable for
+  // as long as the request took, which is the window the hold exists to
+  // close.
+  const enterEditMode = async () => {
+    setEnterError(null);
+    try {
+      const hold = await api.takeEditHold(source, setName);
+      setStopped(hold.stopped);
+    } catch (e) {
+      setEnterError(describeFailure(e, "Backup Manager could not pause this backup set for editing.").message);
+      return;
+    }
+    const loaded = readEditFields(s);
+    setBaseline(loaded);
+    setDraft({ ...loaded });
+    setFieldErrors({});
+    setStale(false);
+    setSnapshot(captureSetEditSnapshot());
+    setEditing(true);
+  };
+
+  // Pressing Edit asks what a cycle is doing for this set BEFORE it holds
+  // anything, which is what makes declining possible: an operator is
+  // shown what stopping would discard and can say no, and the cycle is
+  // untouched because nothing has been held yet.
+  const onEditPressed = async () => {
+    setEnterError(null);
+    let running: RunningWork | null;
+    try {
+      running = (await api.getEditHold(source, setName)).running;
+    } catch (e) {
+      // Refused rather than entered anyway. Opening edit mode without
+      // knowing whether a cycle is running is exactly the two-writers
+      // race the hold exists to prevent, and doing it silently would be
+      // worse than saying so.
+      setEnterError(
+        describeFailure(e, "Backup Manager could not check whether a backup is running for this set.").message
+      );
+      return;
+    }
+    if (running) {
+      setWarnAbout(running);
+      return;
+    }
+    await enterEditMode();
+  };
+
+  /**
+   * Persists exactly `keys` and nothing else.
+   *
+   * One path for both the per-box Save and SAVE ALL, differing only in
+   * which keys they hand it, so the two can never disagree about what a
+   * save sends. Returns whether it succeeded, because SAVE ALL has to
+   * stay in edit mode when it did not.
+   */
+  const saveFields = async (keys: EditFieldKey[]): Promise<boolean> => {
+    if (keys.length === 0) return true;
+    // The staleness check the dialog already ran, kept and moved here.
+    // Inline editing holds the page open longer than a dialog did, so
+    // this matters more here, not less.
+    if (!snapshot || isSetEditStale(snapshot)) {
+      setStale(true);
+      return false;
+    }
+
+    const patch: BackupSetPatch = {};
+    const problems: Partial<Record<EditFieldKey, string>> = {};
+    for (const key of keys) {
+      const field = fieldFor(key);
+      const parsed = field.parse(draft ? draft[key] : "");
+      if (parsed.error) problems[key] = parsed.error;
+      else Object.assign(patch, parsed.patch);
+    }
+    if (Object.keys(problems).length > 0) {
+      setFieldErrors((prev) => ({ ...prev, ...problems }));
+      return false;
+    }
+
+    setSavingFields(keys);
+    try {
+      const updated = await api.updateBackupSet(source, setName, patch);
+      // The persisted truth goes back on the graph directly, rather than
+      // through a reload. Two reasons, and the second is the one that
+      // matters: a reload is fire-and-forget so there is no moment to
+      // re-baseline the staleness snapshot against, and re-baselining is
+      // mandatory here because this page's own commit bumps the very
+      // version counter isSetEditStale compares. Without it the SECOND
+      // per-box Save of a session would always report a concurrent edit
+      // that never happened.
+      graph.commit("app.currentSetDetail/edit-saved", (tx) =>
+        tx.set(currentSetDetailNode, { data: updated, error: null, loading: false })
+      );
+      setSnapshot(captureSetEditSnapshot());
+      // Both baseline and draft are re-read from the SERVER's answer for
+      // the saved keys, not from the text that was sent: the box then
+      // shows what is actually persisted (an include list the server
+      // normalised, say), and its Save goes quiet because the two agree.
+      // Keys nobody saved are untouched, which is what keeps another
+      // box's unsaved edit on screen.
+      const persisted = readEditFields(updated);
+      setBaseline((prev) => applyKeys(prev, persisted, keys));
+      setDraft((prev) => applyKeys(prev, persisted, keys));
+      setFieldErrors((prev) => clearKeys(prev, keys));
+      return true;
+    } catch (e) {
+      // Edit mode stays open and the typed value stays where it is; only
+      // an explanation is added. Dropping back to view mode here would
+      // discard the operator's work and show them the old value as
+      // though nothing had happened.
+      const message = describeFailure(e, "Backup Manager could not save this change.").message;
+      setFieldErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, message])) }));
+      return false;
+    } finally {
+      setSavingFields([]);
+    }
+  };
+
+  // Saves whatever is STILL dirty and leaves, and leaves regardless of
+  // whether anything was. It is not a second chance to re-save what a
+  // per-box Save already wrote, which is why it asks dirtyKeys() rather
+  // than sending every field.
+  const saveAllAndExit = async () => {
+    if (!(await saveFields(dirtyKeys()))) return;
+    leaveEditMode();
+  };
+
+  const leaveEditMode = () => {
+    setEditing(false);
+    setDraft(null);
+    setBaseline(null);
+    setSnapshot(null);
+    setFieldErrors({});
+    setStale(false);
+    setStopped(null);
+  };
+
+  const reloadLatestValues = () => {
+    const fresh = captureSetEditSnapshot();
+    setSnapshot(fresh);
+    setStale(false);
+    if (fresh) {
+      const loaded = readEditFields(fresh.set);
+      setBaseline(loaded);
+      setDraft({ ...loaded });
+    }
+  };
 
   return (
     <>
@@ -101,7 +306,29 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               Run all due sets
             </button>
             <button className="btn" disabled={readOnly} onClick={() => api.testConnection(s.id)}>Test connection</button>
-            <button className="btn" disabled={readOnly} onClick={() => setEditOpen(true)}>Edit</button>
+            {/* Issue #350: Edit is a mode, so this one button is both the
+                way in and the way out. Read-only keeps it unavailable
+                exactly as it always has. */}
+            {editing ? (
+              // Disabled while a per-box Save is still in flight. Without
+              // that, pressing this during one would re-send the field
+              // that save is already writing, because dirtyKeys() cannot
+              // yet see a baseline the in-flight response has not
+              // returned. Two writes of the same value are harmless in
+              // themselves; a control that says "save what is still
+              // unsaved" and then re-sends something already saved is
+              // lying about its scope, which is the thing this issue is
+              // about.
+              <button
+                className="btn btn--primary"
+                disabled={savingFields.length > 0}
+                onClick={() => void saveAllAndExit()}
+              >
+                SAVE ALL &amp; EXIT EDIT
+              </button>
+            ) : (
+              <button className="btn" disabled={readOnly} onClick={() => void onEditPressed()}>Edit</button>
+            )}
             <button className="btn" disabled={readOnly} onClick={() => setPreviewOpen(true)}>Preview retention</button>
           </>
         }
@@ -115,6 +342,39 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           changed is an administrator action taken out of band that this
           manager will not offer to perform (§77 invariant 5). */}
       <HaltBanner set={s} />
+
+      {enterError ? (
+        <div style={{ marginBottom: 14 }}>
+          <WarningBanner tone="warn" title="Could not open edit mode">
+            {enterError}
+          </WarningBanner>
+        </div>
+      ) : null}
+
+      {stale ? (
+        <div style={{ marginBottom: 14 }}>
+          <WarningBanner
+            tone="warn"
+            title="This backup set changed since you opened edit mode"
+            actions={
+              <button className="btn btn--sm" onClick={reloadLatestValues}>Reload latest values</button>
+            }
+          >
+            Someone (or something) else saved a change to this set first. Nothing from
+            this form was applied. Review the latest values before editing again.
+          </WarningBanner>
+        </div>
+      ) : null}
+
+      {editing && stopped ? (
+        <div style={{ marginBottom: 14 }}>
+          <WarningBanner tone="info" title="A backup was stopped for this edit">
+            {"Backup Manager stopped " +
+              (stopped.artifact || "the cycle") +
+              " at the " + stopped.stage + " stage. It stays incomplete rather than counting as a finished backup, and the next cycle after you leave edit mode picks it up again."}
+          </WarningBanner>
+        </div>
+      ) : null}
 
       <div
         style={{
@@ -157,6 +417,33 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               />
             </dl>
           </Section>
+
+          {editing && draft && baseline ? (
+            <Section title="Edit this backup set">
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {EDIT_FIELDS.map((field) => (
+                  <EditRow
+                    key={field.key}
+                    field={field}
+                    value={draft[field.key]}
+                    dirty={draft[field.key] !== baseline[field.key]}
+                    saving={savingFields.includes(field.key)}
+                    error={fieldErrors[field.key]}
+                    onChange={(next) =>
+                      setDraft((prev) => (prev ? { ...prev, [field.key]: next } : prev))
+                    }
+                    onSave={() => void saveFields([field.key])}
+                  />
+                ))}
+              </div>
+              <p style={{ margin: "14px 0 0", fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
+                This set&rsquo;s name and source are its identity: every backup, journal
+                entry and recovery manifest is filed under them, so they are not editable
+                here. Its SSH key and trusted host key are not either, because changing
+                those is a trust decision the wizard&rsquo;s verify step exists for.
+              </p>
+            </Section>
+          ) : null}
 
           <Section title="Connection">
             <FingerprintDisplay
@@ -275,7 +562,34 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
 
       <RetentionPreviewDialog source={s.source} set={s.set} open={previewOpen} onClose={() => setPreviewOpen(false)} />
 
-      <EditBackupSetDialog set={s} open={editOpen} onClose={() => setEditOpen(false)} />
+      {/* Issue #350: entering edit mode stops any cycle running against
+          this set, so an operator is told what that discards before it
+          happens, and only when something is actually running. Declining
+          leaves the cycle untouched, because nothing has been held yet. */}
+      <ConfirmationDialog
+        open={warnAbout !== null}
+        destructive
+        eyebrow="A backup is running for this set"
+        title="Stop it to edit this backup set?"
+        confirmLabel="Stop it and edit"
+        cancelLabel="Keep backing up"
+        onCancel={() => setWarnAbout(null)}
+        onConfirm={() => {
+          setWarnAbout(null);
+          void enterEditMode();
+        }}
+      >
+        <p style={{ margin: 0 }}>
+          {"Backup Manager is " +
+            (warnAbout?.stage ?? "") +
+            (warnAbout?.artifact ? " " + warnAbout.artifact : " this set's current cycle") +
+            " right now. Editing this set stops it, and holds the schedule until you leave edit mode."}
+        </p>
+        <p style={{ margin: 0, color: "var(--text-2)" }}>
+          The stopped backup stays incomplete rather than counting as a finished one, and
+          the next cycle after you leave edit mode starts it again from where it can.
+        </p>
+      </ConfirmationDialog>
 
       <ConfirmationDialog
         open={removeOpen}
@@ -295,6 +609,115 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       </ConfirmationDialog>
     </>
   );
+}
+
+/**
+ * One editable box with its own Save.
+ *
+ * The Save button is a SIBLING of HelpField, never a child of it, and
+ * that is load-bearing rather than a layout preference: HelpField wraps
+ * its content in a <label>, a <label> binds to its first labelable
+ * descendant, and <button> is labelable. A Save button placed inside
+ * would silently rebind the field's label to the button, so the input
+ * would have no accessible name and the button would have the field's.
+ */
+function EditRow({
+  field,
+  value,
+  dirty,
+  saving,
+  error,
+  onChange,
+  onSave
+}: {
+  field: EditField;
+  value: string;
+  dirty: boolean;
+  saving: boolean;
+  error?: string;
+  onChange(next: string): void;
+  onSave(): void;
+}) {
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 9, alignItems: "flex-end" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <HelpField label={field.label} help={field.help}>
+            {(helpId) =>
+              field.control === "select" ? (
+                <select
+                  className="input"
+                  aria-describedby={helpId}
+                  value={value}
+                  onChange={(e) => onChange(e.target.value)}
+                >
+                  {(field.options ?? []).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className="input"
+                  type={field.control === "number" ? "number" : "text"}
+                  aria-describedby={helpId}
+                  value={value}
+                  onChange={(e) => onChange(e.target.value)}
+                />
+              )
+            }
+          </HelpField>
+        </div>
+        {/* The accessible name names the box, so a screen reader (and a
+            test) can tell seven Saves apart. */}
+        <button
+          className="btn btn--sm"
+          aria-label={"Save " + field.label.toLowerCase()}
+          disabled={!dirty || saving}
+          onClick={onSave}
+        >
+          {saving ? "Saving\u2026" : "Save"}
+        </button>
+      </div>
+      {error ? (
+        <p role="alert" style={{ margin: "6px 0 0", fontSize: "var(--text-sm)", color: "var(--danger)" }}>
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function fieldFor(key: EditFieldKey): EditField {
+  const found = EDIT_FIELDS.find((f) => f.key === key);
+  // EditFieldKey is a union of exactly EDIT_FIELDS' own keys, so this is
+  // unreachable; throwing rather than falling back keeps a future key
+  // added to the union but not to the table from silently saving nothing.
+  if (!found) throw new Error("no edit field named " + key);
+  return found;
+}
+
+/** Copies `keys` from `from` onto `into`, leaving every other key as it
+ *  was. This is what "a per-box Save leaves other boxes alone" looks like
+ *  in state, and it is a function rather than an inline spread because
+ *  both baseline and draft need exactly the same operation. */
+function applyKeys(
+  into: Record<EditFieldKey, string> | null,
+  from: Record<EditFieldKey, string>,
+  keys: EditFieldKey[]
+): Record<EditFieldKey, string> | null {
+  if (!into) return into;
+  const next = { ...into };
+  for (const key of keys) next[key] = from[key];
+  return next;
+}
+
+function clearKeys(
+  errors: Partial<Record<EditFieldKey, string>>,
+  keys: EditFieldKey[]
+): Partial<Record<EditFieldKey, string>> {
+  const next = { ...errors };
+  for (const key of keys) delete next[key];
+  return next;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

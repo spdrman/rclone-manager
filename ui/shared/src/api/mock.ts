@@ -678,6 +678,41 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     setEnabled: () => delay(undefined),
     setReadOnly: () => delay(undefined),
 
+    // Issue #350. The mock APPLIES the patch to its own SETS entry
+    // rather than echoing the request, and applies only the keys the
+    // patch carries. Echoing would make every per-box Save look correct
+    // in the browser suite no matter what the page sent, which is
+    // exactly the class of green-by-construction the e2e harness has
+    // been caught by before: a page that sent every field on every Save
+    // would be indistinguishable from one that sent only the dirty box.
+    updateBackupSet: (source, set, patch) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
+          })
+        );
+      if (patch.host !== undefined) found.host = patch.host;
+      if (patch.port !== undefined) found.port = patch.port;
+      if (patch.username !== undefined) found.username = patch.username;
+      if (patch.remoteFolder !== undefined) found.remoteFolder = patch.remoteFolder;
+      if (patch.destination !== undefined) found.destination = patch.destination;
+      if (patch.includePatterns !== undefined) found.includePatterns = [...patch.includePatterns];
+      if (patch.completionMethod !== undefined) found.completionMethod = patch.completionMethod;
+      return delay({ ...found });
+    },
+
+    // Nothing is ever running in the mock, so edit mode opens with no
+    // prompt. That is the honest default rather than a convenience: a
+    // fixture that claimed a transfer was in flight would make every
+    // Edit press in the browser suite go through a confirmation the real
+    // product only shows sometimes. A test that wants the warning stubs
+    // this one call.
+    getEditHold: () => delay({ held: false, running: null }),
+    takeEditHold: () => delay({ expiresAt: new Date(Date.now() + 90_000).toISOString(), stopped: null }),
+    releaseEditHold: () => delay(undefined),
+
     createBackupSet: (req: CreateBackupSetRequest): Promise<CreatedBackupSet> => {
       const set = mockBackupSetFromCreateRequest(req);
       // SETS is declared const, not let: pushing onto it (rather than
