@@ -29,9 +29,9 @@ import (
 // CGO_ENABLED=0 build of core/cmd/backup-manager, with this one blank
 // import as the only difference between the two builds:
 //
-//	without backend/s3   29,646,334 bytes
-//	with backend/s3      42,664,008 bytes
-//	delta                13,017,674 bytes, 12.4 MiB, +43.9%
+//	without backend/s3   29,653,436 bytes
+//	with backend/s3      42,737,150 bytes
+//	delta                13,083,714 bytes, 12.5 MiB, +44.1%
 //
 // That is a big number, twenty-seven times crypt's ~470KB, and it is worth
 // saying plainly rather than burying: registering s3 pulls in the AWS SDK
