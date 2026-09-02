@@ -268,6 +268,19 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/tests/$guard.test.sh"
   done
 
+  # The installer's unit tests (#262), which the gate runs by `cd`-ing into
+  # scripts/install. Same reason as every stub above, and the same failure
+  # mode without it: a `cd` into a directory this fixture does not have
+  # fails, the gate runs under `set -e`, and every full-tree case below the
+  # step dies for a reason that has nothing to do with what it measures.
+  # This is the third time that has happened here, and it is why the step
+  # gets a stub rather than a conditional in ci-local.sh: a step that
+  # quietly skips itself when its own file is missing is #160's silent skip
+  # wearing a different hat.
+  mkdir -p "$tree/scripts/install"
+  printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self):\n        pass\n' \
+    >"$tree/scripts/install/test_install_docker_host.py"
+
   # The browser e2e step (#158, #197). Same reason as every stub above, and
   # the same failure mode without it, which this suite has now been bitten
   # by twice: `bash` on a path that does not exist exits 127, the gate runs
@@ -750,6 +763,26 @@ if grep -qE '^TESTS_REPO_SHA=[0-9a-f]{40}$' "$mutant_pin"; then
 else
   pass "G6 the G5 scan flags a branch-name pin"
 fi
+
+# H1: the installer prerequisite-refusal step (#262) piped its `unittest`
+# run through `tail -3` for output tidiness, and this file has no
+# `set -o pipefail` (nor could it portably rely on one, being
+# #!/usr/bin/env sh): a pipeline's exit status under plain `set -e` is its
+# LAST command's, which is `tail` here, and `tail` always succeeds. That
+# let the installer's own 55-case test suite fail silently forever -- the
+# exact "a refusal nobody has watched work is not a refusal" failure this
+# step exists to close, one line away from closing it, caught by review
+# before it shipped. This proves the fix: a red installer suite has to
+# refuse the commit, not get truncated and ignored, the same shape as G4's
+# proof for the browser e2e step.
+tree="$(make_full_tree)"
+printf 'import unittest\n\n\nclass Stub(unittest.TestCase):\n    def test_stub(self):\n        self.fail("a real installer regression")\n' \
+  >"$tree/scripts/install/test_install_docker_host.py"
+run_gate "$tree"
+assert_nonzero "H1 a red installer suite fails the run" "$status"
+assert_not_contains "H1 a red installer suite cannot report success" 'ci-local: ok' "$out"
+assert_contains "H1 the verdict line names the step that failed" \
+  'ci-local: FAILED (installer prerequisite refusals' "$out"
 
 # ------------------------------------------------------------------ result
 
