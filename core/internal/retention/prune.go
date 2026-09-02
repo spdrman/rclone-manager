@@ -378,9 +378,31 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 		Artifact: rec.Artifact,
 		Action:   PruneDelete,
 		Path:     safePath,
-		Reason: "no configured GFS retention tier selects this artifact and it does not hold last-known-good protection; " +
-			"its canonical path was confirmed beneath the backup-set root, confirmed a final managed artifact, and confirmed not a symlink",
+		Reason:   pruneDeleteReason(keepVerdict),
 	}
+}
+
+// pruneDeleteReason renders a PruneDelete verdict's Reason: FR-20's usual
+// sentence, plus, when keepVerdict carries any (issue #292), a warning
+// naming every sibling this artifact tied on an identical timestamp with
+// and lost only the deterministic tie-break to -- not the safety checks
+// pruneVerifySafeToDelete already passed, and not this function's own
+// KEEP/DELETE decision, which is unchanged either way (see this issue's
+// own scope decision: the split itself is not what this function refuses,
+// only its silence). This is what carries issue #292's signal to
+// PruneApply's actual, HTTP-reachable delete path
+// (core/service/retention.go's ApplyRetentionPlan, gated on an
+// administrator having reviewed exactly this Reason text in a prior
+// preview), the same way GFSVerdict.SiblingCollisionLines carries it to
+// `retention --dry-run`.
+func pruneDeleteReason(keepVerdict GFSVerdict) string {
+	base := "no configured GFS retention tier selects this artifact and it does not hold last-known-good protection; " +
+		"its canonical path was confirmed beneath the backup-set root, confirmed a final managed artifact, and confirmed not a symlink"
+	lines := keepVerdict.SiblingCollisionLines()
+	if len(lines) == 0 {
+		return base
+	}
+	return base + "; " + strings.Join(lines, "; ")
 }
 
 // pruneKeepReason renders the tiers that kept an artifact into the

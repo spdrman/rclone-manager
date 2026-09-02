@@ -1336,6 +1336,28 @@ rather than resolved to an empty KEEP, because an empty KEEP puts every
 managed backup in the set on the delete side. Retention is turned off by
 not running a retention pass.
 
+### Multi-file restore points
+
+GFS retention assumes one artifact is one restore point. A producer that
+instead writes a restore point as several files sharing one run's
+timestamp (a portable archive alongside a native database dump, in issue
+#292's own reproduction) breaks that assumption: within one backup set,
+GFS still selects at most one representative per bucket per tier, so one
+file of the run is kept and the rest become DELETE candidates.
+
+Configure such a producer as one backup set per file pattern instead: a
+distinct `include` glob (FR-5) and `backup_set_id` (FR-7) per file type,
+so every set's bucket holds exactly one artifact per run. The sets then
+retain independently, which has a real cost worth weighing going in: a
+verification failure quarantines only that set's artifact for a given
+run, so the sets can drift onto different runs over time, and each set's
+own health and last-known-good age are reported without regard to the
+other set's. `retention --dry-run` still flags a same-run tie inside a
+single set as a sibling collision rather than a silent split (see
+GFSVerdict.SiblingCollisionLines in core/internal/retention/gfs.go), but
+that is a safety net for a set left misconfigured, not a reason to prefer
+one set over several.
+
 ------------------------------------------------------------------------
 
 ## FR-19 --- Last-Known-Good Protection

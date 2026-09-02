@@ -608,3 +608,56 @@ func TestPruneDryRunAndApplyAgree(t *testing.T) {
 	pruneMustNotExist(t, deletablePath)
 	pruneMustExist(t, refusedWrongPath)
 }
+
+// TestPruneDeleteReasonNamesASiblingCollision is issue #292's own PruneApply
+// path: pruneEvaluate still decides PruneDelete for the artifact that
+// lost the timestamp tie (this issue does not change FR-20's KEEP/DELETE
+// decision, only what it explains), but the Reason it hands back must
+// name the sibling it collided with, since PruneApply is the actual,
+// HTTP-reachable deletion (core/service's ApplyRetentionPlan), unlike
+// `retention --dry-run`, which today never calls this package at all.
+func TestPruneDeleteReasonNamesASiblingCollision(t *testing.T) {
+	root := t.TempDir()
+	set := gfsMustSet(t, "prune-sibling-collision", "gitea-forge")
+	winner := gfsMustArtifact(t, set, "gitea-dump-20260828T120000Z.tar.gz")
+	loser := gfsMustArtifact(t, set, "gitea-db-20260828T120000Z.dump")
+	winnerPath := filepath.Join(root, winner.Name)
+	loserPath := filepath.Join(root, loser.Name)
+	pruneWriteFile(t, winnerPath, "the portable archive half of one restore point")
+	pruneWriteFile(t, loserPath, "the pg_dump half of the very same restore point")
+
+	// Both carry the exact same producer (remote modification) timestamp:
+	// the run's own shared timestamp, in the issue's own reproduction.
+	// pruneRecord alone cannot express this (it never sets Remote.ModTime,
+	// since none of this file's other cases need FR-18's producer pass at
+	// all), so these two records are built directly instead.
+	runTimestamp := pruneNow
+	winnerRec := pruneRecord(winner, lifecycle.Complete, pruneNow, winnerPath)
+	winnerRec.Remote.ModTime = &runTimestamp
+	loserRec := pruneRecord(loser, lifecycle.Complete, pruneNow, loserPath)
+	loserRec.Remote.ModTime = &runTimestamp
+	records := []state.Record{winnerRec, loserRec}
+	bs := pruneBackupSet(set, root)
+	cfg := pruneTodayOnlyChain()
+
+	verdicts, err := PruneDecide(pruneNow, cfg, bs, records)
+	if err != nil {
+		t.Fatalf("PruneDecide: %v", err)
+	}
+
+	kept := pruneFindVerdict(t, verdicts, winner.Name)
+	if kept.Action != PruneKeep {
+		t.Fatalf("%s: Action = %s, want %s (the fixture's own tie-break winner)", winner.Name, kept.Action, PruneKeep)
+	}
+
+	deleted := pruneFindVerdict(t, verdicts, loser.Name)
+	if deleted.Action != PruneDelete {
+		t.Fatalf("%s: Action = %s, want %s (issue #292 does not change this decision, only its Reason)", loser.Name, deleted.Action, PruneDelete)
+	}
+	if !strings.Contains(deleted.Reason, "sibling collision") {
+		t.Errorf("%s: Reason = %q, want it to mention a sibling collision", loser.Name, deleted.Reason)
+	}
+	if !strings.Contains(deleted.Reason, winner.Name) {
+		t.Errorf("%s: Reason = %q, want it to name %s, the sibling it tied with", loser.Name, deleted.Reason, winner.Name)
+	}
+}

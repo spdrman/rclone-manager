@@ -184,6 +184,60 @@ func (s GFSTierSelection) String() string {
 	return string(s.Tier) + "(" + strings.ToLower(string(s.By)) + ")"
 }
 
+// GFSSiblingCollision names one tier+placement bucket in which this
+// verdict's own artifact tied, on the exact placement instant (not merely
+// the same calendar bucket), with another artifact in the same backup
+// set, and lost only to gfsIsNewerRepresentative's deterministic
+// name tie-break -- never to being genuinely older (issue #292).
+//
+// The distinction that makes this worth its own type, rather than just
+// noting "this bucket had more than one candidate", is trust: two
+// artifacts landing in the same daily bucket on merely the same calendar
+// date is the ordinary case GFS exists to arbitrate (the newer one wins,
+// the older one is a real delete candidate). Two artifacts sharing the
+// exact same producer instant, the remote's own reported modification
+// time, down to the second, is not that case: outside a contrived test,
+// the only realistic way for two artifacts in one backup set to carry an
+// identical producer timestamp is that they are the same backup run,
+// captured as more than one file (a portable archive and a native
+// database dump of the same restore point, in the issue's own
+// reproduction). Flagging the exact producer tie, and only that, is what
+// keeps this signal from firing on every ordinary "newest of the day"
+// delete -- see TestGFSDecideDoesNotFlagAGenuinelyOlderArtifactAsASiblingCollision.
+//
+// A discovery-timestamp tie is deliberately never flagged, and that is
+// not the same case merely restated: the discovery pass is this
+// manager's own clock, not the artifacts' history, and one ingest cycle
+// routinely discovers several, entirely unrelated artifacts at the same
+// instant (bucketkey.go's own doc, and the very fixture that motivated
+// FR-18's producer pass in the first place -- a year of dumps ingested
+// in one cycle -- is exactly that). Treating a discovery tie as a
+// collision would flag most ordinary backlog ingests, not same-run
+// siblings, which is why GFSDecide only ever populates this from the
+// producer pass.
+type GFSSiblingCollision struct {
+	// Tier names which bucket the collision happened in: the same tier a
+	// matching entry in the winning artifact's own GFSTierSelection would
+	// name.
+	//
+	// By is always GFSSelectedByProducer (see this type's own doc for why
+	// a discovery-timestamp tie is never reported here), never
+	// GFSSelectedByBoth (a single pass produces at most one collision per
+	// artifact) and never GFSSelectedByProtection (FR-19's protection is
+	// not a bucket selection and cannot tie one). It is still a field,
+	// rather than a hardcoded constant this type omits, so a caller
+	// rendering a collision can reuse GFSTierSelection{Tier, By}.String()
+	// verbatim (see SiblingCollisionLines) instead of special-casing one
+	// more type that happens to always carry the same placement today.
+	Tier GFSTier
+	By   GFSSelectedBy
+
+	// Sibling is the artifact whose name won the deterministic tie-break
+	// and became that bucket's representative instead of this verdict's
+	// own artifact.
+	Sibling model.ArtifactID
+}
+
 // GFSVerdict is one backup set artifact's GFS classification.
 //
 // Keep reflects only this package's daily/weekly/monthly union: see the
@@ -211,6 +265,63 @@ type GFSVerdict struct {
 	// is no way to render a tier here without saying what selected it.
 	// That is issue #218's actual requirement: see GFSTierSelection.
 	Tiers []GFSTierSelection
+
+	// SiblingCollisions lists every tier+placement bucket in which this
+	// artifact tied, on the exact placement instant, with another
+	// artifact in the same backup set, and lost the deterministic
+	// tie-break (issue #292). Populated only when Keep is false: an
+	// artifact this manager is keeping anyway has nothing here worth
+	// disambiguating, and GFSDecide, ApplyLastKnownGood both clear it the
+	// moment an artifact's own Keep flips to true, so a caller can treat
+	// "Keep == false but SiblingCollisions is non-empty" as a fact this
+	// field alone establishes, never something it merely happens to still
+	// be carrying from an earlier, since-overridden decision.
+	//
+	// This is what lets a caller (this package's own
+	// GFSVerdict.SiblingCollisionLines, `retention --dry-run`,
+	// PruneVerdict.Reason) tell "no tier claimed this because it is older
+	// than every window" apart from "no tier claimed this because a
+	// sibling in the same bucket won" -- the exact distinction issue
+	// #292's acceptance criteria asks for. Neither this field nor its
+	// renderers change what gets kept or deleted: GFSDecide still selects
+	// at most one representative per bucket per tier, on purpose (see this
+	// issue's own scope decision) -- this only makes the resulting split
+	// impossible to mistake for an unrelated, ordinary delete.
+	SiblingCollisions []GFSSiblingCollision
+}
+
+// SiblingCollisionLines renders v.SiblingCollisions into one human
+// sentence per distinct sibling, for `retention --dry-run`
+// (cmd/backup-manager/retention.go) and FR-20's own PruneVerdict.Reason
+// (prune.go) to print verbatim. Returns nil when SiblingCollisions is
+// empty, so a caller can range over the result without a length check.
+//
+// One line per sibling, not one line per (tier, placement) entry: the
+// realistic case (issue #292's own reproduction) is two files from the
+// same run tying under the producer placement in every tier that admits
+// them, which would otherwise print the same pair of names three times
+// over for the default daily/weekly/monthly chain. The tiers and
+// placements that tied are still named, just folded into that one line,
+// via GFSTierSelection's own String().
+func (v GFSVerdict) SiblingCollisionLines() []string {
+	if len(v.SiblingCollisions) == 0 {
+		return nil
+	}
+	var order []model.ArtifactID
+	bySibling := map[model.ArtifactID][]string{}
+	for _, c := range v.SiblingCollisions {
+		if _, seen := bySibling[c.Sibling]; !seen {
+			order = append(order, c.Sibling)
+		}
+		bySibling[c.Sibling] = append(bySibling[c.Sibling], GFSTierSelection{Tier: c.Tier, By: c.By}.String())
+	}
+	out := make([]string, 0, len(order))
+	for _, sib := range order {
+		out = append(out, fmt.Sprintf(
+			"sibling collision: %s shares an identical timestamp with %s (%s) and lost only the name tie-break, not the retention window -- this is not an ordinary supersession; if these are two files of one restore point, see docs/EPIC.md's FR-18 \"Multi-file restore points\" section on configuring one backup set per file pattern before deleting either",
+			v.Artifact.Name, sib.Name, strings.Join(bySibling[sib], ", ")))
+	}
+	return out
 }
 
 // tierNames projects Tiers down to bare tier names, which is what this
@@ -369,8 +480,8 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 		// the spot, because which of them selected an artifact is the fact
 		// issue #218 is about: it is recorded per tier, below, as the
 		// union is formed.
-		byDiscovery := gfsSelectRepresentatives(tb, eligible, gfsDiscoveryPlacement)
-		byProducer := gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement)
+		byDiscovery, _ := gfsSelectRepresentatives(tb, eligible, gfsDiscoveryPlacement)
+		byProducer, producerTies := gfsSelectRepresentatives(tb, eligible, gfsProducerPlacement)
 
 		// A tier is attributed to an artifact exactly once even when both
 		// passes selected it, so a verdict never reads DAILY twice. The
@@ -395,6 +506,49 @@ func GFSDecide(now time.Time, cfg config.Retention, set model.BackupSetID, recor
 			v := verdicts[d.artifact]
 			v.Keep = true
 			v.Tiers = append(v.Tiers, GFSTierSelection{Tier: tb.tier, By: by})
+		}
+
+		// gfsSelectRepresentatives' own producer-pass tie map (issue
+		// #292): every artifact that placed at the exact same producer
+		// instant as this tier's bucket champion, and lost only to
+		// gfsIsNewerRepresentative's name tie-break. Recorded onto every
+		// loser's own verdict regardless of what else keeps it; the
+		// "Keep == false only" contract SiblingCollisions documents is
+		// enforced once, below, after every tier has had a turn, rather
+		// than re-checked per tier here.
+		//
+		// The discovery pass's own tie map (byDiscovery's second return,
+		// discarded above) is deliberately never consulted here, and that
+		// is not an oversight: a discovery-timestamp tie is the ordinary
+		// shape of one ingest cycle picking up several, entirely
+		// unrelated artifacts at once (bucketkey.go's own doc is explicit
+		// that this manager's clock, not the artifacts' own history, is
+		// what a discovery timestamp records), so flagging it would fire
+		// on every batch ingest, not on same-run siblings specifically.
+		// TestGFSDecideDoesNotFlagTheBatchIngestDiscoveryTieAsASiblingCollision
+		// (bucketkey_test.go) pins exactly this against the six-artifact
+		// backlog fixture the pinned CLI contract suite in
+		// spdrman/rclone-manager-tests also exercises. A producer
+		// timestamp tie has no such innocent explanation: two artifacts
+		// in one backup set reporting an identical remote modification
+		// time, to the second, is what two files of one backup run
+		// actually look like, which is the signal this issue is about.
+		for loser, sibling := range producerTies {
+			v := verdicts[loser]
+			v.SiblingCollisions = append(v.SiblingCollisions, GFSSiblingCollision{Tier: tb.tier, By: GFSSelectedByProducer, Sibling: sibling})
+		}
+	}
+
+	// SiblingCollisions is populated only when Keep is false (see that
+	// field's own doc): an artifact some other bucket, tier or placement
+	// still keeps has nothing here worth disambiguating, and carrying a
+	// stale collision forward on a KEEP verdict would contradict the
+	// field's own contract. This is the one place that contract is
+	// enforced, after every tier's ties have already been recorded above,
+	// rather than re-derived per artifact per tier.
+	for _, v := range verdicts {
+		if v.Keep {
+			v.SiblingCollisions = nil
 		}
 	}
 
@@ -432,32 +586,62 @@ func gfsProducerPlacement(d gfsDated) (gfsPlacement, bool) {
 // gfsSelectRepresentatives runs one tier's selection over one placement
 // key: every artifact that place() offers a date for, that falls inside
 // the tier's window, competes for its bucket, and the newest in each
-// bucket is that bucket's representative. The result is the set of
-// artifacts this pass selected, with each bucket contributing at most one
-// of them, which is FR-18's "the newest valid backup in each of its own
-// buckets" exactly as it always read.
-func gfsSelectRepresentatives(tb gfsBoundTier, eligible []gfsDated, place func(gfsDated) (gfsPlacement, bool)) map[model.ArtifactID]bool {
-	type champion struct {
+// bucket is that bucket's representative. The first return value is the
+// set of artifacts this pass selected, with each bucket contributing at
+// most one of them, which is FR-18's "the newest valid backup in each of
+// its own buckets" exactly as it always read.
+//
+// The second return value is issue #292's addition: every artifact that
+// competed for a bucket at the exact same placement instant as that
+// bucket's eventual representative, and so lost purely to
+// gfsIsNewerRepresentative's name tie-break rather than to being older,
+// mapped to the representative it tied with. A candidate whose instant is
+// merely older, not equal, never appears here: that is the ordinary case
+// this pass exists to arbitrate, not a collision. See
+// GFSSiblingCollision's own doc for why an exact instant tie is the
+// signal worth naming.
+func gfsSelectRepresentatives(tb gfsBoundTier, eligible []gfsDated, place func(gfsDated) (gfsPlacement, bool)) (map[model.ArtifactID]bool, map[model.ArtifactID]model.ArtifactID) {
+	type candidate struct {
 		artifact model.ArtifactID
 		occurred time.Time
 	}
-	champions := map[gfsCivilDate]champion{}
+	buckets := map[gfsCivilDate][]candidate{}
 	for _, d := range eligible {
 		p, ok := place(d)
 		if !ok || !tb.inSpan(p.date) {
 			continue
 		}
 		key := tb.bucket(p.date)
-		cur, exists := champions[key]
-		if !exists || gfsIsNewerRepresentative(d.artifact, p.occurred, cur.artifact, cur.occurred) {
-			champions[key] = champion{artifact: d.artifact, occurred: p.occurred}
+		buckets[key] = append(buckets[key], candidate{artifact: d.artifact, occurred: p.occurred})
+	}
+
+	winners := make(map[model.ArtifactID]bool, len(buckets))
+	ties := map[model.ArtifactID]model.ArtifactID{}
+	for _, cands := range buckets {
+		// gfsIsNewerRepresentative totally orders candidates by (occurred,
+		// name), so folding it over the bucket's members in any order
+		// finds the same maximum gfsIsNewerRepresentative's own original,
+		// incremental, single-pass form found: this is not a behaviour
+		// change, only a restructuring that also lets every candidate in
+		// the bucket be inspected afterward, which the original form
+		// discarded as soon as a new champion replaced the old one.
+		champ := cands[0]
+		for _, c := range cands[1:] {
+			if gfsIsNewerRepresentative(c.artifact, c.occurred, champ.artifact, champ.occurred) {
+				champ = c
+			}
+		}
+		winners[champ.artifact] = true
+		for _, c := range cands {
+			if c.artifact == champ.artifact {
+				continue
+			}
+			if c.occurred.Equal(champ.occurred) {
+				ties[c.artifact] = champ.artifact
+			}
 		}
 	}
-	out := make(map[model.ArtifactID]bool, len(champions))
-	for _, c := range champions {
-		out[c.artifact] = true
-	}
-	return out
+	return winners, ties
 }
 
 // gfsIsNewerRepresentative reports whether candidate should replace
