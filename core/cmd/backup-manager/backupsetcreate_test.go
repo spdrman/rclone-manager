@@ -308,3 +308,25 @@ func TestProbePortFor(t *testing.T) {
 		t.Errorf("probePortFor(2222) = %d, want it left alone", got)
 	}
 }
+
+// TestRun_BackupSetCreateRefusesRunOnAFreshInstall pins the one flag this
+// verb cannot honour on one of its two paths. core/service ignores
+// RunImmediately while writing a first configuration, because a
+// first-run instance has no service to submit a cycle to yet. Accepting
+// the flag and doing nothing with it would tell an operator who asked for
+// a backup that one started, so the CLI refuses instead of inheriting the
+// silence.
+func TestRun_BackupSetCreateRefusesRunOnAFreshInstall(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	keyPath := writeTestPrivateKey(t)
+
+	args := createArgs(configPath, keyPath, "api/postgres",
+		"--state-database", filepath.Join(dir, "state.db"), "--run")
+	if got := run(args); got != 2 {
+		t.Fatalf("run(%v) = %d, want 2", args, got)
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		t.Errorf("a refused create still wrote a configuration at %s", configPath)
+	}
+}
