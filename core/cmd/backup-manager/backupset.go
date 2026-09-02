@@ -56,6 +56,8 @@ func cmdBackupSet(args []string) int {
 	stableFor := fs.Duration("stable-for", 0, `patch: completion.stable_for; required when the strategy in effect is "stable"`)
 	staleAfter := fs.Duration("stale-after", 0, "patch: stale_after (FR-24's freshness budget)")
 	validatorID := fs.String("validator-id", "", `patch: validation.validator_id, an id the validator catalog lists, or "" for none`)
+	acknowledgeRepoint := fs.Bool("acknowledge-repoint", false,
+		"patch: confirm an edit that moves this set to different data. Needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; the refusal without it says what it costs")
 
 	operands, err := parseFlagsAroundOperands(fs, args)
 	if err != nil {
@@ -70,6 +72,7 @@ func cmdBackupSet(args []string) int {
 	}
 
 	req, named := buildBackupSetPatch(fs, host, port, user, remotePath, localPath, include, completionStrategy, stableFor, staleAfter, validatorID)
+	req.AcknowledgeRepoint = *acknowledgeRepoint
 	if !named {
 		return usageError("backup-set patch: name at least one field to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
 	}
@@ -137,6 +140,13 @@ func buildBackupSetPatch(
 		case "validator-id":
 			v := service.ValidatorID(*validatorID)
 			req.ValidatorID = &v
+		case "acknowledge-repoint":
+			// Read by the caller straight off its own flag, because it is
+			// not a field of the backup set: it answers a refusal about
+			// the fields above. Naming only this one changes nothing, so
+			// it must not make an otherwise-empty patch look like a
+			// patch.
+			return
 		default:
 			// --config, or anything else this command does not own. It is
 			// not a field of the backup set, so it must not make an
@@ -182,6 +192,16 @@ func printBackupSet(s service.BackupSet) {
 	fmt.Printf("  local_path: %s\n", s.LocalPath)
 	fmt.Printf("  include: %s\n", strings.Join(s.Include, ", "))
 	fmt.Printf("  completion_strategy: %s\n", s.CompletionStrategy)
+	// stable_for and stale_after are both patchable, so both are
+	// reported: a command that can change a field and then prints a set
+	// without it leaves an operator unable to confirm what it did.
+	// stable_for is printed only under the strategy it belongs to,
+	// because it is zero for every other one and a "0s" line invites the
+	// reader to think it means something.
+	if s.CompletionStrategy == "stable" {
+		fmt.Printf("  stable_for: %s\n", s.StableFor)
+	}
+	fmt.Printf("  stale_after: %s\n", s.StaleAfter)
 	fmt.Printf("  validator_id: %s\n", string(s.ValidatorID))
 	fmt.Printf("  disabled: %v\n", s.Disabled)
 	fmt.Printf("  read_only: %v\n", s.ReadOnly)

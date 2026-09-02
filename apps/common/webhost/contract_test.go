@@ -94,17 +94,17 @@ var contractBindings = map[string]contractBinding{
 	// these has a FIXED arity and three of them need a literal tail
 	// ("/enabled", "/revalidate", "/retry") that a catch-all would
 	// swallow.
-	"getSystemHealth":           {"/api/v1/system/health", nil, healthResponse{}, "/api/v1/system/health"},
-	"listOperations":            {"/api/v1/operations", nil, listOperationsResponse{}, "/api/v1/operations"},
-	"listArtifacts":             {"/api/v1/backups", nil, listArtifactsResponse{}, "/api/v1/backups"},
-	"getArtifact":               {"/api/v1/backups/{source}/{set}/{name}", nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
-	"listActivity":              {"/api/v1/activity", nil, listActivityResponse{}, "/api/v1/activity"},
-	"listQuarantine":            {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
-	"revalidateArtifact":        {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
-	"retryArtifactIngestion":    {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
-	"reinstateArtifact":         {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
-	"setBackupSetEnabled":       {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
-	"setBackupSetReadOnly":      {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+	"getSystemHealth":        {"/api/v1/system/health", nil, healthResponse{}, "/api/v1/system/health"},
+	"listOperations":         {"/api/v1/operations", nil, listOperationsResponse{}, "/api/v1/operations"},
+	"listArtifacts":          {"/api/v1/backups", nil, listArtifactsResponse{}, "/api/v1/backups"},
+	"getArtifact":            {"/api/v1/backups/{source}/{set}/{name}", nil, artifactResponse{}, "/api/v1/backups/src/set-1/backup.dump"},
+	"listActivity":           {"/api/v1/activity", nil, listActivityResponse{}, "/api/v1/activity"},
+	"listQuarantine":         {"/api/v1/quarantine", nil, listArtifactsResponse{}, "/api/v1/quarantine"},
+	"revalidateArtifact":     {"/api/v1/quarantine/{source}/{set}/{name}/revalidate", nil, artifactCheckResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/revalidate"},
+	"retryArtifactIngestion": {"/api/v1/quarantine/{source}/{set}/{name}/retry", nil, nil, "/api/v1/quarantine/src/set-1/backup.dump/retry"},
+	"reinstateArtifact":      {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
+	"setBackupSetEnabled":    {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
+	"setBackupSetReadOnly":   {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
 	// Issue #350's edit route. It shares its path template with
 	// getBackupSet's "/api/v1/backup-sets/*" catch-all and does not
 	// collide with it, because chi routes on the method too.
@@ -112,9 +112,9 @@ var contractBindings = map[string]contractBinding{
 	// Issue #350's edit hold. The release has no response body at all
 	// (204), so it binds no response type; the contract declares no
 	// response schema for it either, which is what keeps the two in step.
-	"getBackupSetEditHold":     {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldStateResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
-	"takeBackupSetEditHold":    {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
-	"releaseBackupSetEditHold": {"/api/v1/backup-sets/{source}/{set}/edit-hold/release", nil, nil, "/api/v1/backup-sets/src/set-1/edit-hold/release"},
+	"getBackupSetEditHold":      {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldStateResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
+	"takeBackupSetEditHold":     {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
+	"releaseBackupSetEditHold":  {"/api/v1/backup-sets/{source}/{set}/edit-hold/release", nil, nil, "/api/v1/backup-sets/src/set-1/edit-hold/release"},
 	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
 	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
 	"getRetentionErrorEnvelope": {"", nil, errorResponse{}, ""},

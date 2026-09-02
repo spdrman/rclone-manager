@@ -24,7 +24,7 @@ import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { EDIT_FIELDS, readEditFields, visibleEditFields } from "./backupSetEditFields";
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
-import { describeFailure } from "@shared/api/failure";
+import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import { bytes, relativeAge } from "@shared/utilities/format";
 
 /**
@@ -86,6 +86,16 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const [enterError, setEnterError] = useState<string | null>(null);
   const [warnAbout, setWarnAbout] = useState<RunningWork | null>(null);
   const [stopped, setStopped] = useState<RunningWork | null>(null);
+  // The service refused this save because it would point the set at
+  // different data and nothing said so (issue #333/#350,
+  // core/service/backupsetrepoint.go). Held rather than turned into a
+  // field error, because it is not a field error: the value is fine, and
+  // the operator has one decision to make about it. `exitAfter` carries
+  // whether the refusal came from SAVE ALL, so confirming finishes what
+  // was asked for rather than dropping the operator back into edit mode
+  // having done half of it.
+  const [repointRefusal, setRepointRefusal] =
+    useState<{ keys: EditFieldKey[]; message: string; exitAfter: boolean } | null>(null);
 
   // The backup set this page is currently showing. Every piece of edit
   // state above belongs to ONE set, and React Router does not remount
@@ -118,6 +128,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setStopped(null);
     setWarnAbout(null);
     setEnterError(null);
+    setRepointRefusal(null);
   }
 
   // The hold's lifetime, tied to `editing` rather than to any one button.
@@ -200,6 +211,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setDraft({ ...loaded });
     setFieldErrors({});
     setStale(false);
+    setRepointRefusal(null);
     setSnapshot(captureSetEditSnapshot());
     setEditing(true);
   };
@@ -238,7 +250,11 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
    * save sends. Returns whether it succeeded, because SAVE ALL has to
    * stay in edit mode when it did not.
    */
-  const saveFields = async (keys: EditFieldKey[]): Promise<boolean> => {
+  const saveFields = async (
+    keys: EditFieldKey[],
+    acknowledgeRepoint = false,
+    exitAfter = false
+  ): Promise<boolean> => {
     if (keys.length === 0) return true;
     // The staleness check the dialog already ran, kept and moved here.
     // Inline editing holds the page open longer than a dialog did, so
@@ -260,6 +276,12 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       setFieldErrors((prev) => ({ ...prev, ...problems }));
       return false;
     }
+    // Only ever set when the operator has just been shown what it costs
+    // and said yes. It is never carried across saves: the next save
+    // starts unacknowledged again, so a second, different repoint asks
+    // again rather than riding on the first answer.
+    if (acknowledgeRepoint) patch.acknowledgeRepoint = true;
+    setRepointRefusal(null);
 
     // Added to, and later removed from, rather than replaced wholesale.
     // Two per-box Saves can genuinely overlap (press one, press another
@@ -299,6 +321,14 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       // discard the operator's work and show them the old value as
       // though nothing had happened.
       const message = describeFailure(e, "Backup Manager could not save this change.").message;
+      if (apiErrorOf(e)?.code === "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED") {
+        // Not a field error. The service is not saying the value is
+        // wrong, it is saying this edit moves the set to data it has no
+        // history of and wants that confirmed, which is a decision with
+        // its own two answers rather than a sentence under a box.
+        setRepointRefusal({ keys, message, exitAfter });
+        return false;
+      }
       setFieldErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, message])) }));
       return false;
     } finally {
@@ -311,8 +341,19 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   // per-box Save already wrote, which is why it asks dirtyKeys() rather
   // than sending every field.
   const saveAllAndExit = async () => {
-    if (!(await saveFields(dirtyKeys()))) return;
+    if (!(await saveFields(dirtyKeys(), false, true))) return;
     leaveEditMode();
+  };
+
+  // The one way out of a repoint refusal that actually writes. It
+  // re-sends exactly the keys the refused save carried, with the
+  // acknowledgement, and then finishes whatever was asked for: SAVE ALL
+  // leaves edit mode, a per-box Save stays.
+  const confirmRepoint = async () => {
+    const refusal = repointRefusal;
+    if (!refusal) return;
+    if (!(await saveFields(refusal.keys, true, refusal.exitAfter))) return;
+    if (refusal.exitAfter) leaveEditMode();
   };
 
   const leaveEditMode = () => {
@@ -323,6 +364,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
     setFieldErrors({});
     setStale(false);
     setStopped(null);
+    setRepointRefusal(null);
   };
 
   const reloadLatestValues = () => {
@@ -431,6 +473,31 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           >
             Someone (or something) else saved a change to this set first. Nothing from
             this form was applied. Review the latest values before editing again.
+          </WarningBanner>
+        </div>
+      ) : null}
+
+      {repointRefusal ? (
+        <div style={{ marginBottom: 14 }}>
+          <WarningBanner
+            tone="warn"
+            title="This change points the backup set at different data"
+            actions={
+              <>
+                <button
+                  className="btn btn--sm btn--primary"
+                  disabled={savingFields.length > 0}
+                  onClick={() => void confirmRepoint()}
+                >
+                  Save anyway
+                </button>
+                <button className="btn btn--sm" onClick={() => setRepointRefusal(null)}>
+                  Leave it as it was
+                </button>
+              </>
+            }
+          >
+            {repointRefusal.message}
           </WarningBanner>
         </div>
       ) : null}

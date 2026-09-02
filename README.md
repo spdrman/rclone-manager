@@ -211,6 +211,26 @@ A set's name and source are deliberately not patchable: they key every journal r
 id and recovery manifest the set has ever produced, so renaming one is a migration rather
 than an edit.
 
+Three fields that *are* patchable ask first, once the set has artifacts on record:
+`--host`, `--remote-path` and `--local-path`. Together they are what "the data this set is
+about" means, and the artifacts already on record stay with the set rather than moving with
+them:
+
+- A remote root pointed at a **different** dataset whose file names match ones already on
+  record makes every candidate come back already-known. The cycle reports success, health
+  stays green, and nothing is fetched. That is a backup that has silently stopped happening.
+- Artifacts stored under the **old** `local_path` stop matching what retention computes for
+  them, so retention refuses them rather than pruning them from then on, and `catalog
+  rebuild` stops seeing them.
+
+Neither destroys anything, and pointing the field back restores both, which is why this is
+an acknowledgement rather than a refusal: an operator whose NAS got a new address, or whose
+volume moved, has a real change to make. Add `--acknowledge-repoint` (or
+`"acknowledge_repoint": true` on the API, or **Save anyway** in the Web UI) once the message
+has been read. If the new location holds a *different* dataset, make it a separate backup
+set instead. `--port` and `--user` are not in that list: neither changes which directory on
+which machine holds the data.
+
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
 produce its first one; `core/service.FirstRun.CreateInitialConfig`'s own doc says plainly

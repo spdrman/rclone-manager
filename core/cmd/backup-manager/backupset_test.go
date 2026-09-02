@@ -191,3 +191,80 @@ func TestRun_UsageListsTheBackupSetCommand(t *testing.T) {
 		t.Errorf("usage banner = %q, want it to list the backup-set command", out)
 	}
 }
+
+// TestRun_BackupSetPatchRefusesToRepointASetWithHistoryUntilAcknowledged
+// is the CLI half of backupsetrepoint.go. An operator driving this over
+// SSH gets exactly the same refusal, and the same one flag out of it, as
+// one clicking Save in the browser: a surface that could repoint a set
+// silently while the other one asked would be the divergence
+// suites/equivalence exists to catch.
+//
+// The `run` beforehand is what gives the set history. Without it there is
+// nothing to orphan, which is the case the control below covers.
+func TestRun_BackupSetPatchRefusesToRepointASetWithHistoryUntilAcknowledged(t *testing.T) {
+	configPath := writeTestConfig(t)
+	if got := run([]string{"run", "--config", configPath}); got != 0 {
+		t.Fatalf(`run(["run"]) = %d, want 0: the fixture has to actually back something up or this test proves nothing`, got)
+	}
+
+	newLocal := filepath.Join(t.TempDir(), "moved-local")
+	refuseArgs := []string{"backup-set", "--config", configPath, "patch", "production/postgres-primary",
+		"--local-path", newLocal}
+	var code int
+	stderr := captureStderr(t, func() { code = run(refuseArgs) })
+	if code == 0 {
+		t.Fatalf("run(%v) = 0, want non-zero: repointing a set that already holds artifacts must be refused until acknowledged", refuseArgs)
+	}
+	for _, want := range []string{"local_path", "acknowledge_repoint"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, stderr)
+		}
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(raw), newLocal) {
+		t.Error("the config file carries the new local_path even though the patch was refused")
+	}
+
+	if got := run(append(refuseArgs, "--acknowledge-repoint")); got != 0 {
+		t.Fatalf("run with --acknowledge-repoint = %d, want 0", got)
+	}
+	raw, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), newLocal) {
+		t.Errorf("the acknowledged patch did not persist the new local_path:\n%s", raw)
+	}
+}
+
+// TestRun_BackupSetPatchAcknowledgeAloneIsStillAUsageError: the
+// acknowledgement names no field to change, so a patch carrying only it
+// rewrites and reloads the configuration to no effect, which is exactly
+// what the no-flags refusal exists to stop.
+func TestRun_BackupSetPatchAcknowledgeAloneIsStillAUsageError(t *testing.T) {
+	configPath := writeTestConfig(t)
+	args := []string{"backup-set", "--config", configPath, "patch", "production/postgres-primary", "--acknowledge-repoint"}
+	if got := run(args); got != 2 {
+		t.Errorf("run(%v) = %d, want 2", args, got)
+	}
+}
+
+// TestRun_BackupSetPatchReportsTheFieldsItCanChange: printBackupSet
+// claims to report every field this command can change, and a command
+// that can write stale_after while printing a set without it leaves an
+// operator unable to confirm what it did.
+func TestRun_BackupSetPatchReportsTheFieldsItCanChange(t *testing.T) {
+	configPath := writeTestConfig(t)
+	out := captureStdout(t, func() {
+		args := []string{"backup-set", "--config", configPath, "patch", "production/postgres-primary", "--stale-after", "36h"}
+		if got := run(args); got != 0 {
+			t.Fatalf("run(%v) = %d, want 0", args, got)
+		}
+	})
+	if !strings.Contains(out, "stale_after: 36h") {
+		t.Errorf("patch output does not report the stale_after it just wrote:\n%s", out)
+	}
+}

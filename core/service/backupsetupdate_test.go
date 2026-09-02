@@ -627,10 +627,10 @@ func mustRead(t *testing.T, path string) string {
 // being ledgered is a judgement someone has to make at the moment the
 // field lands rather than a violation to be waved through.
 var exemptFromIsolationFixture = map[string]string{
-	"ID": "assigned by Validate from the source and name, never read off the file, so a fixture cannot set it",
-	"Retention": "the RESOLVED policy, filled in by Validate and carrying yaml:\"-\", so it is never on disk to compare",
-	"ReadOnly": "the RESOLVED answer, filled in by Validate from ReadOnlyConfig; the override is what the fixture sets",
-	"Disabled": "a bool whose zero value IS its ordinary state (an enabled set), so \"non-zero\" cannot be required of it. UpdateBackupSetRequest cannot reach it either: enabling and disabling is POST /enabled's own route",
+	"ID":           "assigned by Validate from the source and name, never read off the file, so a fixture cannot set it",
+	"Retention":    "the RESOLVED policy, filled in by Validate and carrying yaml:\"-\", so it is never on disk to compare",
+	"ReadOnly":     "the RESOLVED answer, filled in by Validate from ReadOnlyConfig; the override is what the fixture sets",
+	"Disabled":     "a bool whose zero value IS its ordinary state (an enabled set), so \"non-zero\" cannot be required of it. UpdateBackupSetRequest cannot reach it either: enabling and disabling is POST /enabled's own route",
 	"Revalidation": "issue #315's re-check schedule, which no update-path request field can reach and which config.Validate does not require",
 }
 
