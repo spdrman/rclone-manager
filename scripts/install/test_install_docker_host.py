@@ -24,6 +24,7 @@ or, from this directory:
 
 from __future__ import annotations
 
+import argparse
 import os
 import socket
 import sys
@@ -73,6 +74,27 @@ def refusal_from(fn, *a, **kw):
     except installer.Refusal as exc:
         return exc
     return None
+
+
+def _subparser(parser, name):
+    """The named subcommand's own ArgumentParser, e.g. _subparser(parser,
+    "install"). build_parser() uses real subparsers (issue #330) so each
+    subcommand's flags live on its own parser, not the top-level one."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices[name]
+    raise AssertionError("build_parser() has no subparsers action")
+
+
+def _all_subparser_flags(parser):
+    """Every option string declared on any subcommand, e.g. for asserting
+    a flag exists nowhere at all rather than checking one subcommand."""
+    flags = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                flags |= {opt for a in sub._actions for opt in a.option_strings}
+    return flags
 
 
 class TestArchitectureRefusal(unittest.TestCase):
@@ -850,7 +872,7 @@ class TestSudoRefusals(unittest.TestCase):
 class TestHealthyHostIsANoOp(unittest.TestCase):
     def test_a_working_host_changes_nothing_and_never_escalates(self):
         fx = Fixture(self)
-        args = fx.args("--fix-network", "auto")
+        args = fx.args("--fix-network", "auto", command="install")
 
         class ExplodingSudo(installer.Sudo):
             def run_script(self, script, *, purpose, timeout=300):
@@ -870,7 +892,7 @@ class TestHealthyHostIsANoOp(unittest.TestCase):
 
     def test_fix_network_never_refuses_on_a_broken_host_without_escalating(self):
         fx = Fixture(self)
-        args = fx.args("--fix-network", "never")
+        args = fx.args("--fix-network", "never", command="install")
 
         class ExplodingSudo(installer.Sudo):
             def run_script(self, script, *, purpose, timeout=300):
@@ -895,7 +917,7 @@ class TestProbeDefaultsCarryNothingPrivate(unittest.TestCase):
     never a host this project happens to back up."""
 
     def test_the_default_probe_target_is_generic(self):
-        args = Fixture(self).args()
+        args = Fixture(self).args(command="install")
         self.assertEqual(args.probe_host, "1.1.1.1")
         self.assertEqual(args.probe_port, 443)
 
@@ -1109,21 +1131,83 @@ class TestPersistenceVerification(unittest.TestCase):
         self.assertIn("is-active", exc.message)
 
 
+class TestSubcommandFlagScoping(unittest.TestCase):
+    """Real argparse subparsers (issue #330): before this, every flag from
+    every subcommand was on one flat parser, so `network-doctor --help`
+    showed `--ssh-key`, `--if-installed` and everything else irrelevant to
+    it. These assert the flags that ARE cleanly separable (bridge-network
+    policy, the probe flags, --if-installed) actually only appear on the
+    subcommands that read them - not that every flag is now scoped, since
+    layout/credentials/runtime stay shared across all six commands on
+    purpose (resolve() needs them for every command uniformly)."""
+
+    def flags_of(self, command):
+        return {opt for a in _subparser(installer.build_parser(), command)._actions
+                for opt in a.option_strings}
+
+    def test_if_installed_exists_only_on_install(self):
+        for command in ("preflight", "status", "uninstall", "network-doctor", "network-undo"):
+            self.assertNotIn("--if-installed", self.flags_of(command),
+                             f"{command} does not converge or refuse an existing install")
+        self.assertIn("--if-installed", self.flags_of("install"))
+
+    def test_fix_network_exists_only_on_install_and_network_doctor(self):
+        for command in ("preflight", "status", "uninstall", "network-undo"):
+            self.assertNotIn("--fix-network", self.flags_of(command),
+                             f"{command} never repairs bridge networking")
+        for command in ("install", "network-doctor"):
+            self.assertIn("--fix-network", self.flags_of(command))
+
+    def test_check_network_exists_only_on_status(self):
+        for command in ("preflight", "install", "uninstall", "network-doctor", "network-undo"):
+            self.assertNotIn("--check-network", self.flags_of(command),
+                             f"{command} has no reason to know status's own read-only flag")
+        self.assertIn("--check-network", self.flags_of("status"))
+
+    def test_probe_flags_exist_only_where_a_probe_can_run(self):
+        probe_flags = {"--probe-image", "--probe-host", "--probe-port", "--probe-network"}
+        for command in ("preflight", "uninstall", "network-undo"):
+            self.assertFalse(probe_flags & self.flags_of(command),
+                             f"{command} never reads a probe result")
+        for command in ("install", "status", "network-doctor"):
+            self.assertTrue(probe_flags <= self.flags_of(command),
+                            f"{command} needs every probe flag")
+
+    def test_every_command_still_resolves_the_fields_resolve_needs(self):
+        """The flags resolve() populates unconditionally stay on every
+        subcommand - the point of #330 was to remove IRRELEVANT flags,
+        not to break resolve()'s own uniform behavior."""
+        shared = {"--prefix", "--state-dir", "--backup-dir", "--config-dir", "--ssh-key",
+                  "--known-hosts", "--compose-file", "--image", "--image-archive",
+                  "--puid", "--pgid", "--timezone", "--public-base-url", "--listen-port"}
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            self.assertTrue(shared <= self.flags_of(command), f"{command} is missing a shared flag")
+
+
 class TestFixNetworkVocabulary(unittest.TestCase):
     def test_the_default_is_the_conservative_one(self):
-        args = Fixture(self).args()
+        args = Fixture(self).args(command="install")
         self.assertEqual(args.fix_network, "auto",
                          "installing a systemd unit is a larger commitment than a runtime rule, "
                          "so it has to be asked for")
 
+    def test_network_doctors_own_default_is_diagnose_not_auto(self):
+        """Unlike install: a command named "doctor" reads as diagnostic,
+        so running it stand-alone to check should not itself escalate
+        sudo and mutate the firewall (issue #330)."""
+        args = Fixture(self).args(command="network-doctor")
+        self.assertEqual(args.fix_network, "diagnose")
+
     def test_persistence_is_a_value_of_the_existing_flag_not_a_second_one(self):
         parser = installer.build_parser()
+        install_sp = _subparser(parser, "install")
         choices = None
-        for action in parser._actions:
+        for action in install_sp._actions:
             if action.dest == "fix_network":
                 choices = set(action.choices)
         self.assertEqual(choices, {"auto", "persist", "diagnose", "never"})
-        flags = {opt for action in parser._actions for opt in action.option_strings}
+        flags = _all_subparser_flags(parser)
         for overlapping in ("--persist", "--persist-network", "--install-unit", "--systemd"):
             self.assertNotIn(overlapping, flags,
                              "a second flag with overlapping meaning is how two knobs end up "
@@ -1136,7 +1220,7 @@ class TestFixNetworkVocabulary(unittest.TestCase):
         for mode, want_install in (("auto", False), ("persist", True)):
             with self.subTest(mode=mode):
                 fx = Fixture(self)
-                args = fx.args("--fix-network", mode)
+                args = fx.args("--fix-network", mode, command="install")
                 calls = []
 
                 class RecordingSudo(installer.Sudo):
