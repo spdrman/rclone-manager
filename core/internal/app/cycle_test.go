@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -80,6 +81,134 @@ func TestRunCycle_ProcessesArtifactThroughToComplete(t *testing.T) {
 	}
 	if !set.Retention.Verdicts[0].Keep {
 		t.Errorf("Retention.Verdicts[0].Keep = false, want true (the only backup in a set is always the newest and should be kept)")
+	}
+}
+
+// TestRunCycle_ReconciliationLossCountsAsAFailedCycle is the adversarial
+// review's High finding on PR #303: processBackupSet's own reconcile pass
+// (FR-17, run before discovery and before this cycle's own forward
+// pipeline) can, on its own, discover that a previously-durable
+// artifact's local final copy has gone missing after its remote source
+// was already cleaned up -- COMPLETE -> QUARANTINED_LOST, total,
+// permanent loss of that restore point. Reconcile itself returns err ==
+// nil for this: finding and recording the loss is reconciliation doing
+// its job correctly, not a systemic failure. Before this fix, nothing
+// folded recRep.Findings into result.FailedArtifacts, so a cycle that
+// discovered this exact loss still reported success.
+//
+// The repro drives one artifact all the way to COMPLETE in a first
+// RunCycle (mirroring TestRunCycle_ProcessesArtifactThroughToComplete),
+// deletes its durable local copy out from under the journal, then runs a
+// second RunCycle and confirms the loss reconciliation just found is
+// counted toward FailedArtifacts, not silently logged and ignored.
+func TestRunCycle_ReconciliationLossCountsAsAFailedCycle(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "irrecoverable loss payload", epoch.Unix())
+
+	journal := openJournal(t)
+	ctx := context.Background()
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	first := svc.RunCycle(ctx)
+	if len(first.Sets) != 1 || first.Sets[0].Err != nil {
+		t.Fatalf("precondition: first RunCycle = %+v, want one clean set", first.Sets)
+	}
+	artifact := first.Sets[0].Discovery.Discovered[0].Artifact
+	rec, err := journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.Complete) {
+		t.Fatalf("precondition: journal state = %q, want %q", rec.State, lifecycle.Complete)
+	}
+
+	if err := os.Remove(rec.LocalPath); err != nil {
+		t.Fatalf("corrupting the durable local copy: %v", err)
+	}
+
+	second := svc.RunCycle(ctx)
+	if len(second.Sets) != 1 {
+		t.Fatalf("len(second.Sets) = %d, want 1", len(second.Sets))
+	}
+	set := second.Sets[0]
+	if set.Err != nil {
+		t.Fatalf("BackupSetCycleResult.Err = %v, want nil: reconciliation discovering a loss is not itself a systemic error", set.Err)
+	}
+
+	after, err := journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.State != string(lifecycle.QuarantinedLost) {
+		t.Fatalf("precondition: journal state after reconciliation = %q, want %q", after.State, lifecycle.QuarantinedLost)
+	}
+
+	if set.FailedArtifacts != 1 {
+		t.Errorf("BackupSetCycleResult.FailedArtifacts = %d, want 1: reconciliation just moved a previously-durable artifact to QUARANTINED_LOST, an irrecoverable loss, and that must count toward this cycle's failure verdict exactly like a this-cycle FAILED/QUARANTINED outcome does", set.FailedArtifacts)
+	}
+}
+
+// TestRunCycle_ReconciliationQuarantineCountsAsAFailedCycle is the
+// QUARANTINED sibling of TestRunCycle_ReconciliationLossCountsAsAFailedCycle:
+// an artifact stuck at REMOTE_DELETE_PENDING (the remote delete call
+// itself failed, so the remote copy is still present) whose local final
+// copy is found corrupted by reconciliation moves to QUARANTINED, not
+// QUARANTINED_LOST, and that must count toward FailedArtifacts too.
+func TestRunCycle_ReconciliationQuarantineCountsAsAFailedCycle(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newFakeTransport()
+	tr.put("backup.dump", "quarantine payload", epoch.Unix())
+	tr.deleteErr = errors.New("boom: remote delete refused")
+
+	journal := openJournal(t)
+	ctx := context.Background()
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	first := svc.RunCycle(ctx)
+	if len(first.Sets) != 1 || first.Sets[0].Err != nil {
+		t.Fatalf("precondition: first RunCycle = %+v, want one clean set", first.Sets)
+	}
+	artifact := first.Sets[0].Discovery.Discovered[0].Artifact
+	rec, err := journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.RemoteDeletePending) {
+		t.Fatalf("precondition: journal state = %q, want %q (remote delete was made to fail so it stops here)", rec.State, lifecycle.RemoteDeletePending)
+	}
+	if first.Sets[0].FailedArtifacts != 0 {
+		t.Fatalf("precondition: first RunCycle FailedArtifacts = %d, want 0", first.Sets[0].FailedArtifacts)
+	}
+
+	if err := os.Remove(rec.LocalPath); err != nil {
+		t.Fatalf("corrupting the durable local copy: %v", err)
+	}
+
+	second := svc.RunCycle(ctx)
+	set := second.Sets[0]
+	if set.Err != nil {
+		t.Fatalf("BackupSetCycleResult.Err = %v, want nil", set.Err)
+	}
+
+	after, err := journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.State != string(lifecycle.Quarantined) {
+		t.Fatalf("precondition: journal state after reconciliation = %q, want %q", after.State, lifecycle.Quarantined)
+	}
+
+	if set.FailedArtifacts != 1 {
+		t.Errorf("BackupSetCycleResult.FailedArtifacts = %d, want 1: reconciliation just quarantined a previously-committed artifact", set.FailedArtifacts)
 	}
 }
 

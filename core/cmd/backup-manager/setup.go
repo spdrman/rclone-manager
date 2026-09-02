@@ -156,6 +156,28 @@ func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 	l.RcloneVersion(ctx, info.RcloneVersion)
 }
 
+// cycleFailed is the one place `run` and `fetch` both decide whether a
+// cycle counts as failed (issue #283): a systemic error (reconcile or
+// discover exhausting its retry budget, a journal listing failing
+// outright, or a shutdown mid-cycle) OR any artifact the cycle walked
+// ending in FAILED, QUARANTINED or QUARANTINED_LOST. Before this existed,
+// each command checked only the systemic half, so a cycle where every
+// artifact discovered fine and then failed verification exited 0 -- the
+// exact bug this function exists to make structurally impossible to
+// reintroduce in one of the two commands without the other.
+//
+// failedArtifacts (internal/app.processArtifacts) already folds in a
+// loss this cycle's own reconcile pass discovered on its own -- a
+// previously-durable artifact whose local copy turned out corrupted or
+// missing, moved to QUARANTINED or QUARANTINED_LOST -- not just a
+// this-cycle transfer/verify/commit failure: a successful reconciliation
+// pass that finds rot is not a systemic error, but it is a stronger case
+// for a non-zero exit than a single artifact this cycle's own pipeline
+// quarantined, and this function must not let that distinction matter.
+func cycleFailed(systemicFailure bool, failedArtifacts int) bool {
+	return systemicFailure || failedArtifacts > 0
+}
+
 // fail prints err to stderr in a consistent shape and returns the exit
 // code every subcommand's own failure path returns.
 func fail(err error) int {
