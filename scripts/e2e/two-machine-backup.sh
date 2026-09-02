@@ -336,7 +336,7 @@ bm() {  # bm <mgr> <prefix> <backup-manager args...>
 # ------------------------------------------------------------- preflight
 
 step "preflight"
-for tool in docker ssh-keygen; do
+for tool in docker ssh-keygen openssl; do
   command -v "$tool" >/dev/null 2>&1 \
     || cannot_run "$tool is not on PATH, and this test needs it."
 done
@@ -435,8 +435,15 @@ mkdir -p "$run_dir/upload"
 # out: an SSH client negotiates a host-key algorithm by its OWN preference
 # order, so pinning only ed25519 against a server offering both can still
 # end up negotiating RSA and failing verification.
-ssh-keygen -q -t ed25519 -N '' -C 'e2e host key' -f "$run_dir/ssh_host_ed25519_key"
-ssh-keygen -q -t rsa -b 2048 -N '' -C 'e2e host key' -f "$run_dir/ssh_host_rsa_key"
+# </dev/null on both, so a run_dir that somehow already holds these keys
+# (an explicit E2E_RUN_ID reused after a --keep-on-failure run) fails
+# rather than sitting on ssh-keygen's "Overwrite (y/n)?" prompt forever.
+# Every wait in this script is bounded; a prompt is an unbounded one.
+ssh-keygen -q -t ed25519 -N '' -C 'e2e host key' -f "$run_dir/ssh_host_ed25519_key" </dev/null \
+  || die "could not generate the source machine's ed25519 host key at $run_dir." \
+         "If this run reused an E2E_RUN_ID, that directory already has one: choose another id."
+ssh-keygen -q -t rsa -b 2048 -N '' -C 'e2e host key' -f "$run_dir/ssh_host_rsa_key" </dev/null \
+  || die "could not generate the source machine's RSA host key at $run_dir."
 
 # --------------------------------------------------------------- payload
 #
