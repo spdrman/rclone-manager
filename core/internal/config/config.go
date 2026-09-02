@@ -891,8 +891,20 @@ type Revalidation struct {
 // deliberately, with a schema, a validation seam and a resolution order,
 // which is exactly the "separate, larger change" this paragraph asked for.
 type Retention struct {
-	Timezone     string `yaml:"timezone"`
-	WeekStartsOn string `yaml:"week_starts_on"`
+	// Timezone and WeekStartsOn carry omitempty for the round-trip reason
+	// the three scalars below already document, and #333 made it matter
+	// rather than merely tidy. A per-set override that names neither
+	// INHERITS the deployment's, and this struct is what gets marshalled
+	// back into config.yaml: without omitempty a set that inherited the
+	// calendar came back from a save with `timezone: ""` written under it,
+	// which still resolves to inheritance but reads to an operator (and to
+	// anyone hand-editing the file afterwards) as a configured empty
+	// timezone. The file has to keep exactly what was submitted.
+	//
+	// Nothing changes at the top level, where Validate resolves both to a
+	// real value before anything decides with them.
+	Timezone     string `yaml:"timezone,omitempty"`
+	WeekStartsOn string `yaml:"week_starts_on,omitempty"`
 
 	// DailyDays, WeeklyMonths and MonthlyMonths are the original
 	// three-scalar spelling of FR-18's default chain, kept as sugar for
@@ -968,7 +980,14 @@ type Retention struct {
 	// then rejects outright under Load's KnownFields(true).
 	Tiers []RetentionTier `yaml:"tiers,omitempty"`
 
-	ProtectLastKnownGood *bool `yaml:"protect_last_known_good"`
+	// ProtectLastKnownGood carries omitempty for the same round trip, and
+	// the pointer is what makes it safe: yaml omits a NIL pointer, never a
+	// pointer to false, so an operator who deliberately turned FR-19's
+	// protection off keeps an explicit `protect_last_known_good: false` in
+	// their file. Only "I said nothing about it" is omitted, which for a
+	// per-set override means "inherit the deployment's posture" and at the
+	// top level means the documented default of true.
+	ProtectLastKnownGood *bool `yaml:"protect_last_known_good,omitempty"`
 }
 
 // Retention granularity names. These are the values RetentionTier's

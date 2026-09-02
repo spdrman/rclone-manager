@@ -274,6 +274,7 @@ func TestRun_BackupSetRetentionRefusesContradictoryFlags(t *testing.T) {
 	}
 
 	for _, args := range [][]string{
+		retentionArgs(configPath, "--policy-file", ""),
 		retentionArgs(configPath, "--inherit", "--daily-days", "3"),
 		retentionArgs(configPath, "--inherit", "--policy-file", policyPath),
 		retentionArgs(configPath, "--policy-file", policyPath, "--timezone", "UTC"),

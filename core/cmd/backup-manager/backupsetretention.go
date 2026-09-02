@@ -84,6 +84,9 @@ func cmdBackupSetRetention(args []string) int {
 			"backup-set retention: --inherit removes this set's own policy and --%s writes one; pass one or the other",
 			strings.Join(named, ", --"))
 	}
+	if contains(named, "policy-file") && *policyFile == "" {
+		return usageError(`backup-set retention: --policy-file needs a path, or "-" to read the policy from standard input`)
+	}
 	if *policyFile != "" && len(named) > 1 {
 		return usageError(
 			"backup-set retention: --policy-file carries the whole policy, so it cannot be combined with --%s; "+
@@ -162,6 +165,15 @@ func visitedRetentionPolicyFlags(fs *flag.FlagSet) []string {
 		}
 	})
 	return named
+}
+
+func contains(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
 }
 
 func without(names []string, drop string) []string {
