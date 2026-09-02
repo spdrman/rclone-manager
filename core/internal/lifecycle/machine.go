@@ -137,6 +137,40 @@ var Transitions = []Transition{
 	// confirms the remote object was already gone.
 	{From: RemoteDeletePending, To: Complete},
 
+	// --- issue #282: the read-only path, a second exit from the same two
+	// states Complete is reachable from ---
+	//
+	// Committed -> RemoteRetained and RemoteDeletePending -> RemoteRetained
+	// are what a read-only backup set's artifacts take instead of ever
+	// reaching RemoteDeletePending -> Complete. Both are declared here,
+	// not only the first, because an operator can flip a set to read-only
+	// after some of its artifacts already recorded delete *intent*
+	// (RemoteDeletePending) on an earlier cycle, before this feature
+	// existed or before the flag was set; those artifacts need a way out
+	// too; RetainRemote (retainremote.go) is the only function that ever
+	// takes either edge, and, structurally, it never references
+	// Deps.Transport at all, so there is no expression in its body that
+	// could reach transport.Transport.DeleteRemote.
+	{From: Committed, To: RemoteRetained},
+	{From: RemoteDeletePending, To: RemoteRetained},
+
+	// RemoteRetained -> Committed: the one way out. "No state is a dead
+	// end" (TestNoStateIsALeak) is an invariant this whole table holds for
+	// every state including the terminal ones, exactly the way Complete's
+	// own exit into QuarantinedLost is not "automatic recovery" but "an
+	// operator-visible alarm with a documented way out" -- and
+	// ReleaseFromRetention (retainremote.go) is this state's equivalent:
+	// an explicit, operator-triggered decision that this artifact should
+	// re-enter the ordinary delete-eligible pipeline after all, never
+	// something a cycle, a scheduler or a retry policy takes on its own.
+	// It returns to Committed, not to RemoteDeletePending or Complete,
+	// because that is the state RetainRemote's own two edges both
+	// originate from being asked to leave: an artifact released this way
+	// re-enters FR-15's delete step exactly where it would have if it had
+	// never been retained, revalidated from scratch on the next cycle
+	// like every other COMMITTED artifact.
+	{From: RemoteRetained, To: Committed},
+
 	// --- entry points into FAILED: any permanent error before commit ---
 	{From: Discovered, To: Failed},
 	{From: Transferring, To: Failed},

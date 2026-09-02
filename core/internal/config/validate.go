@@ -61,7 +61,7 @@ func (c *Config) Validate() error {
 
 		for j := range src.BackupSets {
 			bsPath := fmt.Sprintf("%s.backup_sets[%d]", path, j)
-			v.validateBackupSet(bsPath, src.Name, &src.BackupSets[j], seenSetIDs)
+			v.validateBackupSet(bsPath, src.Name, src.ReadOnly, &src.BackupSets[j], seenSetIDs)
 		}
 	}
 
@@ -156,9 +156,20 @@ func (v *validator) validateCapacity(c *Capacity) {
 	}
 }
 
-func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, seenSetIDs map[string]string) {
+func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bool, bs *BackupSet, seenSetIDs map[string]string) {
 	if bs.Name == "" {
 		v.addf("%s: id must not be empty", path)
+	}
+
+	// Issue #282: resolve the fully-answered ReadOnly from this set's own
+	// override, falling back to the parent source's default. Nothing here
+	// can be wrong the way most other fields in this function can: every
+	// bool is a meaningful, acceptable answer, so this is resolution, not
+	// validation, exactly like ID just below it.
+	if bs.ReadOnlyConfig != nil {
+		bs.ReadOnly = *bs.ReadOnlyConfig
+	} else {
+		bs.ReadOnly = sourceReadOnly
 	}
 
 	// FR-7: the identity is source-plus-set, and it goes through

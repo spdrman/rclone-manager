@@ -256,6 +256,40 @@ func TestReconcile_Complete_ValidLocal_IsConsistent(t *testing.T) {
 	}
 }
 
+// TestReconcile_RemoteRetained_IsConsistent proves issue #282's terminal
+// state does not break FR-17's startup pass: reconcileOne must not error
+// out (the pre-#282 default case would have refused every unrecognised
+// state), must take no action, and must never call Stat -- this manager
+// never examined the remote object on the way into REMOTE_RETAINED and has
+// no business examining it now either.
+func TestReconcile_RemoteRetained_IsConsistent(t *testing.T) {
+	j := openTestJournal(t)
+	artifact := testArtifact(t, "retained.dump")
+	size := int64(32)
+	localPath := writeLocalFile(t, size)
+	driveTo(t, j, driveParams{
+		artifact: artifact, remote: state.RemoteIdentity{Size: &size}, localPath: localPath,
+		transfer: &state.TransferResult{BytesTransferred: size}, stopAt: lifecycle.RemoteRetained,
+	})
+
+	tp := &fakeTransport{}
+	report, err := Reconcile(context.Background(), Deps{Journal: j, Transport: tp}, testSource, testSet(t))
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	requireNoErrors(t, report)
+	f := requireOneFinding(t, report)
+	if f.Changed() {
+		t.Errorf("Finding.Changed() = true, want false (From=%s To=%s)", f.From, f.To)
+	}
+	if f.From != lifecycle.RemoteRetained {
+		t.Errorf("From = %s, want REMOTE_RETAINED", f.From)
+	}
+	if tp.statCalls != 0 {
+		t.Errorf("statCalls = %d, want 0: a read-only set's retained remote is never examined", tp.statCalls)
+	}
+}
+
 // --- the gap row this package adds: absent, invalid final, any -> quarantine, unrecoverable ---
 
 func TestReconcile_Complete_InvalidLocal_QuarantinesAsLost(t *testing.T) {

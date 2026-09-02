@@ -94,6 +94,23 @@ func reconcileOne(ctx context.Context, deps Deps, source transport.Source, rec s
 	case lifecycle.Complete:
 		return reconcileComplete(ctx, deps, rec)
 
+	case lifecycle.RemoteRetained:
+		// Row: issue #282's read-only terminal state. This manager never
+		// touched, and will never touch, this artifact's remote object
+		// either way, so there is nothing FR-17 could bring back in line
+		// by re-checking the remote (unlike COMPLETE, whose only exit
+		// depends on a remote confirmation this state deliberately never
+		// makes). Detecting local-copy corruption for a REMOTE_RETAINED
+		// artifact, and deciding what a corrupted one should do given the
+		// remote's status is genuinely unknown here, is intentionally left
+		// to a follow-up: routing it through the existing QUARANTINED
+		// machinery would need a reinstatement path aware of which state
+		// an artifact was quarantined FROM (today's ReinstatementTarget is
+		// keyed only by the CURRENT quarantine state), and getting that
+		// wrong risks silently returning a released artifact to ordinary
+		// delete eligibility, exactly what this issue exists to prevent.
+		return noAction(rec.Artifact, st, "read-only backup set: the remote source is retained by policy and was never examined; nothing to reconcile"), nil
+
 	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
 		// These are already exceptional or terminal outcomes that some
 		// other, deliberate mechanism owns: FR-22's retry policy for

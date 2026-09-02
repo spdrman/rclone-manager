@@ -236,6 +236,28 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 	if ctx.Err() != nil {
 		return
 	}
+
+	// Issue #282: a backup set declared read-only never reaches the delete
+	// step at all. This branch, not a check inside DeleteRemote itself, is
+	// what makes "no code path can reach DeleteRemote for that set" true:
+	// s.deleteRemoteOne, and therefore lifecycle.DeleteRemote and
+	// therefore transport.Transport.DeleteRemote, is simply never called
+	// in this branch, structurally, not refused after being asked. See
+	// readonly_test.go's TestProcessArtifact_ReadOnlyBackupSet_* for the
+	// proof, driven with a transport double that fails the test the
+	// instant DeleteRemote is invoked.
+	if bs.ReadOnly {
+		prog.enterStage(StageCleaningRemote, artifact.Name)
+		out, err := s.retainRemoteOne(ctx, rec, base)
+		if err != nil {
+			s.logger().Error(ctx, "remote-retain", err)
+			return
+		}
+		s.logger().LifecycleTransition(ctx, artifact.String(), rec.State, out.Record.State,
+			"read-only backup set: the remote source is retained by policy, never offered for deletion")
+		return
+	}
+
 	prog.enterStage(StageCleaningRemote, artifact.Name)
 	out, err := s.deleteRemoteOne(ctx, source, bs, rec, base)
 	if err != nil {
@@ -315,6 +337,18 @@ func (s *Service) deleteRemoteOne(ctx context.Context, source transport.Source, 
 		// own doc for the full reasoning.
 		CompletionStrategy: bs.Completion.Strategy,
 		DeleteSafetyDelay:  bs.Completion.DeleteSafetyDelay.Duration(),
+	})
+}
+
+// retainRemoteOne runs lifecycle.RetainRemote: issue #282's read-only path,
+// taken instead of deleteRemoteOne whenever bs.ReadOnly is true. Unlike
+// that function, this one never touches transport.Transport at all -- it
+// does not even receive one -- so there is nothing in its call graph that
+// could reach transport.Transport.DeleteRemote.
+func (s *Service) retainRemoteOne(ctx context.Context, rec state.Record, base string) (state.Outcome, error) {
+	return lifecycle.RetainRemote(ctx, s.lifecycleDeps(), lifecycle.RetainRemoteRequest{
+		Artifact:   rec.Artifact,
+		AttemptKey: base + ":retain",
 	})
 }
 

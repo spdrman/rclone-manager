@@ -38,6 +38,11 @@ package lifecycle
 //     copy is deliberately retained (that is the whole point of holding it
 //     for a human rather than deleting it), and issue #220's reinstatement
 //     path exists precisely because those bytes are still there.
+//   - RemoteRetained DOES (issue #282). It is reached from Committed or
+//     RemoteDeletePending exactly where Complete normally would be, and
+//     neither of those edges touches the local file at all; the same
+//     durable final copy Committed already holds is simply never handed
+//     off to a delete step for its remote counterpart.
 var StatesHoldingLocalCopy = []State{
 	Transferring,
 	Transferred,
@@ -47,6 +52,7 @@ var StatesHoldingLocalCopy = []State{
 	Committed,
 	RemoteDeletePending,
 	Complete,
+	RemoteRetained,
 	Quarantined,
 	QuarantinedLost,
 }

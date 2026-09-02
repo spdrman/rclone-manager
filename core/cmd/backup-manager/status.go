@@ -68,6 +68,16 @@ func cmdStatus(args []string) int {
 			fmt.Printf("    these were re-trusted after quarantine, so this manager will never delete their remote copies.\n")
 			fmt.Printf("    how much they occupy on the source is not known here; releasing them is your decision, made there.\n")
 		}
+		// Issue #282. Printed only when there are any, for the same reason
+		// as the reinstated line above: most deployments never set
+		// read_only and this stays permanently zero. When it is not zero,
+		// this manager is doing exactly what a read-only source was
+		// declared for, and the line says so rather than looking like an
+		// oddly-stalled pending-delete count.
+		if bs.ReadOnlyRetainedCount > 0 {
+			fmt.Printf("  remote retained, read-only source: %d\n", bs.ReadOnlyRetainedCount)
+			fmt.Printf("    this backup set is declared read-only: this manager will never delete these remote copies.\n")
+		}
 		if bs.FreeBytes != nil {
 			fmt.Printf("  free space: %d bytes\n", *bs.FreeBytes)
 		}
