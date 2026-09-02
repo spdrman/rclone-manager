@@ -9,7 +9,7 @@ python3 scripts/install/install_docker_host.py install \
     --prefix /volume1/backup-manager \
     --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
     --known-hosts /volume1/backup-manager/secrets/known_hosts \
-    --image ghcr.io/spdrman/backup-manager:0.1.0
+    --image ghcr.io/spdrman/backup-manager:0.2.0
 ```
 
 Six subcommands: `preflight` checks and creates nothing, `install` checks then

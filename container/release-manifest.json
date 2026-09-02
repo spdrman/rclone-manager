@@ -1,8 +1,8 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "commit": "13ed7108c0459228d4c251cdd941b96137154556",
   "generated_at": "2026-09-01T00:07:37Z",
-  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script refuses to record a commit that is not reachable from a rewrite-free ref and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled, and scripts/release/verify-manifest-parity.sh rebuilds and re-hashes them before any push, so a manifest describing different bytes cannot be published (#260). registry_digest is what ghcr.io assigned each architecture's manifest on the 0.1.0 push, read back with docker buildx imagetools inspect rather than taken from the push's own output: the push says what it believes it sent and the registry says what it holds. index_digest is the multi-architecture image index those two sit under, and it is what cosign signed and attached the SBOM attestation to. local_image_id_sha256 is none of these: it is the local Docker image ID the recording build produced, which identifies the image on the machine that built it and nowhere else. Deploy by digest, never by tag.",
+  "note": "Regenerate with scripts/release/record-release-hashes.sh, and only at a commit that is ALREADY on main. A commit recorded from a feature branch stops existing the moment that branch is squash merged, and the manifest is then pinned to a SHA nobody can check out: that is issue #174, which is why the script refuses to record a commit that is not reachable from a rewrite-free ref and why distribution/packaging's release-manifest-integrity check re-asks the same question on every run. binary_sha256 is hashed from the two binaries extracted out of the built image, so it is real evidence of what was compiled, and scripts/release/verify-manifest-parity.sh rebuilds and re-hashes them before any push, so a manifest describing different bytes cannot be published (#260). registry_digest is what ghcr.io assigns each architecture's manifest on a push, read back with docker buildx imagetools inspect rather than taken from the push's own output: the push says what it believes it sent and the registry says what it holds. index_digest is the multi-architecture image index those two sit under, and it is what cosign signs and attaches the SBOM attestation to. All three are null here because 0.2.0 has not been pushed yet, which distribution/packaging/canonical.json records as image.published false; they are filled in from a real push, and the two files move together so neither can claim a publish the other does not. local_image_id_sha256 is none of these: it is the local Docker image ID the recording build produced, which identifies the image on the machine that built it and nowhere else. Deploy by digest, never by tag.",
   "architectures": [
     {
       "architecture": "amd64",
@@ -11,7 +11,7 @@
         "backup-manager-web": "001b5dc8a0cdb44c341570c4c87c0ed411f05a1eae016b95537ea186574b79d9"
       },
       "local_image_id_sha256": "6fd441d024ab58fb42e4b31c8481ce2dfe6533664c3c2f8a4109d9f6ee4d050b",
-      "registry_digest": "sha256:67781dcb5148f9613891da87d08ea14b7656a668247f0b483bea5c02a15be81a"
+      "registry_digest": null
     },
     {
       "architecture": "arm64",
@@ -20,8 +20,8 @@
         "backup-manager-web": "31faa542448efec3bdcbb65ebadcd4862cfe6cbec3853d3ccf8922dbd841db43"
       },
       "local_image_id_sha256": "79baf5babdd0ceb25deae016449c0e3345ff98be78945da5550834fd18e9c907",
-      "registry_digest": "sha256:a8a1f7227c57db8545c81c7dc7d031ba9535c287e69f25fbd2cb01c6b02bfd67"
+      "registry_digest": null
     }
   ],
-  "index_digest": "sha256:533e7540e3b4c496de56d56d1e5bc54ed17d050d7d3296f266f10c852d6381cb"
+  "index_digest": null
 }
