@@ -1263,6 +1263,47 @@ def _bridge_interfaces_from_network_inspect(raw: str) -> list[str]:
     return sorted(ifaces)
 
 
+def _probe_argv(image: str, network: str, gateway: str, probe_host: str, probe_port: int) -> list[str]:
+    """The `docker run` argv for BridgeDoctor.probe(), with gateway,
+    probe_host and probe_port passed as environment variables rather than
+    interpolated into the shell script string.
+
+    The script text itself is a fixed constant, never built from these
+    values, so there is nothing here for a value containing shell
+    metacharacters to reach: `sh` expands `"$GATEWAY"` etc. as one quoted
+    word regardless of what is in it, the same way every other privileged
+    invocation in this file builds an argv list rather than a shell
+    string. Practical risk was already low (unprivileged, --rm, these are
+    the operator's own CLI args, never attacker-controlled), but this file
+    is careful about injection everywhere else and this call was the one
+    exception.
+
+    The `--` before each value closes the other half, which quoting does
+    not reach: quoting stops the SHELL re-parsing a value as syntax, but
+    ping and nc still parse their own argv, so a --probe-host beginning
+    with a dash was read as a flag rather than a hostname. Confirmed
+    against the default --probe-image (busybox:stable, BusyBox v1.36.1):
+    `nc -z -4 9` fails with "invalid option -- '4'", `nc -z -- -4 9` fails
+    with "bad address '-4'", and both applets accept `--` normally
+    otherwise. Not a security boundary either way, since these are the
+    operator's own arguments on their own machine, but a probe that
+    reports a flag-parsing error as an egress failure is a misleading
+    diagnostic, which is the thing this file most tries not to ship.
+    """
+    script = (
+        'ping -c 3 -W 2 -- "$GATEWAY" >/dev/null 2>&1; echo "gateway_rc=$?"; '
+        'timeout 6 nc -z -- "$PROBE_HOST" "$PROBE_PORT" >/dev/null 2>&1; '
+        'echo "egress_rc=$?"'
+    )
+    return [
+        "docker", "run", "--rm", "--network", network,
+        "-e", f"GATEWAY={gateway}",
+        "-e", f"PROBE_HOST={probe_host}",
+        "-e", f"PROBE_PORT={probe_port}",
+        "--entrypoint", "/bin/sh", image, "-c", script,
+    ]
+
+
 class BridgeDoctor:
     """Diagnose, and if asked, repair, Docker bridge networking.
 
@@ -1356,13 +1397,8 @@ class BridgeDoctor:
         """
         image = self.args.probe_image
         gateway = self._gateway_of(network)
-        script = (
-            f"ping -c 3 -W 2 {gateway} >/dev/null 2>&1; echo \"gateway_rc=$?\"; "
-            f"timeout 6 nc -z {self.args.probe_host} {self.args.probe_port} >/dev/null 2>&1; "
-            f"echo \"egress_rc=$?\""
-        )
-        proc = run(["docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
-                    image, "-c", script], check=False, timeout=120)
+        proc = run(_probe_argv(image, network, gateway, self.args.probe_host, self.args.probe_port),
+                   check=False, timeout=120)
         out = proc.stdout + proc.stderr
         result = {"gateway": None, "egress": None, "gateway_ip": gateway, "raw": out.strip()}
         for line in out.splitlines():
@@ -1939,7 +1975,7 @@ def cmd_status(args) -> int:
     # reboot loses them, and so does the host firewall rewriting its own
     # set. The containers come back either way, so the failure is silent
     # unless something asks. This asks, with no root and no password.
-    if args.fix_network != "never":
+    if args.check_network != "never":
         doctor = BridgeDoctor(args)
         try:
             doctor.ensure_probe_image()
@@ -2033,25 +2069,16 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
     pass
 
 
-def build_parser() -> argparse.ArgumentParser:
-    repo_root = Path(__file__).resolve().parents[2]
-    parser = argparse.ArgumentParser(
-        prog="install_docker_host.py",
-        description="Install rclone-manager on a Docker host (issue #262).",
-        formatter_class=_HelpFormatter,
-        epilog=(
-            "example:\n"
-            "  python3 install_docker_host.py install \\\n"
-            "      --prefix /volume1/backup-manager \\\n"
-            "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
-            "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
-            "      --image ghcr.io/spdrman/backup-manager:0.1.0\n"
-        ),
-    )
-    parser.add_argument("command", choices=["preflight", "install", "status", "uninstall",
-                                            "network-doctor", "network-undo"])
+def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
+    """layout: every subcommand gets these, and only these, unconditionally.
 
-    layout = parser.add_argument_group("layout")
+    resolve() below always builds host_dirs from prefix/state_dir/
+    backup_dir/config_dir, and every cmd_* handler needs at least prefix
+    and project (compose_argv() and detect_existing() both read only
+    these five) - this is the true common floor, not "everything install
+    happens to need" the way this function used to define it.
+    """
+    layout = sp.add_argument_group("layout")
     layout.add_argument("--prefix", type=Path, default=Path("/volume1/backup-manager"),
                         help="Directory the deployment files and the default data directories live under.")
     layout.add_argument("--state-dir", type=Path, default=None,
@@ -2062,10 +2089,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Host directory holding config.yaml. Defaults to <prefix>/config. May be empty: "
                              "a fresh install serves a first-run flow (issue #176).")
     layout.add_argument("--project", default=DEFAULT_PROJECT, help="Compose project name.")
-    layout.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
-                        help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
 
-    creds = parser.add_argument_group("credentials (paths only, never contents)")
+
+def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> None:
+    """credentials and the rest of runtime: only preflight and install read
+    any of these (every check in the Preflight class, and everything
+    cmd_install stages and brings up). status, uninstall, network-doctor
+    and network-undo never touch a credential path, an image reference or
+    a listen port, so they no longer declare these flags at all.
+    """
+    creds = sp.add_argument_group("credentials (paths only, never contents)")
     creds.add_argument("--ssh-key", type=Path, default=None,
                        help="Host path to the SFTP client private key. Never read, never generated, never "
                             "printed. Defaults to <prefix>/secrets/id_ed25519.")
@@ -2075,7 +2108,16 @@ def build_parser() -> argparse.ArgumentParser:
                             "port is yours to supply: it is never defaulted here and never written into this "
                             "repository (issue #264).")
 
-    runtime = parser.add_argument_group("runtime")
+    runtime = sp.add_argument_group("runtime")
+    # Here rather than in a second group of its own titled "layout": argparse
+    # renders every add_argument_group() call as its own section and never
+    # merges two by title, so a second "layout" group put this flag under a
+    # duplicate heading in `install --help` and `preflight --help`, which is
+    # the opposite of what splitting the parser was for. It reads as runtime
+    # anyway: it names the runtime definition, and its scope (preflight and
+    # install only) is exactly this group's.
+    runtime.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
+                         help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
     runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.1.0",
                          help="Image reference both services run.")
     runtime.add_argument("--image-archive", type=Path, default=None,
@@ -2097,63 +2139,175 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--pgid", type=int, default=None, help="Defaults to this account's gid.")
     runtime.add_argument("--timeout", type=int, default=180,
                          help="Seconds to wait for the engine's liveness probe and the Web UI.")
-    net = parser.add_argument_group("bridge networking (issue #271)")
-    net.add_argument("--fix-network", choices=["auto", "persist", "diagnose", "never"], default="auto",
+
+
+def _add_probe_flags(sp: argparse.ArgumentParser) -> None:
+    """--probe-image/--probe-host/--probe-port/--probe-network: every
+    command that can ask BridgeDoctor to probe (install, status,
+    network-doctor) needs these; preflight, uninstall and network-undo
+    never read a probe result at all.
+    """
+    probe = sp.add_argument_group("bridge probe (issue #271)")
+    probe.add_argument("--probe-image", default="busybox:stable",
+                       help="A small image with a shell, ping and nc, used to ask what a bridged container "
+                            "can actually do. Point it at one this host already has to avoid a pull.")
+    probe.add_argument("--probe-host", default="1.1.1.1",
+                       help="External endpoint the egress probe opens TCP to. Nothing is sent to it.")
+    probe.add_argument("--probe-port", type=int, default=443, help="Port for the egress probe.")
+    probe.add_argument("--probe-network", default="bridge",
+                       help="Docker network the probe container joins. The rules this installer inserts "
+                            "are scoped to docker0 and every bridge network Docker itself reports at "
+                            "repair time, so re-running after a network is created covers it too.")
+
+
+def _add_fix_network_flag(sp: argparse.ArgumentParser, *, default: str, why_this_default: str) -> None:
+    net = sp.add_argument_group("bridge networking (issue #271)")
+    net.add_argument("--fix-network", choices=["auto", "persist", "diagnose", "never"], default=default,
                      help="auto diagnoses and repairs Docker bridge networking when a bridged container "
                           "cannot originate traffic, escalating through sudo, with rules that are lost on "
                           "reboot. persist does the same and additionally installs a systemd unit and "
                           "timer that re-assert those same rules, which survives a reboot and a runtime "
                           "rewrite of the host firewall. diagnose stops after naming the rule. never "
-                          "skips the check entirely and touches no firewall. auto is the default because "
-                          "installing a systemd unit is a larger commitment than inserting a runtime "
-                          "rule, and an operator should have to ask for it.")
-    net.add_argument("--probe-image", default="busybox:stable",
-                     help="A small image with a shell, ping and nc, used to ask what a bridged container "
-                          "can actually do. Point it at one this host already has to avoid a pull.")
-    net.add_argument("--probe-host", default="1.1.1.1",
-                     help="External endpoint the egress probe opens TCP to. Nothing is sent to it.")
-    net.add_argument("--probe-port", type=int, default=443, help="Port for the egress probe.")
-    net.add_argument("--probe-network", default="bridge",
-                     help="Docker network the probe container joins. The rules this installer inserts "
-                          "are scoped to docker0 and every bridge network Docker itself reports at "
-                          "repair time, so re-running after a network is created covers it too.")
+                          f"skips the check entirely and touches no firewall. {why_this_default}")
 
-    runtime.add_argument("--if-installed", choices=["converge", "refuse"], default="converge",
-                         help="What to do when an install is already here. converge rewrites the deployment "
-                              "files and brings the stack up again, never touching state, config or backups.")
+
+def build_parser() -> argparse.ArgumentParser:
+    repo_root = Path(__file__).resolve().parents[2]
+    parser = argparse.ArgumentParser(
+        prog="install_docker_host.py",
+        description="Install rclone-manager on a Docker host (issue #262).",
+        formatter_class=_HelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    sp_preflight = subparsers.add_parser(
+        "preflight", formatter_class=_HelpFormatter,
+        help="Check every prerequisite and exit. Changes nothing on the host.")
+    _add_shared_groups(sp_preflight)
+    _add_install_prereq_groups(sp_preflight, repo_root)
+
+    sp_install = subparsers.add_parser(
+        "install", formatter_class=_HelpFormatter,
+        help="Bring the engine and Web UI up on this host, or refuse and say why.",
+        epilog=(
+            "example:\n"
+            "  python3 install_docker_host.py install \\\n"
+            "      --prefix /volume1/backup-manager \\\n"
+            "      --ssh-key /volume1/backup-manager/secrets/id_ed25519 \\\n"
+            "      --known-hosts /volume1/backup-manager/secrets/known_hosts \\\n"
+            "      --image ghcr.io/spdrman/backup-manager:0.1.0\n"
+        ),
+    )
+    _add_shared_groups(sp_install)
+    _add_install_prereq_groups(sp_install, repo_root)
+    _add_fix_network_flag(
+        sp_install, default="auto",
+        why_this_default="auto is the default because a healthy host is a strict no-op either way, so "
+                          "there is nothing to opt into for the common case; installing a systemd unit "
+                          "(persist) is still a larger commitment than a runtime rule and needs asking for.")
+    _add_probe_flags(sp_install)
+    existing = sp_install.add_argument_group("existing install")
+    existing.add_argument("--if-installed", choices=["converge", "refuse"], default="converge",
+                          help="What to do when an install is already here. converge rewrites the deployment "
+                               "files and brings the stack up again, never touching state, config or backups.")
+
+    sp_status = subparsers.add_parser(
+        "status", formatter_class=_HelpFormatter,
+        help="Report what's here, and whether bridge networking still works. Read-only.")
+    _add_shared_groups(sp_status)
+    check = sp_status.add_argument_group("bridge networking (issue #271)")
+    check.add_argument("--check-network", choices=["auto", "never"], default="auto",
+                       help="auto asks, unprivileged and read-only, whether a bridged container can still "
+                            "originate traffic and reports rclone-manager-bridge.timer's own state "
+                            "alongside it. never skips the check. A separate flag from install's own "
+                            "--fix-network on purpose: this command only ever reads, it repairs nothing, "
+                            "so it needed its own policy rather than borrowing a flag whose name promises "
+                            "a fix.")
+    _add_probe_flags(sp_status)
+
+    sp_uninstall = subparsers.add_parser(
+        "uninstall", formatter_class=_HelpFormatter,
+        help="Remove what install created (docker compose down), and nothing else.")
+    _add_shared_groups(sp_uninstall)
+
+    sp_doctor = subparsers.add_parser(
+        "network-doctor", formatter_class=_HelpFormatter,
+        help="Diagnose Docker bridge networking, and repair it if --fix-network says to.")
+    _add_shared_groups(sp_doctor)
+    _add_fix_network_flag(
+        sp_doctor, default="diagnose",
+        why_this_default="diagnose is the default here, unlike install's auto: a command named \"doctor\" "
+                          "reads as diagnostic, so running it stand-alone to check should not itself "
+                          "escalate sudo and mutate the firewall. Pass --fix-network=auto explicitly to "
+                          "repair.")
+    _add_probe_flags(sp_doctor)
+
+    sp_undo = subparsers.add_parser(
+        "network-undo", formatter_class=_HelpFormatter,
+        help="Remove exactly the firewall rules and persistence unit this installer added, and nothing else.")
+    _add_shared_groups(sp_undo)
+
     return parser
 
 
 def resolve(args):
+    """Fill in every default this installer computes from --prefix and the
+    account it runs as.
+
+    Guarded with hasattr() past the layout group: since #330's subparsers
+    split, only preflight and install declare --ssh-key, --compose-file
+    and the rest of the install-prerequisite flags (status, uninstall,
+    network-doctor and network-undo never read a credential path or an
+    image reference), so those attributes are simply absent from the
+    Namespace for the other four commands. layout itself (prefix,
+    state_dir, backup_dir, config_dir, project) stays unconditional: every
+    subcommand declares it, and host_dirs below needs all four regardless
+    of which command is running.
+
+    KEEP THESE TWO IN STEP: every hasattr()-guarded field below must also
+    be reachable from
+    TestSubcommandFlagScoping.test_resolve_never_raises_for_a_command_missing_install_prereq_flags,
+    which resolves all six real subparsers. argparse gives no static signal
+    here, so a guard nothing exercises is a guard nobody has checked, and
+    the failure it is meant to prevent (an AttributeError deep inside a
+    privileged repair path, mid-run) only surfaces when that command is
+    actually invoked. Adding a seventh subcommand with its own scoped flag
+    and a computed default here means adding it to that test in the same
+    change.
+    """
     args.prefix = args.prefix.expanduser().resolve()
     args.state_dir = (args.state_dir or args.prefix / "state").expanduser()
     args.backup_dir = (args.backup_dir or args.prefix / "backups").expanduser()
     args.config_dir = (args.config_dir or args.prefix / "config").expanduser()
-    args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
-    args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
-    args.compose_file = args.compose_file.expanduser()
-    if args.image_archive is not None:
-        args.image_archive = args.image_archive.expanduser()
-    if args.puid is None:
-        args.puid = os.getuid()
-    if args.pgid is None:
-        args.pgid = os.getgid()
-    if args.timezone is None:
-        tzfile = Path("/etc/timezone")
-        args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
-    if args.public_base_url is None:
-        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
     args.host_dirs = {
         "--prefix": args.prefix,
         "--state-dir": args.state_dir,
         "--backup-dir": args.backup_dir,
         "--config-dir": args.config_dir,
     }
-    # The tag compose resolves for VERSION, taken from the reference so
-    # the .env cannot claim a different release from the image.
-    ref = args.image
-    args.image_tag = ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"
-    args.image_commit = "none"
+    if hasattr(args, "ssh_key"):
+        args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
+    if hasattr(args, "known_hosts"):
+        args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
+    if hasattr(args, "compose_file"):
+        args.compose_file = args.compose_file.expanduser()
+    if hasattr(args, "image_archive") and args.image_archive is not None:
+        args.image_archive = args.image_archive.expanduser()
+    if hasattr(args, "puid") and args.puid is None:
+        args.puid = os.getuid()
+    if hasattr(args, "pgid") and args.pgid is None:
+        args.pgid = os.getgid()
+    if hasattr(args, "timezone") and args.timezone is None:
+        tzfile = Path("/etc/timezone")
+        args.timezone = tzfile.read_text().strip() if tzfile.is_file() else "UTC"
+    if hasattr(args, "public_base_url") and args.public_base_url is None:
+        args.public_base_url = f"http://{socket.gethostname()}:{args.listen_port}"
+    if hasattr(args, "image"):
+        # The tag compose resolves for VERSION, taken from the reference so
+        # the .env cannot claim a different release from the image.
+        ref = args.image
+        args.image_tag = ref.rsplit(":", 1)[-1] if ":" in ref.rsplit("/", 1)[-1] else "latest"
+        args.image_commit = "none"
     return args
 
 

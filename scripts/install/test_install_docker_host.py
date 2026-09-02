@@ -24,6 +24,7 @@ or, from this directory:
 
 from __future__ import annotations
 
+import argparse
 import os
 import socket
 import sys
@@ -56,14 +57,15 @@ class Fixture:
         self.known.write_text("# pinned host keys go here\n")
 
     def args(self, *extra: str, command: str = "preflight"):
-        argv = [
-            command,
-            "--prefix", str(self.prefix),
-            "--ssh-key", str(self.key),
-            "--known-hosts", str(self.known),
-            "--compose-file", str(CANONICAL_COMPOSE),
-            *extra,
-        ]
+        argv = [command, "--prefix", str(self.prefix)]
+        # --ssh-key/--known-hosts/--compose-file only exist on preflight and
+        # install's own subparsers (issue #330): only Preflight's checks and
+        # cmd_install's staging ever read a credential path or the canonical
+        # compose file, so the other four commands no longer declare them.
+        if command in ("preflight", "install"):
+            argv += ["--ssh-key", str(self.key), "--known-hosts", str(self.known),
+                    "--compose-file", str(CANONICAL_COMPOSE)]
+        argv += list(extra)
         return installer.resolve(installer.build_parser().parse_args(argv))
 
 
@@ -73,6 +75,27 @@ def refusal_from(fn, *a, **kw):
     except installer.Refusal as exc:
         return exc
     return None
+
+
+def _subparser(parser, name):
+    """The named subcommand's own ArgumentParser, e.g. _subparser(parser,
+    "install"). build_parser() uses real subparsers (issue #330) so each
+    subcommand's flags live on its own parser, not the top-level one."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action.choices[name]
+    raise AssertionError("build_parser() has no subparsers action")
+
+
+def _all_subparser_flags(parser):
+    """Every option string declared on any subcommand, e.g. for asserting
+    a flag exists nowhere at all rather than checking one subcommand."""
+    flags = set()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in action.choices.values():
+                flags |= {opt for a in sub._actions for opt in a.option_strings}
+    return flags
 
 
 class TestArchitectureRefusal(unittest.TestCase):
@@ -850,7 +873,7 @@ class TestSudoRefusals(unittest.TestCase):
 class TestHealthyHostIsANoOp(unittest.TestCase):
     def test_a_working_host_changes_nothing_and_never_escalates(self):
         fx = Fixture(self)
-        args = fx.args("--fix-network", "auto")
+        args = fx.args("--fix-network", "auto", command="install")
 
         class ExplodingSudo(installer.Sudo):
             def run_script(self, script, *, purpose, timeout=300):
@@ -870,7 +893,7 @@ class TestHealthyHostIsANoOp(unittest.TestCase):
 
     def test_fix_network_never_refuses_on_a_broken_host_without_escalating(self):
         fx = Fixture(self)
-        args = fx.args("--fix-network", "never")
+        args = fx.args("--fix-network", "never", command="install")
 
         class ExplodingSudo(installer.Sudo):
             def run_script(self, script, *, purpose, timeout=300):
@@ -895,9 +918,57 @@ class TestProbeDefaultsCarryNothingPrivate(unittest.TestCase):
     never a host this project happens to back up."""
 
     def test_the_default_probe_target_is_generic(self):
-        args = Fixture(self).args()
+        args = Fixture(self).args(command="install")
         self.assertEqual(args.probe_host, "1.1.1.1")
         self.assertEqual(args.probe_port, 443)
+
+
+class TestProbeArgvHygiene(unittest.TestCase):
+    """gateway/probe_host/probe_port used to be interpolated directly into
+    the shell script string run inside the probe container (issue #330).
+    These pin the replacement: the script text is a fixed constant, and
+    the values travel as environment variables instead - never re-parsed
+    as shell syntax on either side."""
+
+    def test_the_shell_script_is_a_fixed_constant(self):
+        """Same script string regardless of what gateway/host/port are,
+        which is only possible if none of them were ever spliced into it."""
+        argv1 = installer._probe_argv("img", "net", "172.17.0.1", "1.1.1.1", 443)
+        argv2 = installer._probe_argv("img", "net", "10.0.0.1; rm -rf /", "$(whoami)", 9999)
+        self.assertEqual(argv1[-1], argv2[-1])
+
+    def test_values_travel_as_environment_variables_not_shell_text(self):
+        argv = installer._probe_argv("img", "net", "172.17.0.1", "1.1.1.1", 443)
+        env_pairs = {argv[i + 1] for i, tok in enumerate(argv) if tok == "-e"}
+        self.assertEqual(env_pairs, {"GATEWAY=172.17.0.1", "PROBE_HOST=1.1.1.1", "PROBE_PORT=443"})
+
+    def test_a_value_with_shell_metacharacters_never_reaches_the_script_text(self):
+        """The regression this class exists for: a value that would have
+        broken out of the old interpolated string must appear ONLY in its
+        own -e argument, never inside the script argparse hands to sh."""
+        hostile = "1.1.1.1; rm -rf / #"
+        argv = installer._probe_argv("img", "net", "172.17.0.1", hostile, 443)
+        script = argv[-1]
+        self.assertNotIn(hostile, script, "a hostile value leaked into the script text")
+        self.assertIn(f"PROBE_HOST={hostile}", argv, "the value should still reach the container, as an env var")
+
+    def test_the_script_references_only_the_environment_variables(self):
+        script = installer._probe_argv("img", "net", "gw", "host", 1)[-1]
+        for name in ("GATEWAY", "PROBE_HOST", "PROBE_PORT"):
+            self.assertIn(f'"${name}"', script, f"the script does not read ${name} at all")
+
+    def test_every_value_is_passed_after_an_end_of_options_marker(self):
+        """Quoting stops the shell re-parsing a value as syntax; it does
+        not stop ping and nc parsing their own argv. A --probe-host
+        starting with a dash was read as a flag, so the probe reported a
+        flag-parsing error as an egress failure. Confirmed against
+        busybox:stable (the default --probe-image): `nc -z -4 9` gives
+        "invalid option", `nc -z -- -4 9` gives "bad address"."""
+        script = installer._probe_argv("img", "net", "gw", "host", 1)[-1]
+        self.assertIn('ping -c 3 -W 2 -- "$GATEWAY"', script,
+                      "ping reads $GATEWAY without an end-of-options marker")
+        self.assertIn('nc -z -- "$PROBE_HOST" "$PROBE_PORT"', script,
+                      "nc reads $PROBE_HOST without an end-of-options marker")
 
 
 
@@ -1109,21 +1180,158 @@ class TestPersistenceVerification(unittest.TestCase):
         self.assertIn("is-active", exc.message)
 
 
+class TestSubcommandFlagScoping(unittest.TestCase):
+    """Real argparse subparsers (issue #330): before this, every flag from
+    every subcommand was on one flat parser, so `network-doctor --help`
+    showed `--ssh-key`, `--if-installed` and everything else irrelevant to
+    it. Only `--prefix`/`--state-dir`/`--backup-dir`/`--config-dir`/
+    `--project` are truly universal (compose_argv() and detect_existing()
+    read only these five, and resolve() always builds host_dirs from the
+    first four); credentials, --compose-file and the rest of runtime are
+    scoped to preflight and install, the only two commands that ever read
+    a credential path or an image reference at all."""
+
+    def flags_of(self, command):
+        return {opt for a in _subparser(installer.build_parser(), command)._actions
+                for opt in a.option_strings}
+
+    def test_if_installed_exists_only_on_install(self):
+        for command in ("preflight", "status", "uninstall", "network-doctor", "network-undo"):
+            self.assertNotIn("--if-installed", self.flags_of(command),
+                             f"{command} does not converge or refuse an existing install")
+        self.assertIn("--if-installed", self.flags_of("install"))
+
+    def test_fix_network_exists_only_on_install_and_network_doctor(self):
+        for command in ("preflight", "status", "uninstall", "network-undo"):
+            self.assertNotIn("--fix-network", self.flags_of(command),
+                             f"{command} never repairs bridge networking")
+        for command in ("install", "network-doctor"):
+            self.assertIn("--fix-network", self.flags_of(command))
+
+    def test_check_network_exists_only_on_status(self):
+        for command in ("preflight", "install", "uninstall", "network-doctor", "network-undo"):
+            self.assertNotIn("--check-network", self.flags_of(command),
+                             f"{command} has no reason to know status's own read-only flag")
+        self.assertIn("--check-network", self.flags_of("status"))
+
+    def test_probe_flags_exist_only_where_a_probe_can_run(self):
+        probe_flags = {"--probe-image", "--probe-host", "--probe-port", "--probe-network"}
+        for command in ("preflight", "uninstall", "network-undo"):
+            self.assertFalse(probe_flags & self.flags_of(command),
+                             f"{command} never reads a probe result")
+        for command in ("install", "status", "network-doctor"):
+            self.assertTrue(probe_flags <= self.flags_of(command),
+                            f"{command} needs every probe flag")
+
+    def test_the_true_common_floor_stays_on_every_command(self):
+        """compose_argv() and detect_existing() are the only two functions
+        every subcommand's path can reach, and both read only these five -
+        the actual floor resolve() and every handler need, not "everything
+        install happens to need" the way this shared group used to be
+        defined."""
+        floor = {"--prefix", "--state-dir", "--backup-dir", "--config-dir", "--project"}
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            self.assertTrue(floor <= self.flags_of(command), f"{command} is missing a floor flag")
+
+    def test_credentials_and_the_rest_of_runtime_exist_only_on_preflight_and_install(self):
+        """Only Preflight's own checks and cmd_install's staging ever read
+        a credential path, --compose-file, an image reference, a listen
+        port or a puid/pgid/timezone override. status, uninstall,
+        network-doctor and network-undo never construct a Preflight and
+        never stage a deployment, so they no longer declare any of this."""
+        install_prereqs = {"--ssh-key", "--known-hosts", "--compose-file", "--image",
+                           "--image-archive", "--no-pull", "--listen-port", "--public-base-url",
+                           "--profile", "--timezone", "--puid", "--pgid", "--timeout"}
+        for command in ("status", "uninstall", "network-doctor", "network-undo"):
+            self.assertFalse(install_prereqs & self.flags_of(command),
+                             f"{command} never reads a credential, an image reference or a port")
+        for command in ("preflight", "install"):
+            self.assertTrue(install_prereqs <= self.flags_of(command),
+                            f"{command} needs every install-prerequisite flag")
+
+    def test_no_subcommand_renders_the_same_group_title_twice(self):
+        """argparse renders every add_argument_group() call as its own
+        section and never merges two by title, so two groups sharing a
+        title print the same heading twice with the flags split between
+        them. That happened here: _add_shared_groups() titled its group
+        "layout" and _add_install_prereq_groups() opened a second "layout"
+        holding only --compose-file, so `install --help` and `preflight
+        --help` both grew a duplicate heading with one orphaned flag under
+        it - the exact clutter splitting the parser was meant to remove.
+
+        Every other test in this class reads flags out of _actions/
+        option_strings, which is blind to how they are grouped, so nothing
+        caught it. This asserts on the grouping itself."""
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            with self.subTest(command=command):
+                titles = [g.title for g in _subparser(installer.build_parser(), command)._action_groups
+                          if g.title and g._group_actions]
+                duplicates = {t for t in titles if titles.count(t) > 1}
+                self.assertFalse(duplicates,
+                                 f"{command} --help renders {sorted(duplicates)} more than once, "
+                                 "splitting one section's flags across two identical headings")
+
+    def test_resolve_never_raises_for_a_command_missing_install_prereq_flags(self):
+        """The regression this whole split depends on: resolve() used to
+        touch args.ssh_key/args.compose_file/args.image unconditionally,
+        which would be an AttributeError the moment a subcommand stopped
+        declaring them. Exercised against all six commands for real,
+        not just the two that still have every flag."""
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            with self.subTest(command=command):
+                args = installer.resolve(installer.build_parser().parse_args(
+                    [command, "--prefix", "/tmp/rm-resolve-test"]))
+                self.assertEqual(args.command, command)
+                self.assertIn("--prefix", args.host_dirs)
+
+    def test_docs_install_md_names_every_real_subcommand(self):
+        """docs/install.md's opening paragraph used to say "Four
+        subcommands" after network-doctor and network-undo had already
+        been added, undercounting by two. Pinned against build_parser()'s
+        real subcommand set so a seventh command added later fails this
+        test until the doc catches up, rather than drifting silently
+        again."""
+        names = set(next(a for a in installer.build_parser()._actions
+                         if isinstance(a, argparse._SubParsersAction)).choices)
+        doc_lines = (REPO_ROOT / "docs" / "install.md").read_text().splitlines()
+        start = next((i for i, ln in enumerate(doc_lines) if "subcommands:" in ln), None)
+        self.assertIsNotNone(start, "docs/install.md has no '... subcommands:' opening line")
+        paragraph_lines = []
+        for ln in doc_lines[start:]:
+            if ln.strip() == "":
+                break
+            paragraph_lines.append(ln)
+        opening = " ".join(paragraph_lines)
+        for name in names:
+            self.assertIn(f"`{name}`", opening, f"docs/install.md's opening does not name {name!r}")
+
+
 class TestFixNetworkVocabulary(unittest.TestCase):
     def test_the_default_is_the_conservative_one(self):
-        args = Fixture(self).args()
+        args = Fixture(self).args(command="install")
         self.assertEqual(args.fix_network, "auto",
                          "installing a systemd unit is a larger commitment than a runtime rule, "
                          "so it has to be asked for")
 
+    def test_network_doctors_own_default_is_diagnose_not_auto(self):
+        """Unlike install: a command named "doctor" reads as diagnostic,
+        so running it stand-alone to check should not itself escalate
+        sudo and mutate the firewall (issue #330)."""
+        args = Fixture(self).args(command="network-doctor")
+        self.assertEqual(args.fix_network, "diagnose")
+
     def test_persistence_is_a_value_of_the_existing_flag_not_a_second_one(self):
         parser = installer.build_parser()
+        install_sp = _subparser(parser, "install")
         choices = None
-        for action in parser._actions:
+        for action in install_sp._actions:
             if action.dest == "fix_network":
                 choices = set(action.choices)
         self.assertEqual(choices, {"auto", "persist", "diagnose", "never"})
-        flags = {opt for action in parser._actions for opt in action.option_strings}
+        flags = _all_subparser_flags(parser)
         for overlapping in ("--persist", "--persist-network", "--install-unit", "--systemd"):
             self.assertNotIn(overlapping, flags,
                              "a second flag with overlapping meaning is how two knobs end up "
@@ -1136,7 +1344,7 @@ class TestFixNetworkVocabulary(unittest.TestCase):
         for mode, want_install in (("auto", False), ("persist", True)):
             with self.subTest(mode=mode):
                 fx = Fixture(self)
-                args = fx.args("--fix-network", mode)
+                args = fx.args("--fix-network", mode, command="install")
                 calls = []
 
                 class RecordingSudo(installer.Sudo):
