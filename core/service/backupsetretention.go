@@ -196,15 +196,34 @@ func (b *BackupService) SetBackupSetRetention(ctx context.Context, id string, ov
 // the state the caller asked for is the state that holds, and a client
 // that has to check first before it can safely ask is a client that will
 // race. It also means clear does not rewrite config.yaml for a set it
-// would not change. An unknown set is still refused, because that is a
-// different answer.
+// would not change, which matters because a no-op write still moves the
+// configuration revision and invalidates every outstanding retention
+// preview. An unknown set is still refused, because that is a different
+// answer.
+//
+// # The one window this has, said rather than left to be found
+//
+// The "is there anything to clear" read is not taken under the same lock
+// the write is: UpdateBackupSet takes configMu itself and re-reads the
+// file inside it, so this method cannot hold it across both. A set that
+// gains an override between the read and the return therefore gets a
+// clear that does nothing and an answer saying it inherits.
+//
+// That is bounded rather than silent: nothing wrong is written, the next
+// read shows the override still there, and the losing caller is a second
+// operator writing the same set's retention policy at the same
+// millisecond as the first. Closing it properly means the no-op decision
+// moving inside UpdateBackupSet's own lock, which is a change to the
+// update path's contract for every field rather than for this one, and
+// is not worth making from here. The fresh read below is what keeps the
+// returned value a real one rather than the pre-write snapshot.
 func (b *BackupService) ClearBackupSetRetention(ctx context.Context, id string) (BackupSetRetention, error) {
 	current, err := b.GetBackupSetRetention(ctx, id)
 	if err != nil {
 		return BackupSetRetention{}, err
 	}
 	if !current.IsOverride {
-		return current, nil
+		return b.GetBackupSetRetention(ctx, id)
 	}
 	if _, err := b.UpdateBackupSet(ctx, id, UpdateBackupSetRequest{
 		Retention: &retentionOverrideChange{Clear: true},
