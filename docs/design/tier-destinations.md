@@ -53,11 +53,16 @@ paths it did before.
 
 ## Decision: the unit is an artifact, not a file
 
-Every method is addressed by (backup set, artifact), never by a path the
-caller composed. A path is a local-filesystem detail. An object store has
-keys, no parent directories and no symlinks; handing the seam a path
-would mean every caller had already assumed a filesystem, which is the
-assumption #334 exists to remove.
+Every method is addressed by the artifact, never by a path the caller
+composed. A path is a local-filesystem detail. An object store has keys,
+no parent directories and no symlinks; handing the seam a path would mean
+every caller had already assumed a filesystem, which is the assumption
+#334 exists to remove.
+
+The backup set half of that pair arrives through the constructor instead
+of through every call, because a store's configuration is a fact about
+the store rather than about each operation. See the per-set decision
+below.
 
 `Locator` inverts it: ask the store where the artifact belongs, and get
 back a string only that store interprets. `Kind` travels with it so a
@@ -183,7 +188,7 @@ which locator the move was writing, so the question is a `Stat` of one
 locator. If a real need turns up later it should arrive with the argument
 for why the catalog cannot answer it.
 
-## Decision: safety proofs belong to the implementation, not the interface
+## Decision: safety proofs belong to the caller, not the interface
 
 FR-20's six checks before a local delete (canonicalize, prove containment
 under the configured root, refuse a symlink, refuse a `.partial`, confirm
