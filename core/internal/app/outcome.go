@@ -136,9 +136,15 @@ func (o CycleOutcome) Failed() bool {
 }
 
 // NothingGotThrough reports the specific shape issue #361 was filed for,
-// as opposed to the two failure shapes that already had a verdict. A
-// caller uses it to say which of the two happened rather than printing one
-// undifferentiated failure for both.
+// as opposed to the two failure shapes that already had a verdict, so a
+// caller can say which of the three happened rather than printing one
+// undifferentiated failure for all of them.
+//
+// A cycle that stopped early is excluded even though its counts satisfy
+// the arithmetic, because they satisfy it vacuously: it walked nothing
+// because it never reached its pipeline, not because nothing got through.
+// Reporting that as "nothing got through" would put a made-up cause in
+// front of an operator who has a real one sitting in the log.
 func (o CycleOutcome) NothingGotThrough() bool {
 	return o.Err == nil && o.Walked > 0 && o.Durable == 0
 }
