@@ -233,7 +233,7 @@ created_case_dirs=()
 teardown_done=0
 
 teardown() {
-  local status=$?
+  local status="${1:-0}"
   [ "$teardown_done" = 1 ] && return
   teardown_done=1
 
@@ -260,7 +260,19 @@ teardown() {
   docker image rm -f "$product_image" >/dev/null 2>&1 || true
   remove_run_dir
 }
-trap teardown EXIT INT TERM
+# Three traps, not one, and the difference is what makes the interrupt
+# claim true rather than intended. A bash trap on INT or TERM runs the
+# handler and then RESUMES the script, so `trap teardown EXIT INT TERM`
+# would tear everything down and then carry on running against containers
+# that are no longer there. These exit, which also fires the EXIT trap;
+# teardown_done makes the second call a no-op.
+#
+# The status is passed in rather than read from $?, because inside a
+# signal handler $? is the status of whatever command the signal
+# interrupted and says nothing about why the script is ending.
+trap 'teardown $?' EXIT
+trap 'teardown 130; exit 130' INT
+trap 'teardown 143; exit 143' TERM
 
 # remove_run_dir deletes what this run wrote, by name, then removes the
 # directories. Deliberately not a recursive delete: the files are a known,
