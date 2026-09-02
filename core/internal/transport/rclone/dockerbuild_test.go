@@ -280,10 +280,15 @@ func (l *dockerBuildLineTap) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Bytes is a copy, not bytes.Buffer's own backing array: callers keep the
+// transcript around to print in a failure message, and handing them a
+// slice that a still-running Write can append into behind their back is a
+// data race waiting for the one case where the build has not finished
+// yet.
 func (l *dockerBuildLineTap) Bytes() []byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return []byte(l.all.String())
+	return bytes.Clone(l.all.Bytes())
 }
 
 // wireDockerBuildOutput points both of cmd's output streams at one tap
