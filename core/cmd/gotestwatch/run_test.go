@@ -109,11 +109,41 @@ func TestRun_CatchesAGenuineHang(t *testing.T) {
 	// almost exactly the same, tripping on the first check after its own
 	// window closed, which is the behaviour this test exists to prove).
 	//
-	// What promptness means is the overshoot past the window: one poll
-	// interval to notice, plus whatever this host stole from a goroutine
-	// trying to wake up on that same interval, which the sampler above
-	// measured rather than guessed. On a quiet machine this is a much
-	// tighter assertion than the old one.
+	// Before bounding the overshoot, check the window itself is the
+	// derivation of the pace this run measured. tracker_test.go proves
+	// that arithmetic against a synthetic clock; this checks it survived
+	// the trip out through a real subprocess, which is what this file is
+	// for. It also keeps the one piece of cover the old 10 x floor bound
+	// gave by accident: a window that had somehow grown unbounded used to
+	// fail here, and bounding only the overshoot would stop noticing.
+	// Unlike that bound, this one cannot flake, because both sides move
+	// together when the host is slow.
+	wantWindow := time.Duration(float64(res.Trip.slowestStep) * defaultBounds.stepFactor)
+	if wantWindow < floor {
+		wantWindow = floor
+	}
+	if res.Trip.window != wantWindow {
+		t.Fatalf("the trip reports a %s no-progress window, but this run's own slowest recent step was %s, which derives %s; the window an operator is shown is not the one the run's measurements imply",
+			res.Trip.window, res.Trip.slowestStep, wantWindow)
+	}
+
+	// What promptness means is the overshoot past that window, and the
+	// overshoot cannot exceed one gap between two consecutive polls: the
+	// tick before the tripping one did not trip, so it was still inside
+	// the window, and during a hang no event arrives to move the window
+	// underneath them. So the quantity to bound is one poll interval plus
+	// whatever this host stole from a goroutine asking to wake up on that
+	// same interval, which the sampler measured rather than guessed.
+	//
+	// I allow three intervals rather than the one that derivation gives
+	// because the sampler is a different goroutine from the watchdog's:
+	// it estimates what this host did to the poll loop, it does not
+	// measure it. Those two extra intervals are for that estimate being
+	// off by a tick, and for nothing else. They are not a load allowance,
+	// because load is already accounted for twice over, in the window and
+	// in worstLag. Mutation says this is stricter rather than looser than
+	// what it replaces: a watchdog that notices five windows late passes
+	// the old bound and fails this one.
 	promptness := res.Trip.window + 3*poll + worstLag
 	if res.Trip.sinceLast > promptness {
 		t.Fatalf("the watchdog took %s to notice its own %s window had closed, which is %s of overshoot; at most %s is prompt here (3 poll intervals plus the %s this host stole from a goroutine sleeping on the same interval)",

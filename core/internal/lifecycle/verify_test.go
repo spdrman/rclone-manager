@@ -732,7 +732,7 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 // before the timeout fires. At 200ms it did not, on a machine running
 // several full gate runs at once: the fork lost the race, the pid file
 // never appeared, and the test failed on a missing file rather than on
-// anything about the behaviour it exists to prove (issue #373).
+// anything about the behaviour it exists to prove (issue #377).
 //
 // Nothing about the contract needs the budget to be small. It has to be
 // short enough that the test is quick and long enough that a fork cannot
@@ -754,6 +754,13 @@ const hookNeverAnswers = 30 * time.Second
 // turn a correct kill into a failure.
 const hookReturnBudget = 10 * time.Second
 
+// pidFileWait is how long timedOutHookPID waits for the killed script's
+// pid to become readable. It starts after the call under test has already
+// returned, so the script has had its whole hookTimeoutBudget to run
+// before this wait even begins; this is only for the write becoming
+// visible, not for the script starting.
+const pidFileWait = 2 * time.Second
+
 // timedOutHookPID reads the pid the killed script wrote. It polls rather
 // than reading once: the write happens on the child's own schedule, and a
 // filesystem that has not made it visible yet is not the same thing as a
@@ -761,7 +768,7 @@ const hookReturnBudget = 10 * time.Second
 // because that is what took the longest to work out the first time.
 func timedOutHookPID(t *testing.T, pidFile string) int {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(pidFileWait)
 	for {
 		pidBytes, err := os.ReadFile(pidFile)
 		if err == nil {
@@ -773,8 +780,8 @@ func timedOutHookPID(t *testing.T, pidFile string) int {
 				t.Fatalf("pid file holds %q, which is not a pid: %v", string(pidBytes), convErr)
 			}
 		} else if time.Now().After(deadline) {
-			t.Fatalf("no pid file after %s: the script never got far enough to write one, which means it was killed before it started rather than while it was hanging. On a loaded machine that is a fork losing a race with the timeout, not a defect in the code under test (issue #373): %v",
-				hookTimeoutBudget, err)
+			t.Fatalf("no pid file %s after the call returned, and the script had %s to write one before that: it never got far enough, which means it was killed before it started rather than while it was hanging. On a loaded machine that is a fork losing a race with the timeout, not a defect in the code under test (issue #377): %v",
+				pidFileWait, hookTimeoutBudget, err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
