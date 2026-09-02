@@ -683,19 +683,19 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep %d\necho done > %s\n", shQuote(pidFile), int(hookNeverAnswers.Seconds()), shQuote(markerFile)))
 
 	start := time.Now()
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
 		Artifact: rec.Artifact, AttemptKey: "a1",
-		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}},
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(hookTimeoutBudget)}},
 	})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("Verify took %s to return; the validator should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > hookReturnBudget {
+		t.Fatalf("Verify took %s to return; the validator should have been killed well before its %s sleep finished", elapsed, hookNeverAnswers)
 	}
 	if out.Record.State != string(Quarantined) {
 		t.Fatalf("state = %q, want %q: a validator that never answers must fail closed", out.Record.State, Quarantined)
@@ -704,14 +704,7 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 		t.Fatalf("ValidationDetail = %q, want it to mention the timeout", out.Record.ValidationDetail)
 	}
 
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("reading pid file (the validator should have written it immediately on starting): %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatalf("parsing pid: %v", err)
-	}
+	pid := timedOutHookPID(t, pidFile)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -727,6 +720,104 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("marker file exists: the validator ran to completion despite its timeout, so it was not actually killed")
+	}
+}
+
+// hookTimeoutBudget is the timeout the two "a hook that never answers is
+// killed" tests give their script, and it is deliberately not tight.
+//
+// Both tests prove the same contract: the process really is killed, not
+// abandoned. Proving "really killed" needs the script's own pid, which
+// means the script has to be forked, scheduled and get one line written
+// before the timeout fires. At 200ms it did not, on a machine running
+// several full gate runs at once: the fork lost the race, the pid file
+// never appeared, and the test failed on a missing file rather than on
+// anything about the behaviour it exists to prove (issue #377).
+//
+// Nothing about the contract needs the budget to be small. It has to be
+// short enough that the test is quick and long enough that a fork cannot
+// lose, and every assertion downstream is what actually carries the
+// meaning: the call has to return far sooner than the script's own sleep
+// would allow, the script's process has to be gone afterwards, and its
+// completion marker must not exist. Those hold at any budget with a
+// margin under hookNeverAnswers.
+const hookTimeoutBudget = 2 * time.Second
+
+// hookNeverAnswers is how long the test script sleeps for. It is an order
+// of magnitude above hookTimeoutBudget so that "returned before the sleep
+// finished" cannot be true by accident on a slow machine.
+const hookNeverAnswers = 30 * time.Second
+
+// hookReapBackstop mirrors the c.WaitDelay both implementations set
+// (restorecheck.go and verify.go, "c.WaitDelay = 5 * time.Second"). It is
+// Go's own backstop, not this project's: os/exec kills the child that long
+// after the context is done regardless of what c.Cancel did. Nothing reads
+// it from the production code, so if that value ever changes this constant
+// has to change with it, which is what TestHookTimeoutBudgets_CanStillFail
+// below is for.
+const hookReapBackstop = 5 * time.Second
+
+// hookReturnBudget bounds how long the call under test may take, and it is
+// the only assertion in either of these two tests that can separate a hook
+// that was killed from one that was merely abandoned. That is not obvious,
+// and it is worth writing down because a reasonable-looking number here
+// makes both tests vacuous.
+//
+// The pid read below looks like the proof that the process was killed. It
+// is not. Wait does not return until hookReapBackstop has done its own
+// killing, so by the time any check runs the process really is gone and
+// the marker really was never written, whether or not c.Cancel killed
+// anything. Those assertions pass either way.
+//
+// The elapsed time is what tells them apart, and the two regimes are far
+// apart and both insensitive to load, because each is set by a deadline
+// rather than by the scheduler. A killed hook returns at about
+// hookTimeoutBudget. An abandoned one returns at hookTimeoutBudget plus
+// hookReapBackstop. So the bound goes strictly between them, and it is
+// derived from the budget rather than written out, so the two cannot drift
+// apart: three seconds above a correct run, two below the backstop.
+//
+// I checked both directions rather than reasoning about them. With the
+// SIGKILL taken out of c.Cancel in both implementations and nothing else
+// changed, both tests return in 7.00s: at the old 10s budget they passed,
+// and at this one they fail on this line. With the real implementation
+// they return in 2.00s.
+//
+// Found by the author of #382, who reached these two tests from the other
+// direction (issue #371, a cold exec on macOS costing more than the old
+// 200ms budget) and checked it against this branch.
+const hookReturnBudget = hookTimeoutBudget + 3*time.Second
+
+// pidFileWait is how long timedOutHookPID waits for the killed script's
+// pid to become readable. It starts after the call under test has already
+// returned, so the script has had its whole hookTimeoutBudget to run
+// before this wait even begins; this is only for the write becoming
+// visible, not for the script starting.
+const pidFileWait = 2 * time.Second
+
+// timedOutHookPID reads the pid the killed script wrote. It polls rather
+// than reading once: the write happens on the child's own schedule, and a
+// filesystem that has not made it visible yet is not the same thing as a
+// script that never started. The failure message names the difference,
+// because that is what took the longest to work out the first time.
+func timedOutHookPID(t *testing.T, pidFile string) int {
+	t.Helper()
+	deadline := time.Now().Add(pidFileWait)
+	for {
+		pidBytes, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+			if convErr == nil {
+				return pid
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("pid file holds %q, which is not a pid: %v", string(pidBytes), convErr)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("no pid file %s after the call returned, and the script had %s to write one before that: it never got far enough, which means it was killed before it started rather than while it was hanging. On a loaded machine that is a fork losing a race with the timeout, not a defect in the code under test (issue #377): %v",
+				pidFileWait, hookTimeoutBudget, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -1001,5 +1092,27 @@ func TestVerify_NoValidatorIDAndNoCommand_StillVerifies(t *testing.T) {
 	}
 	if out.Record.State != string(Verified) {
 		t.Fatalf("state = %q, want %q", out.Record.State, Verified)
+	}
+}
+
+// TestHookTimeoutBudgets_CanStillFail is a guard on the constants above
+// rather than on any behaviour, because the way these two tests stop
+// working is not a broken assertion, it is a budget quietly widened past
+// the point where it can fail. At hookTimeoutBudget + hookReapBackstop or
+// beyond, a hook that c.Cancel never killed returns inside the budget and
+// every other assertion in both tests passes, so both go green against
+// exactly the defect they are named for. This is the check that says so
+// out loud instead of leaving it to whoever next finds one of them flaky.
+func TestHookTimeoutBudgets_CanStillFail(t *testing.T) {
+	abandoned := hookTimeoutBudget + hookReapBackstop
+	if hookReturnBudget >= abandoned {
+		t.Fatalf("hookReturnBudget is %s, but a hook that was abandoned rather than killed returns at %s (hookTimeoutBudget %s + hookReapBackstop %s). At this budget both timeout tests pass against an implementation whose c.Cancel kills nothing, which is the one thing they exist to prove. Lower it back under %s.",
+			hookReturnBudget, abandoned, hookTimeoutBudget, hookReapBackstop, abandoned)
+	}
+	if hookReturnBudget <= hookTimeoutBudget {
+		t.Fatalf("hookReturnBudget is %s, which is not above hookTimeoutBudget %s: a correct kill returns at about the budget, so this would fail on every run", hookReturnBudget, hookTimeoutBudget)
+	}
+	if hookNeverAnswers <= abandoned {
+		t.Fatalf("hookNeverAnswers is %s, which is not clear of %s: the script has to still be sleeping when both the kill and the backstop would have fired, or \"returned before the sleep finished\" is true by accident", hookNeverAnswers, abandoned)
 	}
 }

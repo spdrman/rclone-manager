@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -104,16 +103,16 @@ func TestRunRestoreCheck_Timeout_KillsProcess(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep %d\necho done > %s\n", shQuote(pidFile), int(hookNeverAnswers.Seconds()), shQuote(markerFile)))
 
 	start := time.Now()
-	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}, path)
+	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(hookTimeoutBudget)}, path)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunRestoreCheck: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("RunRestoreCheck took %s to return; the hook should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > hookReturnBudget {
+		t.Fatalf("RunRestoreCheck took %s to return; the hook should have been killed well before its %s sleep finished", elapsed, hookNeverAnswers)
 	}
 	if result.Passed {
 		t.Fatal("Passed = true, want false: a hook that never answers must fail closed")
@@ -122,14 +121,7 @@ func TestRunRestoreCheck_Timeout_KillsProcess(t *testing.T) {
 		t.Fatalf("Detail = %q, want it to mention the timeout", result.Detail)
 	}
 
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("reading pid file (the hook should have written it immediately on starting): %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatalf("parsing pid: %v", err)
-	}
+	pid := timedOutHookPID(t, pidFile)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
