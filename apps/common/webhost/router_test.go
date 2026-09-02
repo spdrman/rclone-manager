@@ -161,8 +161,8 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//     Scan is that same pass with nothing written.
 	//
 	// None of them can reach a deletion, which is what this list is for.
-	"POST /api/v1/backup-sets/{source}/{set}/enabled":          true,
-	"POST /api/v1/backup-sets/{source}/{set}/read-only":        true,
+	"POST /api/v1/backup-sets/{source}/{set}/enabled":   true,
+	"POST /api/v1/backup-sets/{source}/{set}/read-only": true,
 
 	// Issue #350: editing a backup set is §50's "create/edit backup set"
 	// bucket, the same one POST /api/v1/backup-sets is already exempt
@@ -186,11 +186,11 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// TestBackupSetEditHold_IsNotBehindTheDestructiveGate pins it.
 	"POST /api/v1/backup-sets/{source}/{set}/edit-hold":         true,
 	"POST /api/v1/backup-sets/{source}/{set}/edit-hold/release": true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,
-	"POST /api/v1/catalog/scan":                                true,
-	"POST /api/v1/catalog/rebuild":                             true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate":  true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":       true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":   true,
+	"POST /api/v1/catalog/scan":                                 true,
+	"POST /api/v1/catalog/rebuild":                              true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

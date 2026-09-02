@@ -84,7 +84,8 @@
           "ARTIFACT_NOT_FOUND",
           "ARTIFACT_NOT_QUARANTINED",
           "ARTIFACT_IRRECOVERABLE",
-          "REINSTATEMENT_REFUSED"
+          "REINSTATEMENT_REFUSED",
+          "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -122,7 +123,8 @@
           "ARTIFACT_NOT_FOUND": "wire",
           "ARTIFACT_NOT_QUARANTINED": "wire",
           "ARTIFACT_IRRECOVERABLE": "wire",
-          "REINSTATEMENT_REFUSED": "wire"
+          "REINSTATEMENT_REFUSED": "wire",
+          "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -149,7 +151,8 @@
             "ALREADY_CONFIGURED",
             "ARTIFACT_NOT_QUARANTINED",
             "ARTIFACT_IRRECOVERABLE",
-            "REINSTATEMENT_REFUSED"
+            "REINSTATEMENT_REFUSED",
+            "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
           ],
           "not-found": [
             "BACKUP_SET_NOT_FOUND",
@@ -2133,6 +2136,10 @@
             "type": "string",
             "description": "An id from the registered validator catalog GET /validators serves, or \"\" for none. Never a path.",
             "x-go-pointer": true
+          },
+          "acknowledge_repoint": {
+            "type": "boolean",
+            "description": "Confirms that this edit is meant to point the backup set at different data. Required only when the body actually changes host, remote_path or local_path on a set that already has artifacts on record; without it such an edit is refused with BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED and nothing is written. It is not a property of the backup set and nothing persists it: it answers one refusal, for one request."
           }
         }
       },
@@ -5142,6 +5149,19 @@
             },
             "x-error-codes": [
               "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "409": {
+            "description": "Refused: BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED. The edit would move this set to different data while artifacts are already on record for it; re-send with acknowledge_repoint once the message has been read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
             ]
           },
           "500": {

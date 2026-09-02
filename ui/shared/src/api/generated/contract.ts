@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "28f1ff6250f38ee2569227b97e3e0db6061448d929b5e6d951457c93cf0fbc1c";
+export const CONTRACT_SHA256 = "ba0837e1c37937b981bc24baaf0bf4268b587766bba8a38075df1ee5c75aadb4";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -46,6 +46,7 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
+  "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -104,6 +105,7 @@ export const API_ERROR_CODES = [
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
+  "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -113,7 +115,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -355,6 +357,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
+      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
       500: ["INTERNAL"],
     }
   },
@@ -1529,6 +1532,7 @@ export interface WireTestConnectionResponse {
  *  and probe steps, and re-trusting a host is a trust decision rather
  *  than an edit). */
 export interface WireUpdateBackupSetRequest {
+  acknowledge_repoint?: boolean;
   completion_strategy?: "rename" | "marker" | "stable";
   host?: string;
   include?: string[];

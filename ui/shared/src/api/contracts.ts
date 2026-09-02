@@ -137,6 +137,13 @@ export interface BackupSetPatch {
    *  is "stable-size". */
   stableForSeconds?: number;
   staleAfterSeconds?: number;
+  /** Confirms an edit that moves this set to different data. Needed only
+   *  when `host`, `remoteFolder` or `destination` actually change on a
+   *  set that already has artifacts on record; without it the service
+   *  refuses with BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED and writes nothing.
+   *  It is not a property of the backup set: it answers one refusal, for
+   *  one request. */
+  acknowledgeRepoint?: boolean;
 }
 
 /** What a run cycle is doing for one backup set right now: the content of

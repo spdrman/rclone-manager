@@ -97,7 +97,7 @@ type backupSetResponse struct {
 	RemotePath         string   `json:"remote_path"`
 	LocalPath          string   `json:"local_path"`
 	Include            []string `json:"include"`
-	CompletionStrategy string `json:"completion_strategy"`
+	CompletionStrategy string   `json:"completion_strategy"`
 	// StableForSeconds is the window the "stable" completion strategy
 	// waits for, and 0 for every other strategy. Served (issue #350)
 	// because an edit surface offering the strategy has to be able to
@@ -327,13 +327,31 @@ func writeBackupSetError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, service.ErrSSHKeyNotFound):
 		writeError(w, http.StatusBadRequest, "SSH_KEY_NOT_FOUND", "the referenced ssh_key_id does not exist; import a key first")
+	case errors.Is(err, service.ErrRepointNotAcknowledged):
+		// 409 rather than 400, because this is not a malformed request:
+		// it is a well-formed one whose consequences the caller has to
+		// see first, and it conflicts with the state of the resource
+		// (artifacts already on record for this set) rather than with
+		// its own shape. A client that could only see "400" could offer
+		// an operator nothing better than the same failure again.
+		//
+		// Safe to echo, on the same terms as ErrInvalidRequest above:
+		// core/service builds this message from its own text plus the
+		// caller's own path values and a count, never from a state or
+		// rclone internal.
+		writeError(w, http.StatusConflict, "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "this deployment has no configuration file to persist to")
 	default:
 		// Deliberately not err.Error(): an unclassified error could carry
 		// filesystem or rclone-internal text (see handlers_operations.go's
 		// identical default case for the same reasoning).
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to create backup set")
+		//
+		// "write" rather than "create": this function serves the update
+		// path too (issue #350), and telling an operator whose edit
+		// failed that a creation failed sends them looking for a set
+		// that was never being created.
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to write backup set")
 	}
 }
 
@@ -479,6 +497,13 @@ type updateBackupSetRequest struct {
 	StaleAfterSeconds  *int    `json:"stale_after_seconds"`
 
 	ValidatorID *string `json:"validator_id"`
+
+	// AcknowledgeRepoint is not a field of the backup set and is not a
+	// pointer for that reason: it answers one refusal for one request
+	// rather than carrying a stored value. Absent is false, which is the
+	// honest reading of a client that did not mention it. See
+	// core/service/backupsetrepoint.go for what it acknowledges.
+	AcknowledgeRepoint bool `json:"acknowledge_repoint"`
 }
 
 // updateBackupSet is PATCH /api/v1/backup-sets/{source}/{set} (issue
@@ -524,6 +549,7 @@ func (h *handlers) updateBackupSet(w http.ResponseWriter, r *http.Request) {
 		CompletionStrategy: body.CompletionStrategy,
 		StableFor:          secondsPointerToDuration(body.StableForSeconds),
 		StaleAfter:         secondsPointerToDuration(body.StaleAfterSeconds),
+		AcknowledgeRepoint: body.AcknowledgeRepoint,
 	}
 	if body.ValidatorID != nil {
 		id := service.ValidatorID(*body.ValidatorID)

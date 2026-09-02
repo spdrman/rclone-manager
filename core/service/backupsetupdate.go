@@ -96,6 +96,20 @@ type UpdateBackupSetRequest struct {
 	// path, and refused unless the catalog lists it, exactly as on the
 	// create path (validator.go, docs/EPIC-B-multi-nas.md §26 Step 5).
 	ValidatorID *ValidatorID
+
+	// AcknowledgeRepoint confirms that the caller means to move this set
+	// to different data. It is not a field of the backup set and nothing
+	// persists it: it answers one refusal, for one request.
+	//
+	// It is required only when the request actually changes remote.host,
+	// remote_path or local_path on a set that already has artifacts on
+	// record, and backupsetrepoint.go has the whole argument for why
+	// those three and why an acknowledgement rather than a refusal or a
+	// warning. Deliberately NOT a pointer like everything above it: this
+	// is not a sparse edit of a stored value, it is a yes/no about this
+	// one call, and false is the honest default for a caller that did not
+	// mention it.
+	AcknowledgeRepoint bool
 }
 
 // isEmpty reports whether this request names nothing at all. An update
@@ -104,6 +118,9 @@ type UpdateBackupSetRequest struct {
 // exactly nothing, and it would let a client send {} and read the 200
 // back as though something had happened.
 func (r UpdateBackupSetRequest) isEmpty() bool {
+	// AcknowledgeRepoint is deliberately not counted: it names no field
+	// to change, so a request carrying only it changes nothing and is
+	// refused exactly like an empty one.
 	return r.Host == nil && r.Port == nil && r.User == nil &&
 		r.RemotePath == nil && r.LocalPath == nil && r.Include == nil &&
 		r.CompletionStrategy == nil && r.StableFor == nil &&
@@ -150,6 +167,13 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 	target := findBackupSetPointer(cfg, sourceName, setName)
 	if target == nil {
 		return BackupSet{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, id)
+	}
+
+	// Refused before anything is applied, for the same reason validation
+	// is: a refusal must leave the file and this process's configuration
+	// exactly as they were. See backupsetrepoint.go.
+	if err := b.requireRepointAcknowledgement(ctx, sourceName, setName, *target, req); err != nil {
+		return BackupSet{}, err
 	}
 
 	// Applied to a copy, and validated, before the real one is touched:

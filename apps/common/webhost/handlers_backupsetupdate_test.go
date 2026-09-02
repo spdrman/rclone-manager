@@ -2,6 +2,7 @@ package webhost
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -227,5 +228,68 @@ func TestUpdateBackupSet_IsNotBehindTheDestructiveGate(t *testing.T) {
 	rec := patchBackupSet(t, tr.router, "api/postgres-primary", `{"remote_path":"/backups/moved"}`, true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d with the destructive gate closed, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+// TestUpdateBackupSet_RepointRefusalIs409WithItsOwnCode: a client has to
+// be able to tell "this edit is malformed" from "this edit is fine but it
+// moves the set to different data and needs saying so". Both would be a
+// 400 INVALID_REQUEST under one code, and the Web UI could then offer an
+// operator nothing better than the same failure again.
+func TestUpdateBackupSet_RepointRefusalIs409WithItsOwnCode(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	seedSet(t, tr, "api/postgres-primary")
+	tr.backend.errOnUpdate = fmt.Errorf("%w: this would move local_path from %q to %q while 40 artifact(s) are on record",
+		service.ErrRepointNotAcknowledged, "/old", "/new")
+
+	rec := patchBackupSet(t, tr.router, "api/postgres-primary", `{"local_path":"/new"}`, true)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Error.Code != "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED" {
+		t.Errorf("error code = %q, want BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED", body.Error.Code)
+	}
+	// The message is what the operator reads before deciding, so it has
+	// to survive the hop rather than be replaced by a generic sentence.
+	for _, want := range []string{"local_path", "/old", "/new", "40"} {
+		if !strings.Contains(body.Error.Message, want) {
+			t.Errorf("the message does not carry %q: %s", want, body.Error.Message)
+		}
+	}
+}
+
+// TestUpdateBackupSet_AcknowledgementCrossesTheSeam: the acknowledgement
+// is only worth anything if it actually reaches core, and a handler that
+// decoded it and dropped it would produce an identical 200 on the retry
+// while core went on refusing.
+func TestUpdateBackupSet_AcknowledgementCrossesTheSeam(t *testing.T) {
+	tr := newBackupSetsTestRouter(t)
+	seedSet(t, tr, "api/postgres-primary")
+
+	rec := patchBackupSet(t, tr.router, "api/postgres-primary", `{"local_path":"/new","acknowledge_repoint":true}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !tr.backend.lastUpdate().AcknowledgeRepoint {
+		t.Error("AcknowledgeRepoint did not reach the service request")
+	}
+
+	// And the control: a body that does not mention it must not arrive
+	// as an acknowledgement, or every edit would be pre-acknowledged.
+	if rec := patchBackupSet(t, tr.router, "api/postgres-primary", `{"local_path":"/other"}`, true); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if tr.backend.lastUpdate().AcknowledgeRepoint {
+		t.Error("a body that never mentioned acknowledge_repoint arrived as an acknowledgement")
 	}
 }

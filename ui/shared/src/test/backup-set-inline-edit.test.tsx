@@ -531,3 +531,138 @@ describe("issue #350: entering edit mode stops the cycle, and says so first", ()
     await waitFor(() => expect(release).toHaveBeenCalledWith(target.source, target.set));
   });
 });
+
+/**
+ * The one refusal on the update path (core/service/backupsetrepoint.go).
+ * Changing the host, the remote folder or the destination on a set that
+ * already holds artifacts is not the same edit as correcting a typo
+ * minutes after the wizard: the artifacts already on record stay with
+ * the set and are not repointed with it. This block is about what the
+ * page does with that refusal, which is ask rather than either write it
+ * silently or make it impossible.
+ */
+describe("issue #350: repointing a set that already has history", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+    vi.restoreAllMocks();
+  });
+
+  it("asks before repointing a set at different data, and writes nothing until it is confirmed", async () => {
+    const api = createMockApi();
+    const update = vi
+      .spyOn(api, "updateBackupSet")
+      .mockRejectedValueOnce(
+        new BackupManagerError({
+          code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+          message:
+            'service: this edit would point the backup set at different data: this would move local_path from "/data/old" to "/data/new" while 32 artifact(s) are on record',
+          correlationId: "cid_repoint"
+        })
+      );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Local destination"), { target: { value: "/data/new" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save local destination" }));
+    });
+
+    // The service's own sentence, not one this page invented: it names
+    // the field, both paths and the count, which is what the operator
+    // needs to decide.
+    expect(screen.getByText(/32 artifact\(s\) are on record/)).toBeTruthy();
+    // Still in edit mode, still holding what was typed.
+    expect((screen.getByLabelText("Local destination") as HTMLInputElement).value).toBe("/data/new");
+    // And this is a decision, not a sentence under the box: it comes
+    // with the two answers.
+    expect(screen.getByRole("button", { name: "Save anyway" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Leave it as it was" })).toBeTruthy();
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][2].acknowledgeRepoint).toBeUndefined();
+  });
+
+  it("re-sends the same keys WITH the acknowledgement when the repoint is confirmed", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+        message: "this would move local_path",
+        correlationId: "cid_repoint"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Local destination"), { target: { value: "/data/new" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save local destination" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(2);
+    // The retry carries the SAME single key, plus the acknowledgement.
+    // Re-sending every field here would turn one confirmed decision into
+    // a whole-form write.
+    expect(update.mock.calls[1][2]).toEqual({ destination: "/data/new", acknowledgeRepoint: true });
+    // The refusal is gone once it is answered.
+    expect(screen.queryByRole("button", { name: "Save anyway" })).toBeNull();
+  });
+
+  it("declining a repoint writes nothing and leaves the form as it was", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+        message: "this would move local_path",
+        correlationId: "cid_repoint"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Local destination"), { target: { value: "/data/new" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save local destination" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Leave it as it was" }));
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Save anyway" })).toBeNull();
+    // Still in edit mode with the typed value: declining answers the
+    // question, it does not throw the operator's work away.
+    expect(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" })).toBeTruthy();
+    expect((screen.getByLabelText("Local destination") as HTMLInputElement).value).toBe("/data/new");
+  });
+
+  it("confirming a repoint that SAVE ALL asked for leaves edit mode, as SAVE ALL promised", async () => {
+    const api = createMockApi();
+    const update = vi.spyOn(api, "updateBackupSet").mockRejectedValueOnce(
+      new BackupManagerError({
+        code: "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+        message: "this would move local_path",
+        correlationId: "cid_repoint"
+      })
+    );
+    const target = await firstSet();
+    await openEditMode(api, target);
+
+    fireEvent.change(screen.getByLabelText("Local destination"), { target: { value: "/data/new" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" }));
+    });
+    // Refused, so it did NOT exit: exiting on a refusal would leave the
+    // operator on the view page believing a change landed.
+    expect(screen.getByRole("button", { name: "SAVE ALL & EXIT EDIT" })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save anyway" }));
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    await screen.findByRole("button", { name: "Edit" });
+  });
+});

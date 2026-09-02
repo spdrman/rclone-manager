@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "28f1ff6250f38ee2569227b97e3e0db6061448d929b5e6d951457c93cf0fbc1c"
+const ContractSHA256 = "ba0837e1c37937b981bc24baaf0bf4268b587766bba8a38075df1ee5c75aadb4"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -36,42 +36,43 @@ type ErrorCode string
 // here, and ui/shared reads the same registry through the TypeScript half of
 // these bindings, so the two can never hold different lists.
 const (
-	ErrorCodeAuthenticationFailed          ErrorCode = "authentication-failed"
-	ErrorCodeSSHHostKeyChanged             ErrorCode = "ssh-host-key-changed"
-	ErrorCodePermissionDenied              ErrorCode = "permission-denied"
-	ErrorCodeRemotePathMissing             ErrorCode = "remote-path-missing"
-	ErrorCodeChecksumMismatch              ErrorCode = "checksum-mismatch"
-	ErrorCodeBackupStale                   ErrorCode = "backup-stale"
-	ErrorCodeStorageCritical               ErrorCode = "storage-critical"
-	ErrorCodeVersionMismatch               ErrorCode = "version-mismatch"
-	ErrorCodeOperationConflict             ErrorCode = "operation-conflict"
-	ErrorCodeUnknown                       ErrorCode = "unknown"
-	ErrorCodeUnauthenticated               ErrorCode = "UNAUTHENTICATED"
-	ErrorCodeRateLimited                   ErrorCode = "RATE_LIMITED"
-	ErrorCodeInvalidRequest                ErrorCode = "INVALID_REQUEST"
-	ErrorCodeEnrollmentClosed              ErrorCode = "ENROLLMENT_CLOSED"
-	ErrorCodeBootstrapTokenInvalid         ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
-	ErrorCodeInternalError                 ErrorCode = "INTERNAL_ERROR"
-	ErrorCodeCSRFTokenMissing              ErrorCode = "CSRF_TOKEN_MISSING"
-	ErrorCodeCSRFTokenMismatch             ErrorCode = "CSRF_TOKEN_MISMATCH"
-	ErrorCodeRetentionPlanStale            ErrorCode = "RETENTION_PLAN_STALE"
-	ErrorCodeRetentionPlanNotFound         ErrorCode = "RETENTION_PLAN_NOT_FOUND"
-	ErrorCodeRetentionApplyBusy            ErrorCode = "RETENTION_APPLY_BUSY"
-	ErrorCodeBackupSetNotFound             ErrorCode = "BACKUP_SET_NOT_FOUND"
-	ErrorCodeOperationNotFound             ErrorCode = "OPERATION_NOT_FOUND"
-	ErrorCodeOperationAlreadyRunning       ErrorCode = "OPERATION_ALREADY_RUNNING"
-	ErrorCodeIdempotencyKeyConflict        ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
-	ErrorCodeConfigRevisionStale           ErrorCode = "CONFIG_REVISION_STALE"
-	ErrorCodeSSHKeyNotFound                ErrorCode = "SSH_KEY_NOT_FOUND"
-	ErrorCodeHostKeyProbeFailed            ErrorCode = "HOST_KEY_PROBE_FAILED"
-	ErrorCodeDestructiveOperationsDisabled ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
-	ErrorCodeInternal                      ErrorCode = "INTERNAL"
-	ErrorCodeAlreadyConfigured             ErrorCode = "ALREADY_CONFIGURED"
-	ErrorCodeNotConfigured                 ErrorCode = "NOT_CONFIGURED"
-	ErrorCodeArtifactNotFound              ErrorCode = "ARTIFACT_NOT_FOUND"
-	ErrorCodeArtifactNotQuarantined        ErrorCode = "ARTIFACT_NOT_QUARANTINED"
-	ErrorCodeArtifactIrrecoverable         ErrorCode = "ARTIFACT_IRRECOVERABLE"
-	ErrorCodeReinstatementRefused          ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeAuthenticationFailed            ErrorCode = "authentication-failed"
+	ErrorCodeSSHHostKeyChanged               ErrorCode = "ssh-host-key-changed"
+	ErrorCodePermissionDenied                ErrorCode = "permission-denied"
+	ErrorCodeRemotePathMissing               ErrorCode = "remote-path-missing"
+	ErrorCodeChecksumMismatch                ErrorCode = "checksum-mismatch"
+	ErrorCodeBackupStale                     ErrorCode = "backup-stale"
+	ErrorCodeStorageCritical                 ErrorCode = "storage-critical"
+	ErrorCodeVersionMismatch                 ErrorCode = "version-mismatch"
+	ErrorCodeOperationConflict               ErrorCode = "operation-conflict"
+	ErrorCodeUnknown                         ErrorCode = "unknown"
+	ErrorCodeUnauthenticated                 ErrorCode = "UNAUTHENTICATED"
+	ErrorCodeRateLimited                     ErrorCode = "RATE_LIMITED"
+	ErrorCodeInvalidRequest                  ErrorCode = "INVALID_REQUEST"
+	ErrorCodeEnrollmentClosed                ErrorCode = "ENROLLMENT_CLOSED"
+	ErrorCodeBootstrapTokenInvalid           ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
+	ErrorCodeInternalError                   ErrorCode = "INTERNAL_ERROR"
+	ErrorCodeCSRFTokenMissing                ErrorCode = "CSRF_TOKEN_MISSING"
+	ErrorCodeCSRFTokenMismatch               ErrorCode = "CSRF_TOKEN_MISMATCH"
+	ErrorCodeRetentionPlanStale              ErrorCode = "RETENTION_PLAN_STALE"
+	ErrorCodeRetentionPlanNotFound           ErrorCode = "RETENTION_PLAN_NOT_FOUND"
+	ErrorCodeRetentionApplyBusy              ErrorCode = "RETENTION_APPLY_BUSY"
+	ErrorCodeBackupSetNotFound               ErrorCode = "BACKUP_SET_NOT_FOUND"
+	ErrorCodeOperationNotFound               ErrorCode = "OPERATION_NOT_FOUND"
+	ErrorCodeOperationAlreadyRunning         ErrorCode = "OPERATION_ALREADY_RUNNING"
+	ErrorCodeIdempotencyKeyConflict          ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
+	ErrorCodeConfigRevisionStale             ErrorCode = "CONFIG_REVISION_STALE"
+	ErrorCodeSSHKeyNotFound                  ErrorCode = "SSH_KEY_NOT_FOUND"
+	ErrorCodeHostKeyProbeFailed              ErrorCode = "HOST_KEY_PROBE_FAILED"
+	ErrorCodeDestructiveOperationsDisabled   ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
+	ErrorCodeInternal                        ErrorCode = "INTERNAL"
+	ErrorCodeAlreadyConfigured               ErrorCode = "ALREADY_CONFIGURED"
+	ErrorCodeNotConfigured                   ErrorCode = "NOT_CONFIGURED"
+	ErrorCodeArtifactNotFound                ErrorCode = "ARTIFACT_NOT_FOUND"
+	ErrorCodeArtifactNotQuarantined          ErrorCode = "ARTIFACT_NOT_QUARANTINED"
+	ErrorCodeArtifactIrrecoverable           ErrorCode = "ARTIFACT_IRRECOVERABLE"
+	ErrorCodeReinstatementRefused            ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeBackupSetRepointNotAcknowledged ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -102,6 +103,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
+	ErrorCodeBackupSetRepointNotAcknowledged,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -156,6 +158,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
+	ErrorCodeBackupSetRepointNotAcknowledged,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -163,7 +166,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -308,6 +311,7 @@ var Endpoints = []Endpoint{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged},
 			500: {ErrorCodeInternal},
 		},
 	},
@@ -1263,6 +1267,7 @@ type TestConnectionResponse struct {
 // and probe steps, and re-trusting a host is a trust decision rather
 // than an edit).
 type UpdateBackupSetRequest struct {
+	AcknowledgeRepoint bool      `json:"acknowledge_repoint"`
 	CompletionStrategy *string   `json:"completion_strategy"`
 	Host               *string   `json:"host"`
 	Include            *[]string `json:"include"`

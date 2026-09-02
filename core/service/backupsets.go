@@ -84,6 +84,16 @@ var ErrConfigNotFileBacked = errors.New("service: this backup service has no con
 // previously persisted.
 var ErrSSHKeyNotFound = errors.New("service: imported SSH key not found")
 
+// ErrRepointNotAcknowledged is UpdateBackupSet refusing to move a backup
+// set that already has artifacts on record to different data without
+// being told that is what was meant (issue #350). It is its own sentinel
+// rather than an ErrInvalidRequest because it is not a malformed request:
+// it is a well-formed one whose consequences a caller has to see first,
+// and a client has to be able to tell the two apart to offer the
+// operator anything better than "400". backupsetrepoint.go has the whole
+// argument.
+var ErrRepointNotAcknowledged = errors.New("service: this edit would point the backup set at different data")
+
 // BackupSet is the plain, provider-agnostic shape of one configured
 // backup set (mirrors config.BackupSet the same way Operation mirrors
 // state.Operation): a caller outside core/ never sees a config.BackupSet
@@ -111,6 +121,13 @@ type BackupSet struct {
 	// a UI that could not read or set the window could only ever produce
 	// a save that fails (issue #350).
 	StableFor time.Duration
+
+	// StaleAfter is FR-24's freshness budget for this set
+	// (config.BackupSet.StaleAfter). Reported for the same reason
+	// StableFor is: the update path can change it, and a surface that can
+	// write a field it cannot read back has no way to show an operator
+	// what they changed it from.
+	StaleAfter time.Duration
 
 	// ValidatorID is the registered application validator this backup set
 	// selected (validator.go), or "" for none. It is the id, never the
@@ -673,6 +690,7 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		Include:            bs.Include,
 		CompletionStrategy: bs.Completion.Strategy,
 		StableFor:          bs.Completion.StableFor.Duration(),
+		StaleAfter:         bs.StaleAfter.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
