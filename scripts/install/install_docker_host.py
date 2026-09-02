@@ -144,6 +144,7 @@ EXIT_SUDO_NOT_PERMITTED = 42
 EXIT_NETWORK_BROKEN = 43
 EXIT_NETWORK_STILL_BROKEN = 44
 EXIT_NETWORK_UNDIAGNOSED = 45
+EXIT_PERSISTENCE_UNVERIFIED = 46
 
 # The architectures the release manifest claims. Anything else has no
 # image, and finding that out from a `docker compose up` failure three
@@ -1550,11 +1551,26 @@ class BridgeDoctor:
             "# there, so a fire that changes nothing says nothing, and this keeps systemd's own",
             "# start and finish lines out of the journal too.",
             "LogLevelMax=warning",
+            "# Bounded rather than left to whatever this host's systemd default happens to be",
+            "# (typically 90s, not guaranteed): the one place in this feature a timeout would",
+            "# otherwise be implicit instead of chosen.",
+            "TimeoutStartSec=30s",
         ]
         for chain, spec in self.rule_specs():
             tail = " ".join(spec)
-            lines.append(f'ExecStart=/bin/sh -c "{self.iptables} -C {chain} {tail} '
-                         f'|| {self.iptables} -I {chain} 1 {tail}"')
+            # The leading `-` matters: systemd runs multiple ExecStart= lines in
+            # order and STOPS AT THE FIRST NON-ZERO EXIT by default, skipping the
+            # rest. These four rules are independent corrections, and this unit
+            # fires unattended every REASSERT_INTERVAL for the life of the
+            # machine - if the first rule's check-and-insert fails for any
+            # reason (xtables lock contention with the host's own firewall
+            # process, most plausibly, during exactly the window this unit
+            # exists to react to), the remaining rules must still be attempted
+            # rather than silently skipped. `-` keeps systemd logging and
+            # naming the one that failed; it only stops treating that failure
+            # as a reason to abandon the rest.
+            lines.append(f'ExecStart=-/bin/sh -c "{self.iptables} -w 5 -C {chain} {tail} '
+                         f'|| {self.iptables} -w 5 -I {chain} 1 {tail}"')
         lines += [
             "",
             "[Install]",
@@ -1816,25 +1832,76 @@ def diagnose_and_fix(args, network: str, sudo=None) -> dict:
             "method": "persist" if args.fix_network == "persist" else "rules"}
 
 
+def persistence_complaints(service_unit, service_state, service_active,
+                           timer_unit, timer_state, timer_active, timer_listed):
+    """Every way the systemd state read back after installing the
+    persistence unit and timer disagrees with "armed and will fire".
+
+    Split out so the verdict is a fact this test suite can pin against
+    canned `systemctl` output, the same way this file's other read-back
+    logic is. A oneshot service with RemainAfterExit=no is legitimately
+    `inactive` right after a successful run - that is not a failure
+    signal, which is why the service's own check is "not failed" rather
+    than "active", while the timer's is "active": a timer that armed
+    correctly stays active/waiting, and one that did not is exactly what
+    this exists to catch.
+    """
+    complaints = []
+    if service_state != "enabled":
+        complaints.append(f"{service_unit} is-enabled reports {service_state or 'unknown'!r}, not 'enabled'")
+    if service_active == "failed":
+        complaints.append(f"{service_unit} is-active reports 'failed'")
+    if timer_state != "enabled":
+        complaints.append(f"{timer_unit} is-enabled reports {timer_state or 'unknown'!r}, not 'enabled'")
+    if timer_active != "active":
+        complaints.append(f"{timer_unit} is-active reports {timer_active or 'unknown'!r}, not 'active'")
+    if not timer_listed:
+        complaints.append(f"systemctl list-timers reports no scheduled fire for {timer_unit}")
+    return complaints
+
+
 def install_persistence(doctor, args) -> None:
-    """Install the unit and the timer, then read back what systemd thinks.
+    """Install the unit and the timer, then read back what systemd thinks,
+    and refuse rather than merely report if either did not arm as expected.
 
     Reading it back matters: `systemctl enable` succeeding says the symlink
     was made, not that the unit is valid or that the timer is armed, and a
-    unit file with a typo in it enables perfectly and never runs.
+    unit file with a typo in it enables perfectly and never runs. Printing
+    that read-back and returning anyway restates the same gap one line
+    later: "Fixed, and proven" printed over a state nobody checked is not
+    proof, and #273's entire point is that a reboot or a runtime rewrite
+    has to be recovered from unattended, with nobody there to notice a
+    printed status line.
     """
     doctor.sudo.run_script(
         doctor.unit_install_script(),
         purpose=f"Install {doctor.SERVICE_UNIT} and {doctor.TIMER_UNIT} so the rules survive a reboot")
     systemctl = find_tool("systemctl") or "/bin/systemctl"
+    states = {}
     for unit in (doctor.SERVICE_UNIT, doctor.TIMER_UNIT):
         state = run([systemctl, "is-enabled", unit], check=False, timeout=30).stdout.strip()
         active = run([systemctl, "is-active", unit], check=False, timeout=30).stdout.strip()
+        states[unit] = (state, active)
         say(f"     {unit}: {state or 'unknown'}, {active or 'unknown'}")
     listed = run([systemctl, "list-timers", "--no-pager", "--no-legend", doctor.TIMER_UNIT],
                  check=False, timeout=30).stdout.strip()
     if listed:
         say(f"     next fire: {' '.join(listed.split())}")
+
+    service_state, service_active = states[doctor.SERVICE_UNIT]
+    timer_state, timer_active = states[doctor.TIMER_UNIT]
+    complaints = persistence_complaints(
+        doctor.SERVICE_UNIT, service_state, service_active,
+        doctor.TIMER_UNIT, timer_state, timer_active, listed)
+    if complaints:
+        raise Refusal(
+            EXIT_PERSISTENCE_UNVERIFIED,
+            "the persistence unit and timer were written and systemctl enable/start reported "
+            "success, but reading the state back finds:\n  " + "\n  ".join(complaints),
+            f"systemctl enable succeeding says the symlink was made, not that the unit is valid. "
+            f"Check `journalctl -u {doctor.SERVICE_UNIT}` and "
+            f"`systemctl status {doctor.TIMER_UNIT}` on the host directly.",
+        )
 
 
 def cmd_network_doctor(args) -> int:

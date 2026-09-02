@@ -930,6 +930,35 @@ class TestPersistenceUnit(unittest.TestCase):
             self.assertIn(" -C ", line, f"the unit inserts without checking: {line}")
             self.assertIn(" || ", line, f"the insert is not conditional on the check: {line}")
 
+    def test_a_single_rules_failure_never_stops_the_others_from_being_tried(self):
+        """systemd runs multiple ExecStart= lines in order and STOPS AT THE
+        FIRST NON-ZERO EXIT by default, skipping the rest, unless each is
+        prefixed with `-`. This unit fires unattended every
+        REASSERT_INTERVAL for the life of the machine, re-asserting four
+        logically independent rules: one failing (xtables lock contention
+        with the host's own firewall process, most plausibly) must not
+        leave the other three unasserted, silently, for however many fires
+        it takes to clear."""
+        execs = [ln for ln in self.doctor().unit_service_text().splitlines()
+                 if ln.startswith("ExecStart=")]
+        self.assertEqual(len(execs), 4)
+        for line in execs:
+            self.assertTrue(line.startswith("ExecStart=-"),
+                            f"a bare ExecStart= here means one failing rule silently skips the "
+                            f"rest of this fire: {line}")
+
+    def test_every_iptables_invocation_in_the_unit_waits_for_the_xtables_lock(self):
+        for line in self.doctor().unit_service_text().splitlines():
+            if line.startswith("ExecStart=") and "iptables" in line:
+                self.assertIn(" -w ", line, f"races the xtables lock instead of waiting for it: {line}")
+
+    def test_the_service_has_an_explicit_start_timeout(self):
+        """The one place in this feature a timeout would otherwise be left
+        to whatever this host's systemd default happens to be (typically
+        90s, not guaranteed), rather than deliberately chosen the way
+        every other subprocess call in this codebase already is."""
+        self.assertIn("TimeoutStartSec=", self.doctor().unit_service_text())
+
     def test_the_unit_is_ordered_after_everything_that_builds_the_ruleset(self):
         after = [ln for ln in self.doctor().unit_service_text().splitlines() if ln.startswith("After=")]
         self.assertEqual(len(after), 1)
@@ -981,6 +1010,96 @@ class TestPersistenceUnit(unittest.TestCase):
                 self.assertIn("|| true", line, f"this aborts on an already-absent unit: {line}")
 
 
+class TestPersistenceVerification(unittest.TestCase):
+    """`systemctl enable` succeeding says the symlink was made, not that
+    the unit is valid or the timer is armed - a unit file with a typo in
+    it enables perfectly and never runs. persistence_complaints() is what
+    install_persistence() reads the systemd state back through before
+    printing "Fixed, and proven"; these pin its verdict directly, without
+    needing a real systemd to produce the state it is reading."""
+
+    GOOD = dict(service_unit="rclone-manager-bridge.service", service_state="enabled",
+               service_active="inactive", timer_unit="rclone-manager-bridge.timer",
+               timer_state="enabled", timer_active="active",
+               timer_listed="Thu 2026-09-03 rclone-manager-bridge.timer")
+
+    def test_a_correctly_armed_timer_has_no_complaints(self):
+        """The service itself is legitimately 'inactive' right after a
+        successful run: Type=oneshot with RemainAfterExit=no returns to
+        inactive on success, which is not a failure signal."""
+        self.assertEqual(installer.persistence_complaints(**self.GOOD), [])
+
+    def test_a_service_not_enabled_is_a_complaint(self):
+        bad = dict(self.GOOD, service_state="disabled")
+        got = installer.persistence_complaints(**bad)
+        self.assertEqual(len(got), 1)
+        self.assertIn("not 'enabled'", got[0])
+
+    def test_a_failed_service_is_a_complaint(self):
+        bad = dict(self.GOOD, service_active="failed")
+        got = installer.persistence_complaints(**bad)
+        self.assertEqual(len(got), 1)
+        self.assertIn("'failed'", got[0])
+
+    def test_a_timer_not_enabled_is_a_complaint(self):
+        bad = dict(self.GOOD, timer_state="disabled")
+        got = installer.persistence_complaints(**bad)
+        self.assertEqual(len(got), 1)
+        self.assertIn("not 'enabled'", got[0])
+
+    def test_a_timer_that_is_not_active_is_a_complaint(self):
+        """Unlike the service, the timer being anything other than
+        'active' after enable --now IS a failure signal: a correctly
+        armed timer stays active/waiting."""
+        bad = dict(self.GOOD, timer_active="inactive")
+        got = installer.persistence_complaints(**bad)
+        self.assertEqual(len(got), 1)
+        self.assertIn("not 'active'", got[0])
+
+    def test_no_scheduled_fire_is_a_complaint_even_if_everything_else_looks_fine(self):
+        bad = dict(self.GOOD, timer_listed="")
+        got = installer.persistence_complaints(**bad)
+        self.assertEqual(len(got), 1)
+        self.assertIn("no scheduled fire", got[0])
+
+    def test_every_problem_is_named_at_once_rather_than_stopping_at_the_first(self):
+        bad = dict(self.GOOD, service_state="disabled", timer_active="inactive", timer_listed="")
+        got = installer.persistence_complaints(**bad)
+        self.assertEqual(len(got), 3, f"expected 3 distinct complaints, got {got}")
+
+    def test_install_persistence_refuses_rather_than_printing_over_a_bad_state(self):
+        """The integration point: install_persistence() must turn a bad
+        read-back into a Refusal with the persistence-specific exit code,
+        not just print it and return successfully."""
+        d = installer.BridgeDoctor(Fixture(self).args())
+        d.sudo = installer.Sudo(sudo_path=None)
+        d.sudo.run_script = lambda *a, **kw: None  # the unit-install call itself, stubbed out
+
+        original_run = installer.run
+
+        def fake_run(argv, **kwargs):
+            class Proc:
+                stdout = ""
+            if "is-enabled" in argv:
+                Proc.stdout = "enabled"
+            elif "is-active" in argv:
+                # Every unit reports inactive, including the timer, which
+                # is exactly the "armed on paper, not really" state this
+                # exists to catch.
+                Proc.stdout = "inactive"
+            elif "list-timers" in argv:
+                Proc.stdout = ""
+            return Proc()
+
+        installer.run = fake_run
+        self.addCleanup(lambda: setattr(installer, "run", original_run))
+
+        exc = refusal_from(installer.install_persistence, d, Fixture(self).args())
+        self.assertIsNotNone(exc, "a timer that never reports active must refuse, not print and return")
+        self.assertEqual(exc.code, installer.EXIT_PERSISTENCE_UNVERIFIED)
+        self.assertIn("is-active", exc.message)
+
+
 class TestFixNetworkVocabulary(unittest.TestCase):
     def test_the_default_is_the_conservative_one(self):
         args = Fixture(self).args()
@@ -1026,14 +1145,59 @@ class TestFixNetworkVocabulary(unittest.TestCase):
                 installer.BridgeDoctor.ensure_probe_image = lambda self: None
                 installed = []
                 installer.install_persistence = lambda d, a: installed.append(True)
-                self.addCleanup(lambda: setattr(installer.BridgeDoctor, "probe", real_probe))
-                self.addCleanup(lambda: setattr(installer.BridgeDoctor, "ensure_probe_image", real_image))
-                self.addCleanup(lambda: setattr(installer, "install_persistence", real_install))
+                # Bound as default arguments, not closed over bare: this is inside a
+                # `for mode in (...)` loop, so real_probe/real_image/real_install are
+                # reassigned every iteration and a bare closure reads whatever they
+                # equal when the cleanup finally RUNS (after the loop, at teardown),
+                # not what they equalled when each cleanup was REGISTERED. Every
+                # cleanup used to restore to iteration 2's already-patched value
+                # rather than the true original, leaving BridgeDoctor.probe,
+                # ensure_probe_image and install_persistence permanently monkeypatched
+                # for every test that ran later in the same process.
+                self.addCleanup(lambda p=real_probe: setattr(installer.BridgeDoctor, "probe", p))
+                self.addCleanup(lambda i=real_image: setattr(installer.BridgeDoctor, "ensure_probe_image", i))
+                self.addCleanup(lambda f=real_install: setattr(installer, "install_persistence", f))
 
                 installer.diagnose_and_fix(args, "bridge", sudo=RecordingSudo())
                 self.assertEqual(bool(installed), want_install)
                 if not want_install:
                     self.assertEqual(calls, [], "auto must not escalate on a healthy host")
+
+    def test_the_test_above_restores_everything_it_patched(self):
+        """Regression control for the test above's own three
+        self.addCleanup(...) calls, which used to close over
+        real_probe/real_image/real_install BARELY inside its `for mode in
+        (...)` loop. A bare closure reads whatever the loop variable
+        equals when the cleanup finally RUNS (after the loop, at
+        teardown), not what it equalled when the cleanup was REGISTERED,
+        so every cleanup restored to the second iteration's
+        already-patched value instead of the true original -
+        BridgeDoctor.probe, ensure_probe_image and install_persistence
+        stayed permanently monkeypatched for every test that happened to
+        run later in the same process. That leak is invisible to an
+        assertion inside the leaking test itself; it only shows up in
+        whoever runs next, which is what this proves by running it in a
+        sub-suite and inspecting what it leaves behind."""
+        real_probe = installer.BridgeDoctor.probe
+        real_image = installer.BridgeDoctor.ensure_probe_image
+        real_install = installer.install_persistence
+        try:
+            case = TestFixNetworkVocabulary(
+                "test_a_healthy_host_installs_the_unit_only_when_persistence_is_asked_for")
+            result = unittest.TestResult()
+            case.run(result)
+            self.assertEqual(result.errors, [])
+            self.assertEqual(result.failures, [])
+            self.assertIs(installer.BridgeDoctor.probe, real_probe,
+                          "BridgeDoctor.probe was left monkeypatched after the test ran")
+            self.assertIs(installer.BridgeDoctor.ensure_probe_image, real_image,
+                          "BridgeDoctor.ensure_probe_image was left monkeypatched after the test ran")
+            self.assertIs(installer.install_persistence, real_install,
+                          "install_persistence was left monkeypatched after the test ran")
+        finally:
+            installer.BridgeDoctor.probe = real_probe
+            installer.BridgeDoctor.ensure_probe_image = real_image
+            installer.install_persistence = real_install
 
 
 if __name__ == "__main__":
