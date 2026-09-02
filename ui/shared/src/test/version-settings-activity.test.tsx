@@ -34,10 +34,7 @@ const SET: BackupSet = {
   excludePatterns: ["*.tmp"],
   completionMethod: "completion-marker",
   destination: "/data/backups/production/postgres/",
-  retention: {
-    daily: 7, weekly: 13, monthly: 12,
-    timezone: "Europe/Berlin", weekStartsOn: "monday", protectLastKnownGood: true
-  },
+  retentionIsOverride: false,
   validations: ["transfer", "checksum"],
   state: "healthy",
   stateNote: "Verified nightly dump.",

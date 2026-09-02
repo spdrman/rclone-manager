@@ -872,6 +872,10 @@
           },
           "read_only": {
             "type": "boolean"
+          },
+          "retention_is_override": {
+            "type": "boolean",
+            "description": "Whether this backup set declares its own retention policy rather than being retained under the deployment's (issue #333). The policy itself is not here: read it from /backup-sets/{source}/{set}/retention, which serves the resolved chain, the deployment's chain beside it, and the raw override. A list of sets needs the attribution, not three numbers that only fit one shape of chain."
           }
         },
         "required": [
@@ -887,7 +891,8 @@
           "completion_strategy",
           "validator_id",
           "disabled",
-          "read_only"
+          "read_only",
+          "retention_is_override"
         ]
       },
       "CreateBackupSetResponse": {

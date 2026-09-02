@@ -153,6 +153,13 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       keep_count: 1,
       delete_count: 1,
       reclaim_bytes: 4096,
+      retention: {
+        timezone: "Europe/Berlin",
+        week_starts_on: "monday",
+        protect_last_known_good: true,
+        tiers: [{ name: "daily", granularity: "day", keep: 4 }]
+      },
+      retention_is_override: true,
       verdicts: [WIRE_VERDICT, { artifact: "b.dump", action: "DELETE", reason: "not selected" }]
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -172,6 +179,17 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       deleteCount: 1,
       reclaimBytes: 4096,
       operationId: undefined,
+      // Issue #333: the plan says which policy decided it. `true` here,
+      // and a chain that is not the product default, so a mapper that
+      // dropped either would have to produce something visibly wrong
+      // rather than something plausible.
+      retentionIsOverride: true,
+      retention: {
+        timezone: "Europe/Berlin",
+        weekStartsOn: "monday",
+        protectLastKnownGood: true,
+        tiers: [{ name: "daily", granularity: "day", keep: 4, periodDays: undefined, windowUnit: undefined, medium: undefined }]
+      },
       verdicts: [
         {
           artifact: "a.dump",
@@ -203,6 +221,8 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
       delete_count: 1,
       reclaim_bytes: 4096,
       operation_id: "op_1",
+      retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+      retention_is_override: false,
       verdicts: [WIRE_VERDICT]
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -223,7 +243,9 @@ describe("retention preview/apply: wire contract (apps/common/webhost/handlers_r
   it("URL-encodes source/set independently, so a literal '/' or space in either half cannot smuggle an extra path segment", async () => {
     const fetchMock = mockFetchOk({
       plan_id: "x", backup_set_id: "a b/c/d", inventory_revision: "i", config_revision: "c",
-      expires_at: "t", keep_count: 0, delete_count: 0, reclaim_bytes: 0, verdicts: []
+      expires_at: "t", keep_count: 0, delete_count: 0, reclaim_bytes: 0, verdicts: [],
+      retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+      retention_is_override: false
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -539,7 +561,8 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
             local_path: "/data/backups/postgres",
             include: ["*.dump.zst"],
             completion_strategy: "marker",
-            disabled: true
+            disabled: true,
+            retention_is_override: true
           }
         ]
       },
@@ -563,18 +586,16 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
 
     // Fields the backend does NOT yet send: present, correctly typed and
     // never undefined — this is exactly what crashed
-    // BackupSetDetailPage's s.retention.daily / s.validations.includes(...)
-    // (a real TypeError) the first time these routes returned real data
-    // instead of 404ing.
-    expect(s.retention).toEqual({
-      daily: 0,
-      weekly: 0,
-      monthly: 0,
-      timezone: "UTC",
-      weekStartsOn: "monday",
-      protectLastKnownGood: false
-    });
+    // BackupSetDetailPage's s.validations.includes(...) (a real
+    // TypeError) the first time these routes returned real data instead
+    // of 404ing.
     expect(s.validations).toEqual([]);
+    // Issue #333: retention_is_override IS computed and IS sent, so it
+    // is read rather than defaulted. The fixture says true, which is not
+    // the value a mapper that had forgotten this field would produce; the
+    // per-set retention policy that used to be faked here as three zeros
+    // is gone, and the chain has its own route now.
+    expect(s.retentionIsOverride).toBe(true);
     expect(s.state).toBe("stale");
     expect(s.newestKnownGoodAt).toBeNull();
     expect(s.lastRunAt).toBeNull();
@@ -604,7 +625,6 @@ describe("httpApi issue #146 (B2.7) endpoints", () => {
     expect(s.id).toBe("api/x");
     expect(s.completionMethod).toBe("atomic-rename");
     expect(s.enabled).toBe(true);
-    expect(s.retention.daily).toBe(0);
     expect(s.validations).toEqual([]);
   });
 

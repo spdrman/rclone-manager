@@ -14,6 +14,7 @@ import { HaltBanner } from "@shared/components/HaltBanner";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
+import { BackupSetRetentionCard } from "./BackupSetRetentionCard";
 import { EditBackupSetDialog } from "./EditBackupSetDialog";
 import { bytes, relativeAge } from "@shared/utilities/format";
 
@@ -200,22 +201,19 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
+          {/* Issue #333. This section used to render three numbers off
+              BackupSet.retention, which nothing computed: it read
+              "0 kept" three times against every real deployment. It now
+              names which policy retains this set, shows the chain that
+              policy actually is, and carries the three operations that
+              change it. */}
           <Section title="Retention">
-            <div style={{ display: "flex", flexDirection: "column", gap: 11, fontSize: 13 }}>
-              <KV label="Daily" value={s.retention.daily + " kept"} />
-              <KV label="Weekly" value={s.retention.weekly + " kept"} />
-              <KV label="Monthly" value={s.retention.monthly + " kept"} />
-              <KV label={"Timezone \u00b7 week start"} value={s.retention.timezone + " \u00b7 " + s.retention.weekStartsOn} />
-              {s.retention.protectLastKnownGood ? (
-                <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-                  <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
-                  <span>Newest known-good backup is protected from deletion</span>
-                </div>
-              ) : null}
-              <button className="btn btn--caution" disabled={readOnly} onClick={() => setPreviewOpen(true)}>
-                Preview retention plan
-              </button>
-            </div>
+            <BackupSetRetentionCard
+              source={s.source}
+              set={s.set}
+              readOnly={readOnly}
+              onPreview={() => setPreviewOpen(true)}
+            />
           </Section>
 
           <Section title="Validation">
@@ -317,11 +315,3 @@ function Cell({ label, value, mono }: { label: string; value: string; mono?: boo
   );
 }
 
-function KV({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-      <span style={{ color: "var(--text-2)" }}>{label}</span>
-      <span className="mono">{value}</span>
-    </div>
-  );
-}

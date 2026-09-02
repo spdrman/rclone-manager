@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "c98f22e0a7935d9e8ebad39acc21ea1023d6ab1e145a00193946838f5d61fccc";
+export const CONTRACT_SHA256 = "fa6caeaad95c3ed7ba3243be58a67dcc82464499994bc99e92b56af529766378";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -979,6 +979,7 @@ export interface WireBackupSet {
   port: number;
   read_only: boolean;
   remote_path: string;
+  retention_is_override: boolean;
   source_name: string;
   user: string;
   validator_id: string;

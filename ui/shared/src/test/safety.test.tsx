@@ -231,6 +231,8 @@ describe("storage pressure (\u00a756)", () => {
             delete_count: 1,
             reclaim_bytes: 4096,
             operation_id: "op_1",
+            retention: { timezone: "UTC", week_starts_on: "monday", protect_last_known_good: true, tiers: [] },
+            retention_is_override: false,
             verdicts: []
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }

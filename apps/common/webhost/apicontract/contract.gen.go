@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "c98f22e0a7935d9e8ebad39acc21ea1023d6ab1e145a00193946838f5d61fccc"
+const ContractSHA256 = "fa6caeaad95c3ed7ba3243be58a67dcc82464499994bc99e92b56af529766378"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -709,19 +709,20 @@ type AuthErrorResponse struct {
 
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
-	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
-	Host               string   `json:"host"`
-	ID                 string   `json:"id"`
-	Include            []string `json:"include"`
-	LocalPath          string   `json:"local_path"`
-	Name               string   `json:"name"`
-	Port               int      `json:"port"`
-	ReadOnly           bool     `json:"read_only"`
-	RemotePath         string   `json:"remote_path"`
-	SourceName         string   `json:"source_name"`
-	User               string   `json:"user"`
-	ValidatorID        string   `json:"validator_id"`
+	CompletionStrategy  string   `json:"completion_strategy"`
+	Disabled            bool     `json:"disabled"`
+	Host                string   `json:"host"`
+	ID                  string   `json:"id"`
+	Include             []string `json:"include"`
+	LocalPath           string   `json:"local_path"`
+	Name                string   `json:"name"`
+	Port                int      `json:"port"`
+	ReadOnly            bool     `json:"read_only"`
+	RemotePath          string   `json:"remote_path"`
+	RetentionIsOverride bool     `json:"retention_is_override"`
+	SourceName          string   `json:"source_name"`
+	User                string   `json:"user"`
+	ValidatorID         string   `json:"validator_id"`
 }
 
 // BackupSetHealth is one backup set's freshness verdict. This is the backup half of

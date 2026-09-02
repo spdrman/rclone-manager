@@ -10,22 +10,13 @@ import {
 import type { BackupSet } from "@shared/types/backup";
 import type { ActivityEvent } from "@shared/types/operation";
 
-const RETENTION = {
-  daily: 7,
-  weekly: 13,
-  monthly: 12,
-  timezone: "Europe/Berlin",
-  weekStartsOn: "monday" as const,
-  protectLastKnownGood: true
-};
-
 const SET_V1: BackupSet = {
   id: "set_test", source: "production", set: "postgres-primary",
   name: "Production PostgreSQL",
   host: "prod-db-01.internal", port: 22, username: "backup-agent",
   remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
   excludePatterns: ["*.tmp"], completionMethod: "completion-marker",
-  destination: "/data/backups/production/postgres/", retention: RETENTION,
+  destination: "/data/backups/production/postgres/", retentionIsOverride: false,
   validations: ["transfer", "checksum"],
   state: "healthy",
   stateNote: "Verified nightly dump.",

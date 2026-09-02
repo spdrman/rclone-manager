@@ -80,10 +80,15 @@ export function BackupSetCard({
       >
         <Field label="Newest known-good" value={relativeAge(set.newestKnownGoodAt)} mono />
         <Field label="Last run" value={relativeAge(set.lastRunAt)} mono />
+        {/* Issue #333. This used to read "0 / 0 / 0" on every card in
+            every real deployment, because the daily/weekly/monthly numbers
+            behind it were a hardcoded placeholder nothing computed. It
+            now names WHICH policy retains this set, which is the thing
+            the server actually answers, and the chain itself lives on the
+            set's own page where a chain of any shape can be rendered. */}
         <Field
           label="Retention"
-          value={set.retention.daily + " / " + set.retention.weekly + " / " + set.retention.monthly}
-          mono
+          value={set.retentionIsOverride ? "This set's own policy" : "Deployment policy"}
         />
         <Field
           label="Last validation"

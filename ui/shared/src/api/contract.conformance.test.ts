@@ -203,6 +203,12 @@ describe("every request the shared client makes is a declared operation", () => 
       ["reinstate", () => httpApi.reinstate("artifact-1")],
       ["previewRetention", () => httpApi.previewRetention("src", "set-1")],
       ["applyRetention", () => httpApi.applyRetention("src", "set-1", "plan-1")],
+      ["getBackupSetRetention", () => httpApi.getBackupSetRetention("src", "set-1")],
+      ["setBackupSetRetention", () =>
+        httpApi.setBackupSetRetention("src", "set-1", {
+          tiers: [{ name: "daily", granularity: "day", keep: 7 }]
+        })],
+      ["clearBackupSetRetention", () => httpApi.clearBackupSetRetention("src", "set-1")],
       ["getSettings", () => httpApi.getSettings()],
       ["updateSettings", () => httpApi.updateSettings({ retention: { timezone: "UTC" } })],
       ["getStorage", () => httpApi.getStorage()],
