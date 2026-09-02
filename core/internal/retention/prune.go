@@ -113,6 +113,7 @@ package retention
 
 import (
 	"fmt"
+	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"os"
 	"path/filepath"
 	"sort"
@@ -196,13 +197,15 @@ type PruneVerdict struct {
 // pruneFinalPath computes the same final local path lifecycle's own
 // unexported finalPath (transfer.go) computes for the same (LocalDir,
 // Artifact) pair: the artifact's basename, joined directly under the
-// backup set's configured local directory. Duplicated here for the same
-// reason prunePartialSuffix is (this package cannot reach lifecycle's
-// unexported helper, and file scope keeps it that way): this formula, and
-// lifecycle's own copy of it, are the only two places in the whole
-// project allowed to compute it.
+// backup set's configured local directory.
+//
+// It used to duplicate that join, with a comment here and another there
+// naming the two of them as the only places in the project allowed to
+// compute it. Both now delegate to internal/artifactstore, which is the
+// local store's own account of where its bytes live (issue #334), so the
+// formula exists once and the two callers cannot drift apart.
 func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) string {
-	return filepath.Join(bs.LocalPath, artifact.Name)
+	return artifactstore.LocalLocator(bs.LocalPath, artifact)
 }
 
 // pruneVerifySafeToDelete runs every one of FR-20's checks against one
