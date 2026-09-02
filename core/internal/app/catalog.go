@@ -56,6 +56,26 @@ type CatalogRebuildFinding struct {
 	// Action is CatalogRebuildConflict. It reports the disagreement, it
 	// does not resolve it: nothing here is ever written to the row.
 	Conflicts []string
+
+	// Notes carries what the rebuild READ out of the sidecar and did not
+	// write down, so recovery does not quietly forget it.
+	//
+	// There is exactly one thing in that category today and it matters: a
+	// sidecar naming a copy on a storage medium. A reconstructed row gets
+	// its local placement, derived the trusted way from the backup set's
+	// root and the artifact's name, but a medium placement cannot be
+	// derived from anything this process can check. Writing an ACTIVE one
+	// on a sidecar's say-so would put a copy nobody has verified into the
+	// journal, where FR-30's standing invariant would then count it as one
+	// of the artifact's durable copies and FR-20's medium-aware prune
+	// would later be willing to delete an object on the strength of it.
+	//
+	// Dropping it silently is the other wrong answer, and it is the one
+	// that bites during an actual recovery: the operator whose journal is
+	// gone is precisely the person who needs to be told their sidecar says
+	// there is a copy in a bucket. So it is reported and not applied,
+	// which is the same shape as the conflict above.
+	Notes []string
 }
 
 // CatalogRebuildError reports one sidecar manifest RebuildCatalog could
@@ -261,8 +281,10 @@ func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact mode
 		return CatalogRebuildFinding{}, err
 	}
 
+	notes := unadoptedPlacementNotes(m)
+
 	if dryRun {
-		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed}, nil
+		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed, Notes: notes}, nil
 	}
 
 	final := lifecycle.FinalArtifactPath(localDir, artifact)
@@ -303,7 +325,25 @@ func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact mode
 		return CatalogRebuildFinding{}, fmt.Errorf("recovery: populating verification evidence for %s: %w", artifact, err)
 	}
 
-	return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed}, nil
+	return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed, Notes: notes}, nil
+}
+
+// unadoptedPlacementNotes names every copy m records on a storage medium,
+// which is exactly the set a reconstructed row does not get. See
+// CatalogRebuildFinding.Notes for why these are reported rather than
+// written, and rebuildOne for where the local placement a rebuilt row DOES
+// get comes from instead.
+func unadoptedPlacementNotes(m recovery.Manifest) []string {
+	var out []string
+	for _, p := range m.Placements {
+		if p.Medium == state.MediumLocal {
+			continue
+		}
+		out = append(out, fmt.Sprintf(
+			"the sidecar records a copy on medium %q at %q; it is reported and not written, because nothing here can verify it exists",
+			p.Medium, p.Location))
+	}
+	return out
 }
 
 // manifestConflicts names every way m disagrees with the journal row that

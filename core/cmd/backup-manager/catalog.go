@@ -88,6 +88,9 @@ func cmdCatalogRebuild(configPath string, dryRun bool) int {
 				switch f.Action {
 				case app.CatalogRebuildReconstructed:
 					fmt.Printf("%s: %s %s\n", bs.ID, verb, f.Artifact)
+					for _, n := range f.Notes {
+						fmt.Printf("    %s\n", n)
+					}
 					total++
 				case app.CatalogRebuildAlreadyPresent:
 					fmt.Printf("%s: %s already has a journal row, left untouched\n", bs.ID, f.Artifact)

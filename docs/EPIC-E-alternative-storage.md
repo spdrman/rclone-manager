@@ -110,7 +110,7 @@ Required corrections, all adopted:
 
 - the S3 medium is rclone's own `s3` backend registered inside `core/internal/transport/rclone`, the one package allowed to import rclone; no AWS SDK anywhere in the tree, enforced by the existing backend-set test and the ui/shared provider-import check (FR-28);
 - this specification IS the FR-4 architecture decision, recorded with the same measurement obligations the crypt precedent set (binary size delta measured and recorded in the landing PR) (FR-28);
-- migration 0004 backfills a `local` placement for every existing artifact inside the same migration transaction, and an older binary meeting the new schema version fails closed exactly as today (FR-29, FR-35);
+- migration 0007 backfills a `local` placement for every existing artifact inside the same migration transaction, and an older binary meeting the new schema version fails closed exactly as today (FR-29, FR-35);
 - backwards compatibility is a phase exit gate written as a checkable claim with a planted violation (FR-35, Phase 2 exit gate).
 
 ### Consensus position: APPROVE AFTER REVISION
@@ -244,7 +244,10 @@ type MediumStore interface {
 
 An artifact's location becomes part of its durable record, in a new table rather than new columns on the artifact row, because one artifact can have several copies during a move and zero local copies after one.
 
-Migration `0004_placements.sql` SHALL create:
+Migration `0007_placements.sql` SHALL create:
+
+> **Numbering.** This FR was written when 3 was the highest applied schema version and named the file `0004_placements.sql`. 0004, 0005 and 0006 were taken while EPIC E was being specified (`backup_set_halts`, its `KEY_PERMISSIONS` widening, and `REMOTE_RETAINED`), so the file that shipped is `0007_placements.sql`. Nothing else about this FR changes; the number is the only thing that moved.
+
 
 - `placements`: one row per durable copy. Artifact FK, medium id (`local` or a configured id), location (an absolute path for local, a key for s3), size, hash, hash algorithm, verification class achieved (FR-31), verified-at, status (`ACTIVE`, `DELETE_PENDING`, `GONE`), created/updated timestamps.
 - `placement_moves`: one row per migration, the FR-30 journal. Artifact FK, source placement, destination medium, destination key, phase, bytes, error, timestamps.
@@ -328,7 +331,7 @@ A colder storage class can take hours to restore and costs money to read. The pr
 ## FR-35, Compatibility
 
 - A configuration with no `storage_mediums` key and no `medium` key on any tier SHALL behave byte for byte as today: identical validation outcomes, identical retention verdicts (the existing golden tests run unmodified against the migrated schema and pass unmodified), identical API responses except for additive fields, identical CLI output except for additive columns that render only when a non-local placement exists.
-- Migration 0004's backfill SHALL leave every existing deployment reading as "every artifact has one ACTIVE local placement", with no behavioral difference observable through any surface.
+- Migration 0007's backfill SHALL leave every existing deployment reading as "every artifact has one ACTIVE local placement", with no behavioral difference observable through any surface.
 - A wizard or settings save SHALL NOT inject `storage_mediums: []` or `medium: ""` into a config that never configured them (the `omitempty` round-trip rule, same trap `tiers` already documented and avoided).
 - An older binary opening a database at schema version 4 fails closed with the existing unsupported-downgrade behavior; nothing here weakens it.
 - This FR is a Phase 2 exit gate line, not an aspiration, and its planted violation is defined there.
@@ -361,7 +364,7 @@ Phase 1 builds every load-bearing wall: schema, transport, state, verification. 
 - E1.1 The specification (this document), adversarially reviewed and landed
 - E1.2 Config schema and validation for storage mediums, tier placement and credential references (FR-27, FR-33 schema half, FR-35 round-trip rule)
 - E1.3 `MediumStore` boundary, rclone `s3` backend registration, credential resolution, error classification, MinIO contract fixture (FR-28, FR-33 runtime half)
-- E1.4 Placement records: migration 0004 with backfill, `state.Record` surface, recovery manifest and sidecar extension (FR-29, FR-32 rebuild half)
+- E1.4 Placement records: migration 0007 with backfill, `state.Record` surface, recovery manifest and sidecar extension (FR-29, FR-32 rebuild half)
 - E1.5 The verification ladder and placement-aware revalidation (FR-31, FR-32 invariants)
 
 ### Phase 1 entry gate
@@ -378,7 +381,7 @@ Checkable claims, not intentions:
 - [ ] The rclone backend set test passes with exactly `local`, `sftp`, `s3` required and `crypt` accepted; the binary-size delta is measured and recorded in the landing PR.
 - [ ] The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture in integration, including upload, stat, checksum attestation where supported, read-back, delete, and the explicit capability refusal where attestation is unsupported.
 - [ ] The credential canary test passes for all three sources, and its planted violation (verbatim config logging) demonstrably fails it.
-- [ ] Migration 0004 backfills a local placement for every pre-existing artifact row; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
+- [ ] Migration 0007 backfills a local placement for every pre-existing artifact row; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
 - [ ] Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve, proven by the class-string assertion test.
 - [ ] Nothing in this phase can delete an artifact copy anywhere: the destructive-safety suite diff shows no new deletion path.
 
@@ -418,4 +421,4 @@ Checkable claims, not intentions:
 
 # 7. Compatibility and migration summary
 
-An existing deployment upgrades in place: migration 0004 backfills local placements transactionally; a medium-free config keeps producing identical decisions and identical surfaces; the settings round-trip injects nothing; downgrade fails closed on schema version exactly as today. Adoption is opt-in per tier, gated by an explicit disclosure, and reversible in config (remapping a tier back to `local` plans moves back; the move engine is direction-agnostic, though the egress cost of coming home is the operator's, stated in the disclosure).
+An existing deployment upgrades in place: migration 0007 backfills local placements transactionally; a medium-free config keeps producing identical decisions and identical surfaces; the settings round-trip injects nothing; downgrade fails closed on schema version exactly as today. Adoption is opt-in per tier, gated by an explicit disclosure, and reversible in config (remapping a tier back to `local` plans moves back; the move engine is direction-agnostic, though the egress cost of coming home is the operator's, stated in the disclosure).

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -178,5 +179,67 @@ func TestCommitWritesTheArtifactsPlacementsIntoTheSidecar(t *testing.T) {
 	if m.Placements[0].Medium != local.Medium || m.Placements[0].Location != local.Location ||
 		m.Placements[0].Status != local.Status || m.Placements[0].Checksum != local.Hash {
 		t.Errorf("the sidecar's placement %+v does not match the journal's %+v", m.Placements[0], local)
+	}
+}
+
+// The recovery case this whole sidecar extension exists for: an operator
+// has lost their journal, and the sidecar next to the artifact says there
+// is also a copy in a bucket. That copy cannot be adopted (nothing here
+// can check it is there, and an unverified ACTIVE placement would later be
+// enough for a medium-aware prune to delete an object), and it must not be
+// silently dropped either, because the person whose journal is gone is
+// precisely the person who needs to be told.
+func TestRebuildCatalog_ReportsAMediumCopyItCannotAdopt(t *testing.T) {
+	ctx := context.Background()
+	localDir := t.TempDir()
+	_, svc, artifact, _ := runCycleAndReadBack(t, localDir)
+
+	m, err := recovery.ReadManifest(recovery.ManifestPath(localDir, artifact.Name))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	m.Placements = append(m.Placements, recovery.ManifestPlacement{
+		Medium:   "cold_s3",
+		Location: "backups/production/testset/backup.dump",
+		Status:   recovery.PlacementActive,
+	})
+	if err := recovery.WriteManifest(localDir, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	// A brand new journal, so this is a real reconstruction rather than a
+	// conflict against a row that already exists.
+	fresh := New(svc.Config, openJournal(t), newFakeTransport(), nil)
+	report, err := fresh.RebuildCatalog(ctx, artifact.Set, false)
+	if err != nil {
+		t.Fatalf("RebuildCatalog: %v", err)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Action != CatalogRebuildReconstructed {
+		t.Fatalf("Findings = %+v, want exactly one CatalogRebuildReconstructed", report.Findings)
+	}
+	joined := strings.Join(report.Findings[0].Notes, "\n")
+	if !strings.Contains(joined, "cold_s3") || !strings.Contains(joined, "not written") {
+		t.Errorf("notes = %q, want the medium copy reported as read but not written", joined)
+	}
+
+	// And the reconstructed row carries its LOCAL placement, derived the
+	// trusted way, and only that one.
+	rec, err := fresh.Journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after rebuild: %v", err)
+	}
+	if len(rec.Placements) != 1 {
+		t.Fatalf("the rebuilt row has %d placements, want only the local one it could derive: %+v", len(rec.Placements), rec.Placements)
+	}
+	local, ok := rec.LocalPlacement()
+	if !ok {
+		t.Fatal("a rebuilt row has no local placement, so a code path can observe an artifact with none")
+	}
+	if local.Location != filepath.Join(localDir, artifact.Name) {
+		t.Errorf("the rebuilt local placement is at %q, want the path derived from the backup set root, %q",
+			local.Location, filepath.Join(localDir, artifact.Name))
+	}
+	if local.VerificationClass != "" {
+		t.Errorf("the rebuilt placement claims verification class %q; nothing read the bytes", local.VerificationClass)
 	}
 }
