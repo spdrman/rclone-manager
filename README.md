@@ -49,6 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
+| `backup-set` | `backup-set patch <source/backup-set> [flags]` changes one configured backup set in place; only the flags you pass are changed (issue #350) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
@@ -165,9 +166,10 @@ and unreachable got their own CLI commands in the same change (`quarantine` and 
 both documented in their own sections above); one gap turned out to need real new product
 work and is out of scope here (see the bottom of this section).
 
-**Creating or editing a backup set is a config-file edit, on purpose, and this is that
-answer written down.** `POST /backup-sets` is what the setup wizard calls; the CLI's answer
-is that a wizard is unnecessary, not that one is missing. Write `config.yaml` by hand
+**Creating a backup set is a config-file edit, on purpose, and this is that answer written
+down. EDITING one is no longer, and that changed with issue #350.** `POST /backup-sets` is
+what the setup wizard calls; the CLI's answer to CREATING a set is that a wizard is
+unnecessary, not that one is missing. Write `config.yaml` by hand
 (`core/internal/config`'s own doc comments are the fullest explanation of the schema in this
 tree, and `core/internal/config/testdata/full.yaml` is a worked, if terse, example), then:
 
@@ -181,6 +183,24 @@ backup-manager fetch --config ./config.yaml --source S --backup-set B --dry-run
 That is a create-and-verify loop with no browser in it. There is no `backup-manager sets
 add` command and none is planned: `validate` and `check` exist specifically so a hand-edited
 file does not have to be trusted blind.
+
+Changing a set that already exists is a different question, and until issue #350 the answer
+was the same file edit, which meant opening an editor on the NAS itself. `backup-set patch`
+is what replaces that:
+
+```bash
+backup-manager backup-set --config ./config.yaml patch production/postgres-primary \
+  --remote-path /var/backups/postgresql --include "*.dump,*.tar.zst"
+```
+
+Only the flags you pass are changed; anything you leave out is left exactly as it is, which
+is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
+one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
+cannot drift. The change is validated against the same `config.Validate` a hand-edited file
+goes through at boot, written through the same atomic replace, and hot-reloaded, so a
+running daemon picks it up without a restart. A set's name and source are deliberately not
+patchable: they key every journal row, artifact id and recovery manifest the set has ever
+produced, so renaming one is a migration rather than an edit.
 
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
