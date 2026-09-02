@@ -179,6 +179,11 @@ func getByRowID(ctx context.Context, q querier, rowID int64) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacements(ctx, q, rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements
 	return rec, nil
 }
 
@@ -188,13 +193,18 @@ func (j *Journal) Get(ctx context.Context, artifact model.ArtifactID) (Record, e
 		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? AND artifact_name = ?`,
 		artifact.Set.Source, artifact.Set.Set, artifact.Name,
 	)
-	rec, _, err := scanRecord(row)
+	rec, rowID, err := scanRecord(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, artifact)
 	}
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacements(ctx, j.db, rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements
 	return rec, nil
 }
 
@@ -344,7 +354,7 @@ func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, erro
 	if err != nil {
 		return nil, fmt.Errorf("state: list by state: %w", err)
 	}
-	return scanRecords(rows)
+	return scanRecords(ctx, j.db, rows)
 }
 
 // ListByBackupSet returns every artifact recorded for one backup set (FR-7):
@@ -357,22 +367,39 @@ func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([
 	if err != nil {
 		return nil, fmt.Errorf("state: list by backup set: %w", err)
 	}
-	return scanRecords(rows)
+	return scanRecords(ctx, j.db, rows)
 }
 
-func scanRecords(rows *sql.Rows) ([]Record, error) {
+// scanRecords decodes a whole result set and then attaches every record's
+// placements in ONE further query rather than one per record.
+//
+// The N+1 it avoids is not hypothetical: the list paths are what a
+// retention cycle runs over every backup set on every pass, and a NAS with
+// a few thousand artifacts would pay a round trip per artifact per cycle
+// for a table that is almost always tiny.
+func scanRecords(ctx context.Context, q querier, rows *sql.Rows) ([]Record, error) {
 	defer rows.Close()
 
 	var out []Record
+	var rowIDs []int64
 	for rows.Next() {
-		rec, _, err := scanRecord(rows)
+		rec, rowID, err := scanRecord(rows)
 		if err != nil {
 			return nil, fmt.Errorf("state: scan artifact: %w", err)
 		}
 		out = append(out, rec)
+		rowIDs = append(rowIDs, rowID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("state: list artifacts: %w", err)
+	}
+
+	byArtifact, err := loadPlacementsFor(ctx, q, rowIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i, rowID := range rowIDs {
+		out[i].Placements = byArtifact[rowID]
 	}
 	return out, nil
 }
