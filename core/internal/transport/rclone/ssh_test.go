@@ -21,6 +21,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/tests/dockerlease"
 	"golang.org/x/crypto/ssh/knownhosts"
 
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
@@ -254,6 +255,53 @@ func TestSftpConfig_AllowsStickyWorldWritableAncestorDirectory(t *testing.T) {
 
 	if _, err := sftpConfig(src); err != nil {
 		t.Fatalf("sftpConfig refused a key_file under a world-writable-but-sticky ancestor directory: %v", err)
+	}
+}
+
+// TestSftpConfig_DirChainCheckAppliesToAnEncryptedKeyToo composes #311's
+// directory-chain check with #298's at-rest encryption: a world-writable
+// ancestor directory must still be refused when key_encryption is
+// configured, exactly as it is on the plaintext path. #298's own
+// ciphertext is authenticated (AES-GCM), which already defeats a silent
+// CONTENT forgery, but a world-writable directory still lets any local
+// actor unlink/replace/rename the encrypted key file wholesale, so the
+// permission-drift risk this check exists for is identical either way.
+// Before ssh.go's key_file case was restructured to run these checks
+// unconditionally, resolveKeyFileForSFTP's own os.ReadFile ran first
+// whenever key_encryption was configured, leaving this exact gap.
+func TestSftpConfig_DirChainCheckAppliesToAnEncryptedKeyToo(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "level1", "level2")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("mkdir chain: %v", err)
+	}
+	src := validSource(t, root)
+	src.KeyFile = touchFile(t, nested, "id_ed25519")
+	if err := os.WriteFile(src.KeyFile, mustUnencryptedKeyPEM(t), 0o600); err != nil {
+		t.Fatalf("writing a real test key over the placeholder: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_DIRCHAIN_KEYENC_ENV"
+	t.Setenv(envName, "dirchain-encrypted-key-dek")
+	src.KeyEncryptionEnv = envName
+
+	// Positive control: an untouched chain must still resolve through the
+	// encrypted path, otherwise the refusal below proves nothing.
+	if _, err := sftpConfig(src); err != nil {
+		t.Fatalf("sftpConfig refused an encrypted key_file with an untouched directory chain: %v", err)
+	}
+
+	level1 := filepath.Join(root, "level1")
+	if err := os.Chmod(level1, 0o777); err != nil {
+		t.Fatalf("chmod level1 to 0777: %v", err)
+	}
+
+	_, err := sftpConfig(src)
+	if err == nil {
+		t.Fatal("sftpConfig accepted an encrypted key_file whose directory chain contains a world-writable component, want a refusal")
+	}
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.KeyPermissions {
+		t.Fatalf("category = %v (ok=%v), want transport.KeyPermissions (the same halt-reason path checkKeyFileMode uses)", category, ok)
 	}
 }
 
@@ -529,6 +577,108 @@ func TestSftpConfig_KeyResolverFailureNeverLeaksIntoTheError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), secretLookingJunk) {
 		t.Fatalf("sftpConfig's error leaked the resolved value: %v", err)
+	}
+}
+
+// --- #298: key_file at rest encryption, exercised through sftpConfig itself ---
+
+// TestSftpConfig_KeyFileWithNoKeyEncryptionStaysOffTheHeap is #298's
+// regression guarantee proven at the sftpConfig level rather than
+// resolveKeyFileForSFTP's own unit level: with no key_encryption source
+// configured, a key_file source behaves EXACTLY as TestSftpConfig_
+// KeyFileNeverProducesKeyPem already proves it always has, key_pem is
+// never set and key_file is forwarded untouched, even though this
+// specific source's file happens to hold a real key on disk (validSource's
+// touchFile only ever writes a placeholder; this test uses a real one so a
+// regression that started reading key_file's content unconditionally would
+// still only be caught here, not by the placeholder-based test).
+func TestSftpConfig_KeyFileWithNoKeyEncryptionStaysOffTheHeap(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	if err := os.WriteFile(src.KeyFile, mustUnencryptedKeyPEM(t), 0o600); err != nil {
+		t.Fatalf("writing a real test key over the placeholder: %v", err)
+	}
+
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	if _, ok := cfg.Get("key_pem"); ok {
+		t.Fatal("key_pem was set with no key_encryption source configured")
+	}
+	if v, _ := cfg.Get("key_file"); v != src.KeyFile {
+		t.Errorf("key_file = %q, want %q", v, src.KeyFile)
+	}
+}
+
+// TestSftpConfig_KeyFileEncryptedAtRestResolvesToKeyPem is #298's
+// migration path exercised through the real production entry point: a
+// plaintext key_file plus a configured key_encryption source is migrated
+// to at-rest encryption AND authenticates this one connection attempt, in
+// a single sftpConfig call, exactly the way an upgraded installation's
+// first real connection after configuring key_encryption behaves.
+func TestSftpConfig_KeyFileEncryptedAtRestResolvesToKeyPem(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+	plaintext := mustUnencryptedKeyPEM(t)
+	if err := os.WriteFile(src.KeyFile, plaintext, 0o600); err != nil {
+		t.Fatalf("writing a real test key over the placeholder: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_KEYENC_ENV"
+	t.Setenv(envName, "sftpconfig-level-migration-dek")
+	src.KeyEncryptionEnv = envName
+
+	cfg, err := sftpConfig(src)
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	if _, ok := cfg.Get("key_file"); ok {
+		t.Error("an at-rest-encrypted key source also set key_file")
+	}
+	got, ok := cfg.Get("key_pem")
+	if !ok {
+		t.Fatal("an at-rest-encrypted key source did not set key_pem")
+	}
+	roundTripped, err := strconv.Unquote(`"` + got + `"`)
+	if err != nil {
+		t.Fatalf("key_pem value is not valid rclone escaping: %v", err)
+	}
+	if roundTripped != string(plaintext) {
+		t.Fatal("key_pem, once unescaped, does not match the original key")
+	}
+
+	onDisk, err := os.ReadFile(src.KeyFile)
+	if err != nil {
+		t.Fatalf("reading key_file after sftpConfig: %v", err)
+	}
+	if !isEncryptedKeyMaterial(onDisk) {
+		t.Fatal("sftpConfig did not migrate the plaintext key_file to at-rest encryption")
+	}
+}
+
+// TestSftpConfig_KeyFileEncryptionWrongDEKFails proves a misconfigured
+// key_encryption source fails the whole connection attempt loudly, the
+// same way a bad key.env/key.command resolver already does, rather than
+// silently falling back to key_file or authenticating with garbage.
+func TestSftpConfig_KeyFileEncryptionWrongDEKFails(t *testing.T) {
+	dir := t.TempDir()
+	src := validSource(t, dir)
+
+	ciphertext, err := encryptKeyMaterial(obs.NewSecret("the-real-dek"), mustUnencryptedKeyPEM(t))
+	if err != nil {
+		t.Fatalf("encryptKeyMaterial: %v", err)
+	}
+	if err := os.WriteFile(src.KeyFile, ciphertext, 0o600); err != nil {
+		t.Fatalf("writing a pre-encrypted key over the placeholder: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_SFTPCONFIG_KEYENC_WRONG"
+	t.Setenv(envName, "not-the-right-dek")
+	src.KeyEncryptionEnv = envName
+
+	if _, err := sftpConfig(src); err == nil {
+		t.Fatal("sftpConfig succeeded with a key_encryption source that does not decrypt key_file")
 	}
 }
 

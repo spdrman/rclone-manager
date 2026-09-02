@@ -167,16 +167,19 @@ func (b *BackupService) TestBackupSetConnection(ctx context.Context, id string) 
 
 	r := found.Remote
 	src := transport.Source{
-		ID:         "connection-test",
-		Type:       r.Type,
-		Host:       r.Host,
-		Port:       r.Port,
-		User:       r.User,
-		KeyFile:    r.Key.File,
-		KeyEnv:     r.Key.Env,
-		KeyCommand: r.Key.Command,
-		KnownHosts: r.KnownHosts,
-		Root:       root,
+		ID:                   "connection-test",
+		Type:                 r.Type,
+		Host:                 r.Host,
+		Port:                 r.Port,
+		User:                 r.User,
+		KeyFile:              r.Key.File,
+		KeyEnv:               r.Key.Env,
+		KeyCommand:           r.Key.Command,
+		KeyEncryptionFile:    st.inner.Config.KeyEncryption.File,
+		KeyEncryptionEnv:     st.inner.Config.KeyEncryption.Env,
+		KeyEncryptionCommand: st.inner.Config.KeyEncryption.Command,
+		KnownHosts:           r.KnownHosts,
+		Root:                 root,
 	}
 
 	if _, err := st.inner.Transport.List(testCtx, src); err != nil {

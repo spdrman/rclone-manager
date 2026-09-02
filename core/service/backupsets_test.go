@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -522,6 +523,95 @@ func TestImportSSHKey_Success_PersistsFileAndReportsFingerprint(t *testing.T) {
 	}
 	if string(persisted) != testFixtureEd25519Key {
 		t.Error("persisted key file content does not match the imported key")
+	}
+}
+
+// TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext is #298's
+// explicit REGRESSION test: with no key_encryption source configured (the
+// default, and every config.yaml written before #298 existed), an
+// imported key is persisted exactly as before this feature -- a plain
+// PEM file, protected only by #293's filesystem-permission hardening.
+// TestImportSSHKey_Success_PersistsFileAndReportsFingerprint already
+// asserts this same fact as part of a broader test; this one exists
+// purely so the regression guarantee has its own name and can be read on
+// its own, and it is also #298's RED baseline: run against the code as
+// it stood before this issue, it already passed, which is the proof the
+// gap #298 was filed over was real.
+func TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext(t *testing.T) {
+	svc, _ := openTestService(t)
+	ke := svc.state.Load().inner.Config.KeyEncryption
+	if ke.File != "" || ke.Env != "" || len(ke.Command) != 0 {
+		t.Fatal("openTestService's config unexpectedly configured a key_encryption source")
+	}
+
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	if err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+
+	persisted, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("ReadFile(KeyFile): %v", err)
+	}
+	if string(persisted) != testFixtureEd25519Key {
+		t.Fatal("an imported key is no longer stored as plain, parseable PEM with no key_encryption source configured")
+	}
+	if !bytes.HasPrefix(persisted, []byte("-----BEGIN ")) {
+		t.Fatal("an imported key with no key_encryption source configured does not look like a plain PEM key on disk")
+	}
+}
+
+// TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured is
+// #298's migration path (issue step 3), proven through the real,
+// production Open()-constructed BackupService rather than against
+// resolveKeyFileForSFTP directly: it proves config.KeyEncryption set on
+// this Service's already-loaded configuration actually reaches the
+// transport layer (internal/app's sourceFor and this file's own
+// testConnectionVia both have to forward it correctly for this to work
+// at all), and that the first real use of an imported key after a
+// key_encryption source is configured rewrites it in place.
+//
+// The connection itself is against an address nothing listens on, so it
+// fails -- TestConnection reports that as OK: false, never as a Go error
+// (see its own doc) -- but key resolution (and, here, migration) happens
+// synchronously inside sftpConfig, before any network I/O is attempted,
+// so the migration this test cares about has already happened regardless
+// of the connection's own outcome.
+func TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	if err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	before, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("reading imported key file: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_TESTCONNECTION_MIGRATION_DEK"
+	t.Setenv(envName, "test-connection-level-dek")
+	svc.state.Load().inner.Config.KeyEncryption = config.KeyEncryption{Env: envName}
+
+	if _, err := svc.TestConnection(context.Background(), ConnectionTestRequest{
+		Host:           "127.0.0.1",
+		Port:           1, // nothing listens on port 1; the dial itself is expected to fail
+		User:           "backup-agent",
+		SSHKeyID:       ref.ID,
+		KnownHostsLine: "example.internal ssh-ed25519 AAAAtestfixtureline",
+	}); err != nil {
+		t.Fatalf("TestConnection returned a Go error rather than ConnectionTestResult.OK == false: %v", err)
+	}
+
+	after, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("reading key file after TestConnection: %v", err)
+	}
+	if bytes.Equal(after, before) {
+		t.Fatal("TestConnection did not migrate the key file to at-rest encryption once key_encryption was configured")
+	}
+	if bytes.HasPrefix(after, []byte("-----BEGIN ")) {
+		t.Fatal("the key file still looks like a plain PEM key after migration")
 	}
 }
 

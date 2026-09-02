@@ -594,6 +594,88 @@ func TestKeyPassphraseCommandEmptyExecutableRejected(t *testing.T) {
 	}
 }
 
+// --- #298: key_encryption.file, key_encryption.env, key_encryption.command ---
+
+// TestKeyEncryptionOptional is #298's version of TestKeyExactlyOneSourceRequired's
+// "zero sources" case for Key.isZero, except in the OPPOSITE direction:
+// KeyEncryption is optional (mirroring Passphrase, not Key), so the zero
+// value -- no key_encryption block at all, every config.yaml written
+// before #298 -- must be ACCEPTED, not rejected. This is the config-layer
+// half of "REGRESSION: with no DEK configured, everything behaves exactly
+// as before."
+func TestKeyEncryptionOptional(t *testing.T) {
+	cfg := validConfig()
+	if !cfg.KeyEncryption.isZero() {
+		t.Fatalf("validConfig()'s KeyEncryption should be the zero value, got %+v", cfg.KeyEncryption)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a config with no key_encryption block at all was rejected: %v", err)
+	}
+}
+
+func TestKeyEncryptionExactlyOneSourceEnforced(t *testing.T) {
+	t.Run("file alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.KeyEncryption = KeyEncryption{File: "/etc/backup-manager/key.dek"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("env alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.KeyEncryption = KeyEncryption{Env: "BACKUP_KEY_DEK"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("command alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.KeyEncryption = KeyEncryption{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/dek"}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		ke   KeyEncryption
+	}{
+		{"file and env", KeyEncryption{File: "/etc/backup-manager/key.dek", Env: "BACKUP_KEY_DEK"}},
+		{"file and command", KeyEncryption{File: "/etc/backup-manager/key.dek", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+		{"env and command", KeyEncryption{Env: "BACKUP_KEY_DEK", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+	} {
+		t.Run(tc.name+" together rejected", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.KeyEncryption = tc.ke
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("%s set together were accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestKeyEncryptionCommandExecutableMustBeAbsolute(t *testing.T) {
+	cfg := validConfig()
+	cfg.KeyEncryption = KeyEncryption{Command: []string{"op", "read", "op://infra/backup-manager/dek"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a relative key_encryption.command executable was accepted")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error %q does not explain the absolute-path requirement", err.Error())
+	}
+}
+
+func TestKeyEncryptionCommandEmptyExecutableRejected(t *testing.T) {
+	cfg := validConfig()
+	cfg.KeyEncryption = KeyEncryption{Command: []string{""}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a key_encryption.command with an empty executable was accepted")
+	}
+}
+
 func TestKeyValidateIsIdempotent(t *testing.T) {
 	for _, tc := range []struct {
 		name string

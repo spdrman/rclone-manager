@@ -91,7 +91,7 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	if err != nil {
 		return FetchResult{}, err
 	}
-	source := sourceFor(src, bs)
+	source := sourceFor(s.Config, src, bs)
 
 	if dryRun {
 		return s.fetchDryRun(ctx, source, bs.ID)

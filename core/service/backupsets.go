@@ -885,14 +885,21 @@ type ConnectionTestResult struct {
 // (see the wizard's pre-save "Verify server"/review flow, where no trust
 // decision is final until CreateBackupSet actually runs).
 func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
-	return testConnectionVia(ctx, b.state.Load().inner.Transport, b.configPath, req)
+	st := b.state.Load()
+	return testConnectionVia(ctx, st.inner.Transport, b.configPath, st.inner.Config.KeyEncryption, req)
 }
 
 // testConnectionVia is TestConnection's transport-and-configPath-only
 // half; see keysDirIn above for why the split exists. The first-run
 // surface wires a transport of its own (firstrun.go) because it has no
-// internal/app.Service to read one off yet.
-func testConnectionVia(ctx context.Context, tr transport.Transport, configPath string, req ConnectionTestRequest) (ConnectionTestResult, error) {
+// internal/app.Service to read one off yet, and passes config.KeyEncryption{}
+// (its zero value) for keyEnc: a first-run instance has no config.yaml to
+// read a key_encryption block from yet, so #298's encryption is
+// necessarily off for the very first connection test an operator ever
+// runs, exactly the same "nothing to opt into yet" case every other
+// config-driven behavior starts from here (see firstrun.go's own package
+// doc, "What this type deliberately is not").
+func testConnectionVia(ctx context.Context, tr transport.Transport, configPath string, keyEnc config.KeyEncryption, req ConnectionTestRequest) (ConnectionTestResult, error) {
 	if req.Host == "" || req.User == "" || req.SSHKeyID == "" || req.KnownHostsLine == "" {
 		return ConnectionTestResult{}, fmt.Errorf("%w: host, user, ssh_key_id and known_hosts_line are all required", ErrInvalidRequest)
 	}
@@ -925,14 +932,17 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 	defer cancel()
 
 	src := transport.Source{
-		ID:         "connection-test",
-		Type:       "sftp",
-		Host:       req.Host,
-		Port:       req.Port,
-		User:       req.User,
-		KeyFile:    keyFile,
-		KnownHosts: tmpPath,
-		Root:       root,
+		ID:                   "connection-test",
+		Type:                 "sftp",
+		Host:                 req.Host,
+		Port:                 req.Port,
+		User:                 req.User,
+		KeyFile:              keyFile,
+		KeyEncryptionFile:    keyEnc.File,
+		KeyEncryptionEnv:     keyEnc.Env,
+		KeyEncryptionCommand: keyEnc.Command,
+		KnownHosts:           tmpPath,
+		Root:                 root,
 	}
 
 	if _, err := tr.List(testCtx, src); err != nil {
