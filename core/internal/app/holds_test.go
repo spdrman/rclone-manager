@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,11 +297,74 @@ func TestWatchForHold_CatchesAHoldPlacedInsideTheCheckWindow(t *testing.T) {
 	setCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go watchForHold(setCtx, holds, "production/postgres-primary", cancel)
+	var fired atomic.Bool
+	go watchForHold(setCtx, holds, "production/postgres-primary", &fired, cancel)
 
 	select {
 	case <-setCtx.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("watchForHold never cancelled: a hold placed between its Held() answer and its next Changed() read was lost")
+	}
+	if !fired.Load() {
+		t.Error("the cancellation flag was not set by the time the context was done; a reader that sees the cancellation has to be able to see the reason for it too")
+	}
+}
+
+// TestRunCycle_AStoppedSetIsNotReportedAsAFailure is the honesty half of
+// the hold. Stopping a set because an operator pressed Edit is something
+// this manager was asked to do, so it must not come back looking like a
+// backup that broke: a cycle report carrying context.Canceled here is
+// read as a failure by every consumer downstream of it (core/service
+// fails the operation an operator submitted, `backup-manager run` exits
+// 1, and the health surface counts the set as unevaluated), which turns
+// an ordinary edit into a false alarm in the one product where a false
+// alarm about a backup is expensive.
+//
+// The interrupted artifact is checked too: a transfer stopped this way is
+// not a failed transfer, so it must not be journaled as FAILED or
+// QUARANTINED either, or the repeated-failure alert (#105) fires for an
+// edit.
+func TestRunCycle_AStoppedSetIsNotReportedAsAFailure(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+
+	holds := newTestHolds()
+	tr := newFakeTransport()
+	tr.put("first.dump", "the artifact being copied when Edit was pressed", epoch.Unix())
+	tr.beforeCopy = func() { holds.hold(bs.ID.String()) }
+
+	journal := openJournal(t)
+	svc := New(testConfig(t, testSource("production", bs)), journal, tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	report := svc.RunCycle(WithBackupSetHolds(context.Background(), holds))
+
+	if len(report.Sets) != 1 {
+		t.Fatalf("this cycle reported %d backup sets, want exactly 1; sets=%+v", len(report.Sets), report.Sets)
+	}
+	set := report.Sets[0]
+	if set.Err == nil {
+		t.Fatal("the stopped set reported no error at all; it has to say WHY its pass did not finish, or a caller cannot tell a stopped set from a completed one")
+	}
+	if !errors.Is(set.Err, ErrBackupSetHeldForEditing) {
+		t.Errorf("Err = %v, want one that errors.Is ErrBackupSetHeldForEditing; a bare context error is indistinguishable from a real failure to every consumer of this report", set.Err)
+	}
+	if set.FailedArtifacts != 0 {
+		t.Errorf("FailedArtifacts = %d, want 0: an artifact whose transfer an operator stopped has not failed", set.FailedArtifacts)
+	}
+
+	records, err := journal.ListByBackupSet(context.Background(), bs.ID)
+	if err != nil {
+		t.Fatalf("ListByBackupSet: %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatal("the cycle journaled nothing at all, so this test would prove nothing about how the interrupted artifact was recorded")
+	}
+	for _, rec := range records {
+		switch lifecycle.State(rec.State) {
+		case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
+			t.Errorf("artifact %s was journaled %s after an operator stopped its transfer by entering edit mode; a stopped transfer is not a failed one",
+				rec.Artifact, rec.State)
+		}
 	}
 }

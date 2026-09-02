@@ -38,7 +38,12 @@ func cmdRun(args []string) int {
 
 	failed := false
 	for _, s := range report.Sets {
-		if cycleFailed(s.Err != nil, s.FailedArtifacts) {
+		// SystemicFailure rather than a bare Err != nil, so a pass
+		// stopped by an edit hold (issue #350) is not an exit 1. A hold
+		// cannot be placed in this process today (nothing serves an API
+		// here), but the exit code is a contract and it reads the same
+		// report `daemon` does.
+		if cycleFailed(s.SystemicFailure(), s.FailedArtifacts) {
 			failed = true
 		}
 	}

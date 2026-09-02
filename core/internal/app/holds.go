@@ -1,6 +1,10 @@
 package app
 
-import "context"
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+)
 
 // BackupSetHolds answers, for a cycle in flight, which backup sets must
 // not be processed right now (issue #350).
@@ -57,6 +61,19 @@ type BackupSetHolds interface {
 	Changed() <-chan struct{}
 }
 
+// ErrBackupSetHeldForEditing is BackupSetCycleResult.Err for a pass this
+// cycle stopped because a hold landed on that set, and it exists so a
+// stopped pass is not spelled the same way a failed one is.
+//
+// Before it, the cancellation surfaced as a bare context.Canceled, which
+// every consumer of a cycle report reads as a failure: the operation an
+// operator submitted was marked failed with "context canceled" as its
+// reason, `backup-manager run` exited 1, and the activity feed said a
+// backup had gone wrong. Nothing had. See
+// BackupSetCycleResult.SystemicFailure, which is what callers should ask
+// rather than comparing against this directly.
+var ErrBackupSetHeldForEditing = errors.New("app: this backup set's pass was stopped because it is held for editing")
+
 type backupSetHoldsKey struct{}
 
 // WithBackupSetHolds returns a context that asks RunCycle to consult h
@@ -80,17 +97,25 @@ func BackupSetHoldsFrom(ctx context.Context) BackupSetHolds {
 }
 
 // withHoldCancellation returns a context that is cancelled as soon as a
-// hold lands on setID, plus the cancel func the caller must defer. When
-// ctx carries no holds registry it returns ctx and a no-op, so a cycle
-// nobody is holding starts no goroutine at all.
-func withHoldCancellation(ctx context.Context, setID string) (context.Context, context.CancelFunc) {
+// hold lands on setID, plus the cancel func the caller must defer and a
+// predicate reporting whether it was THIS watcher that cancelled. When
+// ctx carries no holds registry it returns ctx, a no-op and a predicate
+// that is always false, so a cycle nobody is holding starts no goroutine
+// at all.
+//
+// The predicate is what lets the caller tell a pass an operator stopped
+// apart from a pass the parent context ended (a shutdown, a deadline).
+// Both leave the same context.Canceled behind, and they mean opposite
+// things to anyone reading the cycle report afterwards.
+func withHoldCancellation(ctx context.Context, setID string) (context.Context, context.CancelFunc, func() bool) {
 	holds := BackupSetHoldsFrom(ctx)
 	if holds == nil {
-		return ctx, func() {}
+		return ctx, func() {}, func() bool { return false }
 	}
 	setCtx, cancel := context.WithCancel(ctx)
-	go watchForHold(setCtx, holds, setID, cancel)
-	return setCtx, cancel
+	var fired atomic.Bool
+	go watchForHold(setCtx, holds, setID, &fired, cancel)
+	return setCtx, cancel, fired.Load
 }
 
 // watchForHold cancels setCtx the moment setID becomes held, and returns
@@ -101,10 +126,17 @@ func withHoldCancellation(ctx context.Context, setID string) (context.Context, c
 // placed between the check and the wait would close a channel this
 // goroutine is not yet listening on, and the cancellation would be lost
 // until some unrelated later hold happened to wake it.
-func watchForHold(setCtx context.Context, holds BackupSetHolds, setID string, cancel context.CancelFunc) {
+//
+// fired is set BEFORE cancel, never after, so any goroutine that observes
+// the cancellation also observes the reason for it. The other order would
+// leave a window in which the pass has stopped and the report cannot yet
+// say why, which is exactly the window a cycle unwinding through its own
+// ctx.Err() checks runs in.
+func watchForHold(setCtx context.Context, holds BackupSetHolds, setID string, fired *atomic.Bool, cancel context.CancelFunc) {
 	for {
 		changed := holds.Changed()
 		if holds.Held(setID) {
+			fired.Store(true)
 			cancel()
 			return
 		}
