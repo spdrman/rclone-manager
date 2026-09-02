@@ -973,6 +973,17 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 	testCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
+	// No MaxConnections here, deliberately (#355). This is the pre-save
+	// wizard: there is no saved remote to read a ceiling off, and the form
+	// that feeds it has no field for one, so there is nothing to carry.
+	// Running uncapped is also not a gap in this particular case: the
+	// check is a single List, the adapter walks a tree one directory at a
+	// time (oneConnectionAtATime in internal/transport/rclone/adapter.go),
+	// so it opens exactly one connection, and no positive ceiling can
+	// change what one connection does. The saved-set version of this check
+	// DOES carry the ceiling, because there the remote exists and the
+	// operator has already spoken: see TestBackupSetConnection in
+	// backupsetenabled.go.
 	src := transport.Source{
 		ID:                   "connection-test",
 		Type:                 "sftp",

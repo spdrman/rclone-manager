@@ -74,10 +74,17 @@ type Source struct {
 
 	KnownHosts string
 
-	// MaxConnections caps how many simultaneous SFTP connections this
-	// source may open, mapping to rclone's sftp `connections` option. Zero
-	// means unset, which is rclone's own default of unlimited and is what
-	// every Source built before #264 existed means.
+	// MaxConnections caps how many simultaneous SFTP connections ONE
+	// OPERATION against this source may open, mapping to rclone's sftp
+	// `connections` option. Zero means unset, which is rclone's own
+	// default of unlimited and is what every Source built before #264
+	// existed means.
+	//
+	// Per operation, not per host, and the wording is deliberate (#355).
+	// rclone's token dispenser lives on an Fs, and internal/transport/rclone
+	// builds one Fs per operation, so two operations against one host are
+	// two independent budgets. The daemon and the web API's own
+	// reachability check are exactly that case.
 	//
 	// This is not the same setting as the per-file request window (rclone's
 	// `concurrency`, which internal/transport/rclone pins at 64). That one
@@ -92,7 +99,10 @@ type Source struct {
 	// an iptables rule rejecting a third simultaneous SSH connection from
 	// one address with a TCP reset, so an unbounded transfer does not run
 	// slowly, it fails, and it fails as a bare "connection refused" that
-	// names nothing an operator could act on.
+	// names nothing an operator could act on. What actually holds this
+	// manager under such a cap is the adapter's own bound of one connection
+	// per operation (oneConnectionAtATime in adapter.go); this is the
+	// belt over that, enforced by rclone itself.
 	MaxConnections int
 
 	Root string

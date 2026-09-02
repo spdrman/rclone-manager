@@ -1,10 +1,13 @@
 package rclone
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rclone/rclone/fs"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -99,5 +102,67 @@ func source(key, knownHosts string) transport.Source {
 		User:       "backup",
 		KeyFile:    key,
 		KnownHosts: knownHosts,
+	}
+}
+
+// #355 finding 7: fsFor calls info.NewFs directly, so none of rclone's own
+// option defaults apply and idle_timeout lands at its Go zero value. At
+// zero, rclone never creates the pool drainer at all
+// (backend/sftp/sftp.go: `if f.opt.IdleTimeout > 0 { f.drain = ... }`),
+// which is why an Fs this adapter failed to release held its connections
+// until the process exited rather than for a bounded 60 seconds.
+func TestSftpConfigRestoresRclonesOwnPoolDrainer(t *testing.T) {
+	cfg, err := sftpConfig(baseSource(t))
+	if err != nil {
+		t.Fatalf("sftpConfig: %v", err)
+	}
+	got, ok := cfg.Get("idle_timeout")
+	if !ok {
+		t.Fatal("idle_timeout was never set, so it reaches rclone as 0 and the sftp backend never creates its pool drainer; a pool nothing releases is then held forever rather than for a bounded time")
+	}
+	if got != "60s" {
+		t.Errorf("idle_timeout = %q, want %q (rclone's own documented default for this option)", got, "60s")
+	}
+}
+
+// #355 finding 1: one recursive List is not one connection unless
+// something says so. rclone walks a tree it cannot list recursively with
+// one goroutine per --checkers, and the sftp backend gives each goroutine
+// its own connection, so discovery alone opens eight against a host that
+// may reject the third.
+//
+// The observable proof is in connections_gate_test.go, against a real
+// server. This is the same claim without a container, so a machine with no
+// docker still fails when the bound is removed.
+func TestOneConnectionAtATimeBoundsTheWalkAndTheTransfer(t *testing.T) {
+	ctx := oneConnectionAtATime(context.Background())
+	ci := fs.GetConfig(ctx)
+
+	if ci.Checkers != 1 {
+		t.Errorf("Checkers = %d, want 1: rclone walks a tree with one goroutine per checker and each one takes its own SFTP connection, so anything above 1 makes plain discovery open more connections than an operator was ever told about", ci.Checkers)
+	}
+	if ci.MultiThreadStreams != 1 {
+		t.Errorf("MultiThreadStreams = %d, want 1: rclone splits a download above --multi-thread-cutoff across this many concurrent readers, and on sftp each reader is its own connection, so the multi-GB dumps this manager exists to fetch are exactly the transfers that fan out", ci.MultiThreadStreams)
+	}
+}
+
+// The bound must be a bound and nothing else. rclone captures the ambient
+// ConfigInfo into an Fs at construction, and the mid-transfer cancellation
+// gate exists because a caller's own settings reaching the wrong operation
+// is how a transfer stops being interruptible.
+func TestOneConnectionAtATimeLeavesEverythingElseAlone(t *testing.T) {
+	base, baseCI := fs.AddConfig(context.Background())
+	if err := (&baseCI.BwLimit).Set("64k"); err != nil {
+		t.Fatalf("set bwlimit: %v", err)
+	}
+	baseCI.Transfers = 7
+
+	got := fs.GetConfig(oneConnectionAtATime(base))
+
+	if got.BwLimit.String() != baseCI.BwLimit.String() {
+		t.Errorf("BwLimit = %s, want %s: the caller's own bandwidth limit has to survive", got.BwLimit, baseCI.BwLimit)
+	}
+	if got.Transfers != 7 {
+		t.Errorf("Transfers = %d, want 7", got.Transfers)
 	}
 }

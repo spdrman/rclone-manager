@@ -53,12 +53,19 @@ func TestValidateAcceptsNoCeilingAndRefusesANegativeOne(t *testing.T) {
 		{"unset", 0, false},
 		{"a real ceiling", 2, false},
 		{"negative", -1, true},
+		// #355 finding 10: rclone builds a token dispenser of exactly
+		// this many tokens at every NewFs, filling the channel one send
+		// at a time (lib/pacer.NewTokenDispenser), so a fat-fingered
+		// value is not a harmless no-op. An upper bound costs one line
+		// and there is no host on earth this is a ceiling FOR.
+		{"the largest value that is still a ceiling", maxConnectionsCeiling, false},
+		{"pathological", maxConnectionsCeiling + 1, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := validConfigWithMaxConnections(t, tc.value)
 			err := cfg.Validate()
 			if tc.wantErr && err == nil {
-				t.Fatalf("max_connections %d was accepted; rclone would take it and fail every backend operation", tc.value)
+				t.Fatalf("max_connections %d was accepted; out of range in either direction it is not a ceiling, it is something rclone will take and then misbehave over", tc.value)
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("max_connections %d was refused: %v", tc.value, err)

@@ -342,9 +342,19 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	//     shares. The values here match rclone's own documented defaults
 	//     (32KiB chunks, 64 concurrent requests per file) as of rclone
 	//     v1.75.0.
+	//   - idle_timeout: rclone only creates its pool drainer when this is
+	//     above zero (`if f.opt.IdleTimeout > 0 { f.drain = time.AfterFunc(
+	//     ...) }` in NewFsWithConnection), so at the Go zero value that
+	//     timer does not exist and nothing ever empties the pool on its
+	//     own. That is why the leak in #355 was unbounded rather than
+	//     bounded at a minute, and it is also the safety net behind
+	//     shutdownFs: rclone's Shutdown declines to close anything while a
+	//     session is still checked out, and this is what comes back for
+	//     it. The value matches rclone's own documented default.
 	cfg.Set("subsystem", "sftp")
 	cfg.Set("chunk_size", "32Ki")
 	cfg.Set("concurrency", "64")
+	cfg.Set("idle_timeout", "60s")
 
 	// #264: `connections` is a different setting from `concurrency` above,
 	// and the difference is the whole point. concurrency is the per-file
@@ -358,6 +368,24 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	//
 	// Left at zero this sets nothing at all, so rclone's default stands and
 	// no existing deployment changes.
+	//
+	// rclone's own help for this option says setting it "is very likely to
+	// cause deadlocks" and asks for one more than the sum of --transfers
+	// and --checkers, which for a ceiling of 1 reads as "never set 1".
+	// That warning is about rclone's sync engine, which holds several
+	// connections at once; this adapter is not that shape, and
+	// oneConnectionAtATime in adapter.go pins it at one connection per
+	// operation by construction.
+	//
+	// Measured rather than assumed, because "probably fine" is not
+	// something to leave for the next reader to trust:
+	// TestSFTPConnectionsAreReleasedAndBounded/EveryOperationCompletesAtEverySmallCeiling
+	// runs a recursive List, a Stat, an 8MiB copy and a RemoteHash at
+	// ceilings of 0, 1, 2 and 3, each under a 40s deadline that turns a
+	// deadlock into a failure rather than a hang. Nothing deadlocked at
+	// any of them, and the four runs came in between 7.2s and 9.1s with
+	// the SLOWEST being the highest ceiling, so nothing there points at
+	// the ceiling as a cost either. `max_connections: 1` is safe here.
 	if src.MaxConnections < 0 {
 		return nil, fmt.Errorf("source %q: max_connections is %d, but a connection ceiling cannot be negative (leave it unset, or zero, for rclone's unlimited default)", src.ID, src.MaxConnections)
 	}

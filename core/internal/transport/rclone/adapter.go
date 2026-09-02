@@ -87,9 +87,76 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 
 	f, err := info.NewFs(ctx, src.ID, src.Root, cfg)
 	if err != nil {
+		// A backend may hand back a LIVE Fs alongside an error, and
+		// rclone's sftp backend does exactly that. NewFsWithConnection
+		// ends `return f, err`, and the err that reaches here can be
+		// fs.ErrorIsFile: the root named an existing file, so rclone
+		// re-points the Fs at the parent directory and reports it, with
+		// a connection already opened and sitting in that Fs's pool.
+		//
+		// Dropping it here is the one leak "release on the way out of
+		// each operation" does not catch, because there is no way out to
+		// release on: no caller ever sees this Fs, so no caller ever
+		// defers a shutdown for it. It is also the worst kind, since
+		// nothing recovers it short of a restart if rclone's own drainer
+		// is not running.
+		//
+		// Ordinary misconfiguration reaches it. config.Validate asks only
+		// that remote_path be a non-empty absolute path, so pointing it
+		// at a file is accepted, and the daemon then repeats it every
+		// poll interval for as long as it runs.
+		if f != nil {
+			shutdownFs(ctx, f)
+		}
 		return nil, fmt.Errorf("source %q: %w", src.ID, err)
 	}
 	return f, nil
+}
+
+// oneConnectionAtATime returns a context whose rclone configuration keeps
+// a single operation to a single SFTP connection.
+//
+// An Fs is not a connection, it is a pool, and two of rclone's own
+// settings decide how wide one operation opens that pool. Both default
+// above one, and both were measured against the real fixture in
+// connections_gate_test.go:
+//
+//   - Checkers (8 by default) is how many goroutines walk a tree that the
+//     backend cannot list recursively, and sftp has no ListR, so a plain
+//     recursive List over 24 subdirectories opened 8 connections. A
+//     directory per producer run (gitea-runs/<RUN_ID>/*.dump) is a normal
+//     FR-8 layout, so this is the ordinary case, not a deep-tree edge.
+//   - MultiThreadStreams (4 by default) is how many concurrent readers
+//     rclone splits a download across once the file is bigger than
+//     --multi-thread-cutoff (256Mi). Multi-GB database dumps are exactly
+//     what this manager fetches, so the default path for its own subject
+//     matter is four connections for one copy.
+//
+// Against a host that queues the surplus that is invisible. Against one
+// that rejects it, which is what #264 is about, it is a failed backup that
+// names nothing an operator can act on. Bounding both here means the
+// number of connections a source sees is a property of this adapter, not
+// something an operator has to discover and then defend against with a
+// per-remote ceiling.
+//
+// The throughput this gives up is small and worth naming rather than
+// hand-waving: sftpConfig pins concurrency at 64, which is 64 requests in
+// flight inside the one connection, so a single stream is not a single
+// request. What is given up is the parallelism ACROSS connections, and for
+// a backup manager pulling one artifact at a time from a hardened host
+// that parallelism was never the point.
+//
+// fs.AddConfig copies the caller's ConfigInfo rather than replacing it, so
+// everything else the caller configured (a bandwidth limit, in particular)
+// survives untouched. That matters more than it looks: rclone captures the
+// ambient ConfigInfo into an Fs at construction, and the mid-transfer
+// cancellation gate exists precisely because one caller's settings
+// reaching another operation is how a transfer stops being interruptible.
+func oneConnectionAtATime(ctx context.Context) context.Context {
+	ctx, ci := fs.AddConfig(ctx)
+	ci.Checkers = 1
+	ci.MultiThreadStreams = 1
+	return ctx
 }
 
 // shutdownFs releases the backend resources an Fs holds, which for sftp
@@ -109,12 +176,25 @@ func (a *Adapter) newFs(ctx context.Context, src transport.Source, forHashing bo
 // never re-reads it, so a cached Fs silently applies the first caller's
 // bandwidth limit and cancellation wiring to every later one. The
 // mid-transfer cancellation gate in gate_test.go catches that, and a backup
-// tool that cannot cancel a transfer is a worse outcome than an extra
-// connection setup per operation.
+// tool that cannot cancel a transfer is a worse outcome than a connection
+// setup per operation, which is what main was already paying anyway (see
+// this function's caller doc and #355: main opened a fresh pool per
+// operation too, it just never closed one).
 //
-// The error is deliberately swallowed. This runs on the way out of an
-// operation that has already produced its answer, and a failure to hang up
-// cleanly must not turn a good backup into a reported failure.
+// The error is swallowed for a future backend rather than for this one.
+// sftp's Shutdown is `return f.drainPool(ctx)` and drainPool has no path
+// that returns non-nil, so today there is no error here to swallow; the
+// `_ =` is what keeps that true when a backend that does report one is
+// added, since a failure to hang up cleanly, after the operation has
+// already produced its answer, must not turn a good backup into a reported
+// failure.
+//
+// What drainPool CAN do is decline: it returns nil early, closing nothing,
+// while f.getSessions() != 0. That would leak a pool while reporting
+// success, and the reason it does not is sftpConfig's idle_timeout, which
+// leaves rclone's own drain timer running to finish the job (see the
+// comment there, and #355's finding that with idle_timeout unset that
+// timer is never created at all).
 func shutdownFs(ctx context.Context, f fs.Fs) {
 	if do, ok := f.(fs.Shutdowner); ok {
 		_ = do.Shutdown(ctx)
@@ -165,7 +245,14 @@ func toArtifact(o fs.Object) transport.RemoteArtifact {
 // for a caller to accidentally rely on; making that explicit here is
 // cheaper than leaving the answer to whatever ambient default happens to be
 // in effect.
+//
+// Full recursion is also where a plain listing turns into a fan-out of
+// connections, because sftp has no native recursive listing and rclone
+// walks what it cannot list recursively with one goroutine per --checkers.
+// oneConnectionAtATime below is what bounds that; see its doc for the
+// measurement.
 func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.RemoteArtifact, error) {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
 		return nil, Wrap("list", err)
@@ -224,6 +311,7 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 // genuinely cannot answer, so the comparison stays Weak and the delete stays
 // refused, which is what FR-16 asks for.
 func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath string) (transport.RemoteArtifact, error) {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
 		return transport.RemoteArtifact{}, Wrap("stat", err)
@@ -252,6 +340,7 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 }
 
 func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
+	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)
 	if err != nil {
 		return transport.TransferResult{}, Wrap("copy_to_local", err)
@@ -287,6 +376,7 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 }
 
 func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePath string, alg transport.HashAlgorithm) (string, error) {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsForHashing(ctx, src)
 	if err != nil {
 		return "", Wrap("remote_hash", err)
@@ -342,6 +432,7 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 }
 
 func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remotePath string) error {
+	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
 		return Wrap("delete_remote", err)
