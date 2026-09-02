@@ -160,12 +160,32 @@ func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 // cycleFailed is the one place `run` and `fetch` both decide whether a
 // cycle counts as failed (issue #283): a systemic error (reconcile or
 // discover exhausting its retry budget, a journal listing failing
-// outright, or a shutdown mid-cycle) OR any artifact the cycle walked
-// ending in FAILED, QUARANTINED or QUARANTINED_LOST. Before this existed,
-// each command checked only the systemic half, so a cycle where every
-// artifact discovered fine and then failed verification exited 0 -- the
-// exact bug this function exists to make structurally impossible to
-// reintroduce in one of the two commands without the other.
+// outright, or a shutdown mid-cycle), OR an artifact reconciliation could
+// not reach a verdict on, OR any artifact the cycle walked ending in
+// FAILED, QUARANTINED or QUARANTINED_LOST, OR a cycle that had work in
+// front of it and got none of it through. Before this existed, each
+// command checked only the systemic half, so a cycle where every artifact
+// discovered fine and then failed verification exited 0 -- the exact bug
+// this function exists to make structurally impossible to reintroduce in
+// one of the two commands without the other.
+//
+// The last of those four is issue #361, and it is the one that needs
+// stating carefully, because the obvious version of it is wrong. "Nothing
+// was transferred" is not a failure: a backup set with nothing new
+// waiting on the remote transfers nothing every poll interval for weeks
+// at a time, and that is the product working. What is a failure is a
+// cycle that had artifacts in front of it and moved none of them, whether
+// they were refused at discovery or refused at transfer. app.CycleProgress
+// is the count that tells those two apart; see its doc for what it
+// deliberately does not count, which is the other half of not turning a
+// quiet night into an alarm.
+//
+// It takes one app.CycleVerdict rather than a list of arguments each
+// command assembles for itself. That is not tidiness: #283 introduced
+// this function to stop the two commands disagreeing, and #361 found them
+// disagreeing anyway, because each was still building its own arguments
+// at the call site. The verdict is built in internal/app now, from the
+// same fields, for both.
 //
 // failedArtifacts (internal/app.processArtifacts) already folds in a
 // loss this cycle's own reconcile pass discovered on its own -- a
@@ -176,7 +196,7 @@ func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 // for a non-zero exit than a single artifact this cycle's own pipeline
 // quarantined, and this function must not let that distinction matter.
 func cycleFailed(v app.CycleVerdict) bool {
-	return v.Systemic || v.ReconcileErrors > 0 || v.FailedArtifacts > 0
+	return v.Systemic || v.ReconcileErrors > 0 || v.FailedArtifacts > 0 || v.Progress.NothingGotThrough()
 }
 
 // cycleExit turns one cycle's per-backup-set verdicts into the exit
@@ -190,6 +210,10 @@ func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 			continue
 		}
 		code = 1
+		if v.Progress.NothingGotThrough() {
+			fmt.Fprintf(w, "backup-manager: %s got nothing through this cycle: %d walked, %d got through\n",
+				v.Set, v.Progress.Walked, v.Progress.Advanced)
+		}
 	}
 	return code
 }

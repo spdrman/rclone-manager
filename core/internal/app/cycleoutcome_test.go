@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -248,5 +249,48 @@ func TestFetch_ReportsTheSameProgressAsRunCycle(t *testing.T) {
 	}
 	if !result.Progress.NothingGotThrough() {
 		t.Errorf("fetch Progress.NothingGotThrough() = false for a cycle where one candidate was refused discovery and the other's transfer was refused: %+v", result.Progress)
+	}
+}
+
+// TestRunCycle_ARefusedRemoteCleanupIsNotABarrenCycle is the false alarm
+// this count has to not raise. FR-16's identity re-check refusing to
+// delete a remote source is the documented, expected steady state against
+// a hardened account (see internal/lifecycle/remotedelete.go), so an
+// artifact can sit at COMMITTED indefinitely with its bytes already
+// durable on local disk. That backup succeeded. A cycle that walks it and
+// moves nothing must not read as a cycle that got nothing through, every
+// poll interval, forever.
+func TestRunCycle_ARefusedRemoteCleanupIsNotABarrenCycle(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+	tr.deleteErr = refusal("delete_remote")
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 1}
+
+	first := svc.RunCycle(context.Background()).Sets[0]
+	artifact := first.Discovery.Discovered[0].Artifact
+	rec, err := svc.Journal.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if st := lifecycle.State(rec.State); st == lifecycle.Complete {
+		t.Fatalf("precondition: journal state = %q; this test needs the remote cleanup to have been refused, leaving the artifact short of COMPLETE", st)
+	}
+	if _, err := os.Stat(lifecycle.FinalArtifactPath(localDir, artifact)); err != nil {
+		t.Fatalf("precondition: the artifact's durable local copy should exist, since only the remote cleanup was refused: %v", err)
+	}
+
+	second := svc.RunCycle(context.Background()).Sets[0]
+	if second.Progress.NothingGotThrough() {
+		t.Errorf("Progress.NothingGotThrough() = true (%+v) for a cycle whose only artifact is already durable on local disk and is waiting on a remote cleanup its source keeps refusing; that is a healthy set, not a failed backup", second.Progress)
+	}
+	if second.FailedArtifacts != 0 {
+		t.Errorf("FailedArtifacts = %d, want 0: a refused remote cleanup is not a failed artifact", second.FailedArtifacts)
 	}
 }

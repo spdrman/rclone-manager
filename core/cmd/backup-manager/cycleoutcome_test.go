@@ -159,20 +159,31 @@ func TestRun_ExitsZeroOnASteadyStateCycle(t *testing.T) {
 }
 
 // TestRun_ExitsNonZeroWhenTheJournalRecordedAFailureTheCycleDidNotSee is
-// issue #361's other half, end to end. lifecycle.Transfer refuses a
-// transfer whose final local name is already taken, records that refusal
-// as FAILED itself, and returns the error. processArtifact's error path
-// then reported the state the record carried BEFORE the step ran, so the
-// cycle counted no failed artifact at all and exited 0 while its own
-// journal said the only artifact in the backup set had failed.
+// issue #361's other half, end to end, and it is deliberately built so
+// that only that half can make it pass.
+//
+// lifecycle.Transfer refuses a transfer whose final local name is already
+// taken, records that refusal as FAILED itself, and returns the error.
+// processArtifact's error path then reported the state the record carried
+// BEFORE the step ran, so the cycle counted no failed artifact at all and
+// exited 0 while its own journal said that artifact had failed.
+//
+// The second artifact is the whole point of the fixture. It transfers
+// cleanly, so this cycle got something through and the "nothing got
+// through" rule cannot fire. The only thing left that can produce a
+// non-zero exit is the cycle counting the artifact its own journal says
+// failed, which is exactly the reading-back this test exists to pin.
 func TestRun_ExitsNonZeroWhenTheJournalRecordedAFailureTheCycleDidNotSee(t *testing.T) {
 	cfg := writeCycleConfig(t, true, "")
+	if err := os.WriteFile(filepath.Join(cfg.remoteDir, "second.dump"), []byte("the artifact that gets through"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 	if err := os.MkdirAll(cfg.localDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	// Something is already sitting at the artifact's final local name, so
-	// the transfer refuses rather than overwriting a possible known-good
-	// backup.
+	// Something is already sitting at the first artifact's final local
+	// name, so its transfer refuses rather than overwriting a possible
+	// known-good backup.
 	if err := os.WriteFile(filepath.Join(cfg.localDir, "backup.dump"), []byte("a backup that is already here"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -182,8 +193,14 @@ func TestRun_ExitsNonZeroWhenTheJournalRecordedAFailureTheCycleDidNotSee(t *test
 		got = run([]string{"run", "--config", cfg.path})
 	})
 
+	if _, err := os.Stat(filepath.Join(cfg.localDir, "second.dump")); err != nil {
+		t.Fatalf("precondition: the second artifact was supposed to transfer cleanly, so that this cycle is a partial one rather than a barren one: %v", err)
+	}
+	if strings.Contains(out, "got nothing through") {
+		t.Fatalf("precondition: this cycle got an artifact through, so the barren rule must not be what fails it.\nstdout:\n%s", out)
+	}
 	if got == 0 {
-		t.Errorf("run exit code = 0, want non-zero: the transfer refused and recorded FAILED, so this cycle backed up nothing.\nstdout:\n%s", out)
+		t.Errorf("run exit code = 0, want non-zero: one artifact's transfer refused and the journal recorded FAILED for it.\nstdout:\n%s", out)
 	}
 }
 

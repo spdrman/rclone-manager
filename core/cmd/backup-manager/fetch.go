@@ -62,15 +62,21 @@ func cmdFetch(args []string) int {
 	// or QUARANTINED_LOST: either a this-cycle transfer/verify/commit
 	// failure, or a previously-durable artifact reconciliation (above)
 	// found rotten on its own and quarantined before this cycle's own
-	// pipeline ever touched it. Neither case is what
-	// discoveryOrReconcileFailed sees, since that is a systemic discover/
-	// reconcile failure, not a per-artifact outcome, and a reconciliation
-	// pass that successfully finds and records rot returns no error at
-	// all. Checking it here, from the same count the line above just
-	// printed, is what issue #283 asks for: the exit code and the
-	// reported number cannot drift apart, because they are the same
-	// number. cycleFailed (setup.go) is the identical check `run`
-	// (run.go) makes, so the two commands cannot disagree about what a
-	// failed cycle is.
+	// pipeline ever touched it. A reconciliation pass that successfully
+	// finds and records rot returns no error at all, so nothing else
+	// here would see it. Reading the exit status off the same count the
+	// line above just printed is what issue #283 asks for: the exit code
+	// and the reported number cannot drift apart, because they are the
+	// same number.
+	//
+	// The verdict itself is built by internal/app, from the same fields
+	// RunCycle fills in, and handed to the same cycleExit `run` calls
+	// (setup.go). Issue #361 is why that is worth insisting on: the two
+	// commands used to build their own arguments here, and they had
+	// quietly grown two different definitions of a failed cycle. `fetch`
+	// failed a whole cycle over a single per-candidate discovery error
+	// that `run` correctly ignored, and ignored the per-artifact
+	// reconcile errors `run` now shares with it. Neither difference was
+	// deliberate and no test covered either.
 	return cycleExit(os.Stdout, result.Verdict())
 }

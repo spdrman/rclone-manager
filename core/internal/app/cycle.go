@@ -200,6 +200,12 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	}
 	discRes, err := s.discoverOne(ctx, source, bs)
 	result.Discovery = discRes
+	// A candidate discovery could not take in is a real object on the
+	// remote that this cycle failed to start backing up, so it counts as
+	// work walked and never advanced (issue #361). It does not fail the
+	// cycle on its own: one unreadable remote object among many that
+	// transferred fine is a pass that did real work.
+	result.Progress.Walked += len(discRes.Errors)
 	discovered, alreadyKnown, pending, rejected, conflicts, errored := eventDiscoveryCounts(discRes)
 	s.logger().Discovery(ctx, bs.ID.String(), discovered, alreadyKnown, pending, rejected, conflicts, errored)
 	if err != nil {
@@ -214,7 +220,10 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		result.Err = err
 		return result
 	}
-	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	failed, walk := s.processArtifacts(ctx, source, bs, records)
+	result.FailedArtifacts = failed
+	result.Progress.Walked += walk.Walked
+	result.Progress.Advanced += walk.Advanced
 	if ctx.Err() != nil {
 		result.Err = ctx.Err()
 	}
