@@ -34,10 +34,8 @@ from __future__ import annotations
 
 import argparse
 import ast
-import hashlib
 import os
 import socket
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -398,7 +396,7 @@ class TestTheEmbeddedCopyIsTheCanonicalOne(unittest.TestCase):
         on a machine that has no checkout, so a stale one is a check that
         passes for the wrong file."""
         self.assertEqual(
-            hashlib.sha256(CANONICAL_COMPOSE.read_bytes()).hexdigest(),
+            installer.hashlib.sha256(CANONICAL_COMPOSE.read_bytes()).hexdigest(),
             installer.EMBEDDED_COMPOSE_SHA256,
             "EMBEDDED_COMPOSE_SHA256 is not the digest of container/compose.yaml.\n\n"
             f"Regenerate it, do not hand-edit it:\n  {self.REGENERATE}")
@@ -514,7 +512,7 @@ class TestRegeneratingTheEmbeddedCopy(unittest.TestCase):
         self.assertNotEqual(changed, self.canonical_text())
         out = embed_compose.rewrite(self.installer_text(), changed)
         self.assertIn("read_only: false", out)
-        self.assertIn(hashlib.sha256(changed.encode("utf-8")).hexdigest(), out,
+        self.assertIn(installer.hashlib.sha256(changed.encode("utf-8")).hexdigest(), out,
                       "a regenerated blob with a stale digest is a self-check that passes for "
                       "the wrong file")
 
@@ -638,7 +636,7 @@ print(len((args.prefix / 'compose.yaml').read_bytes()))
     def test_staging_does_not_die_on_a_c_locale(self):
         env = dict(os.environ, LC_ALL="C", LANG="C",
                    PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
-        proc = subprocess.run(
+        proc = installer.subprocess.run(
             [sys.executable, "-c",
              self.PROBE.format(installdir=str(Path(installer.__file__).resolve().parent))],
             capture_output=True, text=True, env=env, timeout=120)
@@ -683,7 +681,7 @@ class TestARunningCheckoutIsNotSilentlyIgnored(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             copy = Path(tmp) / "install_docker_host.py"
             copy.write_bytes(Path(installer.__file__).read_bytes())
-            proc = subprocess.run(
+            proc = installer.subprocess.run(
                 [sys.executable, "-c",
                  "import sys; sys.path.insert(0, %r); import install_docker_host as i; "
                  "print(i.checkout_compose_beside_this_installer())" % tmp],
