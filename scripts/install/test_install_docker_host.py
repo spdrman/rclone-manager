@@ -1303,6 +1303,90 @@ class TestArchivingIsInsideTheRefusalContract(unittest.TestCase):
                         "it refuses before it touches anything")
 
 
+class TestAnUpgradeThatDiesHalfWayLeavesAWorkingInstall(unittest.TestCase):
+    """#343 states this and nothing held it: "A refused or failed upgrade
+    leaves the old install working."
+
+    An upgrade COPIES its archive and a factory reset MOVES it, and the
+    two branches differ by one keyword argument in prepare_for_mode. Get
+    that word wrong and a failed upgrade takes the administrator record
+    and the catalog with it, which is the one outcome an upgrade is
+    supposed to be incapable of. The tests around this one all watch the
+    archive; this one watches the INSTALL, which is the thing that has to
+    still be there afterwards.
+    """
+
+    def _installed(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        installer.stage_payload(args)
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username":"rom"}')
+        (args.state_dir / "state.db").write_text("SQLite format 3")
+        (args.state_dir / "state.db-wal").write_text("the committed transactions")
+        (args.config_dir / "config.yaml").write_text("sets: [one]\n")
+        (args.config_dir / "ssh_keys").mkdir(parents=True, exist_ok=True)
+        (args.config_dir / "ssh_keys" / "imported.key").write_text("an imported key")
+        installer.stop_stack = lambda a, *, remove: None
+        return fx, args
+
+    def setUp(self):
+        self._real_stop = installer.stop_stack
+        self.addCleanup(setattr, installer, "stop_stack", self._real_stop)
+
+    def _everything(self, args):
+        """Every file the deployment needs to start, by content, so a
+        truncated or emptied one is as visible as a missing one."""
+        seen = {}
+        for p in installer.archive_plan(args) + [args.prefix / "compose.yaml",
+                                                 args.prefix / "compose.image.yaml",
+                                                 args.prefix / ".env"]:
+            if p.is_file():
+                seen[str(p)] = p.read_bytes()
+            elif p.is_dir():
+                seen[str(p)] = sorted(q.name for q in p.iterdir())
+        return seen
+
+    def test_an_upgrade_that_dies_mid_archive_leaves_every_file_in_place(self):
+        _fx, args = self._installed()
+        before = self._everything(args)
+        self.assertIn(str(args.state_dir / "local-auth.json"), before, "the setup has to be real")
+
+        real_copy = installer.shutil.copy2
+
+        def explode(src, dst):
+            if str(src).endswith("state.db"):
+                raise OSError(28, "No space left on device")
+            return real_copy(src, dst)
+
+        installer.shutil.copy2 = explode
+        self.addCleanup(setattr, installer.shutil, "copy2", real_copy)
+
+        exc = refusal_from(installer.prepare_for_mode, args, "upgrade", installed=True)
+        self.assertIsNotNone(exc, "an OSError here reaches the operator as a traceback")
+        self.assertEqual(self._everything(args), before,
+                         "an upgrade that died half way took something the stack needs to start")
+        self.assertIn("Nothing was removed from the install", exc.remedy,
+                      "and it has to say so, because the next step depends on it")
+
+    def test_the_upgrade_archive_is_a_copy_and_the_reset_archive_is_a_move(self):
+        """The one keyword that separates the two, asserted on what is left
+        behind rather than on the flag, because the flag is what would be
+        wrong."""
+        _fx, args = self._installed()
+        installer.prepare_for_mode(args, "upgrade", installed=True)
+        self.assertTrue((args.state_dir / "local-auth.json").is_file(),
+                        "an upgrade keeps the administrator record where the engine looks for it")
+        self.assertTrue((args.state_dir / "state.db").is_file())
+
+        installer.prepare_for_mode(args, "factory-reset", installed=True)
+        self.assertFalse((args.state_dir / "local-auth.json").exists(),
+                         "a factory reset that leaves the administrator record produces an install "
+                         "nobody can log into and no enrollment link")
+        self.assertFalse((args.state_dir / "state.db").exists())
+
+
 class TestTheInstalledLayoutIsNotOverridden(unittest.TestCase):
     """Every path this installer archives, destroys or rewrites came from
     THIS run's flags, and it wrote prefix/.env without ever reading it
