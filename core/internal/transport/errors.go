@@ -47,6 +47,27 @@ const (
 	UnsupportedCapability
 	Permanent
 	Cancelled
+	// Configuration is EPIC E's addition (FR-28): a failure that is a fact
+	// about the CONFIGURATION rather than about the request, the network or
+	// the credentials. A bucket that does not exist, an endpoint that does
+	// not resolve, a region the provider rejects. Retrying any of them
+	// spends the whole backoff budget on a request that cannot begin
+	// succeeding until a person edits a config file.
+	//
+	// It is distinct from Permanent because Permanent means "this
+	// classifier did not recognise the failure", which is a statement about
+	// this code, and Configuration means "the operator wrote something that
+	// does not exist", which is a statement about the deployment and is the
+	// one an operator can act on. A surface that collapsed them would tell
+	// somebody with a typo in a bucket name to check their network.
+	//
+	// It is appended at the end of this block rather than filed next to
+	// Authentication, where it reads more naturally, because that would
+	// renumber every category below it. Nothing persists the number today
+	// (only String() reaches a log line or a journal detail), so the
+	// renumbering would in fact be safe, and appending means a reviewer
+	// does not have to establish that in order to trust this diff.
+	Configuration
 )
 
 var categoryNames = [...]string{
@@ -62,6 +83,7 @@ var categoryNames = [...]string{
 	UnsupportedCapability: "unsupported_capability",
 	Permanent:             "permanent",
 	Cancelled:             "cancelled",
+	Configuration:         "configuration",
 }
 
 // String renders the category name for logs. It is a label, not a contract:
@@ -78,10 +100,11 @@ func (c Category) String() string {
 // this category. Only Transient is: every other category is either a fixed
 // property of the request that a retry cannot change (NotFound,
 // PermissionDenied, HostVerification, Authentication, KeyPermissions,
-// IntegrityFailure, Conflict, UnsupportedCapability), a decision already
-// made by the caller (Cancelled), or a case this classifier could not
-// place at all (Unclassified, Permanent), which must never be treated as
-// safe to retry just because it wasn't recognized.
+// IntegrityFailure, Conflict, UnsupportedCapability), a fixed property of
+// the deployment that only an operator can change (Configuration), a
+// decision already made by the caller (Cancelled), or a case this
+// classifier could not place at all (Unclassified, Permanent), which must
+// never be treated as safe to retry just because it wasn't recognized.
 func (c Category) Retryable() bool {
 	return c == Transient
 }

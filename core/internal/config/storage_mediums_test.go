@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // Tests for issue #234 (EPIC E, E1.2): the storage-medium config schema,
@@ -762,5 +763,23 @@ func TestMediumLocalIsTheStoreKindOfTheSameName(t *testing.T) {
 	if MediumLocal != string(artifactstore.KindLocal) {
 		t.Errorf("config.MediumLocal = %q but artifactstore.KindLocal = %q; a placement recorded under one cannot resolve a store under the other",
 			MediumLocal, artifactstore.KindLocal)
+	}
+}
+
+// TestStorageMediumTypeIsTheTransportMediumTypeOfTheSameName is the second
+// half of the same agreement, for the same reason. config decides what an
+// operator may write in `type:`; transport decides what an adapter knows
+// how to serve. A drift between the two spellings is a config that
+// validates and then finds nothing willing to serve it, which surfaces at
+// the worst possible moment: the first time an artifact is due to move.
+//
+// It lives here, beside TestMediumLocalIsTheStoreKindOfTheSameName, rather
+// than in transport, because these are the same kind of fact and splitting
+// them across two packages is how one of them stops being maintained.
+// config still imports neither package in production code.
+func TestStorageMediumTypeIsTheTransportMediumTypeOfTheSameName(t *testing.T) {
+	if StorageMediumTypeS3 != string(transport.MediumTypeS3) {
+		t.Errorf("config.StorageMediumTypeS3 = %q but transport.MediumTypeS3 = %q; a medium this schema accepts must be one an adapter recognises",
+			StorageMediumTypeS3, transport.MediumTypeS3)
 	}
 }
