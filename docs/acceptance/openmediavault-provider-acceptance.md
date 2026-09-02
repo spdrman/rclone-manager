@@ -48,12 +48,14 @@ apt-get install openmediavault-compose
 
 ### 0.2 Make the canonical image resolvable
 
-`ghcr.io/spdrman/backup-manager:0.1.0` is real: it is published, keyless-signed and
-SBOM-attested. `distribution/packaging/canonical.json` records
-`image.published: true`, and `container/release-manifest.json` carries a real
-`registry_digest` per architecture. So the reference in the compose file resolves to resolves
-today by pulling the released image; no push or side-load is needed. The steps below are only needed to test a locally-built image instead of the
-released one -- either push to your own registry:
+`ghcr.io/spdrman/backup-manager:0.2.0` is cut but not pushed yet:
+`distribution/packaging/canonical.json` records `image.published: false`, and
+`container/release-manifest.json` carries a `registry_digest` of `null` per
+architecture. So the reference does not resolve from the registry today, and the
+steps below are how you make it resolve, by pushing a build to a registry this host
+can reach or building elsewhere and loading it. The previous release,
+`ghcr.io/spdrman/backup-manager:0.1.0`, stays published and signed if you would
+rather run that. Either push to your own registry:
 
 ```bash
 docker buildx build \

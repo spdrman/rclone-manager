@@ -19,15 +19,19 @@
 # the resolved digest") is the digest the registry assigns on push. The
 # registry is ghcr.io and the reference is
 # ghcr.io/spdrman/backup-manager (distribution/packaging/canonical.json is
-# the single source of truth for it), so the gap is no longer "no
-# registry is configured": it is that nothing has been pushed there yet,
-# which canonical.json records as image.published false. This script
-# therefore writes `registry_digest: null` per architecture, a slot with
-# one obvious way to fill it (`docker buildx build --push` prints the
-# digest, `docker buildx imagetools inspect <ref>` reads it back), and
-# keeps recording the LOCAL image ID `docker build` produced, labeled
-# honestly as "local_image_id_sha256" and never as "digest". Doing the
-# push, and signing and attesting what it points at, is issue #88's work.
+# the single source of truth for it). This script does not push, so it
+# cannot know a digest: it writes `registry_digest: null` per architecture
+# and a null `index_digest`, slots with one obvious way to fill them
+# (`docker buildx build --push` prints the digest, `docker buildx
+# imagetools inspect <ref>` reads it back). The release workflow does the
+# push, signs the index keylessly through its own OIDC identity and
+# attaches the SBOM attestation, and the digests are recorded back into
+# the manifest afterwards, at the same time canonical.json's
+# image.published flips. Those two move together by test, so a manifest
+# with digests and a flag that says unpublished is refused, and so is the
+# reverse. What this script keeps recording either way is the LOCAL image
+# ID `docker build` produced, labeled honestly as "local_image_id_sha256"
+# and never as "digest".
 #
 # Where this script is run matters as much as what it records. The
 # manifest is only worth anything while the commit it pins stays in

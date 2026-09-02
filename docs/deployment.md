@@ -594,17 +594,20 @@ found by hand.
 The manifest checked in today was produced this way at `8ad3100`, and a second run from
 the same clean checkout reproduced its binary hashes exactly.
 
-**What this now records too**: a registry digest. `ghcr.io/spdrman/backup-manager:0.1.0`
-is real, `distribution/packaging/canonical.json` records `image.published: true`, and
-the manifest carries the `registry_digest` `docker buildx imagetools inspect` read back
-per architecture, not the digest the push's own output printed: the push says what it
-believes it sent, the registry says what it holds. The multi-architecture index those
-two manifests sit under is `sha256:533e7540`, keylessly signed through the release
-workflow's own OIDC identity with the SBOM attested beside it.
-`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` is what held the flag
-and the digests together while `published` was still false, and keeps holding them
-together now: a published flag with no digest and a digest with no published flag are
-both half-truths.
+**What this records about the registry**: nothing yet, for the version currently cut.
+`distribution/packaging/canonical.json` records `image.published: false` for
+`ghcr.io/spdrman/backup-manager:0.2.0`, and the manifest carries a `registry_digest` of
+`null` per architecture and a null `index_digest` to say the same thing from the other
+side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
+together in both directions: a published flag with no digest and a digest with no
+published flag are both half-truths.
+
+They are filled in from a real push rather than from the push's own output. That is how
+`0.1.0` was recorded: `docker buildx imagetools inspect` read each architecture's digest
+back out of ghcr.io, because the push says what it believes it sent and the registry says
+what it holds, and the multi-architecture index those two sat under, `sha256:533e7540`,
+was keylessly signed through the release workflow's own OIDC identity with the SBOM
+attested beside it. `0.2.0` gets the same treatment once the workflow pushes it.
 `local_image_id_sha256` stays what it always was, the local Docker image ID the
 recording build produced, which resolves nowhere but the machine that built it and is
 never a stand-in for a digest.
