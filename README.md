@@ -744,7 +744,7 @@ sources:
 **A set-level block replaces the deployment's whole chain.** Writing two of the three
 scalars is refused, not merged: `daily_days: 120` on its own would resolve weekly and
 monthly to the product defaults (3 and 12) rather than to the 24 and 60 three lines up the
-file, which is a set retaining a decade less than the operator who wrote the deployment's
+file, which is a set retaining four years less than the operator who wrote the deployment's
 policy believes. So a set-level block names either a `tiers:` list or all three scalars, and
 `backup-manager check` says which one is missing if it does not.
 

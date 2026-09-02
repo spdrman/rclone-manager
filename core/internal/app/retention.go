@@ -56,6 +56,7 @@ type RetentionSetReport struct {
 // today (see that command's own note on the CLI still not calling
 // PruneApply for a real, non-dry-run invocation, a separate, narrower gap
 // than this doc comment's own past staleness was).
+//
 // # A set the journal remembers but config no longer names
 //
 // Since issue #333 this method looks the set's configuration up, because

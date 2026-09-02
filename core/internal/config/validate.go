@@ -787,8 +787,8 @@ func (c *Config) resolveBackupSetRetentions(v *validator) {
 // validateRetention reads a zero scalar as "fill in the documented
 // default" and an empty timezone as UTC. That rule is right at the top
 // level, where the alternative is no policy at all, and wrong one level
-// down, where there IS another policy: the deployment's, which the
-// operator can see a few lines further down the same file. Left alone it
+// down, where there IS another policy: the deployment's, sitting in the
+// same file the override was written into. Left alone it
 // resolves a set writing `retention: {daily_days: 120}` inside a
 // deployment retaining 90/24/60 to 120/3/12, collapsing weekly from 24
 // months to 3 and monthly from 60 to 12, and reporting nothing.

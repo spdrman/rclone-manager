@@ -164,9 +164,8 @@ func cmdRetention(args []string) int {
 // it decides with, and the calendar it reckons that chain in.
 //
 // Tier names are spelled the way the config file spells them, lower case,
-// rather than the way the per-artifact tiers= line below spells them
-// (upper case, because those strings are API surface that reaches a
-// client). This line is not a verdict, it is a pointer at the block an
+// rather than the way the per-artifact tiers= line spells them (upper
+// case, because those strings are API surface that reaches a client). This line is not a verdict, it is a pointer at the block an
 // operator would go and edit, so it should read like that block.
 //
 // The timezone is on this line rather than left implicit because it is
