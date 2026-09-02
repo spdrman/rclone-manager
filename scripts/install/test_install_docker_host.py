@@ -20,11 +20,20 @@ Run with:
     python3 -m unittest scripts.install.test_install_docker_host -v
 or, from this directory:
     python3 -m unittest test_install_docker_host -v
+
+NEW TEST CLASSES GO ABOVE the `if __name__ == "__main__":` block at the
+bottom of this file, never below it. `python3 test_install_docker_host.py`
+calls unittest.main() at the moment that line executes, so anything
+defined after it is not in the namespace yet, does not run, and the run
+still prints OK. TestTheSuiteRunsEveryTestItDefines enforces this, because
+a suite that can silently stop running half of itself is worse than no
+suite at all.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import os
 import socket
 import sys
@@ -1415,6 +1424,60 @@ class TestFixNetworkVocabulary(unittest.TestCase):
             installer.BridgeDoctor.probe = real_probe
             installer.BridgeDoctor.ensure_probe_image = real_image
             installer.install_persistence = real_install
+
+
+class TestTheSuiteRunsEveryTestItDefines(unittest.TestCase):
+    """A suite that can silently stop running part of itself.
+
+    `python3 test_install_docker_host.py` runs unittest.main() at the
+    moment that line executes, against whatever is in the module namespace
+    by then. A class appended BELOW the entrypoint is not there yet, so it
+    never runs, and the invocation still prints OK with a lower count
+    nobody is watching.
+
+    That is not hypothetical: two branches in flight both appended their
+    new classes past it, and a direct run of either reported OK over 94
+    tests while `python3 -m unittest` (which imports the module fully
+    first, and is what scripts/ci-local.sh uses) ran 100 and 118. The gate
+    was fine and one invocation away from not being.
+
+    So the entrypoint has to be the last statement in the file, and this
+    says so about the installer too, which has the same shape.
+    """
+
+    @staticmethod
+    def _is_entrypoint(node) -> bool:
+        """`if __name__ == "__main__":`, matched structurally.
+
+        Not ast.unparse(), which arrived in 3.9: the installer supports
+        3.8 (Preflight.check_python), and a test that cannot run on the
+        version the thing under test supports is a hole of its own.
+        """
+        return (isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Name)
+                and node.test.left.id == "__name__")
+
+    def assert_nothing_follows_the_entrypoint(self, path: Path) -> None:
+        body = ast.parse(path.read_text(encoding="utf-8")).body
+        entrypoints = [i for i, node in enumerate(body) if self._is_entrypoint(node)]
+        self.assertEqual(
+            len(entrypoints), 1,
+            f"{path.name} should have exactly one `if __name__ == \"__main__\":` block, found "
+            f"{len(entrypoints)}")
+        trailing = body[entrypoints[0] + 1:]
+        named = [getattr(node, "name", type(node).__name__) for node in trailing]
+        self.assertEqual(
+            named, [],
+            f"{path.name} defines {named} AFTER its `if __name__ == \"__main__\":` block, so a "
+            f"direct `python3 {path.name}` run never sees them and still reports OK. Move them "
+            f"above it.")
+
+    def test_nothing_is_defined_after_this_file_runs_itself(self):
+        self.assert_nothing_follows_the_entrypoint(Path(__file__))
+
+    def test_nothing_is_defined_after_the_installer_runs_itself(self):
+        self.assert_nothing_follows_the_entrypoint(Path(installer.__file__))
 
 
 if __name__ == "__main__":
