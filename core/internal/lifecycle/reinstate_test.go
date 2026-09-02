@@ -61,6 +61,71 @@ func quarantinedFixture(t *testing.T) (*state.Journal, model.ArtifactID) {
 	return j, artifact
 }
 
+// remoteDeletePendingQuarantinedFixture builds a journal row quarantined
+// out of REMOTE_DELETE_PENDING rather than COMMITTED, the other origin
+// quarantineOrigins conservatively reinstates one step further back (see
+// machine.go's "Reinstatement" section for why there is deliberately no
+// QUARANTINED -> REMOTE_DELETE_PENDING edge for it to return to instead).
+func remoteDeletePendingQuarantinedFixture(t *testing.T) (*state.Journal, model.ArtifactID) {
+	t.Helper()
+	j := openTestJournal(t)
+	artifact := mustID(t)
+	localPath, localSum := writeLocalFile(t, 10)
+	size := int64(10)
+
+	discoverAndAdvance(t, j, artifact, testRemotePath,
+		state.RemoteIdentity{Size: &size, Hash: localSum, HashAlg: "sha256"},
+		localPath, &state.TransferResult{BytesTransferred: 10},
+		&state.HashUpdate{Alg: "sha256", Hash: localSum},
+		RemoteDeletePending)
+
+	ctx := context.Background()
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "fixture-quarantine",
+		From: string(RemoteDeletePending), To: string(Quarantined),
+		Detail: "reconciliation found the durable local copy invalid while the remote object was still present",
+	}); err != nil {
+		t.Fatalf("fixture: -> QUARANTINED: %v", err)
+	}
+	return j, artifact
+}
+
+// remoteRetainedQuarantinedFixture builds a journal row that walked the
+// pipeline to COMMITTED, was retained under issue #282's read-only path
+// (COMMITTED -> REMOTE_RETAINED), and was then quarantined by a later
+// content check finding the durable local copy invalid: issue #315's own
+// entry point, REMOTE_RETAINED -> QUARANTINED.
+func remoteRetainedQuarantinedFixture(t *testing.T) (*state.Journal, model.ArtifactID) {
+	t.Helper()
+	j := openTestJournal(t)
+	artifact := mustID(t)
+	localPath, localSum := writeLocalFile(t, 10)
+	size := int64(10)
+
+	discoverAndAdvance(t, j, artifact, testRemotePath,
+		state.RemoteIdentity{Size: &size, Hash: localSum, HashAlg: "sha256"},
+		localPath, &state.TransferResult{BytesTransferred: 10},
+		&state.HashUpdate{Alg: "sha256", Hash: localSum},
+		Committed)
+
+	ctx := context.Background()
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "fixture-retain",
+		From: string(Committed), To: string(RemoteRetained),
+		Detail: "issue #282: this backup set is declared read-only",
+	}); err != nil {
+		t.Fatalf("fixture: -> REMOTE_RETAINED: %v", err)
+	}
+	if _, err := Advance(ctx, Deps{Journal: j}, state.Transition{
+		Artifact: artifact, Key: "fixture-quarantine",
+		From: string(RemoteRetained), To: string(Quarantined),
+		Detail: "issue #315: reconciliation found the durable local copy of a retained artifact invalid",
+	}); err != nil {
+		t.Fatalf("fixture: -> QUARANTINED: %v", err)
+	}
+	return j, artifact
+}
+
 func conclusiveEvidence() ReinstatementEvidence {
 	return ReinstatementEvidence{
 		HashMatched: true,
@@ -446,5 +511,142 @@ func TestASecondReinstatementIsRefusedAndWritesNothing(t *testing.T) {
 	}
 	if again := transitionCount(t, j, artifact); again != after {
 		t.Fatalf("state_transitions grew from %d to %d rows on a second attempt", after, again)
+	}
+}
+
+// --- issue #315: origin-aware reinstatement ---
+
+// The decisive proof for issue #315. Before this, QUARANTINED reinstated
+// to exactly one fixed state, COMMITTED, no matter which state an artifact
+// was quarantined FROM. That collides with REMOTE_RETAINED: an artifact
+// quarantined out of it must come back to REMOTE_RETAINED, or it silently
+// re-enters the ordinary FR-15 delete-eligible pipeline the moment its
+// backup set's ReadOnly flag is ever unset, defeating the entire point of
+// issue #282's read-only guarantee. This is exactly the collision issue
+// #315's "Why it wasn't just fixed in #314" section names.
+func TestReinstateFromQuarantineReturnsARemoteRetainedOriginArtifactToRemoteRetained(t *testing.T) {
+	ctx := context.Background()
+	j, artifact := remoteRetainedQuarantinedFixture(t)
+
+	out, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "reinstate-retained",
+		Evidence:   conclusiveEvidence(),
+		Note:       "confirmed the local copy is intact",
+	})
+	if err != nil {
+		t.Fatalf("ReinstateFromQuarantine: %v", err)
+	}
+	if out.Record.State != string(RemoteRetained) {
+		t.Fatalf("state after reinstatement = %q, want %q: a REMOTE_RETAINED-origin quarantine must never resolve to COMMITTED", out.Record.State, RemoteRetained)
+	}
+
+	at, ok, err := j.LastTransition(ctx, artifact, string(Quarantined), string(RemoteRetained))
+	if err != nil || !ok {
+		t.Fatalf("LastTransition(QUARANTINED -> REMOTE_RETAINED) = (ok %v, err %v), want (true, nil)", ok, err)
+	}
+	if at.IsZero() {
+		t.Fatal("the reinstatement was recorded with a zero timestamp")
+	}
+
+	// FR-24's reporting has to see this lineage too, the same guarantee
+	// health.go's package doc already makes for the pre-existing
+	// QUARANTINED -> COMMITTED edge: both readers derive from the same
+	// reinstatementEdges, so a new exit is covered by construction rather
+	// than by remembering to update a second list.
+	reinstated, err := ReinstatedArtifacts(ctx, j, artifact.Set)
+	if err != nil {
+		t.Fatalf("ReinstatedArtifacts: %v", err)
+	}
+	found := false
+	for _, id := range reinstated {
+		if id == artifact {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ReinstatedArtifacts(%s) = %v, want it to include %s", artifact.Set, reinstated, artifact)
+	}
+}
+
+// Positive control / regression for the pre-#315 lineage: an ordinary
+// COMMITTED-origin quarantine must still land back at COMMITTED, exactly
+// as it always has, unaffected by REMOTE_RETAINED gaining its own
+// reinstatement exit.
+func TestReinstateFromQuarantineCommittedOriginStillReturnsCommitted(t *testing.T) {
+	ctx := context.Background()
+	j, artifact := quarantinedFixture(t)
+
+	out, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "reinstate-committed",
+		Evidence:   conclusiveEvidence(),
+	})
+	if err != nil {
+		t.Fatalf("ReinstateFromQuarantine: %v", err)
+	}
+	if out.Record.State != string(Committed) {
+		t.Fatalf("state after reinstatement = %q, want %q", out.Record.State, Committed)
+	}
+}
+
+// REMOTE_DELETE_PENDING's origin reinstates one step further back, to
+// COMMITTED, not to itself: machine.go deliberately declares no
+// QUARANTINED -> REMOTE_DELETE_PENDING edge (COMMITTED must remain the
+// only predecessor of REMOTE_DELETE_PENDING). This proves
+// reinstatementTargetForArtifact's per-origin table still gets that right
+// now that it also has to disambiguate REMOTE_RETAINED.
+func TestReinstateFromQuarantineRemoteDeletePendingOriginReturnsToCommitted(t *testing.T) {
+	ctx := context.Background()
+	j, artifact := remoteDeletePendingQuarantinedFixture(t)
+
+	out, err := ReinstateFromQuarantine(ctx, Deps{Journal: j}, QuarantineReinstateParams{
+		Artifact:   artifact,
+		AttemptKey: "reinstate-rdp-origin",
+		Evidence:   conclusiveEvidence(),
+	})
+	if err != nil {
+		t.Fatalf("ReinstateFromQuarantine: %v", err)
+	}
+	if out.Record.State != string(Committed) {
+		t.Fatalf("state after reinstatement = %q, want %q: a REMOTE_DELETE_PENDING-origin quarantine reinstates one step further back, never to itself", out.Record.State, Committed)
+	}
+}
+
+// quarantineOrigins (quarantine.go) and machine.go's Transitions table are
+// two independently-maintained lists, exactly the shape of drift this
+// project's own convention (see reinstatementEdges' doc) always pins with
+// a test rather than trusting by inspection. Every predecessor of
+// QUARANTINED that is a durable restore point must have an entry here, and
+// every entry here must name an edge machine.go actually declares.
+func TestQuarantineOriginsCoverEveryDurablePredecessorOfQuarantined(t *testing.T) {
+	origins := make(map[State]State, len(quarantineOrigins))
+	for _, o := range quarantineOrigins {
+		if _, dup := origins[o.From]; dup {
+			t.Errorf("quarantineOrigins names %s more than once", o.From)
+		}
+		origins[o.From] = o.Target
+	}
+
+	for _, from := range Predecessors(Quarantined) {
+		if !IsDurableRestorePoint(from) {
+			continue // Verifying, Failed: never held a durable local copy.
+		}
+		if _, ok := origins[from]; !ok {
+			t.Errorf("%s precedes QUARANTINED and is a durable restore point, but quarantineOrigins has no entry for it", from)
+		}
+	}
+
+	for from := range origins {
+		declared := false
+		for _, p := range Predecessors(Quarantined) {
+			if p == from {
+				declared = true
+				break
+			}
+		}
+		if !declared {
+			t.Errorf("quarantineOrigins names %s as an origin of QUARANTINED, but machine.go's Transitions table declares no such edge", from)
+		}
 	}
 }

@@ -64,6 +64,27 @@ export interface BackupSet {
   stateNote: string;
   enabled: boolean;
   /**
+   * Issue #282's read-only declaration, resolved (config.BackupSet.ReadOnly,
+   * never the per-set-override/source-default split): pull backups from
+   * this source, but never delete the remote original. Set through the
+   * wizard or the "declare read-only" control on this set's own detail
+   * page (issue #316), not only by hand-editing config.yaml.
+   */
+  readOnly: boolean;
+  /**
+   * How many backups in THIS set currently hold a remote source kept only
+   * because `readOnly` above is true, not because any one of them was
+   * individually reinstated out of quarantine (issue #227's own count,
+   * which this type has no field for at all: see QuarantinePage.tsx's own
+   * doc for why that population has never had a UI home). Comes from this
+   * set's own entry in GET /system/health, the same join haltReason above
+   * already depends on; 0 when that report could not be read for this set,
+   * which is indistinguishable here from a genuine zero — the aggregate
+   * across every set (SystemHealth.readOnlyRetainedCount) carries the
+   * same caveat for the identical reason.
+   */
+  readOnlyRetainedCount: number;
+  /**
    * Why the manager could not connect to this backup set the last time it
    * tried, so nothing was backed up. Absent when no refusal is on record
    * (#245).
@@ -78,7 +99,7 @@ export interface BackupSet {
    * and the word a card printed for its current activity. Two fields for
    * one concept could also disagree; this one carries it alone.
    *
-   * Both values have a producer. api/client.ts reads them from GET
+   * All three values have a producer. api/client.ts reads them from GET
    * /system/health's per-set `halt_reason`, which core writes to a
    * durable per-backup-set record when a cycle's transport refuses the
    * connection and removes when a later cycle runs that set to
@@ -86,12 +107,21 @@ export interface BackupSet {
    * recognise maps to absent rather than through, so a banner never
    * renders for a word it cannot explain.
    *
+   * `key-permissions` (#293) is the one of the three that never reaches
+   * the host at all: the configured key's on-disk mode no longer matches
+   * what it was imported with, caught before a connection is even
+   * attempted. It is kept distinct from `authentication-failed` on
+   * purpose, the same way that one is kept distinct from
+   * `host-key-changed`: a rejected login is a question for the remote
+   * account, a permission drift is a question for this filesystem, and
+   * collapsing the two would put an operator on the wrong page.
+   *
    * Nothing keyed on this may offer to resume the set. §77 invariant 5
    * makes re-trusting a changed host key an explicit administrator action
    * taken outside this manager, so these banners report and link; they
    * never dismiss, retry or re-trust.
    */
-  haltReason?: "host-key-changed" | "authentication-failed";
+  haltReason?: "host-key-changed" | "authentication-failed" | "key-permissions";
   newestKnownGoodAt: string | null;
   lastRunAt: string | null;
   lastValidation: "passed" | "failed" | "not-run";
@@ -136,6 +166,17 @@ export type QuarantineReason =
 
 export interface QuarantineRecord {
   reason: QuarantineReason;
+  /**
+   * The literal diagnostic sentence the backend recorded at the moment
+   * this backup was quarantined (core/service.Artifact.QuarantineReason,
+   * wire field quarantine_reason), verbatim. `reason` above is a closed
+   * category derived FROM this text for badging/filtering (see
+   * client.ts's quarantineReasonFor); this is the actual words, for an
+   * operator who needs to know exactly what was found, not just which
+   * bucket it fell into (issue #308). Empty when the backend has none to
+   * report, which the UI renders as absent rather than as a blank line.
+   */
+  detail: string;
   detectedAt: string;
   /** Quarantined artifacts never trigger remote deletion. */
   remoteSourceRetained: true;

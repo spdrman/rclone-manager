@@ -37,6 +37,16 @@ var ErrAlreadyEnrolled = errors.New("local: an administrator account already exi
 // durable one write at a time via write-temp-then-rename, so a crash
 // mid-write can never leave a half-written file for the next start to
 // trip over.
+//
+// "A single process owns path" is no longer just an assumption: New and
+// CreateAdmin (service.go/provision.go) both take path's own exclusive
+// advisory lock (lock_unix.go/lock_other.go) before either constructs a
+// Store or writes through one, so a second process reaching for the same
+// path - a duplicate `serve`, or `create-admin` racing a live one -
+// is refused with ErrStoreLocked rather than racing this Store's own
+// read-modify-write cycle. Store itself still does not take that lock;
+// it is deliberately the lower-level, path-only primitive both callers
+// build on.
 type Store struct {
 	path string
 	mu   sync.Mutex

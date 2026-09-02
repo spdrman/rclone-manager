@@ -24,10 +24,12 @@ package rclone
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/rclone/rclone/fs/config/configmap"
+	"github.com/rclone/rclone/fs/config/obscure"
 	"github.com/rclone/rclone/lib/env"
 
 	"github.com/spdrman/rclone-manager/core/internal/obs"
@@ -51,15 +53,36 @@ import (
 //   - key_pem (#74) IS reachable, but only just: it is set only when Source
 //     names an env or command key resolver instead of key_file, and only
 //     ever with what keysource.go's resolveKeyFromEnv/resolveKeyFromCommand
-//     returned after confirming it parses as an unencrypted SSH private
-//     key. There is no config field anywhere in this repository an operator
-//     can put a value into key_pem with directly: config.Remote's Key type
-//     has File, Env and Command fields, and deliberately nothing an
-//     operator could paste raw key material into (see config.Key's doc).
-//     key_file remains the default and documented preference specifically
-//     because it is the only one of the three sources that never routes
-//     through key_pem at all: rclone opens that file itself, so this
-//     adapter's own memory never holds the key.
+//     returned after confirming it parses (with the resolved passphrase,
+//     see below, when one is configured) as an SSH private key. There is
+//     no config field anywhere in this repository an operator can put a
+//     value into key_pem with directly: config.Remote's Key type has File,
+//     Env and Command fields, and deliberately nothing an operator could
+//     paste raw key material into (see config.Key's doc). key_file remains
+//     the default and documented preference specifically because it is the
+//     only one of the three sources that never routes through key_pem at
+//     all: rclone opens that file itself, so this adapter's own memory
+//     never holds the key. #298 adds a fourth, narrower way in: when Source
+//     names a key_encryption source AND key_file's content is (or gets
+//     migrated to) this program's own at-rest encryption format,
+//     keyencryption.go's resolveKeyFileForSFTP decrypts it into memory and
+//     it reaches key_pem the same way an env/command resolver's output
+//     does. With no key_encryption source configured, key_file keeps its
+//     "never enters memory" property exactly as before #298 existed; see
+//     keyencryption.go's package doc for the full threat model this trades
+//     away in exchange for defending the file at rest.
+//   - key_file_pass (#269) IS reachable, the same way key_pem is: only with
+//     what passphrase.go's resolvePassphrase returned, never with anything
+//     an operator could write into this adapter's option map directly.
+//     Unlike key_pem, it is set regardless of which key source is in play
+//     (rclone honours it for key_file just as much as for key_pem), and
+//     only when Source actually names a passphrase source; a Source with
+//     none of PassphraseFile/PassphraseEnv/PassphraseCommand set produces
+//     no key_file_pass at all, exactly the case for every Source built
+//     before #269 existed. rclone's own key_file_pass option expects an
+//     "obscured" (its own reversible obfuscation, not real encryption)
+//     value, never the plaintext passphrase, so this file always passes
+//     the resolved passphrase through obscure.Obscure before setting it.
 //   - pin_host_key and host_keys (rclone's trust-on-first-use pinning mode)
 //     are never set. TOFU is a legitimate mode for interactive use, but it
 //     means "accept whatever key the server shows the first time", which is
@@ -117,6 +140,44 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		return nil, fmt.Errorf("source %q: exactly one of key_file, key_env or key_command may be set for sftp, not more than one", src.ID)
 	}
 
+	// #269: the passphrase's own three sources get the identical "exactly
+	// one, never more" backstop the key's three sources just got, for the
+	// identical reason -- internal/config/validate.go enforces this same
+	// rule independently for a config built through that package, so this
+	// is the backstop for anything that builds a transport.Source
+	// directly, tests included. Zero is fine here, unlike for the key
+	// itself: most keys are not passphrase-protected at all, and that is
+	// still the default this function assumes when none of the three is
+	// set.
+	passphraseSourceCount := 0
+	if src.PassphraseFile != "" {
+		passphraseSourceCount++
+	}
+	if src.PassphraseEnv != "" {
+		passphraseSourceCount++
+	}
+	if len(src.PassphraseCommand) > 0 {
+		passphraseSourceCount++
+	}
+	if passphraseSourceCount > 1 {
+		return nil, fmt.Errorf("source %q: exactly one of key_passphrase_file, key_passphrase_env or key_passphrase_command may be set for sftp, not more than one", src.ID)
+	}
+
+	// Resolved before the key material itself, and before known_hosts is
+	// even checked: src.KeyEnv/src.KeyCommand's own resolvers (below) need
+	// the passphrase to validate the key they resolve actually decrypts
+	// with it, and a bad passphrase resolver should be reported as a
+	// passphrase problem, not buried behind an unrelated known_hosts
+	// error.
+	passphraseSecret, hasPassphrase, err := resolvePassphrase(src)
+	if err != nil {
+		return nil, fmt.Errorf("source %q: resolving the SSH key passphrase: %w", src.ID, err)
+	}
+	passphrase := ""
+	if hasPassphrase {
+		passphrase = passphraseSecret.Reveal()
+	}
+
 	// keyFileValue and keyPEM are mutually exclusive: exactly one of them
 	// ends up populated by the switch below, and which one decides whether
 	// the cfg built further down sets key_file or key_pem. Resolution
@@ -130,24 +191,65 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 
 	switch {
 	case src.KeyFile != "":
-		// The default and documented preference (docs/ssh-setup.md): this
-		// adapter only ever confirms the file exists and is readable. It
-		// never opens it, so the key itself never enters this process's
-		// memory at all; rclone's own sftp backend reads key_file directly.
+		// #293/#311: the file's own mode and its whole containing
+		// directory chain are checked first, before anything reads or
+		// resolves the file's content, and regardless of whether
+		// key_encryption ends up applying below. A world-writable
+		// directory lets any local actor unlink/replace/rename the key
+		// file regardless of the file's own mode bits, and that risk is
+		// identical whether the file holds a plaintext PEM or #298's
+		// at-rest ciphertext -- the ciphertext's own AES-GCM
+		// authentication defeats a silent CONTENT forgery, but not a
+		// wholesale swap or deletion, so this check applies to the
+		// physical file unconditionally rather than only on the
+		// plaintext path.
 		keyFilePath := env.ShellExpand(src.KeyFile)
-		if _, err := os.Stat(keyFilePath); err != nil {
+		info, err := os.Stat(keyFilePath)
+		if err != nil {
 			return nil, fmt.Errorf("source %q: key_file %q is not accessible: %w", src.ID, src.KeyFile, err)
 		}
+		if err := checkKeyFileMode(src.ID, src.KeyFile, info); err != nil {
+			return nil, err
+		}
+		if err := checkKeyDirChainMode(src.ID, src.KeyFile, keyFilePath); err != nil {
+			return nil, err
+		}
+
+		// #298: resolveKeyFileForSFTP handles both the default case (no
+		// key_encryption source configured, ok == false) and the at-rest
+		// encryption case (decrypt, or migrate-then-decrypt, into
+		// memory). See its own doc for the full contract.
+		secret, usingPEM, err := resolveKeyFileForSFTP(src)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: %w", src.ID, err)
+		}
+		if usingPEM {
+			keyPEM = secret
+			usingKeyPEM = true
+			break
+		}
+		// The default and documented preference (docs/ssh-setup.md), and
+		// still exactly what happens when no key_encryption source is
+		// configured at all: beyond the mode/directory checks just
+		// above, this adapter never opens the file itself, so the key
+		// never enters this process's memory at all; rclone's own sftp
+		// backend reads key_file directly. A passphrase, if one resolved
+		// above, is NOT verified against this file's content here, for
+		// the same reason: verifying it would mean reading and
+		// decrypting the file in this process, exactly what key_file
+		// exists to avoid. rclone itself checks it, with the
+		// key_file_pass option set below, the moment this cfg is
+		// actually used to connect.
 		keyFileValue = src.KeyFile
 	case src.KeyEnv != "":
-		secret, err := resolveKeyFromEnv(src.KeyEnv)
+		secret, err := resolveKeyFromEnv(src.KeyEnv, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("source %q: resolving the SSH key from environment variable %q: %w", src.ID, src.KeyEnv, err)
 		}
 		keyPEM = secret
 		usingKeyPEM = true
 	case len(src.KeyCommand) > 0:
-		secret, err := resolveKeyFromCommand(src.KeyCommand)
+		secret, err := resolveKeyFromCommand(src.KeyCommand, passphrase)
 		if err != nil {
 			return nil, fmt.Errorf("source %q: resolving the SSH key from the configured command: %w", src.ID, err)
 		}
@@ -189,6 +291,21 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 		cfg.Set("key_pem", quoteForRclonePem(keyPEM.Reveal()))
 	} else {
 		cfg.Set("key_file", keyFileValue)
+	}
+	if hasPassphrase {
+		// rclone's sftp backend reveals key_file_pass with its own
+		// obscure.Reveal (backend/sftp/sftp.go), which requires the
+		// obscured form, not the plaintext passphrase: Obscure here is the
+		// exact inverse of the Reveal rclone performs when it actually
+		// opens the key, on the same reasoning quoteForRclonePem states for
+		// key_pem's own required transformation. This is honoured
+		// regardless of whether the key came from key_file or key_pem
+		// above; rclone applies key_file_pass to either.
+		obscured, err := obscure.Obscure(passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("source %q: obscuring the resolved passphrase for rclone: %w", src.ID, err)
+		}
+		cfg.Set("key_file_pass", obscured)
 	}
 	cfg.Set("known_hosts_file", src.KnownHosts)
 
@@ -232,6 +349,147 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 	return cfg, nil
 }
 
+// wantKeyFileMode is the permission mode importSSHKeyInto
+// (core/service/backupsets.go) writes an imported key with
+// (os.WriteFile(path, raw, 0o600)). It is a literal here rather than an
+// import of that package's constant, because checkKeyFileMode's whole job
+// is to notice when a key's mode has drifted away from what was written,
+// and that comparison has to stay honest even if the two files' idea of
+// "0600" were ever to drift apart from each other, which is exactly the
+// class of silent assumption issue #293 is about.
+const wantKeyFileMode = 0o600
+
+// checkKeyFileMode refuses a key_file whose mode is not exactly
+// wantKeyFileMode (issue #293), rather than silently trusting that the
+// 0600 importSSHKeyInto wrote at creation is still true whenever the key
+// is next needed.
+//
+// This runs inside sftpConfig, so it runs on every call to it: every List,
+// Stat, CopyToLocal, RemoteHash and DeleteRemote against an sftp source
+// (adapter.go's fsFor/fsForHashing), not only at import. Import-time
+// correctness says nothing about whether the mode is still what it was set
+// to by the time the key is next used, and a real production deployment
+// found exactly that gap: the directory chain down to a backup root had
+// drifted to world-writable out of band, most likely during unrelated
+// troubleshooting on the host. The cost of checking is one os.Stat the
+// key_file case already pays for (see the caller), so there is no added
+// I/O over what existed before, and the healthy path (mode unchanged)
+// takes exactly the same number of syscalls it always did.
+//
+// This is an exact-match check, not "no wider than 0600": a mode that only
+// ever narrows (say, an operator's own well-meaning 0400) is still not
+// what was written, and "verify what actually happened, do not assume a
+// write stuck" is the whole point, not "assume a write stuck unless it
+// got worse."
+//
+// # Why this refuses instead of re-asserting 0600
+//
+// core/service/validator.go's materializeValidators is this project's one
+// existing precedent for self-healing a drifted permission: it rewrites an
+// embedded validator script, mode included, whenever upToDate finds it has
+// drifted, on every run cycle. That precedent does not transfer here,
+// because what makes it safe is that the content being restored is
+// verified byte-for-byte against an embedded copy this process authored;
+// self-healing there can never re-trust content an outside actor supplied.
+// A private key has no such reference copy: this process wrote it once,
+// from bytes an operator pasted through the wizard, and never kept an
+// independent copy to verify against. A chmod alone cannot tell "an
+// operator's own chmod widened this" apart from "something replaced the
+// file altogether", and a permission drift wide enough to let another
+// local actor read this key is exactly the situation where silently
+// narrowing the mode back and proceeding, without telling anyone, is the
+// wrong instinct. It is HostKeyChanged's own posture (internal/state/
+// halts.go, §77 invariant 5) read the same way: a security-relevant trust
+// break gets surfaced for a human to look at, not smoothed over so nobody
+// ever has to. Refusing with a clear, actionable diagnostic is the safe
+// default the issue names for exactly this reason.
+func checkKeyFileMode(sourceID, configuredPath string, info os.FileInfo) error {
+	if mode := info.Mode().Perm(); mode != wantKeyFileMode {
+		return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
+			"source %q: key_file %q has permissions %04o, expected exactly %04o (the mode it was imported with): "+
+				"an imported key's permissions must not drift after import; correct it (chmod %04o %s) or re-import the key",
+			sourceID, configuredPath, mode, wantKeyFileMode, wantKeyFileMode, configuredPath,
+		))
+	}
+	return nil
+}
+
+// checkKeyDirChainMode is checkKeyFileMode's other half: it refuses when
+// ANY ancestor directory between the key file and the filesystem root is
+// writable by anyone but its owner, rather than trusting that a tight
+// mode on the key file itself is enough.
+//
+// It has to exist because checkKeyFileMode alone leaves exactly the gap
+// issue #293's own incident report describes: "the key AND the whole
+// directory chain down to the backup root" had drifted to world-writable.
+// Unix directory-write permission governs entry changes (unlink, rename,
+// create) independent of the target file's own mode bits, so a key left
+// at a pristine 0600 sitting inside a world-writable directory is still
+// fully exposed: any local actor can delete it and drop a replacement in
+// its place, and checkKeyFileMode, looking only at the file, would never
+// notice. That is the "more dangerous half" PR #311's own review flagged:
+// the file check alone gives false confidence while the actual attack
+// surface, swapping the key out entirely, stands untouched.
+//
+// # How far up: every ancestor, to the filesystem root
+//
+// There is no configuration field this function can bound the walk to
+// instead. sftpConfig only ever receives a transport.Source, which has no
+// notion of "the backup root" (that concept, config.Capacity.BackupRoot,
+// belongs to a different tree entirely: where backup SETS write their
+// output, not where an imported key lives), and threading the full
+// manager Config down through Adapter into here for one check would be a
+// far bigger change than this fix warrants. Stopping short at some
+// arbitrary depth instead would just relocate the blind spot rather than
+// remove it: a directory widened one level above wherever the walk gave
+// up would be exactly as invisible as the key file itself was before this
+// check existed. Walking to the root closes that off completely, "up to
+// (at least) the backup root" being trivially true of every path. The
+// cost is a handful of extra stat calls per connection, negligible next
+// to the SSH handshake this check already gates.
+//
+// # The sticky-bit exception
+//
+// A directory whose mode has the sticky bit set (os.ModeSticky — 1777,
+// the standard permissions of /tmp on every mainstream Unix) is not
+// refused merely for being group- or world-writable. This is not a
+// loophole; it is the same fact that makes a world-writable /tmp safe to
+// have on a real system in the first place: POSIX restricts unlink and
+// rename inside a sticky directory to the entry's own owner, the
+// directory's owner, or root, regardless of who else can write there,
+// which is exactly the attack this function exists to close. A check that
+// ignored the sticky bit would refuse an entirely ordinary, correctly
+// configured deployment the moment a key file's path happened to share an
+// ancestor with the system's shared temp directory, which is a false
+// positive this project has no reason to accept for a bit POSIX itself
+// already uses to neutralize the risk.
+func checkKeyDirChainMode(sourceID, configuredPath, keyFilePath string) error {
+	dir, err := filepath.Abs(filepath.Dir(keyFilePath))
+	if err != nil {
+		return fmt.Errorf("source %q: resolving the directory containing key_file %q: %w", sourceID, configuredPath, err)
+	}
+	for {
+		info, err := os.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("source %q: checking permissions on %q, a directory containing key_file %q: %w", sourceID, dir, configuredPath, err)
+		}
+		mode := info.Mode()
+		if mode.Perm()&0o022 != 0 && mode&os.ModeSticky == 0 {
+			return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
+				"source %q: key_file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
+					"directory lets any local actor delete or replace the key regardless of the key file's own mode; "+
+					"correct it (chmod go-w %s) or move the key",
+				sourceID, configuredPath, dir, mode.Perm(), dir,
+			))
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
+}
+
 // quoteForRclonePem converts raw PEM text into the single-line,
 // backslash-n-escaped form rclone's sftp backend expects for its key_pem
 // option. backend/sftp/sftp.go reconstructs the original bytes with
@@ -244,4 +502,73 @@ func sftpConfig(src transport.Source) (configmap.Simple, error) {
 func quoteForRclonePem(pem string) string {
 	quoted := strconv.Quote(pem)
 	return quoted[1 : len(quoted)-1]
+}
+
+// withSHA256 returns cfg with the two options rclone needs before it will
+// compute a SHA-256 digest on an sftp source, and is applied ONLY on the
+// path that asks for one (Adapter.RemoteHash). It is deliberately not part
+// of sftpConfig, so the Fs that lists and copies is built exactly as it was
+// before this existed.
+//
+// # Why the hash has to be asked for at all
+//
+// rclone's sftp backend builds its candidate hash set from its own "hashes"
+// option, and when that option is empty (backend/sftp/sftp.go, Hashes()) it
+// seeds the set with hash.MD5 and hash.SHA1 and nothing else. SHA-256 is
+// never a candidate, so the probe that would look for a working sha256sum
+// never runs, Hashes() comes back without it on every server however
+// capable, and Adapter.RemoteHash's capability check refuses before it ever
+// reaches the object. config.Validation.Hash accepts "" or "sha256" and
+// nothing else, so leaving this unset made the only non-empty value it
+// accepts unusable against the only remote backend this project ships
+// besides "local": every artifact in such a backup set went
+// TRANSFERRED -> VERIFYING -> FAILED, forever, on every host.
+//
+// # Why naming it is not enough
+//
+// rclone will not trust a hash command until it has probed it, and its
+// v1.75.0 SHA-256 probe list pairs the sha256 commands with the SHA-1 ones
+// for the empty-input check:
+//
+//	{"sha256sum", "sha1sum"}, {"sha256 -r", "sha1 -r"},
+//	{"rclone hashsum sha256", "rclone hashsum sha256"}
+//
+// checkHash runs the second element and compares its output against
+// SHA-256's digest of empty input. It runs sha1sum, gets SHA-1's, and
+// rejects a working sha256sum. Only the third candidate can ever be
+// accepted, and that one needs rclone installed on the SOURCE host, which
+// nothing entitles a backup source to have. Measured against a real sshd
+// with coreutils sha256sum on PATH: with "hashes" alone, RemoteHash still
+// answered `backend "sftp" cannot compute sha256`. checkHash skips its
+// whole probe when the command is already set, so pinning it is rclone's
+// own supported way past a table this project does not own.
+//
+// # Why this is not folded into sftpConfig
+//
+// Because it would stop backups working. rclone's copy picks an integrity
+// hash from Common(src.Hashes(), dst.Hashes()). With these options on the
+// Fs that copies, a hardened, shell-less account (the posture
+// docs/ssh-setup.md recommends) advertises SHA-256, fails to compute it at
+// copy time, and rclone compares the empty string against the local digest
+// and reports `corrupted on transfer: sha256 hashes differ`. Measured: it
+// turns that deployment from "backs up, cannot hash-verify" into "cannot
+// back up at all", and it does so with a message that blames corruption
+// for a missing capability. It breaks the no-hash case too, which never
+// asked for any of this.
+//
+// Confining it to RemoteHash keeps the copy path byte-identical and leaves
+// exactly one behaviour changed: an account that CAN run sha256sum is now
+// allowed to. One that cannot still fails, because rclone runs the command
+// and the run fails, so Verify fails the artifact exactly as it did when
+// the capability was reported absent. The message changes from "backend
+// \"sftp\" cannot compute sha256" to one naming the command that could not
+// run, which is more use to whoever has to fix it.
+func withSHA256(cfg configmap.Simple) configmap.Simple {
+	out := configmap.Simple{}
+	for k, v := range cfg {
+		out[k] = v
+	}
+	out.Set("hashes", "sha256")
+	out.Set("sha256sum_command", "sha256sum")
+	return out
 }

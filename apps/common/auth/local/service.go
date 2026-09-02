@@ -83,6 +83,7 @@ const (
 // login/enroll/logout/session routes themselves.
 type Service struct {
 	store                 *Store
+	lock                  *storeLock
 	sessions              *sessionManager
 	bootstrap             *bootstrapIssuer
 	loginLimiter          *RateLimiter
@@ -119,15 +120,34 @@ func New(cfg Config) (*Service, error) {
 		passwordLimit = DefaultPasswordRateLimit
 	}
 
+	// Take this store's exclusive advisory lock BEFORE reading or writing
+	// anything, and hold it for this Service's entire lifetime (there is
+	// deliberately no Close/release - the real, long-lived `serve`
+	// process holds it until it exits, at which point the kernel releases
+	// it automatically, exactly like core/service/lock_unix.go's own
+	// startup/journal locks). This is what makes store.go's own
+	// documented assumption - "a single process owns path" - an enforced
+	// invariant rather than a convention: a second `serve` against the
+	// same store, or a `create-admin` invocation (provision.go) racing a
+	// live one, is refused with ErrStoreLocked instead of racing this
+	// Service's own Store.Enroll/Store.SetPassword read-modify-write
+	// cycle (issue #322).
+	lock, err := acquireStoreLock(cfg.StorePath)
+	if err != nil {
+		return nil, err
+	}
+
 	store := NewStore(cfg.StorePath)
 	admin, err := store.Admin()
 	if err != nil {
+		_ = lock.release()
 		return nil, fmt.Errorf("local: read existing administrator: %w", err)
 	}
 
 	bootstrap := newBootstrapIssuer(now)
 	if admin == nil {
 		if _, err := bootstrap.issue(); err != nil {
+			_ = lock.release()
 			return nil, fmt.Errorf("local: issue bootstrap token: %w", err)
 		}
 	}
@@ -141,6 +161,7 @@ func New(cfg Config) (*Service, error) {
 
 	return &Service{
 		store:                 store,
+		lock:                  lock,
 		sessions:              newSessionManager(now),
 		bootstrap:             bootstrap,
 		loginLimiter:          loginLimiter,

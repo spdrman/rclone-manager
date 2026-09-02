@@ -158,6 +158,7 @@ type syncFakeBackend struct {
 	errOnRetry          error
 	errOnReinstate      error
 	errOnSetEnabled     error
+	errOnSetReadOnly    error
 	errOnTestPersisted  error
 
 	lastArtifactFilter    service.ArtifactFilter
@@ -167,6 +168,7 @@ type syncFakeBackend struct {
 	lastRetried           string
 	lastReinstated        string
 	lastSetEnabled        setEnabledCall
+	lastSetReadOnly       setReadOnlyCall
 	lastTestedBackupSetID string
 }
 
@@ -303,7 +305,7 @@ func (f *syncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupS
 	return service.CreateBackupSetResult{}, errors.New("syncFakeBackend: CreateBackupSet not implemented")
 }
 
-func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte) (service.SSHKeyRef, error) {
+func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
 }
 
@@ -320,6 +322,20 @@ func (f *syncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageS
 		return nil, f.errOnStorage
 	}
 	return nil, nil
+}
+
+// ManagerStorage's default is an honest unknown rather than a zeroed
+// reading that claims Known. Every test in this package that does not
+// care about capacity therefore gets the shape a fresh install actually
+// produces, which is the one the NaN came from.
+func (f *syncFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
+	if f.errOnStorage != nil {
+		return service.ManagerStorage{}, f.errOnStorage
+	}
+	return service.ManagerStorage{
+		UnknownReason: service.StorageUnknownNoBackupRoot,
+		Denominator:   service.DenominatorDisk,
+	}, nil
 }
 
 // --- issue #211's read surface and its two quarantine actions ---
@@ -339,6 +355,16 @@ func (f *syncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enab
 	defer f.mu.Unlock()
 	f.lastSetEnabled = setEnabledCall{id: id, enabled: enabled}
 	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *syncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
+	if f.errOnSetReadOnly != nil {
+		return service.BackupSet{}, f.errOnSetReadOnly
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastSetReadOnly = setReadOnlyCall{id: id, readOnly: readOnly}
+	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
 }
 
 func (f *syncFakeBackend) TestBackupSetConnection(_ context.Context, id string) (service.ConnectionTestResult, error) {
@@ -468,6 +494,13 @@ type setEnabledCall struct {
 	enabled bool
 }
 
+// setReadOnlyCall is setEnabledCall's issue #316 counterpart, for
+// SetBackupSetReadOnly.
+type setReadOnlyCall struct {
+	id       string
+	readOnly bool
+}
+
 // asyncFakeBackend is a BackupServiceClient double whose SubmitRunCycle
 // behaves like the real core/service.BackupService's own contract:
 // persist synchronously, then finish the work later on a goroutine that
@@ -567,7 +600,7 @@ func (f *asyncFakeBackend) CreateBackupSet(context.Context, service.CreateBackup
 	return service.CreateBackupSetResult{}, errors.New("asyncFakeBackend: CreateBackupSet not implemented")
 }
 
-func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte) (service.SSHKeyRef, error) {
+func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
 }
 
@@ -577,6 +610,14 @@ func (f *asyncFakeBackend) ProbeHostKey(context.Context, string, int) (service.H
 
 func (f *asyncFakeBackend) TestConnection(context.Context, service.ConnectionTestRequest) (service.ConnectionTestResult, error) {
 	return service.ConnectionTestResult{}, errors.New("asyncFakeBackend: TestConnection not implemented")
+}
+
+// The same honest unknown syncFakeBackend gives: see its own comment.
+func (f *asyncFakeBackend) ManagerStorage(context.Context) (service.ManagerStorage, error) {
+	return service.ManagerStorage{
+		UnknownReason: service.StorageUnknownNoBackupRoot,
+		Denominator:   service.DenominatorDisk,
+	}, nil
 }
 
 func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.StorageStatus, error) {
@@ -591,6 +632,10 @@ func (f *asyncFakeBackend) ListStorageStatus(context.Context) ([]service.Storage
 // to route around.
 func (f *asyncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, enabled bool) (service.BackupSet, error) {
 	return service.BackupSet{ID: id, Disabled: !enabled}, nil
+}
+
+func (f *asyncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
+	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
 }
 
 func (f *asyncFakeBackend) TestBackupSetConnection(context.Context, string) (service.ConnectionTestResult, error) {
@@ -657,6 +702,13 @@ type backupSetFakeBackend struct {
 	// seam (issue #162's validator_id, in particular) rather than only on
 	// what came back out of it.
 	lastCreate service.CreateBackupSetRequest
+
+	// lastImportPassphrase records the passphrase argument the handler
+	// called ImportSSHKey with (#269), the same way lastCreate does for
+	// CreateBackupSet: a test can assert the JSON "passphrase" field
+	// actually crossed the HTTP-to-core seam, not only that it was
+	// accepted by the JSON decoder.
+	lastImportPassphrase string
 
 	errOnCreate  error
 	errOnList    error
@@ -725,6 +777,7 @@ func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.
 		CompletionStrategy: req.CompletionStrategy,
 		ValidatorID:        req.ValidatorID,
 		Disabled:           req.Disabled,
+		ReadOnly:           req.ReadOnly,
 	}
 	f.mu.Lock()
 	f.lastCreate = req
@@ -746,7 +799,10 @@ func (f *backupSetFakeBackend) CreateBackupSet(ctx context.Context, req service.
 	return result, nil
 }
 
-func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte) (service.SSHKeyRef, error) {
+func (f *backupSetFakeBackend) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error) {
+	f.mu.Lock()
+	f.lastImportPassphrase = passphrase
+	f.mu.Unlock()
 	if f.errOnImport != nil {
 		return service.SSHKeyRef{}, f.errOnImport
 	}

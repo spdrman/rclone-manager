@@ -44,6 +44,9 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if bs.Remote.Type != "sftp" || bs.Remote.Host != "production.example.internal" || bs.Remote.Port != 22 {
 		t.Fatalf("Remote decoded wrong: %#v", bs.Remote)
 	}
+	if !bs.Remote.Sensitive {
+		t.Fatalf("Remote.Sensitive = false, want true (full.yaml sets sensitive_endpoint: true)")
+	}
 	if len(bs.Include) != 1 || bs.Include[0] != "*.dump.zst" {
 		t.Fatalf("Include decoded wrong: %#v", bs.Include)
 	}
@@ -206,6 +209,22 @@ func TestLoadParsesKeyCommand(t *testing.T) {
 	}
 	if r.KeyFile != "" {
 		t.Fatalf("KeyFile = %q, want empty: a key.command source has no file to normalize into it", r.KeyFile)
+	}
+}
+
+// TestRemoteSensitiveDefaultsToFalse is issue #295's opt-in regression
+// control: a config written before sensitive_endpoint existed (every real
+// deployment's config file, and every testdata fixture except full.yaml)
+// must parse with Remote.Sensitive false, not merely unset in some way a
+// caller has to special-case. key_resolvers.yaml never mentions the key at
+// all, which is the ordinary case this proves.
+func TestRemoteSensitiveDefaultsToFalse(t *testing.T) {
+	cfg, err := LoadAndValidate("testdata/key_resolvers.yaml")
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	if cfg.Sources[0].BackupSets[0].Remote.Sensitive {
+		t.Fatalf("Remote.Sensitive = true for a config that never sets sensitive_endpoint, want false")
 	}
 }
 

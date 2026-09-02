@@ -8,6 +8,8 @@ import type { BackupSet } from "@shared/types/backup";
 import { PageHeader } from "@shared/components/PageHeader";
 import { BackupSetCard } from "@shared/components/BackupSetCard";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { isNotConfigured } from "@shared/api/failure";
+import { backupSetPath } from "@shared/utilities/routes";
 
 export function BackupSetsPage({
   sets,
@@ -27,6 +29,28 @@ export function BackupSetsPage({
   // page has not seen is exactly what CONFIG_REVISION_STALE exists to
   // refuse (see BackupManagerApi.runCycle's own doc).
   const version = useCausl(versionNode);
+
+  // #275: the empty list an unconfigured instance should show, rather than
+  // the refusal it answers with. Same shape as the genuinely-zero-sets case
+  // below, different sentence, because "no configuration yet" and "a
+  // configuration with no sets in it" are not the same fact.
+  if (isNotConfigured(sets.error))
+    return (
+      <>
+        <PageHeader title="Backup sets" subtitle="No backup sets configured" />
+        <EmptyState
+          title="No backup sets yet"
+          action={
+            <button className="btn btn--primary" onClick={() => navigate("/sets/new")}>
+              Add backup set
+            </button>
+          }
+        >
+          This instance has no configuration yet. Adding your first backup set is what
+          writes it.
+        </EmptyState>
+      </>
+    );
 
   if (sets.error) return <ErrorState {...sets.error} onRetry={sets.reload} />;
 
@@ -135,7 +159,7 @@ export function BackupSetsPage({
               key={set.id}
               set={set}
               currentOperation={currentOperation}
-              onOpen={() => navigate("/sets/" + set.id)}
+              onOpen={() => navigate(backupSetPath(set.source, set.set))}
               onTest={() => api.testConnection(set.id)}
               actionsDisabled={readOnly}
             />

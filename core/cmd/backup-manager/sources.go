@@ -29,6 +29,14 @@ func cmdSources(args []string) int {
 			if bs.Disabled {
 				status = "disabled"
 			}
+			// Issue #316: read-only-ness is a second, independent axis
+			// from enabled/disabled (a set can be read-only and still
+			// run, discovering and transferring new artifacts, just
+			// never deleting the remote original), so it is appended
+			// rather than folded into status above.
+			if bs.ReadOnly {
+				status += ",read_only"
+			}
 			fmt.Printf("  %-40s remote=%-6s remote_path=%-30s local_path=%-30s stale_after=%-8s status=%s\n",
 				bs.ID, bs.RemoteType, bs.RemotePath, bs.LocalPath, bs.StaleAfter, status)
 		}

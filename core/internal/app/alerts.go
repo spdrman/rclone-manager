@@ -208,6 +208,14 @@ func (s *Service) evaluateAlerts(ctx context.Context, report CycleReport) {
 
 	threshold := s.Config.Alerts.RepeatedFailureThreshold
 
+	// Measured once for the whole pass rather than per backup set: the cap
+	// is manager-wide, so the answer is the same for every set, and a
+	// storage condition that changed halfway down the list because the
+	// number was re-read would be an artefact of the loop rather than of
+	// the disk. An unmeasured usage leaves every capped deployment's
+	// storage condition unevaluated, which is what that list is for.
+	usage := s.usageForAssessment(ctx, "alert-evaluation")
+
 	for _, bs := range healthReport.BackupSets {
 		if !alertable[bs.Set] {
 			continue
@@ -229,7 +237,7 @@ func (s *Service) evaluateAlerts(ctx context.Context, report CycleReport) {
 		// different numbers on any filesystem with reserved blocks, and
 		// capacity.Stat's doc says so: if health ever starts carrying the
 		// raw one, this line has to change with it.
-		assessment, err := capacity.AssessCurrent(capacity.Stat{AvailableBytes: *bs.FreeBytes}, s.Capacity)
+		assessment, err := capacity.AssessCurrent(capacity.Stat{AvailableBytes: *bs.FreeBytes}, usage, s.Capacity)
 		if err != nil {
 			s.logger().Error(ctx, "alert-evaluation", err)
 			unevaluated = append(unevaluated, storage)

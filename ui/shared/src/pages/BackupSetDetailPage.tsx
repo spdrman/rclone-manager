@@ -24,7 +24,14 @@ const COMPLETION_COPY = {
 } as const;
 
 export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
-  const { setId = "" } = useParams();
+  // The route is two segments (App.tsx: /sets/:source/:set), matching a
+  // real backup set id's own shape (model.BackupSetID.String() joins them
+  // with "/" — core/internal/model/ids.go). Rejoining them here is the
+  // same join that produces core's own id string, and it is safe: neither
+  // half may contain "/" (model.validPart), so there is exactly one way
+  // to read this pair back as one id (issue #285).
+  const { source = "", set: setName = "" } = useParams();
+  const setId = source && setName ? source + "/" + setName : "";
   const api = useApi();
   const navigate = useNavigate();
   // B2.2 (#97) — graph-backed, not page-local useAsync state: an edit
@@ -45,7 +52,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   if (set.error) return <ErrorState {...set.error} onRetry={set.reload} />;
   // Both checks matter, same as BackupDetailPage.tsx's equivalent fix
   // (B2.4 mandatory review): React Router does not remount this
-  // component for a :setId change alone, so navigating set A -> set B
+  // component for a :source/:set change alone, so navigating set A -> set B
   // re-triggers this fetch while `data` still holds set A until the new
   // fetch resolves. Gating on `loading` too closes that window instead
   // of rendering set A's fields under set B's url.
@@ -130,6 +137,24 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <Cell label="Expected cadence" value={"every " + s.expectedIntervalHours + "h"} mono />
               <Cell label="State" value={s.stateNote} />
               <Cell label="Remote cleanup" value={s.enabled ? "Enabled after commit" : "Disabled"} />
+              {/* Issue #282/#316: a second, independent axis from "Remote
+                  cleanup" above — a disabled set still keeps its remote
+                  cleanup policy for whenever it runs again, while a
+                  read-only set never deletes the remote source at all,
+                  running or not. Retained count only when it is nonzero
+                  and read-only, the same "a permanent zero is a line an
+                  operator stops seeing" reasoning `status`'s own CLI
+                  output already follows for this exact figure. */}
+              <Cell
+                label="Read-only source"
+                value={
+                  s.readOnly
+                    ? s.readOnlyRetainedCount > 0
+                      ? "Yes — " + s.readOnlyRetainedCount + " retained"
+                      : "Yes"
+                    : "No"
+                }
+              />
             </dl>
           </Section>
 
@@ -180,10 +205,10 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <KV label="Daily" value={s.retention.daily + " kept"} />
               <KV label="Weekly" value={s.retention.weekly + " kept"} />
               <KV label="Monthly" value={s.retention.monthly + " kept"} />
-              <KV label="Timezone \u00b7 week start" value={s.retention.timezone + " \u00b7 " + s.retention.weekStartsOn} />
+              <KV label={"Timezone \u00b7 week start"} value={s.retention.timezone + " \u00b7 " + s.retention.weekStartsOn} />
               {s.retention.protectLastKnownGood ? (
                 <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
-                  <span aria-hidden="true" style={{ color: "var(--ok)" }}>\u2713</span>
+                  <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
                   <span>Newest known-good backup is protected from deletion</span>
                 </div>
               ) : null}
@@ -217,6 +242,22 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <button className="btn btn--caution" disabled={readOnly} onClick={() => api.setEnabled(s.source, s.set, !s.enabled).then(set.reload)}>
                 {s.enabled ? "Disable backup set" : "Enable backup set"}
+              </button>
+              {/* Issue #316: the read-only counterpart to the
+                  enable/disable toggle above, following the same
+                  CRUD-parity shape (a dedicated toggle route, not a
+                  generic edit). Turning this ON only prevents a FUTURE
+                  deletion; turning it back off does not reach back and
+                  delete anything already retained under it
+                  (core/service.SetBackupSetReadOnly's own doc) — so it
+                  sits in the caution tier beside Disable, not the
+                  destructive one below. */}
+              <button
+                className="btn btn--caution"
+                disabled={readOnly}
+                onClick={() => api.setReadOnly(s.source, s.set, !s.readOnly).then(set.reload)}
+              >
+                {s.readOnly ? "Allow remote deletion again" : "Declare source read-only"}
               </button>
               <button className="btn btn--destructive" disabled={readOnly} onClick={() => setPreviewOpen(true)}>
                 Apply retention now…

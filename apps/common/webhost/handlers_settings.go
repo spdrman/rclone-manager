@@ -46,6 +46,38 @@ const maxSettingsBodyBytes = 64 << 10
 // deliberate refusal and a silently widened window.
 type settingsRequest struct {
 	Retention *retentionUpdateRequest `json:"retention"`
+	Capacity  *capacityUpdateRequest  `json:"capacity"`
+}
+
+// capacityUpdateRequest is FR-21's block on the write side (issue #286).
+//
+// Every field is bytes, and every field is a pointer. The pointers matter
+// more here than anywhere else in this type: on this block ZERO IS A
+// MEANING, not an absence. `"cap_bytes": 0` is "remove my cap, use the
+// whole volume", and an omitted cap_bytes is "I did not touch the cap".
+// A plain int64 could not tell those two apart, and getting it wrong in
+// either direction silently changes what the product is allowed to do
+// with an operator's disk.
+//
+// There is no units field, on purpose. The Settings page shows an MB/GB
+// picker beside the input and converts before it sends; a wire that
+// carried a number and a unit would be a wire where the two can get out
+// of step, which is a thousand-fold mistake nobody would see in a diff.
+type capacityUpdateRequest struct {
+	CapBytes          *int64 `json:"cap_bytes"`
+	WarningFreeBytes  *int64 `json:"warning_free_bytes"`
+	CriticalFreeBytes *int64 `json:"critical_free_bytes"`
+	SafetyMarginBytes *int64 `json:"safety_margin_bytes"`
+}
+
+// namesNothing reports a capacity object that was sent but carries no
+// field at all, refused for exactly the reason retentionUpdateRequest's
+// own namesNothing gives.
+func (r capacityUpdateRequest) namesNothing() bool {
+	return r.CapBytes == nil &&
+		r.WarningFreeBytes == nil &&
+		r.CriticalFreeBytes == nil &&
+		r.SafetyMarginBytes == nil
 }
 
 type retentionUpdateRequest struct {
@@ -110,7 +142,24 @@ type retentionTierBody struct {
 // config.RetentionTier's own doc anticipates exactly this.
 type settingsResponse struct {
 	Retention retentionSettingsBody `json:"retention"`
+	Capacity  capacitySettingsBody  `json:"capacity"`
 	Schema    settingsSchemaBody    `json:"schema"`
+}
+
+// capacitySettingsBody is FR-21's block as it is actually deciding.
+//
+// backup_root and backup_root_configured travel together because a form
+// has to be able to show the path the reading is taken from WITHOUT
+// putting a derived value in an editable box: saving one back would turn
+// today's derivation into an operator's explicit choice and pin it there
+// forever, including on a later release that derives it better.
+type capacitySettingsBody struct {
+	CapBytes             int64  `json:"cap_bytes"`
+	WarningFreeBytes     int64  `json:"warning_free_bytes"`
+	CriticalFreeBytes    int64  `json:"critical_free_bytes"`
+	SafetyMarginBytes    int64  `json:"safety_margin_bytes"`
+	BackupRoot           string `json:"backup_root"`
+	BackupRootConfigured bool   `json:"backup_root_configured"`
 }
 
 type retentionSettingsBody struct {
@@ -227,28 +276,53 @@ func (h *handlers) updateSettings(w http.ResponseWriter, r *http.Request) {
 // core/service, which is the only layer that knows an empty chain
 // reinstates the default policy and therefore has to refuse it.
 func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsRequest, error) {
-	if body.Retention == nil || body.Retention.namesNothing() {
+	namedSomething := (body.Retention != nil && !body.Retention.namesNothing()) ||
+		(body.Capacity != nil && !body.Capacity.namesNothing())
+	if !namedSomething {
 		return service.UpdateSettingsRequest{}, errors.New("a settings write must name at least one setting to change")
 	}
-
-	update := service.RetentionUpdate{
-		Timezone:             body.Retention.Timezone,
-		WeekStartsOn:         body.Retention.WeekStartsOn,
-		ProtectLastKnownGood: body.Retention.ProtectLastKnownGood,
+	// A section that was sent but carries no field is refused even when
+	// ANOTHER section carries a real change. Quietly ignoring half a
+	// request is how a settings page reports success for an edit that
+	// never happened.
+	if (body.Retention != nil && body.Retention.namesNothing()) ||
+		(body.Capacity != nil && body.Capacity.namesNothing()) {
+		return service.UpdateSettingsRequest{}, errors.New("a settings section was sent with no field in it; omit the section instead of sending an empty one")
 	}
-	if body.Retention.Tiers != nil {
-		update.Tiers = make([]service.RetentionTier, 0, len(body.Retention.Tiers))
-		for _, t := range body.Retention.Tiers {
-			update.Tiers = append(update.Tiers, service.RetentionTier{
-				Name:        t.Name,
-				Granularity: t.Granularity,
-				PeriodDays:  t.PeriodDays,
-				Keep:        t.Keep,
-				WindowUnit:  t.WindowUnit,
-			})
+
+	var out service.UpdateSettingsRequest
+
+	if body.Retention != nil {
+		update := service.RetentionUpdate{
+			Timezone:             body.Retention.Timezone,
+			WeekStartsOn:         body.Retention.WeekStartsOn,
+			ProtectLastKnownGood: body.Retention.ProtectLastKnownGood,
+		}
+		if body.Retention.Tiers != nil {
+			update.Tiers = make([]service.RetentionTier, 0, len(body.Retention.Tiers))
+			for _, t := range body.Retention.Tiers {
+				update.Tiers = append(update.Tiers, service.RetentionTier{
+					Name:        t.Name,
+					Granularity: t.Granularity,
+					PeriodDays:  t.PeriodDays,
+					Keep:        t.Keep,
+					WindowUnit:  t.WindowUnit,
+				})
+			}
+		}
+		out.Retention = &update
+	}
+
+	if body.Capacity != nil {
+		out.Capacity = &service.CapacityUpdate{
+			CapBytes:          body.Capacity.CapBytes,
+			WarningFreeBytes:  body.Capacity.WarningFreeBytes,
+			CriticalFreeBytes: body.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes: body.Capacity.SafetyMarginBytes,
 		}
 	}
-	return service.UpdateSettingsRequest{Retention: &update}, nil
+
+	return out, nil
 }
 
 func toSettingsResponse(s service.Settings) settingsResponse {
@@ -260,6 +334,14 @@ func toSettingsResponse(s service.Settings) settingsResponse {
 			WeekStartsOn:         s.Retention.WeekStartsOn,
 			Tiers:                tiers,
 			ProtectLastKnownGood: s.Retention.ProtectLastKnownGood,
+		},
+		Capacity: capacitySettingsBody{
+			CapBytes:             s.Capacity.CapBytes,
+			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
+			CriticalFreeBytes:    s.Capacity.CriticalFreeBytes,
+			SafetyMarginBytes:    s.Capacity.SafetyMarginBytes,
+			BackupRoot:           s.Capacity.BackupRoot,
+			BackupRootConfigured: s.Capacity.BackupRootConfigured,
 		},
 		Schema: settingsSchemaBody{
 			Retention: retentionSchemaBody{

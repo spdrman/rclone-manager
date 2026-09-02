@@ -118,6 +118,21 @@ func commitArtifactWithoutHash(t *testing.T, j *state.Journal, artifact model.Ar
 	return localPath
 }
 
+// retainedArtifact is completeArtifact's issue #315 twin: it drives
+// artifact to COMMITTED and then to REMOTE_RETAINED (issue #282's
+// read-only path) instead of REMOTE_DELETE_PENDING -> COMPLETE.
+func retainedArtifact(t *testing.T, j *state.Journal, artifact model.ArtifactID, content []byte, occurredAt time.Time) string {
+	t.Helper()
+	localPath := commitArtifact(t, j, artifact, content, occurredAt)
+	ctx := context.Background()
+	if _, err := j.RecordTransition(ctx, state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":retained", From: "COMMITTED", To: "REMOTE_RETAINED", OccurredAt: occurredAt,
+	}); err != nil {
+		t.Fatalf("-> REMOTE_RETAINED: %v", err)
+	}
+	return localPath
+}
+
 func completeArtifact(t *testing.T, j *state.Journal, artifact model.ArtifactID, content []byte, occurredAt time.Time) string {
 	t.Helper()
 	localPath := commitArtifact(t, j, artifact, content, occurredAt)
@@ -161,14 +176,34 @@ func TestSelectDue_FiltersByEligibleState(t *testing.T) {
 	}
 
 	due := SelectDue(records, cfg, now)
-	if len(due) != 3 {
-		t.Fatalf("len(due) = %d, want 3 (COMMITTED, REMOTE_DELETE_PENDING, COMPLETE)", len(due))
+	if len(due) != 4 {
+		t.Fatalf("len(due) = %d, want 4 (COMMITTED, REMOTE_DELETE_PENDING, COMPLETE, REMOTE_RETAINED)", len(due))
 	}
 	for _, rec := range due {
 		st := lifecycle.State(rec.State)
-		if st != lifecycle.Committed && st != lifecycle.RemoteDeletePending && st != lifecycle.Complete {
+		if st != lifecycle.Committed && st != lifecycle.RemoteDeletePending && st != lifecycle.Complete && st != lifecycle.RemoteRetained {
 			t.Fatalf("SelectDue returned an ineligible state %s", st)
 		}
+	}
+}
+
+// TestSelectDue_IncludesRemoteRetained is issue #315's own proof, isolated
+// from the "walk every state" sweep above: a read-only source's retained
+// artifacts must be selected for scheduled revalidation exactly like an
+// ordinary COMMITTED one, not silently skipped forever the way they were
+// before this fix.
+func TestSelectDue_IncludesRemoteRetained(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	old := now.Add(-999 * time.Hour)
+	cfg := config.Revalidation{Hash: true, Interval: config.Duration(time.Hour), MaxPerCycle: 10}
+
+	records := []state.Record{
+		{Artifact: artifactNamed(t, "retained.dump"), State: "REMOTE_RETAINED", UpdatedAt: old},
+	}
+
+	due := SelectDue(records, cfg, now)
+	if len(due) != 1 {
+		t.Fatalf("len(due) = %d, want 1: a REMOTE_RETAINED artifact overdue for a check must be selected", len(due))
 	}
 }
 
@@ -379,6 +414,90 @@ func TestRun_CorruptedComplete_RoutesToQuarantinedLost(t *testing.T) {
 	}
 	if rec.State != string(lifecycle.QuarantinedLost) {
 		t.Fatalf("state = %q, want %s", rec.State, lifecycle.QuarantinedLost)
+	}
+}
+
+// TestRun_CorruptedRemoteRetained_RoutesToQuarantined is issue #315's
+// end-to-end proof, through the real Run entry point rather than just
+// SelectDue: a retained, read-only-source artifact whose durable local
+// copy has bit-rotted is caught by a scheduled revalidation pass and
+// quarantined, exactly the way TestRun_CorruptedCommitted_RoutesToQuarantined
+// proves for an ordinary COMMITTED one. Unlike TestRun_CorruptedComplete's
+// routing to QUARANTINED_LOST, this has to land in the recoverable
+// QUARANTINED: REMOTE_RETAINED never confirmed the remote object gone, so
+// the remote is presumptively still there for an operator to recover from.
+func TestRun_CorruptedRemoteRetained_RoutesToQuarantined(t *testing.T) {
+	j := openJournal(t)
+	artifact := artifactNamed(t, "backup.dump")
+	set := artifact.Set
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	localPath := retainedArtifact(t, j, artifact, []byte("hello world"), now.Add(-999*time.Hour))
+
+	if err := os.WriteFile(localPath, []byte("corrupted!!"), 0o600); err != nil {
+		t.Fatalf("corrupting local file: %v", err)
+	}
+
+	cfg := config.Revalidation{Hash: true, Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10}
+	report, err := Run(context.Background(), Deps{Journal: j, Now: func() time.Time { return now }}, set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("len(Findings) = %d, want 1", len(report.Findings))
+	}
+	f := report.Findings[0]
+	if !f.Checked || f.Passed {
+		t.Fatalf("Finding = %+v, want Checked=true Passed=false", f)
+	}
+	if f.To != lifecycle.Quarantined {
+		t.Fatalf("Finding.To = %s, want %s: the remote was never touched or confirmed gone, so this must stay recoverable", f.To, lifecycle.Quarantined)
+	}
+
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.Quarantined) {
+		t.Fatalf("state = %q, want %s", rec.State, lifecycle.Quarantined)
+	}
+}
+
+// TestRun_RemoteRetainedHashStillMatches_StaysRetainedAndRefreshesTheClock
+// is the pass-side companion: a retained artifact whose local copy is
+// still intact must stay exactly where it was, REMOTE_RETAINED, and get
+// its due-ness clock reset like any other passing recheck.
+func TestRun_RemoteRetainedHashStillMatches_StaysRetainedAndRefreshesTheClock(t *testing.T) {
+	j := openJournal(t)
+	artifact := artifactNamed(t, "backup.dump")
+	set := artifact.Set
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	retainedArtifact(t, j, artifact, []byte("hello world"), old.Add(-999*time.Hour))
+
+	cfg := config.Revalidation{Hash: true, Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10}
+	report, err := Run(context.Background(), Deps{Journal: j, Now: func() time.Time { return old }}, set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("len(Findings) = %d, want 1", len(report.Findings))
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("Finding = %+v, want Checked=true Passed=true", f)
+	}
+	if f.From != lifecycle.RemoteRetained || f.To != lifecycle.RemoteRetained {
+		t.Fatalf("Finding From/To = %s/%s, want REMOTE_RETAINED/REMOTE_RETAINED", f.From, f.To)
+	}
+
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != string(lifecycle.RemoteRetained) {
+		t.Fatalf("state = %q, want it to stay REMOTE_RETAINED", rec.State)
+	}
+	if !rec.UpdatedAt.Equal(old) {
+		t.Fatalf("UpdatedAt = %s, want it refreshed to %s", rec.UpdatedAt, old)
 	}
 }
 

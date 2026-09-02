@@ -18,14 +18,29 @@ import (
 // configures.
 const markerSuffix = ".complete"
 
-// manifestMarkerName is this package's convention for FR-8's "manifest
-// marker" strategy variant: an object with exactly this name, in the same
-// directory as a group of artifacts, signals that every artifact the
-// producer intended to write to that directory has been written. The name
-// borrows the well-known Hadoop/Spark convention for a completed output
-// directory, chosen because it is already a widely recognized signal for
-// exactly this fact rather than inventing a new one.
-const manifestMarkerName = "_SUCCESS"
+// effectiveManifestMarker is FR-8's "manifest marker" strategy variant's
+// directory-level completion signal: an object with exactly this name, in
+// the same directory as a group of artifacts, signals that every artifact
+// the producer intended to write to that directory has been written.
+//
+// c.ManifestMarker is the operator's configured name (issue #291): a real
+// read-only producer is not always able to be reconfigured to write
+// "_SUCCESS" (the well-known Hadoop/Spark convention this package
+// recognized unconditionally before that field existed), so the name is
+// now the operator's to choose. An unset ManifestMarker falls back to
+// config.DefaultManifestMarker here, independent of whether c has already
+// been through config.Validate (which resolves the same default): this
+// package's own tests, and BackupSet values service.CreateBackupSet
+// builds, construct a config.Completion directly without always calling
+// Validate first, so resolving here too is what keeps an unset field
+// meaning "_SUCCESS" everywhere, not just on the path that happens to
+// validate first.
+func effectiveManifestMarker(c config.Completion) string {
+	if c.ManifestMarker == "" {
+		return config.DefaultManifestMarker
+	}
+	return c.ManifestMarker
+}
 
 // inProgressSuffixes are basename suffixes this package treats as "still
 // being written under a recognized temporary name", universally, regardless
@@ -39,9 +54,14 @@ const manifestMarkerName = "_SUCCESS"
 var inProgressSuffixes = []string{".tmp", ".partial", ".inprogress"}
 
 // isMarkerObject reports whether base names one of this package's own
-// completion signals rather than a payload artifact.
-func isMarkerObject(base string) bool {
-	return base == manifestMarkerName || strings.HasSuffix(base, markerSuffix)
+// completion signals rather than a payload artifact, using c's configured
+// (or defaulted, see effectiveManifestMarker) manifest marker name. This is
+// called for every candidate regardless of c.Strategy (see Discover's
+// caller), the same way it always has been: a directory-level manifest
+// marker is never itself a payload artifact, whether or not this backup
+// set's own strategy is what would go looking for one.
+func isMarkerObject(base string, c config.Completion) bool {
+	return base == effectiveManifestMarker(c) || strings.HasSuffix(base, markerSuffix)
 }
 
 // isProducerTempName reports whether base carries one of inProgressSuffixes.
@@ -100,10 +120,11 @@ func isComplete(a transport.RemoteArtifact, c config.Completion, known map[strin
 		if _, ok := known[a.Path+markerSuffix]; ok {
 			return true, ""
 		}
-		if _, ok := known[path.Join(path.Dir(a.Path), manifestMarkerName)]; ok {
+		manifestMarker := effectiveManifestMarker(c)
+		if _, ok := known[path.Join(path.Dir(a.Path), manifestMarker)]; ok {
 			return true, ""
 		}
-		return false, fmt.Sprintf("no %s sibling marker and no %s manifest marker in its directory yet", a.Path+markerSuffix, manifestMarkerName)
+		return false, fmt.Sprintf("no %s sibling marker and no %s manifest marker in its directory yet", a.Path+markerSuffix, manifestMarker)
 
 	case "stable":
 		if a.ModTime == 0 {

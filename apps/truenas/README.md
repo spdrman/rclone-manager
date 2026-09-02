@@ -167,14 +167,15 @@ shape; this is the same thing with TrueNAS's paths.
 
 ## The image reference
 
-The registry is settled and nothing has been pushed to it yet, so
-`ghcr.io/spdrman/backup-manager:0.1.0` is the intended publish target rather than
-something that resolves today. `distribution/packaging/canonical.json` is the
-single source of truth for the reference and records `image.published: false`,
-and `container/release-manifest.json` carries a `registry_digest` of `null` per
-architecture for exactly as long as that stays false. Step 0 of the acceptance
-procedure covers pushing to your own registry or side-loading a saved image in
-the meantime. The reference is one question in the wizard and one line in the
+`ghcr.io/spdrman/backup-manager:0.2.0` is the reference every package here
+carries, and it is not pushed yet. `distribution/packaging/canonical.json`
+records `image.published: false`, and `container/release-manifest.json` carries
+a `registry_digest` of `null` per architecture; those two move together, so
+either both describe a real push or neither does. Until the release workflow
+pushes 0.2.0 and the digests are recorded back, reach it the way the acceptance
+procedure's step 0 describes, by pushing to your own registry or side-loading a
+build. The previous release, `ghcr.io/spdrman/backup-manager:0.1.0`, stays
+published and signed if you would rather run that. The reference is one question in the wizard and one line in the
 compose file, so substituting it is a one-place change.
 
 ## Contributing this to the TrueNAS catalog

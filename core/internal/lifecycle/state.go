@@ -17,6 +17,7 @@
 //	COMMITTED
 //	REMOTE_DELETE_PENDING
 //	COMPLETE
+//	REMOTE_RETAINED    (a second terminal state, issue #282: see below)
 //	FAILED             (exceptional)
 //	QUARANTINED        (exceptional, recoverable)
 //	QUARANTINED_LOST   (exceptional, terminal)
@@ -97,6 +98,21 @@ const (
 	// copy is retained. This is the happy-path terminal state.
 	Complete State = "COMPLETE"
 
+	// RemoteRetained means this artifact's backup set is declared
+	// read-only (issue #282, config.BackupSet.ReadOnly): FR-15's delete
+	// step is never offered this artifact, transport.Transport.DeleteRemote
+	// is never called for it, and the remote object is retained by policy
+	// rather than pending deletion. It is a second happy-path terminal
+	// state, reached from Committed or RemoteDeletePending exactly where
+	// Complete normally would be, and it exists so that a read-only set's
+	// artifacts stop being re-offered to the delete gate every cycle and
+	// logging a refusal each time -- the exact complaint the issue makes
+	// about a config that can only delay, never withhold, consent to
+	// delete. Unlike Complete, reaching this state says nothing about
+	// whether the remote object still exists: this manager never checked,
+	// on purpose, because it was never going to touch it either way.
+	RemoteRetained State = "REMOTE_RETAINED"
+
 	// Failed means the pipeline could not produce a valid backup on this
 	// attempt because of a permanent, non-retryable error (FR-22). It is
 	// never reached once the artifact is Committed: by then the backup has
@@ -143,6 +159,7 @@ var AllStates = []State{
 	Committed,
 	RemoteDeletePending,
 	Complete,
+	RemoteRetained,
 	Failed,
 	Quarantined,
 	QuarantinedLost,

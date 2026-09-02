@@ -192,7 +192,7 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 	}
 
 	cur := lifecycle.State(rec.State)
-	if _, ok := lifecycle.ReinstatementTarget(cur); !ok {
+	if !lifecycle.HasReinstatementExit(cur) {
 		return ReinstateResult{Artifact: id}, fmt.Errorf("%w: %s is %s", ErrNotQuarantined, id, cur)
 	}
 

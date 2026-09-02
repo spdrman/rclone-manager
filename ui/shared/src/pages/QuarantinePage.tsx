@@ -5,6 +5,8 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { WarningBanner } from "@shared/components/WarningBanner";
+import { describeFailure } from "@shared/api/failure";
+import { isNotConfigured } from "@shared/api/failure";
 import { stamp } from "@shared/utilities/format";
 import type { BackupArtifact, QuarantineReason } from "@shared/types/backup";
 
@@ -31,9 +33,29 @@ const REASON: Record<QuarantineReason, string> = {
  *  Revalidate and Retry ingestion only ever produce `failed`: neither
  *  resolves with a body worth reading. */
 type Outcome =
-  | { kind: "failed"; message: string }
+  | { kind: "failed"; message: string; remediation?: string; correlationId?: string }
   | { kind: "refused"; filename: string; reason: string }
   | { kind: "restored"; filename: string; reason: string };
+
+/** #274: these three actions used to report "Try again." whatever the
+ *  service said, under the literal `cid_quarantine_action`. Reinstatement
+ *  in particular refuses for reasons retrying cannot fix
+ *  (ARTIFACT_IRRECOVERABLE, ARTIFACT_NOT_QUARANTINED), and the service
+ *  names them. "Try again" is kept only for the case where nothing else
+ *  is known. */
+function actionFailed(verb: string, filename: string, e: unknown): Outcome {
+  const headline = verb + " \"" + filename + "\".";
+  const failure = describeFailure(e, headline);
+  const reason = failure.remediation ?? (failure.message === headline ? undefined : failure.message);
+  return {
+    kind: "failed",
+    message: headline,
+    // "Try again" only where nothing better is known, instead of as the
+    // standing advice it used to be.
+    remediation: reason ?? "Try again.",
+    correlationId: failure.correlationId
+  };
+}
 
 /** No "delete remote anyway" action exists here, by design (§18).
  *
@@ -85,9 +107,7 @@ export function QuarantinePage({
     api
       .revalidate(a.id)
       .then(quarantine.reload)
-      .catch(() =>
-        setOutcome({ kind: "failed", message: "Could not revalidate \"" + a.filename + "\". Try again." })
-      );
+      .catch((e: unknown) => setOutcome(actionFailed("Could not revalidate", a.filename, e)));
   };
 
   const retryIngestion = (a: BackupArtifact) => {
@@ -95,9 +115,7 @@ export function QuarantinePage({
     api
       .retryIngestion(a.id)
       .then(quarantine.reload)
-      .catch(() =>
-        setOutcome({ kind: "failed", message: "Could not retry ingestion for \"" + a.filename + "\". Try again." })
-      );
+      .catch((e: unknown) => setOutcome(actionFailed("Could not retry ingestion for", a.filename, e)));
   };
 
   const reinstate = (a: BackupArtifact) => {
@@ -114,12 +132,28 @@ export function QuarantinePage({
         setOutcome({ kind: "restored", filename: a.filename, reason: result.reason });
         quarantine.reload();
       })
-      .catch(() => {
+      .catch((e: unknown) => {
         setConfirming(null);
-        setOutcome({ kind: "failed", message: "Could not reinstate \"" + a.filename + "\". Try again." });
+        setOutcome(actionFailed("Could not reinstate", a.filename, e));
       })
       .finally(() => setRunning(false));
   };
+
+  // #275: quarantine holds what failed validation. Nothing has been
+  // ingested on an unconfigured instance, so nothing can have failed.
+  if (isNotConfigured(quarantine.error))
+    return (
+      <>
+        <PageHeader
+          title="Quarantine"
+          subtitle="Artifacts held back from the catalog. Their remote originals are retained until the issue is resolved."
+        />
+        <EmptyState title="Nothing in quarantine">
+          Quarantine holds backups that arrived but did not pass validation. This instance
+          has no configuration yet, so nothing has arrived.
+        </EmptyState>
+      </>
+    );
 
   if (quarantine.error) return <ErrorState {...quarantine.error} onRetry={quarantine.reload} />;
 
@@ -134,7 +168,11 @@ export function QuarantinePage({
 
       {outcome?.kind === "failed" ? (
         <div style={{ marginBottom: 14 }}>
-          <ErrorState message={outcome.message} correlationId="cid_quarantine_action" />
+          <ErrorState
+            message={outcome.message}
+            remediation={outcome.remediation}
+            correlationId={outcome.correlationId}
+          />
         </div>
       ) : null}
 
@@ -198,9 +236,32 @@ export function QuarantinePage({
                       <td>{a.setName}</td>
                       <td>
                         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                          <span aria-hidden="true" style={{ color: "var(--danger)" }}>\u2715</span>
+                          <span aria-hidden="true" style={{ color: "var(--danger)" }}>{"\u2715"}</span>
                           {a.quarantine ? REASON[a.quarantine.reason] : "\u2014"}
                         </span>
+                        {/* The literal sentence the journal recorded when this
+                            backup was quarantined (issue #308), not just the
+                            category badge above it. Only rendered when the
+                            backend actually sent one: an artifact whose
+                            quarantining transition carried no detail text
+                            shows the badge alone, same as before. */}
+                        {a.quarantine?.detail ? (
+                          <div
+                            className="mono"
+                            title={a.quarantine.detail}
+                            style={{
+                              fontSize: "var(--text-xs)",
+                              color: "var(--text-2)",
+                              marginTop: 2,
+                              maxWidth: 320,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap"
+                            }}
+                          >
+                            {a.quarantine.detail}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>
                         {a.quarantine ? stamp(a.quarantine.detectedAt) : "\u2014"}

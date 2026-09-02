@@ -80,6 +80,23 @@ type fakeTransport struct {
 	// every backup set that happens to use it.
 	failForSourceID string
 	failErr         error
+
+	// poison, when set, makes DeleteRemote fail the test the instant it is
+	// called, rather than merely counting the call for a later assertion.
+	// Issue #282's own acceptance criterion asks for proof "not by
+	// asserting a refusal": a double that fails as soon as it is invoked
+	// is the strongest form of that this package can build, stronger than
+	// a post-hoc deleteCallCount() check.
+	poison *testing.T
+
+	// remoteHashErr, when non-nil, is what RemoteHash returns instead of
+	// a computed hash, for every remote path. Unlike failForSourceID
+	// above (which fails every method, breaking transfer along with
+	// verification), this targets only the hash-comparison call, so a
+	// test can drive a real FR-13 layer-2 capability-absence failure
+	// (issue #284's own reproduction: a hardened SFTP account that
+	// cannot compute a hash) through an otherwise-successful transfer.
+	remoteHashErr error
 }
 
 func newFakeTransport() *fakeTransport {
@@ -143,6 +160,9 @@ func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source
 }
 
 func (f *fakeTransport) RemoteHash(ctx context.Context, source transport.Source, remotePath string, algorithm transport.HashAlgorithm) (string, error) {
+	if f.remoteHashErr != nil {
+		return "", f.remoteHashErr
+	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
 		return "", transport.NewError(transport.NotFound, "remote_hash", errors.New("not found"))
@@ -152,6 +172,9 @@ func (f *fakeTransport) RemoteHash(ctx context.Context, source transport.Source,
 
 func (f *fakeTransport) DeleteRemote(ctx context.Context, source transport.Source, remotePath string) error {
 	atomic.AddInt32(&f.deleteRemoteCalls, 1)
+	if f.poison != nil {
+		f.poison.Fatalf("fakeTransport.DeleteRemote(%q) was called; this test's backup set must never reach the transport's delete", remotePath)
+	}
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}

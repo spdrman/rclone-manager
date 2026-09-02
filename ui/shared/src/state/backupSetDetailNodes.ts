@@ -19,11 +19,11 @@ import { createResourceNode } from "./resource";
  * captureSetEditSnapshot/isSetEditStale below.
  *
  * A single shared node rather than one node per setId: only one detail
- * page is ever mounted at a time (route is `/sets/:setId`), so there is
- * no simultaneous-multiple-sets case to isolate, and every node id on
- * this graph is a fixed top-level string literal per the convention
- * graph.ts documents. The one hazard a shared "current X" node creates —
- * B2.4 found it for a hypothetical shared artifact node — is a stale
+ * page is ever mounted at a time (route is `/sets/:source/:set`, issue
+ * #285), so there is no simultaneous-multiple-sets case to isolate, and
+ * every node id on this graph is a fixed top-level string literal per
+ * the convention graph.ts documents. The one hazard a shared "current X"
+ * node creates — B2.4 found it for a hypothetical shared artifact node — is a stale
  * flash of set A's fields under set B's url while B's fetch is still in
  * flight; BackupSetDetailPage.tsx guards against that the same way
  * BackupDetailPage.tsx does (gate render on `loading`, not just `data`).

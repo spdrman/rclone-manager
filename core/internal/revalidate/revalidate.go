@@ -231,8 +231,11 @@ func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec 
 	// A failed recheck: route through the exact same edges reconcile.go
 	// already established for "the durable local copy was found invalid
 	// after the fact" (see machine.go and this package's own doc). Only
-	// COMPLETE routes to QUARANTINED_LOST; both other eligible states
-	// route to the ordinary, recoverable QUARANTINED.
+	// COMPLETE routes to QUARANTINED_LOST; every other eligible state,
+	// REMOTE_RETAINED (issue #315) included, routes to the ordinary,
+	// recoverable QUARANTINED: unlike COMPLETE, none of them has confirmed
+	// the remote object gone, so the remote is presumptively still there
+	// to recover from.
 	to := lifecycle.Quarantined
 	if cur == lifecycle.Complete {
 		to = lifecycle.QuarantinedLost

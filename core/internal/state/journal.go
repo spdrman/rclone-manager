@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
 // timeLayout is used for every timestamp column. RFC3339Nano round-trips
@@ -82,6 +83,27 @@ type Outcome struct {
 	// earlier call's result and this call changed nothing.
 	Applied bool
 	Record  Record
+
+	// Detail echoes back this call's own Transition.Detail: the free-text
+	// note (if any) the caller attached to this exact transition, for
+	// example the sentence internal/lifecycle/verify.go writes when an
+	// artifact fails or is quarantined. Record itself never carries this
+	// text (see this package's own doc on why state_transitions.detail is
+	// kept off the artifacts row), so a caller holding only an Outcome,
+	// for example internal/app writing an FR-23 log line immediately
+	// after the call, would otherwise have no way to report it without a
+	// second query against this table (see LastEnteredDetail, the
+	// package's answer for a caller that only has an artifact id and no
+	// Outcome in hand).
+	//
+	// On a replayed call (Applied == false) this is still t.Detail from
+	// THIS call, not necessarily a re-read of whatever text the original
+	// call recorded: idempotency keys are derived deterministically from
+	// the attempt itself, so a caller retrying with the same Key is, by
+	// construction, the same code path recomputing the same fact, and
+	// echoing the replay's own value is cheaper than a second read for
+	// the same answer.
+	Detail string
 }
 
 // Discover records DISCOVERED and creates the artifact's journal row,
@@ -147,23 +169,34 @@ func (j *Journal) RecordTransition(ctx context.Context, t Transition) (Outcome, 
 		if err := tx.Commit(); err != nil {
 			return Outcome{}, fmt.Errorf("state: commit idempotent replay: %w", err)
 		}
-		return Outcome{Applied: false, Record: rec}, nil
+		return Outcome{Applied: false, Record: rec, Detail: t.Detail}, nil
 	}
+
+	redact := j.redact.Load()
 
 	var artifactRowID int64
 	if t.From == "" {
 		artifactRowID, err = insertArtifact(ctx, tx, t)
 	} else {
-		artifactRowID, err = updateArtifact(ctx, tx, t)
+		artifactRowID, err = updateArtifact(ctx, tx, t, redact)
 	}
 	if err != nil {
 		return Outcome{}, err
 	}
 
+	// Issue #295's one seam for the journal: t.Detail is what a caller
+	// wrote (often, per the FAILED-transition call sites throughout
+	// internal/lifecycle, literally err.Error() from a transport failure
+	// that originated inside rclone or Go's own net dialer), filtered here,
+	// once, immediately before the durable write, rather than trusted to
+	// have already been scrubbed by whichever of this package's many
+	// callers built it. redact.Filter is nil-receiver-safe, so this runs
+	// unconditionally: a Journal nobody ever called SetRedactor on writes
+	// t.Detail exactly as given, byte for byte.
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO state_transitions (artifact_id, idempotency_key, from_state, to_state, occurred_at, detail)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
-		artifactRowID, t.Key, t.From, t.To, formatTime(t.OccurredAt), t.Detail,
+		artifactRowID, t.Key, t.From, t.To, formatTime(t.OccurredAt), redact.Filter(t.Detail),
 	); err != nil {
 		return Outcome{}, fmt.Errorf("state: record transition: %w", err)
 	}
@@ -177,7 +210,7 @@ func (j *Journal) RecordTransition(ctx context.Context, t Transition) (Outcome, 
 		return Outcome{}, fmt.Errorf("state: commit transition: %w", err)
 	}
 
-	return Outcome{Applied: true, Record: rec}, nil
+	return Outcome{Applied: true, Record: rec, Detail: t.Detail}, nil
 }
 
 func validateTransition(t Transition) error {
@@ -251,7 +284,15 @@ func insertArtifact(ctx context.Context, tx *sql.Tx, t Transition) (int64, error
 	return res.LastInsertId()
 }
 
-func updateArtifact(ctx context.Context, tx *sql.Tx, t Transition) (int64, error) {
+// redact filters t.Deletion.Error, issue #295's other confirmed durable
+// leak route beyond state_transitions.detail: internal/lifecycle/
+// remotedelete.go's persistDeleteOutcome writes a real transport failure's
+// err.Error() straight into this column when a remote delete call itself
+// fails, and that column, remote_delete_error, is not state_transitions.
+// detail and so would otherwise sail straight past the filtering above.
+// redact may be nil (no Journal.SetRedactor call was ever made); Filter
+// is nil-receiver-safe.
+func updateArtifact(ctx context.Context, tx *sql.Tx, t Transition, redact *obs.Redactor) (int64, error) {
 	var rowID int64
 	var currentState string
 	err := tx.QueryRowContext(ctx,
@@ -298,7 +339,7 @@ func updateArtifact(ctx context.Context, tx *sql.Tx, t Transition) (int64, error
 	}
 	if t.Deletion != nil {
 		set = append(set, "remote_deleted_at = ?", "remote_delete_error = ?")
-		args = append(args, optionalTimeText(t.Deletion.DeletedAt), t.Deletion.Error)
+		args = append(args, optionalTimeText(t.Deletion.DeletedAt), redact.Filter(t.Deletion.Error))
 	}
 	if t.Retention != nil {
 		set = append(set, "retention_tier = ?", "retention_expires_at = ?")

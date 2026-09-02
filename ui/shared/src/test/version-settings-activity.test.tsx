@@ -42,6 +42,8 @@ const SET: BackupSet = {
   state: "healthy",
   stateNote: "Verified nightly dump.",
   enabled: true,
+  readOnly: false,
+  readOnlyRetainedCount: 0,
   newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
   lastRunAt: "2026-08-29T02:01:01+02:00",
   lastValidation: "passed",
@@ -200,6 +202,86 @@ describe("SettingsPage reads the shared version node", () => {
 
     expect(screen.getByText(/Version information is unavailable/)).toBeTruthy();
     expect(screen.queryByText("Loading version information…")).toBeNull();
+  });
+});
+
+/** Issue #299 — SettingsPage used to render three decorative controls:
+ *  "Polling interval" and "Log level" (both `defaultValue`, no handler,
+ *  no save — see fieldHelpCopy.ts's module doc for why each was removed
+ *  rather than wired) and a "Webhook notifications" row presenting
+ *  "https://hooks.internal/bm" as a live delivery target config.Alerts'
+ *  own doc says is deliberately not configurable. All three are gone
+ *  from the page now, not merely unwired. */
+describe("SettingsPage no longer renders the controls #299 removed", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+  });
+
+  async function renderSettingsPage() {
+    act(() => {
+      graph.commit("test/seed-version", (tx) =>
+        tx.set(versionNode, { data: COMPATIBLE_VERSION, error: null, loading: false })
+      );
+    });
+    render(
+      <MemoryRouter>
+        <ApiProvider api={createMockApi()}>
+          <PlatformProvider bridge={genericBridge}>
+            <SettingsPage readOnly={false} />
+          </PlatformProvider>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+  }
+
+  it("has no Service card, and no Polling interval or Log level control", async () => {
+    await renderSettingsPage();
+
+    expect(screen.queryByText("Service")).toBeNull();
+    expect(screen.queryByText("Polling interval")).toBeNull();
+    expect(screen.queryByText("Log level")).toBeNull();
+    expect(screen.queryByText("15 seconds")).toBeNull();
+    expect(screen.queryByText("debug")).toBeNull();
+  });
+
+  it("has no Webhook notifications checkbox row, and states no fake delivery URL anywhere on the page", async () => {
+    await renderSettingsPage();
+
+    // "Webhook notifications" also appears legitimately elsewhere on this
+    // page, as the honest fallback-capability detail for "Native
+    // notifications" (capabilities.ts) — so this asserts the specific
+    // CHECKBOX ROW is gone, not the phrase everywhere on the page.
+    expect(screen.queryByRole("checkbox", { name: /Webhook notifications/ })).toBeNull();
+    expect(screen.queryByText(/hooks\.internal/)).toBeNull();
+  });
+});
+
+/** Issue #299 — ActivityPage used to render a "Time range" select
+ *  (`defaultValue="24"`, no `onChange`, nothing reading it); listActivity()
+ *  takes no window argument, so it is gone from the page now. */
+describe("ActivityPage no longer renders the Time range control #299 removed", () => {
+  afterEach(() => {
+    cleanup();
+    resetGraphForTests();
+  });
+
+  it("has no Time range control", async () => {
+    const api = { ...createMockApi(), listActivity: () => Promise.resolve([]) };
+
+    render(
+      <MemoryRouter>
+        <ApiProvider api={api}>
+          <ActivityPage />
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await act(async () => {});
+
+    expect(screen.queryByLabelText("Time range")).toBeNull();
+    expect(screen.queryByText("Last 24 hours")).toBeNull();
+    expect(screen.queryByText("Last 7 days")).toBeNull();
   });
 });
 

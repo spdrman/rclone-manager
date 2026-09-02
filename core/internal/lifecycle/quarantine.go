@@ -54,6 +54,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -411,8 +412,13 @@ func AsNeverHeldTargetState(err error) (*NeverHeldTargetStateError, bool) {
 //     refused. The evidence has to address the reason for the distrust,
 //     not merely be strong in the abstract.
 //
-//  5. The append-only transition log records this artifact having entered
-//     the target state before, else *NeverHeldTargetStateError.
+//  5. The append-only transition log records which state this specific
+//     artifact was quarantined FROM (issue #315: see quarantineOrigins and
+//     reinstatementTargetForArtifact), and that state is one this package
+//     knows how to reinstate at all, else *NeverHeldTargetStateError. This
+//     is also what decides the target: QUARANTINED no longer reinstates to
+//     one fixed state, since an artifact quarantined out of REMOTE_RETAINED
+//     must return there, never to COMMITTED.
 //
 // Every refusal happens before any write, so a refused reinstatement
 // leaves no mark at all.
@@ -436,6 +442,85 @@ func AsNeverHeldTargetState(err error) (*NeverHeldTargetStateError, bool) {
 // transport. That is what makes this edge safe to have at all, and it is
 // not a cooling-off period; there is no way back to delete eligibility.
 // See remotedelete.go.
+// quarantineOrigin pairs one state that may precede QUARANTINED
+// (machine.go's Predecessors(Quarantined)) with the state
+// ReinstateFromQuarantine returns an artifact to when that is where it was
+// quarantined from. It is deliberately hand-written rather than derived:
+// unlike reinstatementEdges (machine.go), which is a structural property
+// of the graph (quarantine state -> durable restore point), the target for
+// a given origin is a domain decision this package already made once,
+// before issue #315, for REMOTE_DELETE_PENDING: that origin does not
+// reinstate to itself, it reinstates one step further back, to COMMITTED
+// (see machine.go's "Why these edges cannot launder..." section for why
+// there is deliberately no QUARANTINED -> REMOTE_DELETE_PENDING edge for it
+// to reinstate to). Issue #315 adds REMOTE_RETAINED's row alongside it,
+// and that one *does* reinstate to itself: an artifact quarantined out of
+// a retained, read-only-source artifact has to come back exactly there,
+// never to COMMITTED, or it silently re-enters the ordinary delete-eligible
+// pipeline the moment its backup set's ReadOnly flag is ever unset (see
+// this package's file doc and issue #315's own "Why it wasn't just fixed
+// in #314" section).
+//
+// VERIFYING and FAILED, QUARANTINED's other two declared predecessors, are
+// deliberately absent: neither ever holds a durable local copy (see
+// NeverHeldTargetStateError), so there is nothing for either to reinstate
+// to.
+//
+// TestQuarantineOriginsCoverEveryDurablePredecessorOfQuarantined walks
+// machine.go's own table and proves this list can neither miss a
+// predecessor that does have a durable copy nor name one machine.go does
+// not declare, so the two cannot silently drift apart.
+var quarantineOrigins = []struct {
+	From   State
+	Target State
+}{
+	{From: Committed, Target: Committed},
+	{From: RemoteDeletePending, Target: Committed},
+	{From: RemoteRetained, Target: RemoteRetained},
+}
+
+// reinstatementTargetForArtifact resolves the state artifact should be
+// reinstated to from current (QUARANTINED or QUARANTINED_LOST), reading
+// the append-only transition log for the exact edge that most recently
+// carried THIS artifact into current. See quarantineOrigins for why this
+// has to be per-artifact rather than a fixed answer per quarantine state.
+//
+// QUARANTINED_LOST has exactly one possible origin (COMPLETE, proved by
+// TestOnlyCompletePrecedesQuarantinedLost), so its target is fixed and
+// costs no journal read. QUARANTINED does not: it returns the target
+// belonging to whichever declared origin edge fired most recently for this
+// artifact, or "" if none did, which happens exactly when the artifact was
+// quarantined out of VERIFYING or FAILED (see quarantineOrigins).
+//
+// An artifact can in principle be quarantined and reinstated more than
+// once over its lifetime, so "most recently" matters: querying the log for
+// several candidate edges and keeping the newest match is the same pattern
+// remotedelete.go's lastReinstatement already uses for the same reason.
+func reinstatementTargetForArtifact(ctx context.Context, d Deps, artifact model.ArtifactID, current State) (State, error) {
+	if current == QuarantinedLost {
+		return Complete, nil
+	}
+
+	var (
+		target State
+		newest time.Time
+		found  bool
+	)
+	for _, o := range quarantineOrigins {
+		at, ok, err := d.Journal.LastTransition(ctx, artifact, string(o.From), string(Quarantined))
+		if err != nil {
+			return "", err
+		}
+		if ok && (!found || at.After(newest)) {
+			target, newest, found = o.Target, at, true
+		}
+	}
+	if !found {
+		return "", nil
+	}
+	return target, nil
+}
+
 func ReinstateFromQuarantine(ctx context.Context, d Deps, p QuarantineReinstateParams) (state.Outcome, error) {
 	if d.Journal == nil {
 		return state.Outcome{}, fmt.Errorf("lifecycle: ReinstateFromQuarantine needs a Journal")
@@ -453,8 +538,7 @@ func ReinstateFromQuarantine(ctx context.Context, d Deps, p QuarantineReinstateP
 	}
 
 	current := State(rec.State)
-	target, ok := ReinstatementTarget(current)
-	if !ok {
+	if !IsQuarantineState(current) {
 		return state.Outcome{}, &NotQuarantinedError{Artifact: p.Artifact, Current: current}
 	}
 
@@ -482,10 +566,24 @@ func ReinstateFromQuarantine(ctx context.Context, d Deps, p QuarantineReinstateP
 		}
 	}
 
-	if _, held, err := d.Journal.LastEnteredAt(ctx, p.Artifact, string(target)); err != nil {
-		return state.Outcome{}, fmt.Errorf("lifecycle: ReinstateFromQuarantine: reading the transition log for %s: %w", p.Artifact, err)
-	} else if !held {
-		return state.Outcome{}, &NeverHeldTargetStateError{Artifact: p.Artifact, Target: target}
+	// Issue #315: which durable state THIS artifact is returned to depends
+	// on which one it was quarantined FROM, not merely on it currently
+	// reading QUARANTINED. See quarantineOrigins and the doc on
+	// reinstatementTargetForArtifact for why a static, current-state-keyed
+	// answer (the old ReinstatementTarget call this replaced) is no longer
+	// enough now that QUARANTINED has two declared reinstatement edges.
+	target, err := reinstatementTargetForArtifact(ctx, d, p.Artifact, current)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: ReinstateFromQuarantine: resolving the reinstatement target for %s: %w", p.Artifact, err)
+	}
+	if target == "" {
+		// No declared origin edge is on record for this artifact's most
+		// recent entry into QUARANTINED: it was quarantined out of
+		// VERIFYING or FAILED, neither of which ever held a durable local
+		// copy for this to reinstate. Committed is named here, matching
+		// this package's pre-#315 behaviour, since it is the target every
+		// caller of this error has always been told to expect.
+		return state.Outcome{}, &NeverHeldTargetStateError{Artifact: p.Artifact, Target: Committed}
 	}
 
 	detail := fmt.Sprintf("operator reinstated from %s to %s on re-checked evidence: %s", current, target, p.Evidence.Summary)

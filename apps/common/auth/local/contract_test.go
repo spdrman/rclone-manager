@@ -37,13 +37,20 @@ var authBindings = map[string]struct {
 	route    string
 	request  any
 	response any
+	// successStatus is the HTTP status this package's own handler answers
+	// with on success - the counterpart to errorCodeStatus (handler.go)
+	// for the one status writeAuthError never touches. Compared against
+	// the contract's SuccessStatus by
+	// TestContract_AuthResponseStatusesMatchTheContract below. Left 0 for
+	// the pseudo-binding, which names no real operation to compare it to.
+	successStatus int
 }{
-	"login":                 {"/login", credentialsRequest{}, nil},
-	"enrollAdministrator":   {"/enroll", credentialsRequest{}, nil},
-	"rotatePassword":        {"/password", rotatePasswordRequest{}, nil},
-	"logout":                {"/logout", nil, nil},
-	"getSession":            {"/session", nil, sessionResponse{}},
-	"x-auth-error-envelope": {"", nil, authErrorResponse{}},
+	"login":                 {"/login", credentialsRequest{}, nil, http.StatusNoContent},
+	"enrollAdministrator":   {"/enroll", credentialsRequest{}, nil, http.StatusNoContent},
+	"rotatePassword":        {"/password", rotatePasswordRequest{}, nil, http.StatusNoContent},
+	"logout":                {"/logout", nil, nil, http.StatusNoContent},
+	"getSession":            {"/session", nil, sessionResponse{}, http.StatusOK},
+	"x-auth-error-envelope": {"", nil, authErrorResponse{}, 0},
 }
 
 // authErrorEnvelopeSchema is the schema the pseudo-binding above pins: the
@@ -168,6 +175,70 @@ func TestContract_AuthHandlerShapesMatchTheContract(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no /auth type was compared against the contract; this test would pass vacuously")
 	}
+}
+
+// TestContract_AuthResponseStatusesMatchTheContract is the other half of
+// TestContract_AuthHandlerShapesMatchTheContract's walk: that test binds
+// each operation's request/response TYPES to the contract and says
+// nothing about the STATUS a response carries, which is exactly the gap
+// that let api/v1/openapi.json declare BOOTSTRAP_TOKEN_INVALID a 401 while
+// the handler answered 403, unnoticed (#289). This walks the same two
+// maps (authBindings, contractAuthEndpoints) a second time and checks
+// status instead of shape: the success status each binding records
+// against the contract's SuccessStatus, and - for every error code the
+// contract declares for that operation - the status handler.go's own
+// errorCodeStatus registry says that code is always served at (checked
+// against real requests by handler_test.go, and by writeAuthError itself
+// at the call site) against the status the contract declares it at.
+func TestContract_AuthResponseStatusesMatchTheContract(t *testing.T) {
+	endpoints := contractAuthEndpoints(t)
+	checked := 0
+
+	for opID, binding := range authBindings {
+		if opID == "x-auth-error-envelope" {
+			// Names no real operation: nothing to compare a status to.
+			continue
+		}
+		e, ok := endpoints[opID]
+		if !ok {
+			// Already reported by TestContract_AuthHandlerShapesMatchTheContract.
+			continue
+		}
+
+		if e.SuccessStatus != binding.successStatus {
+			t.Errorf("%s: the contract declares success status %d, but this package answers success with %d", opID, e.SuccessStatus, binding.successStatus)
+		}
+		checked++
+
+		for _, declaredStatus := range sortedStatusKeys(e.ErrorCodes) {
+			for _, code := range e.ErrorCodes[declaredStatus] {
+				got, known := errorCodeStatus[string(code)]
+				if !known {
+					t.Errorf("%s: the contract declares error code %q, which this package's errorCodeStatus registry (handler.go) does not know about - add it there so this test can check the status the contract declares for it", opID, code)
+					continue
+				}
+				checked++
+				if got != declaredStatus {
+					t.Errorf("%s: the contract declares %q at status %d, but this package always answers %q with %d (errorCodeStatus in handler.go)", opID, code, declaredStatus, code, got)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no /auth operation's status was compared against the contract; this test would pass vacuously")
+	}
+}
+
+// sortedStatusKeys gives TestContract_AuthResponseStatusesMatchTheContract
+// a stable iteration order over a contract endpoint's ErrorCodes map, so a
+// failing run's output doesn't reorder itself between invocations.
+func sortedStatusKeys(m map[int][]apicontract.ErrorCode) []int {
+	out := make([]int, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Ints(out)
+	return out
 }
 
 func union(a, b map[string]string) []string {

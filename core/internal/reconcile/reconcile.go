@@ -94,6 +94,9 @@ func reconcileOne(ctx context.Context, deps Deps, source transport.Source, rec s
 	case lifecycle.Complete:
 		return reconcileComplete(ctx, deps, rec)
 
+	case lifecycle.RemoteRetained:
+		return reconcileRemoteRetained(ctx, deps, rec)
+
 	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
 		// These are already exceptional or terminal outcomes that some
 		// other, deliberate mechanism owns: FR-22's retry policy for
@@ -111,6 +114,47 @@ func reconcileOne(ctx context.Context, deps Deps, source transport.Source, rec s
 // change.
 func noAction(artifact model.ArtifactID, st lifecycle.State, reason string) Finding {
 	return Finding{Artifact: artifact, From: st, To: st, Reason: reason}
+}
+
+// reconcileRemoteRetained handles the REMOTE_RETAINED row (issue #315):
+// re-check the durable local copy the same way reconcileCommitted does for
+// COMMITTED, and quarantine it if it has gone bad.
+//
+// I never call Stat here either, for the same reason reconcileCommitted
+// doesn't: this manager was never going to touch this artifact's remote
+// object either way (that is the entire point of issue #282's read-only
+// path), so no answer a remote check could give changes anything about how
+// a corrupted local copy is handled. machine.go's REMOTE_RETAINED ->
+// QUARANTINED edge routes to the recoverable QUARANTINED, never to
+// QUARANTINED_LOST: unlike COMPLETE, REMOTE_RETAINED never confirmed the
+// remote object gone, so the remote is presumptively still there for an
+// operator to recover from (ReleaseFromQuarantine's ordinary re-fetch) or
+// to reinstate past (ReinstateFromQuarantine, which now resolves back to
+// REMOTE_RETAINED specifically for this lineage, never to COMMITTED; see
+// quarantine.go's quarantineOrigins).
+func reconcileRemoteRetained(ctx context.Context, deps Deps, rec state.Record) (Finding, error) {
+	local := checkLocalFinal(rec)
+	if local.Valid {
+		return noAction(rec.Artifact, lifecycle.RemoteRetained,
+			"local final copy verified valid; the remote source remains retained by policy and was never examined"), nil
+	}
+
+	out, err := lifecycle.Advance(ctx, deps.lifecycleDeps(), state.Transition{
+		Artifact: rec.Artifact,
+		Key:      reconcileKey(rec.Artifact, lifecycle.RemoteRetained, lifecycle.Quarantined, rec.UpdatedAt),
+		From:     string(lifecycle.RemoteRetained),
+		To:       string(lifecycle.Quarantined),
+		Detail:   "FR-17 / issue #315: reconciliation found the durable local copy of a retained (read-only-source) artifact invalid: " + local.Reason,
+	})
+	if err != nil {
+		return Finding{}, fmt.Errorf("quarantining %s: %w", rec.Artifact, err)
+	}
+	return Finding{
+		Artifact: rec.Artifact,
+		From:     lifecycle.RemoteRetained,
+		To:       lifecycle.State(out.Record.State),
+		Reason:   "local final copy is invalid (" + local.Reason + "); the remote copy is retained by policy and was never examined, quarantining the local copy so an operator can decide whether to re-fetch or reinstate it",
+	}, nil
 }
 
 // reconcileCommitted handles the COMMITTED row of the table (verify and

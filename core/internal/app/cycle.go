@@ -20,12 +20,27 @@ import (
 // budget, or a journal listing failing outright); a per-artifact problem
 // never sets it; see processArtifact's own doc for how those are isolated
 // instead.
+//
+// FailedArtifacts is the other half of "did this cycle fail" (issue
+// #283): how many of the artifacts this call itself walked through
+// processArtifacts ended in FAILED, QUARANTINED or QUARANTINED_LOST. Err
+// alone used to be the only thing a caller checked, which is exactly how
+// a cycle where every artifact discovered fine and then failed
+// verification could report success: nothing about that outcome is a
+// systemic error, so Err stayed nil. This also covers a loss this
+// cycle's own reconcile pass discovered on its own -- a previously-
+// durable artifact whose local copy turned out corrupted or missing --
+// since processArtifacts lists the journal after reconcileOne has
+// already written that verdict (see processArtifacts's own doc); a
+// successful reconciliation pass that finds rot is not a systemic
+// failure either, but it must still make this cycle count as failed.
 type BackupSetCycleResult struct {
-	Set       model.BackupSetID
-	Reconcile reconcile.Report
-	Discovery discovery.Result
-	Retention RetentionSetReport
-	Err       error
+	Set             model.BackupSetID
+	Reconcile       reconcile.Report
+	Discovery       discovery.Result
+	Retention       RetentionSetReport
+	Err             error
+	FailedArtifacts int
 }
 
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per
@@ -147,7 +162,7 @@ sourcesLoop:
 // rationale.
 func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs config.BackupSet) BackupSetCycleResult {
 	result := BackupSetCycleResult{Set: bs.ID}
-	source := sourceFor(src, bs)
+	source := sourceFor(s.Config, src, bs)
 
 	// Deferred, so a set counts as finished however this returns. A set
 	// whose reconcile or discovery failed is still a set this cycle is
@@ -194,12 +209,9 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		result.Err = err
 		return result
 	}
-	for _, rec := range records {
-		if ctx.Err() != nil {
-			result.Err = ctx.Err()
-			break
-		}
-		s.processArtifact(ctx, source, bs, rec)
+	result.FailedArtifacts = s.processArtifacts(ctx, source, bs, records)
+	if ctx.Err() != nil {
+		result.Err = ctx.Err()
 	}
 
 	if ctx.Err() == nil {

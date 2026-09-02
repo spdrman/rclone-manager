@@ -1,12 +1,14 @@
 import type {
   AppSettings,
   BackupManagerApi,
+  CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
   CreateBackupSetRequest,
   CreatedBackupSet,
   FirstRunResult,
   HostKeyProbeResult,
+  ManagerStorage,
   SSHKeyImportResult,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
@@ -50,7 +52,7 @@ const defaultRetention = {
 
 const SETS: BackupSet[] = [
   {
-    id: "set_pg_prod", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
+    id: "production/postgres-primary", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
     excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker",
@@ -58,7 +60,7 @@ const SETS: BackupSet[] = [
     validations: ["transfer", "checksum", "application"],
     state: "healthy",
     stateNote: "Verified nightly dump; application validation passed 42 minutes ago.",
-    enabled: true,
+    enabled: true, readOnly: false, readOnlyRetainedCount: 0,
     newestKnownGoodAt: "2026-08-29T02:01:01+02:00",
     lastRunAt: "2026-08-29T02:01:01+02:00",
     lastValidation: "passed", expectedIntervalHours: 24,
@@ -67,7 +69,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-08-02T10:14:00+02:00"
   },
   {
-    id: "set_mysql_billing", source: "production", set: "billing-mysql", name: "Billing MySQL",
+    id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
     excludePatterns: ["*.part"], completionMethod: "atomic-rename",
@@ -75,7 +77,7 @@ const SETS: BackupSet[] = [
     validations: ["transfer", "checksum"],
     state: "stale",
     stateNote: "No verified backup received for 31 hours. Expected within 24 hours.",
-    enabled: true,
+    enabled: true, readOnly: false, readOnlyRetainedCount: 0,
     newestKnownGoodAt: "2026-08-27T21:10:00+02:00",
     lastRunAt: "2026-08-28T02:00:04+02:00",
     lastValidation: "passed", expectedIntervalHours: 24,
@@ -84,7 +86,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-07-19T09:02:00+02:00"
   },
   {
-    id: "set_auth_cfg", source: "production", set: "auth-config", name: "Auth service config",
+    id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
     excludePatterns: [], completionMethod: "stable-size",
@@ -93,7 +95,7 @@ const SETS: BackupSet[] = [
     validations: ["transfer", "checksum"],
     state: "failing",
     stateNote: "Halted — the SSH host key changed. Remote artifacts are untouched.",
-    enabled: true, haltReason: "host-key-changed",
+    enabled: true, readOnly: false, readOnlyRetainedCount: 0, haltReason: "host-key-changed",
     newestKnownGoodAt: "2026-08-29T00:14:00+02:00",
     lastRunAt: "2026-08-29T04:12:08+02:00",
     lastValidation: "not-run", expectedIntervalHours: 24,
@@ -102,7 +104,7 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: null
   },
   {
-    id: "set_media", source: "media", set: "weekly-archive", name: "Media archive",
+    id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
     excludePatterns: [], completionMethod: "completion-marker",
@@ -110,7 +112,12 @@ const SETS: BackupSet[] = [
     retention: { ...defaultRetention, daily: 0, weekly: 8, monthly: 24 },
     validations: ["transfer", "checksum"],
     state: "healthy", stateNote: "Weekly cold archive; checksum verification only.",
-    enabled: true,
+    // This fixture is the one read-only set (issue #282, #316): a cold
+    // archive is exactly the shape "pull from here, never delete here"
+    // was written for, and it is what exercises the wizard/detail-page
+    // controls and the retained-count displays in dev mode without a
+    // real backend.
+    enabled: true, readOnly: true, readOnlyRetainedCount: 3,
     newestKnownGoodAt: "2026-08-26T01:30:00+02:00",
     lastRunAt: "2026-08-26T01:30:00+02:00",
     lastValidation: "passed", expectedIntervalHours: 168,
@@ -122,7 +129,7 @@ const SETS: BackupSet[] = [
 
 const ARTIFACTS: BackupArtifact[] = [
   {
-    id: "art_01J9F4M2QK8Z", setId: "set_pg_prod", setName: "Production PostgreSQL",
+    id: "art_01J9F4M2QK8Z", setId: "production/postgres-primary", setName: "Production PostgreSQL",
     filename: "postgres-prod-20260828.dump.zst",
     remoteOriginalPath: "prod-db-01:/backups/postgresql/postgres-prod-20260828.dump.zst",
     localPath: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
@@ -134,7 +141,7 @@ const ARTIFACTS: BackupArtifact[] = [
     remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
   },
   {
-    id: "art_01J9F2A7BC44", setId: "set_mysql_billing", setName: "Billing MySQL",
+    id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260827.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260827.sql.gz",
     localPath: "/data/backups/production/billing/2026/08/billing-20260827.sql.gz",
@@ -146,7 +153,7 @@ const ARTIFACTS: BackupArtifact[] = [
     remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null
   },
   {
-    id: "art_01J9E8QP4R21", setId: "set_auth_cfg", setName: "Auth service config",
+    id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
     filename: "auth-config-20260826.tar.zst",
     remoteOriginalPath: "prod-db-01:/etc/auth-service/backups/auth-config-20260826.tar.zst",
     localPath: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
@@ -156,10 +163,16 @@ const ARTIFACTS: BackupArtifact[] = [
     checksumAlgorithm: "sha256", validation: "failed",
     retentionClasses: ["daily"], remoteSourceRemovedAt: null,
     // Remote original stays put. Quarantine never triggers remote deletion.
-    quarantine: { reason: "checksum-mismatch", detectedAt: "2026-08-26T04:14:10+02:00", remoteSourceRetained: true }
+    quarantine: {
+      reason: "checksum-mismatch",
+      detail:
+        "sha256 mismatch: local file hashes to c19f3ba7..., remote reports 91a4d02e...",
+      detectedAt: "2026-08-26T04:14:10+02:00",
+      remoteSourceRetained: true
+    }
   },
   {
-    id: "art_01J9C1XY7T09", setId: "set_mysql_billing", setName: "Billing MySQL",
+    id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
     filename: "billing-20260824.sql.gz",
     remoteOriginalPath: "billing-db:/srv/backups/mysql/billing-20260824.sql.gz",
     localPath: "/data/backups/production/billing/quarantine/billing-20260824.sql.gz",
@@ -168,10 +181,15 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "e42b9c8f1a370d6512cf4b7d2098ae31c67d5f0a9b8241e3c07d5b6a2f918d04",
     checksumAlgorithm: "sha256", validation: "failed",
     retentionClasses: [], remoteSourceRemovedAt: null,
-    quarantine: { reason: "validation-failed", detectedAt: "2026-08-24T02:19:02+02:00", remoteSourceRetained: true }
+    quarantine: {
+      reason: "validation-failed",
+      detail: "application validator rejected the artifact: restore-test hook failed: could not decompress",
+      detectedAt: "2026-08-24T02:19:02+02:00",
+      remoteSourceRetained: true
+    }
   },
   {
-    id: "art_01J98MN3V5KK", setId: "set_media", setName: "Media archive",
+    id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
     filename: "media-week34.tar",
     remoteOriginalPath: "media-01:/export/weekly/media-week34.tar",
     localPath: "/data/backups/media/2026/w34/media-week34.tar",
@@ -192,13 +210,13 @@ const ARTIFACTS: BackupArtifact[] = [
 // the dev server has to be able to show both.
 const OPERATIONS: Operation[] = [
   {
-    id: "op_transfer_1", setId: "set_pg_prod", setName: "Production PostgreSQL",
+    id: "op_transfer_1", setId: "production/postgres-primary", setName: "Production PostgreSQL",
     kind: "transfer", label: "Transferring backup", status: "running",
     progress: {
       observedAt: "2026-08-29T02:01:14+02:00",
       sequence: 412,
       stage: "transferring",
-      backupSetId: "set_pg_prod",
+      backupSetId: "production/postgres-primary",
       backupSetsDone: 1,
       backupSetsTotal: 4,
       artifact: "postgres-primary-2026-08-29.dump.zst",
@@ -210,7 +228,7 @@ const OPERATIONS: Operation[] = [
     nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00"
   },
   {
-    id: "op_recon_1", setId: "set_media", setName: "Media archive",
+    id: "op_recon_1", setId: "media/weekly-archive", setName: "Media archive",
     kind: "reconciliation", label: "Reconciling catalog against storage",
     status: "running", progress: null,
     nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00"
@@ -218,18 +236,18 @@ const OPERATIONS: Operation[] = [
 ];
 
 const ACTIVITY: ActivityEvent[] = [
-  { id: "ev_1", at: "2026-08-29T04:12:08+02:00", type: "host-key-changed", severity: "error", setId: "set_auth_cfg", setName: "Auth service config", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", correlationId: "cid_9f2a41" },
-  { id: "ev_2", at: "2026-08-29T03:40:22+02:00", type: "validation-failed", severity: "warn", setId: "set_mysql_billing", setName: "Billing MySQL", text: "Backup stale", detail: "no verified backup for 31 hours", correlationId: "cid_71bc03" },
-  { id: "ev_3", at: "2026-08-29T02:01:01+02:00", type: "remote-source-deleted", severity: "ok", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Remote source deleted", detail: "after durable commit", correlationId: "cid_4ad812" },
-  { id: "ev_4", at: "2026-08-29T02:01:00+02:00", type: "backup-committed", severity: "ok", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Backup committed", detail: "14.2 GB fsynced", correlationId: "cid_4ad812" },
-  { id: "ev_5", at: "2026-08-29T02:00:59+02:00", type: "verification-passed", severity: "ok", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Verification passed", detail: "SHA-256 matched manifest", correlationId: "cid_4ad812" },
-  { id: "ev_6", at: "2026-08-29T02:00:53+02:00", type: "transfer-complete", severity: "info", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Transfer complete", detail: "1m 03s at 118 MB/s", correlationId: "cid_4ad812" },
-  { id: "ev_7", at: "2026-08-29T02:00:11+02:00", type: "backup-discovered", severity: "info", setId: "set_pg_prod", setName: "Production PostgreSQL", text: "Backup discovered", detail: "completion manifest present", correlationId: "cid_4ad812" },
-  { id: "ev_8", at: "2026-08-29T01:35:40+02:00", type: "retention-completed", severity: "ok", setId: "set_media", setName: "Media archive", text: "Retention completed", detail: "4 deleted, 51.8 GB reclaimed", correlationId: "cid_22e7f9" },
-  { id: "ev_9", at: "2026-08-28T22:14:03+02:00", type: "validation-failed", severity: "warn", setId: "set_auth_cfg", setName: "Auth service config", text: "Validation failed", detail: "artifact quarantined", correlationId: "cid_50cc18" },
-  { id: "ev_10", at: "2026-08-28T19:02:55+02:00", type: "configuration-updated", severity: "info", setId: "set_media", setName: "Media archive", text: "Configuration updated", detail: "weekly retention 8 to 13", correlationId: "cid_1b9d64" },
+  { id: "ev_1", at: "2026-08-29T04:12:08+02:00", type: "host-key-changed", severity: "error", setId: "production/auth-config", setName: "Auth service config", text: "SSH host key changed", detail: "set halted, remote artifacts untouched", correlationId: "cid_9f2a41" },
+  { id: "ev_2", at: "2026-08-29T03:40:22+02:00", type: "validation-failed", severity: "warn", setId: "production/billing-mysql", setName: "Billing MySQL", text: "Backup stale", detail: "no verified backup for 31 hours", correlationId: "cid_71bc03" },
+  { id: "ev_3", at: "2026-08-29T02:01:01+02:00", type: "remote-source-deleted", severity: "ok", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Remote source deleted", detail: "after durable commit", correlationId: "cid_4ad812" },
+  { id: "ev_4", at: "2026-08-29T02:01:00+02:00", type: "backup-committed", severity: "ok", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Backup committed", detail: "14.2 GB fsynced", correlationId: "cid_4ad812" },
+  { id: "ev_5", at: "2026-08-29T02:00:59+02:00", type: "verification-passed", severity: "ok", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Verification passed", detail: "SHA-256 matched manifest", correlationId: "cid_4ad812" },
+  { id: "ev_6", at: "2026-08-29T02:00:53+02:00", type: "transfer-complete", severity: "info", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Transfer complete", detail: "1m 03s at 118 MB/s", correlationId: "cid_4ad812" },
+  { id: "ev_7", at: "2026-08-29T02:00:11+02:00", type: "backup-discovered", severity: "info", setId: "production/postgres-primary", setName: "Production PostgreSQL", text: "Backup discovered", detail: "completion manifest present", correlationId: "cid_4ad812" },
+  { id: "ev_8", at: "2026-08-29T01:35:40+02:00", type: "retention-completed", severity: "ok", setId: "media/weekly-archive", setName: "Media archive", text: "Retention completed", detail: "4 deleted, 51.8 GB reclaimed", correlationId: "cid_22e7f9" },
+  { id: "ev_9", at: "2026-08-28T22:14:03+02:00", type: "validation-failed", severity: "warn", setId: "production/auth-config", setName: "Auth service config", text: "Validation failed", detail: "artifact quarantined", correlationId: "cid_50cc18" },
+  { id: "ev_10", at: "2026-08-28T19:02:55+02:00", type: "configuration-updated", severity: "info", setId: "media/weekly-archive", setName: "Media archive", text: "Configuration updated", detail: "weekly retention 8 to 13", correlationId: "cid_1b9d64" },
   { id: "ev_11", at: "2026-08-28T12:44:17+02:00", type: "storage-critical", severity: "warn", setId: null, setName: "System", text: "Storage warning", detail: "81% of pool used", correlationId: "cid_88fa02" },
-  { id: "ev_12", at: "2026-08-28T02:00:04+02:00", type: "transfer-started", severity: "info", setId: "set_mysql_billing", setName: "Billing MySQL", text: "Transfer started", detail: "3.4 GB", correlationId: "cid_71bc03" }
+  { id: "ev_12", at: "2026-08-28T02:00:04+02:00", type: "transfer-started", severity: "info", setId: "production/billing-mysql", setName: "Billing MySQL", text: "Transfer started", detail: "3.4 GB", correlationId: "cid_71bc03" }
 ];
 
 const HEALTH: SystemHealth = {
@@ -244,9 +262,87 @@ const HEALTH: SystemHealth = {
   oldestSetFreshnessHours: 31,
   setsHealthy: 5, setsDegraded: 0, setsStale: 1, setsFailing: 1,
   quarantinedCount: 2,
+  // Issue #316: the media archive fixture below is declared read-only,
+  // so this is not a permanently-resting zero the way it is for most
+  // deployments (BackupSet.readOnlyRetainedCount's own doc).
+  readOnlyRetainedCount: 3,
   storageFreeBytes: 1.8 * TB, storageTotalBytes: 6.2 * TB,
   storageState: "nominal",
   storageReadingsUnavailable: 0
+};
+
+/**
+ * Issue #286's manager-wide reading. Deliberately its own fixture rather
+ * than derived from HEALTH: the two answer different questions (a
+ * fresh/unconfigured instance sums HEALTH's per-set list to zero and gets
+ * "0 B of 0 B used · NaN%", which is the defect this whole mechanism
+ * exists to stop), so nothing here is computed FROM the other.
+ *
+ * "default" reports the disk itself (no cap configured, this product's
+ * default): 6.2 TB total, 1.8 TB free, matching HEALTH's own numbers so
+ * the two readings agree where they overlap. "empty" reports known:false
+ * with no_backup_root, which is the honest answer a configuration with no
+ * backup sets actually gives — not a fabricated zero. "storage-critical"
+ * keeps the disk denominator (a critically full volume, not a spent cap)
+ * so it lines up with HEALTH's own "storage critical" narrative for that
+ * scenario.
+ */
+const STORAGE: ManagerStorage = {
+  known: true,
+  unknownReason: "",
+  measuredPath: "/data/backups",
+  totalBytes: 6.2 * TB,
+  freeBytes: 1.8 * TB,
+  availableBytes: 1.8 * TB,
+  catalogBytes: 4.4 * TB,
+  catalogBytesKnown: true,
+  otherBytes: 0,
+  otherBytesKnown: true,
+  capBytes: 0,
+  denominator: "disk",
+  limitBytes: 6.2 * TB,
+  usedBytes: 4.4 * TB,
+  headroomBytes: 1.8 * TB,
+  bindingConstraint: "disk",
+  warningFreeBytes: 0,
+  criticalFreeBytes: 0,
+  level: "OK"
+};
+
+const STORAGE_CRITICAL: ManagerStorage = {
+  ...STORAGE,
+  freeBytes: 0.28 * TB,
+  availableBytes: 0.28 * TB,
+  catalogBytes: 5.92 * TB,
+  usedBytes: 5.92 * TB,
+  headroomBytes: 0.28 * TB,
+  level: "CRITICAL"
+};
+
+/** What a configuration with no backup sets actually reports: there is no
+ *  local_path anywhere to derive a backup root from, so this is not
+ *  known, not a fabricated zero. Matches getHealth's own "empty" branch,
+ *  which reports zero sets for the identical reason. */
+const STORAGE_EMPTY: ManagerStorage = {
+  known: false,
+  unknownReason: "no_backup_root",
+  measuredPath: "",
+  totalBytes: 0,
+  freeBytes: 0,
+  availableBytes: 0,
+  catalogBytes: 0,
+  catalogBytesKnown: false,
+  otherBytes: 0,
+  otherBytesKnown: false,
+  capBytes: 0,
+  denominator: "disk",
+  limitBytes: 0,
+  usedBytes: 0,
+  headroomBytes: 0,
+  bindingConstraint: "",
+  warningFreeBytes: 0,
+  criticalFreeBytes: 0,
+  level: ""
 };
 
 const VERSION: VersionInfo = {
@@ -343,6 +439,8 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     state: "healthy",
     stateNote: "Created just now; no runs yet.",
     enabled: !req.disabled,
+    readOnly: !!req.readOnly,
+    readOnlyRetainedCount: 0,
     newestKnownGoodAt: null,
     lastRunAt: null,
     lastValidation: "not-run",
@@ -380,6 +478,23 @@ const VALIDATORS: ValidatorCatalogEntry[] = [
  * `schema` mirrors core/internal/config's own constants, so the picker
  * this fixture drives offers exactly what config.Validate accepts.
  */
+/** Issue #286: 0 across the board, which is this product's default (no
+ *  cap, no warning line, no critical line) and matches how getStorage's
+ *  own "default" fixture below reports the disk itself as the
+ *  denominator. backupRoot mirrors the derivation the real backend does
+ *  when an operator has not named one: the directory the fixture's own
+ *  backup sets share. */
+function defaultCapacitySettings(): CapacitySettings {
+  return {
+    capBytes: 0,
+    warningFreeBytes: 0,
+    criticalFreeBytes: 0,
+    safetyMarginBytes: 0,
+    backupRoot: "/data/backups",
+    backupRootConfigured: false
+  };
+}
+
 function defaultSettings(): AppSettings {
   return {
     retention: {
@@ -392,6 +507,7 @@ function defaultSettings(): AppSettings {
       ],
       protectLastKnownGood: true
     },
+    capacity: defaultCapacitySettings(),
     schema: {
       retention: {
         granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
@@ -414,6 +530,59 @@ function defaultSettings(): AppSettings {
   };
 }
 
+/**
+ * The operations an instance with no configuration actually serves, taken
+ * from apps/common/webhost's newUnconfiguredRouter: the two reads that tell
+ * a client which mode it is in, the setup flow itself, the wizard's own
+ * pre-save helpers, and the auth routes, which are mounted by a different
+ * package and are not gated on configuration at all. Everything else
+ * answers 503 NOT_CONFIGURED.
+ *
+ * Issue #275: this fixture used to serve the FULL dataset in the
+ * "first-run" scenario, so `?scenario=first-run` in dev, and every test
+ * using it, showed an unconfigured instance behaving like a configured one.
+ * That is the fixture lying about the state it exists to reproduce, and it
+ * is why nothing caught what the pages do with the refusals they really
+ * get.
+ */
+const SERVED_WHILE_UNCONFIGURED: ReadonlySet<keyof BackupManagerApi> = new Set([
+  "getVersion",
+  "getFirstRunStatus",
+  "completeFirstRun",
+  "listValidators",
+  "importSSHKey",
+  "probeHostKey",
+  "testCandidateConnection",
+  "login",
+  "enrollAdministrator",
+  "rotatePassword",
+  "logout"
+]);
+
+function notConfigured(): BackupManagerError {
+  return new BackupManagerError({
+    code: "NOT_CONFIGURED",
+    message:
+      "this instance has not been configured yet; complete the setup flow at /api/v1/system/first-run first",
+    correlationId: "cid_mock503"
+  });
+}
+
+/** Wraps every operation an unconfigured instance does not serve so it
+ *  refuses while `isConfigured()` is false, and stops refusing the moment
+ *  setup writes a configuration, exactly as the real router's own
+ *  configured/unconfigured split does on the next request. */
+function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => boolean): BackupManagerApi {
+  const wrapped = { ...api } as Record<string, unknown>;
+  for (const key of Object.keys(api) as (keyof BackupManagerApi)[]) {
+    if (SERVED_WHILE_UNCONFIGURED.has(key)) continue;
+    const original = api[key] as (...args: unknown[]) => unknown;
+    wrapped[key] = (...args: unknown[]) =>
+      isConfigured() ? original(...args) : Promise.reject(notConfigured());
+  }
+  return wrapped as unknown as BackupManagerApi;
+}
+
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
   // Every previewRetention call advances this backup set's "inventory" by
@@ -430,7 +599,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // same one-way transition the real backend makes in-process.
   let configured = scenario !== "first-run";
 
-  return {
+  const api: BackupManagerApi = {
     getVersion: () =>
       delay(
         scenario === "version-mismatch"
@@ -465,7 +634,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           include: set.includePatterns,
           completionStrategy: req.completionStrategy,
           validatorId: req.validatorId,
-          disabled: !!req.disabled
+          disabled: !!req.disabled,
+          readOnly: !!req.readOnly
         },
         restartRequired: false
       });
@@ -474,11 +644,16 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getHealth: () =>
       delay(
         empty
-          ? { ...HEALTH, backupHealth: "healthy", backupHealthReason: "No backup sets configured yet.", setsHealthy: 0, setsStale: 0, setsFailing: 0, retainedCount: 0, retainedBytes: 0, quarantinedCount: 0 }
+          ? { ...HEALTH, backupHealth: "healthy", backupHealthReason: "No backup sets configured yet.", setsHealthy: 0, setsStale: 0, setsFailing: 0, retainedCount: 0, retainedBytes: 0, quarantinedCount: 0, readOnlyRetainedCount: 0 }
           : scenario === "storage-critical"
             ? { ...HEALTH, storageState: "critical", storageFreeBytes: 0.28 * TB, backupHealth: "failing", backupHealthReason: "Storage is critically low; ingestion has been paused to protect existing backups." }
             : HEALTH
       ),
+
+    // Issue #286. See STORAGE/STORAGE_CRITICAL/STORAGE_EMPTY's own doc
+    // for why this is not derived from getHealth's own numbers.
+    getStorage: () =>
+      delay(empty ? STORAGE_EMPTY : scenario === "storage-critical" ? STORAGE_CRITICAL : STORAGE),
 
     listSets: () => delay(empty ? [] : SETS),
     getSet: (id) => {
@@ -501,6 +676,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     runCycle: () => delay(undefined),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
     setEnabled: () => delay(undefined),
+    setReadOnly: () => delay(undefined),
 
     createBackupSet: (req: CreateBackupSetRequest): Promise<CreatedBackupSet> => {
       const set = mockBackupSetFromCreateRequest(req);
@@ -524,6 +700,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         completionStrategy: req.completionStrategy,
         validatorId: req.validatorId,
         disabled: !!req.disabled,
+        readOnly: !!req.readOnly,
         operation: runImmediately ? { operationId: "op_mock_" + set.id, status: "completed" } : undefined
       });
     },
@@ -580,26 +757,44 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getSettings: () => delay(structuredClone(settings)),
     updateSettings: (req: UpdateSettingsRequest) => {
       const r = req.retention;
-      // The real backend refuses a write that names no setting, in both
-      // layers and structurally: an absent retention section and a
+      const c = req.capacity;
+      // The real backend refuses a write that names no setting at all, in
+      // both layers and structurally: an absent section and a
       // present-but-empty one are the same request, and honouring either
       // would rewrite the config file and move the config revision for a
-      // body with no content (PR #171, mandatory finding M3). A fixture
-      // that resolved with the current settings instead would let a
-      // component that sends an empty body pass here and fail against the
-      // server.
-      const namesNothing =
-        !r ||
+      // body with no content (PR #171, mandatory finding M3; issue #286
+      // extended this to capacity, the same way). A fixture that resolved
+      // with the current settings instead would let a component that
+      // sends an empty body pass here and fail against the server.
+      const retentionNamesNothing =
+        r === undefined ||
         (r.timezone === undefined &&
           r.weekStartsOn === undefined &&
           r.tiers === undefined &&
           r.protectLastKnownGood === undefined);
-      if (namesNothing)
+      const capacityNamesNothing =
+        c === undefined ||
+        (c.capBytes === undefined &&
+          c.warningFreeBytes === undefined &&
+          c.criticalFreeBytes === undefined &&
+          c.safetyMarginBytes === undefined);
+      if (retentionNamesNothing && capacityNamesNothing)
         return Promise.reject(new BackupManagerError({
           code: "INVALID_REQUEST",
           message: "a settings write must name at least one setting to change",
           correlationId: "cid_mocksettings400"
         }));
+      // A section that WAS sent but named nothing is refused even when
+      // the OTHER section carries a real change: quietly dropping half a
+      // request is how a settings page reports success for an edit that
+      // never happened.
+      if ((r !== undefined && retentionNamesNothing) || (c !== undefined && capacityNamesNothing))
+        return Promise.reject(new BackupManagerError({
+          code: "INVALID_REQUEST",
+          message: "a settings section was sent with no field in it; omit the section instead of sending an empty one",
+          correlationId: "cid_mocksettings400"
+        }));
+
       if (r) {
         // Only the named fields move, exactly like the PATCH contract
         // (and like core/service's own applyRetentionUpdate): a mock that
@@ -626,6 +821,51 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           settings.retention.tiers = r.tiers.map((t) => ({ ...t }));
         }
       }
+
+      if (c) {
+        // core/internal/config.validateCapacity's own rules (issue #286):
+        // nothing negative, and a cap may not sit at or below the
+        // critical floor, since that combination refuses every transfer
+        // forever. Checked against what the write would leave in effect
+        // (the named fields folded onto the current settings), the same
+        // way the real backend validates the WHOLE config rather than
+        // only the fields a request happened to touch.
+        const capBytes = c.capBytes ?? settings.capacity.capBytes;
+        const warningFreeBytes = c.warningFreeBytes ?? settings.capacity.warningFreeBytes;
+        const criticalFreeBytes = c.criticalFreeBytes ?? settings.capacity.criticalFreeBytes;
+        const safetyMarginBytes = c.safetyMarginBytes ?? settings.capacity.safetyMarginBytes;
+
+        if (capBytes < 0)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity.cap_bytes must not be negative; use 0 for no cap",
+            correlationId: "cid_mocksettings400"
+          }));
+        if (warningFreeBytes < 0 || criticalFreeBytes < 0 || safetyMarginBytes < 0)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity thresholds must not be negative",
+            correlationId: "cid_mocksettings400"
+          }));
+        if (warningFreeBytes < criticalFreeBytes)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity.warning_free_bytes must be at or above capacity.critical_free_bytes",
+            correlationId: "cid_mocksettings400"
+          }));
+        if (capBytes > 0 && criticalFreeBytes > 0 && capBytes <= criticalFreeBytes)
+          return Promise.reject(new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message: "capacity.cap_bytes must be above capacity.critical_free_bytes",
+            correlationId: "cid_mocksettings400"
+          }));
+
+        if (c.capBytes !== undefined) settings.capacity.capBytes = c.capBytes;
+        if (c.warningFreeBytes !== undefined) settings.capacity.warningFreeBytes = c.warningFreeBytes;
+        if (c.criticalFreeBytes !== undefined) settings.capacity.criticalFreeBytes = c.criticalFreeBytes;
+        if (c.safetyMarginBytes !== undefined) settings.capacity.safetyMarginBytes = c.safetyMarginBytes;
+      }
+
       return delay(structuredClone(settings));
     },
 
@@ -649,4 +889,6 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
         : delay(undefined),
     logout: () => delay(undefined)
   };
+
+  return refusingWhileUnconfigured(api, () => configured);
 }

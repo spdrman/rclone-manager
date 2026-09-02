@@ -29,6 +29,17 @@ const (
 	Transient
 	Authentication
 	HostVerification
+	// KeyPermissions is issue #293's refusal: a locally configured key_file
+	// exists but its on-disk mode no longer matches what importSSHKeyInto
+	// (core/service/backupsets.go) wrote it with. Like HostVerification and
+	// Authentication, this can only ever happen BEFORE a session exists
+	// (internal/transport/rclone/ssh.go's sftpConfig decides it while
+	// building the connection's own options, before rclone is ever handed
+	// them), which is why it belongs beside those two rather than beside
+	// PermissionDenied: PermissionDenied is a remote-side failure reachable
+	// only with a perfectly good connection (see haltReasonFor's doc in
+	// internal/app/halt.go), and this is the opposite of that.
+	KeyPermissions
 	NotFound
 	PermissionDenied
 	IntegrityFailure
@@ -43,6 +54,7 @@ var categoryNames = [...]string{
 	Transient:             "transient",
 	Authentication:        "authentication",
 	HostVerification:      "host_verification",
+	KeyPermissions:        "key_permissions",
 	NotFound:              "not_found",
 	PermissionDenied:      "permission_denied",
 	IntegrityFailure:      "integrity_failure",
@@ -65,11 +77,11 @@ func (c Category) String() string {
 // Retryable reports whether FR-22's bounded backoff is ever appropriate for
 // this category. Only Transient is: every other category is either a fixed
 // property of the request that a retry cannot change (NotFound,
-// PermissionDenied, HostVerification, Authentication, IntegrityFailure,
-// Conflict, UnsupportedCapability), a decision already made by the caller
-// (Cancelled), or a case this classifier could not place at all
-// (Unclassified, Permanent), which must never be treated as safe to retry
-// just because it wasn't recognized.
+// PermissionDenied, HostVerification, Authentication, KeyPermissions,
+// IntegrityFailure, Conflict, UnsupportedCapability), a decision already
+// made by the caller (Cancelled), or a case this classifier could not
+// place at all (Unclassified, Permanent), which must never be treated as
+// safe to retry just because it wasn't recognized.
 func (c Category) Retryable() bool {
 	return c == Transient
 }

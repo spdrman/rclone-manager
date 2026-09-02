@@ -196,6 +196,16 @@ export interface SystemHealth {
   setsFailing: number;
   /** Every quarantined artifact, including the irrecoverable ones. */
   quarantinedCount: number;
+  /**
+   * Summed across every configured backup set: how many backups currently
+   * hold a remote source this manager will never delete because the set
+   * that produced them is declared read-only (issue #282, #316). It only
+   * ever grows while a set stays read-only, since nothing here ever
+   * re-authorises a deletion that policy already refused (see
+   * BackupSet.readOnlyRetainedCount's own doc for the per-set figure this
+   * sums, and for what turning read-only off does and does not undo).
+   */
+  readOnlyRetainedCount: number;
   /** Summed across the destinations whose capacity could be read.
    *  storageReadingsUnavailable says how many could not be. */
   storageFreeBytes: number;

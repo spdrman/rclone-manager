@@ -181,6 +181,49 @@ func TestGFSDecideKeepsTheMultiTierShapeOfABacklogIngestedInOneCycle(t *testing.
 	}
 }
 
+// TestGFSDecideDoesNotFlagTheBatchIngestDiscoveryTieAsASiblingCollision is
+// issue #292's regression guard against the false positive this exact
+// fixture would produce from a naive reading of "flag every exact
+// timestamp tie": all six artifacts here share one discovery instant
+// (one ingest cycle), so a discovery-pass tie exists between every one of
+// them, including pg-2025-04-18.dump, which is genuinely, meaningfully
+// outside every configured window and shares nothing with the other five
+// except this manager's own ingest clock. If SiblingCollisions were ever
+// populated from the discovery pass's own tie map, this test would start
+// reporting pg-2025-04-18.dump as having "collided" with
+// pg-2026-08-31.dump, which would also send the pinned CLI contract case
+// retention/gfs-tiers-from-one-ingest.yaml in spdrman/rclone-manager-tests
+// red (its `count: 8` pins exactly eight printed lines for this same
+// shape of fixture, with no room for an extra warning line under
+// pg-01-age-500d.dump). See GFSSiblingCollision's own doc for why only a
+// producer-timestamp tie is trusted as evidence of one backup run
+// captured as more than one file.
+func TestGFSDecideDoesNotFlagTheBatchIngestDiscoveryTieAsASiblingCollision(t *testing.T) {
+	set := gfsMustSet(t, "production", "postgres-primary")
+	now := bkAt(t, "2026-08-31T12:00:00Z")
+	discovered := bkAt(t, "2026-08-31T09:00:00Z")
+
+	records := bkBuildRecords(t, set, []bkRecSpec{
+		{"pg-2026-08-31.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-31T09:00:00Z"))},
+		{"pg-2026-08-28.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-28T09:00:00Z"))},
+		{"pg-2026-08-11.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-08-11T09:00:00Z"))},
+		{"pg-2026-07-12.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-07-12T09:00:00Z"))},
+		{"pg-2026-02-12.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2026-02-12T09:00:00Z"))},
+		{"pg-2025-04-18.dump", lifecycle.Complete, discovered, bkPtr(bkAt(t, "2025-04-18T09:00:00Z"))},
+	})
+
+	verdicts, err := GFSDecide(now, bkDefaultChain(), set, records)
+	if err != nil {
+		t.Fatalf("GFSDecide: %v", err)
+	}
+
+	for _, v := range verdicts {
+		if len(v.SiblingCollisions) != 0 {
+			t.Errorf("%s: SiblingCollisions = %+v, want none; these six share only a discovery-pass ingest instant, each with its own distinct producer timestamp, so none of them is a same-run sibling of another", v.Artifact.Name, v.SiblingCollisions)
+		}
+	}
+}
+
 // TestDecideKeepOnTheReportedBacklogNamesTheRealNewestRestorePoint uses
 // issue #192's own fixture names, where the artifact with the
 // lexicographically largest name is also the oldest backup in the set.

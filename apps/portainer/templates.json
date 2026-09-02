@@ -40,8 +40,8 @@
         {
           "name": "IMAGE",
           "label": "Canonical image reference",
-          "description": "The one multi-architecture image both containers run. No registry is configured for this repository yet, so change this to wherever you pushed or loaded it.",
-          "default": "ghcr.io/spdrman/backup-manager:0.1.0"
+          "description": "The one multi-architecture image both containers run. 0.2.0 is not pushed to ghcr.io yet, so until the release lands, change this to wherever you pushed or loaded a build, or to the previous release 0.1.0.",
+          "default": "ghcr.io/spdrman/backup-manager:0.2.0"
         },
         {
           "name": "PUID",

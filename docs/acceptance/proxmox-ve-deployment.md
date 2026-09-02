@@ -158,13 +158,14 @@ ssh admin@<guest> 'docker --version && docker compose version'
 
 ### 0.5 Make the canonical image resolvable
 
-The registry is settled and nothing has been pushed to it yet. The reference is
-`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the
-single source of truth for it), and that file records `image.published: false`;
-`container/release-manifest.json` records the same fact as a `registry_digest` of
-`null` on every architecture. So the reference in the compose file resolves to
-nothing today, not because no registry exists but because the first push has not
-happened (issue #88). Until it does, either push to your own registry:
+`ghcr.io/spdrman/backup-manager:0.2.0` is cut but not pushed yet:
+`distribution/packaging/canonical.json` records `image.published: false`, and
+`container/release-manifest.json` carries a `registry_digest` of `null` per
+architecture. So the reference does not resolve from the registry today, and the
+steps below are how you make it resolve, by pushing a build to a registry this host
+can reach or building elsewhere and loading it. The previous release,
+`ghcr.io/spdrman/backup-manager:0.1.0`, stays published and signed if you would
+rather run that. Either push to your own registry:
 
 ```bash
 docker buildx build \

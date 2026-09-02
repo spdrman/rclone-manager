@@ -247,6 +247,50 @@ func (j *Journal) LastEnteredAt(ctx context.Context, artifact model.ArtifactID, 
 	return at, true, nil
 }
 
+// LastEnteredDetail is LastEnteredAt plus the one thing that query
+// deliberately does not return: the free-text detail recorded on that
+// same transition (issue #284).
+//
+// state_transitions.detail is the ONLY durable place a lifecycle step's
+// diagnostic sentence ever lands (internal/lifecycle/verify.go's "hash
+// verification required..." text, or a validator's rejection reason
+// carried through Advance's Transition.Detail); the artifacts row itself
+// never gets a column for it, on purpose (see this package's own doc, and
+// internal/lifecycle/quarantine.go's QuarantineReason for the best-effort
+// derivation every OTHER caller is stuck with because it declines to read
+// this table directly). This is the one place in the codebase that reads
+// it back literally, for a caller (internal/app.GetArtifactDetail, an
+// operator asking the CLI why one specific artifact is FAILED or
+// QUARANTINED) that needs the actual recorded words rather than a guess
+// reconstructed from whatever else happens to be on the record.
+//
+// found is false, with a nil error and empty detail, when the artifact
+// exists but has never entered st, exactly like LastEnteredAt's ok.
+func (j *Journal) LastEnteredDetail(ctx context.Context, artifact model.ArtifactID, st string) (detail string, occurredAt time.Time, found bool, err error) {
+	var occurred string
+	err = j.db.QueryRowContext(ctx,
+		`SELECT t.detail, t.occurred_at
+		   FROM state_transitions t
+		   JOIN artifacts a ON a.id = t.artifact_id
+		  WHERE a.source = ? AND a.backup_set = ? AND a.artifact_name = ?
+		    AND t.to_state = ? AND t.from_state <> ?
+		  ORDER BY t.id DESC
+		  LIMIT 1`,
+		artifact.Set.Source, artifact.Set.Set, artifact.Name, st, st,
+	).Scan(&detail, &occurred)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("state: last entered detail for %s at %s: %w", artifact, st, err)
+	}
+	at, err := parseTime(occurred)
+	if err != nil {
+		return "", time.Time{}, false, fmt.Errorf("state: last entered detail for %s at %s: parsing occurred_at %q: %w", artifact, st, occurred, err)
+	}
+	return detail, at, true, nil
+}
+
 // LastTransition reports when artifact most recently recorded the exact
 // from -> to edge in the append-only transition log, and whether it ever
 // did.

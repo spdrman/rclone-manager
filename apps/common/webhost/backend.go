@@ -76,8 +76,10 @@ type BackupServiceClient interface {
 
 	// ImportSSHKey backs POST /api/v1/ssh-keys: the wizard's "Import
 	// key" step, persisting client-validated key material server-side
-	// for the first time (issue #146).
-	ImportSSHKey(ctx context.Context, raw []byte) (service.SSHKeyRef, error)
+	// for the first time (issue #146). passphrase is "" for an
+	// unencrypted key; see service.BackupService.ImportSSHKey's own doc
+	// for what a non-empty one does (#269).
+	ImportSSHKey(ctx context.Context, raw []byte, passphrase string) (service.SSHKeyRef, error)
 
 	// ProbeHostKey backs POST /api/v1/ssh/host-key-probe: the wizard's
 	// "Verify server" step, fetching a real fingerprint instead of a
@@ -98,6 +100,20 @@ type BackupServiceClient interface {
 	// from here can turn a "critical" result into a deletion or a call
 	// into internal/retention's apply path.
 	ListStorageStatus(ctx context.Context) ([]service.StorageStatus, error)
+
+	// ManagerStorage backs the other half of GET /api/v1/system/storage
+	// (issue #286): the ONE manager-wide reading, taken from the
+	// filesystem the backup root is on, carrying this manager's own
+	// consumption and the operator's cap alongside the volume's figures.
+	//
+	// It is a separate call rather than something derivable from
+	// ListStorageStatus because summing that list cannot answer the same
+	// question: an unconfigured instance sums to zero, two sets on one
+	// volume sum to twice the disk, and a manager-wide cap has no per-set
+	// entry to live on. See core/service.ManagerStorage's own doc, and in
+	// particular what a reading with Known false must and must not be
+	// rendered as.
+	ManagerStorage(ctx context.Context) (service.ManagerStorage, error)
 
 	// Settings and UpdateSettings back GET and PATCH /api/v1/settings
 	// (issue #140/B3.7): the one generic, authenticated, CSRF-protected
@@ -130,6 +146,14 @@ type BackupServiceClient interface {
 	// a disabled set stops doing and, more importantly, for what it does
 	// not touch.
 	SetBackupSetEnabled(ctx context.Context, id string, enabled bool) (service.BackupSet, error)
+
+	// SetBackupSetReadOnly backs POST /api/v1/backup-sets/{id}/read-only
+	// (issue #316): the CRUD-parity write that turns issue #282's
+	// read-only declaration on or off for an already-persisted backup
+	// set. State-changing but not destructive — see
+	// core/service.SetBackupSetReadOnly's own doc for what each direction
+	// does and, in particular, does not undo.
+	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
 
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same

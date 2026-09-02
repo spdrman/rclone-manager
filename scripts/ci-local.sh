@@ -122,8 +122,21 @@ if [ "$FAST" = "1" ]; then
   gate_step "core/ go test ./internal/... (CI_LOCAL_FAST=1: skipping ./tests/... Docker suites)"
   (cd core && GOWORK=off go test ./internal/...)
 else
-  gate_step "core/ go test ./... (full suite, including Docker-backed crash matrix + SFTP integration)"
-  (cd core && GOWORK=off go test ./...)
+  # tests/crashmatrix and tests/sftpintegration run separately, under
+  # cmd/gotestwatch instead of `go test`'s own default -timeout (10m per
+  # package). Both drive real Docker/SFTP work through a real subprocess
+  # (tests/crashmatrix's own harness, or a real rclone transfer against
+  # the SFTP fixture container), so their wall-clock time tracks real
+  # machine load rather than a fixed budget; issue #256 is a real gate
+  # run hitting go test's fixed 10m default under load. gotestwatch
+  # bounds them with a no-progress window derived from this run's own
+  # measured pace instead (issue #247's reasoning, one layer out; see
+  # core/cmd/gotestwatch/doc.go), so there is no fixed number to outgrow.
+  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration, run next)"
+  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration)$'))
+
+  gate_step "core/ tests/crashmatrix + tests/sftpintegration under gotestwatch (issue #256: no fixed go test -timeout)"
+  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/...)
 fi
 
 gate_step "apps/common go build, vet, test"
@@ -280,7 +293,13 @@ bash scripts/architecture/check-ui-shared-provider-imports.sh
 # behaviour nobody exercises until the day it matters on a NAS they cannot
 # debug.
 gate_step "installer prerequisite refusals (#262)"
-(cd scripts/install && python3 -m unittest test_install_docker_host 2>&1 | tail -3)
+# Not piped through `tail`: this file has no `set -o pipefail` (and could
+# not portably rely on one, being #!/usr/bin/env sh), so a pipeline's exit
+# status under plain `set -e` is its LAST command's -- `tail`, which always
+# succeeds. Piping this would let the installer's own test suite fail
+# silently forever, the exact "a refusal nobody has watched work is not a
+# refusal" failure this step exists to close, one line away from closing it.
+(cd scripts/install && python3 -m unittest test_install_docker_host)
 
 gate_step "performance baseline present, and its gate can fail (#165)"
 bash scripts/perf/check-baseline.sh

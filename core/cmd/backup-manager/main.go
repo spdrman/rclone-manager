@@ -44,18 +44,20 @@ func run(args []string) int {
 }
 
 var commands = map[string]func([]string) int{
-	"run":       cmdRun,
-	"daemon":    cmdDaemon,
-	"check":     cmdCheck,
-	"status":    cmdStatus,
-	"sources":   cmdSources,
-	"artifacts": cmdArtifacts,
-	"fetch":     cmdFetch,
-	"retention": cmdRetention,
-	"reconcile": cmdReconcile,
-	"validate":  cmdValidate,
-	"catalog":   cmdCatalog,
-	"version":   cmdVersion,
+	"run":        cmdRun,
+	"daemon":     cmdDaemon,
+	"check":      cmdCheck,
+	"status":     cmdStatus,
+	"sources":    cmdSources,
+	"artifacts":  cmdArtifacts,
+	"fetch":      cmdFetch,
+	"retention":  cmdRetention,
+	"reconcile":  cmdReconcile,
+	"validate":   cmdValidate,
+	"catalog":    cmdCatalog,
+	"quarantine": cmdQuarantine,
+	"settings":   cmdSettings,
+	"version":    cmdVersion,
 }
 
 func usage() {
@@ -68,6 +70,8 @@ commands:
   status                                         report process and backup-set health (FR-24)
   sources                                        list configured sources and backup sets
   artifacts [--source S] [--backup-set B]        list journal artifacts
+  artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
+                                                  recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
   fetch --source S --backup-set B [--dry-run]    run one backup set's cycle on demand
   retention [--dry-run] [--timezone T] [--week-starts-on D] [--daily-days N] [--weekly-months N] [--monthly-months N] [--protect-last-known-good]
                                                   preview GFS/last-known-good retention decisions; each retention flag
@@ -75,6 +79,14 @@ commands:
   reconcile                                      run FR-17 reconciliation for every backup set
   validate <source/backup-set/artifact>          re-check one artifact's durable local copy
   catalog rebuild [--dry-run]                    reconstruct a lost/corrupted state database from sidecar recovery manifests
+  quarantine <revalidate|retry|reinstate> <source/backup-set/artifact> [--note T]
+                                                  act on one quarantined artifact: revalidate re-checks it and moves
+                                                  nothing; retry re-enters the pipeline from DISCOVERED; reinstate
+                                                  trusts it again in place and forfeits any future remote delete
+  settings [patch [--timezone T] [--week-starts-on D] [--protect-last-known-good=BOOL]
+                   [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
+                                                  report the live retention/capacity settings, or change one in place;
+                                                  a full retention tier-chain replacement is still a config-file edit
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;

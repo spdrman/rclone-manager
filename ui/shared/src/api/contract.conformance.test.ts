@@ -181,6 +181,7 @@ describe("every request the shared client makes is a declared operation", () => 
       ["runCycle", () => httpApi.runCycle("rev-1")],
       ["testConnection", () => httpApi.testConnection("set-1")],
       ["setEnabled", () => httpApi.setEnabled("src", "set-1", true)],
+      ["setReadOnly", () => httpApi.setReadOnly("src", "set-1", true)],
       ["createBackupSet", () => httpApi.createBackupSet({
         name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
         knownHostsLine: "l", remotePath: "/r", localPath: "/l",
@@ -204,6 +205,7 @@ describe("every request the shared client makes is a declared operation", () => 
       ["applyRetention", () => httpApi.applyRetention("src", "set-1", "plan-1")],
       ["getSettings", () => httpApi.getSettings()],
       ["updateSettings", () => httpApi.updateSettings({ retention: { timezone: "UTC" } })],
+      ["getStorage", () => httpApi.getStorage()],
       ["scanCatalog", () => httpApi.scanCatalog()],
       ["rebuildCatalog", () => httpApi.rebuildCatalog()],
       ["login", () => httpApi.login("u", "p")],
@@ -273,13 +275,18 @@ describe("every request the shared client makes is a declared operation", () => 
    * `getSystemVersion` left for the same reason: the version banner used
    * to request /api/v1/version.
    *
+   * `listStorageStatus` left with issue #286: GET /system/storage existed
+   * on the contract with no client method reaching it at all, so nothing
+   * here could ever have noticed a mismatch between what the dashboard's
+   * storage gauge needed and what the route actually served. getStorage
+   * (client.ts) now calls it, and DashboardPage reads the response.
+   *
    * Asserted EXACTLY, like its counterpart, so the list can only shrink.
    */
   const UNREACHED_SERVER_OPERATIONS = [
     "getOperation",
     "getSession",
-    "getSystemCapabilities",
-    "listStorageStatus"
+    "getSystemCapabilities"
   ];
 
   it("pins the contract operations no client call reaches", () => {

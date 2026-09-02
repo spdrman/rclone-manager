@@ -118,14 +118,15 @@ func TestLastKnownGoodDecideExcludesEveryDisqualifiedStateEvenWhenNewest(t *test
 	if err != nil {
 		t.Fatalf("LastKnownGoodDecide: %v", err)
 	}
-	// lifecycle.AllStates lists Failed, Quarantined, QuarantinedLost last,
-	// so each is discovered strictly after Complete (the newest of the
-	// three eligible states). If eligibility were bypassed for "the newest
+	// lifecycle.AllStates lists RemoteRetained right after Complete, then
+	// Failed, Quarantined, QuarantinedLost last, so each of those three is
+	// discovered strictly after RemoteRetained (the newest of the four
+	// eligible states). If eligibility were bypassed for "the newest
 	// arrival regardless of state," one of those three would win instead.
 	if !got.Protected {
-		t.Fatalf("Protected = false, want true: Committed/RemoteDeletePending/Complete are all present (%+v)", got)
+		t.Fatalf("Protected = false, want true: Committed/RemoteDeletePending/Complete/RemoteRetained are all present (%+v)", got)
 	}
-	wantName := "artifact-" + string(lifecycle.Complete)
+	wantName := "artifact-" + string(lifecycle.RemoteRetained)
 	if got.Artifact.Name != wantName {
 		t.Errorf("Artifact = %q, want %q (the newest *eligible* artifact, not the newest arrival of any kind)", got.Artifact.Name, wantName)
 	}

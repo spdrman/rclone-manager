@@ -77,6 +77,14 @@ type backupSetHealthResponse struct {
 	// nobody has looked at.
 	ReinstatedRemoteRetainedCount int `json:"reinstated_remote_retained_count"`
 
+	// ReadOnlyRetainedCount is how many backups here currently hold a
+	// remote source this manager will never delete because the SET
+	// itself is declared read-only (issue #282), not because any one of
+	// them was individually reinstated (see ReinstatedRemoteRetainedCount
+	// above for that separate population). Also NOT omitempty, for the
+	// identical reason: zero is a real, common reading.
+	ReadOnlyRetainedCount int `json:"read_only_retained_count"`
+
 	// FreeBytes is omitted when the reading could not be taken, and
 	// FreeBytesKnown says which case a zero is. A bare 0 would read as
 	// "the disk is full", which is the one thing an unavailable reading
@@ -140,6 +148,7 @@ func toBackupSetHealthResponse(bs service.BackupSetHealth) backupSetHealthRespon
 		QuarantinedLostCount:  bs.QuarantinedLostCount,
 
 		ReinstatedRemoteRetainedCount: bs.ReinstatedRemoteRetainedCount,
+		ReadOnlyRetainedCount:         bs.ReadOnlyRetainedCount,
 		FreeBytes:                     bs.FreeBytes,
 		FreeBytesKnown:                bs.FreeBytesKnown,
 		TotalBytes:                    bs.TotalBytes,

@@ -91,6 +91,17 @@ func cmdRetention(args []string) int {
 			// (suites/cli/cases/retention/), so changing its shape means
 			// moving those cases in lockstep.
 			fmt.Printf("  %-6s %-40s tiers=%v\n", decision, v.Artifact.Name, v.Tiers)
+			// Issue #292: tiers=[] alone cannot tell an operator "no tier
+			// claimed this because it is older than every window" apart
+			// from "no tier claimed this because a sibling in the same
+			// bucket won" -- both render identically otherwise. Every
+			// GFSSiblingCollision GFSDecide recorded against this
+			// artifact prints as its own indented line right under the
+			// verdict it belongs to, so the distinction is visible before
+			// anything is deleted, which is this issue's whole ask.
+			for _, line := range v.SiblingCollisionLines() {
+				fmt.Printf("    ! %s\n", line)
+			}
 		}
 		fmt.Printf("  last-known-good: %s\n", r.LastKnownGood.Reason)
 	}
