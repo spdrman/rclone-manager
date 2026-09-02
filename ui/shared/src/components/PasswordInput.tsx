@@ -17,10 +17,12 @@ import { useEffect, useRef, useState } from "react";
  *      also wraps a validation message, because the name grows to
  *      "Confirm passwordPasswords do not match." the moment one renders.
  *      A leading anchor survives both.
- *    - Select the TOGGLE by role and its full name, "Show password" or
- *      "Hide password". The verb comes first on purpose: a name starting
- *      with the field's own label is what makes an input locator resolve
- *      two elements, which is #329's defect exactly.
+ *    - Select the TOGGLE by role and its full name, "Show password". That
+ *      name does NOT change when the field is revealed, so a locator does
+ *      not have to know which state the field is in; `aria-pressed` is what
+ *      moves. The verb comes first on purpose: a name starting with the
+ *      field's own label is what makes an input locator resolve two
+ *      elements, which is #329's defect exactly.
  *
  *  # Why this diverges from FieldHelp's rule about aria-label
  *
@@ -63,13 +65,18 @@ import { useEffect, useRef, useState } from "react";
  *  logical ones. Together they mean a revealed field cannot outlive the
  *  moment it was revealed for.
  *
- *  The toggle's name flips ("Show password" then "Hide password") and
- *  carries no `aria-pressed`. Both would state the same fact twice in two
- *  tenses, which WAI-ARIA's button pattern says to avoid: a name that says
- *  what the next activation does, next to a pressed state that says what
- *  the current one is, announces as "Hide password, toggle button,
- *  pressed". The name is the half that both a screen reader and every
- *  locator can see, so the name is the half that was kept.
+ *  The state is carried by `aria-pressed` alone, and the name is fixed.
+ *  Doing both, which this started out doing, states the same fact twice in
+ *  two tenses: a name saying what the next activation will do, beside a
+ *  pressed state saying what the current one is, announces as "Hide
+ *  password, toggle button, pressed". WAI-ARIA's button pattern says to
+ *  pick one, and its advice for a toggle is explicit about which: do not
+ *  change a toggle button's label as its state changes, name it for the
+ *  thing being toggled and let `aria-pressed` move. That also happens to be
+ *  the half a screen reader announces on its own when the button is
+ *  activated while focused, which a silently renamed plain button is not.
+ *  There is no visible text to keep in sync, only the eye glyph, which
+ *  gains its slash when the field is revealed.
  *
  *  `type="button"` is explicit because every one of these fields sits in a
  *  form with a real submit button, and a button with no type inside a form
@@ -127,8 +134,6 @@ export function PasswordInput({
     return () => form.removeEventListener("submit", mask);
   }, []);
 
-  const action = revealed ? "Hide" : "Show";
-
   return (
     <span className="password-field">
       {/* First child on purpose: a <label> binds to its first labelable
@@ -164,7 +169,8 @@ export function PasswordInput({
       <button
         type="button"
         className="password-field__toggle"
-        aria-label={action + " " + label.toLowerCase()}
+        aria-label={"Show " + label.toLowerCase()}
+        aria-pressed={revealed}
         disabled={disabled}
         onClick={() => setRevealed((shown) => !shown)}
       >
@@ -174,8 +180,9 @@ export function PasswordInput({
   );
 }
 
-/** Decorative: the button already carries the name, so a second
- *  announcement here would only repeat it. Colour comes from currentColor
+/** Decorative: the button already carries the name and the state, so a
+ *  second announcement here would only repeat them. The slash is the
+ *  sighted half of what aria-pressed says. Colour comes from currentColor
  *  so the theme drives it, matching Logo.tsx. */
 function EyeIcon({ open }: { open: boolean }) {
   return (

@@ -81,29 +81,28 @@ describe("password reveal toggle", () => {
   it("starts masked", () => {
     render(<Harness />);
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "password");
-    expect(screen.getByRole("button", { name: "Show password" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show password" })).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("reveals the value and renames itself for the next activation", async () => {
+  it("reveals the value and reports itself pressed", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Show password" }));
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "text");
-    // The name is the whole state announcement. It deliberately does not
-    // also carry aria-pressed: a name that says what the next activation
-    // will do, beside a pressed state that says what the current one is,
-    // announces the same fact twice in two tenses, which WAI-ARIA's button
-    // pattern says to pick one of.
-    expect(screen.getByRole("button", { name: "Hide password" })).not.toHaveAttribute("aria-pressed");
+    // aria-pressed is the whole state announcement, and the name holds
+    // still. Doing both would state the same fact in two tenses, which
+    // WAI-ARIA's button pattern says to pick one of, and its advice for a
+    // toggle is not to rename it as its state changes.
+    expect(screen.getByRole("button", { name: "Show password" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("masks again on a second activation", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Show password" }));
-    await user.click(screen.getByRole("button", { name: "Hide password" }));
+    await user.click(screen.getByRole("button", { name: "Show password" }));
     expect(screen.getByLabelText("Password", { exact: true })).toHaveAttribute("type", "password");
-    expect(screen.getByRole("button", { name: "Show password" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show password" })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("does not carry the revealed state across a remount", async () => {
