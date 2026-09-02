@@ -261,7 +261,13 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       return false;
     }
 
-    setSavingFields(keys);
+    // Added to, and later removed from, rather than replaced wholesale.
+    // Two per-box Saves can genuinely overlap (press one, press another
+    // before the first answers), and a wholesale replace loses the first
+    // one's entry: its button springs back to "Save", enabled, while its
+    // request is still in flight, which invites the double submit it was
+    // meant to prevent.
+    setSavingFields((prev) => [...prev, ...keys]);
     try {
       const updated = await api.updateBackupSet(source, setName, patch);
       // The persisted truth goes back on the graph directly, rather than
@@ -296,7 +302,7 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
       setFieldErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, message])) }));
       return false;
     } finally {
-      setSavingFields([]);
+      setSavingFields((prev) => prev.filter((key) => !keys.includes(key)));
     }
   };
 
