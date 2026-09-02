@@ -145,6 +145,17 @@ export type QuarantineReason =
 
 export interface QuarantineRecord {
   reason: QuarantineReason;
+  /**
+   * The literal diagnostic sentence the backend recorded at the moment
+   * this backup was quarantined (core/service.Artifact.QuarantineReason,
+   * wire field quarantine_reason), verbatim. `reason` above is a closed
+   * category derived FROM this text for badging/filtering (see
+   * client.ts's quarantineReasonFor); this is the actual words, for an
+   * operator who needs to know exactly what was found, not just which
+   * bucket it fell into (issue #308). Empty when the backend has none to
+   * report, which the UI renders as absent rather than as a blank line.
+   */
+  detail: string;
   detectedAt: string;
   /** Quarantined artifacts never trigger remote deletion. */
   remoteSourceRetained: true;

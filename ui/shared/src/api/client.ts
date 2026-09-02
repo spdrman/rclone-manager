@@ -721,6 +721,7 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     quarantine: a.quarantined
       ? {
           reason: quarantineReasonFor(a),
+          detail: a.quarantine_reason ?? "",
           detectedAt: a.updated_at,
           remoteSourceRetained: true
         }
