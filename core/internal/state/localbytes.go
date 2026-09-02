@@ -34,6 +34,16 @@ import (
 // fields are optional by contract and one sizeless backend must not make
 // the cap unenforceable everywhere.
 //
+// # Only copies that are actually local
+//
+// An artifact counts here only while it has an ACTIVE local placement
+// (FR-29). Every artifact does today, so this is the same set of rows the
+// state filter alone selected and the same total. Once the move engine can
+// migrate an artifact to a storage medium, its bytes stop counting against
+// a LOCAL cap, which is the only reading that makes the cap mean anything:
+// the alternative refuses new transfers to protect space occupied by a
+// copy that is in a bucket.
+//
 // # Where this over-counts, and why that direction is the safe one
 //
 // internal/retention's PruneApply removes a local file without writing
@@ -76,8 +86,24 @@ func (j *Journal) LocalBytesInUse(ctx context.Context, states []string) (uint64,
 	// COALESCE twice, deliberately: the inner one picks transfer_bytes over
 	// remote_size per row, the outer one turns SUM's NULL over zero matching
 	// rows into a plain 0.
-	query := `SELECT COALESCE(SUM(COALESCE(transfer_bytes, remote_size, 0)), 0) FROM artifacts WHERE state IN (` +
-		strings.Join(placeholders, ", ") + `)`
+	// The placement clause is FR-29's sweep reaching the capacity guard.
+	// Every artifact has exactly one local placement and it is ACTIVE, so
+	// today this matches precisely the rows the plain state filter matched
+	// and the total is unchanged (TestLocalBytesInUseIsUnchangedWhileEvery
+	// PlacementIsLocal pins that). It stops matching for an artifact whose
+	// bytes have moved to a storage medium, which is the point: this
+	// number is what a LOCAL storage cap is enforced against, and counting
+	// a copy that is in a bucket would refuse transfers to make room for
+	// bytes that are not on the disk.
+	query := `SELECT COALESCE(SUM(COALESCE(a.transfer_bytes, a.remote_size, 0)), 0)
+	            FROM artifacts a
+	           WHERE a.state IN (` + strings.Join(placeholders, ", ") + `)
+	             AND EXISTS (
+	                   SELECT 1 FROM placements p
+	                    WHERE p.artifact_id = a.id
+	                      AND p.medium = '` + MediumLocal + `'
+	                      AND p.status = '` + PlacementActive + `'
+	             )`
 
 	var total sql.NullInt64
 	if err := j.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {

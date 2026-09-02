@@ -133,6 +133,13 @@ func taRecords(t *testing.T, set model.BackupSetID, specs []recSpecWithProducer,
 		if localRoot != "" {
 			rec.LocalPath = filepath.Join(localRoot, s.name)
 		}
+		// Every record the journal produces carries its local placement
+		// (FR-29), including one whose local path is empty.
+		rec.Placements = []state.Placement{{
+			Medium:   state.MediumLocal,
+			Location: rec.LocalPath,
+			Status:   state.PlacementActive,
+		}}
 		rec.Remote.ModTime = &p
 		out = append(out, rec)
 	}

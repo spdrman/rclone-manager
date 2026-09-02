@@ -42,18 +42,30 @@ func runChecks(ctx context.Context, cfg config.Revalidation, rec state.Record) (
 	var reasons []string
 	passed = true
 
+	// FR-29: where the copy actually is comes from the placement, not from
+	// LocalPath, which records where it landed and keeps saying so
+	// afterwards. Every placement is local today, so this reads exactly as
+	// it did; when the move engine can retire a local copy, an empty
+	// answer here is the honest one and turning it into a read of the old
+	// landing path would be a re-hash of whatever else ended up at that
+	// name.
+	local := rec.LocalLocation()
+
 	if cfg.Hash && rec.LocalHashAlg == string(transport.SHA256) && rec.LocalHash != "" {
 		checked = true
-		sum, readErr := recomputeLocalHash(rec.LocalPath)
+		sum, readErr := recomputeLocalHash(local)
 		switch {
+		case local == "":
+			passed = false
+			reasons = append(reasons, "the journal records no active local copy of this artifact to re-read")
 		case readErr != nil:
 			passed = false
-			reasons = append(reasons, fmt.Sprintf("local final file %s could not be read: %v", rec.LocalPath, readErr))
+			reasons = append(reasons, fmt.Sprintf("local final file %s could not be read: %v", local, readErr))
 		case !strings.EqualFold(sum, rec.LocalHash):
 			passed = false
 			reasons = append(reasons, fmt.Sprintf(
 				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash,
+				local, sum, rec.LocalHashAlg, rec.LocalHash,
 			))
 		default:
 			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
@@ -61,7 +73,7 @@ func runChecks(ctx context.Context, cfg config.Revalidation, rec state.Record) (
 	}
 
 	if cfg.Command != nil {
-		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cfg.Command, rec.LocalPath)
+		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cfg.Command, local)
 		if hookErr != nil {
 			if isCancelled(hookErr) {
 				return false, false, "", hookErr

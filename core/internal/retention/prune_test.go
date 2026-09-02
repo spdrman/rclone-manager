@@ -39,6 +39,17 @@ func pruneRecord(artifact model.ArtifactID, st lifecycle.State, discovered time.
 		LocalPath:    localPath,
 		DiscoveredAt: discovered,
 		UpdatedAt:    discovered,
+		// FR-29: a record the journal produces always carries its local
+		// placement, so a hand-built one has to as well or it is not the
+		// shape prune ever actually sees. Prune identifies the file it is
+		// about to delete through the placement now (see pruneFinalPath),
+		// which is what keeps it refusing rather than deleting once an
+		// artifact's bytes have moved off local disk.
+		Placements: []state.Placement{{
+			Medium:   state.MediumLocal,
+			Location: localPath,
+			Status:   state.PlacementActive,
+		}},
 	}
 }
 

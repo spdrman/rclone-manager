@@ -270,10 +270,22 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 	// what stands between this function and a "file the journal does not
 	// know about": nothing here ever considers a path that was not the
 	// journal's own recorded LocalPath.
-	if rec.LocalPath != expected {
+	//
+	// FR-29: the path compared here is the ACTIVE local placement's, not
+	// Record.LocalPath. They are the same string for every artifact in
+	// every deployment today, so this check refuses and permits exactly
+	// what it did before. The difference only appears once the move engine
+	// can retire a local copy, and it appears in the safe direction: an
+	// artifact whose bytes have moved to a medium has no active local
+	// placement, so this compares "" against the computed path, does not
+	// match, and refuses. Comparing LocalPath instead would match, because
+	// LocalPath is the landing path and stays true after the file is gone,
+	// and this function would go on to delete whatever else had since
+	// taken that name.
+	if rec.LocalLocation() != expected {
 		return "", fmt.Errorf(
 			"retention: prune: refusing %s: journal records local path %q, which does not match %q, the path this backup set's root and artifact name compute; refusing to guess which is correct",
-			rec.Artifact, rec.LocalPath, expected)
+			rec.Artifact, rec.LocalLocation(), expected)
 	}
 
 	// Check: the final path must be a genuine regular file, never a

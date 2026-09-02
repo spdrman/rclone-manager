@@ -316,3 +316,73 @@ func TestSidecarAndJournalAgreeOnThePlacementVocabulary(t *testing.T) {
 		}
 	}
 }
+
+// The capacity guard's local-bytes reading is FR-29's sweep at its most
+// consequential: the number it produces is what refuses a transfer that
+// would breach an operator's storage cap. It counts only artifacts with an
+// ACTIVE local placement now, and both halves of that need pinning: the
+// total is unchanged today, when every artifact has one, and it drops the
+// artifact that no longer does.
+func TestLocalBytesInUseCountsOnlyCopiesThatAreActuallyLocal(t *testing.T) {
+	ctx := context.Background()
+	j, path := openJournal(t)
+
+	states := []string{"COMPLETE"}
+	for i, name := range []string{"a.dump", "b.dump"} {
+		id := artifactID(t, name)
+		if _, err := j.RecordTransition(ctx, state.Transition{
+			Artifact: id, Key: "d-" + name, From: "", To: "COMPLETE",
+			RemotePath: "/remote/" + name, OccurredAt: at(t, "2026-03-01T00:00:00Z"),
+		}); err != nil {
+			t.Fatalf("discover %s: %v", name, err)
+		}
+		local := "/backups/daily/" + name
+		if _, err := j.RecordTransition(ctx, state.Transition{
+			Artifact: id, Key: "t-" + name, From: "COMPLETE", To: "COMPLETE",
+			LocalPath: &local, Transfer: &state.TransferResult{BytesTransferred: int64(1000 * (i + 1))},
+			OccurredAt: at(t, "2026-03-01T00:01:00Z"),
+		}); err != nil {
+			t.Fatalf("record transfer for %s: %v", name, err)
+		}
+	}
+
+	total, err := j.LocalBytesInUse(ctx, states)
+	if err != nil {
+		t.Fatalf("LocalBytesInUse: %v", err)
+	}
+	if total != 3000 {
+		t.Fatalf("LocalBytesInUse = %d, want 3000: while every placement is local this must read exactly as it did before FR-29", total)
+	}
+
+	// Retire one artifact's local copy the way the move engine will. Its
+	// bytes are no longer on this disk, so they must stop counting against
+	// a local cap.
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE placements SET status = ? WHERE artifact_id = (SELECT id FROM artifacts WHERE artifact_name = 'b.dump')`,
+		state.PlacementGone); err != nil {
+		t.Fatalf("retire the local placement: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened, err := state.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopened.Close()
+	total, err = reopened.LocalBytesInUse(ctx, states)
+	if err != nil {
+		t.Fatalf("LocalBytesInUse after retiring one copy: %v", err)
+	}
+	if total != 1000 {
+		t.Fatalf("LocalBytesInUse = %d, want 1000: an artifact whose local copy is GONE occupies nothing on this disk", total)
+	}
+}

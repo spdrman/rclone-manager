@@ -38,19 +38,27 @@ type localValidity struct {
 // for these states, with no third option, and a final copy that is not
 // even there any more cannot honestly be called anything but invalid.
 func checkLocalFinal(rec state.Record) localValidity {
-	if rec.LocalPath == "" {
+	// FR-29: the placement, not LocalPath. Record.LocalPath is the
+	// ingestion landing path and stays true forever once written, which
+	// makes it the wrong thing to ask before opening a file. The two say
+	// the same thing for every artifact in every deployment today (see
+	// internal/state's TestLocalLocationAgreesWithLocalPathThroughout), so
+	// this reads identically now, and once the move engine can retire a
+	// local copy it is the one that keeps being right.
+	local := rec.LocalLocation()
+	if local == "" {
 		return localValidity{Reason: "no local final path is recorded in the journal"}
 	}
 
-	info, err := os.Stat(rec.LocalPath)
+	info, err := os.Stat(local)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return localValidity{Reason: fmt.Sprintf("local final file %s is missing", rec.LocalPath)}
+			return localValidity{Reason: fmt.Sprintf("local final file %s is missing", local)}
 		}
-		return localValidity{Reason: fmt.Sprintf("stat %s: %v", rec.LocalPath, err)}
+		return localValidity{Reason: fmt.Sprintf("stat %s: %v", local, err)}
 	}
 	if info.IsDir() {
-		return localValidity{Reason: fmt.Sprintf("local final path %s is a directory, not a file", rec.LocalPath)}
+		return localValidity{Reason: fmt.Sprintf("local final path %s is a directory, not a file", local)}
 	}
 
 	expected, source, err := expectedLocalSize(rec)
@@ -59,21 +67,21 @@ func checkLocalFinal(rec state.Record) localValidity {
 	}
 	if source != "" && info.Size() != expected {
 		return localValidity{Reason: fmt.Sprintf(
-			"local final file %s is %d bytes, expected %d (from %s)", rec.LocalPath, info.Size(), expected, source)}
+			"local final file %s is %d bytes, expected %d (from %s)", local, info.Size(), expected, source)}
 	}
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return localValidity{Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}
 		}
-		sum, err := sha256File(rec.LocalPath)
+		sum, err := sha256File(local)
 		if err != nil {
-			return localValidity{Reason: fmt.Sprintf("hashing %s: %v", rec.LocalPath, err)}
+			return localValidity{Reason: fmt.Sprintf("hashing %s: %v", local, err)}
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
 			return localValidity{Reason: fmt.Sprintf(
 				"local final file %s hash %s does not match the %s hash recorded at verification, %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash)}
+				local, sum, rec.LocalHashAlg, rec.LocalHash)}
 		}
 	}
 
