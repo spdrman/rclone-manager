@@ -22,21 +22,19 @@ import (
 	_ "github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
 
-// resolveTestRetention fills in every backup set's resolved Retention the
-// way config.Validate does (issue #333). These fixtures build a Config by
-// hand rather than loading one, so nothing else fills that field in, and a
-// set left at the zero Retention is not an unconfigured policy, it is an
-// invalid one that DecideKeep refuses outright.
+// resolveTestRetention fills in every backup set's resolved Retention, by
+// running the real config.ResolveBackupSetRetention rather than a second
+// copy of it (issue #333). These fixtures build a Config by hand rather
+// than loading one, so nothing else fills that field in, and a set left at
+// the zero Retention is not an unconfigured policy, it is a chain that
+// keeps nothing and that DecideKeep refuses outright.
+//
+// It panics rather than returning: see internal/app's helper of the same
+// name for why a fixture that quietly fails to resolve is worse than one
+// that stops the test.
 func resolveTestRetention(c *config.Config) *config.Config {
-	for i := range c.Sources {
-		for j := range c.Sources[i].BackupSets {
-			bs := &c.Sources[i].BackupSets[j]
-			if bs.RetentionConfig != nil {
-				bs.Retention = *bs.RetentionConfig
-			} else {
-				bs.Retention = c.Retention
-			}
-		}
+	if err := c.ResolveBackupSetRetention(); err != nil {
+		panic("test fixture's retention does not resolve: " + err.Error())
 	}
 	return c
 }
