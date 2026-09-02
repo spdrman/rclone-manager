@@ -149,6 +149,15 @@ func attemptKey(rec state.Record) string {
 // arriving mid-cycle must not turn "what does the journal say" into "no
 // idea". If the read fails anyway, the state this call last observed is
 // the honest fallback.
+//
+// It costs one indexed point read per artifact per cycle, against a
+// journal the same cycle has already listed in full. That is real and it
+// is small, and it buys a property that does not depend on every future
+// caller remembering which of its own early returns left rec behind. I
+// considered reading back only where a step reported an error and decided
+// against it: it is the same cost on every cycle that has anything wrong
+// with it, which is the cycle that matters, and it puts the correctness
+// back in the hands of whoever adds the next early return.
 func (s *Service) processArtifact(ctx context.Context, source transport.Source, bs config.BackupSet, rec state.Record) (final lifecycle.State) {
 	artifact := rec.Artifact
 	base := attemptKey(rec)
@@ -364,11 +373,15 @@ func (s *Service) processArtifacts(ctx context.Context, source transport.Source,
 		if terminalFailure(after) {
 			walk.Failed++
 		}
+		// Every row's remote path, not only the ones counted below: the
+		// question a discovery error asks is "is this object already
+		// under management", and a COMPLETE row at that path answers yes
+		// just as firmly as a DISCOVERED one does.
+		walk.coveredPaths[rec.RemotePath] = true
 		if !acquiring(before) {
 			continue
 		}
 		walk.Progress.Walked++
-		walk.coveredPaths[rec.RemotePath] = true
 		if durable(after) {
 			walk.Progress.Durable++
 		}
@@ -388,12 +401,20 @@ type artifactWalk struct {
 	// rows.
 	Progress CycleProgress
 
-	// coveredPaths is every remote path Progress.Walked already counts, so
-	// a caller folding in discovery's own per-candidate errors can tell an
-	// object that is invisible here from one this walk already counted.
-	// Counting the same object twice would not change any verdict, since
-	// both readings say "did not get through", but it would put a number
-	// in front of an operator that does not match what is on the remote.
+	// coveredPaths is every remote path this walk saw a journal row for,
+	// in any state, so a caller folding in discovery's own per-candidate
+	// errors can tell an object nothing here knows about from one that is
+	// already under management.
+	//
+	// Both halves of that matter. An object with a row in flight would
+	// otherwise be counted twice, once by the walk and once by discovery,
+	// which changes no verdict but puts a number in front of an operator
+	// that does not match what is on the remote. An object with a
+	// FINISHED row is worse than double counting: a read-only backup set
+	// keeps its remote objects forever by design, so discovery re-reads
+	// them every cycle, and one transient identity-capture failure
+	// against an artifact that was safely backed up weeks ago must not
+	// read as work this cycle failed to do.
 	coveredPaths map[string]bool
 }
 

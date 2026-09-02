@@ -470,3 +470,52 @@ func TestRunCycle_SaysNothingInTheEventStreamOnAQuietCycle(t *testing.T) {
 		t.Errorf("a cycle with nothing waiting on the remote wrote a failure into the event stream:\n%s", stream.String())
 	}
 }
+
+// TestRunCycle_ATransientReadOfAFinishedReadOnlyArtifactIsNotWork is the
+// false alarm that decides what a discovery error is allowed to count as.
+//
+// A read-only backup set never deletes its remote objects, so discovery
+// re-reads every one of them on every cycle for the life of the set. One
+// transient identity-capture failure against an artifact that was safely
+// backed up weeks ago is not work this cycle failed to do, and a rule
+// that read it that way would fail a healthy set on a single blip with
+// nothing else going on.
+func TestRunCycle_ATransientReadOfAFinishedReadOnlyArtifactIsNotWork(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+	bs.ReadOnly = true
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+	tr.poison = t // a read-only set must never reach the transport's delete
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 1}
+
+	first := svc.RunCycle(context.Background()).Sets[0]
+	artifact := first.Discovery.Discovered[0].Artifact
+	rec, err := svc.Journal.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if acquiring(lifecycle.State(rec.State)) {
+		t.Fatalf("precondition: journal state = %q, which is still in flight; this test needs a finished artifact", rec.State)
+	}
+
+	// The object is still on the remote, because that is what read-only
+	// means, and this cycle cannot read its identity.
+	tr.statRefused["backup.dump"] = true
+
+	second := svc.RunCycle(context.Background()).Sets[0]
+	if len(second.Discovery.Errors) != 1 {
+		t.Fatalf("precondition: Discovery.Errors = %+v, want 1", second.Discovery.Errors)
+	}
+	if second.Progress.Walked != 0 {
+		t.Errorf("Progress.Walked = %d, want 0: the object discovery could not read is one this set finished backing up, not work waiting to be done", second.Progress.Walked)
+	}
+	if second.Verdict().NothingGotThrough() {
+		t.Errorf("Verdict().NothingGotThrough() = true for a read-only set whose only artifact is already safe and whose remote it re-reads every cycle by design")
+	}
+}
