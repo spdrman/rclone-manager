@@ -26,8 +26,11 @@ import (
 // the acquisition states (see acquiring, pipeline.go) when the walk
 // reached it, plus every candidate discovery could not take in at all,
 // which never became a row and would otherwise be invisible here. A
-// candidate that errored on a path a walked row already covers is counted
-// once.
+// candidate that errored on a path this backup set already has a journal
+// row for, in any state, is not counted at all: the object is already
+// under management, and on a read-only set (whose remote objects live
+// forever by design, and are therefore re-read every cycle) that is the
+// difference between a blip and a failed cycle.
 //
 // What it deliberately leaves out is the point. A COMPLETE row is a
 // finished backup and is not counted at all, so a set with history cannot
