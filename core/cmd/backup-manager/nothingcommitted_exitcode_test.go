@@ -283,3 +283,43 @@ func TestRun_ExitsNonZeroWhenTheOnlyArtifactCouldNotBeTransferred(t *testing.T) 
 		t.Errorf("stderr does not report the artifact as left in a failure state, which is what the journal now says about it.\nstderr:\n%s", errOut)
 	}
 }
+
+// TestRun_ASystemicFailureNamesTheErrorRatherThanPrintingZeroes keeps the
+// failure report honest for the one shape whose counts say nothing. A
+// cycle that stops before its pipeline runs walked nothing and delivered
+// nothing, so "0 artifacts walked, 0 through" reads exactly like an idle
+// cycle and would be worse than silence. The error is what happened, so
+// the error is what gets printed.
+func TestRun_ASystemicFailureNamesTheErrorRatherThanPrintingZeroes(t *testing.T) {
+	configPath := writeCappedConfig(t, 0, nil)
+	// Point the backup set at a remote directory that does not exist, so
+	// the listing itself fails rather than any one artifact.
+	body, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	missing := filepath.Join(filepath.Dir(configPath), "remote", "gone")
+	rewritten := strings.Replace(string(body),
+		"remote_path: "+filepath.Join(filepath.Dir(configPath), "remote")+"\n",
+		"remote_path: "+missing+"\n", 1)
+	if rewritten == string(body) {
+		t.Fatal("the fixture's remote_path line did not match, so this test never changed anything")
+	}
+	if err := os.WriteFile(configPath, []byte(rewritten), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var got int
+	errOut := captureStderr(t, func() {
+		got = run([]string{"run", "--config", configPath})
+	})
+	if got == 0 {
+		t.Fatalf("run exit code = 0, want non-zero for a backup set whose remote could not be listed.\nstderr:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "stopped early") {
+		t.Errorf("stderr does not say this cycle stopped early.\nstderr:\n%s", errOut)
+	}
+	if strings.Contains(errOut, "0 artifacts walked") {
+		t.Errorf("stderr reports zero counts for a cycle that never reached its pipeline; that reads like an idle cycle.\nstderr:\n%s", errOut)
+	}
+}

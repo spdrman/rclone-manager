@@ -186,11 +186,18 @@ func cycleFailed(outcome app.CycleOutcome) bool {
 // JSON event stream (see logger above), and a sentence in the middle of it
 // would break every consumer that parses it.
 func reportCycleFailure(outcome app.CycleOutcome) {
-	if outcome.NothingGotThrough() {
+	switch {
+	case outcome.Err != nil:
+		// A cycle that stopped before its pipeline ran walked nothing and
+		// delivered nothing, so its counts read exactly like an idle
+		// cycle's and would be worse than saying nothing. The error is
+		// what happened.
+		fmt.Fprintf(os.Stderr, "backup-manager: %s: this cycle stopped early: %v\n", outcome.Set, outcome.Err)
+	case outcome.NothingGotThrough():
 		fmt.Fprintln(os.Stderr, "backup-manager: this cycle backed nothing up:", outcome.Summary())
-		return
+	default:
+		fmt.Fprintln(os.Stderr, "backup-manager: this cycle did not complete cleanly:", outcome.Summary())
 	}
-	fmt.Fprintln(os.Stderr, "backup-manager: this cycle did not complete cleanly:", outcome.Summary())
 }
 
 // fail prints err to stderr in a consistent shape and returns the exit

@@ -79,11 +79,18 @@ import (
 type CycleOutcome struct {
 	Set model.BackupSetID
 
-	// SystemicFailure is the failure that stopped this backup set's
-	// processing early rather than affecting one artifact within it: a
-	// reconcile or discover call exhausting its retry budget, a journal
-	// listing failing outright, or a shutdown mid-cycle.
-	SystemicFailure bool
+	// Err is the failure that stopped this backup set's processing early
+	// rather than affecting one artifact within it: a reconcile or
+	// discover call exhausting its retry budget, a journal listing
+	// failing outright, or a shutdown mid-cycle.
+	//
+	// It carries the error rather than a bool because a caller reporting
+	// this outcome has to be able to say what happened. A cycle that
+	// stopped before the pipeline ran walked nothing and delivered
+	// nothing, so its counts are all zero and read exactly like an idle
+	// cycle's; the error is the only thing that distinguishes them on an
+	// operator's screen.
+	Err error
 
 	// FailedArtifacts is how many of the artifacts this cycle walked
 	// ended it in FAILED, QUARANTINED or QUARANTINED_LOST (issue #283),
@@ -125,7 +132,7 @@ type CycleOutcome struct {
 // empty remote every fifteen minutes must stay silent, and a rule that
 // only asked "did anything commit" would page on every one of those.
 func (o CycleOutcome) Failed() bool {
-	return o.SystemicFailure || o.FailedArtifacts > 0 || (o.Walked > 0 && o.Durable == 0)
+	return o.Err != nil || o.FailedArtifacts > 0 || (o.Walked > 0 && o.Durable == 0)
 }
 
 // NothingGotThrough reports the specific shape issue #361 was filed for,
@@ -133,7 +140,7 @@ func (o CycleOutcome) Failed() bool {
 // caller uses it to say which of the two happened rather than printing one
 // undifferentiated failure for both.
 func (o CycleOutcome) NothingGotThrough() bool {
-	return o.Walked > 0 && o.Durable == 0
+	return o.Err == nil && o.Walked > 0 && o.Durable == 0
 }
 
 // Summary is the sentence a command prints when it refuses to call a cycle

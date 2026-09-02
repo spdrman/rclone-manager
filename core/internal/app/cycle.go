@@ -73,7 +73,7 @@ type BackupSetCycleResult struct {
 func (r BackupSetCycleResult) Outcome() CycleOutcome {
 	return CycleOutcome{
 		Set:             r.Set,
-		SystemicFailure: r.Err != nil,
+		Err:             r.Err,
 		FailedArtifacts: r.FailedArtifacts,
 		Walked:          r.Walked,
 		Durable:         r.Durable,
@@ -331,7 +331,7 @@ func undiscoverableCandidates(res discovery.Result, walked []state.Record) int {
 // for the shape that had no voice of its own.
 func (s *Service) logCycleOutcome(ctx context.Context, result BackupSetCycleResult) {
 	outcome := result.Outcome()
-	if outcome.SystemicFailure || !outcome.NothingGotThrough() {
+	if !outcome.NothingGotThrough() {
 		return
 	}
 	s.logger().Error(ctx, "cycle", errors.New("this cycle backed nothing up: "+outcome.Summary()))
