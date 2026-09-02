@@ -2072,6 +2072,64 @@
         "required": [
           "read_only"
         ]
+      },
+      "UpdateBackupSetRequest": {
+        "type": "object",
+        "description": "PATCH /backup-sets/{source}/{set}. A SPARSE edit of one already-persisted backup set (issue #350): every property is optional, and a property this body omits is left exactly as it is rather than cleared. That is what lets the Web UI's per-box Save persist only the box it belongs to. It deliberately carries no name/source_name (a backup set's identity keys every journal row, artifact id and recovery manifest it has ever produced, so a rename is a migration rather than an edit) and no ssh_key_id/known_hosts_line (those are the results of the import and probe steps, and re-trusting a host is a trust decision rather than an edit).",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string",
+            "x-go-pointer": true
+          },
+          "port": {
+            "type": "integer",
+            "description": "0 selects the default port, so this is a meaningful value rather than an absent one; omit the property entirely to leave the port alone.",
+            "x-go-pointer": true
+          },
+          "user": {
+            "type": "string",
+            "x-go-pointer": true
+          },
+          "remote_path": {
+            "type": "string",
+            "x-go-pointer": true
+          },
+          "local_path": {
+            "type": "string",
+            "x-go-pointer": true
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "x-go-pointer": true
+          },
+          "completion_strategy": {
+            "type": "string",
+            "enum": [
+              "rename",
+              "marker",
+              "stable"
+            ],
+            "x-go-pointer": true
+          },
+          "stable_for_seconds": {
+            "type": "integer",
+            "description": "Required, and only meaningful, when the completion strategy in effect after this edit is \"stable\".",
+            "x-go-pointer": true
+          },
+          "stale_after_seconds": {
+            "type": "integer",
+            "x-go-pointer": true
+          },
+          "validator_id": {
+            "type": "string",
+            "description": "An id from the registered validator catalog GET /validators serves, or \"\" for none. Never a path.",
+            "x-go-pointer": true
+          }
+        }
       }
     },
     "responses": {}
@@ -4826,6 +4884,133 @@
         "responses": {
           "200": {
             "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSet"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}": {
+      "patch": {
+        "operationId": "updateBackupSet",
+        "summary": "Change one already-persisted backup set's definition (issue #350). A sparse edit: only the properties the body carries are changed, and the ones it omits are left alone, so a client saving one field cannot silently ship another. State-changing but not destructive, so it carries CSRF and not the destructive gate, following POST /backup-sets' own precedent.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBackupSetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success. The whole persisted backup set, after the edit.",
             "content": {
               "application/json": {
                 "schema": {

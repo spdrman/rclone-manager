@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7";
+export const CONTRACT_SHA256 = "fe30be6850d387054c31cdfcd43b96380f6690e5046e14f94c4e89d688fa04fe";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -336,6 +336,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "updateBackupSet",
+    method: "PATCH",
+    path: "/backup-sets/{source}/{set}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "UpdateBackupSetRequest",
+    responseSchema: "BackupSet",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
     }
   },
   {
@@ -1405,6 +1425,30 @@ export interface WireTestConnectionRequest {
 export interface WireTestConnectionResponse {
   message?: string;
   ok: boolean;
+}
+
+/** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
+ *  already-persisted backup set (issue #350): every property is
+ *  optional, and a property this body omits is left exactly as it is
+ *  rather than cleared. That is what lets the Web UI's per-box Save
+ *  persist only the box it belongs to. It deliberately carries no
+ *  name/source_name (a backup set's identity keys every journal row,
+ *  artifact id and recovery manifest it has ever produced, so a
+ *  rename is a migration rather than an edit) and no
+ *  ssh_key_id/known_hosts_line (those are the results of the import
+ *  and probe steps, and re-trusting a host is a trust decision rather
+ *  than an edit). */
+export interface WireUpdateBackupSetRequest {
+  completion_strategy?: "rename" | "marker" | "stable";
+  host?: string;
+  include?: string[];
+  local_path?: string;
+  port?: number;
+  remote_path?: string;
+  stable_for_seconds?: number;
+  stale_after_seconds?: number;
+  user?: string;
+  validator_id?: string;
 }
 
 /** A PARTIAL capacity update. An omitted field is left exactly as the

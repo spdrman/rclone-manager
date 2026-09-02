@@ -74,6 +74,21 @@ type BackupServiceClient interface {
 	// for the persist-then-hot-reload sequence this method performs.
 	CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error)
 
+	// UpdateBackupSet backs PATCH /api/v1/backup-sets/{source}/{set}
+	// (issue #350): the edit half of backup-set CRUD, which #146 never
+	// built, so until now a configured set could only be changed by
+	// hand-editing config.yaml on the machine it runs on.
+	//
+	// The request is sparse (every field a pointer, nil means leave
+	// alone), which is what makes the Web UI's per-box Save write only
+	// that box at the layer that persists rather than as a promise the UI
+	// makes. State-changing but not destructive, so this package wraps
+	// the route in requireCSRF and NOT requireDestructiveGate, following
+	// POST /api/v1/backup-sets' own precedent; see
+	// core/service.UpdateBackupSet's own doc for the persist-then-reload
+	// sequence it shares with creation.
+	UpdateBackupSet(ctx context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error)
+
 	// ImportSSHKey backs POST /api/v1/ssh-keys: the wizard's "Import
 	// key" step, persisting client-validated key material server-side
 	// for the first time (issue #146). passphrase is "" for an

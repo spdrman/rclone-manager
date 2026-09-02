@@ -242,6 +242,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// reason (a fixed source/set arity, and a literal "/read-only"
 		// tail a catch-all would swallow).
 		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/read-only", h.setBackupSetReadOnly)
+		// Issue #350: the edit half of backup-set CRUD. Registered as two
+		// named segments with no tail, which is why it needs a method chi
+		// can tell apart from getBackupSet's "/backup-sets/*" catch-all
+		// below: PATCH and GET are different methods, so the two coexist
+		// on overlapping paths without either shadowing the other.
+		//
+		// PATCH, because this is a partial edit of a resource and this
+		// package already spells that PATCH at /settings; see the
+		// handler's own doc for why not PUT, and for why it carries
+		// requireCSRF and not requireDestructiveGate (creation's
+		// precedent, not the gate's: the gate is for run_immediately and
+		// for retention apply, not for writing a set).
+		r.With(requireCSRF).Patch("/backup-sets/{source}/{set}", h.updateBackupSet)
 		r.Get("/backup-sets/*", h.getBackupSet)
 
 		// Issue #211: the backups this deployment actually holds, and the
