@@ -1184,6 +1184,27 @@ class TestSubcommandFlagScoping(unittest.TestCase):
                         "network-doctor", "network-undo"):
             self.assertTrue(shared <= self.flags_of(command), f"{command} is missing a shared flag")
 
+    def test_docs_install_md_names_every_real_subcommand(self):
+        """docs/install.md's opening paragraph used to say "Four
+        subcommands" after network-doctor and network-undo had already
+        been added, undercounting by two. Pinned against build_parser()'s
+        real subcommand set so a seventh command added later fails this
+        test until the doc catches up, rather than drifting silently
+        again."""
+        names = set(next(a for a in installer.build_parser()._actions
+                         if isinstance(a, argparse._SubParsersAction)).choices)
+        doc_lines = (REPO_ROOT / "docs" / "install.md").read_text().splitlines()
+        start = next((i for i, ln in enumerate(doc_lines) if "subcommands:" in ln), None)
+        self.assertIsNotNone(start, "docs/install.md has no '... subcommands:' opening line")
+        paragraph_lines = []
+        for ln in doc_lines[start:]:
+            if ln.strip() == "":
+                break
+            paragraph_lines.append(ln)
+        opening = " ".join(paragraph_lines)
+        for name in names:
+            self.assertIn(f"`{name}`", opening, f"docs/install.md's opening does not name {name!r}")
+
 
 class TestFixNetworkVocabulary(unittest.TestCase):
     def test_the_default_is_the_conservative_one(self):

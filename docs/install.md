@@ -12,8 +12,12 @@ python3 scripts/install/install_docker_host.py install \
     --image ghcr.io/spdrman/backup-manager:0.1.0
 ```
 
-Four subcommands: `preflight` checks and creates nothing, `install` checks then
-installs, `status` reports, `uninstall` removes what the installer made.
+Six subcommands: `preflight` checks and creates nothing, `install` checks then
+installs, `status` reports, `uninstall` removes what the installer made,
+`network-doctor` diagnoses (and, asked to, repairs) Docker bridge networking, and
+`network-undo` removes exactly what a repair added. See
+[Known-good, and known-bad](#known-good-and-known-bad) below for what the last two
+are for.
 
 ## What it assumes about the machine, and what it does not
 
