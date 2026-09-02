@@ -1042,24 +1042,25 @@ that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 
 ```text
 core/internal/
-  alert/        at-most-once operator notifications, delivered through a platform capability
-  app/          the presentation-agnostic application service every command and handler calls
-  capacity/     disk-space admission checks
-  config/       YAML config schema, loading, validation (Load takes any path)
-  discovery/    turns a raw remote listing into artifacts proven complete
-  health/       process and backup-set health computation
-  lifecycle/    the state machine plus every step: transfer, verify, commit, delete
-  metrics/      a health report rendered as Prometheus text (built, exposed nowhere)
-  model/        shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
-  obs/          structured event logging
-  quarantine/   the operator-facing view of what is quarantined and why
-  recovery/     the non-secret sidecar manifest written beside every committed artifact
-  reconcile/    startup reconciliation against the journal, filesystem and remote
-  retention/    GFS classification, last-known-good protection, and the local prune
-  revalidate/   scheduled re-verification of artifacts that already passed
-  state/        the SQLite journal: durable, idempotent transition recording
-  testenv/      the environment a test has to be in before it may conclude anything from file permissions
-  transport/    the manager-owned Transport interface and the rclone adapter behind it
+  alert/         at-most-once operator notifications, delivered through a platform capability
+  app/           the presentation-agnostic application service every command and handler calls
+  artifactstore/ where a committed artifact's bytes live, and the seam that lets that be somewhere else later
+  capacity/      disk-space admission checks
+  config/        YAML config schema, loading, validation (Load takes any path)
+  discovery/     turns a raw remote listing into artifacts proven complete
+  health/        process and backup-set health computation
+  lifecycle/     the state machine plus every step: transfer, verify, commit, delete
+  metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
+  model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
+  obs/           structured event logging
+  quarantine/    the operator-facing view of what is quarantined and why
+  recovery/      the non-secret sidecar manifest written beside every committed artifact
+  reconcile/     startup reconciliation against the journal, filesystem and remote
+  retention/     GFS classification, last-known-good protection, and the local prune
+  revalidate/    scheduled re-verification of artifacts that already passed
+  state/         the SQLite journal: durable, idempotent transition recording
+  testenv/       the environment a test has to be in before it may conclude anything from file permissions
+  transport/     the manager-owned Transport interface and the rclone adapter behind it
 ```
 
 <!-- END CORE-INTERNAL -->
