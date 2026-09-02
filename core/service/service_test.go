@@ -75,9 +75,31 @@ func newTestService(t *testing.T, sources ...config.Source) *BackupService {
 // that cares about the outcome of that execution, rather than just the
 // fact that a row was queued, has to observe it this way instead of
 // assuming any particular timing.
+// waitForTerminalStatus waits for one submitted operation to finish.
+//
+// The deadline is this harness's PATIENCE, not a property any caller
+// asserts: every one of them goes on to check the operation's terminal
+// status and the journal rows it produced, and none of them says anything
+// about how fast that happened. It used to be two seconds, and that was
+// quietly also a claim about machine speed, which is how three of these
+// tests failed inside the gate's own parallel deletion proof while passing
+// on their own.
+//
+// What was eating the budget is the same first-exec latency issue #371 is
+// about, one layer along: a cycle with a registered validator materializes
+// the validator script into a fresh directory and then execs it, and a
+// newly written executable on macOS is inspected before its first line
+// runs. Measured in this package: 212ms for the first exec of a freshly
+// materialized validator, 7ms for the second, on an idle machine. Under a
+// full parallel `go test ./...` running beside it, that is most of two
+// seconds before the cycle has done anything else.
+//
+// Twenty seconds is patience, not permissiveness. waitForTerminalStatusPatient
+// next door already sits at thirty for its own Docker-backed reason, and a
+// genuinely hung operation still fails here, just less quickly.
 func waitForTerminalStatus(t *testing.T, svc *BackupService, id string) Operation {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(20 * time.Second)
 	for {
 		op, err := svc.GetOperation(context.Background(), id)
 		if err != nil {
