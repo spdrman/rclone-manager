@@ -472,27 +472,42 @@ func TestMarshal_ANoMediumConfigGainsNoMediumKeys(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	before, err := yaml.Marshal(cfg)
-	if err != nil {
-		t.Fatalf("Marshal before Validate: %v", err)
-	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	after, err := yaml.Marshal(cfg)
+	base, err := yaml.Marshal(cfg)
 	if err != nil {
-		t.Fatalf("Marshal after Validate: %v", err)
+		t.Fatalf("Marshal: %v", err)
+	}
+	if found := mediumKeyLine.FindAllString(string(base), -1); len(found) != 0 {
+		t.Errorf("a config that names no medium came back from a re-marshal carrying %v:\n%s", found, base)
 	}
 
-	if found := mediumKeyLine.FindAllString(string(after), -1); len(found) != 0 {
-		t.Errorf("a config that names no medium came back from a re-marshal carrying %v:\n%s", found, after)
+	// The byte comparison, in the one form that can actually fail. It is
+	// deliberately NOT a before-Validate/after-Validate diff: Validate
+	// resolves defaults IN PLACE and is documented to, so those two
+	// differ for reasons that have nothing to do with mediums (a
+	// defaulted delete_safety_delay, a defaulted alert threshold), and an
+	// assertion that fails on the honest case teaches nothing.
+	//
+	// What FR-35 actually forbids is a settings form's EMPTY submission
+	// becoming a key in the file. A form that renders a mediums list and
+	// a per-tier medium picker, on a config that configured neither,
+	// hands this struct an empty slice and an empty string, and without
+	// omitempty those marshal to "storage_mediums: []" and "medium: """
+	// on a file that never opted in. An older binary then refuses that
+	// file outright under Load's KnownFields(true). So: set both to their
+	// explicitly-empty form and require the bytes not to move.
+	cfg.StorageMediums = []StorageMedium{}
+	for i := range cfg.Retention.Tiers {
+		cfg.Retention.Tiers[i].Medium = ""
 	}
-
-	// The byte comparison the issue asks for. Validate resolves defaults
-	// IN PLACE, so anything it wrote into a medium field would show up
-	// here as a diff even if the key spelling above somehow slipped past.
-	if string(before) != string(after) {
-		t.Errorf("Validate changed the marshaled form of a medium-free config.\nbefore:\n%s\nafter:\n%s", before, after)
+	afterEmptySubmission, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(base) != string(afterEmptySubmission) {
+		t.Errorf("an explicitly-empty mediums submission changed the marshaled file.\nbefore:\n%s\nafter:\n%s", base, afterEmptySubmission)
 	}
 
 	// Positive control: the scan does find the keys when they are there,

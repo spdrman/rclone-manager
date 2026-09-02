@@ -1168,6 +1168,73 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 	}
 }
 
+// validStorageClasses is the closed set StorageMedium.StorageClass
+// accepts, as a map for the membership test and as a fixed-order slice for
+// the error message and for callers outside this package. Same two
+// spellings, same reasons, as validRetentionGranularities above: a map
+// range would reorder the message per run and make it untestable.
+var validStorageClasses = map[string]bool{
+	StorageClassStandard:           true,
+	StorageClassStandardIA:         true,
+	StorageClassOneZoneIA:          true,
+	StorageClassIntelligentTiering: true,
+	StorageClassGlacierIR:          true,
+	StorageClassGlacier:            true,
+	StorageClassDeepArchive:        true,
+}
+
+var storageClasses = []string{
+	StorageClassStandard, StorageClassStandardIA, StorageClassOneZoneIA,
+	StorageClassIntelligentTiering, StorageClassGlacierIR,
+	StorageClassGlacier, StorageClassDeepArchive,
+}
+
+var storageClassList = strings.Join(storageClasses, ", ")
+
+// StorageClasses returns every value StorageMedium.StorageClass accepts,
+// in the fixed order above, as a fresh slice the caller may keep or sort
+// without moving this package's own copy.
+//
+// Exported for RetentionGranularities' reason: a settings form has to
+// build its picker from the set Validate actually enforces rather than
+// from a list transcribed by hand into a frontend, where nothing would
+// notice it going stale. That form is #240's; this is the source it will
+// read.
+func StorageClasses() []string {
+	return append([]string(nil), storageClasses...)
+}
+
+// validUploadVerifications and uploadVerificationModes are the same pair
+// for StorageMedium.UploadVerification.
+var validUploadVerifications = map[string]bool{
+	UploadVerificationReadback: true,
+	UploadVerificationAttested: true,
+}
+
+var uploadVerificationModes = []string{UploadVerificationReadback, UploadVerificationAttested}
+
+var uploadVerificationList = strings.Join(uploadVerificationModes, ", ")
+
+// UploadVerificationModes returns every value
+// StorageMedium.UploadVerification accepts. See StorageClasses.
+func UploadVerificationModes() []string {
+	return append([]string(nil), uploadVerificationModes...)
+}
+
+// StorageMediumIDPattern is the spelling rule a medium id follows, and it
+// is deliberately RetentionTierNamePattern itself rather than a second
+// copy of the same regular expression.
+//
+// A medium id and a tier name are different namespaces, but they are the
+// same KIND of thing: an operator-chosen identifier this product reports
+// back, which a settings form has to validate client-side against exactly
+// the rule the server applies. Aliasing means there is one answer to "what
+// does lower_snake_case mean here" for a client to implement, instead of
+// two that agree today.
+const StorageMediumIDPattern = RetentionTierNamePattern
+
+var storageMediumIDPattern = regexp.MustCompile(StorageMediumIDPattern)
+
 // validAbsolutePath rejects anything that is not an absolute, traversal-free
 // path.
 //
