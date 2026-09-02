@@ -125,6 +125,40 @@ describe("RetentionPreviewDialog", () => {
     expect(refuseRow?.getAttribute("role")).not.toBe("alert");
   });
 
+  // Issue #333: which policy produced these verdicts. This is the dialog
+  // that asks an operator to authorise a deletion, and "why is this
+  // backup on the delete list" has a different answer, and a different
+  // place to go and change it, depending on whether this set's own chain
+  // or the deployment's decided it.
+  //
+  // Both branches are driven, because a dialog that had hardcoded either
+  // sentence would pass a test that only checked the other one.
+  it("names the policy the verdicts were decided under, on both branches", async () => {
+    const own = apiWith({});
+    const { unmount } = render(
+      <ApiProvider api={own}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+    await screen.findByText(/Decided under this backup set's own retention policy/);
+    // And the chain itself, not only the attribution: "this set's own"
+    // beside the wrong chain is still wrong.
+    expect(screen.getByText(/daily 4/)).toBeTruthy();
+    unmount();
+    resetGraphForTests();
+
+    const inherited = apiWith({
+      previewRetention: () =>
+        Promise.resolve({ ...PLAN, retentionIsOverride: false })
+    });
+    render(
+      <ApiProvider api={inherited}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+    await screen.findByText(/Decided under the deployment's retention policy/);
+  });
+
   it("badges a KEEP verdict from an operator-defined tier under its own name, never as \"unclassified\"", async () => {
     const api = apiWith({ previewRetention: () => Promise.resolve(OPEN_TIER_PLAN) });
     render(
