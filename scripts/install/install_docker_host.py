@@ -49,13 +49,28 @@ rather than torn down under you.
 
 # Credentials
 
-The SSH private key is never read, never copied, never generated and
-never printed. Only its host-side PATH reaches `.env`, which is the
-convention `container/.env.example` states ("Nothing in this file is a
-secret: it only points at where secrets live on the host") and the rule
+The SSH private key at `--ssh-key` is never read and never printed. Only
+its host-side PATH reaches `.env`, which is the convention
+`container/.env.example` states ("Nothing in this file is a secret: it
+only points at where secrets live on the host") and the rule
 `scripts/deploy/deploy_generic.py` already holds itself to. The same goes
 for a non-default SSH port on a backup source: it is an input, never a
 default and never a value written into this repository (issue #264).
+
+This used to say "never copied" as well, and issue #343 made that false.
+Saying it anyway would be worse than the copying, so:
+
+  * `--mode upgrade` and `--mode factory-reset` archive
+    `config/ssh_keys`, which is where the ENGINE keeps the keys an
+    operator imported through the Web UI. An archive therefore holds
+    copies of private key material. It is created 0700 under the prefix,
+    nothing in it is ever read or printed, and the installer refuses
+    rather than let archives accumulate past ARCHIVE_LIMIT: an upgrade
+    that silently multiplied that material every time it ran would be
+    spreading keys nobody asked to spread.
+  * `<prefix>/secrets` is neither archived nor destroyed. A factory reset
+    leaves `--ssh-key` and `--known-hosts` exactly where they are, and
+    the preview says so by name instead of leaving it to be discovered.
 
 # Dependencies
 
@@ -717,19 +732,57 @@ def image_tag(reference: str) -> str:
     return last.split(":", 1)[1] if ":" in last else ""
 
 
+def _prerelease_key(identifiers):
+    """An orderable key for the dot-separated identifiers after the `-`.
+
+    Semver's own rule, because half of it is the half that bites: a
+    numeric identifier orders numerically and below any alphanumeric one,
+    and a shorter run of identifiers orders below a longer one that
+    matches so far. `rc.2` after `rc.10` is the case a lexical comparison
+    gets backwards, and it is the case a release candidate series
+    actually produces.
+    """
+    key = []
+    for part in identifiers:
+        if part.isdigit():
+            key.append((0, int(part), ""))
+        else:
+            key.append((1, 0, part))
+    return key
+
+
 def _semver(tag: str):
-    """(major, minor, patch) for an orderable tag, else None.
+    """An orderable key for a version tag, else None.
 
     None is a real answer and is treated as one everywhere it is used:
     "latest", a branch name and a digest order against nothing, and
     claiming otherwise is how an installer offers to "upgrade" a host
     onto an older build.
+
+    The prerelease suffix is part of the answer, not something to throw
+    away. Discarding it made 0.2.0-rc1 compare EQUAL to 0.2.0, so moving
+    a host from the release back onto its own release candidate was a
+    "same version, converging in place" no-op rather than the downgrade
+    it is, and the guard this whole path exists for never fired. A
+    prerelease sorts BELOW its release, which is why the released half of
+    the key carries a 1 and a prerelease carries a 0 and its own
+    identifiers.
     """
-    core = (tag or "").split("+", 1)[0].split("-", 1)[0]
+    core, _, _build = (tag or "").partition("+")
+    core, dash, pre = core.partition("-")
     parts = core.split(".")
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
         return None
-    return tuple(int(p) for p in parts)
+    numbers = tuple(int(p) for p in parts)
+    if not dash:
+        return (numbers, 1, [])
+    # The separator, not the suffix. "0.2.0-" partitions to an empty
+    # suffix exactly like "0.2.0" does, and reading it as a plain release
+    # would order a typo confidently.
+    identifiers = pre.split(".")
+    if not all(identifiers):
+        return None
+    return (numbers, 0, _prerelease_key(identifiers))
 
 
 def compare_versions(installed: str, target: str) -> str:
@@ -738,7 +791,8 @@ def compare_versions(installed: str, target: str) -> str:
 
     Numeric per component, never lexical: "0.10.0" is newer than "0.9.0"
     and sorts the other way as a string, so a string comparison here gets
-    the one case that matters backwards.
+    the one case that matters backwards. A prerelease sorts below its own
+    release, so 0.2.0 -> 0.2.0-rc1 is a downgrade and is refused as one.
     """
     a, b = _semver(installed), _semver(target)
     if a is None or b is None:
@@ -746,31 +800,82 @@ def compare_versions(installed: str, target: str) -> str:
     return "same" if a == b else ("older" if a < b else "newer")
 
 
-def installed_version(containers) -> str:
-    """The tag the installed stack is actually running, or "".
+# The service name the engine runs under in container/compose.yaml. The
+# version question is about THAT container: web-ui runs the same image
+# today and is not required to forever, and an orphan or a stopped
+# leftover from an older layout is neither.
+ENGINE_SERVICE = "rclone-manager"
 
-    Read off the containers rather than the deployment files, because the
-    files say what the next `up` would use and the containers say what is
-    serving right now, and an upgrade is a statement about the latter.
+
+def _image_from_override(prefix: Path) -> str:
+    """The engine's image out of the override this installer wrote, or "".
+
+    Two keys per service and this installer authored every byte of it, so
+    a line-oriented read is honest here rather than lazy: it is not
+    parsing arbitrary YAML, it is reading back its own render_image_override.
     """
-    for c in containers:
-        tag = image_tag(str(c.get("Image", "")))
-        if tag:
-            return tag
+    override = prefix / "compose.image.yaml"
+    if not override.is_file():
+        return ""
+    service = None
+    for raw in override.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped.endswith(":") and not stripped.startswith("#") and raw.startswith("  ") \
+                and not raw.startswith("    "):
+            service = stripped[:-1]
+        elif service == ENGINE_SERVICE and stripped.startswith("image:"):
+            return stripped.split(":", 1)[1].strip()
     return ""
 
 
-def decide_install_mode(*, requested, installed, installed_version,
-                        target_version, interactive):
+def installed_image_tag(containers, prefix: Path):
+    """(tag, where the answer came from). Both halves matter.
+
+    THE ENGINE'S container, selected by its compose Service field, not
+    "the first container that has a tag". `docker compose ps -a` lists
+    stopped leftovers and orphans from an older layout in whatever order
+    it likes, and reading a version off one of those is how an installer
+    decides an upgrade against a container nobody is running.
+
+    And when the stack is DOWN there are no containers at all, so the
+    running-version answer was "" and the downgrade guard evaporated
+    exactly when a re-run is most likely: after a reboot, or after an
+    operator stopped the stack to do something to it. The deployment
+    files still say what the last install pinned, so that is the fallback,
+    and the caller is told which of the two answered because they are
+    different claims: one is what is serving, the other is what the next
+    `up` would start.
+    """
+    for c in containers:
+        if str(c.get("Service", "")) != ENGINE_SERVICE:
+            continue
+        tag = image_tag(str(c.get("Image", "")))
+        if tag:
+            return tag, f"the {ENGINE_SERVICE} container"
+    tag = image_tag(_image_from_override(prefix))
+    if tag:
+        return tag, "compose.image.yaml, because no engine container is here to ask"
+    return "", ""
+
+
+def decide_install_mode(*, requested, installed, installed_tag,
+                        target_version, interactive, prefix):
     """Which mode to run, and whether an operator has to be asked first.
 
-    Returns (mode, needs_prompt). (None, True) means the caller must ask;
-    nothing is decided until the answer comes back.
+    Returns (mode, needs_prompt). (None, True) means the caller must ask,
+    and the answer has to come back THROUGH HERE rather than be used
+    directly: this is the only place the downgrade guard lives, and a
+    path that skipped it skipped the guard. That is not theoretical, it
+    is what the first version did.
 
     The rule this exists to enforce: an unanswerable question is a
     refusal, never a default. One of upgrade and factory-reset destroys
     data and the other does not, so guessing between them is the one
     thing this must never do.
+
+    `installed_tag`, not `installed_version`, because installed_version
+    was also the name of a module-level function in this file and one of
+    the two silently shadowed the other inside this body.
     """
     if not installed:
         # Nothing here, so nothing to decide, including for factory-reset:
@@ -782,7 +887,7 @@ def decide_install_mode(*, requested, installed, installed_version,
         raise Refusal(
             EXIT_EXISTING_INSTALL,
             f"--mode fresh means nothing is installed here, and something is: "
-            f"version {installed_version or 'unknown'} at {target_version}'s prefix.",
+            f"version {installed_tag or 'unknown'} at {prefix}.",
             "Use --mode upgrade to keep the users, backup sets and catalog, or "
             "--mode factory-reset to discard them and start clean.",
         )
@@ -791,10 +896,10 @@ def decide_install_mode(*, requested, installed, installed_version,
         return "factory-reset", False
 
     if requested == "upgrade":
-        if compare_versions(installed_version, target_version) == "newer":
+        if compare_versions(installed_tag, target_version) == "newer":
             raise Refusal(
                 EXIT_DOWNGRADE_REFUSED,
-                f"the install here is newer ({installed_version}) than the version this "
+                f"the install here is newer ({installed_tag}) than the version this "
                 f"installer carries ({target_version}), so this would move it backwards.",
                 "A catalog written by a newer build is not something this can promise to "
                 "read back. Install the newer version, or --mode factory-reset if the "
@@ -810,7 +915,7 @@ def decide_install_mode(*, requested, installed, installed_version,
 
     raise Refusal(
         EXIT_EXISTING_INSTALL,
-        f"an install is already here (version {installed_version or 'unknown'}), this "
+        f"an install is already here (version {installed_tag or 'unknown'}), this "
         f"installer carries {target_version}, and no mode was given.",
         "There is no terminal to ask on, and guessing between keeping the data and "
         "wiping it is not something this will do. Pass --mode upgrade to keep the "
@@ -831,8 +936,26 @@ def archive_plan(args):
     protect against nothing. Their location is reported instead.
     """
     return [
-        args.state_dir / "state.db",
+        # local-auth.json FIRST, and the order is the point. archive_state
+        # moves these one at a time for a factory reset, so a failure
+        # partway through leaves everything before the failure moved and
+        # everything after it in place. With the database first, an ENOSPC
+        # between the two left the catalog gone and the administrator
+        # record present, which is the engine reporting "an administrator
+        # already exists", issuing no enrollment link, and nobody being
+        # able to log in. That is the exact lockout this archive exists to
+        # prevent, produced by the archive.
         args.state_dir / "local-auth.json",
+        args.state_dir / "state.db",
+        # The journal, which is not optional. internal/state/state.go opens
+        # the database with journal_mode=WAL and container/compose.yaml
+        # says in as many words that -wal and -shm sit beside the main
+        # file. Archiving state.db alone copies a database whose most
+        # recent committed transactions are still in the WAL, so an
+        # upgrade's archive is torn, and a factory reset leaves a stale
+        # WAL sitting next to a database that is about to be replaced.
+        args.state_dir / "state.db-wal",
+        args.state_dir / "state.db-shm",
         args.config_dir / "config.yaml",
         args.config_dir / "ssh_keys",
         args.config_dir / "known_hosts.d",
@@ -900,9 +1023,34 @@ def destroy_preview(args):
         n = len([p for p in known.iterdir() if p.is_file()])
         lines.append(f"{n} pinned host key file(s) (config/known_hosts.d)")
     if not lines:
-        return ["nothing: no administrator record, catalog or configuration is here to destroy"]
+        lines.append("nothing: no administrator record, catalog or configuration is here to destroy")
+    # Named, not left to be discovered. Everything below survives a
+    # factory reset, and an operator standing in front of this list is
+    # entitled to know what it does NOT cover before typing the word.
     lines.append(f"NOT destroyed: the retained backups under {args.backup_dir}, which stay where they are")
+    lines.append(f"NOT destroyed: {args.ssh_key}, the SFTP client key this deployment points at")
+    lines.append(f"NOT destroyed: {args.known_hosts}, the pinned host keys beside it")
     return lines
+
+
+# How many archives may sit under --prefix before this refuses to make
+# another. Each one holds a copy of config/ssh_keys, which is where the
+# engine keeps the SSH keys an operator imported, so an unbounded pile is
+# an installer that multiplies private key material every time it runs.
+#
+# A refusal rather than a prune, and the choice is deliberate. This whole
+# path MOVES rather than deletes precisely so a destructive decision stays
+# recoverable; an installer that then quietly deleted the oldest recovery
+# copy on its own would be taking back the property it advertises. It
+# names them and the command instead, and the operator decides.
+ARCHIVE_LIMIT = 5
+
+
+def existing_archives(prefix: Path):
+    """Every archive directory this installer has left under `prefix`,
+    oldest name first. Nothing else, ever: the glob is anchored on the
+    prefix this run's own archives are named with."""
+    return sorted(p for p in prefix.glob("archive-*") if p.is_dir())
 
 
 def archive_state(args, *, move: bool):
@@ -918,52 +1066,174 @@ def archive_state(args, *, move: bool):
     survive into the upgraded install and the archive is only insurance.
     A factory reset MOVES, because removing it is the point, and moving
     rather than deleting is what makes the decision recoverable.
+
+    Every filesystem call here is inside the Refusal contract. shutil's
+    move, copytree and copy2 raise OSError on ENOSPC, EPERM and EXDEV,
+    main() catches Refusal and nothing else, so an unwrapped one reached
+    an operator as a Python traceback with no exit code of its own. Worse
+    for the moving case: a failure part way through leaves some of the
+    plan moved and the rest in place, so the refusal has to say which,
+    because "the archive failed" and "the archive failed after your
+    administrator record was moved" call for completely different next
+    steps.
     """
+    archives = existing_archives(args.prefix)
+    if len(archives) >= ARCHIVE_LIMIT:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"{len(archives)} archives are already under {args.prefix}, and the limit is "
+            f"{ARCHIVE_LIMIT}:\n" + "\n".join(f"  {a}" for a in archives),
+            "Each one holds a copy of config/ssh_keys, which is where the engine keeps the SSH keys "
+            "you imported, so leaving them to pile up spreads private key material with every "
+            "upgrade. This will not delete them for you, because moving rather than deleting is the "
+            "whole reason the archive is recoverable. Look at what you still need, then remove the "
+            "rest by hand and re-run.",
+        )
+
+    # Second granularity collides. Two runs inside the same second reused
+    # the directory (mkdir was exist_ok=True), and then copytree, which is
+    # NOT exist_ok by default, raised FileExistsError into a traceback.
     stamp = time.strftime("%Y%m%d-%H%M%S")
     archive = args.prefix / f"archive-{stamp}"
-    archive.mkdir(parents=True, exist_ok=True)
-    os.chmod(archive, 0o700)
+    suffix = 1
+    while archive.exists():
+        suffix += 1
+        archive = args.prefix / f"archive-{stamp}-{suffix}"
+
+    try:
+        # mode= on mkdir rather than a chmod afterwards. The chmod version
+        # left a window where an archive of the administrator record and
+        # every imported key sat at whatever the umask allowed, which on
+        # the NAS this was proven on is 0777.
+        archive.mkdir(mode=0o700, parents=True)
+    except OSError as exc:
+        raise Refusal(
+            EXIT_RUNTIME,
+            f"could not create the archive directory {archive}: {exc}",
+            "Nothing has been touched yet. Free some space, or fix the permissions on "
+            f"{args.prefix}, and re-run.",
+        ) from exc
+
     captured = []
     for src in archive_plan(args):
         if not src.exists():
             continue
         dest = archive / src.parent.name / src.name
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if move:
-            shutil.move(str(src), str(dest))
-        elif src.is_dir():
-            shutil.copytree(str(src), str(dest))
-        else:
-            shutil.copy2(str(src), str(dest))
+        try:
+            dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if move:
+                shutil.move(str(src), str(dest))
+            elif src.is_dir():
+                # dirs_exist_ok, because the destination can already be
+                # there: nothing guarantees this directory is untouched,
+                # and raising FileExistsError out of a helper nobody wraps
+                # is how a copy became a traceback.
+                shutil.copytree(str(src), str(dest), dirs_exist_ok=True)
+            else:
+                shutil.copy2(str(src), str(dest))
+        except OSError as exc:
+            done = "\n".join(f"  {c}" for c in captured) or "  (nothing)"
+            verb = "moved out to" if move else "copied to"
+            raise Refusal(
+                EXIT_RUNTIME,
+                f"the archive failed on {src}: {exc}\n\n"
+                f"Already {verb} {archive}:\n{done}",
+                ("Everything listed above is IN THE ARCHIVE and no longer where the engine looks "
+                 "for it, so the install is half-taken-apart and starting the stack now would "
+                 "give you an engine reading state that is not all there. Move those paths back "
+                 "from the archive, or finish the job by hand, before doing anything else."
+                 if move and captured else
+                 "Nothing was removed from the install; the archive is incomplete and can be "
+                 "deleted. Free some space or fix the permissions, and re-run."),
+            ) from exc
         captured.append(src)
     return archive, captured
 
 
-def tighten_config_ancestry(args) -> None:
-    """Take the group and world write bit off the config chain.
+# The two directories the ENGINE creates and owns inside the config
+# directory: the keys an operator imports through the Web UI, and the host
+# keys it pins per source. container/compose.yaml documents both as
+# siblings of config.yaml (issue #196).
+ENGINE_OWNED_CONFIG_DIRS = ("ssh_keys", "known_hosts.d")
 
-    The engine refuses to use an SSH key whose containing directory is
-    group- or world-writable, and it walks the whole ancestry: on the
-    real NAS it named config/ssh_keys, then config, then the install root
-    on three successive cycles. Every mode runs this, because a first
-    cycle that fails on a permission the installer could have fixed is a
-    failure the installer caused.
+
+def prepare_engine_config_dirs(args) -> None:
+    """Create the engine's two on-demand stores, 0700, before it does.
+
+    This ran BEFORE stage_payload, when neither the prefix nor the config
+    directory existed yet, so on a fresh install every path it looked at
+    was absent and the whole function was a no-op. It runs after now,
+    which is the ordering the name always implied.
+
+    Neither of these is created by the installer's own staging: they are
+    the engine's, made on demand the first time a key is imported or a
+    host key pinned, with the CONTAINER's umask. On the UGREEN that
+    produced a 0777 config/ssh_keys, and the engine then refused its own
+    key over it and named the chmod, three cycles running. Creating them
+    here, correctly, means that first cycle does not have to fail.
+
+    Creating them is only safe while the container runs as this account,
+    which is the default: PUID and PGID come from os.getuid()/os.getgid()
+    in resolve(). Told otherwise, a 0700 directory owned by this uid is
+    one the engine cannot write, so this names them and the chmod instead
+    of manufacturing a different failure.
     """
-    for d in (args.prefix, args.config_dir,
-              args.config_dir / "ssh_keys", args.config_dir / "known_hosts.d"):
-        if d.is_dir():
-            try:
-                os.chmod(d, os.stat(d).st_mode & ~0o022)
-            except OSError as exc:
-                say(f"     (could not tighten {d}: {exc})")
+    targets = [args.config_dir / name for name in ENGINE_OWNED_CONFIG_DIRS]
+    if args.puid != os.getuid() or args.pgid != os.getgid():
+        say(f"     Not creating {', '.join(str(t) for t in targets)}: this deployment runs as "
+            f"{args.puid}:{args.pgid} and the installer runs as {os.getuid()}:{os.getgid()}, so a "
+            f"directory made here would be one the engine cannot write. The engine creates them "
+            f"itself; if the first cycle refuses over their mode, run: chmod 700 {' '.join(str(t) for t in targets)}")
+        return
+    for d in targets:
+        try:
+            if d.is_dir():
+                d.chmod(d.stat().st_mode & ~0o022)
+            else:
+                d.mkdir(mode=0o700, parents=True)
+        except OSError as exc:
+            say(f"     (could not prepare {d}: {exc})")
+
+
+def read_env_file(path: Path) -> dict:
+    """The KEY=VALUE lines of a .env this installer wrote, as a dict.
+
+    Line oriented and unquoting nothing, because this only ever reads
+    back render_env()'s own output, which writes bare values and comment
+    lines and nothing else. Anything it cannot parse is skipped rather
+    than guessed at.
+    """
+    values = {}
+    if not path.is_file():
+        return values
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return values
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip()
+    return values
 
 
 def detect_existing(args):
-    """What is already here, as three separate facts.
+    """What is already here, as four separate facts.
 
     "Is it installed" is not one question. The directory can exist with
     no stack, the stack can be running from a directory somebody deleted,
     and both are states an operator can genuinely be in.
+
+    The fourth fact is the .env the LAST install wrote, and it is here
+    because every other path in this file comes from this run's flags.
+    The installer wrote prefix/.env and never read it back, so an operator
+    who first installed with --state-dir /mnt/fast/state and re-ran
+    without repeating it got "Archived 0 item(s)", a rewritten .env and a
+    stack pointed at an empty state directory, while the real catalog sat
+    at the old path untouched and unreferenced. Reading it is what lets
+    check_layout_matches refuse instead.
     """
     payload = (args.prefix / "compose.yaml").is_file() and (args.prefix / ".env").is_file()
     proc = run(["docker", "compose", "-p", args.project, "ps", "-a", "--format", "json"],
@@ -983,7 +1253,63 @@ def detect_existing(args):
                 say(f"     (docker compose ps -a line did not parse as JSON, ignoring it: {line!r})")
                 continue
             containers.extend(entry if isinstance(entry, list) else [entry])
-    return payload, containers
+    return payload, containers, read_env_file(args.prefix / ".env")
+
+
+def _same_directory(a: Path, b: Path) -> bool:
+    """Whether two path spellings name the same directory.
+
+    Resolved on both sides, because they routinely are not spelled the
+    same and neither spelling is wrong. resolve() canonicalises --prefix
+    and leaves --state-dir alone, and on macOS the temp root is handed
+    out as /var where the canonical name is /private/var, so a straight
+    string comparison refuses an install over a symlink. Non-strict, so a
+    directory that does not exist yet still compares.
+    """
+    try:
+        return a.expanduser().resolve() == b.expanduser().resolve()
+    except OSError:
+        return str(a) == str(b)
+
+
+def check_layout_matches(args, installed_env: dict) -> None:
+    """Refuse when this run's directories are not the installed ones.
+
+    Adopting them silently would be the friendlier-looking answer and the
+    wrong one. The three paths below are where the catalog, the
+    administrator record and the backups actually live, so a run that
+    quietly took this invocation's values would archive nothing (there is
+    nothing at the new paths), rewrite .env to point at empty
+    directories, and bring a stack up that reports a healthy, empty
+    install while the real data sits somewhere nothing references any
+    more. Every signal would be green.
+
+    Adopting them silently in the OTHER direction is no better: it would
+    mean flags an operator typed were ignored. So it names the
+    disagreement and stops.
+    """
+    mismatched = []
+    for key, label, current in (
+        ("STATE_DIR", "--state-dir", args.state_dir),
+        ("BACKUP_DIR", "--backup-dir", args.backup_dir),
+        ("CONFIG_DIR", "--config-dir", args.config_dir),
+    ):
+        was = installed_env.get(key)
+        if was and not _same_directory(Path(was), Path(str(current))):
+            mismatched.append(f"  {label:<14} installed: {was}\n{'':16}this run: {current}")
+    if not mismatched:
+        return
+    raise Refusal(
+        EXIT_EXISTING_INSTALL,
+        "the install already here points at different directories than this run does:\n"
+        + "\n".join(mismatched),
+        "This installer will not adopt one over the other on its own: the installed paths are "
+        "where the catalog, the administrator record and the backups actually are, and taking "
+        "this run's values instead would archive nothing, rewrite .env, and bring up a stack "
+        "that looks healthy and empty while the real data sits somewhere nothing points at. "
+        "Pass the paths the install already uses, or `uninstall` first if you really are "
+        "moving it.",
+    )
 
 
 def _other_containers_from_ps_ndjson(raw: str, project: str):
@@ -1121,34 +1447,188 @@ def cmd_preflight(args) -> int:
     return EXIT_OK
 
 
-def _ask_install_mode(args, here: str, target: str) -> str:
+FACTORY_RESET_TOKEN = "factory-reset"
+
+
+def stop_stack(args, *, remove: bool) -> None:
+    """Bring the running stack down before its state is copied or moved.
+
+    Nothing used to. The only `docker compose down` in this file was in
+    cmd_uninstall, and all three consequences are real:
+
+      * an upgrade's shutil.copy2 snapshotted a LIVE database. The engine
+        opens it journal_mode=WAL, so the archive was a copy of a file
+        being written, with its most recent transactions in a -wal the
+        copy did not even take.
+      * a factory reset's shutil.move relocated state.db out from under an
+        engine holding an open fd, which on Linux keeps writing to the
+        moved inode. The "destroyed" catalog carries on being updated
+        inside the archive.
+      * and a factory reset at the SAME version with an unchanged .env did
+        not recreate the containers at all. `docker compose up -d` is a
+        no-op against a stack whose config has not changed, so the old
+        engine kept serving the old catalog out of its own memory and the
+        installer printed success over a reset that had not happened.
+
+    `down` for factory-reset rather than `stop`, because recreating the
+    containers is the point: removing them is what makes the next `up`
+    start a new engine against the new, empty state.
+
+    Never a refusal. A stack that will not come down is worth saying out
+    loud, and the caller decides what to do about it, but there are real
+    states (containers already gone, a project removed by hand) where the
+    command reports failure and there is nothing wrong.
+    """
+    verb = "down" if remove else "stop"
+    if (args.prefix / "compose.yaml").is_file() and (args.prefix / ".env").is_file():
+        argv = compose_argv(args) + [verb]
+        cwd = str(args.prefix)
+    else:
+        argv = ["docker", "compose", "-p", args.project, verb]
+        cwd = None
+    if remove:
+        argv.append("--remove-orphans")
+    say(f"==> docker compose {verb}, so nothing is holding the state open while it is "
+        f"{'moved' if remove else 'copied'}")
+    proc = run(argv, check=False, timeout=600, cwd=cwd)
+    out = (proc.stdout or "").strip() or (proc.stderr or "").strip()
+    if out:
+        say(f"     {out.splitlines()[-1]}")
+    if proc.returncode != 0:
+        say(f"     (docker compose {verb} exited {proc.returncode}; continuing, because a stack "
+            f"that is already gone reports the same thing)")
+
+
+def _ask_install_mode(here: str, target: str, preview) -> str:
     """Ask, on a terminal, the question decide_install_mode() refused to
     guess at.
 
-    Only reached when a terminal exists, an install exists and no mode was
-    given. Everything else is decided without asking, because a prompt
-    that can block a cron job forever is worse than a refusal that names
-    the flag to pass.
+    The preview comes BEFORE the question, which is the whole point of
+    having one. It used to print after the mode was chosen and after
+    archive_state had already been called with move=True, so an operator
+    picked from a one-line menu and was then shown the counts for a
+    decision that was already irrevocable. A list you read afterwards is
+    a receipt, not a decision.
+
+    The answer is returned, never acted on here. decide_install_mode is
+    the only place the downgrade guard lives, so the caller feeds this
+    back through it rather than treating a prompt answer as settled.
     """
     say("")
     say(f"    An install is already here (version {here or 'unknown'}) and no --mode was given.")
+    say("")
     say(f"    upgrade        keep every user, backup set and catalogued artifact, moving to {target}")
-    say( "    factory-reset  discard the administrator record, catalog and configuration")
-    say( "    abort          change nothing")
+    say("    factory-reset  destroy, after archiving:")
+    for line in preview:
+        say(f"                     {line}")
+    say("    abort          change nothing")
     say("")
     for _ in range(3):
         try:
-            answer = input("    upgrade / factory-reset / abort: ").strip().lower()
+            answer = input(f"    upgrade / {FACTORY_RESET_TOKEN} / abort: ").strip().lower()
         except EOFError:
             answer = "abort"
         if answer in ("upgrade", "u"):
             return "upgrade"
-        if answer in ("factory-reset", "factory", "f"):
-            return "factory-reset"
+        if answer == FACTORY_RESET_TOKEN:
+            # The whole word, and no "f" or "factory". This is the answer
+            # that destroys the administrator record and the catalog, and
+            # a single keystroke next to the one that does not is not a
+            # confirmation, it is a typo waiting to happen.
+            return FACTORY_RESET_TOKEN
         if answer in ("abort", "a", "", "n", "no"):
             raise Refusal(EXIT_EXISTING_INSTALL, "aborted at the prompt; nothing was changed.", "")
-        say("    Answer upgrade, factory-reset or abort.")
+        say(f"    Answer upgrade, {FACTORY_RESET_TOKEN} in full, or abort.")
     raise Refusal(EXIT_EXISTING_INSTALL, "no usable answer after three attempts; nothing was changed.", "")
+
+
+def confirm_factory_reset(args, preview) -> None:
+    """The typed confirmation for a factory reset asked for by flag.
+
+    Not needed when the mode came from the menu above, because the menu's
+    answer IS this word and the preview was above it. This is the other
+    path: `--mode factory-reset` on the command line, where nothing had
+    been read and nothing had been typed.
+
+    A typed token rather than [y/N]. `y` is what a finger presses to get
+    past a prompt; the word is what somebody types having read what is
+    above it. And with no terminal there is nothing to type on, so the
+    non-interactive path needs its own flag rather than a default, for
+    exactly the reason the mode itself does.
+    """
+    say("==> factory-reset will destroy:")
+    for line in preview:
+        say(f"     {line}")
+    if args.confirm_factory_reset:
+        say("==> --confirm-factory-reset was given, so this is not asked again.")
+        return
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise Refusal(
+            EXIT_EXISTING_INSTALL,
+            "--mode factory-reset destroys the list above and there is no terminal to confirm on.",
+            "Re-run with --confirm-factory-reset if that list is really what you want gone. "
+            "Nothing has been touched.",
+        )
+    try:
+        answer = input(f'    Type "{FACTORY_RESET_TOKEN}" to destroy the list above, '
+                       f"anything else to abort: ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer != FACTORY_RESET_TOKEN:
+        raise Refusal(EXIT_EXISTING_INSTALL, "not confirmed; nothing was changed.", "")
+
+
+def choose_install_mode(args, *, installed, here, target, interactive):
+    """The whole mode decision, prompt included, in one place.
+
+    A function rather than a run of statements inside cmd_install,
+    because the shape of the bug was the caller and not the callee. The
+    downgrade refusal lives inside decide_install_mode's upgrade branch
+    and nowhere else, so a caller that asked and then acted on the answer
+    walked straight past it: the guard was live for --mode upgrade and
+    absent for the identical word typed at the prompt. Nothing here can
+    be checked by a test that only ever calls decide_install_mode.
+
+    Returns (mode, came_from_prompt). The second half decides whether a
+    factory reset still needs confirming: an answer typed at the prompt
+    IS the confirmation, and was typed under the preview.
+    """
+    decide = dict(installed=installed, installed_tag=here, target_version=target,
+                  interactive=interactive, prefix=args.prefix)
+    mode, needs_prompt = decide_install_mode(requested=args.mode, **decide)
+    if not needs_prompt:
+        return mode, False
+    answer = _ask_install_mode(here, target, destroy_preview(args))
+    mode, _ = decide_install_mode(requested=answer, **decide)
+    return mode, True
+
+
+def prepare_for_mode(args, mode, *, installed):
+    """Everything between choosing a mode and staging the deployment.
+
+    One function for the same reason as choose_install_mode: the ORDER is
+    the fix, so it has to be somewhere a test can watch it happen. The
+    stack comes down BEFORE the state is copied or moved, and nothing
+    used to bring it down at all.
+
+    Returns (archive, captured), or (None, []) when there was nothing to
+    archive.
+    """
+    if mode not in ("factory-reset", "upgrade") or not installed:
+        return None, []
+
+    stop_stack(args, remove=(mode == "factory-reset"))
+
+    if mode == "factory-reset":
+        archive, captured = archive_state(args, move=True)
+        say(f"==> Moved {len(captured)} item(s) out to {archive}. Recoverable from there, "
+            f"and gone from here.")
+    else:
+        archive, captured = archive_state(args, move=False)
+        say(f"==> Archived {len(captured)} item(s) to {archive} before touching anything.")
+        say(f"     The retained backups under {args.backup_dir} are not copied: an upgrade does not "
+            f"modify them and duplicating them would protect nothing.")
+    return archive, captured
 
 
 def cmd_install(args) -> int:
@@ -1156,43 +1636,45 @@ def cmd_install(args) -> int:
     pf = Preflight(args)
     pf.check_all()
 
-    payload, containers = detect_existing(args)
+    payload, containers, installed_env = detect_existing(args)
     running = [c for c in containers if str(c.get("State", "")).lower() == "running"]
     installed = bool(payload or containers)
-    here = installed_version(containers)
+
+    # Before any decision, because every decision below is about paths
+    # this run may not be the authority on. A mismatch here means the
+    # archive would capture nothing and the stack would come up pointed
+    # at empty directories.
+    check_layout_matches(args, installed_env)
+
+    here, here_from = installed_image_tag(containers, args.prefix)
     target = image_tag(args.image)
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
 
     # Reported in every mode, including a plain fresh install, because
     # "which version is this" is the first question anyone debugging a
     # deployment asks and the installer is the one place that knows both
-    # halves of the answer at once.
+    # halves of the answer at once. The SOURCE is reported with it: what
+    # is running and what the next `up` would start are different claims,
+    # and when the stack is down only the second one can be answered.
     if installed:
         say(f"==> An install is already here: {len(containers)} container(s), {len(running)} running, "
-            f"version {here or 'unknown'}. This installer carries {target or 'unknown'} "
-            f"({compare_versions(here, target)}).")
+            f"version {here or 'unknown'}"
+            f"{f' (from {here_from})' if here_from else ''}. This installer carries "
+            f"{target or 'unknown'} ({compare_versions(here, target)}).")
 
-    mode, needs_prompt = decide_install_mode(
-        requested=args.mode, installed=installed, installed_version=here,
-        target_version=target, interactive=sys.stdin.isatty() and sys.stdout.isatty())
-    if needs_prompt:
-        mode = _ask_install_mode(args, here, target)
+    mode, from_prompt = choose_install_mode(
+        args, installed=installed, here=here, target=target, interactive=interactive)
+
+    if mode == "factory-reset" and not from_prompt:
+        # The prompt already showed the preview and already required the
+        # word to be typed, so asking again there would be theatre. This
+        # is --mode factory-reset, where nothing has been read yet.
+        confirm_factory_reset(args, destroy_preview(args))
+
     say(f"==> Mode: {mode}")
-
-    if mode == "factory-reset":
-        say("==> factory-reset will destroy:")
-        for line in destroy_preview(args):
-            say(f"     {line}")
-        archive, captured = archive_state(args, move=True)
-        say(f"==> Moved {len(captured)} item(s) out to {archive}. Recoverable from there, and gone from here.")
-    elif mode == "upgrade" and installed:
-        archive, captured = archive_state(args, move=False)
-        say(f"==> Archived {len(captured)} item(s) to {archive} before touching anything.")
-        say(f"     The retained backups under {args.backup_dir} are not copied: an upgrade does not "
-            f"modify them and duplicating them would protect nothing.")
-        if compare_versions(here, target) == "same":
-            say(f"==> Already {target}. Converging in place rather than claiming a version moved.")
-
-    tighten_config_ancestry(args)
+    prepare_for_mode(args, mode, installed=installed)
+    if mode == "upgrade" and installed and compare_versions(here, target) == "same":
+        say(f"==> Already {target}. Converging in place rather than claiming a version moved.")
 
     # Before anything is staged, and before the stack comes up, because a
     # host that cannot pass container-originated traffic fails the Web-UI
@@ -1205,6 +1687,12 @@ def cmd_install(args) -> int:
 
     say(f"==> Staging the deployment under {args.prefix}")
     stage_payload(args)
+
+    # AFTER staging, because the config directory it works inside is one
+    # of the directories staging creates. Called before it, which is where
+    # it used to live, every path it looked at was absent on a fresh
+    # install and the whole thing was a no-op.
+    prepare_engine_config_dirs(args)
 
     if args.image_archive is not None:
         say(f"==> Loading {args.image_archive}")
@@ -2288,7 +2776,7 @@ def cmd_network_undo(args) -> int:
 
 
 def cmd_status(args) -> int:
-    payload, containers = detect_existing(args)
+    payload, containers, _env = detect_existing(args)
     say(f"payload at {args.prefix}: {'present' if payload else 'absent'}")
     if not containers:
         say("no containers for project " + args.project)
@@ -2352,7 +2840,7 @@ def cmd_uninstall(args) -> int:
     what this account already owns. So this prints the exact remedy
     instead of silently claiming a contract nothing here checks.
     """
-    payload, containers = detect_existing(args)
+    payload, containers, _env = detect_existing(args)
     if not payload and not containers:
         say("nothing to uninstall: no payload and no containers for project " + args.project)
         return EXIT_OK
@@ -2496,6 +2984,48 @@ def _add_fix_network_flag(sp: argparse.ArgumentParser, *, default: str, why_this
                           f"skips the check entirely and touches no firewall. {why_this_default}")
 
 
+class _IfInstalledRemoved(argparse.Action):
+    """--if-installed, kept in the parser for the sole purpose of
+    refusing usefully.
+
+    Deleting it outright made a scripted `--if-installed converge` die at
+    argparse's own exit 2 with "unrecognized arguments: --if-installed
+    converge", which names neither --mode nor the mapping, so whoever hit
+    it in a cron job had to come and read this file. The claim that the
+    failure was already loud and named the flag was only true for a
+    re-run with NO mode flag, which is a different command line from the
+    one every existing script actually has.
+
+    help=argparse.SUPPRESS, because it is not an option: it does not
+    appear in --help, it cannot be used, and the only thing it does is
+    say what to write instead. Exit 2 is kept deliberately, so a wrapper
+    already branching on a usage error keeps working and simply gets a
+    message it can act on.
+    """
+
+    TRANSLATION = {"converge": "--mode upgrade", "refuse": "--mode fresh"}
+
+    def __init__(self, option_strings, dest, **kwargs):
+        kwargs.pop("nargs", None)
+        super().__init__(option_strings, dest, nargs="?", default=None,
+                         help=argparse.SUPPRESS, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        replacement = self.TRANSLATION.get(values)
+        if replacement:
+            detail = f"`--if-installed {values}` is `{replacement}` now."
+        else:
+            detail = ("Its converge is `--mode upgrade` and its refuse is `--mode fresh`.")
+        raise Refusal(
+            EXIT_USAGE,
+            "--if-installed was removed in issue #343 and replaced by --mode.",
+            f"{detail}\n\nupgrade keeps every user, backup set and catalogued artifact and "
+            "archives them first; fresh asserts nothing is installed here and refuses if "
+            "something is. There is also --mode factory-reset, which the old flag had no way "
+            "to ask for. See docs/install.md.",
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     repo_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(
@@ -2542,6 +3072,14 @@ def build_parser() -> argparse.ArgumentParser:
                                "on a terminal and refuses without one, because guessing between keeping the "
                                "data and wiping it is not something an installer should do. Replaces "
                                "--if-installed: its converge is --mode upgrade and its refuse is --mode fresh.")
+    existing.add_argument("--confirm-factory-reset", action="store_true",
+                          help="Confirm --mode factory-reset without a terminal. On a terminal the word "
+                               "factory-reset is typed at the prompt instead, after the list of what is "
+                               "about to be destroyed. Without one of the two, factory-reset refuses.")
+    # Not an option, and not in --help. It exists only so a script still
+    # passing the flag it was told to pass gets a sentence rather than
+    # argparse's "unrecognized arguments".
+    existing.add_argument("--if-installed", action=_IfInstalledRemoved, dest="if_installed")
 
     sp_status = subparsers.add_parser(
         "status", formatter_class=_HelpFormatter,
@@ -2644,7 +3182,6 @@ def resolve(args):
 
 
 def main(argv) -> int:
-    args = resolve(build_parser().parse_args(argv))
     handlers = {
         "preflight": cmd_preflight,
         "install": cmd_install,
@@ -2654,6 +3191,11 @@ def main(argv) -> int:
         "network-undo": cmd_network_undo,
     }
     try:
+        # Parsing is inside the contract now. _IfInstalledRemoved refuses
+        # during parse_args, and a Refusal raised out here reached the
+        # operator as a traceback instead of as the two sentences that
+        # tell them which flag replaced theirs.
+        args = resolve(build_parser().parse_args(argv))
         return handlers[args.command](args)
     except Refusal as refusal:
         print(f"\nrefusing: {refusal.message}", file=sys.stderr)

@@ -63,7 +63,7 @@ parsing prose.
 | 17 | the SSH key or `known_hosts` is missing, is not a file, or the key is readable beyond its owner |
 | 18 | the image is neither present, nor loadable from an archive, nor pullable |
 | 19 | `container/compose.yaml` is not where the installer was told to find it |
-| 20 | an install is already here and the mode did not settle what to do about it |
+| 20 | an install is already here and the mode did not settle what to do about it, a factory reset was not confirmed, or this run's directories are not the installed ones |
 | 21 | the install here is newer than the version this installer carries |
 | 30 | a Docker command failed |
 | 31 | the stack started but did not reach the state that counts as installed |
@@ -100,10 +100,52 @@ converges and says so, rather than claiming a version moved. Upgrading onto an
 **older** version is refused, because a catalog written by a newer build is not
 something this can promise to read back.
 
-`factory-reset` prints what it will destroy, by name and count, before it does it. It
-moves that state into a timestamped archive rather than deleting it, so the decision
-stays recoverable. It leaves the retained backups on disk: it drops the catalog that
-describes them, not the files.
+`factory-reset` prints what it will destroy, by name and count, **before** it asks, and
+it has to be confirmed in as many words: the literal word `factory-reset` typed at the
+prompt on a terminal, or `--confirm-factory-reset` where there is no terminal to type
+on. `y` is what a finger presses to get past a prompt; the word is what somebody types
+having read the list above it. It moves that state into a timestamped archive rather
+than deleting it, so the decision stays recoverable. It leaves the retained backups on
+disk (it drops the catalog that describes them, not the files), and it leaves
+`<prefix>/secrets` alone, so `--ssh-key` and `--known-hosts` survive a reset. The
+preview names all three.
+
+Both modes **stop the stack first**, and this is not housekeeping. The engine opens the
+state database with `journal_mode=WAL`, so copying it while the engine is running
+produces a torn snapshot whose newest committed transactions are in a `-wal` beside it,
+and moving it out from under an open file descriptor does not stop the engine writing
+to it. A factory reset uses `down` rather than `stop` for a third reason: `docker
+compose up -d` against a stack whose configuration has not changed is a no-op, so a
+reset back onto the same version with an unchanged `.env` left the old engine serving
+the old catalog while the installer printed success.
+
+The archive captures `state.db`, `state.db-wal` and `state.db-shm` together, because
+the first without the other two is a database missing its most recent commits. It puts
+`state/local-auth.json` **first**, because the plan is executed in order and a failure
+part way through a move otherwise leaves the catalog gone and the administrator record
+present, which is an engine that reports an administrator already exists, issues no
+enrollment link, and locks everyone out. That is the exact failure the archive exists
+to prevent.
+
+Archives are not pruned, and they are not unlimited either. Each one holds a copy of
+`config/ssh_keys`, which is where the engine keeps the keys imported through the Web UI,
+so an unbounded pile is an installer that multiplies private key material every time it
+runs. Past five, `install` refuses and names them: deleting one for you would take back
+the recoverability that moving rather than deleting is there to provide.
+
+## It will not adopt a layout you did not ask for
+
+Every directory the installer archives, destroys or rewrites used to come from the
+current run's flags, and it wrote `<prefix>/.env` without ever reading it back. So an
+operator who first installed with `--state-dir /mnt/fast/state` and re-ran without
+repeating it got "Archived 0 item(s)", a rewritten `.env`, and a stack pointed at an
+empty state directory, while the real catalog sat at the old path with nothing pointing
+at it. Every signal was green.
+
+`install` now reads the installed `.env` and refuses (exit 20) when `STATE_DIR`,
+`BACKUP_DIR` or `CONFIG_DIR` disagree with this run, naming both sides. It refuses
+rather than adopting either: taking the installed paths would ignore flags you typed,
+and taking yours would quietly abandon the data.
 
 **With an install already here and no `--mode` given**, the installer asks on a
 terminal and refuses without one. It will not guess, because one of the two answers
@@ -121,8 +163,14 @@ worse than a refusal that names the flag.
 **This is a breaking change for scripted re-runs.** The old default converged
 silently; the new behaviour refuses rather than guess. A script or cron job that
 re-runs the installer over an existing deployment must now pass `--mode upgrade`
-explicitly. The refusal names the flag, and exits 20, so the failure is loud rather
-than silent.
+explicitly.
+
+The flag itself is still registered, hidden from `--help`, for the sole purpose of
+saying so. Deleting it outright meant a scripted `--if-installed converge` died at
+argparse's own exit 2 with "unrecognized arguments: --if-installed converge", which
+names neither `--mode` nor the mapping, so whoever hit it in a cron job had to come and
+read the source. It still exits 2, and now it says which flag replaced theirs. A re-run
+with no mode flag at all is the other case, and that one exits 20 and names `--mode`.
 
 ## It derives from the canonical definition, it does not restate it
 
