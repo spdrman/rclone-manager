@@ -665,8 +665,7 @@ func TestSftpConfig_KeyFileEncryptionWrongDEKFails(t *testing.T) {
 	dir := t.TempDir()
 	src := validSource(t, dir)
 
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("the-real-dek"))
-	ciphertext, err := encryptKeyMaterial(dek, mustUnencryptedKeyPEM(t))
+	ciphertext, err := encryptKeyMaterial(obs.NewSecret("the-real-dek"), mustUnencryptedKeyPEM(t))
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}

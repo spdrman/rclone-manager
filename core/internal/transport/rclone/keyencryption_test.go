@@ -2,9 +2,16 @@ package rclone
 
 import (
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/crypto/argon2"
 
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
@@ -13,10 +20,10 @@ import (
 // --- format: encrypt/decrypt/detect ---
 
 func TestEncryptDecryptKeyMaterial_RoundTrip(t *testing.T) {
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("correct-horse-battery-staple"))
+	secret := obs.NewSecret("correct-horse-battery-staple")
 	plaintext := mustUnencryptedKeyPEM(t)
 
-	ciphertext, err := encryptKeyMaterial(dek, plaintext)
+	ciphertext, err := encryptKeyMaterial(secret, plaintext)
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}
@@ -27,7 +34,7 @@ func TestEncryptDecryptKeyMaterial_RoundTrip(t *testing.T) {
 		t.Fatal("ciphertext contains the plaintext key verbatim; this is not encrypted at all")
 	}
 
-	got, err := decryptKeyMaterial(dek, ciphertext)
+	got, err := decryptKeyMaterial(secret, ciphertext)
 	if err != nil {
 		t.Fatalf("decryptKeyMaterial: %v", err)
 	}
@@ -44,27 +51,27 @@ func TestIsEncryptedKeyMaterial_FalseForPlainPEM(t *testing.T) {
 
 // TestEncryptKeyMaterial_FreshNonceEveryTime is the property that actually
 // makes AES-GCM safe here: encrypting the same plaintext under the same
-// DEK twice must never reuse a nonce, or GCM's authentication guarantee
+// secret twice must never reuse a nonce, or GCM's authentication guarantee
 // breaks. Asserting the two ciphertexts differ is the black-box way to
 // catch a hard-coded or reused nonce without reaching into the format.
 func TestEncryptKeyMaterial_FreshNonceEveryTime(t *testing.T) {
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("same-dek-every-time"))
+	secret := obs.NewSecret("same-dek-every-time")
 	plaintext := mustUnencryptedKeyPEM(t)
 
-	first, err := encryptKeyMaterial(dek, plaintext)
+	first, err := encryptKeyMaterial(secret, plaintext)
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}
-	second, err := encryptKeyMaterial(dek, plaintext)
+	second, err := encryptKeyMaterial(secret, plaintext)
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}
 	if bytes.Equal(first, second) {
-		t.Fatal("encrypting the same plaintext twice under the same DEK produced identical ciphertext: the nonce is not actually fresh")
+		t.Fatal("encrypting the same plaintext twice under the same secret produced identical ciphertext: the salt/nonce is not actually fresh")
 	}
 	// Both must still decrypt to the same plaintext regardless.
 	for _, ct := range [][]byte{first, second} {
-		got, err := decryptKeyMaterial(dek, ct)
+		got, err := decryptKeyMaterial(secret, ct)
 		if err != nil {
 			t.Fatalf("decryptKeyMaterial: %v", err)
 		}
@@ -74,9 +81,36 @@ func TestEncryptKeyMaterial_FreshNonceEveryTime(t *testing.T) {
 	}
 }
 
+// TestEncryptKeyMaterial_FreshSaltEveryTime is the salt-specific half of
+// the property above: two encryptions of the same plaintext under the same
+// secret must carry two different salts, not just two different nonces, or
+// an offline guesser could precompute one Argon2id pass per candidate and
+// reuse it against every key file this process ever writes.
+func TestEncryptKeyMaterial_FreshSaltEveryTime(t *testing.T) {
+	secret := obs.NewSecret("same-dek-every-time")
+	plaintext := mustUnencryptedKeyPEM(t)
+
+	first, err := encryptKeyMaterial(secret, plaintext)
+	if err != nil {
+		t.Fatalf("encryptKeyMaterial: %v", err)
+	}
+	second, err := encryptKeyMaterial(secret, plaintext)
+	if err != nil {
+		t.Fatalf("encryptKeyMaterial: %v", err)
+	}
+
+	saltStart := len(encryptedKeyMagicV2)
+	saltEnd := saltStart + keyEncryptionSaltLen
+	firstSalt := first[saltStart:saltEnd]
+	secondSalt := second[saltStart:saltEnd]
+	if bytes.Equal(firstSalt, secondSalt) {
+		t.Fatal("encrypting the same plaintext twice under the same secret produced the same salt")
+	}
+}
+
 func TestDecryptKeyMaterial_WrongDEKFails(t *testing.T) {
-	right := deriveKeyEncryptionDEK(obs.NewSecret("the-real-dek"))
-	wrong := deriveKeyEncryptionDEK(obs.NewSecret("a-different-dek"))
+	right := obs.NewSecret("the-real-dek")
+	wrong := obs.NewSecret("a-different-dek")
 	plaintext := mustUnencryptedKeyPEM(t)
 
 	ciphertext, err := encryptKeyMaterial(right, plaintext)
@@ -89,8 +123,8 @@ func TestDecryptKeyMaterial_WrongDEKFails(t *testing.T) {
 }
 
 func TestDecryptKeyMaterial_TamperedCiphertextFails(t *testing.T) {
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("some-dek"))
-	ciphertext, err := encryptKeyMaterial(dek, mustUnencryptedKeyPEM(t))
+	secret := obs.NewSecret("some-dek")
+	ciphertext, err := encryptKeyMaterial(secret, mustUnencryptedKeyPEM(t))
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}
@@ -98,15 +132,131 @@ func TestDecryptKeyMaterial_TamperedCiphertextFails(t *testing.T) {
 	tampered := append([]byte(nil), ciphertext...)
 	tampered[len(tampered)-1] ^= 0xFF
 
-	if _, err := decryptKeyMaterial(dek, tampered); err == nil {
+	if _, err := decryptKeyMaterial(secret, tampered); err == nil {
 		t.Fatal("decrypting tampered ciphertext succeeded; GCM's authentication should have caught this")
 	}
 }
 
 func TestDecryptKeyMaterial_RejectsPlainPEM(t *testing.T) {
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("some-dek"))
-	if _, err := decryptKeyMaterial(dek, mustUnencryptedKeyPEM(t)); err == nil {
+	secret := obs.NewSecret("some-dek")
+	if _, err := decryptKeyMaterial(secret, mustUnencryptedKeyPEM(t)); err == nil {
 		t.Fatal("decryptKeyMaterial accepted plain PEM content as its own encrypted format")
+	}
+}
+
+// TestDecryptKeyMaterial_StillReadsLegacyV1Format is #298's DEK-derivation
+// hardening backward-compatibility guarantee: a key file encrypted under
+// the original, now-superseded V1 scheme (unsalted SHA-256) must still
+// decrypt, so an installation is never locked out of its own key file the
+// moment this file's KDF changes underneath it.
+func TestDecryptKeyMaterial_StillReadsLegacyV1Format(t *testing.T) {
+	secret := obs.NewSecret("a-legacy-v1-dek")
+	plaintext := mustUnencryptedKeyPEM(t)
+	dek := deriveKeyEncryptionDEKV1(secret)
+
+	legacyCiphertext, err := encryptKeyMaterialV1ForTest(dek, plaintext)
+	if err != nil {
+		t.Fatalf("encrypting a V1-format fixture: %v", err)
+	}
+	if !isEncryptedKeyMaterial(legacyCiphertext) {
+		t.Fatal("a V1-format ciphertext was not recognized as this program's own encrypted format")
+	}
+	if !isLegacyEncryptedKeyMaterial(legacyCiphertext) {
+		t.Fatal("a V1-format ciphertext was not recognized as legacy")
+	}
+
+	got, err := decryptKeyMaterial(secret, legacyCiphertext)
+	if err != nil {
+		t.Fatalf("decryptKeyMaterial did not read a legacy V1-format file: %v", err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatal("decrypting a legacy V1-format file did not round-trip the original plaintext")
+	}
+}
+
+// TestIsLegacyEncryptedKeyMaterial_FalseForV2 proves the two formats are
+// told apart correctly: resolveKeyFileForSFTP relies on this to decide
+// whether a freshly-decrypted file also needs an upgrade to V2.
+func TestIsLegacyEncryptedKeyMaterial_FalseForV2(t *testing.T) {
+	secret := obs.NewSecret("some-v2-dek")
+	ciphertext, err := encryptKeyMaterial(secret, mustUnencryptedKeyPEM(t))
+	if err != nil {
+		t.Fatalf("encryptKeyMaterial: %v", err)
+	}
+	if isLegacyEncryptedKeyMaterial(ciphertext) {
+		t.Fatal("a current V2-format ciphertext was reported as legacy V1")
+	}
+}
+
+// --- DEK derivation: Argon2id hardening (mandatory review finding #1) ---
+
+// TestDeriveKeyEncryptionDEK_DiffersFromPlainSHA256 is the central proof
+// this file no longer derives its DEK the weak way: #298's original
+// deriveKeyEncryptionDEK was a bare sha256.Sum256 of the resolved secret,
+// with no salt and no cost at all, so an attacker who obtained an
+// encrypted key file but not the DEK source secret could try candidate
+// secrets at the cost of one SHA-256 call each. The hardened derivation
+// must never coincide with that bare hash.
+func TestDeriveKeyEncryptionDEK_DiffersFromPlainSHA256(t *testing.T) {
+	secret := obs.NewSecret("a-weak-guessable-passphrase")
+	salt := bytes.Repeat([]byte{0x42}, keyEncryptionSaltLen)
+
+	dek := deriveKeyEncryptionDEK(secret, salt)
+	plainSHA256 := sha256.Sum256([]byte(secret.Reveal()))
+
+	if dek == plainSHA256 {
+		t.Fatal("deriveKeyEncryptionDEK produced the same output as a bare SHA-256 hash; the point of this fix is that it no longer does")
+	}
+}
+
+// TestDeriveKeyEncryptionDEK_UsesArgon2idWithThisFilesParameters proves
+// deriveKeyEncryptionDEK really is Argon2id, run with this file's own
+// published cost parameters, rather than merely "not SHA-256": it must
+// match a direct golang.org/x/crypto/argon2 call using the same inputs and
+// the same keyEncryptionArgon2Time/Memory/Threads/KeyLen constants
+// keyencryption.go declares.
+func TestDeriveKeyEncryptionDEK_UsesArgon2idWithThisFilesParameters(t *testing.T) {
+	secret := obs.NewSecret("some-secret-value")
+	salt := []byte("0123456789abcdef") // keyEncryptionSaltLen bytes
+
+	got := deriveKeyEncryptionDEK(secret, salt)
+	want := argon2.IDKey([]byte(secret.Reveal()), salt, keyEncryptionArgon2Time, keyEncryptionArgon2Memory, keyEncryptionArgon2Threads, keyEncryptionArgon2KeyLen)
+
+	if !bytes.Equal(got[:], want) {
+		t.Fatal("deriveKeyEncryptionDEK did not match a direct argon2.IDKey call using this file's own published parameters")
+	}
+}
+
+// TestDeriveKeyEncryptionDEK_SaltChangesTheOutput is Argon2id's whole
+// reason for taking a salt at all: the same secret through two different
+// salts must never derive the same DEK, or persisting a salt in the V2
+// format would be theater.
+func TestDeriveKeyEncryptionDEK_SaltChangesTheOutput(t *testing.T) {
+	secret := obs.NewSecret("same-secret-both-times")
+	saltA := bytes.Repeat([]byte{0x01}, keyEncryptionSaltLen)
+	saltB := bytes.Repeat([]byte{0x02}, keyEncryptionSaltLen)
+
+	dekA := deriveKeyEncryptionDEK(secret, saltA)
+	dekB := deriveKeyEncryptionDEK(secret, saltB)
+
+	if dekA == dekB {
+		t.Fatal("two different salts derived the same DEK from the same secret")
+	}
+}
+
+// TestKeyEncryptionArgon2Params_AreNotTrivial is a lightweight guard
+// against silently regressing to cost parameters cheap enough to defeat
+// this file's whole reason for using Argon2id: values mirror the floor
+// apps/common/auth/local/password.go's own doc cites (OWASP's minimum
+// m=19MiB, t=2, p=1). This does not measure wall-clock cost (that would be
+// slow and flaky); it pins the published constants themselves.
+func TestKeyEncryptionArgon2Params_AreNotTrivial(t *testing.T) {
+	const owaspMinMemoryKiB = 19 * 1024
+	if keyEncryptionArgon2Memory < owaspMinMemoryKiB {
+		t.Fatalf("keyEncryptionArgon2Memory = %d KiB, below OWASP's %d KiB minimum", keyEncryptionArgon2Memory, owaspMinMemoryKiB)
+	}
+	if keyEncryptionArgon2Time < 2 {
+		t.Fatalf("keyEncryptionArgon2Time = %d, below OWASP's minimum of 2", keyEncryptionArgon2Time)
 	}
 }
 
@@ -180,6 +330,111 @@ func TestResolveKeyEncryptionSecret_MissingEnvVariableFails(t *testing.T) {
 	}
 }
 
+// --- key_encryption secret caching (mandatory review finding #2) ---
+
+// TestResolveKeyEncryptionSecretCached_OnlyResolvesOnce is the central
+// proof of the caching fix: List/Stat/CopyToLocal/RemoteHash/DeleteRemote
+// each independently reach resolveKeyFileForSFTP, which used to call
+// resolveKeyEncryptionSecret -- and, for a command source, spawn a fresh
+// subprocess -- from scratch on every single call. Three calls against the
+// identical key_encryption source must invoke the resolver command exactly
+// once.
+func TestResolveKeyEncryptionSecretCached_OnlyResolvesOnce(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter")
+	script := filepath.Join(dir, "resolve-dek.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf x >> \"$1\"\nprintf 'cached-dek-value'\n"), 0o700); err != nil {
+		t.Fatalf("writing test resolver script: %v", err)
+	}
+
+	src := transport.Source{KeyEncryptionCommand: []string{script, counter}}
+
+	for i := 0; i < 3; i++ {
+		secret, ok, err := resolveKeyEncryptionSecretCached(src)
+		if err != nil {
+			t.Fatalf("call %d: resolveKeyEncryptionSecretCached: %v", i, err)
+		}
+		if !ok || secret.Reveal() != "cached-dek-value" {
+			t.Fatalf("call %d: got (%q, %v), want (%q, true)", i, secret.Reveal(), ok, "cached-dek-value")
+		}
+	}
+
+	counted, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatalf("reading counter file: %v", err)
+	}
+	if len(counted) != 1 {
+		t.Fatalf("resolver command ran %d times across 3 calls with the same key_encryption source; want exactly 1", len(counted))
+	}
+}
+
+// TestResolveKeyEncryptionSecretCached_DistinctSourcesResolveIndependently
+// guards against a caching bug in the other direction: two DIFFERENT
+// key_encryption sources must never share a cache entry.
+func TestResolveKeyEncryptionSecretCached_DistinctSourcesResolveIndependently(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter")
+	script := filepath.Join(dir, "resolve-dek.sh")
+	// Echoes back its second argument, so two distinct sources (distinct
+	// argv) resolve to two distinct secrets.
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf x >> \"$1\"\nprintf '%s' \"$2\"\n"), 0o700); err != nil {
+		t.Fatalf("writing test resolver script: %v", err)
+	}
+
+	srcA := transport.Source{KeyEncryptionCommand: []string{script, counter, "secret-a"}}
+	srcB := transport.Source{KeyEncryptionCommand: []string{script, counter, "secret-b"}}
+
+	secretA, ok, err := resolveKeyEncryptionSecretCached(srcA)
+	if err != nil || !ok {
+		t.Fatalf("resolving source A: ok=%v err=%v", ok, err)
+	}
+	secretB, ok, err := resolveKeyEncryptionSecretCached(srcB)
+	if err != nil || !ok {
+		t.Fatalf("resolving source B: ok=%v err=%v", ok, err)
+	}
+
+	if secretA.Reveal() != "secret-a" || secretB.Reveal() != "secret-b" {
+		t.Fatalf("got secretA=%q secretB=%q, want distinct sources to resolve independently", secretA.Reveal(), secretB.Reveal())
+	}
+
+	counted, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatalf("reading counter file: %v", err)
+	}
+	if len(counted) != 2 {
+		t.Fatalf("resolver command ran %d times across 2 distinct sources; want exactly 2 (one per source)", len(counted))
+	}
+}
+
+// TestResolveKeyEncryptionSecretCached_CachesFailureToo proves a failing
+// resolver is not retried within the same process either: repeating the
+// subprocess spawn on every call is exactly the failure mode this cache
+// exists to prevent, whether the resolver succeeds or not.
+func TestResolveKeyEncryptionSecretCached_CachesFailureToo(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "counter")
+	script := filepath.Join(dir, "always-fails.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf x >> \"$1\"\nexit 1\n"), 0o700); err != nil {
+		t.Fatalf("writing test resolver script: %v", err)
+	}
+
+	src := transport.Source{KeyEncryptionCommand: []string{script, counter}}
+
+	for i := 0; i < 3; i++ {
+		if _, _, err := resolveKeyEncryptionSecretCached(src); err == nil {
+			t.Fatalf("call %d: a failing resolver command was reported as successful", i)
+		}
+	}
+
+	counted, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatalf("reading counter file: %v", err)
+	}
+	if len(counted) != 1 {
+		t.Fatalf("resolver command ran %d times across 3 failing calls; want exactly 1", len(counted))
+	}
+}
+
 // --- resolveKeyFileForSFTP: the actual key_file-at-rest behaviour ---
 
 // TestResolveKeyFileForSFTP_NoKeyEncryptionConfigured is #298's central
@@ -242,11 +497,13 @@ func TestResolveKeyFileForSFTP_MigratesPlaintextKeyInPlace(t *testing.T) {
 	if !isEncryptedKeyMaterial(onDisk) {
 		t.Fatal("the migrated key file does not carry this program's encrypted-format marker")
 	}
+	if isLegacyEncryptedKeyMaterial(onDisk) {
+		t.Fatal("a freshly migrated key file was written in the legacy V1 format instead of the current V2 one")
+	}
 
 	// The migrated file must itself decrypt back to the exact original
-	// key with the same DEK, and permissions must stay owner-only.
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("the-configured-dek"))
-	decrypted, err := decryptKeyMaterial(dek, onDisk)
+	// key with the same DEK source, and permissions must stay owner-only.
+	decrypted, err := decryptKeyMaterial(obs.NewSecret("the-configured-dek"), onDisk)
 	if err != nil {
 		t.Fatalf("decrypting the migrated file: %v", err)
 	}
@@ -274,8 +531,8 @@ func TestResolveKeyFileForSFTP_MigratesPlaintextKeyInPlace(t *testing.T) {
 }
 
 // TestResolveKeyFileForSFTP_DecryptsAlreadyEncryptedFile is the steady
-// state after migration: a file already in #298's format is decrypted in
-// memory and used, unchanged on disk.
+// state after migration: a file already in #298's current format is
+// decrypted in memory and used, unchanged on disk.
 func TestResolveKeyFileForSFTP_DecryptsAlreadyEncryptedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "imported_key")
@@ -283,8 +540,7 @@ func TestResolveKeyFileForSFTP_DecryptsAlreadyEncryptedFile(t *testing.T) {
 
 	const envName = "RCLONE_MANAGER_TEST_STEADYSTATE_DEK"
 	t.Setenv(envName, "the-steady-state-dek")
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("the-steady-state-dek"))
-	ciphertext, err := encryptKeyMaterial(dek, plaintext)
+	ciphertext, err := encryptKeyMaterial(obs.NewSecret("the-steady-state-dek"), plaintext)
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}
@@ -309,14 +565,84 @@ func TestResolveKeyFileForSFTP_DecryptsAlreadyEncryptedFile(t *testing.T) {
 	}
 }
 
+// TestResolveKeyFileForSFTP_UpgradesLegacyV1FileInPlace is #298's
+// DEK-derivation hardening migration path: a key file encrypted before
+// this hardening landed -- V1's unsalted SHA-256-derived DEK -- gets
+// transparently re-encrypted under V2 (Argon2id, salted) the next time
+// this function runs against it, the same self-heal-on-next-touch
+// discipline the plaintext migration above already established.
+func TestResolveKeyFileForSFTP_UpgradesLegacyV1FileInPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "imported_key")
+	plaintext := mustUnencryptedKeyPEM(t)
+
+	const envName = "RCLONE_MANAGER_TEST_V1UPGRADE_DEK"
+	t.Setenv(envName, "the-v1-dek")
+	legacyDEK := deriveKeyEncryptionDEKV1(obs.NewSecret("the-v1-dek"))
+	legacyCiphertext, err := encryptKeyMaterialV1ForTest(legacyDEK, plaintext)
+	if err != nil {
+		t.Fatalf("encrypting a V1-format fixture: %v", err)
+	}
+	if err := os.WriteFile(path, legacyCiphertext, 0o600); err != nil {
+		t.Fatalf("writing a legacy V1-format key file: %v", err)
+	}
+
+	src := transport.Source{KeyFile: path, KeyEncryptionEnv: envName}
+	secret, ok, err := resolveKeyFileForSFTP(src)
+	if err != nil {
+		t.Fatalf("resolveKeyFileForSFTP: %v", err)
+	}
+	if !ok || secret.Reveal() != string(plaintext) {
+		t.Fatal("resolveKeyFileForSFTP did not resolve a legacy V1 file back to the original plaintext")
+	}
+
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading upgraded key file: %v", err)
+	}
+	if bytes.Equal(onDisk, legacyCiphertext) {
+		t.Fatal("a legacy V1 key file was left unchanged instead of being upgraded to V2")
+	}
+	if isLegacyEncryptedKeyMaterial(onDisk) {
+		t.Fatal("the upgraded key file is still in the legacy V1 format")
+	}
+	if !isEncryptedKeyMaterial(onDisk) {
+		t.Fatal("the upgraded key file does not carry this program's encrypted-format marker")
+	}
+
+	decrypted, err := decryptKeyMaterial(obs.NewSecret("the-v1-dek"), onDisk)
+	if err != nil {
+		t.Fatalf("decrypting the upgraded file: %v", err)
+	}
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Fatal("the upgraded file does not decrypt back to the original key")
+	}
+
+	// A SECOND call must find the file already on V2 and simply decrypt
+	// it, never touching it again.
+	secret2, ok2, err := resolveKeyFileForSFTP(src)
+	if err != nil {
+		t.Fatalf("resolveKeyFileForSFTP (second call): %v", err)
+	}
+	if !ok2 || secret2.Reveal() != string(plaintext) {
+		t.Fatal("a second resolveKeyFileForSFTP call against an already-upgraded file did not return the same usable key")
+	}
+	onDiskAfterSecondCall, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading key file after second call: %v", err)
+	}
+	if !bytes.Equal(onDiskAfterSecondCall, onDisk) {
+		t.Fatal("a second call against an already-upgraded (V2) file rewrote it again")
+	}
+}
+
 // TestResolveKeyFileForSFTP_WrongDEKFailsClearly proves a misconfigured
 // key_encryption source is refused, by name, rather than silently
 // authenticating with garbage or panicking.
 func TestResolveKeyFileForSFTP_WrongDEKFailsClearly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "imported_key")
-	dek := deriveKeyEncryptionDEK(obs.NewSecret("the-real-dek"))
-	ciphertext, err := encryptKeyMaterial(dek, mustUnencryptedKeyPEM(t))
+	ciphertext, err := encryptKeyMaterial(obs.NewSecret("the-real-dek"), mustUnencryptedKeyPEM(t))
 	if err != nil {
 		t.Fatalf("encryptKeyMaterial: %v", err)
 	}
@@ -342,4 +668,31 @@ func TestResolveKeyFileForSFTP_WrongDEKFailsClearly(t *testing.T) {
 	if !bytes.Equal(onDisk, ciphertext) {
 		t.Fatal("a failed decryption attempt modified the key file on disk")
 	}
+}
+
+// encryptKeyMaterialV1ForTest builds a V1-format ciphertext directly from
+// an already-derived DEK, bypassing encryptKeyMaterial (which only ever
+// writes the current V2 format). It exists purely so tests can construct
+// the legacy on-disk shape a real pre-hardening installation would have
+// left behind, the same fixture-building role
+// TestResolveKeyFileForSFTP_MigratesPlaintextKeyInPlace already plays for
+// the plaintext case.
+func encryptKeyMaterialV1ForTest(dek [32]byte, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(dek[:])
+	if err != nil {
+		return nil, fmt.Errorf("initializing cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("initializing AES-GCM: %w", err)
+	}
+	nonce := make([]byte, gcmNonceSize)
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generating a nonce: %w", err)
+	}
+	out := make([]byte, 0, len(encryptedKeyMagicV1)+len(nonce)+len(plaintext)+gcm.Overhead())
+	out = append(out, encryptedKeyMagicV1...)
+	out = append(out, nonce...)
+	out = gcm.Seal(out, nonce, plaintext, nil)
+	return out, nil
 }

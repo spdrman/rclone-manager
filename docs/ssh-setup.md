@@ -347,9 +347,21 @@ first real use after you add the `key_encryption` block IS the migration.
 An encrypted key file is easy to tell apart from a plain one if you ever
 need to check: a plain key still begins `-----BEGIN `, exactly like
 `ssh-keygen` produces; an encrypted one begins with backup-manager's own
-`RCLONEMGR-KEYENC-V1:` marker instead and is not valid PEM to any other
-tool, `ssh-keygen -lf` included, on purpose -- nothing but backup-manager's
-own configured `key_encryption` source can read it.
+`RCLONEMGR-KEYENC-V2:` marker instead (a `RCLONEMGR-KEYENC-V1:` file just
+means it predates the DEK derivation hardening below -- it upgrades to V2
+automatically on the next real use, no action needed) and is not valid PEM
+to any other tool, `ssh-keygen -lf` included, on purpose -- nothing but
+backup-manager's own configured `key_encryption` source can read it.
+
+The key that actually encrypts the file (the DEK, "data encryption key") is
+never `key_encryption`'s resolved value used raw: it's run through
+[Argon2id](https://en.wikipedia.org/wiki/Argon2), the same password-hardening
+function this project already uses for the Web UI administrator's own
+password, salted per key file. That matters because `key_encryption.env`
+and `key_encryption.command` are documented above as accepting "a secrets
+manager", and nothing stops that from being a typed passphrase instead --
+Argon2id is what makes guessing that passphrase against a stolen encrypted
+key file expensive, rather than one hash call per guess.
 
 ## 5. Point a source at it
 
