@@ -526,3 +526,97 @@ func clearAmbientAWSEnvironment(t *testing.T) {
 		_ = os.Unsetenv(name)
 	}
 }
+
+// TestAnEmptyBucketIsNotAMissingBucket is the positive control for
+// confirmBucket, and it exists because the fix that needed it could so
+// easily have introduced this bug instead.
+//
+// confirmBucket answers "is this key absent, or is the whole bucket
+// absent" by listing the bucket root, on the theory that a bucket which
+// exists answers a listing even when it holds nothing. If that theory were
+// wrong, the fix would have turned the FIRST stat, delete or list against a
+// freshly created medium into "your bucket does not exist", which is a
+// worse bug than the one it was fixing and would show up only on a brand
+// new deployment.
+//
+// rclone's own source says listDir returns ErrorDirNotFound only when the
+// underlying request 404s, and a ListObjectsV2 against an existing bucket
+// answers 200 however empty it is. That is a reading, and a reading is not
+// evidence, so this asks a real endpoint with a real bucket that has never
+// been written to.
+//
+// The missing-bucket half runs in the same test on purpose. An assertion
+// that an empty bucket behaves normally is only worth having next to the
+// one showing a missing bucket does not, because otherwise a confirmBucket
+// that always returned nil would pass it.
+func TestAnEmptyBucketIsNotAMissingBucket(t *testing.T) {
+	fixture := miniofixture.Start(t)
+	clearAmbientAWSEnvironment(t)
+	adapter := rclone.New()
+	ctx := fixture.Context()
+
+	envVar := "RCLONE_MANAGER_MINIO_TEST_CREDS"
+	t.Setenv(envVar, fixture.CredentialsINI())
+
+	empty := transport.Medium{
+		ID: "empty", Type: transport.MediumTypeS3, Region: "us-east-1",
+		Endpoint: fixture.Endpoint, Bucket: fixture.EmptyBucket,
+		Prefix: "rclone-manager/empty", StorageClass: "STANDARD",
+		Credentials: transport.MediumCredentials{Env: envVar},
+	}
+	missing := empty
+	missing.Bucket = "no-such-bucket-anywhere"
+
+	key := "rclone-manager/empty/src/set/never-written.dump"
+
+	t.Run("an empty bucket", func(t *testing.T) {
+		_, err := adapter.StatObject(ctx, empty, key)
+		if err == nil {
+			t.Fatal("StatObject found an object in a bucket nothing has ever been written to")
+		}
+		if category, _ := transport.CategoryOf(err); category != transport.NotFound {
+			t.Errorf("StatObject in an empty bucket gave %s, want %s; an empty medium is not a misconfigured one, and the first stat on a new deployment must not read as a typo\nerror: %v",
+				category, transport.NotFound, err)
+		}
+
+		if err := adapter.DeleteObject(ctx, empty, key); err != nil {
+			t.Errorf("DeleteObject in an empty bucket returned %v; the caller's intent is already true", err)
+		}
+
+		objs, err := adapter.ListObjects(ctx, empty, "rclone-manager/empty")
+		if err != nil {
+			t.Errorf("ListObjects over an empty bucket returned %v", err)
+		}
+		if len(objs) != 0 {
+			t.Errorf("ListObjects over an empty bucket returned %d objects: %+v", len(objs), objs)
+		}
+
+		// And it is genuinely usable: the whole point is that an empty
+		// medium is a working medium that has not been written to yet.
+		local := filepath.Join(t.TempDir(), "first.dump")
+		if err := os.WriteFile(local, []byte("the first artifact"), 0o600); err != nil {
+			t.Fatalf("writing the local file: %v", err)
+		}
+		if _, err := adapter.UploadFromLocal(ctx, empty, local, key); err != nil {
+			t.Fatalf("the first upload to an empty bucket failed: %v", err)
+		}
+		t.Cleanup(func() { _ = adapter.DeleteObject(ctx, empty, key) })
+	})
+
+	t.Run("the missing-bucket control", func(t *testing.T) {
+		for name, op := range map[string]func() error{
+			"stat":   func() error { _, err := adapter.StatObject(ctx, missing, key); return err },
+			"delete": func() error { return adapter.DeleteObject(ctx, missing, key) },
+			"list":   func() error { _, err := adapter.ListObjects(ctx, missing, "rclone-manager/empty"); return err },
+		} {
+			err := op()
+			if err == nil {
+				t.Errorf("%s against a bucket that does not exist reported success; without this half, a confirmBucket that always returned nil would pass the case above", name)
+				continue
+			}
+			if category, _ := transport.CategoryOf(err); category != transport.Configuration {
+				t.Errorf("%s against a missing bucket gave %s, want %s", name, category, transport.Configuration)
+			}
+		}
+	})
+}

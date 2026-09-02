@@ -122,6 +122,16 @@ type Fixture struct {
 	// the server started.
 	Bucket string
 
+	// EmptyBucket is a second bucket that exists and is deliberately never
+	// written to.
+	//
+	// It exists because "this bucket is empty" and "this bucket does not
+	// exist" are the pair the adapter's confirmBucket has to keep apart,
+	// and a suite that only ever asks about a bucket with objects in it
+	// proves nothing about the empty one. Nothing may write here; a test
+	// that needs to store something uses Bucket.
+	EmptyBucket string
+
 	// AccessKeyID and SecretAccessKey are the throwaway root credentials.
 	// They are exported so a test can build an env or command resolver's
 	// payload; see CredentialsINI.
@@ -178,6 +188,7 @@ func Start(t *testing.T) *Fixture {
 	f.AccessKeyID = rootUser
 	f.SecretAccessKey = randomSecret(t)
 	f.Bucket = "rclone-manager-test"
+	f.EmptyBucket = "rclone-manager-test-empty"
 
 	// The bucket is created as a DIRECTORY under the data dir before the
 	// server starts. MinIO's single-drive backend treats a top-level
@@ -190,6 +201,7 @@ func Start(t *testing.T) *Fixture {
 	runDir := t.TempDir()
 	f.dataDir = filepath.Join(runDir, "data")
 	must(t, os.MkdirAll(filepath.Join(f.dataDir, f.Bucket), 0o777), "create the bucket directory")
+	must(t, os.MkdirAll(filepath.Join(f.dataDir, f.EmptyBucket), 0o777), "create the empty bucket directory")
 
 	f.setStage("writing the shared-credentials file")
 	credDir := filepath.Join(runDir, "private")
