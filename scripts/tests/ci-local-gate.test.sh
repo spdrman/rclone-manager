@@ -874,7 +874,7 @@ run_gate "$tree"
 if [ "$three_status" = "$INCOMPLETE" ] && [ "$status" != "$INCOMPLETE" ]; then
   pass "I6 exit 3 and exit 1 from the proof are told apart"
 else
-  fail "I6 exit 3 and exit 1 from the proof are told apart -- got $three_status and $status"
+  fail "I6 exit 3 and exit 1 from the proof are told apart, got $three_status and $status"
 fi
 
 # ------------------------------------------------------------------ result

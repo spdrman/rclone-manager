@@ -286,8 +286,8 @@ fi
 
 # The two-machine end-to-end backup proof (#356). Everything between
 # "nothing installed" and "an artifact is on disk" was proven in pieces and
-# nowhere joined up, so the one claim a user actually makes -- a fresh
-# install can be pointed at a machine and pull a backup off it -- had no
+# nowhere joined up, so the one claim a user actually makes (a fresh
+# install can be pointed at a machine and pull a backup off it) had no
 # test anywhere. This is that test: two throwaway containers on a temporary
 # network, the real installer, a backup set created through the CLI, and
 # the artifact compared to the source by digest.
