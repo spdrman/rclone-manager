@@ -27,7 +27,6 @@ package miniointegration_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -527,5 +526,3 @@ func clearAmbientAWSEnvironment(t *testing.T) {
 		_ = os.Unsetenv(name)
 	}
 }
-
-var _ = errors.Is
