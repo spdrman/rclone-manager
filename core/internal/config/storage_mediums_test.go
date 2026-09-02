@@ -277,6 +277,81 @@ func TestValidate_TierMediumReferences(t *testing.T) {
 	})
 }
 
+// TestValidate_PerSetRetentionMediumReferences is the second chain a
+// config can carry, and the one a reference check that only walked the
+// global policy would miss entirely.
+//
+// A per-set retention override (#333) is a whole chain in its own right,
+// so a set writing "retention: {tiers: [...]}" names a medium exactly the
+// way the deployment-wide policy does. I found this by rebasing onto the
+// override landing rather than by design, which is why it gets its own
+// test rather than a line in the table above.
+func TestValidate_PerSetRetentionMediumReferences(t *testing.T) {
+	// perSet returns a config whose one backup set overrides retention
+	// with a chain, with that chain's second tier naming medium.
+	perSet := func(medium string) Config {
+		c := mediumsConfig()
+		c.Sources[0].BackupSets[0].RetentionConfig = &Retention{
+			Tiers: []RetentionTier{
+				{Name: "daily", Granularity: GranularityDay, Keep: 7},
+				{Name: "monthly", Granularity: GranularityMonth, Keep: 12, Medium: medium},
+			},
+		}
+		return c
+	}
+
+	t.Run("a declared medium resolves", func(t *testing.T) {
+		c := perSet("offsite_s3")
+		mustValidate(t, &c)
+		got := c.Sources[0].BackupSets[0].Retention.Tiers[1].EffectiveMedium()
+		if got != "offsite_s3" {
+			t.Errorf("the resolved per-set chain reports medium %q, want offsite_s3", got)
+		}
+	})
+
+	t.Run("a dangling reference is refused", func(t *testing.T) {
+		c := perSet("not_declared")
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("Validate accepted a per-set retention chain naming a medium no storage_mediums entry declares")
+		}
+		for _, want := range []string{"sources[0].backup_sets[0].retention", "tiers[1]", "not_declared"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not carry %q, so it does not locate the offending chain", err, want)
+			}
+		}
+	})
+
+	t.Run("the reserved local id is refused there too", func(t *testing.T) {
+		c := perSet(MediumLocal)
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("Validate accepted medium: local in a per-set retention chain")
+		}
+	})
+
+	t.Run("one dangling global medium is reported once, not once per set", func(t *testing.T) {
+		// A set with NO override resolves to a clone of the global chain,
+		// so walking every set's resolved policy would turn one mistake
+		// into one message per backup set.
+		c := mediumsConfig()
+		c.Retention.Tiers[1].Medium = "not_declared"
+		second := c.Sources[0].BackupSets[0]
+		second.Name = "postgres-secondary"
+		second.LocalPath = "/backups/production/postgres-secondary"
+		c.Sources[0].BackupSets = append(c.Sources[0].BackupSets, second)
+
+		err := c.Validate()
+		if err == nil {
+			t.Fatal("Validate accepted a dangling global medium")
+		}
+		if n := strings.Count(err.Error(), "not_declared"); n != 1 {
+			t.Errorf("one dangling medium was reported %d times across %d backup sets; want once:\n%s",
+				n, len(c.Sources[0].BackupSets), err)
+		}
+	})
+}
+
 // TestValidate_MediumCredentialSources is FR-33's schema half: three
 // sources, exactly one set, and the same argv rules Key.Command already
 // carries.
