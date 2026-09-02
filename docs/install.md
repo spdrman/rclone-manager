@@ -5,6 +5,17 @@ up on a machine you have SSH on, or refuses and tells you exactly which prerequi
 stopped it.
 
 ```
+python3 scripts/install/install_docker_host.py install
+```
+
+That is the whole command on a bare host (issue #347). It installs under
+`~/rclone-manager`, generates an SSH keypair and an empty `known_hosts` under
+`<prefix>/secrets` if they are not there, and prints the public half with a note that
+it belongs in the `authorized_keys` of whichever host you are backing up.
+
+Every flag is still there when you want it, and naming one changes only that one:
+
+```
 python3 scripts/install/install_docker_host.py install \
     --prefix /volume1/backup-manager \
     --ssh-key /volume1/backup-manager/secrets/id_ed25519 \
@@ -21,6 +32,31 @@ one thing an operator installing onto a NAS does not have. It now carries that
 definition itself (see [It derives from the canonical
 definition](#it-derives-from-the-canonical-definition-it-does-not-restate-it) below for
 what keeps the copy honest).
+
+### Compatibility: `--prefix` no longer defaults to `/volume1/backup-manager`
+
+It defaults to `~/rclone-manager`. If you have a script that relied on the old default
+being applied for you, pass `--prefix /volume1/backup-manager` explicitly. The old
+default was a guess at one NAS vendor's share layout that was wrong by a directory name
+on the actual UGREEN this was proven on, and wrong entirely on anything not
+Synology-shaped, so it never once saved anybody a flag.
+
+### What is generated, and what is still a refusal
+
+A **defaulted** credential path that does not exist is created. An **explicitly named**
+one that does not exist is still a refusal, and deliberately: generating a different key
+under a path you typed would hand you one the far host has never seen, while reporting
+success. An existing key is never regenerated over, whatever its age, because replacing
+one silently breaks every source already trusting it.
+
+The private half is still never read and never printed. Only the public half is.
+
+Directories the installer creates are born `0700`. Directories that already exist only
+lose group and world **write**, so read bits you set on purpose survive. That is not
+cosmetic: the engine refuses to use an SSH key if any directory in its whole ancestry is
+group- or world-writable, since anyone holding that bit can replace the key whatever the
+key file's own mode says. Ancestors *above* `--prefix` belong to whoever set the machine
+up, so those are named in a warning with the exact `chmod go-w` rather than changed.
 
 Six subcommands: `preflight` checks and creates nothing, `install` checks then
 installs, `status` reports, `uninstall` removes what the installer made,
@@ -70,7 +106,7 @@ parsing prose.
 | 14 | a host directory is missing, is not a directory, or is owned by another uid |
 | 15 | the listen port is held by something that is not this project |
 | 16 | too little free space on the backup volume |
-| 17 | the SSH key or `known_hosts` is missing, is not a file, or the key is readable beyond its owner |
+| 17 | an explicitly named SSH key or `known_hosts` is missing, either is not a regular file, or the key is readable beyond its owner |
 | 18 | the image is neither present, nor loadable from an archive, nor pullable |
 | 19 | `--compose-file` names a path that is not there, or this installer's own embedded runtime definition does not match the digest recorded beside it |
 | 20 | an install is already here and the mode did not settle what to do about it, a factory reset was not confirmed, or this run's directories are not the installed ones |

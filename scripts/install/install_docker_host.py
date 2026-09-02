@@ -536,14 +536,31 @@ class Preflight:
         """
         key = self.args.ssh_key
         known = self.args.known_hosts
-        for label, path in (("--ssh-key", key), ("--known-hosts", known)):
+        pending = []
+        for label, path, supplied in (
+            ("--ssh-key", key, getattr(self.args, "ssh_key_supplied", True)),
+            ("--known-hosts", known, getattr(self.args, "known_hosts_supplied", True)),
+        ):
+            if not path.exists() and not supplied:
+                # A default that install is about to create. Refusing here
+                # would make `preflight` report a fresh host as broken for
+                # the one thing `install` fixes by itself, which is a false
+                # alarm on exactly the machine this is meant to be easy on.
+                pending.append(label)
+                say(f"  note {label} is not there yet; install creates it at {path}")
+                continue
             if not path.exists():
+                # Only reachable for a path the operator named: ensure_credentials()
+                # has already created any defaulted one by the time this runs. An
+                # explicitly named file that is absent stays a refusal, because
+                # quietly generating a different key than the one asked for is worse
+                # than either creating nothing or refusing.
                 raise Refusal(
                     EXIT_PREREQ_CREDENTIALS,
                     f"{label} is {path}, which is not there.",
-                    "container/compose.yaml mounts both of these with `:?`, so the stack cannot start without "
-                    "them. Create them on this host first. This installer never generates a key and never "
-                    "reads one.",
+                    "container/compose.yaml mounts both of these with `:?`, so the stack cannot start "
+                    "without them. Point the flag at a file that exists, or drop it to have the installer "
+                    "create one under <prefix>/secrets.",
                 )
             if not path.is_file():
                 raise Refusal(
@@ -551,6 +568,8 @@ class Preflight:
                     f"{label} is {path}, which is not a regular file.",
                     "Both mounts are read-only single files, deliberately: a directory would be a different claim.",
                 )
+        if "--ssh-key" in pending:
+            return
         mode = key.stat().st_mode
         if mode & DISALLOWED_KEY_MODE_BITS:
             raise Refusal(
@@ -2039,10 +2058,136 @@ def checkout_compose_beside_this_installer():
     return candidate if candidate.is_file() else None
 
 
+# The mode every directory this installer creates is born with.
+#
+# Not tightened afterwards, born correct. The engine refuses to use an SSH
+# key whose containing directory is group- or world-writable and it walks
+# the WHOLE ancestry to decide: installing onto the UGREEN it refused three
+# times in a row, naming config/ssh_keys, then config, then the install
+# root, printing the exact chmod each time. A directory that is writable by
+# anyone lets a local actor replace the key whatever the key file's own mode
+# says, so creating one and generating a key into it would move that failure
+# later rather than remove it.
+SECURE_DIR_MODE = 0o700
+
+
+def make_secure_dir(path: Path) -> None:
+    """Create a directory the engine will accept, and leave an existing
+    one as close to how the operator had it as the rule allows.
+
+    Two different cases, deliberately not collapsed:
+
+    A directory this installer CREATES is born 0700. mkdir applies the
+    process umask, which on a NAS is routinely permissive enough to
+    produce exactly the 0777 the engine refuses, so the mode is set
+    explicitly rather than trusted to the umask.
+
+    A directory that was ALREADY there only loses group and world write.
+    An operator may have deliberately made a backup directory group- or
+    world-READABLE, and that is their call and no risk to the key; write
+    is the bit the engine refuses over, because anyone holding it can
+    replace the key whatever the key file's own mode says. Forcing 0700
+    over an existing directory would quietly undo a decision the operator
+    made on purpose.
+    """
+    if path.is_dir():
+        mode = path.stat().st_mode & 0o777
+        if mode & 0o022:
+            os.chmod(path, mode & ~0o022)
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, SECURE_DIR_MODE)
+
+
+def warn_about_writable_ancestors(path: Path, stop_at: Path) -> list:
+    """Name any directory ABOVE stop_at that the engine will refuse over.
+
+    Deliberately a warning and not a fix. Those directories belong to
+    whoever set the machine up, not to this installer, and silently
+    tightening a share root because a backup tool was installed under it
+    is not a decision an installer gets to make. Naming it, with the same
+    chmod the engine itself would print, is.
+    """
+    offenders = []
+    p = stop_at.parent
+    while True:
+        try:
+            if p.is_dir() and (p.stat().st_mode & 0o022):
+                offenders.append(p)
+        except OSError:
+            pass
+        if p == p.parent:
+            break
+        p = p.parent
+    return offenders
+
+
+def ensure_credentials(args) -> None:
+    """Create the key and known_hosts when they were defaulted and absent.
+
+    A fresh install has no sources configured, so there is nothing a
+    pre-existing key could authenticate against yet: generating one is the
+    step the operator was going to take anyway, and refusing until they
+    take it by hand is friction with no safety in it.
+
+    Nothing is ever overwritten. An existing key is reused whatever its
+    age, because replacing one silently would break every source already
+    trusting it.
+    """
+    # Each file's OWN parent, not just the key's. The two paths are
+    # independent flags and only coincide by default, so creating one
+    # directory and assuming it holds both leaves known_hosts landing in a
+    # directory nobody made whenever --ssh-key points elsewhere.
+    make_secure_dir(args.prefix)
+    for target in (args.ssh_key, args.known_hosts):
+        make_secure_dir(target.parent)
+
+    if not args.ssh_key.exists() and not args.ssh_key_supplied:
+        keygen = find_tool("ssh-keygen")
+        if keygen is None:
+            raise Refusal(
+                EXIT_PREREQ_CREDENTIALS,
+                f"no SSH key at {args.ssh_key} and ssh-keygen is not on {PRIVILEGED_PATH}.",
+                "Generate an ed25519 key by hand and point --ssh-key at it, or install openssh-client.",
+            )
+        run([keygen, "-q", "-t", "ed25519", "-N", "", "-C", "rclone-manager",
+             "-f", str(args.ssh_key)], timeout=120)
+        os.chmod(args.ssh_key, 0o600)
+        pub = args.ssh_key.with_suffix(args.ssh_key.suffix + ".pub")
+        say(f"==> Generated an ed25519 keypair at {args.ssh_key}")
+        say("")
+        say("    THIS PUBLIC KEY GOES ON THE HOST YOU ARE BACKING UP, in that account's")
+        say("    ~/.ssh/authorized_keys. Nothing can be pulled until it does.")
+        say("")
+        if pub.is_file():
+            say(f"      {pub.read_text().strip()}")
+            say("")
+        # Printed rather than left to be discovered. A keypair that appears
+        # silently is one nobody knows to deploy, and the operator's next
+        # step is blocked by something they were never told happened.
+
+    if not args.known_hosts.exists() and not args.known_hosts_supplied:
+        args.known_hosts.touch()
+        os.chmod(args.known_hosts, 0o600)
+        say(f"==> Created an empty {args.known_hosts}")
+        say("    Empty is correct before any source exists: host keys are pinned when a source")
+        say("    is added, which is what the host-key probe is for.")
+
+    for d in warn_about_writable_ancestors(args.ssh_key, args.prefix):
+        say(f"     WARNING: {d} is group- or world-writable, and the engine walks the whole")
+        say(f"              ancestry when it validates the key. If the first cycle refuses with")
+        say(f"              key_permissions, run: chmod go-w {d}")
+
+
 def stage_payload(args) -> None:
-    args.prefix.mkdir(parents=True, exist_ok=True)
+    # make_secure_dir, not a bare mkdir. host_dirs carries ssh_keys, and
+    # the engine walks that directory's whole ancestry before it will use
+    # the key: a plain mkdir here inherits the umask, which is how the
+    # UGREEN ended up with a 0777 ssh_keys and refused three cycles in a
+    # row before anyone worked out it was the installer that made it.
+    make_secure_dir(args.prefix)
     for path in args.host_dirs.values():
-        path.mkdir(parents=True, exist_ok=True)
+        make_secure_dir(path)
 
     # Copy, never rewrite. distribution/compose holds this exact file to
     # runtime-contract.json, so shipping a modified copy would be shipping
@@ -2331,6 +2476,12 @@ def prepare_for_mode(args, mode, *, installed):
 
 
 def cmd_install(args) -> int:
+    # Before Preflight, because Preflight VALIDATES these and this CREATES
+    # them. A fresh host has neither, and validating first would refuse
+    # every no-argument install on exactly the machines this is meant to
+    # make easy.
+    ensure_credentials(args)
+
     say("==> Preflight")
     pf = Preflight(args)
     pf.check_all()
@@ -3591,8 +3742,12 @@ def _add_shared_groups(sp: argparse.ArgumentParser) -> None:
     happens to need" the way this function used to define it.
     """
     layout = sp.add_argument_group("layout")
-    layout.add_argument("--prefix", type=Path, default=Path("/volume1/backup-manager"),
-                        help="Directory the deployment files and the default data directories live under.")
+    layout.add_argument("--prefix", type=Path, default=Path.home() / "rclone-manager",
+                        help="Directory the deployment files and the default data directories live under. "
+                             "Defaults to rclone-manager under the invoking user's home. It used to default "
+                             "to /volume1/backup-manager, a guessed path for one NAS layout that was wrong "
+                             "by a directory name on the actual UGREEN and wrong entirely on anything that "
+                             "is not Synology-shaped.")
     layout.add_argument("--state-dir", type=Path, default=None,
                         help="Host directory for the SQLite lifecycle journal. Defaults to <prefix>/state.")
     layout.add_argument("--backup-dir", type=Path, default=None,
@@ -3612,8 +3767,10 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser) -> None:
     """
     creds = sp.add_argument_group("credentials (paths only, never contents)")
     creds.add_argument("--ssh-key", type=Path, default=None,
-                       help="Host path to the SFTP client private key. Never read, never generated, never "
-                            "printed. Defaults to <prefix>/secrets/id_ed25519.")
+                       help="Host path to the SFTP client private key. Never read and never printed; its "
+                            "PUBLIC half is printed when one is generated. Defaults to "
+                            "<prefix>/secrets/id_ed25519, and is generated there if absent. Naming a "
+                            "path explicitly that does not exist is still a refusal.")
     creds.add_argument("--known-hosts", type=Path, default=None,
                        help="Host path to the pinned known_hosts file. Defaults to <prefix>/secrets/known_hosts. "
                             "For a source on a non-default SSH port the entry is keyed [host]:port, and that "
@@ -3867,9 +4024,17 @@ def resolve(args):
         "--backup-dir": args.backup_dir,
         "--config-dir": args.config_dir,
     }
+    # Whether the operator NAMED these, recorded before the default fills
+    # them in. The difference decides what a missing file means: a default
+    # that is not there yet is something to create, and a path an operator
+    # typed that is not there is a mistake worth refusing over. Collapsing
+    # the two would either refuse every fresh install or silently install
+    # a different key than the one that was asked for.
     if hasattr(args, "ssh_key"):
+        args.ssh_key_supplied = args.ssh_key is not None
         args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
     if hasattr(args, "known_hosts"):
+        args.known_hosts_supplied = args.known_hosts is not None
         args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
     if hasattr(args, "compose_file") and args.compose_file is not None:
         args.compose_file = args.compose_file.expanduser()
