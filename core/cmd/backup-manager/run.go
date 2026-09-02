@@ -40,5 +40,5 @@ func cmdRun(args []string) int {
 	for _, s := range report.Sets {
 		verdicts = append(verdicts, s.Verdict())
 	}
-	return cycleExit(os.Stdout, verdicts...)
+	return cycleExit(os.Stderr, verdicts...)
 }

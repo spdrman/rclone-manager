@@ -122,14 +122,12 @@ func (s *Service) Fetch(ctx context.Context, sourceName, setName string, dryRun 
 	if err != nil {
 		return result, fmt.Errorf("app: fetch: listing %s: %w", bs.ID, err)
 	}
-	failed, walk := s.processArtifacts(ctx, source, bs, records)
-	result.FailedArtifacts = failed
-	// Exactly the arithmetic RunCycle does, from exactly the same walk
-	// (issue #361): a candidate discovery could not take in counts as
-	// work this fetch never got through, and the journal rows it tried to
-	// move count themselves.
-	result.Progress.Walked = len(result.Discovery.Errors) + walk.Walked
-	result.Progress.Advanced = walk.Advanced
+	walk := s.processArtifacts(ctx, source, bs, records)
+	result.FailedArtifacts = walk.Failed
+	// Exactly the arithmetic RunCycle does, through exactly the same
+	// function over exactly the same walk (issue #361), so the two
+	// commands cannot report different numbers for the same cycle.
+	result.Progress = foldDiscoveryErrors(walk, discRes)
 
 	return result, nil
 }

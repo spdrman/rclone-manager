@@ -1,13 +1,18 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/capacity"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/retry"
 )
@@ -138,11 +143,11 @@ func TestRunCycle_NothingGotThroughWhenEveryArtifactWasRefused(t *testing.T) {
 	if set.Progress.Walked != 3 {
 		t.Errorf("Progress.Walked = %d, want 3: two candidates discovery could not take in, plus the one journal row this cycle tried to transfer", set.Progress.Walked)
 	}
-	if set.Progress.Advanced != 0 {
-		t.Errorf("Progress.Advanced = %d, want 0: nothing moved toward a durable backup", set.Progress.Advanced)
+	if set.Progress.Durable != 0 {
+		t.Errorf("Progress.Durable = %d, want 0: nothing moved toward a durable backup", set.Progress.Durable)
 	}
 	if !set.Progress.NothingGotThrough() {
-		t.Errorf("Progress.NothingGotThrough() = false, want true for a cycle that walked %d and advanced %d", set.Progress.Walked, set.Progress.Advanced)
+		t.Errorf("Progress.NothingGotThrough() = false, want true for a cycle that walked %d and advanced %d", set.Progress.Walked, set.Progress.Durable)
 	}
 }
 
@@ -162,8 +167,8 @@ func TestRunCycle_APartialCycleStillCounts(t *testing.T) {
 	if set.Progress.Walked != 3 {
 		t.Errorf("Progress.Walked = %d, want 3", set.Progress.Walked)
 	}
-	if set.Progress.Advanced != 2 {
-		t.Errorf("Progress.Advanced = %d, want 2: the two artifacts that transferred", set.Progress.Advanced)
+	if set.Progress.Durable != 2 {
+		t.Errorf("Progress.Durable = %d, want 2: the two artifacts that transferred", set.Progress.Durable)
 	}
 	if set.Progress.NothingGotThrough() {
 		t.Errorf("Progress.NothingGotThrough() = true for a cycle that got 2 of 3 artifacts through; that is a healthy pass, not a failure")
@@ -202,8 +207,8 @@ func TestRunCycle_ASteadyStateCycleIsNotABarrenOne(t *testing.T) {
 	svc.Now = fixedNow(epoch)
 
 	first := svc.RunCycle(context.Background())
-	if first.Sets[0].Progress.Advanced != 1 {
-		t.Fatalf("precondition: first cycle Progress.Advanced = %d, want 1", first.Sets[0].Progress.Advanced)
+	if first.Sets[0].Progress.Durable != 1 {
+		t.Fatalf("precondition: first cycle Progress.Durable = %d, want 1", first.Sets[0].Progress.Durable)
 	}
 
 	second := svc.RunCycle(context.Background()).Sets[0]
@@ -292,5 +297,176 @@ func TestRunCycle_ARefusedRemoteCleanupIsNotABarrenCycle(t *testing.T) {
 	}
 	if second.FailedArtifacts != 0 {
 		t.Errorf("FailedArtifacts = %d, want 0: a refused remote cleanup is not a failed artifact", second.FailedArtifacts)
+	}
+}
+
+// TestRunCycle_HistoryDoesNotHideABarrenCycle is the case that decides
+// what Walked is allowed to count, and it is the production shape the
+// issue describes: "the operator saw a manager that reported success on
+// every scheduled run and had backed up nothing". A real backup set has
+// history. If the settled COMPLETE rows from earlier cycles counted
+// toward this cycle's throughput, the rule would work exactly once, on a
+// fresh journal, and never again.
+//
+// The storage ceiling is what makes this test say something the failed-
+// artifact clause does not already say: internal/capacity refuses each
+// transfer before it starts, so no row ends in a failure state and
+// FailedArtifacts stays 0. The only thing left that can fail this cycle
+// is the count.
+func TestRunCycle_HistoryDoesNotHideABarrenCycle(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("old.dump", "already backed up", epoch.Unix())
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 1}
+
+	first := svc.RunCycle(context.Background()).Sets[0]
+	if first.Progress.NothingGotThrough() {
+		t.Fatalf("precondition: the first cycle was supposed to back up its one artifact: %+v", first.Progress)
+	}
+
+	for _, name := range []string{"one.dump", "two.dump", "three.dump"} {
+		tr.put(name, "payload of "+name, epoch.Unix())
+	}
+	svc.Capacity = capacity.Thresholds{CapBytes: 1}
+
+	second := svc.RunCycle(context.Background()).Sets[0]
+
+	if second.FailedArtifacts != 0 {
+		t.Fatalf("precondition: FailedArtifacts = %d, want 0; this test only means anything if nothing ended in a failure state, so that the count is the only thing that can fail the cycle", second.FailedArtifacts)
+	}
+	if second.Progress.Walked != 3 {
+		t.Errorf("Progress.Walked = %d, want 3: the three artifacts that arrived this cycle, and not the one that was already finished", second.Progress.Walked)
+	}
+	if second.Progress.Durable != 0 {
+		t.Errorf("Progress.Durable = %d, want 0: none of the three got through", second.Progress.Durable)
+	}
+	if !second.Verdict().NothingGotThrough() {
+		t.Errorf("Verdict().NothingGotThrough() = false (%+v): three artifacts arrived, none got through, and an artifact this set finished weeks ago does not make that a successful cycle", second.Progress)
+	}
+}
+
+// TestRunCycle_ADiscoveryErrorOnAWalkedRowIsCountedOnce keeps the number
+// an operator reads honest. A candidate that errors at identity capture
+// can already have a journal row from an earlier cycle, in which case
+// discovery and the walk are both looking at the same object. Counting it
+// twice changes no verdict, since both readings say the same thing, but
+// it puts a count in front of an operator that does not match what is on
+// the remote.
+func TestRunCycle_ADiscoveryErrorOnAWalkedRowIsCountedOnce(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+	svc.RetryPolicy = retry.Policy{BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, Multiplier: 2, MaxAttempts: 1}
+	svc.Capacity = capacity.Thresholds{CapBytes: 1}
+
+	// Cycle one journals the artifact and is refused admission, so the row
+	// is left at DISCOVERED rather than ending in a failure state.
+	first := svc.RunCycle(context.Background()).Sets[0]
+	if len(first.Discovery.Discovered) != 1 {
+		t.Fatalf("precondition: Discovery.Discovered = %+v, want one artifact", first.Discovery.Discovered)
+	}
+
+	// Now the source refuses the identity capture too, so the same object
+	// is both a discovery error and a row this cycle walks.
+	tr.statRefused["backup.dump"] = true
+
+	second := svc.RunCycle(context.Background()).Sets[0]
+	if len(second.Discovery.Errors) != 1 {
+		t.Fatalf("precondition: Discovery.Errors = %+v, want 1", second.Discovery.Errors)
+	}
+	if second.Progress.Walked != 1 {
+		t.Errorf("Progress.Walked = %d, want 1: there is one object on the remote, seen twice by two parts of the same pass", second.Progress.Walked)
+	}
+}
+
+// TestCycleVerdict_ACycleThatStoppedEarlyIsNotCalledBarren pins the one
+// case where the arithmetic is true and saying so would be wrong. A cycle
+// that never reached its pipeline walked nothing for a reason that is
+// already in the log; announcing "nothing got through" would invent a
+// second, made-up cause in front of the real one.
+func TestCycleVerdict_ACycleThatStoppedEarlyIsNotCalledBarren(t *testing.T) {
+	barren := CycleVerdict{Progress: CycleProgress{Walked: 3}}
+	if !barren.NothingGotThrough() {
+		t.Fatalf("precondition: a verdict with three walked and none through should report it")
+	}
+
+	stopped := CycleVerdict{Systemic: true, Progress: CycleProgress{Walked: 3}}
+	if stopped.NothingGotThrough() {
+		t.Errorf("NothingGotThrough() = true for a cycle that stopped early; its zeros are vacuous, and the failure it actually hit is already reported")
+	}
+}
+
+// TestRunCycle_SaysSoInTheEventStreamWhenNothingGotThrough is the
+// daemon's half of the answer. `daemon` cannot exit on a bad cycle
+// without turning one outage into two, so the evidence has to be in the
+// FR-23 stream it already writes, not only in an exit status it never
+// produces.
+func TestRunCycle_SaysSoInTheEventStreamWhenNothingGotThrough(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+	svc.Capacity = capacity.Thresholds{CapBytes: 1}
+
+	set := svc.RunCycle(context.Background()).Sets[0]
+	if !set.Verdict().NothingGotThrough() {
+		t.Fatalf("precondition: this cycle was supposed to get nothing through: %+v", set.Progress)
+	}
+
+	var found string
+	for _, line := range strings.Split(strings.TrimSpace(stream.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("the event stream carries a line that is not JSON: %q", line)
+		}
+		if event["op"] == "cycle" {
+			found, _ = event["error"].(string)
+		}
+	}
+	if found == "" {
+		t.Fatalf("nothing in the event stream says this cycle backed nothing up; a daemon has no exit status, so this is the only place it can say it.\nstream:\n%s", stream.String())
+	}
+	if !strings.Contains(found, "1 walked") || !strings.Contains(found, "0 got through") {
+		t.Errorf("the event stream's message = %q, want it to name how many artifacts were walked and how many got through", found)
+	}
+}
+
+// TestRunCycle_SaysNothingInTheEventStreamOnAQuietCycle is that message's
+// own control. A daemon polling an empty remote every fifteen minutes
+// must not write an error line every time it does.
+func TestRunCycle_SaysNothingInTheEventStreamOnAQuietCycle(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), newRefusingTransport(), obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+
+	svc.RunCycle(context.Background())
+
+	if strings.Contains(stream.String(), "backed nothing up") {
+		t.Errorf("a cycle with nothing waiting on the remote wrote a failure into the event stream:\n%s", stream.String())
 	}
 }

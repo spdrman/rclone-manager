@@ -353,7 +353,8 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 // own copy, is what makes "run and fetch agree on what a failed cycle is"
 // a structural property instead of two definitions that happen to match
 // today.
-func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) (failed int, progress CycleProgress) {
+func (s *Service) processArtifacts(ctx context.Context, source transport.Source, bs config.BackupSet, records []state.Record) artifactWalk {
+	walk := artifactWalk{coveredPaths: map[string]bool{}}
 	for _, rec := range records {
 		if ctx.Err() != nil {
 			break
@@ -361,17 +362,39 @@ func (s *Service) processArtifacts(ctx context.Context, source transport.Source,
 		before := lifecycle.State(rec.State)
 		after := s.processArtifact(ctx, source, bs, rec)
 		if terminalFailure(after) {
-			failed++
+			walk.Failed++
 		}
 		if !acquiring(before) {
 			continue
 		}
-		progress.Walked++
-		if after != before && !terminalFailure(after) {
-			progress.Advanced++
+		walk.Progress.Walked++
+		walk.coveredPaths[rec.RemotePath] = true
+		if durable(after) {
+			walk.Progress.Durable++
 		}
 	}
-	return failed, progress
+	return walk
+}
+
+// artifactWalk is what one walk over a backup set's journal rows tells the
+// cycle around it. Nothing else builds one.
+type artifactWalk struct {
+	// Failed is how many rows ended the walk in FAILED, QUARANTINED or
+	// QUARANTINED_LOST (issue #283).
+	Failed int
+
+	// Progress is issue #361's denominator and numerator over these rows
+	// alone. The caller adds the discovery candidates that never became
+	// rows.
+	Progress CycleProgress
+
+	// coveredPaths is every remote path Progress.Walked already counts, so
+	// a caller folding in discovery's own per-candidate errors can tell an
+	// object that is invisible here from one this walk already counted.
+	// Counting the same object twice would not change any verdict, since
+	// both readings say "did not get through", but it would put a number
+	// in front of an operator that does not match what is on the remote.
+	coveredPaths map[string]bool
 }
 
 // terminalFailure names the three states an artifact ends in when it did
@@ -380,6 +403,18 @@ func (s *Service) processArtifacts(ctx context.Context, source transport.Source,
 func terminalFailure(st lifecycle.State) bool {
 	switch st {
 	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:
+		return true
+	}
+	return false
+}
+
+// durable names the states in which an artifact's bytes are on local disk,
+// verified and fsynced, which is what a backup is (see internal/lifecycle's
+// state doc). Everything before COMMITTED is either still in flight or not
+// yet proven; everything after it is either finished or a failure.
+func durable(st lifecycle.State) bool {
+	switch st {
+	case lifecycle.Committed, lifecycle.RemoteDeletePending, lifecycle.RemoteRetained, lifecycle.Complete:
 		return true
 	}
 	return false

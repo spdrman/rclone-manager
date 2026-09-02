@@ -78,5 +78,5 @@ func cmdFetch(args []string) int {
 	// that `run` correctly ignored, and ignored the per-artifact
 	// reconcile errors `run` now shares with it. Neither difference was
 	// deliberate and no test covered either.
-	return cycleExit(os.Stdout, result.Verdict())
+	return cycleExit(os.Stderr, result.Verdict())
 }

@@ -1,5 +1,12 @@
 package app
 
+import (
+	"context"
+	"fmt"
+
+	"github.com/spdrman/rclone-manager/core/internal/discovery"
+)
+
 // This file is issue #361's answer to "did this cycle actually do
 // anything": the arithmetic a caller needs to tell a cycle that had
 // nothing to do apart from a cycle in which nothing got through.
@@ -11,35 +18,46 @@ package app
 // cycle into an exit status.
 
 // CycleProgress is how much of what one backup set's share of a cycle set
-// out to do actually happened.
+// out to do actually happened: a denominator and a numerator, and the
+// whole difficulty of issue #361 is in choosing them.
 //
-// Walked counts everything the cycle was still trying to turn into a
-// durable local backup: every journal row that was in one of the
-// acquisition states (see acquiring, pipeline.go) when the walk reached
-// it, plus every candidate discovery could not take in at all. It
-// deliberately does not count a row with nothing left to do (COMPLETE,
-// or a COMMITTED row whose remote cleanup is being refused by a hardened
-// source, which is the documented steady state for those hosts and not a
-// backup failure), because "nothing was waiting" and "nothing got
-// through" are different outcomes and only one of them is a problem.
+// Walked is the denominator: everything this cycle was still trying to
+// turn into a durable local backup. That is every journal row in one of
+// the acquisition states (see acquiring, pipeline.go) when the walk
+// reached it, plus every candidate discovery could not take in at all,
+// which never became a row and would otherwise be invisible here. A
+// candidate that errored on a path a walked row already covers is counted
+// once.
 //
-// Advanced counts how many of those actually moved forward. An artifact
-// that moved straight into FAILED or QUARANTINED did not advance: it is
-// counted as a failure by FailedArtifacts instead, and counting it here
-// as well would let a cycle in which every artifact failed describe
-// itself as one where everything got through.
+// What it deliberately leaves out is the point. A COMPLETE row is a
+// finished backup and is not counted at all, so a set with history cannot
+// mask a cycle in which nothing new got through. A COMMITTED row whose
+// remote cleanup keeps being refused is not counted either: those bytes
+// are already durable, and FR-16's identity re-check refusing the delete
+// is the documented steady state against a hardened source rather than a
+// backup that did not happen.
+//
+// Durable is the numerator: how many of Walked ended the cycle holding a
+// durable local copy (COMMITTED, REMOTE_DELETE_PENDING, REMOTE_RETAINED
+// or COMPLETE), which is what a backup actually is. Asking that rather
+// than "did the state change" is what keeps an artifact that moved
+// straight into FAILED out of the numerator, and what keeps an artifact
+// that transferred but could not be committed out of it too: it moved,
+// and it is not a backup yet.
 type CycleProgress struct {
-	Walked   int
-	Advanced int
+	Walked  int
+	Durable int
 }
 
-// NothingGotThrough is issue #361's condition: this cycle had work in
+// NothingGotThrough is issue #361's arithmetic: this cycle had work in
 // front of it and none of that work landed. It is deliberately not
-// "Advanced == 0", because a cycle with nothing waiting on the remote and
-// nothing in flight advances nothing either, and that is a healthy quiet
-// night rather than a failed backup.
+// "Durable == 0", because a cycle with nothing waiting on the remote and
+// nothing in flight delivers nothing either, and that is a healthy quiet
+// night rather than a failed backup. See CycleVerdict.NothingGotThrough
+// for the one case where this arithmetic is true and still the wrong
+// thing to say.
 func (p CycleProgress) NothingGotThrough() bool {
-	return p.Walked > 0 && p.Advanced == 0
+	return p.Walked > 0 && p.Durable == 0
 }
 
 // CycleVerdict is everything the decision "did this backup set's share of
@@ -74,6 +92,20 @@ type CycleVerdict struct {
 	Progress CycleProgress
 }
 
+// NothingGotThrough is the specific shape issue #361 was filed for, as
+// opposed to the other three things that can fail a cycle, so a caller can
+// say which of them happened rather than printing one undifferentiated
+// failure for all of them.
+//
+// A cycle that stopped early is excluded even though its arithmetic
+// qualifies, because it qualifies vacuously: it walked nothing because it
+// never reached its pipeline, not because nothing got through. Saying
+// "nothing got through" there would put an invented cause in front of an
+// operator who has a real one sitting in the log.
+func (v CycleVerdict) NothingGotThrough() bool {
+	return !v.Systemic && v.Progress.NothingGotThrough()
+}
+
 // Verdict is this cycle result's share of the exit-status decision. See
 // CycleVerdict.
 func (r BackupSetCycleResult) Verdict() CycleVerdict {
@@ -98,5 +130,50 @@ func (r FetchResult) Verdict() CycleVerdict {
 		ReconcileErrors: len(r.Reconcile.Errors),
 		FailedArtifacts: r.FailedArtifacts,
 		Progress:        r.Progress,
+	}
+}
+
+// foldDiscoveryErrors is the one place a backup set's CycleProgress is
+// assembled, from the journal rows a walk drove forward and the candidates
+// discovery could not take in at all. RunCycle and Fetch both call it
+// rather than each adding up its own, which is what stops the two
+// commands reporting different numbers for the same cycle (issue #361).
+//
+// A candidate whose remote path a walked row already covers is not counted
+// again: it is the same object, seen twice by two different parts of the
+// same pass.
+func foldDiscoveryErrors(walk artifactWalk, discovered discovery.Result) CycleProgress {
+	progress := walk.Progress
+	for _, e := range discovered.Errors {
+		if walk.coveredPaths[e.RemotePath] {
+			continue
+		}
+		progress.Walked++
+	}
+	return progress
+}
+
+// reportBarrenSets writes issue #361's verdict into the FR-23 event
+// stream, for every backup set in this cycle that had artifacts in front
+// of it and got none of them through.
+//
+// It exists because `run` is not the only thing that runs a cycle. `run`
+// is a report and can answer with an exit status; `daemon` is a service
+// whose whole job is to keep going, so it cannot exit on a bad cycle
+// without turning one outage into two. Putting the evidence in the stream
+// both of them already write means the daemon says the same thing `run`
+// says, to whatever is shipping those logs, and keeps running.
+//
+// It reports nothing else. A systemic failure and a failed artifact are
+// both already in the stream from where they happened, and repeating them
+// here would double-count them on an operator's screen.
+func (s *Service) reportBarrenSets(ctx context.Context, report CycleReport) {
+	for _, set := range report.Sets {
+		v := set.Verdict()
+		if !v.NothingGotThrough() {
+			continue
+		}
+		s.logger().Error(ctx, "cycle", fmt.Errorf("%s backed nothing up this cycle: %d walked, %d got through",
+			v.Set, v.Progress.Walked, v.Progress.Durable))
 	}
 }

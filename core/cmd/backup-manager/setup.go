@@ -196,13 +196,20 @@ func logStartup(ctx context.Context, l *obs.Logger, info app.VersionInfo) {
 // for a non-zero exit than a single artifact this cycle's own pipeline
 // quarantined, and this function must not let that distinction matter.
 func cycleFailed(v app.CycleVerdict) bool {
-	return v.Systemic || v.ReconcileErrors > 0 || v.FailedArtifacts > 0 || v.Progress.NothingGotThrough()
+	return v.Systemic || v.ReconcileErrors > 0 || v.FailedArtifacts > 0 || v.NothingGotThrough()
 }
 
 // cycleExit turns one cycle's per-backup-set verdicts into the exit
 // status `run` and `fetch` both return, and prints the reason for any
 // non-zero one it can name. Both commands go through this single
 // function so neither can grow its own idea of what a failed cycle is.
+//
+// Callers pass os.Stderr, deliberately. This binary's stdout is FR-23's
+// newline-delimited JSON event stream (logger, above, writes there), and
+// a sentence in the middle of it would break every consumer that parses
+// the stream a line at a time. `fetch` already prints its own human
+// summary to stdout, which predates this and is not worth changing, but
+// nothing new goes there.
 func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 	code := 0
 	for _, v := range verdicts {
@@ -210,9 +217,9 @@ func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 			continue
 		}
 		code = 1
-		if v.Progress.NothingGotThrough() {
-			fmt.Fprintf(w, "backup-manager: %s got nothing through this cycle: %d walked, %d got through\n",
-				v.Set, v.Progress.Walked, v.Progress.Advanced)
+		if v.NothingGotThrough() {
+			fmt.Fprintf(w, "backup-manager: %s backed nothing up this cycle: %d walked, %d got through\n",
+				v.Set, v.Progress.Walked, v.Progress.Durable)
 		}
 	}
 	return code

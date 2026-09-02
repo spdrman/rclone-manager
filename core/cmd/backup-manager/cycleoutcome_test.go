@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,18 +87,33 @@ func TestRun_ExitsNonZeroWhenNothingGotThrough(t *testing.T) {
 	cfg := writeCycleConfig(t, true, capacityRefusesEverything)
 
 	var got int
-	out := captureStdout(t, func() {
-		got = run([]string{"run", "--config", cfg.path})
+	var stdout string
+	stderr := captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			got = run([]string{"run", "--config", cfg.path})
+		})
 	})
 
 	if got == 0 {
-		t.Errorf("run exit code = 0, want non-zero: one artifact was waiting on the remote, the cycle refused to transfer it, and nothing was backed up.\nstdout:\n%s", out)
+		t.Errorf("run exit code = 0, want non-zero: one artifact was waiting on the remote, the cycle refused to transfer it, and nothing was backed up.\nstderr:\n%s", stderr)
 	}
 	if _, err := os.Stat(filepath.Join(cfg.localDir, "backup.dump")); err == nil {
 		t.Fatalf("precondition: %s exists; this test only means anything if nothing was actually backed up", filepath.Join(cfg.localDir, "backup.dump"))
 	}
-	if !strings.Contains(out, "1 walked") || !strings.Contains(out, "0 got through") {
-		t.Errorf("run's non-zero exit does not name how many artifacts were walked and how many got through.\nstdout:\n%s", out)
+	if !strings.Contains(stderr, "1 walked") || !strings.Contains(stderr, "0 got through") {
+		t.Errorf("run's non-zero exit does not name how many artifacts were walked and how many got through.\nstderr:\n%s", stderr)
+	}
+	// stdout is the FR-23 event stream and nothing else: every line of it
+	// has to stay parseable as JSON, or the sentence above breaks every
+	// consumer reading that stream a line at a time.
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		if line == "" {
+			continue
+		}
+		var probe map[string]any
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			t.Errorf("stdout carries a line that is not JSON: %q", line)
+		}
 	}
 }
 
@@ -108,15 +124,17 @@ func TestRun_FetchExitsNonZeroWhenNothingGotThrough(t *testing.T) {
 	cfg := writeCycleConfig(t, true, capacityRefusesEverything)
 
 	var got int
-	out := captureStdout(t, func() {
-		got = run([]string{"fetch", "--config", cfg.path, "--source", "production", "--backup-set", "postgres-primary"})
+	stderr := captureStderr(t, func() {
+		captureStdout(t, func() {
+			got = run([]string{"fetch", "--config", cfg.path, "--source", "production", "--backup-set", "postgres-primary"})
+		})
 	})
 
 	if got == 0 {
-		t.Errorf("fetch exit code = 0, want non-zero for the same cycle `run` fails.\nstdout:\n%s", out)
+		t.Errorf("fetch exit code = 0, want non-zero for the same cycle `run` fails.\nstderr:\n%s", stderr)
 	}
-	if !strings.Contains(out, "1 walked") || !strings.Contains(out, "0 got through") {
-		t.Errorf("fetch's non-zero exit does not name how many artifacts were walked and how many got through.\nstdout:\n%s", out)
+	if !strings.Contains(stderr, "1 walked") || !strings.Contains(stderr, "0 got through") {
+		t.Errorf("fetch's non-zero exit does not name how many artifacts were walked and how many got through.\nstderr:\n%s", stderr)
 	}
 }
 
@@ -213,14 +231,15 @@ func TestRun_ExitsNonZeroWhenTheJournalRecordedAFailureTheCycleDidNotSee(t *test
 // another got nothing through.
 func TestCycleExit_Matrix(t *testing.T) {
 	barren := app.CycleVerdict{Set: "production/postgres-primary", Progress: app.CycleProgress{Walked: 3}}
-	partial := app.CycleVerdict{Set: "production/postgres-primary", Progress: app.CycleProgress{Walked: 3, Advanced: 2}}
+	partial := app.CycleVerdict{Set: "production/postgres-primary", Progress: app.CycleProgress{Walked: 3, Durable: 2}}
 	quiet := app.CycleVerdict{Set: "production/postgres-primary"}
 
 	cases := []struct {
-		name     string
-		verdicts []app.CycleVerdict
-		want     int
-		wantSays string
+		name            string
+		verdicts        []app.CycleVerdict
+		want            int
+		wantSays        string
+		wantSilentAbout string
 	}{
 		{
 			name:     "nothing got through",
@@ -240,7 +259,7 @@ func TestCycleExit_Matrix(t *testing.T) {
 		},
 		{
 			name:     "an artifact ended failed",
-			verdicts: []app.CycleVerdict{{Set: "production/postgres-primary", FailedArtifacts: 1, Progress: app.CycleProgress{Walked: 2, Advanced: 1}}},
+			verdicts: []app.CycleVerdict{{Set: "production/postgres-primary", FailedArtifacts: 1, Progress: app.CycleProgress{Walked: 2, Durable: 1}}},
 			want:     1,
 		},
 		{
@@ -264,6 +283,15 @@ func TestCycleExit_Matrix(t *testing.T) {
 			verdicts: []app.CycleVerdict{quiet, {Set: "production/redis"}},
 			want:     0,
 		},
+		{
+			// The arithmetic qualifies and saying so would be wrong: this
+			// cycle walked nothing because it never reached its pipeline,
+			// and the failure it actually hit is already reported.
+			name:            "a cycle that stopped early is not called barren",
+			verdicts:        []app.CycleVerdict{{Set: "production/postgres-primary", Systemic: true, Progress: app.CycleProgress{Walked: 3}}},
+			want:            1,
+			wantSilentAbout: "got nothing through",
+		},
 	}
 
 	for _, tc := range cases {
@@ -275,6 +303,9 @@ func TestCycleExit_Matrix(t *testing.T) {
 			}
 			if tc.wantSays != "" && !strings.Contains(out.String(), tc.wantSays) {
 				t.Errorf("cycleExit printed %q, want it to contain %q", out.String(), tc.wantSays)
+			}
+			if tc.wantSilentAbout != "" && strings.Contains(out.String(), tc.wantSilentAbout) {
+				t.Errorf("cycleExit printed %q, which must not mention %q", out.String(), tc.wantSilentAbout)
 			}
 			if tc.want == 0 && out.Len() != 0 {
 				t.Errorf("cycleExit printed %q for a cycle that did not fail; a healthy cycle must say nothing", out.String())
