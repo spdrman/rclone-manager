@@ -52,6 +52,12 @@ parsing prose.
 | 20 | an install is already here and `--if-installed=refuse` was given |
 | 30 | a Docker command failed |
 | 31 | the stack started but did not reach the state that counts as installed |
+| 40 | sudo has no terminal to prompt on |
+| 41 | the sudo password was not accepted |
+| 42 | this account may not run that as root |
+| 43 | bridge networking is broken and was not repaired (`--fix-network=never`, or `diagnose`) |
+| 44 | the correction was applied and a bridged container still cannot originate traffic |
+| 45 | bridge networking is broken and the responsible rule could not be identified |
 
 Compose v1 is refused rather than tolerated because the deployment gates the Web UI on
 `depends_on: condition: service_healthy`, and v1 ignores that. It would appear to work
@@ -127,21 +133,113 @@ Python 3.11.2, SSH account uid 1001 in the `docker` group with no passwordless s
 Install, engine liveness, Web UI, restart survival, converge-on-rerun and uninstall all
 behave as documented there.
 
-**A host prerequisite this installer cannot fix.** That same NAS cannot pass
-container-originated TCP. Containers receive connections from the host perfectly, and
-cannot open one to a peer on their own bridge, to their own bridge gateway, or to the
-internet; a container in the host network namespace has full connectivity, and so does
-the host. That is a Docker bridge networking fault on the machine, not a property of
-this deployment, and it affects every bridged container on it.
+**A host prerequisite the installer now repairs.** That same NAS could not pass
+container-originated TCP. Containers received connections from the host perfectly and
+could not open one to a peer on their own bridge, to their own bridge gateway, or to
+the internet; a container in the host network namespace had full connectivity, and so
+did the host.
 
 It matters twice over. The Web UI reaches the engine over exactly that hop, so the page
-loads and every API call hangs. And the engine reaches an SFTP source over the same
-hop, so no backup can run at all. The installer now refuses with exit 31 rather than
-reporting success, and names the one-line probe that shows the fault:
+loaded and every API call hung. And the engine reaches an SFTP source over the same hop,
+so no backup could run at all. So the installer diagnoses it and fixes it (issue #271).
+
+### How it decides what is wrong
+
+By measurement, never by reading the ruleset and reasoning about it. Two earlier
+attempts to diagnose this same host by inference got it wrong in two different
+directions: one concluded `iptables` and `nft` were missing when they were at `/sbin`
+and the probe's PATH was not, and one blamed forwarding and NAT when half the fault was
+in `INPUT`. So:
+
+1. Ask what a bridged container can actually do. No root needed, so an operator who
+   declines the escalation still gets an answer. Two separate questions, because they
+   traverse different chains: reaching the bridge gateway is `INPUT` (delivered locally
+   on the bridge, never forwarded, never NAT'd) and reaching an external endpoint is
+   `FORWARD` plus NAT.
+2. If either fails, read every DROP rule's counter, generate exactly that traffic, and
+   read them again. **The rule whose counter moved by the number of packets sent is the
+   rule doing it**, and that is what gets reported. A remediation that cannot name the
+   rule it corrects is a guess.
+
+Every privileged tool is invoked by absolute path off an explicit privileged PATH.
+Nothing concludes "absent" from a bare name lookup.
+
+### What it does about it
+
+Least invasive first, and the measurement chooses. If Docker's own chains are **missing**,
+the host firewall probably started after `dockerd` and flushed them, and `systemctl
+restart docker` makes Docker reinstall them. That is one reversible command, and a
+positive result says this is a boot-ordering problem rather than a rule problem. When
+the chains are all present, a restart reinstalls what is already there, so it is skipped
+rather than tried out of ritual.
+
+Otherwise, four scoped rules:
 
 ```
-docker run --rm --network <project>_internal alpine wget -T5 -O- http://rclone-manager:8080/health/live
+iptables -I DOCKER-USER 1 -i docker0 -m comment --comment rclone-manager-bridge -j RETURN
+iptables -I DOCKER-USER 1 -i br-+    -m comment --comment rclone-manager-bridge -j RETURN
+iptables -I INPUT       1 -i docker0 -m comment --comment rclone-manager-bridge -j ACCEPT
+iptables -I INPUT       1 -i br-+    -m comment --comment rclone-manager-bridge -j ACCEPT
 ```
 
-If that hangs, fix the host before going further. Nothing in this deployment can work
-around it.
+`RETURN` in `DOCKER-USER`, not `ACCEPT`, and the difference matters. An `ACCEPT` there
+ends the `FORWARD` traversal and takes Docker's inter-network isolation with it, which
+is the exact property this deployment rests on: the engine is reachable only from the
+Web UI because they share a network nothing else joins. `RETURN` skips whatever the host
+firewall jumped to from inside `DOCKER-USER` and hands the decision back to Docker's own
+chains, isolation included.
+
+`br-+` is iptables' wildcard for Docker's user-defined bridges, which are always
+`br-<12 hex>`. It keeps the hyphen so it cannot match a host bridge called `br0`.
+
+### The safety rules it holds itself to
+
+This edits a firewall on a machine reachable only over SSH.
+
+- Inserts only. No `-F`, no `-P`, no `iptables-restore`, no `-X`, no `-Z`. There is a
+  test asserting each of those strings is absent from every generated script.
+- Every rule is scoped to a Docker bridge interface. Never a blanket ACCEPT.
+- Idempotent by construction: each line is `iptables -C … || iptables -I …`.
+- Reversible: every rule carries the `rclone-manager-bridge` comment, and
+  `network-undo` removes exactly those and nothing else.
+- The host's own rules are never touched, replaced or reordered.
+- A healthy host is a no-op and is never asked for a password.
+
+### Sudo
+
+One escalation, announced before it happens, with the exact commands printed first. The
+password is read by `sudo` from the terminal; this installer never sees it, never stores
+it, never puts it in an environment variable, never passes it on a command line and
+never writes it anywhere. Three distinct failures with three exit codes: no terminal
+(40), wrong password (41), not permitted (42).
+
+Worth stating plainly: on a host where this account is in the `docker` group, it can
+already obtain root by running a privileged container, so the password is not what
+stands between this installer and the firewall. What it buys is that the escalation is
+explicit, announced and auditable rather than arriving quietly through the container
+runtime.
+
+### Persistence, which is a decision rather than an oversight
+
+**These rules do not survive a reboot.** They are raw `iptables` inserts, and a host
+firewall that rewrites its own ruleset on boot will drop them, as will any later rewrite.
+After a reboot the containers come back and the hop is broken again, silently, because
+nothing re-runs the installer.
+
+The installer says so at the end of every run that changes anything, and `status`
+re-checks the hop with no root and no password so the loss is discoverable:
+
+```
+bridge networking: ok (gateway yes, egress yes)
+```
+
+The durable fix belongs in the host firewall's own configuration, which is the host
+administrator's to make. The installer does not write into it, because a NAS appliance's
+firewall configuration is not something an application installer should be editing
+behind its owner's back.
+
+### Verified, not assumed
+
+After remediating, the installer re-runs the same probes and refuses with exit 44 if
+they still fail. This is the same discipline that turned "the Web UI answered 200" into
+"the Web UI reached the engine".

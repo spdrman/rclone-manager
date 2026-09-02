@@ -65,11 +65,29 @@ installer that cannot run. Nothing here imports outside the standard
 library, and every external tool it needs (docker, docker compose) is
 checked for before anything is created.
 
+# Bridge networking
+
+The installer also checks whether a bridged container on this host can
+originate traffic at all, and repairs it when it cannot (issue #271). That
+is not a general-purpose firewall tool: it is here because the Web UI
+reaches the engine over exactly that hop, and so does every SFTP transfer,
+so a host that cannot pass it cannot run this product.
+
+It diagnoses by measurement rather than by reading: counters, then the
+failing traffic, then counters again, and it names the rule whose counter
+moved. Remediation escalates through one announced `sudo` call, inserts
+only interface-scoped rules, never flushes anything, never changes a chain
+policy, is idempotent and is reversible with `network-undo`. A host whose
+bridge networking already works is a no-op and is never asked for a
+password. `--fix-network=never` skips all of it.
+
 Usage:
     python3 install_docker_host.py preflight  [options]
     python3 install_docker_host.py install    [options]
     python3 install_docker_host.py status     [options]
     python3 install_docker_host.py uninstall  [options]
+    python3 install_docker_host.py network-doctor [options]
+    python3 install_docker_host.py network-undo   [options]
 
 Run --help for the full flag list.
 """
@@ -115,6 +133,17 @@ EXIT_PREREQ_PAYLOAD = 19
 EXIT_EXISTING_INSTALL = 20
 EXIT_RUNTIME = 30
 EXIT_VERIFY = 31
+
+# Bridge networking (issue #271). Its own block, because these are the only
+# codes that can be reached after a password prompt, and an operator reading
+# a wrapper's exit status should be able to tell "I could not ask you" from
+# "you said no" from "the host would not let you".
+EXIT_SUDO_NO_TTY = 40
+EXIT_SUDO_WRONG_PASSWORD = 41
+EXIT_SUDO_NOT_PERMITTED = 42
+EXIT_NETWORK_BROKEN = 43
+EXIT_NETWORK_STILL_BROKEN = 44
+EXIT_NETWORK_UNDIAGNOSED = 45
 
 # The architectures the release manifest claims. Anything else has no
 # image, and finding that out from a `docker compose up` failure three
@@ -167,13 +196,22 @@ class Refusal(Exception):
 # ---------------------------------------------------------------------
 
 
-def run(argv, *, check=True, timeout=None, cwd=None, env=None):
+def run(argv, *, check=True, timeout=None, cwd=None, env=None, input=None):
     """Run a command and keep BOTH streams.
 
     A subprocess whose stderr is discarded is how an installer reports
     success on a failed step, so nothing here uses DEVNULL and every
     non-zero exit that matters is turned into a Refusal carrying what the
     command actually said.
+
+    `input`, when given, is text delivered on the subprocess's stdin, the
+    same as `subprocess.run(..., input=...)`. It exists so a caller that
+    needs to pipe a script into a command's stdin - `Sudo.run_script()`'s
+    `/bin/sh -s` chief among them - gets the SAME FileNotFoundError and
+    TimeoutExpired translation every other call in this file gets, rather
+    than calling subprocess.run directly and letting a hang on a live,
+    SSH-only, sudo-escalated host surface as a raw traceback instead of a
+    coded Refusal.
     """
     try:
         proc = subprocess.run(
@@ -196,6 +234,7 @@ def run(argv, *, check=True, timeout=None, cwd=None, env=None):
             timeout=timeout,
             cwd=cwd,
             env=env,
+            input=input,
         )
     except FileNotFoundError as exc:
         raise Refusal(
@@ -667,6 +706,50 @@ def detect_existing(args):
     return payload, containers
 
 
+def _other_containers_from_ps_ndjson(raw: str, project: str):
+    """Every entry in a `docker ps --format json` NDJSON stream that is
+    NOT part of `project`, as (name, image) pairs.
+
+    Split out from other_running_containers() so the filtering logic - by
+    the same com.docker.compose.project label detect_existing() already
+    keys off - is a fact this test suite can pin against canned NDJSON,
+    the same way _bridge_interfaces_from_network_inspect() is pinned
+    against a canned network inspect array.
+    """
+    others = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if f"com.docker.compose.project={project}" in (entry.get("Labels") or ""):
+            continue
+        others.append((entry.get("Names", "?"), entry.get("Image", "?")))
+    return others
+
+
+def other_running_containers(project: str):
+    """Every running container NOT part of `project`, as (name, image)
+    pairs, or None if `docker ps` itself could not be asked.
+
+    Exists so restarting the Docker daemon - which restarts EVERY
+    container on the host, not just this project's - can say what else
+    it is about to disrupt before it does it. The platforms this
+    installer targets (CasaOS, TrueNAS, Portainer, Unraid, ZimaOS, OMV)
+    are appliances whose whole point is running many unrelated
+    workloads, so "install just this one backup tool" and "bounce every
+    other container on this machine" are not the same ask, and an
+    operator is owed the difference.
+    """
+    proc = run(["docker", "ps", "--format", "json"], check=False, timeout=60)
+    if proc.returncode != 0:
+        return None
+    return _other_containers_from_ps_ndjson(proc.stdout, project)
+
+
 def stage_payload(args) -> None:
     args.prefix.mkdir(parents=True, exist_ok=True)
     for path in args.host_dirs.values():
@@ -785,6 +868,15 @@ def cmd_install(args) -> int:
         say(f"==> An install is already here ({len(containers)} container(s), {len(running)} running). "
             f"Converging it in place; state, config and backups are not touched.")
 
+    # Before anything is staged, and before the stack comes up, because a
+    # host that cannot pass container-originated traffic fails the Web-UI
+    # to engine check at the end for a reason no amount of retrying fixes
+    # (#271). A healthy host is a no-op here and never asks for a password.
+    if args.fix_network != "never":
+        diagnose_and_fix(args, args.probe_network)
+    else:
+        say("==> --fix-network=never: not checking Docker bridge networking, and touching no firewall.")
+
     say(f"==> Staging the deployment under {args.prefix}")
     stage_payload(args)
 
@@ -875,6 +967,702 @@ def cmd_install(args) -> int:
     return EXIT_OK
 
 
+# ---------------------------------------------------------------------
+# Docker bridge networking: diagnose it by measurement, then repair it
+# ---------------------------------------------------------------------
+#
+# Issue #271. The installer used to detect that a host could not pass
+# container-originated traffic and stop there, telling the operator the
+# machine could not run this deployment. That was honest and it was not
+# enough: everything needed to find the exact rule and correct it is
+# available, and on the machine this was built for the correction is two
+# inserted rules.
+#
+# Three things an earlier diagnosis of the same host got wrong, all three
+# encoded below as rules this code follows rather than as prose.
+#
+#   1. It reported iptables and nft as "not found in PATH". They were at
+#      /sbin, and the probe ran as a non-root account whose PATH excludes
+#      /sbin, so the whole firewall section of that report was empty for a
+#      PATH reason and that section held the answer. NOTHING here concludes
+#      "absent" from a bare name: find_tool searches an explicit privileged
+#      PATH and returns an absolute path or nothing.
+#   2. It blamed forwarding and NAT. A container cannot ping its own bridge
+#      gateway, and that packet is delivered locally on the bridge: never
+#      forwarded, never NAT'd. So INPUT is in scope too, and a fix aimed
+#      only at FORWARD leaves half the fault standing. Both chains are
+#      measured, separately.
+#   3. It searched the plumbing. The veth is enslaved and up, the neighbour
+#      table has the container MACs, ip_forward is 1. ARP resolves, so
+#      frames cross and IP packets are dropped afterwards. That is a
+#      netfilter rule, and naming it is the whole job.
+#
+# WHY COUNTERS. There are several plausible culprits here (a missing
+# DOCKER chain, a DOCKER-USER DROP, a host firewall jumped to ahead of
+# Docker's rules, a policy of DROP with no matching ACCEPT) and they need
+# different corrections. Choosing between them by reading the ruleset is
+# inference. Reading every DROP rule's counter, generating exactly the
+# traffic that fails, and reading them again is measurement: the rule whose
+# counter moved by the number of packets sent is the rule doing it. A
+# remediation that cannot name the rule it corrects is a guess, and a guess
+# applied to a firewall over SSH is how somebody loses a NAS.
+
+# The PATH a privileged tool actually lives on. Explicit, because the
+# account this runs as very likely does not have /sbin.
+PRIVILEGED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Every rule this installer adds carries this comment, which is what makes
+# the set idempotent (check before insert) and reversible (delete by
+# comment). Nothing else in the ruleset is ever touched.
+RULE_TAG = "rclone-manager-bridge"
+
+# docker0 is the default bridge's interface, unconditionally: it is a
+# hardcoded name in the Docker daemon rather than something derived from a
+# network's id, so nothing enumerated below ever needs to produce it.
+#
+# There used to be a second entry here, the iptables wildcard `br-+`,
+# standing in for every user-defined bridge (which Docker names
+# `br-<12 hex>`). `+` is iptables' own PREFIX wildcard, not an
+# exact-suffix guard: `-i br-+` matches ANY interface whose name starts
+# with `br-`, not only the twelve-hex-character ones Docker's bridge
+# driver creates. A host bridge an operator named `br-lan` (common on
+# router and embedded platforms, and not implausible on the NAS class
+# this installer targets) would get the same DOCKER-USER RETURN and INPUT
+# ACCEPT this class installs for Docker's own bridges: a real widening of
+# what INPUT accepts and what DOCKER-USER lets skip isolation, on an
+# interface this installer knows nothing about. BridgeDoctor now asks
+# Docker for the exact interfaces instead (see bridge_interfaces()
+# below), and every rule names one, never a pattern.
+DOCKER_DEFAULT_BRIDGE = "docker0"
+
+# The chains Docker installs. Their ABSENCE is the one finding that points
+# at a restart rather than at a rule, so it is checked as its own question.
+DOCKER_CHAINS = ("DOCKER", "DOCKER-USER", "DOCKER-ISOLATION-STAGE-1")
+
+# Docker's own chain in the NAT table, separate from the filter-table
+# DOCKER chain above (same name, different table). diagnose_and_fix()
+# used to print "the NAT rules are intact" on the strength of the filter
+# table alone, which is a claim about a table it never read.
+DOCKER_NAT_CHAINS = ("DOCKER",)
+
+
+def find_tool(name: str):
+    """Absolute path to a privileged tool, or None.
+
+    Never `shutil.which(name)` on the inherited PATH alone: that is the
+    exact mistake that made an earlier diagnosis of this host report an
+    empty firewall.
+    """
+    found = shutil.which(name, path=PRIVILEGED_PATH)
+    if found:
+        return found
+    return shutil.which(name)
+
+
+class Sudo:
+    """One escalation, announced before it happens, and a password that
+    exists only in the terminal.
+
+    The password is never written to disk, never put in an environment
+    variable, never passed on a command line and never logged. sudo reads
+    it from /dev/tty itself; this process never sees it. The script sudo
+    runs arrives on sudo's stdin, which is why the password cannot come
+    from there and must come from a terminal, and why "no TTY" is a
+    first-class refusal rather than a mysterious failure.
+
+    A note worth writing down rather than leaving implicit: on a host
+    where this account is in the `docker` group, it can already obtain
+    root by running a privileged container, so asking for a password is
+    not what stands between this installer and the firewall. What it
+    buys is that the escalation is explicit, announced, and auditable
+    instead of quietly arriving through the container runtime. That is
+    worth the prompt.
+    """
+
+    def __init__(self, sudo_path=None) -> None:
+        self.sudo = sudo_path or find_tool("sudo")
+        self._passwordless = None
+
+    def available(self) -> bool:
+        return self.sudo is not None
+
+    def passwordless(self) -> bool:
+        """True when sudo needs no password at all. A read-only probe:
+        `sudo -n true` never prompts and never runs anything else.
+
+        Through run() rather than a direct subprocess.run, so a hang here
+        gets the same coded Refusal every other subprocess call in this
+        file gets instead of a raw TimeoutExpired traceback.
+        """
+        if self._passwordless is None:
+            if not self.available():
+                self._passwordless = False
+            else:
+                proc = run([self.sudo, "-n", "true"], check=False, timeout=30)
+                self._passwordless = proc.returncode == 0
+        return self._passwordless
+
+    def classify(self, stderr: str) -> int:
+        low = (stderr or "").lower()
+        # Three wordings for the same problem, and sudo picks between them
+        # by version and by how it was invoked. The one this was first seen
+        # against says "a terminal is required to read the password", which
+        # contains none of the words the other two do.
+        if ("no tty present" in low or "askpass" in low
+                or "terminal is required" in low or "no askpass" in low):
+            return EXIT_SUDO_NO_TTY
+        if "not in the sudoers" in low or "not allowed to execute" in low or "may not run" in low:
+            return EXIT_SUDO_NOT_PERMITTED
+        if "incorrect password" in low or "sorry, try again" in low or "authentication failure" in low:
+            return EXIT_SUDO_WRONG_PASSWORD
+        return EXIT_RUNTIME
+
+    def run_script(self, script: str, *, purpose: str, timeout=300):
+        """Run a shell script as root through exactly one sudo call.
+
+        `script` reaches sudo on stdin, so it is never an argument and
+        never appears in the process table. Every command inside it is
+        printed first, in full, because an operator being asked for a
+        password is owed the list of what it will be spent on.
+
+        Through run() rather than a direct subprocess.run: this is the
+        one path that escalates to root, on a host reachable only over
+        the SSH session the operator is currently using, inserting
+        firewall rules. A `sudo -p ... /bin/sh -s` that hangs for the
+        full timeout used to raise a raw TimeoutExpired here instead of
+        one of this file's own coded exit statuses, the only subprocess
+        call in it that did. check=False because the returncode-specific
+        classify() below needs proc.stderr even on failure, which
+        run()'s own check=True Refusal would have consumed first.
+        """
+        if not self.available():
+            raise Refusal(
+                EXIT_SUDO_NOT_PERMITTED,
+                "sudo is not on this host, and this step needs root.",
+                "Run the installer with --fix-network=never to skip it, or apply the printed commands "
+                "yourself as root.",
+            )
+        say("")
+        say(f"==> {purpose}")
+        say("    This needs root. Exactly these commands will run, and nothing else:")
+        for line in script.strip().splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                say(f"      {stripped}")
+        if self.passwordless():
+            say("    sudo needs no password on this host.")
+        else:
+            say("    sudo will prompt on this terminal. The password is read by sudo itself: this")
+            say("    installer never sees it, never stores it and never writes it anywhere.")
+        say("")
+        proc = run(
+            [self.sudo, "-p", "[sudo] password for %p (rclone-manager installer): ", "/bin/sh", "-s"],
+            input=script, check=False, timeout=timeout,
+        )
+        if proc.returncode != 0:
+            code = self.classify(proc.stderr)
+            detail = (proc.stderr or proc.stdout).strip()
+            remedies = {
+                EXIT_SUDO_NO_TTY: (
+                    "sudo has no terminal to prompt on. Run the installer from an interactive shell "
+                    "(`ssh -t host ...` if you are driving it remotely), or run it with "
+                    "--fix-network=never and apply the printed commands yourself."
+                ),
+                EXIT_SUDO_NOT_PERMITTED: (
+                    "This account is not allowed to run that as root. Ask whoever administers the host, "
+                    "or run with --fix-network=never and apply the printed commands yourself."
+                ),
+                EXIT_SUDO_WRONG_PASSWORD: (
+                    "The password was not accepted. Nothing was changed. Run the installer again."
+                ),
+            }
+            raise Refusal(code, f"the privileged step did not run:\n{detail}",
+                          remedies.get(code, "Nothing was changed."))
+        return proc
+
+
+class Ruleset:
+    """A parsed iptables filter table, as counters rather than as prose."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.rules = {}   # (chain, num) -> dict
+        self.chains = set()
+        self.policies = {}
+        chain = None
+        for line in text.splitlines():
+            if line.startswith("Chain "):
+                parts = line.split()
+                chain = parts[1]
+                self.chains.add(chain)
+                if "(policy" in line:
+                    self.policies[chain] = parts[3].rstrip(")")
+                continue
+            fields = line.split()
+            if not fields or not fields[0].isdigit() or chain is None:
+                continue
+            self.rules[(chain, int(fields[0]))] = {
+                "chain": chain,
+                "num": int(fields[0]),
+                "packets": _int_or_zero(fields[1]),
+                "target": fields[3] if len(fields) > 3 else "",
+                "text": " ".join(fields),
+            }
+
+    def drops(self):
+        return {k: v for k, v in self.rules.items() if v["target"] == "DROP"}
+
+
+def _int_or_zero(value: str) -> int:
+    """iptables abbreviates counters (12M, 494K). A parse that silently
+    returned 0 for those would make every abbreviated rule look idle, and
+    the busiest DROP on a NAS is exactly the one that gets abbreviated."""
+    value = value.strip()
+    scale = {"K": 1000, "M": 1000000, "G": 1000000000}
+    if value and value[-1] in scale:
+        try:
+            return int(float(value[:-1]) * scale[value[-1]])
+        except ValueError:
+            return 0
+    try:
+        return int(value)
+    except ValueError:
+        return 0
+
+
+def _bridge_interfaces_from_network_inspect(raw: str) -> list[str]:
+    """The exact interface name Docker gave each bridge network in a
+    `docker network inspect <id> [<id> ...]` JSON array.
+
+    Split out from the method that calls docker so the parsing itself is
+    a fact this test suite can pin against a canned array, the same way
+    Ruleset is pinned against a canned iptables dump rather than a live
+    ruleset.
+
+    The default bridge network is always named "bridge" and its interface
+    is always "docker0" - a name the daemon hardcodes rather than derives,
+    so it is matched by name here rather than by the derivation below.
+    Every other bridge network either carries a custom
+    `com.docker.network.bridge.name` option, or Docker names its
+    interface `br-` followed by the network id's first twelve characters,
+    which is the same convention the iptables wildcard this replaces used
+    to trust blindly.
+    """
+    ifaces = {DOCKER_DEFAULT_BRIDGE}
+    for net in json.loads(raw):
+        if net.get("Name") == "bridge":
+            continue
+        name = (net.get("Options") or {}).get("com.docker.network.bridge.name")
+        if not name:
+            net_id = net.get("Id", "")
+            if len(net_id) >= 12:
+                name = f"br-{net_id[:12]}"
+        if name:
+            ifaces.add(name)
+    return sorted(ifaces)
+
+
+class BridgeDoctor:
+    """Diagnose, and if asked, repair, Docker bridge networking.
+
+    Deliberately not a Preflight check, despite asking an overlapping
+    "must this hold before we proceed" question. Preflight's checks are
+    pure: they read and refuse, and nothing about running one changes the
+    host. This class's repair path does the opposite on purpose - it
+    escalates through sudo and mutates the host firewall - so folding it
+    into Preflight would blur the one property that makes Preflight safe
+    to run speculatively: that running it is never itself the risk.
+    """
+
+    def __init__(self, args, sudo=None) -> None:
+        self.args = args
+        self.sudo = sudo or Sudo()
+        self.iptables = find_tool("iptables")
+        self.findings = []
+        # Discovered lazily and memoized by bridge_interfaces() below.
+        # Tests set this directly, the same way they override self.iptables,
+        # so rule_specs() never needs a live Docker daemon to be asserted
+        # against.
+        self._bridge_interfaces = None
+
+    def bridge_interfaces(self) -> list[str]:
+        """Every interface that is actually one of Docker's own bridges on
+        this host right now, asked of Docker rather than trusted from an
+        iptables wildcard (see DOCKER_DEFAULT_BRIDGE's comment for why
+        that mattered).
+        """
+        if self._bridge_interfaces is None:
+            ls = run(["docker", "network", "ls", "--filter", "driver=bridge", "-q"],
+                     check=False, timeout=60)
+            if ls.returncode != 0:
+                raise Refusal(
+                    EXIT_NETWORK_UNDIAGNOSED,
+                    "could not list this host's Docker networks, so the exact bridge "
+                    f"interfaces to scope a firewall rule to cannot be known:\n"
+                    f"{(ls.stderr or ls.stdout).strip()}",
+                    "Check the Docker daemon is responsive, or run with --fix-network=never.",
+                )
+            ids = ls.stdout.split()
+            if not ids:
+                self._bridge_interfaces = [DOCKER_DEFAULT_BRIDGE]
+            else:
+                inspect = run(["docker", "network", "inspect", *ids], check=False, timeout=60)
+                if inspect.returncode != 0:
+                    raise Refusal(
+                        EXIT_NETWORK_UNDIAGNOSED,
+                        f"could not inspect this host's bridge networks:\n"
+                        f"{(inspect.stderr or inspect.stdout).strip()}",
+                        "Check the Docker daemon is responsive, or run with --fix-network=never.",
+                    )
+                try:
+                    self._bridge_interfaces = _bridge_interfaces_from_network_inspect(inspect.stdout)
+                except json.JSONDecodeError as exc:
+                    raise Refusal(
+                        EXIT_NETWORK_UNDIAGNOSED,
+                        f"docker network inspect did not print JSON this installer could parse: {exc}",
+                        "Check the Docker daemon is responsive, or run with --fix-network=never.",
+                    ) from exc
+        return self._bridge_interfaces
+
+    # -- reading the ruleset ------------------------------------------
+
+    def _iptables_dump(self):
+        """The whole filter table with counters, read as root.
+
+        Read-only, but still root: iptables refuses an unprivileged
+        reader outright ("Permission denied (you must be root)"), which
+        is not something a fallback can work around.
+        """
+        script = f"{self.iptables} -w 5 -L -n -v --line-numbers\n"
+        proc = self.sudo.run_script(script, purpose="Read the firewall ruleset (read-only)")
+        return Ruleset(proc.stdout)
+
+    def _nat_dump(self):
+        script = f"{self.iptables} -w 5 -t nat -L -n -v --line-numbers\n"
+        proc = self.sudo.run_script(script, purpose="Read the NAT table (read-only)")
+        return Ruleset(proc.stdout)
+
+    # -- the probes, which need no root -------------------------------
+
+    def probe(self, network: str):
+        """What a bridged container can actually do. No root anywhere.
+
+        Two questions, deliberately separate, because they traverse
+        different chains and an earlier diagnosis of this host conflated
+        them: reaching the bridge gateway is INPUT (locally delivered on
+        the bridge, never forwarded, never NAT'd), and reaching an
+        external endpoint is FORWARD plus NAT.
+        """
+        image = self.args.probe_image
+        gateway = self._gateway_of(network)
+        script = (
+            f"ping -c 3 -W 2 {gateway} >/dev/null 2>&1; echo \"gateway_rc=$?\"; "
+            f"timeout 6 nc -z {self.args.probe_host} {self.args.probe_port} >/dev/null 2>&1; "
+            f"echo \"egress_rc=$?\""
+        )
+        proc = run(["docker", "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
+                    image, "-c", script], check=False, timeout=120)
+        out = proc.stdout + proc.stderr
+        result = {"gateway": None, "egress": None, "gateway_ip": gateway, "raw": out.strip()}
+        for line in out.splitlines():
+            if line.startswith("gateway_rc="):
+                result["gateway"] = line.split("=", 1)[1].strip() == "0"
+            if line.startswith("egress_rc="):
+                result["egress"] = line.split("=", 1)[1].strip() == "0"
+        return result
+
+    def _gateway_of(self, network: str) -> str:
+        proc = run(["docker", "network", "inspect", network,
+                    "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
+                   check=False, timeout=60)
+        gateway = proc.stdout.strip()
+        return gateway or "172.17.0.1"
+
+    def ensure_probe_image(self) -> None:
+        proc = run(["docker", "image", "inspect", self.args.probe_image], check=False, timeout=60)
+        if proc.returncode == 0:
+            return
+        say(f"  ..   pulling the probe image {self.args.probe_image}")
+        pull = run(["docker", "pull", self.args.probe_image], check=False, timeout=600)
+        if pull.returncode != 0:
+            raise Refusal(
+                EXIT_NETWORK_UNDIAGNOSED,
+                f"the probe image {self.args.probe_image} is not on this host and could not be pulled:\n"
+                + (pull.stderr or pull.stdout).strip(),
+                "The probe needs a container with a shell, ping and nc. Point --probe-image at one "
+                "this host already has, or run with --fix-network=never to skip the network check "
+                "entirely.",
+            )
+
+    # -- measurement ---------------------------------------------------
+
+    def measure(self, network: str):
+        """Counters, then the failing traffic, then counters again.
+
+        The rule whose counter moved is the rule doing it. Everything
+        else in this class is presentation.
+        """
+        before = self._iptables_dump()
+        say("==> Generating the traffic that fails, so the counters can say which rule stops it")
+        result = self.probe(network)
+        after = self._iptables_dump()
+
+        moved = []
+        for key, rule in after.drops().items():
+            delta = rule["packets"] - before.drops().get(key, {"packets": 0})["packets"]
+            if delta > 0:
+                moved.append((rule, delta))
+        moved.sort(key=lambda item: item[1], reverse=True)
+        return before, result, moved
+
+    # -- remediation ---------------------------------------------------
+
+    def rule_specs(self):
+        """Every rule this installer would add, as argv tails.
+
+        Two families, one per chain the measurement can implicate.
+
+        FORWARD: a RETURN at the top of DOCKER-USER, not an ACCEPT. An
+        ACCEPT there terminates the FORWARD traversal and would take
+        Docker's own inter-network isolation with it, which is precisely
+        what this project's topology depends on: the engine is reachable
+        only from the Web UI because the two share a network nothing else
+        joins. RETURN skips whatever the host firewall jumped to from
+        inside DOCKER-USER and hands the decision back to Docker's own
+        chains, isolation included.
+
+        INPUT: an ACCEPT scoped to Docker's bridge interfaces, inserted at
+        the top. It cannot match anything arriving on a physical
+        interface, so it cannot affect SSH, the LAN, or any host service
+        as seen from outside. What it restores is the posture a stock
+        Docker host already has, where INPUT's policy is ACCEPT and a
+        container may talk to its own gateway.
+        """
+        specs = []
+        ifaces = self.bridge_interfaces()
+        for iface in ifaces:
+            specs.append(("DOCKER-USER", ["-i", iface, "-m", "comment", "--comment", RULE_TAG, "-j", "RETURN"]))
+        for iface in ifaces:
+            specs.append(("INPUT", ["-i", iface, "-m", "comment", "--comment", RULE_TAG, "-j", "ACCEPT"]))
+        return specs
+
+    def insert_script(self) -> str:
+        """Insert-if-absent, one line per rule. Idempotent by
+        construction: `iptables -C` asks whether the exact rule is already
+        there, and only a miss inserts.
+
+        There is no flush here, no policy change and no whole-ruleset
+        restore, and there never will be. This runs on a machine reachable
+        only over SSH.
+        """
+        lines = ["set -e"]
+        for chain, spec in self.rule_specs():
+            tail = " ".join(spec)
+            lines.append(f"{self.iptables} -w 5 -C {chain} {tail} 2>/dev/null || "
+                         f"{self.iptables} -w 5 -I {chain} 1 {tail}")
+        return "\n".join(lines) + "\n"
+
+    def delete_script(self) -> str:
+        lines = []
+        for chain, spec in self.rule_specs():
+            tail = " ".join(spec)
+            lines.append(f"{self.iptables} -w 5 -C {chain} {tail} 2>/dev/null && "
+                         f"{self.iptables} -w 5 -D {chain} {tail} || true")
+        return "\n".join(lines) + "\n"
+
+    def restart_docker_script(self) -> str:
+        systemctl = find_tool("systemctl") or "/bin/systemctl"
+        return f"{systemctl} restart docker\n"
+
+def report_findings(doctor, before, result, moved) -> None:
+    say("")
+    say("==> What a bridged container can do")
+    say(f"     reach its gateway {result['gateway_ip']}: {'yes' if result['gateway'] else 'NO'}")
+    say(f"     open TCP to {doctor.args.probe_host}:{doctor.args.probe_port}: {'yes' if result['egress'] else 'NO'}")
+
+    missing = [c for c in DOCKER_CHAINS if c not in before.chains]
+    say("")
+    say("==> The ruleset")
+    say(f"     INPUT policy   {before.policies.get('INPUT', '?')}")
+    say(f"     FORWARD policy {before.policies.get('FORWARD', '?')}")
+    if missing:
+        say(f"     Docker chains MISSING: {', '.join(missing)}")
+    else:
+        say(f"     Docker chains present: {', '.join(sorted(c for c in DOCKER_CHAINS if c in before.chains))}")
+
+    say("")
+    if moved:
+        say("==> The rule dropping the packets, by counter delta across the traffic just generated")
+        for rule, delta in moved:
+            say(f"     +{delta:<5} {rule['chain']} rule {rule['num']}: {rule['text']}")
+    else:
+        say("==> No DROP rule's counter moved.")
+
+
+def diagnose_and_fix(args, network: str, sudo=None) -> dict:
+    """The whole cycle: probe, and if it is broken, measure, correct and
+    prove the correction.
+
+    A healthy host is a no-op and never asks for a password. That is
+    checked first, with the probes, which need no root at all: an
+    operator who declines the escalation still gets an answer.
+    """
+    doctor = BridgeDoctor(args, sudo=sudo)
+    doctor.ensure_probe_image()
+
+    say("==> Checking whether a bridged container can originate traffic")
+    result = doctor.probe(network)
+    say(f"     reach its gateway {result['gateway_ip']}: {'yes' if result['gateway'] else 'NO'}")
+    say(f"     open TCP to {args.probe_host}:{args.probe_port}: {'yes' if result['egress'] else 'NO'}")
+
+    if result["gateway"] and result["egress"]:
+        say("==> Bridge networking is healthy. Nothing to change, and no password needed.")
+        return {"healthy": True, "changed": False, "moved": []}
+
+    if args.fix_network == "never":
+        raise Refusal(
+            EXIT_NETWORK_BROKEN,
+            "bridged containers on this host cannot originate traffic, and --fix-network=never was given.",
+            "The Web UI reaches the engine over exactly that hop, and so does every SFTP transfer, so "
+            "this deployment cannot work until it is corrected. Re-run without --fix-network=never to "
+            "have the installer diagnose and repair it.",
+        )
+
+    if doctor.iptables is None:
+        raise Refusal(
+            EXIT_NETWORK_UNDIAGNOSED,
+            "bridged networking is broken and no iptables binary was found on "
+            f"{PRIVILEGED_PATH}, so the rule cannot be identified.",
+            "Install iptables, or correct this by hand. This installer will not guess at a firewall.",
+        )
+
+    say("")
+    say("==> Bridge networking is broken. Measuring which rule is responsible.")
+    say("    The read-only diagnosis below needs root, because iptables refuses an unprivileged reader.")
+    before, result, moved = doctor.measure(network)
+    report_findings(doctor, before, result, moved)
+
+    if not moved:
+        raise Refusal(
+            EXIT_NETWORK_UNDIAGNOSED,
+            "traffic is being dropped and no DROP rule's counter moved, so this installer cannot name "
+            "the rule responsible.",
+            "It refuses to apply a correction it cannot justify. The ruleset is printed above; take it "
+            "to whoever administers this host. Run with --fix-network=never to install anyway.",
+        )
+
+    if args.fix_network == "diagnose":
+        say("")
+        say("==> --fix-network=diagnose: stopping here. Nothing was changed.")
+        raise Refusal(
+            EXIT_NETWORK_BROKEN,
+            "bridge networking is broken, the responsible rule is named above, and this run was asked "
+            "only to diagnose.",
+            "Re-run with --fix-network=auto to apply the correction.",
+        )
+
+    # Least invasive first, and the evidence chooses. Docker's chains
+    # missing means the host's firewall very likely started after dockerd
+    # and flushed them, and a restart makes Docker reinstall exactly those
+    # chains. That is one reversible command and it says something the
+    # rules cannot: that this is a boot-ordering and persistence problem
+    # rather than a rule problem. When the chains are all present, a
+    # restart reinstalls what is already there and cannot help, so it is
+    # skipped rather than tried out of ritual.
+    #
+    # "All present" is checked in both tables Docker actually installs
+    # into, filter and nat, not just the one the rest of this function was
+    # already reading. The nat table used to go unread while a message
+    # claimed it was intact anyway.
+    missing = [c for c in DOCKER_CHAINS if c not in before.chains]
+    nat = doctor._nat_dump()
+    nat_missing = [c for c in DOCKER_NAT_CHAINS if c not in nat.chains]
+    if missing or nat_missing:
+        say("")
+        say(f"==> Docker's own chains are missing ({', '.join(missing + nat_missing)}), which points at")
+        say("    the host's firewall having flushed them after dockerd installed them. Trying the least")
+        say("    invasive correction first: restarting Docker so it reinstalls them.")
+        others = other_running_containers(args.project)
+        if others is None:
+            say("")
+            say("    Could not list what else is running on this host (docker ps failed), so the blast")
+            say("    radius of a daemon restart below is unknown rather than confirmed small.")
+        elif others:
+            say("")
+            say(f"    Restarting the Docker daemon restarts EVERY container on this host, not only this")
+            say(f"    project's. {len(others)} other container(s) are currently running and will be")
+            say("    restarted too:")
+            for name, image in others:
+                say(f"      {name:<30} {image}")
+        else:
+            say("")
+            say("    No other containers are currently running on this host, so the restart below only")
+            say("    affects this project's own.")
+        doctor.sudo.run_script(doctor.restart_docker_script(),
+                               purpose="Restart Docker so it reinstalls its own chains")
+        time.sleep(10)
+        after = doctor.probe(network)
+        if after["gateway"] and after["egress"]:
+            say("==> Restarting Docker fixed it. That means the chains were flushed rather than wrong,")
+            say("    so this will come back on every boot until the host firewall is ordered before")
+            say("    dockerd, or Docker is restarted after it.")
+            return {"healthy": True, "changed": True, "moved": moved, "method": "restart"}
+        say("==> Restarting Docker did not fix it. Falling through to scoped rules.")
+    else:
+        say("")
+        say("==> Every Docker chain is present in both the filter and NAT tables, so this is not a")
+        say("    flushed ruleset and restarting Docker would reinstall what is already there. Skipping")
+        say("    it.")
+
+    doctor.sudo.run_script(doctor.insert_script(),
+                           purpose="Insert scoped rules for Docker's bridge interfaces")
+
+    say("")
+    say("==> Proving the correction rather than assuming it")
+    final = doctor.probe(network)
+    say(f"     reach its gateway {final['gateway_ip']}: {'yes' if final['gateway'] else 'NO'}")
+    say(f"     open TCP to {args.probe_host}:{args.probe_port}: {'yes' if final['egress'] else 'NO'}")
+    if not (final["gateway"] and final["egress"]):
+        raise Refusal(
+            EXIT_NETWORK_STILL_BROKEN,
+            "the rules were inserted and a bridged container still cannot originate traffic:\n"
+            f"  gateway: {final['gateway']}\n  egress:  {final['egress']}",
+            "The rules are still in place and can be removed with:\n"
+            "  python3 install_docker_host.py network-undo\n"
+            "Take the measurement above to whoever administers this host.",
+        )
+
+    say("")
+    say("==> Fixed, and proven. What was added, and how to take it back:")
+    for chain, spec in doctor.rule_specs():
+        say(f"     {chain}: {' '.join(spec)}")
+    say("     remove with: python3 install_docker_host.py network-undo")
+    say("")
+    say("     THESE RULES DO NOT SURVIVE A REBOOT. They are raw iptables inserts, and this host's own")
+    say("     firewall rewrites its ruleset on boot and may rewrite it again at any time. After a")
+    say("     reboot the containers come back and this hop is broken again, silently, because nothing")
+    say("     re-runs the installer. `status` re-checks it, and the durable fix belongs in the host")
+    say("     firewall's own configuration rather than in an insert this installer makes.")
+    return {"healthy": True, "changed": True, "moved": moved, "method": "rules"}
+
+
+def cmd_network_doctor(args) -> int:
+    diagnose_and_fix(args, args.probe_network)
+    return EXIT_OK
+
+
+def cmd_network_undo(args) -> int:
+    doctor = BridgeDoctor(args)
+    if doctor.iptables is None:
+        raise Refusal(EXIT_NETWORK_UNDIAGNOSED,
+                      f"no iptables binary on {PRIVILEGED_PATH}, so there is nothing to undo with.", "")
+    doctor.sudo.run_script(doctor.delete_script(),
+                           purpose="Remove the rules this installer added, and only those")
+    say("")
+    say("==> Removed every rule carrying the comment " + RULE_TAG + ", and nothing else.")
+    return EXIT_OK
+
+
 def cmd_status(args) -> int:
     payload, containers = detect_existing(args)
     say(f"payload at {args.prefix}: {'present' if payload else 'absent'}")
@@ -883,17 +1671,48 @@ def cmd_status(args) -> int:
         return EXIT_OK
     for c in containers:
         say(f"  {c.get('Service', '?'):<16} {c.get('State', '?'):<10} {c.get('Health', '') or 'no healthcheck':<10} {c.get('Status', '')}")
+
+    # The rules install may have inserted are raw iptables inserts: a
+    # reboot loses them, and so does the host firewall rewriting its own
+    # set. The containers come back either way, so the failure is silent
+    # unless something asks. This asks, with no root and no password.
+    if args.fix_network != "never":
+        doctor = BridgeDoctor(args)
+        try:
+            doctor.ensure_probe_image()
+            result = doctor.probe(args.probe_network)
+        except Refusal as exc:
+            say(f"bridge networking: not checked ({exc.message.splitlines()[0]})")
+            return EXIT_OK
+        ok = result["gateway"] and result["egress"]
+        say(f"bridge networking: {'ok' if ok else 'BROKEN'} "
+            f"(gateway {'yes' if result['gateway'] else 'NO'}, "
+            f"egress {'yes' if result['egress'] else 'NO'})")
+        if not ok:
+            say("  A bridged container cannot originate traffic, so the Web UI cannot reach the engine")
+            say("  and no SFTP transfer can run. If this worked before a reboot, the inserted rules were")
+            say("  lost: python3 install_docker_host.py network-doctor")
     return EXIT_OK
 
 
 def cmd_uninstall(args) -> int:
-    """Remove what the installer created, and nothing else.
+    """Remove what the installer created, and nothing else - with one
+    exception, printed below rather than left for an operator to discover.
 
     `docker compose down` rather than deleting paths, and the state,
     config and backup directories are left where they are unless the
     operator says otherwise in as many words. Those hold the SQLite
     journal, the administrator record and the backups; an uninstall that
     takes them by default is a data-loss bug with a friendly name.
+
+    The exception: if `install` or `network-doctor` ever repaired this
+    host's bridge networking (the default, `--fix-network=auto`), that
+    repair inserted rclone-manager-bridge-tagged iptables rules directly
+    on the host firewall. Detecting whether they are still there needs
+    the same root read `_iptables_dump()` does, which this command has
+    never otherwise needed - uninstall stays a command that touches only
+    what this account already owns. So this prints the exact remedy
+    instead of silently claiming a contract nothing here checks.
     """
     payload, containers = detect_existing(args)
     if not payload and not containers:
@@ -920,6 +1739,11 @@ def cmd_uninstall(args) -> int:
         say(f"  {label:<14} {path}")
     say("They hold the SQLite journal, the administrator record and the backups themselves.")
     say("Remove them by hand if that is really what you want.")
+    say("")
+    say("NOT removed by this command: if `install` or `network-doctor` ever repaired this host's")
+    say("bridge networking, the rclone-manager-bridge-tagged iptables rules it inserted are still on")
+    say("the host firewall. Remove exactly those, and nothing else, with:")
+    say("  python3 install_docker_host.py network-undo")
     return EXIT_OK
 
 
@@ -947,7 +1771,8 @@ def build_parser() -> argparse.ArgumentParser:
             "      --image ghcr.io/spdrman/backup-manager:0.1.0\n"
         ),
     )
-    parser.add_argument("command", choices=["preflight", "install", "status", "uninstall"])
+    parser.add_argument("command", choices=["preflight", "install", "status", "uninstall",
+                                            "network-doctor", "network-undo"])
 
     layout = parser.add_argument_group("layout")
     layout.add_argument("--prefix", type=Path, default=Path("/volume1/backup-manager"),
@@ -995,6 +1820,22 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--pgid", type=int, default=None, help="Defaults to this account's gid.")
     runtime.add_argument("--timeout", type=int, default=180,
                          help="Seconds to wait for the engine's liveness probe and the Web UI.")
+    net = parser.add_argument_group("bridge networking (issue #271)")
+    net.add_argument("--fix-network", choices=["auto", "diagnose", "never"], default="auto",
+                     help="auto diagnoses and repairs Docker bridge networking when a bridged container "
+                          "cannot originate traffic, escalating through sudo. diagnose stops after "
+                          "naming the rule. never skips the check entirely and touches no firewall.")
+    net.add_argument("--probe-image", default="busybox:stable",
+                     help="A small image with a shell, ping and nc, used to ask what a bridged container "
+                          "can actually do. Point it at one this host already has to avoid a pull.")
+    net.add_argument("--probe-host", default="1.1.1.1",
+                     help="External endpoint the egress probe opens TCP to. Nothing is sent to it.")
+    net.add_argument("--probe-port", type=int, default=443, help="Port for the egress probe.")
+    net.add_argument("--probe-network", default="bridge",
+                     help="Docker network the probe container joins. The rules this installer inserts "
+                          "are scoped to docker0 and every bridge network Docker itself reports at "
+                          "repair time, so re-running after a network is created covers it too.")
+
     runtime.add_argument("--if-installed", choices=["converge", "refuse"], default="converge",
                          help="What to do when an install is already here. converge rewrites the deployment "
                               "files and brings the stack up again, never touching state, config or backups.")
@@ -1041,6 +1882,8 @@ def main(argv) -> int:
         "install": cmd_install,
         "status": cmd_status,
         "uninstall": cmd_uninstall,
+        "network-doctor": cmd_network_doctor,
+        "network-undo": cmd_network_undo,
     }
     try:
         return handlers[args.command](args)
