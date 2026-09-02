@@ -327,12 +327,21 @@ class TestPathRefusals(unittest.TestCase):
 
 class TestPayloadRefusal(unittest.TestCase):
     def test_a_missing_canonical_definition_is_refused_rather_than_improvised(self):
+        """Since #346 the installer carries the canonical definition, so
+        supplying nothing is fine. Naming a path that is not there is
+        still refused, and this is the assertion that it does not quietly
+        fall back to the embedded copy instead: asking for one specific
+        runtime and silently installing a different one would be worse
+        than either the old refusal or the new default."""
         fx = Fixture(self)
-        args = fx.args("--compose-file", str(fx.prefix / "nowhere" / "compose.yaml"))
+        missing = fx.prefix / "nowhere" / "compose.yaml"
+        args = fx.args("--compose-file", str(missing))
         exc = refusal_from(installer.Preflight(args).check_payload)
-        self.assertIsNotNone(exc)
+        self.assertIsNotNone(exc, "a named path that is absent must not fall back to the embedded copy")
         self.assertEqual(exc.code, installer.EXIT_PREREQ_PAYLOAD)
-        self.assertIn("copies that file rather than writing its own", exc.remedy)
+        self.assertIn(str(missing), exc.message, "the refusal has to name the path it could not find")
+        self.assertIn("drop the flag", exc.remedy,
+                      "the remedy has to mention that supplying nothing now works")
 
 
 class TestPortRefusal(unittest.TestCase):
@@ -2337,3 +2346,108 @@ class TestTheSuiteRunsEveryTestItDefines(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEmbeddedComposeMatchesCanonical(unittest.TestCase):
+    """The gate that makes embedding safe (issue #346).
+
+    Carrying a copy of the runtime definition inside the installer is only
+    acceptable while it is provably the SAME definition. Without this test
+    it becomes a second opinion about mounts, networks, healthchecks and
+    the engine-to-UI topology, and the two drift the moment either
+    changes, silently.
+
+    That is not hypothetical here. The --image default was the one shipped
+    artifact nothing held to canonical.json, so cutting 0.2.0 moved all
+    eight packaged adapters and left the installer behind; installing
+    0.2.0 then pulled 0.1.0 and reported complete success, because a stale
+    default is still a valid reference to an image that really exists.
+    Nothing failed and nothing said anything. A compose file drifting the
+    same way is worse than a stale tag.
+
+    Set EMBED_COMPOSE_UPDATE=1 to regenerate rather than hand-edit, which
+    is the same escape hatch the conformance docs use.
+    """
+
+    def test_the_embedded_copy_is_byte_for_byte_the_canonical_file(self):
+        canonical = CANONICAL_COMPOSE.read_text()
+        embedded = installer.EMBEDDED_COMPOSE_YAML
+
+        if embedded != canonical and os.environ.get("EMBED_COMPOSE_UPDATE") == "1":
+            src = Path(installer.__file__).read_text()
+            start = src.index('EMBEDDED_COMPOSE_YAML = """\\\n') + len('EMBEDDED_COMPOSE_YAML = """\\\n')
+            end = src.index('"""', start)
+            Path(installer.__file__).write_text(src[:start] + canonical + src[end:])
+            self.fail("regenerated EMBEDDED_COMPOSE_YAML from container/compose.yaml; "
+                      "re-run without EMBED_COMPOSE_UPDATE to confirm, and commit the installer")
+
+        self.assertEqual(
+            embedded, canonical,
+            "the compose definition embedded in install_docker_host.py is not container/compose.yaml.\n\n"
+            "The embedded copy exists so the installer needs no checkout on the host. It is only safe "
+            "while it is provably the same definition, so this compares bytes rather than intent.\n\n"
+            "Regenerate it, do not hand-edit it:\n"
+            "  EMBED_COMPOSE_UPDATE=1 python3 -m unittest "
+            "scripts.install.test_install_docker_host.TestEmbeddedComposeMatchesCanonical")
+
+    def test_the_embedded_copy_says_it_is_generated(self):
+        """A human editing it is the drift this exists to prevent, so it
+        has to look generated and name the way to regenerate it."""
+        src = Path(installer.__file__).read_text()
+        head = src[:src.index("EMBEDDED_COMPOSE_YAML")]
+        self.assertIn("DO NOT EDIT BY HAND", head)
+        self.assertIn("EMBED_COMPOSE_UPDATE=1", head,
+                      "the banner has to name the regeneration command, or the next person hand-edits it")
+
+
+class TestComposeFileIsOptional(unittest.TestCase):
+    """Copying one file to a NAS and running it has to work. It used to
+    refuse with exit 19 because container/compose.yaml only exists inside
+    a checkout, which is the one thing an operator installing onto a NAS
+    does not have."""
+
+    def test_supplying_nothing_is_no_longer_a_refusal(self):
+        fx = Fixture(self)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["preflight", "--prefix", str(fx.prefix),
+             "--ssh-key", str(fx.key), "--known-hosts", str(fx.known)]))
+        self.assertIsNone(args.compose_file, "no --compose-file means the embedded copy")
+        installer.Preflight(args).check_payload()
+
+    def test_naming_a_path_that_is_not_there_is_still_a_refusal(self):
+        """The refusal narrowed, it did not disappear. Asking for one
+        specific file and quietly getting a different one would be the
+        worst of both."""
+        fx = Fixture(self)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["preflight", "--prefix", str(fx.prefix),
+             "--ssh-key", str(fx.key), "--known-hosts", str(fx.known),
+             "--compose-file", str(fx.prefix / "nope.yaml")]))
+        exc = refusal_from(installer.Preflight(args).check_payload)
+        self.assertIsNotNone(exc)
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_PAYLOAD)
+        self.assertIn("nope.yaml", exc.message)
+
+    def test_staging_without_a_compose_file_writes_the_embedded_copy(self):
+        fx = Fixture(self)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(fx.prefix),
+             "--ssh-key", str(fx.key), "--known-hosts", str(fx.known)]))
+        installer.stage_payload(args)
+        staged = (args.prefix / "compose.yaml").read_text()
+        self.assertEqual(staged, CANONICAL_COMPOSE.read_text(),
+                         "what lands at the prefix has to be the canonical definition, whatever wrote it")
+
+    def test_an_explicit_compose_file_still_wins(self):
+        """A checkout testing an uncommitted runtime change must still be
+        able to install it, or the development workflow breaks."""
+        fx = Fixture(self)
+        local = fx.prefix / "local-compose.yaml"
+        local.write_text("services: {}\n# a locally modified runtime\n")
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(fx.prefix),
+             "--ssh-key", str(fx.key), "--known-hosts", str(fx.known),
+             "--compose-file", str(local)]))
+        installer.stage_payload(args)
+        self.assertEqual((args.prefix / "compose.yaml").read_text(), local.read_text(),
+                         "explicit input has to beat the embedded default")

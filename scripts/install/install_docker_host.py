@@ -384,15 +384,28 @@ class Preflight:
     # -- what we are about to install ----------------------------------
 
     def check_payload(self) -> None:
+        """Where the runtime definition is coming from.
+
+        The refusal narrowed rather than disappeared. Supplying nothing is
+        no longer an error, because the canonical definition is embedded
+        and generated from container/compose.yaml. Naming a path that is
+        not there still is: that is an operator asking for one specific
+        file, and quietly installing a different one instead would be the
+        worst of both.
+        """
         canonical = self.args.compose_file
+        if canonical is None:
+            self.note("canonical runtime definition embedded in this installer "
+                      "(generated from container/compose.yaml)")
+            return
         if not canonical.is_file():
             raise Refusal(
                 EXIT_PREREQ_PAYLOAD,
-                f"the canonical compose definition is not at {canonical}.",
-                "Point --compose-file at container/compose.yaml from a checkout, or run this from inside one. "
-                "This installer copies that file rather than writing its own, so it cannot proceed without it.",
+                f"--compose-file names {canonical}, and there is no file there.",
+                "Point it at a real container/compose.yaml, or drop the flag entirely to use the "
+                "definition embedded in this installer.",
             )
-        self.note(f"canonical runtime definition at {canonical}")
+        self.note(f"canonical runtime definition at {canonical} (supplied, overriding the embedded copy)")
 
     def check_paths(self) -> None:
         """Every host directory, and whether THIS uid can actually use it.
@@ -1356,15 +1369,585 @@ def other_running_containers(project: str):
     return _other_containers_from_ps_ndjson(proc.stdout, project)
 
 
+# ---------------------------------------------------------------------
+# The embedded canonical runtime definition
+# ---------------------------------------------------------------------
+
+# GENERATED FROM container/compose.yaml. DO NOT EDIT BY HAND.
+#
+# Regenerate with:
+#     EMBED_COMPOSE_UPDATE=1 python3 -m unittest \
+#         scripts.install.test_install_docker_host.TestEmbeddedComposeMatchesCanonical
+#
+# Why this is carried here at all: copying install_docker_host.py to a NAS
+# and running it used to refuse with exit 19, because container/compose.yaml
+# only exists inside a git checkout, which is the one thing an operator
+# installing onto a NAS does not have. Everything else this script needs it
+# either finds or refuses clearly about, so that second file was the only
+# thing stopping it being genuinely one file.
+#
+# Why it is a COPY and not a template. stage_payload used to say "Copy,
+# never rewrite. distribution/compose holds this exact file to
+# runtime-contract.json, so shipping a modified copy would be shipping
+# something no gate has ever checked." That property is kept, not traded:
+# there is still exactly one canonical runtime definition, this is a
+# generated copy of it rather than a second opinion about it, and
+# TestEmbeddedComposeMatchesCanonical compares the two BYTE FOR BYTE and
+# fails when they diverge.
+#
+# The gate is the whole point. The --image default was the one shipped
+# artifact nothing held to canonical.json, so cutting 0.2.0 moved all eight
+# packaged adapters and left the installer behind; installing 0.2.0 then
+# pulled 0.1.0 and reported complete success, because a stale default is
+# still a valid reference to an image that really exists. Nothing failed
+# and nothing said anything. This file describes mounts, networks,
+# healthchecks and the engine-to-UI topology the security posture depends
+# on, so the same silent drift here would be worse than a stale tag.
+EMBEDDED_COMPOSE_YAML = """\
+# Generic Docker deployment shape for backup-manager (A3.9, extended by
+# issue #82/B4.1). See docs/deployment.md for the reasoning behind every
+# one of these settings and how to build and run it.
+#
+# This file builds for the machine running `docker compose`, i.e. it's meant
+# to be run ON the UGREEN NAS itself (or against a matching architecture).
+# To cross-build and publish a linux/amd64 + linux/arm64 image ahead of
+# time instead, use `docker buildx build --platform=...` directly; see
+# docs/deployment.md.
+#
+# Nothing below reads a secret from this file or from the environment: real
+# credential material (the SSH private key) lives only at the host path
+# SSH_KEY_FILE points to, mounted read-only into the container.
+#
+# TWO SERVICES, ONE IMAGE (project-owner requirement, folded in before
+# this issue merged): `rclone-manager` is the engine - core service,
+# scheduler, local authentication, and the versioned /api/v1 API, all in
+# one process sharing one shutdown context (§9.3) - and has NO published
+# port at all; it is reachable only from `web-ui`, over the `internal`
+# network below. `web-ui` serves the shared static UI and reverse-proxies
+# API requests to `rclone-manager`, and is the ONLY service with a
+# LAN-facing published port. Both run the exact same
+# `/backup-manager-web` binary from the exact same image - only `command:`
+# differs - matching the "one canonical image, vary command" principle
+# already applied to `/backup-manager` vs. `/backup-manager-web`
+# themselves; no nginx or other new runtime dependency was introduced for
+# this (see apps/common/webhost/serve's own doc comment for the plain
+# net/http/httputil.ReverseProxy this uses instead).
+#
+# Network isolation is plain compose topology, nothing more: `internal`
+# below is a private bridge network scoped to just this project (compose
+# creates one per project by default; this just names it explicitly for
+# clarity), so `rclone-manager` is reachable by `web-ui` (same network)
+# and by nothing else on the NAS - no other container, and nothing on the
+# host's own LAN interfaces, since it publishes no port and joins no
+# other network. This does NOT block `web-ui`'s own outbound internet
+# access (e.g. via a `internal: true` network or firewall rules) - that
+# is a further hardening step beyond what was asked for here.
+# ---------------------------------------------------------------------
+# THE CANONICAL RUNTIME CONTRACT (issue #167)
+#
+# This block is what makes this file authoritative rather than merely
+# canonical. distribution/compose holds the whole definition to
+# runtime-contract.json: every field the contract names has to be
+# declared here, and none of the prohibited host privileges may be
+# needed. Adapters derive from this file; distribution/packaging holds
+# them to its image reference, mount points, port and security posture.
+#
+# Nothing here is decoration. Deleting a line below fails
+# distribution/compose's own suite by name, with the reason the contract
+# gives for requiring it.
+# ---------------------------------------------------------------------
+x-canonical-runtime:
+  # The contract version this definition was written against, so a
+  # contract change is a visible edit here rather than a silent
+  # divergence.
+  contract: "1.2.0"
+
+  # The architectures this release claims. Checked against
+  # distribution/packaging/canonical.json and against
+  # container/release-manifest.json, so the three cannot drift.
+  architectures:
+    - amd64
+    - arm64
+
+  # The profiles `--profile=` below may name. Checked against the profile
+  # table the executable actually implements
+  # (apps/common/platform/profile), so a value nothing implements cannot
+  # be declared here.
+  profiles:
+    - generic
+    - ugos
+    # The five Phase 4 platforms, converted to thin adapters over this
+    # runtime by issue #169. Each one selects a profile here instead of
+    # carrying a code path of its own; what the profile changes is the
+    # platform identity the API reports, the deployment description, and
+    # which UI bridge the Web UI host serves.
+    - truenas
+    - unraid
+    - openmediavault
+    - proxmox
+    - synology
+
+  # How an operator pins a release. The tag in `image:` is mutable and is
+  # a convenience; the immutable reference is the digest, recorded per
+  # architecture in the manifest named here.
+  digest_policy:
+    manifest: container/release-manifest.json
+    pin: >-
+      Deploy by digest, not by tag: replace image: backup-manager:<tag>
+      with the registry reference plus the @sha256:... digest recorded for
+      your architecture in the manifest above, and verify the binary
+      SHA-256 recorded alongside it. A tag can be moved; a digest cannot.
+
+  # Documented resource expectations, measured rather than guessed: the
+  # engine's idle RSS on the Phase 6 benchmark host is ~99 MB (see
+  # docs/perf/baselines/), and the UI host is a static file server plus
+  # one reverse proxy. These are what an operator should provision, not a
+  # limit this file imposes: a hard `deploy.resources.limits` here would
+  # turn a large catalogue into an OOM kill mid-backup.
+  resources:
+    engine:
+      memory_idle: 128Mi
+      memory_recommended: 512Mi
+      cpu_recommended: "1"
+    web-ui:
+      memory_idle: 32Mi
+      memory_recommended: 128Mi
+      cpu_recommended: "0.25"
+
+networks:
+  internal:
+
+# Shared hardening, identical for both services: neither one needs any
+# capability beyond what a plain non-root process gets by default.
+x-security: &security
+  privileged: false
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  rclone-manager:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+      args:
+        # Deterministic build stamps (see Dockerfile): pass the real values
+        # from a checkout, e.g.
+        #   VERSION=$(git -C .. describe --tags --always)
+        #   COMMIT=$(git -C .. rev-parse HEAD)
+        # Left unset, the binary reports "dev"/"none", which is fine for a
+        # local build but not what a release should ship.
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+    image: backup-manager:${VERSION:-dev}
+
+    # `/backup-manager-web serve` (issue #82/B4.1, docs/EPIC-B-multi-nas.md
+    # §9.2's "Generic Web App host") is the engine: local authentication,
+    # the versioned /api/v1 API, and the backup scheduler, all in one
+    # process sharing one shutdown context (§9.3). No static UI - that is
+    # web-ui's job, over the `internal` network below, never a published
+    # port here. `/backup-manager` (no "-web") is still in this same image
+    # for headless-only use with no web listener at all: override
+    # `command` with `["/backup-manager", "daemon"]` for that, or `docker
+    # compose run --rm rclone-manager /backup-manager version` / `... check`
+    # for a one-shot check; see the `restart` note below, which assumes
+    # the default `serve` command specifically.
+    # `command` carries the runtime profile, which is one contract field
+    # and not two: a deployment that does not name its profile is a
+    # deployment whose host-dependent behaviour is implicit. `generic` is
+    # the profile with no host integration at all, so defaulting to it can
+    # only ever under-claim; RUNTIME_PROFILE in .env selects another one
+    # out of x-canonical-runtime.profiles above.
+    command: ["/backup-manager-web", "serve", "--profile=${RUNTIME_PROFILE:-generic}"]
+
+    <<: *security
+
+    # Non-root, with the uid/gid coming from the environment rather than
+    # baked into the image. The distroless runtime image's own default
+    # (65532:65532, its "nonroot" account) is fine in isolation, but this
+    # container also has to write into a directory that lives on the
+    # UGREEN NAS's filesystem (the state volume below), and that
+    # directory's ownership is whatever the NAS's own admin account happens
+    # to be, not whatever uid the image picked at build time. Hardcoding
+    # 1000 here would work for the common case (most Linux-based NAS
+    # distributions, UGOS included, give the first admin account uid/gid
+    # 1000) and then fail confusingly on any NAS where it doesn't. PUID and
+    # PGID below default to that common case but are meant to be
+    # overridden in .env for a host where it doesn't hold.
+    #
+    # This only maps to a real writable directory if the host paths bound
+    # below are already owned by PUID:PGID before the container's first
+    # start — this image has no shell, no root step, and no init process to
+    # chown them for you. See "Non-root and the NAS uid/gid" in
+    # docs/deployment.md.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    # Application filesystem is read-only. Nothing under / is meant to be
+    # written by this process; the two things it does write (the SQLite
+    # journal and whatever it fetches from the remote) both live on
+    # explicit volumes below, never on the container's own rootfs.
+    read_only: true
+
+    # SQLite (journal_mode=WAL, see internal/state/state.go) writes -wal and
+    # -shm files alongside the main database file, so the whole state
+    # directory has to be writable, not just the database file itself — a
+    # single-file bind mount here would break the first write. This was
+    # verified directly against a read-only rootfs + this exact mount
+    # shape, not assumed; see docs/deployment.md.
+    #
+    # /tmp is mounted as tmpfs for the same reason: a read-only rootfs makes
+    # Go's default temp directory unwritable (verified directly too), and
+    # while the specific SQLite operations this project currently exercises
+    # didn't turn out to need a real temp file on modernc.org/sqlite in
+    # testing, that's not a guarantee future queries or a future sqlite
+    # version won't need one. Size is small on purpose: this is scratch
+    # space, not somewhere state is meant to persist.
+    tmpfs:
+      - /tmp:size=64m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      # Explicit, not just relying on the default search order SQLite's
+      # temp-file code falls back to (SQLITE_TMPDIR, then TMPDIR, then a
+      # hardcoded list ending in /tmp) — see docs/deployment.md.
+      TMPDIR: /tmp
+
+      # Retention is evaluated against calendar boundaries (FR-18's
+      # daily/weekly/monthly tiers), so the timezone is not cosmetic: left
+      # to the image's UTC default, the day an operator thinks a restore
+      # point belongs to and the day retention assigns it to are silently
+      # different for most of the world. The engine's own
+      # retention.timezone config setting is the authority; this makes the
+      # process-level default match the host rather than the image.
+      TZ: ${TZ:-UTC}
+
+      # `/backup-manager-web serve`'s own `--listen` flag defaults to this
+      # variable when set (falling back to :8080 otherwise), so it binds
+      # this address inside the container without it needing to be an
+      # explicit command-line argument above. Never published to the
+      # host (see the top-of-file note): only reachable from `web-ui`,
+      # over the `internal` network, at this same port via the service
+      # name `rclone-manager` (Docker's own embedded DNS).
+      LISTEN_ADDR: ":8080"
+
+      # This container has no published port at all (see the top-of-file
+      # note), so its OWN --listen address is never something an operator
+      # can actually open - `/backup-manager-web serve` used to print the
+      # one-time enrollment link against that internal address anyway,
+      # which was always wrong once this two-container split shipped
+      # (issue #119's review). PUBLIC_BASE_URL is what `web-ui`'s own
+      # published port actually looks like from outside this host;
+      # defaulting it from LISTEN_PORT below keeps the printed link's
+      # port correct even when LISTEN_PORT is overridden in .env.
+      # "localhost" only resolves correctly when opened on the NAS
+      # itself - override PUBLIC_BASE_URL directly in .env (e.g.
+      # http://your-nas.local:8080) to get a link that also works from
+      # another machine on the LAN.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:${LISTEN_PORT:-8080}}
+
+      # Config.TrustForwardedHeaders (apps/common/auth/local): safe here
+      # SPECIFICALLY because `rclone-manager` joins only the `internal`
+      # network below, which only `web-ui` also joins - nothing else can
+      # ever be this container's direct peer, so trusting the
+      # X-Forwarded-For/X-Forwarded-Proto headers `web-ui`'s own reverse
+      # proxy sets (apps/common/webhost/serve.NewUI) is safe by network
+      # topology, not by convention. Never set this on `web-ui` itself
+      # (below) - that container IS the actual internet-facing edge and
+      # must never trust a forwarded header from just anyone hitting its
+      # published port.
+      TRUST_FORWARDED_HEADERS: "true"
+
+      # This container's own trusted peer, for a gateway runtime profile
+      # (RUNTIME_PROFILE=ugos). Empty for the default `generic` profile,
+      # which has no gateway at all and refuses this variable if it is
+      # set.
+      #
+      # A DIFFERENT variable from `web-ui`'s TRUSTED_GATEWAY_CIDRS below,
+      # and that is the whole point (issue #87's review, M1). The two hops
+      # need contradictory values:
+      #
+      #  - This container's only possible peer is `web-ui`, so this range
+      #    has to contain `web-ui`'s address on the `internal` network or
+      #    nothing authenticates. It names the INTERNAL NETWORK.
+      #  - `web-ui`'s range has to name the platform GATEWAY, and a range
+      #    containing this container or the internal network is the
+      #    LAN-forgery vulnerability restated as configuration.
+      #
+      # One variable feeding both hops has exactly one value that lets a
+      # ugos deployment authenticate, and it is the value that makes
+      # `web-ui` believe an identity header from anything on the internal
+      # bridge, which under Docker's userland port publishing includes LAN
+      # traffic arriving at the published port. That is the bug this
+      # container's own strip exists to close, reintroduced one layer up,
+      # so the two peer sets are two names.
+      #
+      # The usual value here is the compose bridge subnet (e.g.
+      # 172.16.0.0/12 for the default pools, or the `internal` network's
+      # own configured subnet). Widening it changes nothing an attacker
+      # can reach: only `web-ui` joins `internal`, and this container
+      # publishes no port at all.
+      TRUSTED_UPSTREAM_CIDRS: ${TRUSTED_UPSTREAM_CIDRS:-}
+
+    volumes:
+      # Persistent SQLite lifecycle journal (FR-9). A directory, per the
+      # WAL note above, not a single file. `/backup-manager-web serve` also
+      # keeps its local-authentication administrator record
+      # (apps/common/auth/local) at /data/state/local-auth.json — the
+      # Argon2id password hash only, never a plaintext password — so
+      # enrollment survives a container restart without a second volume.
+      - ${STATE_DIR:?set STATE_DIR in .env to a host path for the SQLite state directory}:/data/state
+
+      # Where completed artifacts land once pulled and verified. This is
+      # the NAS backup volume/share itself, so it's writable, not :ro.
+      - ${BACKUP_DIR:?set BACKUP_DIR in .env to the host backup storage path}:/data/backups
+
+      # Configuration: a WRITABLE DIRECTORY the application owns, with
+      # config.yaml inside it (issue #196). Not a read-only single-file
+      # mount, which is what this line used to be and what made three
+      # merged write paths inert in a packaged container: adding a backup
+      # set, saving settings and first-run setup all replace config.yaml
+      # through a temp file created in its own directory, and on a
+      # single-file mount that directory is this image's read-only
+      # rootfs. The engine's two on-demand stores, ssh_keys/ and
+      # known_hosts.d/, are siblings of config.yaml and were unwritable
+      # for the same reason.
+      #
+      # A directory is also the only shape that can honestly be EMPTY. A
+      # bind mount cannot say "not configured yet" about a file: Docker
+      # creates a directory at a source path that does not exist, so the
+      # state a fresh install actually starts in was not representable.
+      - ${CONFIG_DIR:?set CONFIG_DIR in .env to the directory holding config.yaml}:/etc/backup-manager/config
+
+      # Credentials stay read-only single files. Nothing in this
+      # container writes them, and the shapes are two different claims.
+      # Nothing here is baked into the image or into this file — only
+      # host paths, resolved at `docker compose up` time.
+      - ${SSH_KEY_FILE:?set SSH_KEY_FILE in .env to the SFTP private key}:/etc/backup-manager/id_ed25519:ro
+      - ${KNOWN_HOSTS_FILE:?set KNOWN_HOSTS_FILE in .env to the pinned known_hosts file}:/etc/backup-manager/known_hosts:ro
+
+    # `unless-stopped`: restart across crashes and NAS reboots, but stay
+    # down if an operator deliberately stops it — the right policy now that
+    # `command` above (`/backup-manager-web serve`) is a real long-running
+    # process rather than the immediately-exiting `version` this file used
+    # to default to. For a one-shot check, use `docker compose run --rm
+    # rclone-manager /backup-manager version` (or `... check`) instead of
+    # `up -d`, which bypasses `restart` entirely.
+    restart: unless-stopped
+
+    # Liveness, deliberately, and NOT `backup-manager status`.
+    #
+    # This is the check web-ui waits on: it declares `depends_on:
+    # rclone-manager: condition: service_healthy` below, so whatever this
+    # asks is what stands between an operator and the only LAN-facing
+    # listener in the deployment. `backup-manager status` answers backup
+    # freshness (HEALTHY/DEGRADED/STALE/FAILING) and exits non-zero on a
+    # DEGRADED, STALE or FAILING set, and also when it cannot open the
+    # service at all - so gating on it means a stale backup set, or an
+    # instance nobody has configured yet, keeps the UI from ever
+    # starting. That is a real backup problem being reported as a broken
+    # web server, which is the worst moment to lose the page an operator
+    # would fix it from.
+    #
+    # /health/live is the engine's own bare liveness probe
+    # (apps/common/webhost/router.go, deliberately outside /api/v1 so it
+    # needs no authentication and no configuration). `healthcheck` is the
+    # same subcommand web-ui uses below, against a URL rather than its
+    # own default, and it needs no shell - distroless has none.
+    #
+    # Backup freshness is not lost, it moves back to being the thing it
+    # was built as: the image's own HEALTHCHECK instruction still runs
+    # `backup-manager status` (container/Dockerfile, so a plain `docker
+    # run` still reports backup health), the alerts block delivers it
+    # proactively, and an operator reads it directly with
+    # `docker compose exec rclone-manager /backup-manager status`.
+    #
+    # Declared here rather than inherited from the image (issue #167):
+    # the runtime contract requires an operator to be able to read what
+    # "healthy" means out of this file without also reading the
+    # Dockerfile, and distribution/compose fails the build if this key
+    # goes missing or stops naming a liveness probe.
+    #
+    # This line is the ONE place the engine's start gate is decided
+    # (issue #206). distribution/packaging/canonical.json restates it so
+    # derive.go can hold four metadata formats to it, and
+    # TestTheCanonicalDefinitionIsWhereTheHealthChecksAreDecided fails
+    # the build if the restatement stops matching this. Every adapter
+    # declares it too, and must: the image's own instruction is the
+    # freshness verdict, so inheriting it here would be inheriting the
+    # wrong question.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck", "--url", "http://127.0.0.1:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # The declared graceful shutdown period (issue #167). `serve` cancels
+    # one shared shutdown context on SIGTERM and gives the HTTP server and
+    # the scheduler loop apps/common/webhost/serve.DefaultShutdownGrace to
+    # wind down; this is that budget plus room for the journal's final
+    # write, so Docker's own SIGKILL always arrives after the process has
+    # finished rather than during it. Without this line the value is
+    # Docker's 10s default, which is a default and not a contract.
+    stop_grace_period: 30s
+
+    # Deliberately NO ports: here: mapping this to a network is now
+    # web-ui's job, over `internal`, never to the host directly. This is
+    # the actual network-isolation requirement, not a comment - see the
+    # top-of-file note.
+    networks:
+      - internal
+
+  web-ui:
+    # SAME image as rclone-manager, no separate `build:` block: this
+    # service reuses whatever `rclone-manager`'s own build already
+    # produced and tagged (docker compose resolves `image:` against
+    # whatever is already built/pulled under that tag). Same digest, same
+    # binary, different command - never a second image to keep in sync.
+    image: backup-manager:${VERSION:-dev}
+
+    # Wait for the engine to report healthy before starting: a NAS reboot
+    # (or `docker compose up`) starting both containers at once would
+    # otherwise let web-ui begin proxying before rclone-manager is even
+    # listening, surfacing as a confusing "bad gateway" instead of a
+    # simple "please wait." What "healthy" means here is the engine's
+    # liveness probe and nothing else - see its healthcheck above for why
+    # backup freshness must never be the condition this waits on.
+    depends_on:
+      rclone-manager:
+        condition: service_healthy
+
+    # `/backup-manager-web serve-ui`: the shared static UI plus a reverse
+    # proxy to the engine (apps/common/webhost/serve's own doc comment has the
+    # full routing shape). --upstream defaults to
+    # http://rclone-manager:8080 (the engine's own compose service name,
+    # resolved through Docker's embedded DNS on the `internal` network
+    # below), set explicitly here via UPSTREAM_ADDR anyway so the
+    # dependency is visible in this file, not just in the binary's own
+    # default.
+    command: ["/backup-manager-web", "serve-ui", "--profile=${RUNTIME_PROFILE:-generic}"]
+
+    <<: *security
+
+    # Same non-root reasoning as rclone-manager above, even though this
+    # service has no host directory of its own to write into: consistent
+    # hardening costs nothing, and this process may as well run with the
+    # same reduced privilege.
+    user: "${PUID:-1000}:${PGID:-1000}"
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,uid=${PUID:-1000},gid=${PGID:-1000}
+
+    environment:
+      TMPDIR: /tmp
+      TZ: ${TZ:-UTC}
+      # Published to the host (see `ports:` below); LISTEN_ADDR is this
+      # container's own internal bind address, always :8080 regardless of
+      # what host port LISTEN_PORT maps it to.
+      LISTEN_ADDR: ":8080"
+      UPSTREAM_ADDR: "http://rclone-manager:8080"
+
+      # THE trust boundary for a gateway runtime profile (issue #87).
+      # This is the only container with a published port, so this is the
+      # only hop where the network can still answer "did the platform
+      # gateway send this request, or did somebody on the LAN". Left
+      # empty, every provider-native identity header is stripped from
+      # every inbound request, which is what makes the default `generic`
+      # deployment safe without an operator having to know any of this.
+      #
+      # Two things a gateway deployment has to get right, because a CIDR
+      # range on its own does not settle either:
+      #
+      #  - Docker's userland port publishing can present traffic arriving
+      #    at `ports:` below as coming from the bridge gateway address
+      #    whoever sent it, which collapses "the platform gateway" and
+      #    "any LAN client" into one peer. Publish to loopback
+      #    (LISTEN_PORT bound as 127.0.0.1:8080) so the host's own gateway
+      #    is the only thing that can reach this port at all, or put the
+      #    gateway and this container on a network nothing else joins.
+      #  - The range names the GATEWAY, never the internal network. A
+      #    range containing `rclone-manager` or this container itself is
+      #    the vulnerability restated as configuration. That is why the
+      #    engine reads TRUSTED_UPSTREAM_CIDRS above and not this
+      #    variable: the two hops trust different peers, and a single
+      #    value correct for one of them is wrong for the other.
+      TRUSTED_GATEWAY_CIDRS: ${TRUSTED_GATEWAY_CIDRS:-}
+
+      # Runtime UI bundle selection (issue #180, owned by #167). Left
+      # unset, this container serves the bundle compiled into the binary,
+      # which is the shared UI's generic bridge. Set UI_DIR to a bundle
+      # directory mounted into this container, or UI_ROOT to a directory
+      # of per-profile bundles (the one served is <UI_ROOT>/<profile>), to
+      # serve a provider's own bridge instead.
+      #
+      # The reason this is an environment variable rather than a build
+      # argument is the whole point: section 3.7 requires every provider
+      # package to carry the exact same core binary, so the bridge has to
+      # be chosen at run time. apps/generic/tests/uibundle proves one
+      # built binary serves three different bridges with an unchanged
+      # sha256. An unusable UI_DIR/UI_ROOT is a hard start failure, never
+      # a silent fall back to the embedded bundle.
+      UI_DIR: ${UI_DIR:-}
+      UI_ROOT: ${UI_ROOT:-}
+
+    # No volumes at all: this service never reads config.yaml, the SSH
+    # key, known_hosts, or either data directory - it only ever serves
+    # its own embedded static bundle and proxies HTTP requests. Smaller
+    # attack surface than the engine by construction, not by discipline.
+
+    restart: unless-stopped
+
+    # Overrides the image's own HEALTHCHECK (`/backup-manager status`,
+    # which needs a config file and a state database neither of which
+    # this container has): `/backup-manager-web healthcheck` just GETs
+    # its own listener and checks for a non-error response - "is this
+    # web server up," the only question that applies to a container with
+    # no backup state of its own to report on.
+    healthcheck:
+      test: ["CMD", "/backup-manager-web", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+
+    # Shorter than the engine's: this container holds no state and has
+    # nothing to flush, so all it has to finish is whatever request is
+    # already in flight through its reverse proxy.
+    stop_grace_period: 15s
+
+    # The generic Web UI/API listener (docs/EPIC-B-multi-nas.md §9.2) -
+    # the ONLY published port in this file. Bind to a loopback-only host
+    # port (or omit `ports` entirely and reach it through your own
+    # reverse proxy/VPN) if this deployment should not be reachable
+    # directly from the LAN.
+    ports:
+      - "${LISTEN_PORT:-8080}:8080"
+
+    networks:
+      - internal
+"""
+
+
 def stage_payload(args) -> None:
     args.prefix.mkdir(parents=True, exist_ok=True)
     for path in args.host_dirs.values():
         path.mkdir(parents=True, exist_ok=True)
 
     # Copy, never rewrite. distribution/compose holds this exact file to
-    # runtime-contract.json, so shipping a modified copy would be
-    # shipping something no gate has ever checked.
-    shutil.copyfile(str(args.compose_file), str(args.prefix / "compose.yaml"))
+    # runtime-contract.json, so shipping a modified copy would be shipping
+    # something no gate has ever checked.
+    #
+    # With no --compose-file the same rule still holds, because what gets
+    # written is EMBEDDED_COMPOSE_YAML, which is generated from that file
+    # and held to it byte for byte by a test. The installer still has no
+    # opinion of its own about the runtime; it just no longer needs a
+    # checkout on the host to state the one opinion there is.
+    dest = args.prefix / "compose.yaml"
+    if args.compose_file is None:
+        dest.write_text(EMBEDDED_COMPOSE_YAML)
+    else:
+        shutil.copyfile(str(args.compose_file), str(dest))
     (args.prefix / "compose.image.yaml").write_text(render_image_override(args))
 
     env_path = args.prefix / ".env"
@@ -2929,8 +3512,13 @@ def _add_install_prereq_groups(sp: argparse.ArgumentParser, repo_root: Path) -> 
     # the opposite of what splitting the parser was for. It reads as runtime
     # anyway: it names the runtime definition, and its scope (preflight and
     # install only) is exactly this group's.
-    runtime.add_argument("--compose-file", type=Path, default=repo_root / "container" / "compose.yaml",
-                         help="The canonical runtime definition to copy. Not a template: it is copied verbatim.")
+    runtime.add_argument("--compose-file", type=Path, default=None,
+                         help="The canonical runtime definition to copy. Not a template: it is copied "
+                              "verbatim. Defaults to the copy embedded in this installer, which is "
+                              "generated from container/compose.yaml and held to it byte for byte by a "
+                              "test, so this installer needs no checkout on the host. Supply it to install "
+                              "a locally modified runtime from a checkout; naming a path that does not "
+                              "exist is still a refusal.")
     runtime.add_argument("--image", default="ghcr.io/spdrman/backup-manager:0.2.0",
                          help="Image reference both services run.")
     runtime.add_argument("--image-archive", type=Path, default=None,
@@ -3159,7 +3747,7 @@ def resolve(args):
         args.ssh_key = (args.ssh_key or args.prefix / "secrets" / "id_ed25519").expanduser()
     if hasattr(args, "known_hosts"):
         args.known_hosts = (args.known_hosts or args.prefix / "secrets" / "known_hosts").expanduser()
-    if hasattr(args, "compose_file"):
+    if hasattr(args, "compose_file") and args.compose_file is not None:
         args.compose_file = args.compose_file.expanduser()
     if hasattr(args, "image_archive") and args.image_archive is not None:
         args.image_archive = args.image_archive.expanduser()
