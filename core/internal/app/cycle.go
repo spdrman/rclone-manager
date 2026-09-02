@@ -136,6 +136,16 @@ sourcesLoop:
 			if bs.Disabled {
 				continue
 			}
+			// A backup set held for editing (issue #350) is skipped for
+			// the same reason and in the same place a disabled one is:
+			// starting a pass against a definition an operator is
+			// currently changing is two writers on one set, and stopping
+			// the in-flight run while leaving the poll interval free
+			// would be the same race with extra steps. Unlike Disabled
+			// this is not persisted anywhere; see holds.go.
+			if holds := BackupSetHoldsFrom(ctx); holds != nil && holds.Held(bs.ID.String()) {
+				continue
+			}
 			report.Sets = append(report.Sets, s.processBackupSet(ctx, src, bs))
 		}
 	}
@@ -175,6 +185,15 @@ sourcesLoop:
 func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs config.BackupSet) BackupSetCycleResult {
 	result := BackupSetCycleResult{Set: bs.ID}
 	source := sourceFor(s.Config, src, bs)
+
+	// From here on this set runs on its own context, cancelled the moment
+	// an edit hold lands on it (issue #350, holds.go). Every ctx.Err()
+	// check below and inside processArtifact is already positioned so a
+	// cancellation stops the pass at a safe boundary, which is why a hold
+	// needs no new stopping mechanism of its own. With no holds registry
+	// on ctx this is ctx itself and a no-op cancel.
+	ctx, cancelOnHold := withHoldCancellation(ctx, bs.ID.String())
+	defer cancelOnHold()
 
 	// Deferred, so a set counts as finished however this returns. A set
 	// whose reconcile or discovery failed is still a set this cycle is
