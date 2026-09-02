@@ -49,6 +49,22 @@
 }
 .input--mono { font-family: var(--font-mono); }
 
+/* Password reveal toggle (issue #344). The button sits inside the input's
+   own box rather than beside it, so a revealable field keeps the same
+   footprint and baseline as every other field on the form. .field is a
+   column flex, so the wrapper re-establishes a row for the two to share. */
+.password-field { position: relative; display: flex; }
+.password-field__input { flex: 1; min-width: 0; padding-right: 38px; }
+.password-field__toggle {
+  position: absolute; right: 1px; top: 1px; bottom: 1px; width: 36px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: 0; padding: 0;
+  color: var(--text-3); cursor: pointer;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.password-field__toggle:hover:not(:disabled) { color: var(--text); }
+.password-field__toggle:disabled { cursor: not-allowed; opacity: 0.5; }
+
 .table { width: 100%; border-collapse: collapse; font-size: var(--text-base); }
 .table thead tr { background: var(--surface-2); }
 .table th {

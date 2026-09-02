@@ -7,6 +7,7 @@ import type { OperatorFailure } from "@shared/api/failure";
 import { AuthFrame } from "./LoginPage";
 import { ErrorState } from "@shared/components/EmptyState";
 import { HelpField } from "@shared/components/FieldHelp";
+import { PasswordInput } from "../components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 const MIN_LENGTH = 12;
@@ -113,7 +114,7 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
         <HelpField label="Password" help={FIELD_HELP.enrollPassword}>
           {(helpId) => (
             <>
-              <input className="input" type="password" aria-describedby={helpId} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <PasswordInput label="Password" autoComplete="new-password" describedBy={helpId} value={password} onChange={setPassword} required />
               {tooShort ? (
                 <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                   {"Minimum " + MIN_LENGTH + " characters."}
@@ -125,7 +126,7 @@ export function EnrollmentPage({ onEnrolled }: { onEnrolled(): void }) {
         <HelpField label="Confirm password" help={FIELD_HELP.enrollConfirm}>
           {(helpId) => (
             <>
-              <input className="input" type="password" aria-describedby={helpId} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+              <PasswordInput label="Confirm password" autoComplete="new-password" describedBy={helpId} value={confirm} onChange={setConfirm} required />
               {mismatch ? (
                 <span style={{ fontSize: "var(--text-sm)", color: "var(--danger)" }}>
                   Passwords do not match.

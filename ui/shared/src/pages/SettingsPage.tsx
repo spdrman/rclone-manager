@@ -13,6 +13,7 @@ import type { OperatorFailure } from "@shared/api/failure";
 import { RetentionPolicyCard } from "@shared/pages/RetentionPolicyCard";
 import { CapacityCard } from "@shared/pages/CapacityCard";
 import { HelpField } from "@shared/components/FieldHelp";
+import { PasswordInput } from "../components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 export function SettingsPage({ readOnly }: { readOnly: boolean }) {
@@ -240,13 +241,12 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
         <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <HelpField label="Current password" help={FIELD_HELP.currentPassword}>
             {(helpId) => (
-              <input
-                className="input"
-                type="password"
-                aria-describedby={helpId}
+              <PasswordInput
+                label="Current password"
                 autoComplete="current-password"
+                describedBy={helpId}
                 value={current}
-                onChange={(e) => setCurrent(e.target.value)}
+                onChange={setCurrent}
                 disabled={readOnly}
                 required
               />
@@ -255,13 +255,12 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
           <HelpField label="New password" help={FIELD_HELP.newPassword}>
             {(helpId) => (
               <>
-                <input
-                  className="input"
-                  type="password"
-                  aria-describedby={helpId}
+                <PasswordInput
+                  label="New password"
                   autoComplete="new-password"
+                  describedBy={helpId}
                   value={next}
-                  onChange={(e) => setNext(e.target.value)}
+                  onChange={setNext}
                   disabled={readOnly}
                   required
                 />
@@ -276,13 +275,12 @@ function ChangePasswordCard({ readOnly }: { readOnly: boolean }) {
           <HelpField label="Confirm new password" help={FIELD_HELP.confirmNewPassword}>
             {(helpId) => (
               <>
-                <input
-                  className="input"
-                  type="password"
-                  aria-describedby={helpId}
+                <PasswordInput
+                  label="Confirm new password"
                   autoComplete="new-password"
+                  describedBy={helpId}
                   value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
+                  onChange={setConfirm}
                   disabled={readOnly}
                   required
                 />
