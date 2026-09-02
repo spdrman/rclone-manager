@@ -1042,6 +1042,7 @@ Three environment variables change what runs:
 | `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix and the SFTP integration tests), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
 | `CI_LOCAL_SKIP_JS=1` | Proceeds past the preflight with uninstalled JS workspaces instead of failing, for a change that only touches Go. Ends INCOMPLETE whenever it actually left a workspace out; with everything installed it changes nothing and the run can still be `ok`. |
 | `CI_LOCAL_SKIP_DOCKER=1` | Proceeds past the preflight with the daemon down instead of failing. Ends INCOMPLETE, because the Docker-backed suites will have reported `ok` without running. |
+| `CI_LOCAL_SKIP_TWO_MACHINE=1` | Leaves out the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install pulls a real backup off a real machine. Ends INCOMPLETE. |
 
 A run that skipped anything ends with `==> ci-local: INCOMPLETE`, lists what did not run,
 and exits 3. A run that performed every check it invoked ends with `==> ci-local: ok` and
@@ -1066,6 +1067,15 @@ On a machine with no Playwright browser the step refuses and names the install c
 `INCOMPLETE` rather than `ok`, the same way a stopped Docker daemon does.
 `scripts/e2e/README.md` has the mechanics, including how to move the pin and what to do
 when the pin and the working tree legitimately disagree.
+
+A non-FAST run also performs the two-machine end-to-end backup proof (#356): two throwaway
+containers on a temporary network, the real installer, a backup set created through the
+CLI, and the artifact compared to the source by SHA-256. It has three outcomes rather than
+two, and the third is the point. A machine with no Docker, or one whose daemon refuses a
+privileged container so docker-in-docker cannot start, cannot perform the proof at all: the
+script says `CANNOT RUN` and exits 3, this gate ledgers that, and the run ends `INCOMPLETE`
+naming the proof it could not perform. Reporting `ok` for a backup nobody proved would be
+the worst version of the failure this whole ledger exists to prevent.
 
 A component that is not in the tree at all is not a skip: its checks are inapplicable, and
 the run can still be `ok`. Today `apps/ugos/backend` and `apps/ugos/frontend/upk-proof`
