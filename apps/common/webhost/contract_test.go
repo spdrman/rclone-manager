@@ -112,9 +112,15 @@ var contractBindings = map[string]contractBinding{
 	// Issue #350's edit hold. The release has no response body at all
 	// (204), so it binds no response type; the contract declares no
 	// response schema for it either, which is what keeps the two in step.
-	"getBackupSetEditHold":      {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldStateResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
-	"takeBackupSetEditHold":     {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
-	"releaseBackupSetEditHold":  {"/api/v1/backup-sets/{source}/{set}/edit-hold/release", nil, nil, "/api/v1/backup-sets/src/set-1/edit-hold/release"},
+	"getBackupSetEditHold":     {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldStateResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
+	"takeBackupSetEditHold":    {"/api/v1/backup-sets/{source}/{set}/edit-hold", nil, editHoldResponse{}, "/api/v1/backup-sets/src/set-1/edit-hold"},
+	"releaseBackupSetEditHold": {"/api/v1/backup-sets/{source}/{set}/edit-hold/release", nil, nil, "/api/v1/backup-sets/src/set-1/edit-hold/release"},
+	// Issue #333's per-set retention. Three operations on two paths, the
+	// same POST-and-a-tail shape /enabled and /edit-hold/release already
+	// use; see handlers_backupsetretention.go for why not PUT/DELETE.
+	"getBackupSetRetention":     {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"setBackupSetRetention":     {"/api/v1/backup-sets/{source}/{set}/retention", setBackupSetRetentionRequest{}, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"clearBackupSetRetention":   {"/api/v1/backup-sets/{source}/{set}/retention/clear", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention/clear"},
 	"scanCatalog":               {"/api/v1/catalog/scan", nil, catalogReportResponse{}, "/api/v1/catalog/scan"},
 	"rebuildCatalog":            {"/api/v1/catalog/rebuild", nil, catalogReportResponse{}, "/api/v1/catalog/rebuild"},
 	"getRetentionErrorEnvelope": {"", nil, errorResponse{}, ""},

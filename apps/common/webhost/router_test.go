@@ -186,11 +186,25 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// TestBackupSetEditHold_IsNotBehindTheDestructiveGate pins it.
 	"POST /api/v1/backup-sets/{source}/{set}/edit-hold":         true,
 	"POST /api/v1/backup-sets/{source}/{set}/edit-hold/release": true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate":  true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":       true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":   true,
-	"POST /api/v1/catalog/scan":                                 true,
-	"POST /api/v1/catalog/rebuild":                              true,
+
+	// Issue #333: giving one backup set its own retention chain, or
+	// putting it back on the deployment's. Writing a policy deletes
+	// nothing; what deletes is a retention APPLY
+	// (POST /backup-sets/{source}/{set}/retention/apply), which IS gated
+	// and is deliberately not on this list, and which an administrator
+	// reviews as a plan first. The same argument PATCH /api/v1/settings
+	// is exempt under, one level down: gating the policy itself would
+	// mean an operator who has not turned destructive operations on
+	// cannot correct a retention policy that is about to delete the
+	// wrong thing, which is exactly backwards.
+	// TestBackupSetRetention_IsNotBehindTheDestructiveGate pins it.
+	"POST /api/v1/backup-sets/{source}/{set}/retention":        true,
+	"POST /api/v1/backup-sets/{source}/{set}/retention/clear":  true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,
+	"POST /api/v1/catalog/scan":                                true,
+	"POST /api/v1/catalog/rebuild":                             true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

@@ -188,6 +188,13 @@ describe("every request the shared client makes is a declared operation", () => 
       ["getEditHold", () => httpApi.getEditHold("src", "set-1")],
       ["takeEditHold", () => httpApi.takeEditHold("src", "set-1")],
       ["releaseEditHold", () => httpApi.releaseEditHold("src", "set-1")],
+      // Issue #333: one backup set's own retention policy, keyed on the
+      // same {source}/{set} pair as everything above.
+      ["getBackupSetRetention", () => httpApi.getBackupSetRetention("src", "set-1")],
+      ["setBackupSetRetention", () => httpApi.setBackupSetRetention("src", "set-1", {
+        tiers: [{ name: "daily", granularity: "day", keep: 7 }]
+      })],
+      ["clearBackupSetRetention", () => httpApi.clearBackupSetRetention("src", "set-1")],
       ["createBackupSet", () => httpApi.createBackupSet({
         name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
         knownHostsLine: "l", remotePath: "/r", localPath: "/l",

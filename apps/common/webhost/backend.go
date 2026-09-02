@@ -185,6 +185,21 @@ type BackupServiceClient interface {
 	BeginBackupSetEdit(ctx context.Context, id string) (service.EditHold, error)
 	EndBackupSetEdit(ctx context.Context, id string) error
 
+	// GetBackupSetRetention, SetBackupSetRetention and
+	// ClearBackupSetRetention back the /retention routes on one backup
+	// set (issue #333): retention used to be global only, so an operator
+	// wanting a database dump kept on a different chain from a media
+	// share had to run a second deployment.
+	//
+	// All three go through the same config write and validation path the
+	// deployment-wide policy does, so a per-set chain is refused on
+	// exactly the same terms as a global one. See
+	// core/service/backupsetretention.go for why an override names a
+	// whole chain and what an omitted calendar field inherits.
+	GetBackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+	SetBackupSetRetention(ctx context.Context, id string, override service.BackupSetRetentionOverride) (service.BackupSetRetention, error)
+	ClearBackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same
 	// non-destructive reachability check TestConnection performs, against

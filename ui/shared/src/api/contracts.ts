@@ -299,6 +299,14 @@ export interface RetentionTierSetting {
   periodDays?: number;
   keep: number;
   windowUnit?: string;
+  /** The storage medium this tier's artifacts live on (EPIC E, FR-27),
+   *  or undefined for the backup set's own local path. Carried in both
+   *  directions rather than read-only: a retention write REPLACES the
+   *  whole chain, so a field this type could not hold would be a field
+   *  the next settings save deleted from the operator's file, and
+   *  editing daily's keep would quietly move monthly's artifacts back
+   *  onto local disk. */
+  medium?: string;
 }
 
 /** The FR-18/FR-19 policy as it is actually deciding. `tiers` is always
@@ -314,6 +322,49 @@ export interface RetentionSettings {
    *  materially more dangerous configuration, and SettingsPage confirms
    *  it before the write. */
   protectLastKnownGood: boolean;
+}
+
+/**
+ * Issue #333. One backup set's own retention policy, as it is written.
+ *
+ * `tiers` is the WHOLE chain and is required. The three legacy
+ * daily_days/weekly_months/monthly_months scalars are deliberately not
+ * writable per set: naming two of the three would be half a chain, and
+ * half a chain one level down resolves its missing half to the PRODUCT
+ * default rather than to the deployment's policy, which silently
+ * shortens retention. Everything else is optional and inherits from the
+ * deployment's resolved policy when omitted, because the timezone and
+ * the week start decide how any chain is reckoned rather than what it
+ * says.
+ */
+export interface BackupSetRetentionOverride {
+  tiers: RetentionTierSetting[];
+  /** Omit to inherit the deployment's. */
+  timezone?: string;
+  /** Omit to inherit the deployment's. */
+  weekStartsOn?: string;
+  /** Omit to inherit the deployment's posture. An explicit false widens
+   *  what a later retention apply may delete, for this one set. */
+  protectLastKnownGood?: boolean;
+}
+
+/**
+ * Issue #333. What one backup set is retained under, and whether it says
+ * so itself.
+ *
+ * `policy` is always the RESOLVED chain in force, so nothing here has to
+ * redo inheritance. `isOverride` reads whether the operator wrote a
+ * block on this set, never whether the two chains happen to match: a set
+ * override and a deployment policy that agree want opposite advice ("edit
+ * the set" versus "edit the deployment").
+ */
+export interface BackupSetRetention {
+  backupSetId: string;
+  isOverride: boolean;
+  policy: RetentionSettings;
+  /** What clearing the override would return this set to. Equal to
+   *  `policy` exactly when `isOverride` is false. */
+  deploymentPolicy: RetentionSettings;
 }
 
 /**
@@ -723,6 +774,26 @@ export interface BackupManagerApi {
    *  actually persisted rather than echoing its own request back. */
   getSettings(): Promise<AppSettings>;
   updateSettings(req: UpdateSettingsRequest): Promise<AppSettings>;
+
+  /**
+   * Issue #333: one backup set's own retention policy. Retention used to
+   * be global only, so an operator wanting a database dump kept on a
+   * different chain from a media share had to run a second deployment.
+   *
+   * All three reach the same service method the CLI's own
+   * `backup-set retention show|set|clear` does, so the two surfaces
+   * cannot answer differently. `setBackupSetRetention` REPLACES any
+   * override already there rather than merging with it, and
+   * `clearBackupSetRetention` on a set that has none is a success that
+   * writes nothing.
+   */
+  getBackupSetRetention(source: string, set: string): Promise<BackupSetRetention>;
+  setBackupSetRetention(
+    source: string,
+    set: string,
+    override: BackupSetRetentionOverride
+  ): Promise<BackupSetRetention>;
+  clearBackupSetRetention(source: string, set: string): Promise<BackupSetRetention>;
 
   /** Issue #286: the one manager-wide storage reading. Deliberately not
    *  derived from anything else this client already fetches — see

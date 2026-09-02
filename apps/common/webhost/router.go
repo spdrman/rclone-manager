@@ -268,6 +268,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		r.Get("/backup-sets/{source}/{set}/edit-hold", h.getBackupSetEditHold)
 		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/edit-hold", h.takeBackupSetEditHold)
 		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/edit-hold/release", h.releaseBackupSetEditHold)
+		// Issue #333: one backup set's own retention policy. Two named
+		// segments plus a static tail, the same shape as the retention
+		// preview above, so chi matches them ahead of the
+		// "/backup-sets/*" catch-all below.
+		//
+		// POST twice rather than PUT and DELETE, following /enabled,
+		// /read-only and /edit-hold/release: neither method appears
+		// anywhere else in this API, and one feature is a poor reason to
+		// teach the contract, the generated bindings and the middleware
+		// two new shapes. CSRF on both writes and the destructive gate on
+		// neither: writing a policy deletes nothing, and gating it would
+		// mean an operator who has not turned destructive operations on
+		// cannot correct a policy that is about to delete the wrong
+		// thing.
+		r.Get("/backup-sets/{source}/{set}/retention", h.getBackupSetRetention)
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/retention", h.setBackupSetRetention)
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/retention/clear", h.clearBackupSetRetention)
 		r.Get("/backup-sets/*", h.getBackupSet)
 
 		// Issue #211: the backups this deployment actually holds, and the

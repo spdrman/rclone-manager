@@ -72,8 +72,18 @@ commands:
   sources                                        list configured sources and backup sets
   backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
+                    [--acknowledge-repoint]
                                                   change one configured backup set in place; only the flags you pass are
-                                                  changed, and the change is persisted and hot-reloaded (#350)
+                                                  changed, and the change is persisted and hot-reloaded (#350).
+                                                  --acknowledge-repoint confirms a --host/--remote-path/--local-path
+                                                  change on a set that already has artifacts on record
+  backup-set retention show <source/backup-set>  report the retention policy this set is retained under, and
+                                                  whether it is the set's own or the deployment's (#333)
+  backup-set retention set <source/backup-set> --tier name:granularity:keep[:window_unit] [--tier ...]
+                    [--timezone TZ] [--week-starts-on monday|sunday] [--protect-last-known-good=BOOL]
+                                                  give this one set its own retention chain, whatever the rest of
+                                                  the deployment is retained under; omitted calendar fields inherit
+  backup-set retention clear <source/backup-set> retain this set under the deployment's policy again
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)

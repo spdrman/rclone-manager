@@ -97,6 +97,18 @@ type UpdateBackupSetRequest struct {
 	// create path (validator.go, docs/EPIC-B-multi-nas.md §26 Step 5).
 	ValidatorID *ValidatorID
 
+	// Retention is issue #333's per-set override, and is a tri-state
+	// rather than a pointer to a policy: nil leaves the override exactly
+	// as it is, Clear removes it so the set inherits the deployment's
+	// policy again, and a Policy installs one. See
+	// backupsetretention.go, which is where the three operations that
+	// build this live, for why two states were not enough.
+	//
+	// It is never merged field by field with what is already there. An
+	// override names a whole chain or is refused, by the same resolver a
+	// config file's own half-chain is refused by.
+	Retention *retentionOverrideChange
+
 	// AcknowledgeRepoint confirms that the caller means to move this set
 	// to different data. It is not a field of the backup set and nothing
 	// persists it: it answers one refusal, for one request.
@@ -124,7 +136,7 @@ func (r UpdateBackupSetRequest) isEmpty() bool {
 	return r.Host == nil && r.Port == nil && r.User == nil &&
 		r.RemotePath == nil && r.LocalPath == nil && r.Include == nil &&
 		r.CompletionStrategy == nil && r.StableFor == nil &&
-		r.StaleAfter == nil && r.ValidatorID == nil
+		r.StaleAfter == nil && r.ValidatorID == nil && r.Retention == nil
 }
 
 // UpdateBackupSet applies req to the backup set named by id ("source/name"),
@@ -290,6 +302,19 @@ func applyBackupSetUpdate(bs config.BackupSet, req UpdateBackupSetRequest) confi
 	}
 	if req.StaleAfter != nil {
 		bs.StaleAfter = config.Duration(*req.StaleAfter)
+	}
+	if req.Retention != nil {
+		// Whole-policy, never a merge with whatever was there: issue
+		// #333's central rule, and the one whose violation is silent and
+		// expensive. Clearing writes nil rather than an empty struct,
+		// because nil is what "inherit" is spelled as and an empty
+		// struct is a policy the resolver refuses.
+		if req.Retention.Clear {
+			bs.RetentionConfig = nil
+		} else {
+			installed := toConfigRetentionOverride(req.Retention.Override)
+			bs.RetentionConfig = &installed
+		}
 	}
 	if req.ValidatorID != nil {
 		bs.Validation.ValidatorID = string(*req.ValidatorID)

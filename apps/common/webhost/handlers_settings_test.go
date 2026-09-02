@@ -490,3 +490,43 @@ func TestPatchSettings_MethodsOtherThanPatchAreNotRegistered(t *testing.T) {
 		t.Error("a request with an unregistered method still reached the backend")
 	}
 }
+
+// TestUpdateSettings_ATierKeepsItsMediumAcrossTheSeam.
+//
+// A retention write REPLACES the whole chain, so a field this boundary
+// cannot carry is a field a settings save deletes from the operator's
+// file. The medium (EPIC E, FR-27) is the one where that is expensive
+// rather than untidy: dropping it moves that tier's artifacts back onto
+// local disk, and nothing reports it. So an operator editing daily's keep
+// would have silently un-tiered monthly.
+//
+// Both directions, because either one alone is enough to lose it: a read
+// that dropped the medium hands a form a chain without one, which it then
+// writes back.
+func TestUpdateSettings_ATierKeepsItsMediumAcrossTheSeam(t *testing.T) {
+	tr := newSettingsTestRouter(t)
+	tr.backend.settings.Retention.Tiers = []service.RetentionTier{
+		{Name: "daily", Granularity: "day", Keep: 7},
+		{Name: "monthly", Granularity: "month", Keep: 12, Medium: "offsite"},
+	}
+
+	read := decodeSettings(t, tr.get(t))
+	if len(read.Retention.Tiers) != 2 || read.Retention.Tiers[1].Medium != "offsite" {
+		t.Fatalf("the read side dropped the medium: %+v", read.Retention.Tiers)
+	}
+
+	rec := tr.patch(t, `{"retention":{"tiers":[
+	  {"name":"daily","granularity":"day","keep":14},
+	  {"name":"monthly","granularity":"month","keep":12,"medium":"offsite"}
+	]}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	got := tr.backend.lastUpdate.Retention
+	if got == nil || len(got.Tiers) != 2 {
+		t.Fatalf("the service saw %+v, want a two-tier chain", got)
+	}
+	if got.Tiers[1].Medium != "offsite" {
+		t.Errorf("the write side dropped the medium: the service saw %+v", got.Tiers[1])
+	}
+}

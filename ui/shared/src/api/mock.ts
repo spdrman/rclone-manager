@@ -1,6 +1,8 @@
 import type {
   AppSettings,
   BackupManagerApi,
+  BackupSetRetention,
+  BackupSetRetentionOverride,
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -540,6 +542,48 @@ function defaultCapacitySettings(): CapacitySettings {
   };
 }
 
+/** The 404 all three per-set retention operations answer for a set this
+ *  fixture does not hold, spelled once. */
+function noSuchSet(): BackupManagerError {
+  return new BackupManagerError({
+    code: "BACKUP_SET_NOT_FOUND",
+    message: "That backup set no longer exists.",
+    correlationId: "cid_mock404"
+  });
+}
+
+/** Resolves one set's retention the way core/service does: the override
+ *  when there is one, with its omitted calendar fields filled in from the
+ *  deployment's, and the deployment's policy otherwise. Faking the
+ *  resolution rather than echoing the override is what makes a component
+ *  that renders the raw block visibly wrong here rather than only against
+ *  a real server. */
+function mockRetentionFor(
+  id: string,
+  overrides: Map<string, BackupSetRetentionOverride>,
+  settings: AppSettings
+): BackupSetRetention {
+  const deployment = structuredClone(settings.retention);
+  const override = overrides.get(id);
+  if (!override) {
+    return { backupSetId: id, isOverride: false, policy: deployment, deploymentPolicy: deployment };
+  }
+  return {
+    backupSetId: id,
+    isOverride: true,
+    policy: {
+      timezone: override.timezone || deployment.timezone,
+      weekStartsOn: override.weekStartsOn || deployment.weekStartsOn,
+      tiers: structuredClone(override.tiers),
+      protectLastKnownGood:
+        override.protectLastKnownGood === undefined
+          ? deployment.protectLastKnownGood
+          : override.protectLastKnownGood
+    },
+    deploymentPolicy: deployment
+  };
+}
+
 function defaultSettings(): AppSettings {
   return {
     retention: {
@@ -639,6 +683,11 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // same way the real backend's hot reload makes a write visible to the
   // next read (issue #140).
   const settings = defaultSettings();
+  // Per createMockApi call, deliberately: unlike SETS, nothing about a
+  // fixture's identity depends on an override surviving between
+  // instances, and a module-level map would make test order matter for a
+  // third reason.
+  const retentionOverrides = new Map<string, BackupSetRetentionOverride>();
   // Issue #176: a fresh app-store install has no configuration at all.
   // Mutable, because completing setup is what makes it configured — the
   // same one-way transition the real backend makes in-process.
@@ -832,6 +881,38 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           correlationId: "cid_stale991"
         }));
       return delay({ ...current, operationId: "op_mock_retention_" + retentionTick });
+    },
+
+    // Issue #333. Per-set retention overrides live in this closure, not
+    // in SETS, because unlike a backup set's own fields they are not part
+    // of what listSets serves: a page reads them through their own
+    // request, and a fixture that carried them on the set would let a
+    // component pass here while reading a field the server never sends.
+    getBackupSetRetention: (source, set) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return Promise.reject(noSuchSet());
+      return delay(mockRetentionFor(found.id, retentionOverrides, settings));
+    },
+    setBackupSetRetention: (source, set, override) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return Promise.reject(noSuchSet());
+      if (override.tiers.length === 0)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message:
+              "a backup set's own retention policy has to name at least one tier; to go back to the deployment's policy, clear the override instead",
+            correlationId: "cid_mock_retention"
+          })
+        );
+      retentionOverrides.set(found.id, structuredClone(override));
+      return delay(mockRetentionFor(found.id, retentionOverrides, settings));
+    },
+    clearBackupSetRetention: (source, set) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return Promise.reject(noSuchSet());
+      retentionOverrides.delete(found.id);
+      return delay(mockRetentionFor(found.id, retentionOverrides, settings));
     },
 
     getSettings: () => delay(structuredClone(settings)),

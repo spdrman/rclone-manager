@@ -49,7 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
-| `backup-set` | `backup-set patch <source/backup-set> [flags]` changes one configured backup set in place; only the flags you pass are changed (issue #350) |
+| `backup-set` | `backup-set patch <source/backup-set> [flags]` changes one configured backup set in place; only the flags you pass are changed (issue #350). `backup-set retention show\|set\|clear <source/backup-set>` gives one set its own retention chain, or puts it back on the deployment's (issue #333) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
@@ -819,6 +819,34 @@ leave a set that declares its own alone.
 One rollback note: unknown keys are a parse error, so a config file carrying a set-level
 `retention:` block cannot be read by a build from before this feature. Writing one is a
 one-way door for a deployment that might need to go back.
+
+**None of that needs an editor on the NAS any more.** All three of it, on all three
+surfaces:
+
+```bash
+backup-manager backup-set --config ./config.yaml retention show production/scratch-analytics
+backup-manager backup-set --config ./config.yaml retention set production/scratch-analytics \
+  --tier daily:day:3 --tier monthly:month:1
+backup-manager backup-set --config ./config.yaml retention clear production/scratch-analytics
+```
+
+`GET`, `POST` and `POST .../clear` on `/api/v1/backup-sets/{source}/{set}/retention` are the
+same three operations, calling the same service methods, and a backup set's detail page in
+the Web UI shows which policy it is retained under and offers the same two writes while it
+is in edit mode. So the file, the terminal and the browser cannot answer differently.
+
+Three things about that surface are worth knowing before you use it:
+
+- **It writes a `tiers:` chain, never the three scalars.** The scalars stay readable, and a
+  `show` of a set using them reports the chain they stand for, but nothing here can write
+  half a chain, which is the failure the whole-chain rule above exists to prevent.
+- **Declaring an override starts from the deployment's own chain.** `Give this set its own
+  policy` in the Web UI, and `retention set` with the chain a `show` just printed, both
+  leave what is retained unchanged on the day you run them. What changes is that the next
+  edit to the deployment's policy no longer moves this set.
+- **Clearing a set that has no override is a success and writes nothing.** The state you
+  asked for is the state that holds, and a config file rewritten to no effect would move
+  the configuration revision and invalidate every outstanding retention preview.
 
 ### Which timestamp puts a backup in a bucket
 

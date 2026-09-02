@@ -268,3 +268,151 @@ func TestRun_BackupSetPatchReportsTheFieldsItCanChange(t *testing.T) {
 		t.Errorf("patch output does not report the stale_after it just wrote:\n%s", out)
 	}
 }
+
+// TestRun_BackupSetRetentionShowSetClear is issue #333's CLI half, end to
+// end through the real binary against a real config file: show reports
+// inheritance, set gives the one set its own chain and persists it, show
+// then says so, and clear puts it back with no residue.
+//
+// Driven as one sequence rather than four cases on purpose. What the
+// issue actually asks for is that the three verbs compose into a round
+// trip an operator can make and unmake, and four independent cases would
+// each prove a step while leaving that unchecked.
+func TestRun_BackupSetRetentionShowSetClear(t *testing.T) {
+	configPath := writeTestConfig(t)
+
+	inherited := captureStdout(t, func() {
+		if got := run([]string{"backup-set", "--config", configPath, "retention", "show", "production/postgres-primary"}); got != 0 {
+			t.Fatal("retention show on an inheriting set != 0")
+		}
+	})
+	if !strings.Contains(inherited, "inherited") {
+		t.Errorf("show does not say the policy is inherited:\n%s", inherited)
+	}
+
+	set := captureStdout(t, func() {
+		args := []string{"backup-set", "--config", configPath, "retention", "set", "production/postgres-primary",
+			"--tier", "daily:day:30", "--tier", "monthly:month:24"}
+		if got := run(args); got != 0 {
+			t.Fatalf("run(%v) != 0", args)
+		}
+	})
+	if !strings.Contains(set, "daily/30") || !strings.Contains(set, "monthly/24") {
+		t.Errorf("set does not report the chain it just wrote:\n%s", set)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), "name: daily") {
+		t.Errorf("the config file does not carry the set's own chain:\n%s", raw)
+	}
+
+	overridden := captureStdout(t, func() {
+		if got := run([]string{"backup-set", "--config", configPath, "retention", "show", "production/postgres-primary"}); got != 0 {
+			t.Fatal("retention show on an overridden set != 0")
+		}
+	})
+	if !strings.Contains(overridden, "this set's own retention policy") {
+		t.Errorf("show does not name the set's own policy:\n%s", overridden)
+	}
+	// And what clearing would go back to, so deciding whether to clear
+	// does not need a second command.
+	if !strings.Contains(overridden, "deployment policy:") {
+		t.Errorf("show does not report what clearing would return to:\n%s", overridden)
+	}
+
+	cleared := captureStdout(t, func() {
+		if got := run([]string{"backup-set", "--config", configPath, "retention", "clear", "production/postgres-primary"}); got != 0 {
+			t.Fatal("retention clear != 0")
+		}
+	})
+	if !strings.Contains(cleared, "inherited") {
+		t.Errorf("clear does not report the set back on the deployment's policy:\n%s", cleared)
+	}
+	raw, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(raw), "name: daily") {
+		t.Errorf("the cleared chain is still in the config file:\n%s", raw)
+	}
+}
+
+// TestRun_BackupSetRetentionSetRefusesAHalfChain: the CLI cannot express
+// half a chain at all (it writes tiers, never the three legacy scalars),
+// and naming no tier is a usage error pointing at `clear`, which is what
+// an operator who wanted the deployment's policy actually meant.
+func TestRun_BackupSetRetentionSetRefusesAHalfChain(t *testing.T) {
+	configPath := writeTestConfig(t)
+	args := []string{"backup-set", "--config", configPath, "retention", "set", "production/postgres-primary"}
+	var code int
+	stderr := captureStderr(t, func() { code = run(args) })
+	if code != 2 {
+		t.Errorf("run(%v) = %d, want 2", args, code)
+	}
+	if !strings.Contains(stderr, "clear") {
+		t.Errorf("the refusal does not point at `retention clear`:\n%s", stderr)
+	}
+}
+
+// TestRun_BackupSetRefusesAFlagTheVerbDoesNotOwn. A flag silently parsed
+// and then ignored by a command that mutates a live configuration is the
+// trap #323 fixed on `settings`: the operator reads exit 0 as "that
+// landed". Both directions are checked, because a one-way check would
+// pass against a command that accepted everything everywhere.
+func TestRun_BackupSetRefusesAFlagTheVerbDoesNotOwn(t *testing.T) {
+	configPath := writeTestConfig(t)
+	for _, args := range [][]string{
+		{"backup-set", "--config", configPath, "patch", "production/postgres-primary", "--tier", "daily:day:7"},
+		{"backup-set", "--config", configPath, "retention", "set", "production/postgres-primary", "--tier", "daily:day:7", "--host", "elsewhere.internal"},
+		{"backup-set", "--config", configPath, "retention", "clear", "production/postgres-primary", "--tier", "daily:day:7"},
+		{"backup-set", "--config", configPath, "retention", "show", "production/postgres-primary", "--timezone", "UTC"},
+	} {
+		if got := run(args); got != 2 {
+			t.Errorf("run(%v) = %d, want 2 (a usage error)", args, got)
+		}
+	}
+}
+
+// TestRun_BackupSetRetentionMalformedInvocations covers the verb shapes
+// an operator mistypes. `retention` alone is the one that matters: read
+// as a verb on its own it would have to guess which of show, set and
+// clear was meant, and two of those three write.
+func TestRun_BackupSetRetentionMalformedInvocations(t *testing.T) {
+	configPath := writeTestConfig(t)
+	for _, args := range [][]string{
+		{"backup-set", "--config", configPath, "retention"},
+		{"backup-set", "--config", configPath, "retention", "production/postgres-primary"},
+		{"backup-set", "--config", configPath, "retention", "frobnicate", "production/postgres-primary"},
+		{"backup-set", "--config", configPath, "retention", "show", "not-an-id"},
+		{"backup-set", "--config", configPath, "retention", "show", "production/postgres-primary", "extra"},
+	} {
+		if got := run(args); got != 2 {
+			t.Errorf("run(%v) = %d, want 2 (a usage error)", args, got)
+		}
+	}
+}
+
+// TestRun_BackupSetRetentionSetInheritsTheCalendarItDoesNotName, at the
+// surface an operator actually types: a chain written without a timezone
+// is reckoned in the deployment's, not in UTC. Getting this wrong moves
+// which day every restore point in that one set belongs to.
+func TestRun_BackupSetRetentionSetInheritsTheCalendarItDoesNotName(t *testing.T) {
+	configPath := writeTestConfigWithRetentionBlock(t, "retention:\n  timezone: America/Vancouver\n  week_starts_on: sunday\n")
+
+	out := captureStdout(t, func() {
+		args := []string{"backup-set", "--config", configPath, "retention", "set", "production/postgres-primary",
+			"--tier", "daily:day:30"}
+		if got := run(args); got != 0 {
+			t.Fatalf("run(%v) != 0", args)
+		}
+	})
+	if !strings.Contains(out, "timezone=America/Vancouver") {
+		t.Errorf("the override did not inherit the deployment's timezone:\n%s", out)
+	}
+	if !strings.Contains(out, "week_starts_on=sunday") {
+		t.Errorf("the override did not inherit the deployment's week start:\n%s", out)
+	}
+}

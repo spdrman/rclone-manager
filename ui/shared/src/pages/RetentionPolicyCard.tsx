@@ -168,14 +168,52 @@ function granularityLabel(value: string): string {
 
 const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
-function RetentionPolicyEditor({
+/**
+ * How this editor persists what it is showing.
+ *
+ * The deployment-wide card leaves it out and gets the sparse
+ * PATCH /settings write below, which is the right shape there: an absent
+ * key means "leave this alone", and that is what stops a config written
+ * with the legacy scalars being rewritten into the general spelling by a
+ * save that never touched the chain.
+ *
+ * Issue #333's per-set override passes one, because a per-set policy is
+ * WHOLE-policy: a set either declares its own chain or inherits, and
+ * there is no half of one to leave alone. So the seam hands over the
+ * complete policy on screen and gets back whatever is now in force, which
+ * is not the same thing (an override that names no timezone is resolved
+ * against the deployment's).
+ *
+ * One editor with a seam rather than two editors: everything that makes
+ * this one worth having -- the schema-driven pickers, the per-tier
+ * validation, the refusal to empty the chain, the confirmation in front
+ * of turning FR-19 protection off -- is exactly what a second one would
+ * have had to grow again and then keep in step.
+ */
+export interface RetentionPolicySaver {
+  /** Persists the whole policy and resolves with what is now in force. */
+  write(policy: RetentionSettings): Promise<RetentionSettings>;
+  /** What the operator is told this form is about, replacing the
+   *  deployment-wide card's own sentence. */
+  intro: ReactNode;
+  /** The label on the save button, since "Save retention policy" reads
+   *  as the deployment's from a backup set's own page. */
+  saveLabel: string;
+  /** What the success banner says. */
+  savedNote: ReactNode;
+}
+
+export function RetentionPolicyEditor({
   loaded,
   schema,
-  readOnly
+  readOnly,
+  saver
 }: {
   loaded: RetentionSettings;
   schema: RetentionSchema;
   readOnly: boolean;
+  /** Absent means the deployment-wide sparse PATCH /settings write. */
+  saver?: RetentionPolicySaver;
 }) {
   const api = useApi();
 
@@ -232,18 +270,28 @@ function RetentionPolicyEditor({
     setBusy(true);
     setSaveError(null);
     setSaved(false);
-    api
-      .updateSettings({ retention })
+    const persisted = saver
+      ? saver.write({
+          // The WHOLE policy, not the changed half. See
+          // RetentionPolicySaver's own doc for why the two writes differ
+          // in exactly this.
+          timezone,
+          weekStartsOn,
+          protectLastKnownGood: protect,
+          tiers: tiers.map(toTierSetting)
+        })
+      : api.updateSettings({ retention }).then((next) => next.retention);
+    persisted
       .then((next) => {
         // Re-baseline against what the server says is now running, not
         // against the draft: defaults it resolved and values it
         // canonicalised are part of the answer, and the next "has
         // anything changed" comparison has to be made against those.
-        setBaseline(next.retention);
-        setTimezone(next.retention.timezone);
-        setWeekStartsOn(next.retention.weekStartsOn);
-        setProtect(next.retention.protectLastKnownGood);
-        setTiers(next.retention.tiers.map(toDraft));
+        setBaseline(next);
+        setTimezone(next.timezone);
+        setWeekStartsOn(next.weekStartsOn);
+        setProtect(next.protectLastKnownGood);
+        setTiers(next.tiers.map(toDraft));
         setSaved(true);
       })
       .catch((e: unknown) => {
@@ -272,8 +320,15 @@ function RetentionPolicyEditor({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <p style={{ margin: 0, fontSize: 13, color: "var(--text-2)", maxWidth: "78ch" }}>
-        One policy for every backup set. Each tier groups backups into calendar buckets and keeps
-        the newest good backup in each one; a backup kept by any tier is kept.
+        {saver ? (
+          saver.intro
+        ) : (
+          <>
+            The deployment&rsquo;s policy: every backup set that does not declare its own is
+            retained under it. Each tier groups backups into calendar buckets and keeps the
+            newest good backup in each one; a backup kept by any tier is kept.
+          </>
+        )}
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(196px, 1fr))", gap: "15px 18px" }}>
@@ -416,8 +471,14 @@ function RetentionPolicyEditor({
         <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
           <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"✓"}</span>
           <span>
-            Retention policy saved. It is in effect now, with no restart. Saving rewrites the
-            server&rsquo;s configuration file, which does not preserve comments in it.
+            {saver ? (
+              saver.savedNote
+            ) : (
+              <>
+                Retention policy saved. It is in effect now, with no restart. Saving rewrites the
+                server&rsquo;s configuration file, which does not preserve comments in it.
+              </>
+            )}
           </span>
         </div>
       ) : null}
@@ -430,7 +491,7 @@ function RetentionPolicyEditor({
           disabled={readOnly || invalid || !dirty || busy}
           onClick={onSave}
         >
-          {busy ? "Saving…" : "Save retention policy"}
+          {busy ? "Saving…" : (saver?.saveLabel ?? "Save retention policy")}
         </button>
       </div>
 

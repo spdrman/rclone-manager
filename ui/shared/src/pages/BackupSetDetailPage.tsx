@@ -21,6 +21,7 @@ import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
 import { HelpField } from "@shared/components/FieldHelp";
 import { ErrorState } from "@shared/components/EmptyState";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
+import { BackupSetRetentionSection } from "./BackupSetRetentionSection";
 import { EDIT_FIELDS, readEditFields, visibleEditFields } from "./backupSetEditFields";
 import type { EditField, EditFieldKey } from "./backupSetEditFields";
 import type { BackupSetPatch, RunningWork } from "@shared/api/contracts";
@@ -580,6 +581,21 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               </p>
             </Section>
           ) : null}
+
+          {/* Issue #333. Drawn now, and not before, because until this
+              change there was nothing behind it: retention was global
+              only, and #299's rule is that a field nothing reads must not
+              be drawn. Its edit controls follow the page's own edit mode,
+              but it saves whole rather than per box, for the reason its
+              own doc gives. */}
+          <Section title="Retention policy">
+            <BackupSetRetentionSection
+              source={source}
+              setName={setName}
+              editing={editing}
+              readOnly={readOnly}
+            />
+          </Section>
 
           <Section title="Connection">
             <FingerprintDisplay

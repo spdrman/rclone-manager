@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "ba0837e1c37937b981bc24baaf0bf4268b587766bba8a38075df1ee5c75aadb4"
+const ContractSHA256 = "6de292abb7b902c066ad5fb1db74ce4e33b5ee7d160f54882b49c8a76dccac26"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -372,6 +372,28 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "getBackupSetRetention", Method: "GET", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "setBackupSetRetention", Method: "POST", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "SetBackupSetRetentionRequest", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "applyRetention", Method: "POST", Path: "/backup-sets/{source}/{set}/retention/apply",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: true, Concurrency: "inventory_revision+config_revision",
 		RequestSchema: "ApplyRetentionRequest", ResponseSchema: "RetentionPlan", SuccessStatus: 200,
@@ -383,6 +405,18 @@ var Endpoints = []Endpoint{
 			409: {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy},
 			500: {ErrorCodeInternal},
 			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "clearBackupSetRetention", Method: "POST", Path: "/backup-sets/{source}/{set}/retention/clear",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
 		},
 	},
 	{
@@ -784,6 +818,19 @@ type BackupSetHealth struct {
 	TotalBytes                    uint64 `json:"total_bytes,omitempty"`
 }
 
+// BackupSetRetention is what one backup set is retained under, and whether it says so
+// itself (issue #333). `policy` is always the RESOLVED chain in
+// force, so a client never has to redo inheritance; `is_override`
+// reads whether the operator wrote a block on this set, never
+// whether the two chains happen to match, because a set override and
+// a deployment policy that agree want opposite advice.
+type BackupSetRetention struct {
+	BackupSetID      string            `json:"backup_set_id"`
+	DeploymentPolicy RetentionSettings `json:"deployment_policy"`
+	IsOverride       bool              `json:"is_override"`
+	Policy           RetentionSettings `json:"policy"`
+}
+
 // BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads
 // from, where it writes to, how it decides a file is complete, and
 // whether it starts enabled. ssh_key_id and known_hosts_line carry
@@ -1131,6 +1178,7 @@ type RetentionSettings struct {
 type RetentionTier struct {
 	Granularity string `json:"granularity"`
 	Keep        int    `json:"keep"`
+	Medium      string `json:"medium,omitempty"`
 	Name        string `json:"name"`
 	PeriodDays  int    `json:"period_days,omitempty"`
 	WindowUnit  string `json:"window_unit,omitempty"`
@@ -1179,6 +1227,23 @@ type RunningWork struct {
 // SessionResponse is GET /auth/session.
 type SessionResponse struct {
 	Username string `json:"username"`
+}
+
+// SetBackupSetRetentionRequest is POST /backup-sets/{source}/{set}/retention. One backup set's own
+// retention policy (issue #333). tiers is the WHOLE chain and is
+// required: the three legacy daily_days/weekly_months/monthly_months
+// scalars are deliberately not writable here, because naming two of
+// the three would be half a chain, and half a chain one level down
+// resolves its missing half to the product default rather than to
+// the deployment's policy, which silently shortens retention.
+// Everything else is optional and inherits from the deployment's
+// resolved policy when omitted, because the timezone and the week
+// start decide how any chain is reckoned rather than what it says.
+type SetBackupSetRetentionRequest struct {
+	ProtectLastKnownGood *bool           `json:"protect_last_known_good"`
+	Tiers                []RetentionTier `json:"tiers"`
+	Timezone             string          `json:"timezone,omitempty"`
+	WeekStartsOn         string          `json:"week_starts_on,omitempty"`
 }
 
 // SetEnabledRequest is POST /backup-sets/{id}/enabled. A disabled backup set is excluded
@@ -1334,64 +1399,66 @@ type VersionResponse struct {
 // through this map rather than through a hand-written lookup, so a schema
 // added to the contract cannot quietly go unchecked.
 var SchemaTypes = map[string]any{
-	"ActivityEvent":               ActivityEvent{},
-	"ApplyRetentionRequest":       ApplyRetentionRequest{},
-	"Artifact":                    Artifact{},
-	"ArtifactCheckResponse":       ArtifactCheckResponse{},
-	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
-	"AuthErrorResponse":           AuthErrorResponse{},
-	"BackupSet":                   BackupSet{},
-	"BackupSetEditHold":           BackupSetEditHold{},
-	"BackupSetEditHoldState":      BackupSetEditHoldState{},
-	"BackupSetHealth":             BackupSetHealth{},
-	"BackupSetSpec":               BackupSetSpec{},
-	"CapabilitiesResponse":        CapabilitiesResponse{},
-	"CapacitySettings":            CapacitySettings{},
-	"CatalogFailure":              CatalogFailure{},
-	"CatalogReportResponse":       CatalogReportResponse{},
-	"CompleteFirstRunResponse":    CompleteFirstRunResponse{},
-	"ConfigRevisionStaleResponse": ConfigRevisionStaleResponse{},
-	"CreateBackupSetRequest":      CreateBackupSetRequest{},
-	"CreateBackupSetResponse":     CreateBackupSetResponse{},
-	"CredentialsRequest":          CredentialsRequest{},
-	"ErrorBody":                   ErrorBody{},
-	"ErrorResponse":               ErrorResponse{},
-	"FirstRunStatusResponse":      FirstRunStatusResponse{},
-	"HealthResponse":              HealthResponse{},
-	"HostKeyProbeRequest":         HostKeyProbeRequest{},
-	"HostKeyProbeResponse":        HostKeyProbeResponse{},
-	"ImportSSHKeyRequest":         ImportSSHKeyRequest{},
-	"ImportSSHKeyResponse":        ImportSSHKeyResponse{},
-	"ListActivityResponse":        ListActivityResponse{},
-	"ListArtifactsResponse":       ListArtifactsResponse{},
-	"ListBackupSetsResponse":      ListBackupSetsResponse{},
-	"ListOperationsResponse":      ListOperationsResponse{},
-	"ListStorageStatusResponse":   ListStorageStatusResponse{},
-	"ListValidatorsResponse":      ListValidatorsResponse{},
-	"ManagerStorage":              ManagerStorage{},
-	"Operation":                   Operation{},
-	"OperationProgress":           OperationProgress{},
-	"RetentionPlan":               RetentionPlan{},
-	"RetentionSchema":             RetentionSchema{},
-	"RetentionSettings":           RetentionSettings{},
-	"RetentionTier":               RetentionTier{},
-	"RetentionTierSelection":      RetentionTierSelection{},
-	"RetentionVerdict":            RetentionVerdict{},
-	"RotatePasswordRequest":       RotatePasswordRequest{},
-	"RunningWork":                 RunningWork{},
-	"SessionResponse":             SessionResponse{},
-	"SetEnabledRequest":           SetEnabledRequest{},
-	"SetReadOnlyRequest":          SetReadOnlyRequest{},
-	"SettingsResponse":            SettingsResponse{},
-	"SettingsSchema":              SettingsSchema{},
-	"StorageStatus":               StorageStatus{},
-	"SubmitOperationRequest":      SubmitOperationRequest{},
-	"TestConnectionRequest":       TestConnectionRequest{},
-	"TestConnectionResponse":      TestConnectionResponse{},
-	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
-	"UpdateCapacitySettings":      UpdateCapacitySettings{},
-	"UpdateRetentionSettings":     UpdateRetentionSettings{},
-	"UpdateSettingsRequest":       UpdateSettingsRequest{},
-	"Validator":                   Validator{},
-	"VersionResponse":             VersionResponse{},
+	"ActivityEvent":                ActivityEvent{},
+	"ApplyRetentionRequest":        ApplyRetentionRequest{},
+	"Artifact":                     Artifact{},
+	"ArtifactCheckResponse":        ArtifactCheckResponse{},
+	"ArtifactReinstateResponse":    ArtifactReinstateResponse{},
+	"AuthErrorResponse":            AuthErrorResponse{},
+	"BackupSet":                    BackupSet{},
+	"BackupSetEditHold":            BackupSetEditHold{},
+	"BackupSetEditHoldState":       BackupSetEditHoldState{},
+	"BackupSetHealth":              BackupSetHealth{},
+	"BackupSetRetention":           BackupSetRetention{},
+	"BackupSetSpec":                BackupSetSpec{},
+	"CapabilitiesResponse":         CapabilitiesResponse{},
+	"CapacitySettings":             CapacitySettings{},
+	"CatalogFailure":               CatalogFailure{},
+	"CatalogReportResponse":        CatalogReportResponse{},
+	"CompleteFirstRunResponse":     CompleteFirstRunResponse{},
+	"ConfigRevisionStaleResponse":  ConfigRevisionStaleResponse{},
+	"CreateBackupSetRequest":       CreateBackupSetRequest{},
+	"CreateBackupSetResponse":      CreateBackupSetResponse{},
+	"CredentialsRequest":           CredentialsRequest{},
+	"ErrorBody":                    ErrorBody{},
+	"ErrorResponse":                ErrorResponse{},
+	"FirstRunStatusResponse":       FirstRunStatusResponse{},
+	"HealthResponse":               HealthResponse{},
+	"HostKeyProbeRequest":          HostKeyProbeRequest{},
+	"HostKeyProbeResponse":         HostKeyProbeResponse{},
+	"ImportSSHKeyRequest":          ImportSSHKeyRequest{},
+	"ImportSSHKeyResponse":         ImportSSHKeyResponse{},
+	"ListActivityResponse":         ListActivityResponse{},
+	"ListArtifactsResponse":        ListArtifactsResponse{},
+	"ListBackupSetsResponse":       ListBackupSetsResponse{},
+	"ListOperationsResponse":       ListOperationsResponse{},
+	"ListStorageStatusResponse":    ListStorageStatusResponse{},
+	"ListValidatorsResponse":       ListValidatorsResponse{},
+	"ManagerStorage":               ManagerStorage{},
+	"Operation":                    Operation{},
+	"OperationProgress":            OperationProgress{},
+	"RetentionPlan":                RetentionPlan{},
+	"RetentionSchema":              RetentionSchema{},
+	"RetentionSettings":            RetentionSettings{},
+	"RetentionTier":                RetentionTier{},
+	"RetentionTierSelection":       RetentionTierSelection{},
+	"RetentionVerdict":             RetentionVerdict{},
+	"RotatePasswordRequest":        RotatePasswordRequest{},
+	"RunningWork":                  RunningWork{},
+	"SessionResponse":              SessionResponse{},
+	"SetBackupSetRetentionRequest": SetBackupSetRetentionRequest{},
+	"SetEnabledRequest":            SetEnabledRequest{},
+	"SetReadOnlyRequest":           SetReadOnlyRequest{},
+	"SettingsResponse":             SettingsResponse{},
+	"SettingsSchema":               SettingsSchema{},
+	"StorageStatus":                StorageStatus{},
+	"SubmitOperationRequest":       SubmitOperationRequest{},
+	"TestConnectionRequest":        TestConnectionRequest{},
+	"TestConnectionResponse":       TestConnectionResponse{},
+	"UpdateBackupSetRequest":       UpdateBackupSetRequest{},
+	"UpdateCapacitySettings":       UpdateCapacitySettings{},
+	"UpdateRetentionSettings":      UpdateRetentionSettings{},
+	"UpdateSettingsRequest":        UpdateSettingsRequest{},
+	"Validator":                    Validator{},
+	"VersionResponse":              VersionResponse{},
 }

@@ -28,13 +28,19 @@ type retentionFlags struct {
 
 // retentionTierFlag collects a repeatable -tier flag into an ordered chain.
 //
-// The spec syntax is name:granularity:keep, with two optional suffixes:
-// a window unit (name:granularity:keep:window_unit) and, for the custom
+// The spec syntax is name:granularity:keep, with three optional suffixes:
+// a window unit (name:granularity:keep:window_unit); for the custom
 // granularity, its length written into the granularity itself as
-// "days=14". Every value is handed to config.ValidateRetention unparsed
-// beyond the split, so a mistake in a flag is refused for the identical
-// reason and with the identical text the same mistake in the YAML file
-// would be.
+// "days=14"; and a storage medium written onto the NAME as "daily@offsite"
+// (EPIC E, FR-27), which is where the schema puts it too. Every value is
+// handed to config.ValidateRetention unparsed beyond the split, so a
+// mistake in a flag is refused for the identical reason and with the
+// identical text the same mistake in the YAML file would be.
+//
+// The medium suffix is attached to the name rather than given a fifth
+// colon position deliberately: a chain is normally written without one,
+// and a positional field that is empty in the ordinary case would make
+// every ordinary tier carry a trailing colon.
 type retentionTierFlag struct {
 	tiers []config.RetentionTier
 }
@@ -55,6 +61,9 @@ func (f *retentionTierFlag) Set(spec string) error {
 	t := config.RetentionTier{Name: parts[0], Granularity: parts[1]}
 	if len(parts) == 4 {
 		t.WindowUnit = parts[3]
+	}
+	if name, medium, ok := strings.Cut(t.Name, "@"); ok {
+		t.Name, t.Medium = name, medium
 	}
 
 	// "days=14" carries the custom period's length. Splitting it out here

@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "ba0837e1c37937b981bc24baaf0bf4268b587766bba8a38075df1ee5c75aadb4";
+export const CONTRACT_SHA256 = "6de292abb7b902c066ad5fb1db74ce4e33b5ee7d160f54882b49c8a76dccac26";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -458,6 +458,44 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "getBackupSetRetention",
+    method: "GET",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "setBackupSetRetention",
+    method: "POST",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "SetBackupSetRetentionRequest",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "applyRetention",
     method: "POST",
     path: "/backup-sets/{source}/{set}/retention/apply",
@@ -477,6 +515,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       409: ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "clearBackupSetRetention",
+    method: "POST",
+    path: "/backup-sets/{source}/{set}/retention/clear",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
     }
   },
   {
@@ -1051,6 +1109,19 @@ export interface WireBackupSetHealth {
   total_bytes?: number;
 }
 
+/** What one backup set is retained under, and whether it says so
+ *  itself (issue #333). `policy` is always the RESOLVED chain in
+ *  force, so a client never has to redo inheritance; `is_override`
+ *  reads whether the operator wrote a block on this set, never
+ *  whether the two chains happen to match, because a set override and
+ *  a deployment policy that agree want opposite advice. */
+export interface WireBackupSetRetention {
+  backup_set_id: string;
+  deployment_policy: WireRetentionSettings;
+  is_override: boolean;
+  policy: WireRetentionSettings;
+}
+
 /** Everything it takes to DESCRIBE one backup set: where it reads
  *  from, where it writes to, how it decides a file is complete, and
  *  whether it starts enabled. ssh_key_id and known_hosts_line carry
@@ -1396,6 +1467,7 @@ export interface WireRetentionSettings {
 export interface WireRetentionTier {
   granularity: string;
   keep: number;
+  medium?: string;
   name: string;
   period_days?: number;
   window_unit?: string;
@@ -1444,6 +1516,23 @@ export interface WireRunningWork {
 /** GET /auth/session. */
 export interface WireSessionResponse {
   username: string;
+}
+
+/** POST /backup-sets/{source}/{set}/retention. One backup set's own
+ *  retention policy (issue #333). tiers is the WHOLE chain and is
+ *  required: the three legacy daily_days/weekly_months/monthly_months
+ *  scalars are deliberately not writable here, because naming two of
+ *  the three would be half a chain, and half a chain one level down
+ *  resolves its missing half to the product default rather than to
+ *  the deployment's policy, which silently shortens retention.
+ *  Everything else is optional and inherits from the deployment's
+ *  resolved policy when omitted, because the timezone and the week
+ *  start decide how any chain is reckoned rather than what it says. */
+export interface WireSetBackupSetRetentionRequest {
+  protect_last_known_good?: boolean;
+  tiers: WireRetentionTier[];
+  timezone?: string;
+  week_starts_on?: string;
 }
 
 /** POST /backup-sets/{id}/enabled. A disabled backup set is excluded

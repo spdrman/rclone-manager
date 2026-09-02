@@ -17,6 +17,7 @@ import type {
   WireBackupSetEditHold,
   WireBackupSetEditHoldState,
   WireBackupSetHealth,
+  WireBackupSetRetention,
   WireBackupSetSpec,
   WireCapacitySettings,
   WireCatalogReportResponse,
@@ -33,6 +34,7 @@ import type {
   WireManagerStorage,
   WireOperation,
   WireRetentionPlan,
+  WireRetentionSettings,
   WireRetentionTier,
   WireRunningWork,
   WireSettingsResponse,
@@ -44,6 +46,7 @@ import type {
   AppSettings,
   BackupManagerApi,
   BackupSetPatch,
+  BackupSetRetention,
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -51,6 +54,7 @@ import type {
   CreateBackupSetRequest,
   CreatedBackupSet,
   ManagerStorage,
+  RetentionSettings,
   RetentionTierSetting,
   RunningWork,
   SSHKeyImportResult,
@@ -424,7 +428,11 @@ function fromWireTier(t: WireRetentionTier): RetentionTierSetting {
     // and get the whole policy refused.
     periodDays: t.period_days,
     keep: t.keep,
-    windowUnit: t.window_unit
+    windowUnit: t.window_unit,
+    // Same rule again, and this one is load-bearing rather than tidy: a
+    // retention write replaces the whole chain, so a medium dropped on
+    // the way in is a medium deleted on the way out.
+    medium: t.medium
   };
 }
 
@@ -437,7 +445,28 @@ function wireTier(t: RetentionTierSetting): WireRetentionTier {
     // omitted rather than sent as 0/"".
     period_days: t.periodDays && t.periodDays > 0 ? t.periodDays : undefined,
     keep: t.keep,
-    window_unit: t.windowUnit ? t.windowUnit : undefined
+    window_unit: t.windowUnit ? t.windowUnit : undefined,
+    medium: t.medium ? t.medium : undefined
+  };
+}
+
+/** The resolved policy a per-set retention response carries, off the
+ *  wire. Shared by both halves of every BackupSetRetention. */
+function fromWireRetentionSettings(r: WireRetentionSettings): RetentionSettings {
+  return {
+    timezone: r.timezone,
+    weekStartsOn: r.week_starts_on,
+    tiers: (r.tiers ?? []).map(fromWireTier),
+    protectLastKnownGood: r.protect_last_known_good
+  };
+}
+
+function fromWireBackupSetRetention(r: WireBackupSetRetention): BackupSetRetention {
+  return {
+    backupSetId: r.backup_set_id,
+    isOverride: r.is_override,
+    policy: fromWireRetentionSettings(r.policy),
+    deploymentPolicy: fromWireRetentionSettings(r.deployment_policy)
   };
 }
 
@@ -1104,6 +1133,32 @@ export const httpApi: BackupManagerApi = {
       (r) => ({ expiresAt: r.expires_at, stopped: fromWireRunningWork(r.stopped) })
     ),
   releaseEditHold: (source, set) => post(backupSetPath(source, set) + "/edit-hold/release"),
+
+  // Issue #333. Three operations on two paths, POST rather than PUT and
+  // DELETE for the reason apps/common/webhost's own handler records:
+  // neither method appears anywhere in this API, and one feature is a
+  // poor reason to teach the contract and the middleware two new shapes.
+  getBackupSetRetention: (source, set) =>
+    request<WireBackupSetRetention>(backupSetPath(source, set) + "/retention").then(
+      fromWireBackupSetRetention
+    ),
+  setBackupSetRetention: (source, set, override) =>
+    request<WireBackupSetRetention>(backupSetPath(source, set) + "/retention", {
+      method: "POST",
+      body: JSON.stringify({
+        tiers: override.tiers.map(wireTier),
+        // Omitted rather than sent empty: "" is how "inherit the
+        // deployment's" is spelled, and sending one would make this
+        // client decide a calendar it was never told.
+        timezone: override.timezone ? override.timezone : undefined,
+        week_starts_on: override.weekStartsOn ? override.weekStartsOn : undefined,
+        protect_last_known_good: override.protectLastKnownGood
+      })
+    }).then(fromWireBackupSetRetention),
+  clearBackupSetRetention: (source, set) =>
+    request<WireBackupSetRetention>(backupSetPath(source, set) + "/retention/clear", {
+      method: "POST"
+    }).then(fromWireBackupSetRetention),
 
   createBackupSet: (req) =>
     request<WireCreateBackupSetResponse>("/backup-sets", {

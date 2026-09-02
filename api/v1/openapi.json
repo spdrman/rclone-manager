@@ -1117,6 +1117,11 @@
           "window_unit": {
             "type": "string",
             "x-go-omitempty": true
+          },
+          "medium": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "The storage medium this tier's artifacts live on (EPIC E, FR-27), or \"\" for the backup set's own local path. Read AND written: this shape is a whole-chain replacement, so a client that could not carry it would delete an operator's medium assignment by editing a tier's keep."
           }
         },
         "required": [
@@ -2209,6 +2214,63 @@
           "backup_set_id",
           "expires_at"
         ]
+      },
+      "SetBackupSetRetentionRequest": {
+        "type": "object",
+        "description": "POST /backup-sets/{source}/{set}/retention. One backup set's own retention policy (issue #333). tiers is the WHOLE chain and is required: the three legacy daily_days/weekly_months/monthly_months scalars are deliberately not writable here, because naming two of the three would be half a chain, and half a chain one level down resolves its missing half to the product default rather than to the deployment's policy, which silently shortens retention. Everything else is optional and inherits from the deployment's resolved policy when omitted, because the timezone and the week start decide how any chain is reckoned rather than what it says.",
+        "additionalProperties": false,
+        "properties": {
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionTier"
+            }
+          },
+          "timezone": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "Omit to inherit the deployment's."
+          },
+          "week_starts_on": {
+            "type": "string",
+            "x-go-omitempty": true,
+            "description": "Omit to inherit the deployment's."
+          },
+          "protect_last_known_good": {
+            "type": "boolean",
+            "x-go-pointer": true,
+            "description": "Omit (or null) to inherit the deployment's posture. An explicit false widens what a later retention apply may delete for this one set."
+          }
+        },
+        "required": [
+          "tiers"
+        ]
+      },
+      "BackupSetRetention": {
+        "type": "object",
+        "description": "What one backup set is retained under, and whether it says so itself (issue #333). `policy` is always the RESOLVED chain in force, so a client never has to redo inheritance; `is_override` reads whether the operator wrote a block on this set, never whether the two chains happen to match, because a set override and a deployment policy that agree want opposite advice.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "is_override": {
+            "type": "boolean"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/RetentionSettings"
+          },
+          "deployment_policy": {
+            "$ref": "#/components/schemas/RetentionSettings",
+            "description": "The resolved deployment-wide policy, so a client can show what clearing this override would return to without a second request. Equal to policy exactly when is_override is false."
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "is_override",
+          "policy",
+          "deployment_policy"
+        ]
       }
     },
     "responses": {}
@@ -2767,6 +2829,338 @@
         "x-idempotency-key": "none",
         "x-optimistic-concurrency": "inventory_revision+config_revision",
         "x-csrf-required": false,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/retention": {
+      "get": {
+        "operationId": "getBackupSetRetention",
+        "summary": "Report the retention policy this backup set is retained under, and whether it is the set's own or the deployment's (issue #333). Read-only.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetRetention"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "post": {
+        "operationId": "setBackupSetRetention",
+        "summary": "Give this one backup set its own retention chain, whatever the rest of the deployment is retained under (issue #333). Whole-policy: it replaces any override already there rather than merging with it, because merging tier by tier across two chains produces a policy nobody wrote. It carries CSRF and NOT the destructive gate: writing a policy deletes nothing, and a retention apply is what the gate is for.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBackupSetRetentionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetRetention"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/retention/clear": {
+      "post": {
+        "operationId": "clearBackupSetRetention",
+        "summary": "Retain this backup set under the deployment's policy again, with no residue of the chain it used to declare (issue #333). Clearing an override a set does not have is a success rather than an error, and rewrites nothing.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetRetention"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
         "x-authenticated": true
       }
     },

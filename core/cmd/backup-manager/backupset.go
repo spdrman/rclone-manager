@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/service"
 )
 
@@ -44,6 +45,21 @@ import (
 // What it deliberately cannot change: the set's identity, its SSH key
 // reference and its trusted host-key line. See
 // core/service/backupsetupdate.go's own package doc for each.
+//
+// # backup-set retention show|set|clear
+//
+// Issue #333's other half. Retention was global only: every backup set
+// was retained under the one top-level policy, and the only way to give
+// one set its own chain was, again, an editor on the NAS. These three
+// verbs are the CLI answer, and they call the same three service methods
+// the API routes do, so the two surfaces cannot answer differently.
+//
+// `set` writes a TIER CHAIN and never the legacy
+// daily_days/weekly_months/monthly_months scalars, spelled with the same
+// repeatable -tier flag `retention` already accepts, so one tier is
+// written one way whichever command is holding it. See
+// core/service/backupsetretention.go for why a chain rather than the
+// scalars is the only spelling that cannot express half a policy.
 func cmdBackupSet(args []string) int {
 	fs, cfgPath := newFlagSet("backup-set")
 	host := fs.String("host", "", "patch: remote.host")
@@ -58,26 +74,68 @@ func cmdBackupSet(args []string) int {
 	validatorID := fs.String("validator-id", "", `patch: validation.validator_id, an id the validator catalog lists, or "" for none`)
 	acknowledgeRepoint := fs.Bool("acknowledge-repoint", false,
 		"patch: confirm an edit that moves this set to different data. Needed only when --host, --remote-path or --local-path actually change on a set that already has artifacts on record; the refusal without it says what it costs")
+	tiers := &retentionTierFlag{}
+	fs.Var(tiers, "tier",
+		"retention set: one tier of this set's own chain, as name:granularity:keep[:window_unit], with an optional @medium on the name. Repeat in chain order")
+	timezone := fs.String("timezone", "", "retention set: the IANA timezone this set's chain is reckoned in; omit to inherit the deployment's")
+	weekStartsOn := fs.String("week-starts-on", "", `retention set: "monday" or "sunday"; omit to inherit the deployment's`)
+	protect := fs.Bool("protect-last-known-good", true, "retention set: FR-19's last-known-good protection for this set; omit to inherit the deployment's posture")
 
 	operands, err := parseFlagsAroundOperands(fs, args)
 	if err != nil {
 		return 2
 	}
-	if len(operands) != 2 || operands[0] != "patch" {
-		return usageError(`backup-set: expected "patch <source/backup-set>" and exactly one backup set id`)
-	}
-	id := operands[1]
-	if strings.Count(id, "/") != 1 || strings.HasPrefix(id, "/") || strings.HasSuffix(id, "/") {
-		return usageError("backup-set: %q is not a backup set id; a backup set id is exactly source/name", id)
+
+	verb, id, code := backupSetVerbAndID(operands)
+	if code != 0 {
+		return code
 	}
 
-	req, named := buildBackupSetPatch(fs, host, port, user, remotePath, localPath, include, completionStrategy, stableFor, staleAfter, validatorID)
-	req.AcknowledgeRepoint = *acknowledgeRepoint
-	if !named {
-		return usageError("backup-set patch: name at least one field to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
+	// Every flag this command owns belongs to exactly one verb, and a
+	// flag passed to the wrong one is refused rather than ignored.
+	// Silently parsing flags a command then does nothing with is a real
+	// trap on a command that mutates a live configuration: the operator
+	// reads exit 0 as "that landed" (issue #323 fixed the same shape on
+	// `settings`).
+	if wrong := flagsNotOwnedBy(fs, verb); wrong != "" {
+		return usageError("backup-set %s: --%s is not a flag this verb accepts", verb, wrong)
 	}
 
 	ctx := context.Background()
+
+	var (
+		req      service.UpdateBackupSetRequest
+		override service.BackupSetRetentionOverride
+	)
+	switch verb {
+	case "patch":
+		var named bool
+		req, named = buildBackupSetPatch(fs, host, port, user, remotePath, localPath, include, completionStrategy, stableFor, staleAfter, validatorID)
+		req.AcknowledgeRepoint = *acknowledgeRepoint
+		if !named {
+			return usageError("backup-set patch: name at least one field to change (see --help); a patch that changes nothing would rewrite and reload the configuration to no effect")
+		}
+	case "retention set":
+		if len(tiers.tiers) == 0 {
+			return usageError("backup-set retention set: name at least one --tier; to go back to the deployment's policy, use `backup-set retention clear` instead")
+		}
+		override = service.BackupSetRetentionOverride{
+			Tiers:        serviceTiers(tiers.tiers),
+			Timezone:     *timezone,
+			WeekStartsOn: *weekStartsOn,
+		}
+		// Read through fs.Visit for the same reason every patch flag is:
+		// an explicit --protect-last-known-good=false is a real request
+		// and its own zero value, and inheriting the deployment's
+		// posture is what NOT passing it means.
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "protect-last-known-good" {
+				v := *protect
+				override.ProtectLastKnownGood = &v
+			}
+		})
+	}
+
 	svc, cleanup, err := openBackupService(ctx, *cfgPath)
 	if err != nil {
 		return fail(err)
@@ -86,12 +144,130 @@ func cmdBackupSet(args []string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	updated, err := svc.UpdateBackupSet(ctx, id, req)
-	if err != nil {
-		return fail(err)
+	switch verb {
+	case "patch":
+		updated, err := svc.UpdateBackupSet(ctx, id, req)
+		if err != nil {
+			return fail(err)
+		}
+		printBackupSet(updated)
+	case "retention show":
+		got, err := svc.GetBackupSetRetention(ctx, id)
+		if err != nil {
+			return fail(err)
+		}
+		printBackupSetRetention(got)
+	case "retention set":
+		got, err := svc.SetBackupSetRetention(ctx, id, override)
+		if err != nil {
+			return fail(err)
+		}
+		printBackupSetRetention(got)
+	case "retention clear":
+		got, err := svc.ClearBackupSetRetention(ctx, id)
+		if err != nil {
+			return fail(err)
+		}
+		printBackupSetRetention(got)
 	}
-	printBackupSet(updated)
 	return 0
+}
+
+// backupSetVerbAndID reads the operand list into the verb this invocation
+// names and the backup set it names it about, or returns the exit code a
+// malformed invocation gets. The verb is the whole phrase ("retention
+// set", not "retention"), because every branch below acts on the pair and
+// a half-read verb is how `retention` alone would end up doing something.
+func backupSetVerbAndID(operands []string) (verb, id string, code int) {
+	switch {
+	case len(operands) == 2 && operands[0] == "patch":
+		verb, id = "patch", operands[1]
+	case len(operands) == 3 && operands[0] == "retention" &&
+		(operands[1] == "show" || operands[1] == "set" || operands[1] == "clear"):
+		verb, id = "retention "+operands[1], operands[2]
+	default:
+		return "", "", usageError(`backup-set: expected "patch <source/backup-set>" or "retention show|set|clear <source/backup-set>"`)
+	}
+	if strings.Count(id, "/") != 1 || strings.HasPrefix(id, "/") || strings.HasSuffix(id, "/") {
+		return "", "", usageError("backup-set: %q is not a backup set id; a backup set id is exactly source/name", id)
+	}
+	return verb, id, 0
+}
+
+// backupSetVerbFlags names which flags each verb owns. --config is left
+// out because every command accepts it, and a verb with no entry (a read,
+// like `retention show`) owns no flags at all.
+var backupSetVerbFlags = map[string]map[string]bool{
+	"patch": {
+		"host": true, "port": true, "user": true, "remote-path": true, "local-path": true,
+		"include": true, "completion-strategy": true, "stable-for": true, "stale-after": true,
+		"validator-id": true, "acknowledge-repoint": true,
+	},
+	"retention set": {
+		"tier": true, "timezone": true, "week-starts-on": true, "protect-last-known-good": true,
+	},
+}
+
+// flagsNotOwnedBy returns the name of the first flag this invocation
+// passed that the named verb does not own, or "" when every flag belongs.
+func flagsNotOwnedBy(fs *flag.FlagSet, verb string) string {
+	owned := backupSetVerbFlags[verb]
+	wrong := ""
+	fs.Visit(func(f *flag.Flag) {
+		if wrong != "" || f.Name == "config" || owned[f.Name] {
+			return
+		}
+		wrong = f.Name
+	})
+	return wrong
+}
+
+// serviceTiers converts the -tier flag's parsed chain into the shape
+// core/service takes. It is a straight field copy: the two types are the
+// same schema either side of the core/ boundary (core/service/settings.go's
+// RetentionTier doc), and nothing here interprets a value, so a bad tier
+// is refused by config.Validate with the text a bad tier in the YAML file
+// would get.
+func serviceTiers(in []config.RetentionTier) []service.RetentionTier {
+	out := make([]service.RetentionTier, 0, len(in))
+	for _, t := range in {
+		out = append(out, service.RetentionTier{
+			Name:        t.Name,
+			Granularity: t.Granularity,
+			PeriodDays:  t.PeriodDays,
+			Keep:        t.Keep,
+			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
+		})
+	}
+	return out
+}
+
+// printBackupSetRetention reports what a set is retained under and where
+// that comes from.
+//
+// "from" is named on both branches, not only on an override, and that is
+// a deliberate difference from `retention`'s own preview line, which
+// marks an override and stays silent otherwise. A preview is a long list
+// where a marker on the exception is the readable choice; this command
+// answers one question about one set, and an answer that said nothing
+// about provenance in the common case would leave the reader unable to
+// tell "inherits, and here is the chain" from "overrides with a chain
+// that happens to match".
+func printBackupSetRetention(r service.BackupSetRetention) {
+	fmt.Printf("backup set: %s\n", r.BackupSetID)
+	if r.IsOverride {
+		fmt.Printf("  from: this set's own retention policy\n")
+	} else {
+		fmt.Printf("  from: the deployment's retention policy (inherited)\n")
+	}
+	fmt.Printf("  policy: %s\n", service.DescribeRetentionPolicy(r.Policy))
+	if r.IsOverride {
+		// What clearing would go back to, so an operator deciding
+		// whether to clear does not have to run a second command to find
+		// out what they would get.
+		fmt.Printf("  deployment policy: %s\n", service.DescribeRetentionPolicy(r.DeploymentPolicy))
+	}
 }
 
 // buildBackupSetPatch reads fs's parsed values into an

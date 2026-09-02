@@ -129,6 +129,37 @@ type retentionTierBody struct {
 	PeriodDays  int    `json:"period_days,omitempty"`
 	Keep        int    `json:"keep"`
 	WindowUnit  string `json:"window_unit,omitempty"`
+
+	// Medium names the storage medium this tier's artifacts live on
+	// (EPIC E, FR-27), or "" for the backup set's own local path.
+	//
+	// It is carried in BOTH directions for the reason
+	// service.RetentionTier.Medium's own doc gives, and this shape is
+	// where getting it wrong would have bitten: a retention write
+	// REPLACES the whole chain, so a field this body could not hold was a
+	// field a settings save deleted from the operator's file. Editing
+	// daily's keep would have quietly moved monthly's artifacts back onto
+	// local disk, with nothing reported.
+	Medium string `json:"medium,omitempty"`
+}
+
+// fromTierBodies is toTierBodies' inverse, shared by the settings write
+// and by issue #333's per-set retention write so one tier is read off the
+// wire in one place. A missing field here is a field one of those two
+// paths silently drops.
+func fromTierBodies(in []retentionTierBody) []service.RetentionTier {
+	out := make([]service.RetentionTier, 0, len(in))
+	for _, t := range in {
+		out = append(out, service.RetentionTier{
+			Name:        t.Name,
+			Granularity: t.Granularity,
+			PeriodDays:  t.PeriodDays,
+			Keep:        t.Keep,
+			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
+		})
+	}
+	return out
 }
 
 // settingsResponse is what both GET and PATCH /api/v1/settings return:
@@ -299,16 +330,7 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 			ProtectLastKnownGood: body.Retention.ProtectLastKnownGood,
 		}
 		if body.Retention.Tiers != nil {
-			update.Tiers = make([]service.RetentionTier, 0, len(body.Retention.Tiers))
-			for _, t := range body.Retention.Tiers {
-				update.Tiers = append(update.Tiers, service.RetentionTier{
-					Name:        t.Name,
-					Granularity: t.Granularity,
-					PeriodDays:  t.PeriodDays,
-					Keep:        t.Keep,
-					WindowUnit:  t.WindowUnit,
-				})
-			}
+			update.Tiers = fromTierBodies(body.Retention.Tiers)
 		}
 		out.Retention = &update
 	}
@@ -325,16 +347,22 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 	return out, nil
 }
 
+// toRetentionSettingsBody projects one resolved policy onto the wire.
+// Shared by the deployment-wide settings response and by issue #333's
+// per-set retention responses, so the two spell one policy one way.
+func toRetentionSettingsBody(r service.RetentionSettings) retentionSettingsBody {
+	return retentionSettingsBody{
+		Timezone:             r.Timezone,
+		WeekStartsOn:         r.WeekStartsOn,
+		Tiers:                toTierBodies(r.Tiers),
+		ProtectLastKnownGood: r.ProtectLastKnownGood,
+	}
+}
+
 func toSettingsResponse(s service.Settings) settingsResponse {
-	tiers := toTierBodies(s.Retention.Tiers)
 	schema := service.RetentionSchema()
 	return settingsResponse{
-		Retention: retentionSettingsBody{
-			Timezone:             s.Retention.Timezone,
-			WeekStartsOn:         s.Retention.WeekStartsOn,
-			Tiers:                tiers,
-			ProtectLastKnownGood: s.Retention.ProtectLastKnownGood,
-		},
+		Retention: toRetentionSettingsBody(s.Retention),
 		Capacity: capacitySettingsBody{
 			CapBytes:             s.Capacity.CapBytes,
 			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
@@ -369,6 +397,7 @@ func toTierBodies(tiers []service.RetentionTier) []retentionTierBody {
 			PeriodDays:  t.PeriodDays,
 			Keep:        t.Keep,
 			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
 		})
 	}
 	return out

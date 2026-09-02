@@ -319,6 +319,18 @@ func (f *syncFakeBackend) UpdateBackupSet(context.Context, string, service.Updat
 	return service.BackupSet{}, errors.New("syncFakeBackend: UpdateBackupSet not implemented")
 }
 
+func (f *syncFakeBackend) GetBackupSetRetention(context.Context, string) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{}, errors.New("syncFakeBackend: GetBackupSetRetention not implemented")
+}
+
+func (f *syncFakeBackend) SetBackupSetRetention(context.Context, string, service.BackupSetRetentionOverride) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{}, errors.New("syncFakeBackend: SetBackupSetRetention not implemented")
+}
+
+func (f *syncFakeBackend) ClearBackupSetRetention(context.Context, string) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{}, errors.New("syncFakeBackend: ClearBackupSetRetention not implemented")
+}
+
 func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
 }
@@ -628,6 +640,18 @@ func (f *asyncFakeBackend) UpdateBackupSet(context.Context, string, service.Upda
 	return service.BackupSet{}, errors.New("asyncFakeBackend: UpdateBackupSet not implemented")
 }
 
+func (f *asyncFakeBackend) GetBackupSetRetention(context.Context, string) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{}, errors.New("asyncFakeBackend: GetBackupSetRetention not implemented")
+}
+
+func (f *asyncFakeBackend) SetBackupSetRetention(context.Context, string, service.BackupSetRetentionOverride) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{}, errors.New("asyncFakeBackend: SetBackupSetRetention not implemented")
+}
+
+func (f *asyncFakeBackend) ClearBackupSetRetention(context.Context, string) (service.BackupSetRetention, error) {
+	return service.BackupSetRetention{}, errors.New("asyncFakeBackend: ClearBackupSetRetention not implemented")
+}
+
 func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
 }
@@ -746,6 +770,13 @@ type backupSetFakeBackend struct {
 	// field in from the set it just read would produce an identical 200.
 	lastUpdateReq service.UpdateBackupSetRequest
 
+	// overrides holds the per-set retention override each set currently
+	// declares, and lastOverride the exact one SetBackupSetRetention was
+	// last called with, so a test can assert which fields crossed the
+	// HTTP-to-core seam rather than only that a 200 came back.
+	overrides    map[string]service.BackupSetRetentionOverride
+	lastOverride service.BackupSetRetentionOverride
+
 	// running is what the fake reports a cycle is doing for whichever set
 	// is asked about, or nil for "nothing is running". It is a field
 	// rather than a setter because a test arranges this fixture, it does
@@ -823,6 +854,92 @@ func (f *backupSetFakeBackend) UpdateBackupSet(_ context.Context, id string, req
 	}
 	f.sets[id] = set
 	return set, nil
+}
+
+// GetBackupSetRetention/SetBackupSetRetention/ClearBackupSetRetention
+// keep real per-set state rather than echoing, so a handler that decoded
+// a chain and dropped a field would be visible here (issue #333). The
+// deployment policy is a fixed fixture: what these routes are about is
+// which of the two is in force, not what the deployment's own is.
+func (f *backupSetFakeBackend) GetBackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.retentionFor(id)
+}
+
+func (f *backupSetFakeBackend) SetBackupSetRetention(_ context.Context, id string, override service.BackupSetRetentionOverride) (service.BackupSetRetention, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.BackupSetRetention{}, service.ErrBackupSetNotFound
+	}
+	if f.overrides == nil {
+		f.overrides = map[string]service.BackupSetRetentionOverride{}
+	}
+	f.lastOverride = override
+	f.overrides[id] = override
+	return f.retentionFor(id)
+}
+
+func (f *backupSetFakeBackend) ClearBackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.BackupSetRetention{}, service.ErrBackupSetNotFound
+	}
+	delete(f.overrides, id)
+	return f.retentionFor(id)
+}
+
+// fakeDeploymentRetention is the deployment-wide policy this fake reports
+// for every set that inherits.
+func fakeDeploymentRetention() service.RetentionSettings {
+	return service.RetentionSettings{
+		Timezone:     "UTC",
+		WeekStartsOn: "monday",
+		Tiers: []service.RetentionTier{
+			{Name: "daily", Granularity: "day", Keep: 7},
+			{Name: "monthly", Granularity: "month", Keep: 12},
+		},
+		ProtectLastKnownGood: true,
+	}
+}
+
+// retentionFor resolves one set the way core/service does: the override
+// when there is one, with its omitted calendar fields filled in from the
+// deployment's, and the deployment's policy otherwise. Called with f.mu
+// already held.
+func (f *backupSetFakeBackend) retentionFor(id string) (service.BackupSetRetention, error) {
+	if _, ok := f.sets[id]; !ok {
+		return service.BackupSetRetention{}, service.ErrBackupSetNotFound
+	}
+	deployment := fakeDeploymentRetention()
+	override, has := f.overrides[id]
+	if !has {
+		return service.BackupSetRetention{BackupSetID: id, IsOverride: false, Policy: deployment, DeploymentPolicy: deployment}, nil
+	}
+	resolved := service.RetentionSettings{
+		Timezone:             override.Timezone,
+		WeekStartsOn:         override.WeekStartsOn,
+		Tiers:                override.Tiers,
+		ProtectLastKnownGood: deployment.ProtectLastKnownGood,
+	}
+	if resolved.Timezone == "" {
+		resolved.Timezone = deployment.Timezone
+	}
+	if resolved.WeekStartsOn == "" {
+		resolved.WeekStartsOn = deployment.WeekStartsOn
+	}
+	if override.ProtectLastKnownGood != nil {
+		resolved.ProtectLastKnownGood = *override.ProtectLastKnownGood
+	}
+	return service.BackupSetRetention{BackupSetID: id, IsOverride: true, Policy: resolved, DeploymentPolicy: deployment}, nil
+}
+
+func (f *backupSetFakeBackend) lastRetentionOverride() service.BackupSetRetentionOverride {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastOverride
 }
 
 func (f *backupSetFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
