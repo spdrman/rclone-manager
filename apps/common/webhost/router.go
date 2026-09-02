@@ -255,6 +255,19 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// precedent, not the gate's: the gate is for run_immediately and
 		// for retention apply, not for writing a set).
 		r.With(requireCSRF).Patch("/backup-sets/{source}/{set}", h.updateBackupSet)
+		// Issue #350's edit hold. The read is read-only (§50) and carries
+		// neither CSRF nor the gate; both writes carry CSRF and, like
+		// every other route in this group, not the destructive gate. A
+		// hold STOPS work rather than starting or deleting any, so
+		// gating it would mean an operator who has not turned
+		// destructive operations on cannot safely edit a set at all.
+		//
+		// Registered as two named segments plus a static tail, the same
+		// shape as the retention preview above, so chi's own node
+		// ordering matches them ahead of the "/backup-sets/*" catch-all.
+		r.Get("/backup-sets/{source}/{set}/edit-hold", h.getBackupSetEditHold)
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/edit-hold", h.takeBackupSetEditHold)
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/edit-hold/release", h.releaseBackupSetEditHold)
 		r.Get("/backup-sets/*", h.getBackupSet)
 
 		// Issue #211: the backups this deployment actually holds, and the

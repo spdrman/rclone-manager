@@ -305,6 +305,16 @@ func (f *syncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupS
 	return service.CreateBackupSetResult{}, errors.New("syncFakeBackend: CreateBackupSet not implemented")
 }
 
+func (f *syncFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	return service.BackupSetEditState{BackupSetID: id}, nil
+}
+
+func (f *syncFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	return service.EditHold{BackupSetID: id, ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *syncFakeBackend) EndBackupSetEdit(context.Context, string) error { return nil }
+
 func (f *syncFakeBackend) UpdateBackupSet(context.Context, string, service.UpdateBackupSetRequest) (service.BackupSet, error) {
 	return service.BackupSet{}, errors.New("syncFakeBackend: UpdateBackupSet not implemented")
 }
@@ -604,6 +614,16 @@ func (f *asyncFakeBackend) CreateBackupSet(context.Context, service.CreateBackup
 	return service.CreateBackupSetResult{}, errors.New("asyncFakeBackend: CreateBackupSet not implemented")
 }
 
+func (f *asyncFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	return service.BackupSetEditState{BackupSetID: id}, nil
+}
+
+func (f *asyncFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	return service.EditHold{BackupSetID: id, ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *asyncFakeBackend) EndBackupSetEdit(context.Context, string) error { return nil }
+
 func (f *asyncFakeBackend) UpdateBackupSet(context.Context, string, service.UpdateBackupSetRequest) (service.BackupSet, error) {
 	return service.BackupSet{}, errors.New("asyncFakeBackend: UpdateBackupSet not implemented")
 }
@@ -726,6 +746,18 @@ type backupSetFakeBackend struct {
 	// field in from the set it just read would produce an identical 200.
 	lastUpdateReq service.UpdateBackupSetRequest
 
+	// running is what the fake reports a cycle is doing for whichever set
+	// is asked about, or nil for "nothing is running". It is a field
+	// rather than a setter because a test arranges this fixture, it does
+	// not script it.
+	running *service.RunningWork
+
+	// beginCallCount and endCallCount record that the hold routes reached
+	// the backend at all. A handler that answered 200 without holding
+	// anything would otherwise look identical to one that held.
+	beginCallCount int
+	endCallCount   int
+
 	errOnCreate  error
 	errOnList    error
 	errOnGet     error
@@ -791,6 +823,51 @@ func (f *backupSetFakeBackend) UpdateBackupSet(_ context.Context, id string, req
 	}
 	f.sets[id] = set
 	return set, nil
+}
+
+func (f *backupSetFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.BackupSetEditState{}, service.ErrBackupSetNotFound
+	}
+	return service.BackupSetEditState{BackupSetID: id, Running: f.running}, nil
+}
+
+func (f *backupSetFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.EditHold{}, service.ErrBackupSetNotFound
+	}
+	f.beginCallCount++
+	return service.EditHold{
+		BackupSetID: id,
+		ExpiresAt:   time.Now().UTC().Add(90 * time.Second),
+		Stopped:     f.running,
+	}, nil
+}
+
+func (f *backupSetFakeBackend) EndBackupSetEdit(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.ErrBackupSetNotFound
+	}
+	f.endCallCount++
+	return nil
+}
+
+func (f *backupSetFakeBackend) beginCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.beginCallCount
+}
+
+func (f *backupSetFakeBackend) endCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.endCallCount
 }
 
 // lastUpdate reads back the request UpdateBackupSet was last called with,

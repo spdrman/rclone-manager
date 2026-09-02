@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "fe30be6850d387054c31cdfcd43b96380f6690e5046e14f94c4e89d688fa04fe"
+const ContractSHA256 = "433d7867edb269292a1a03d3153c93297002d9f4f226258b09950ea304f4ea20"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -305,6 +305,38 @@ var Endpoints = []Endpoint{
 		RequestSchema: "UpdateBackupSetRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
 			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getBackupSetEditHold", Method: "GET", Path: "/backup-sets/{source}/{set}/edit-hold",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetEditHoldState", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "takeBackupSetEditHold", Method: "POST", Path: "/backup-sets/{source}/{set}/edit-hold",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetEditHold", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "releaseBackupSetEditHold", Method: "POST", Path: "/backup-sets/{source}/{set}/edit-hold/release",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
@@ -697,6 +729,28 @@ type BackupSet struct {
 	SourceName         string   `json:"source_name"`
 	User               string   `json:"user"`
 	ValidatorID        string   `json:"validator_id"`
+}
+
+// BackupSetEditHold is POST /backup-sets/{source}/{set}/edit-hold. The lease just taken
+// or renewed, plus what taking it interrupted. `stopped` is null
+// when nothing was running, so a client never claims to have stopped
+// something it did not.
+type BackupSetEditHold struct {
+	BackupSetID string       `json:"backup_set_id"`
+	ExpiresAt   string       `json:"expires_at"`
+	Stopped     *RunningWork `json:"stopped"`
+}
+
+// BackupSetEditHoldState is GET /backup-sets/{source}/{set}/edit-hold. What entering edit mode
+// for this backup set would interrupt, and whether a hold is already
+// in force. `running` is null when no cycle is currently inside this
+// set, which is what lets a client open edit mode with no prompt for
+// a risk that does not exist.
+type BackupSetEditHoldState struct {
+	BackupSetID string       `json:"backup_set_id"`
+	ExpiresAt   string       `json:"expires_at,omitempty"`
+	Held        bool         `json:"held"`
+	Running     *RunningWork `json:"running"`
 }
 
 // BackupSetHealth is one backup set's freshness verdict. This is the backup half of
@@ -1106,6 +1160,17 @@ type RotatePasswordRequest struct {
 	NewPassword     string `json:"newPassword"`
 }
 
+// RunningWork is what a run cycle is doing for one backup set right now (issue
+// #350). It is the content of the warning shown before edit mode
+// opens: discarding a partial transfer of a named artifact is a
+// materially different cost from cancelling a scheduler tick that
+// has not started work, and only a message saying which one it is
+// lets an operator decide.
+type RunningWork struct {
+	Artifact string `json:"artifact"`
+	Stage    string `json:"stage"`
+}
+
 // SessionResponse is GET /auth/session.
 type SessionResponse struct {
 	Username string `json:"username"`
@@ -1270,6 +1335,8 @@ var SchemaTypes = map[string]any{
 	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
+	"BackupSetEditHold":           BackupSetEditHold{},
+	"BackupSetEditHoldState":      BackupSetEditHoldState{},
 	"BackupSetHealth":             BackupSetHealth{},
 	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
@@ -1305,6 +1372,7 @@ var SchemaTypes = map[string]any{
 	"RetentionTierSelection":      RetentionTierSelection{},
 	"RetentionVerdict":            RetentionVerdict{},
 	"RotatePasswordRequest":       RotatePasswordRequest{},
+	"RunningWork":                 RunningWork{},
 	"SessionResponse":             SessionResponse{},
 	"SetEnabledRequest":           SetEnabledRequest{},
 	"SetReadOnlyRequest":          SetReadOnlyRequest{},
