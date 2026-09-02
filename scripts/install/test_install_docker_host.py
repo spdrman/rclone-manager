@@ -3205,6 +3205,29 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         self.assertIn(str(key), printed, "the path being left behind is named")
         self.assertIn(str(rotated), printed)
 
+    def test_it_never_raises_for_a_command_that_has_no_credential_flags(self):
+        """The same protection resolve() has, for the same reason. Since
+        #330's subparsers split, only preflight and install declare
+        --ssh-key and --known-hosts, so those attributes are simply absent
+        from the Namespace for the other four. Only those two call this
+        today, and an AttributeError deep inside a privileged repair path
+        is the failure a guard nobody exercises does not prevent."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix = Path(tmp.name) / "rclone-manager"
+        env = {"SSH_KEY_FILE": "/somewhere/else/id_ed25519",
+               "KNOWN_HOSTS_FILE": "/somewhere/else/known_hosts"}
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                [command, "--prefix", str(prefix)]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                exc = refusal_from(installer.adopt_installed_credentials, args, env)
+            if command in ("preflight", "install"):
+                self.assertIsNotNone(exc, f"{command} reads these paths, so a missing one refuses")
+            else:
+                self.assertIsNone(exc, f"{command} does not declare these flags and must not trip over them")
+
     def test_a_fresh_host_adopts_nothing(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
