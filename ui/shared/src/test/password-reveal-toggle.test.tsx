@@ -22,7 +22,10 @@ import { HelpField } from "@shared/components/FieldHelp";
  *  this component puts a <button> inside one. */
 function Harness({ label = "Password", disabled = false }: { label?: string; disabled?: boolean }) {
   return (
-    <HelpField label={label} help="Test field.">
+    <HelpField
+      label={label}
+      help={{ what: "A password.", example: "correct-horse-battery", effect: "Signs you in." }}
+    >
       {(helpId) => (
         <PasswordInput
           label={label}
