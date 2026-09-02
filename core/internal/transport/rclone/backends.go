@@ -15,7 +15,16 @@ import (
 
 // RequiredBackends are the backends FR-4 actually asks for. Each one has a
 // direct blank import in adapter.go.
-var RequiredBackends = []string{"local", "sftp"}
+//
+// s3 is EPIC E's addition, and docs/EPIC-E-alternative-storage.md's FR-28
+// IS the "explicit feature/architecture decision" FR-4 requires for it. The
+// decision, in one line: an alternative storage medium must not add a
+// second S3 implementation to this repository, and the only one it already
+// contains is inside the embedded rclone, so the medium is rclone's own s3
+// backend behind the FR-3 transport boundary and no AWS SDK enters the tree
+// in Go or in TypeScript. The measured binary-size delta is recorded in the
+// landing PR, the same obligation the crypt precedent below established.
+var RequiredBackends = []string{"local", "sftp", "s3"}
 
 // AcceptedTransitiveBackends maps the name of a backend that registers
 // itself even though nothing in this package imports it directly, to the
