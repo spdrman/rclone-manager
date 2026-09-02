@@ -97,4 +97,14 @@ type Record struct {
 
 	RetentionTier      string
 	RetentionExpiresAt *time.Time
+
+	// Placements is every durable copy of this artifact the journal knows
+	// about (FR-29), in a stable order, and it is never empty: migration
+	// 0007 backfilled one local placement for every artifact that predates
+	// EPIC E, and the journal's own writer creates one for every artifact
+	// discovered since. Code asking where an artifact's bytes actually are
+	// asks this; LocalPath keeps meaning what it always meant, the
+	// ingestion landing path, which is a historical fact rather than a
+	// promise that anything is still readable there.
+	Placements []Placement
 }

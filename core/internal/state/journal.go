@@ -281,7 +281,19 @@ func insertArtifact(ctx context.Context, tx *sql.Tx, t Transition) (int64, error
 		return 0, fmt.Errorf("state: insert artifact: %w", err)
 	}
 
-	return res.LastInsertId()
+	rowID, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("state: insert artifact: %w", err)
+	}
+
+	// FR-29: an artifact row and its local placement are created together,
+	// in this transaction, so there is no instant at which the journal
+	// holds an artifact with nowhere recorded to look for it.
+	if err := insertLocalPlacement(ctx, tx, rowID, localPath, occurred); err != nil {
+		return 0, err
+	}
+
+	return rowID, nil
 }
 
 // redact filters t.Deletion.Error, issue #295's other confirmed durable
@@ -350,6 +362,13 @@ func updateArtifact(ctx context.Context, tx *sql.Tx, t Transition, redact *obs.R
 	query := "UPDATE artifacts SET " + join(set, ", ") + " WHERE id = ?"
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		return 0, fmt.Errorf("state: update artifact: %w", err)
+	}
+
+	// FR-29: whatever this transition just changed about where the local
+	// copy is, or about what is known of it, is mirrored onto the local
+	// placement in the same transaction.
+	if err := updateLocalPlacement(ctx, tx, rowID, t); err != nil {
+		return 0, err
 	}
 
 	return rowID, nil

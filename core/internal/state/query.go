@@ -172,13 +172,18 @@ func scanOptionalTime(v sql.NullString) (*time.Time, error) {
 
 func getByRowID(ctx context.Context, q querier, rowID int64) (Record, error) {
 	row := q.QueryRowContext(ctx, `SELECT `+selectColumns+` FROM artifacts WHERE id = ?`, rowID)
-	rec, _, err := scanRecord(row)
+	rec, id, err := scanRecord(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, fmt.Errorf("%w: row id %d", ErrArtifactNotFound, rowID)
 	}
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacementsFor(ctx, q, "a.id = ?", rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements[id]
 	return rec, nil
 }
 
@@ -188,13 +193,20 @@ func (j *Journal) Get(ctx context.Context, artifact model.ArtifactID) (Record, e
 		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? AND artifact_name = ?`,
 		artifact.Set.Source, artifact.Set.Set, artifact.Name,
 	)
-	rec, _, err := scanRecord(row)
+	rec, id, err := scanRecord(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, artifact)
 	}
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacementsFor(ctx, j.db,
+		"a.source = ? AND a.backup_set = ? AND a.artifact_name = ?",
+		artifact.Set.Source, artifact.Set.Set, artifact.Name)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements[id]
 	return rec, nil
 }
 
@@ -344,7 +356,7 @@ func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, erro
 	if err != nil {
 		return nil, fmt.Errorf("state: list by state: %w", err)
 	}
-	return scanRecords(rows)
+	return j.scanRecordsWithPlacements(ctx, rows, "a.state = ?", state)
 }
 
 // ListByBackupSet returns every artifact recorded for one backup set (FR-7):
@@ -357,24 +369,50 @@ func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([
 	if err != nil {
 		return nil, fmt.Errorf("state: list by backup set: %w", err)
 	}
-	return scanRecords(rows)
+	return j.scanRecordsWithPlacements(ctx, rows, "a.source = ? AND a.backup_set = ?", set.Source, set.Set)
 }
 
-func scanRecords(rows *sql.Rows) ([]Record, error) {
+func scanRecords(rows *sql.Rows) ([]Record, []int64, error) {
 	defer rows.Close()
 
 	var out []Record
+	var ids []int64
 	for rows.Next() {
-		rec, _, err := scanRecord(rows)
+		rec, id, err := scanRecord(rows)
 		if err != nil {
-			return nil, fmt.Errorf("state: scan artifact: %w", err)
+			return nil, nil, fmt.Errorf("state: scan artifact: %w", err)
 		}
 		out = append(out, rec)
+		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("state: list artifacts: %w", err)
+		return nil, nil, fmt.Errorf("state: list artifacts: %w", err)
 	}
-	return out, nil
+	return out, ids, nil
+}
+
+// scanRecordsWithPlacements drains a list query and then attaches every
+// listed artifact's placements in ONE further read, re-stating the same
+// artifact predicate rather than issuing a query per record. A list of a
+// backup set's artifacts is what retention, health and the API surface all
+// call, and a per-record round trip there is a round trip per artifact on
+// every status page load.
+func (j *Journal) scanRecordsWithPlacements(ctx context.Context, rows *sql.Rows, artifactWhere string, args ...any) ([]Record, error) {
+	recs, ids, err := scanRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(recs) == 0 {
+		return recs, nil
+	}
+	placements, err := loadPlacementsFor(ctx, j.db, artifactWhere, args...)
+	if err != nil {
+		return nil, err
+	}
+	for i := range recs {
+		recs[i].Placements = placements[ids[i]]
+	}
+	return recs, nil
 }
 
 // ActivityRecord is one row of the append-only state_transitions log,
