@@ -24,7 +24,7 @@ package rclone
 // not have room to arise inside one docker build.
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -37,14 +37,16 @@ import (
 	"time"
 )
 
-// dockerBuildBounds are the two derived bounds' floor and multiplier. See
-// dockerBuildProgressTracker.window/overallCap for how they combine with
-// a run's own measured pace.
+// dockerBuildBounds are the two derived bounds' floor, multiplier and
+// absolute ceiling. See dockerBuildProgressTracker.window/overallCap for
+// how they combine with a run's own measured pace.
 type dockerBuildBounds struct {
 	stepFloor     time.Duration
 	stepFactor    float64
+	stepMax       time.Duration
 	overallFloor  time.Duration
 	overallFactor float64
+	overallMax    time.Duration
 }
 
 // defaultDockerBuildBounds is sized for the small, few-layer fixture
@@ -56,11 +58,46 @@ type dockerBuildBounds struct {
 // consistently slow widens both bounds because it raises the "slowest
 // step" they are multiples of; only a step that goes quiet for longer
 // than its own recent pace justifies trips it).
+//
+// stepMax and overallMax are the absolute ceilings, and they exist
+// because "derived from this run's own pace" is unbounded on its own: one
+// 60-second step alone would put the no-progress window at 600s and the
+// overall cap at 1200s. This package is NOT run under core/cmd/gotestwatch
+// (scripts/ci-local.sh routes only tests/crashmatrix and
+// tests/sftpintegration through it), so it still runs under `go test`'s
+// own fixed 600-second per-package default, and a bound allowed to widen
+// past that just moves #309's failure one level up: `go test` force-kills
+// the whole binary with `panic: test timed out`, naming no step and
+// orphaning the in-flight `docker build`.
+//
+// The numbers come from measuring this fixture rather than rounding. On
+// this machine a warm build of sftpFixtureDockerfile takes 0.14-0.47s, a
+// cold one with no layer cache takes ~1.0s, and a cold pull of the
+// alpine:3.20 base adds ~1.4s, so a fully cold build is ~2.5s. A full run
+// of this package takes ~64s wall clock and does six fixture builds
+// (TestClassify_Docker, TestFixtureImageIsNotSharedBetweenClientKeys
+// twice, TestSFTPHostKeyVerification, TestSFTPKeyResolvers,
+// TestSFTPKeyResolvers_Passphrase). overallMax of 150s is therefore ~60x
+// a fully cold build, comfortably above overallFloor so the derived
+// bounds stay the operative mechanism rather than being preempted, and
+// small enough that three simultaneously-pathological builds (450s) still
+// land inside `go test`'s 600s budget next to this package's own measured
+// ~64s of other work. stepMax of 120s sits below it so a build that
+// genuinely stalls is still reported as a stall rather than waiting to be
+// caught by the overall cap and mislabelled a livelock.
+//
+// Deliberately NOT a context.WithTimeout wrapped around the whole command,
+// which is what this function replaced: a context deadline firing produces
+// exactly the bare "signal: killed" / "context canceled" that issue #309
+// filed as unreadable. Capping the derived bounds keeps the ceiling and
+// the diagnostic at the same time.
 var defaultDockerBuildBounds = dockerBuildBounds{
 	stepFloor:     20 * time.Second,
 	stepFactor:    10,
+	stepMax:       120 * time.Second,
 	overallFloor:  90 * time.Second,
 	overallFactor: 20,
+	overallMax:    150 * time.Second,
 }
 
 // dockerBuildTrip is watchdogTrip, adapted: what a bound being exceeded
@@ -132,20 +169,33 @@ func (p *dockerBuildProgressTracker) observe(line string, at time.Time) {
 	p.lines++
 }
 
-// window is the current no-progress bound. Callers hold p.mu.
+// window is the current no-progress bound, derived from this run's own
+// slowest step, never below the floor and never above the absolute
+// ceiling. Callers hold p.mu.
 func (p *dockerBuildProgressTracker) window() time.Duration {
-	if derived := time.Duration(float64(p.slowestGap) * p.b.stepFactor); derived > p.b.stepFloor {
-		return derived
+	w := p.b.stepFloor
+	if derived := time.Duration(float64(p.slowestGap) * p.b.stepFactor); derived > w {
+		w = derived
 	}
-	return p.b.stepFloor
+	if p.b.stepMax > 0 && w > p.b.stepMax {
+		return p.b.stepMax
+	}
+	return w
 }
 
-// overallCap is the current total-runtime backstop. Callers hold p.mu.
+// overallCap is the current total-runtime backstop, bounded the same way.
+// The ceiling is what keeps a build's total runtime from widening past
+// `go test`'s own per-package budget; see defaultDockerBuildBounds.
+// Callers hold p.mu.
 func (p *dockerBuildProgressTracker) overallCap() time.Duration {
-	if derived := time.Duration(float64(p.slowestGap) * p.b.overallFactor); derived > p.b.overallFloor {
-		return derived
+	c := p.b.overallFloor
+	if derived := time.Duration(float64(p.slowestGap) * p.b.overallFactor); derived > c {
+		c = derived
 	}
-	return p.b.overallFloor
+	if p.b.overallMax > 0 && c > p.b.overallMax {
+		return p.b.overallMax
+	}
+	return c
 }
 
 // check reports the bound that has been exceeded as of now, or nil if the
@@ -175,6 +225,88 @@ func (p *dockerBuildProgressTracker) check(now time.Time) *dockerBuildTrip {
 	return nil
 }
 
+// dockerBuildLineTap captures a stream verbatim while handing complete
+// lines to onLine as they arrive.
+//
+// This is crash_matrix's lineTap, and taking it rather than reading pipes
+// by hand is the whole point: os/exec gives a non-*os.File writer its own
+// copying goroutine AND makes Cmd.Wait block on that goroutine before it
+// returns (awaitGoroutines), so a line reaches the tracker the instant the
+// child wrote it and Wait cannot return while output is still in flight.
+//
+// The first version of runDockerBuildWatched used StdoutPipe/StderrPipe
+// with hand-rolled scanner goroutines and ran cmd.Wait concurrently with
+// them, which os/exec's own documentation calls out as incorrect: "Wait
+// will close the pipe after seeing the command exit, so it is incorrect to
+// call Wait before all reads from the pipe have completed." Wait closes
+// the parent's read end as soon as it reaps the process, so anything still
+// buffered at that moment was lost silently, and under load that was
+// almost the entire transcript. Losing the transcript defeats this
+// function: the captured output is what buildSFTPFixtureImage prints on a
+// real build failure, and what names the step a hung build got stuck
+// after.
+//
+// Splitting on '\n' here rather than through a bufio.Scanner also removes
+// that scanner's own failure mode: a Scan() that stopped early on
+// bufio.ErrTooLong (a line past the buffer cap) used to end the pump
+// silently, and the watchdog then reported the resulting silence as a
+// hang. There is no cap and no error to swallow now, and a genuine I/O
+// error on the pipe surfaces through cmd.Wait's own return value instead.
+type dockerBuildLineTap struct {
+	onLine func(line string)
+
+	mu      sync.Mutex
+	all     bytes.Buffer
+	partial []byte
+}
+
+func (l *dockerBuildLineTap) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.all.Write(p)
+	if l.onLine == nil {
+		return len(p), nil
+	}
+	l.partial = append(l.partial, p...)
+	for {
+		i := bytes.IndexByte(l.partial, '\n')
+		if i < 0 {
+			break
+		}
+		line := string(l.partial[:i])
+		l.partial = l.partial[i+1:]
+		l.onLine(line)
+	}
+	return len(p), nil
+}
+
+func (l *dockerBuildLineTap) Bytes() []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return []byte(l.all.String())
+}
+
+// wireDockerBuildOutput points both of cmd's output streams at one tap
+// feeding tracker, and returns the tap holding the transcript.
+//
+// Split out from runDockerBuildWatched so the wiring itself is assertable
+// without a Docker daemon (see TestWireDockerBuildOutput_*): which writer
+// the streams are attached to is the whole correctness question here, and
+// it is not observable from the outside once the command has run.
+//
+// One tap for both streams. BuildKit's plain progress goes to stderr and
+// the CLI's own summary lines to stdout, and a caller wants one transcript
+// in the order the child actually wrote it. Handing the same writer to
+// both is what makes os/exec give them a single pipe and a single copying
+// goroutine (exactly what CombinedOutput does), so there is nothing to
+// merge by hand and no way to interleave the two wrongly.
+func wireDockerBuildOutput(cmd *exec.Cmd, tracker *dockerBuildProgressTracker) *dockerBuildLineTap {
+	tap := &dockerBuildLineTap{onLine: func(line string) { tracker.observe(line, time.Now()) }}
+	cmd.Stdout = tap
+	cmd.Stderr = tap
+	return tap
+}
+
 // runDockerBuildWatched runs `docker build --progress=plain -t tag dir`,
 // killing it and returning a *dockerBuildTrip-described error the moment
 // either derived bound trips, rather than trusting one fixed wall-clock
@@ -185,51 +317,14 @@ func (p *dockerBuildProgressTracker) check(now time.Time) *dockerBuildTrip {
 // drive it fast without sleeping for real seconds.
 func runDockerBuildWatched(ctx context.Context, b dockerBuildBounds, pollEvery time.Duration, tag, dir string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "docker", "build", "--progress=plain", "-t", tag, dir)
-	// BuildKit's plain progress writes to stderr; the CLI's own summary
-	// lines (if any) go to stdout. Piped separately, since exec.Cmd
-	// refuses the same io.Writer for both when either is a *Pipe(), and
-	// merged by hand below so a caller sees one combined transcript
-	// regardless of which stream a given line came from.
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("docker build: stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("docker build: stderr pipe: %w", err)
-	}
 
 	start := time.Now()
 	tracker := newDockerBuildProgressTracker(b, start)
+	tap := wireDockerBuildOutput(cmd, tracker)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("docker build: start: %w", err)
 	}
-
-	var out strings.Builder
-	var outMu sync.Mutex
-	pump := func(r *bufio.Scanner, wg *sync.WaitGroup) {
-		defer wg.Done()
-		for r.Scan() {
-			line := r.Text()
-			now := time.Now()
-			tracker.observe(line, now)
-			outMu.Lock()
-			out.WriteString(line)
-			out.WriteByte('\n')
-			outMu.Unlock()
-		}
-	}
-	var wg sync.WaitGroup
-	wg.Add(2)
-	stdoutScanner := bufio.NewScanner(stdout)
-	stdoutScanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	stderrScanner := bufio.NewScanner(stderr)
-	stderrScanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	go pump(stdoutScanner, &wg)
-	go pump(stderrScanner, &wg)
-	linesDone := make(chan struct{})
-	go func() { wg.Wait(); close(linesDone) }()
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -240,29 +335,27 @@ func runDockerBuildWatched(ctx context.Context, b dockerBuildBounds, pollEvery t
 	for {
 		select {
 		case err := <-done:
-			<-linesDone
-			outMu.Lock()
-			captured := out.String()
-			outMu.Unlock()
+			// Wait has already blocked on the copying goroutine, so the
+			// tap holds everything the build wrote. No separate drain.
 			if err != nil {
-				return []byte(captured), fmt.Errorf("docker build: %w", err)
+				return tap.Bytes(), fmt.Errorf("docker build: %w", err)
 			}
-			return []byte(captured), nil
+			return tap.Bytes(), nil
 		case <-ticker.C:
 			if trip := tracker.check(time.Now()); trip != nil {
+				// Kill it, then still wait, so the watchdog never leaves
+				// the process it gave up on running behind. This reaps
+				// the local `docker` CLI; whether the daemon tears its
+				// server-side BuildKit step down too is BuildKit's own
+				// business and not something this can promise.
 				_ = cmd.Process.Kill()
 				<-done
-				<-linesDone
-				outMu.Lock()
-				captured := out.String()
-				outMu.Unlock()
-				return []byte(captured), fmt.Errorf("docker build hit a timeout, not a build failure: %s", trip)
+				return tap.Bytes(), fmt.Errorf("docker build hit a timeout, not a build failure: %s", trip)
 			}
 		case <-ctx.Done():
 			_ = cmd.Process.Kill()
 			<-done
-			<-linesDone
-			return nil, ctx.Err()
+			return tap.Bytes(), ctx.Err()
 		}
 	}
 }
@@ -372,27 +465,68 @@ func TestDockerBuildProgressTracker_OverallCapCatchesALivelock(t *testing.T) {
 	}
 }
 
-func TestDockerBuildProgressTracker_ASingleSlowStepDoesNotPermanentlyWidenTheCap(t *testing.T) {
-	// The property that distinguishes this from an all-time-maximum bound
-	// that never shrinks: crash_matrix's own progressTracker has this
-	// same shape (an all-time max, not a decaying one) because a single
-	// harness invocation is short enough that the distinction gotestwatch
-	// needed for a whole `go test` package run does not have room to
-	// matter here either. This test exists to make that a checked
-	// decision rather than an unstated assumption: one slow step (the
-	// alpine pull, say) genuinely does widen the bound for the REST of
-	// this one build, on purpose.
+func TestDockerBuildProgressTracker_OneSlowStepWidensTheCapForTheRestOfTheBuild(t *testing.T) {
+	// The property that distinguishes this from a decaying bound:
+	// crash_matrix's own progressTracker has this same all-time-max shape
+	// because a single harness invocation is short enough that the
+	// distinction gotestwatch needed for a whole `go test` package run
+	// does not have room to matter here either. This test exists to make
+	// that a checked decision rather than an unstated assumption: one slow
+	// step (the alpine pull, say) genuinely does widen the bound for the
+	// REST of this one build, on purpose, and keeps it widened after
+	// faster steps follow.
 	start := time.Now()
 	p := newDockerBuildProgressTracker(defaultDockerBuildBounds, start)
 
-	slow := start.Add(60 * time.Second) // one slow step: a 60s image pull
+	slow := start.Add(9 * time.Second) // one slow step: a 9s image pull
 	p.observe("#2 [1/4] FROM alpine:3.20", slow)
 
 	fast := slow.Add(1 * time.Second) // every step after it is fast
 	p.observe("#3 [2/4] RUN apk add", fast)
 
-	if got, want := p.window(), 600*time.Second; got != want {
-		t.Fatalf("window after one 60s step = %s, want %s: the slow pull must still be what the window is derived from", got, want)
+	if got, want := p.window(), 90*time.Second; got != want {
+		t.Fatalf("window after one 9s step = %s, want %s: the slow pull must still be what the window is derived from, even after a fast step followed it", got, want)
+	}
+}
+
+func TestDockerBuildProgressTracker_NeitherBoundWidensPastItsCeiling(t *testing.T) {
+	// The other half of the previous test, and the reason issue #309's
+	// fix cannot simply be "derive the bound and trust it". Deriving from
+	// this run's own pace is unbounded on its own: one 60-second step puts
+	// the raw no-progress window at 600s (stepFactor 10) and the raw
+	// overall cap at 1200s (overallFactor 20), both past `go test`'s own
+	// fixed 600s per-package budget. This package does not run under
+	// gotestwatch, so a bound allowed past that budget just relocates
+	// #309's failure: `go test` kills the whole binary, naming no step.
+	start := time.Now()
+	p := newDockerBuildProgressTracker(defaultDockerBuildBounds, start)
+
+	p.observe("#2 [1/4] FROM alpine:3.20", start.Add(60*time.Second))
+
+	if got, want := p.window(), defaultDockerBuildBounds.stepMax; got != want {
+		t.Fatalf("no-progress window after a 60s step = %s, want it clamped to %s; derived alone it would be %s",
+			got, want, 600*time.Second)
+	}
+	if got, want := p.overallCap(), defaultDockerBuildBounds.overallMax; got != want {
+		t.Fatalf("overall cap after a 60s step = %s, want it clamped to %s; derived alone it would be %s",
+			got, want, 1200*time.Second)
+	}
+
+	// The ceilings are only worth anything if they are actually below the
+	// budget they exist to protect, with room for the rest of the package.
+	// A full run of this package measures ~64s and does six fixture
+	// builds; `go test`'s default package budget is 600s.
+	if defaultDockerBuildBounds.overallMax >= 600*time.Second {
+		t.Fatalf("overallMax %s is not below `go test`'s own 600s package budget, so it guarantees nothing",
+			defaultDockerBuildBounds.overallMax)
+	}
+	if defaultDockerBuildBounds.stepMax >= defaultDockerBuildBounds.overallMax {
+		t.Fatalf("stepMax %s is not below overallMax %s, so a stalled build gets reported as a livelock instead of a stall",
+			defaultDockerBuildBounds.stepMax, defaultDockerBuildBounds.overallMax)
+	}
+	if defaultDockerBuildBounds.overallMax <= defaultDockerBuildBounds.overallFloor {
+		t.Fatalf("overallMax %s is at or below overallFloor %s, so the ceiling preempts the derived bound entirely and this is a fixed budget again, which is what #309 filed",
+			defaultDockerBuildBounds.overallMax, defaultDockerBuildBounds.overallFloor)
 	}
 }
 
@@ -415,6 +549,122 @@ func TestRunDockerBuildWatched_ARealBuildSucceeds(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("a real build produced no captured progress output at all")
+	}
+}
+
+// TestWireDockerBuildOutput_AttachesAWriterRatherThanPipes is the
+// regression net for the capture bug the first version of this file had.
+//
+// That version called cmd.StdoutPipe()/StderrPipe(), read them with
+// scanner goroutines, and ran cmd.Wait() concurrently with those reads.
+// os/exec documents that as incorrect ("Wait will close the pipe after
+// seeing the command exit, so it is incorrect to call Wait before all
+// reads from the pipe have completed"), because Wait closes the parent's
+// read end as soon as it reaps the process and discards whatever is still
+// buffered behind it.
+//
+// The invariant is structural rather than statistical, so this pins it
+// structurally, and deliberately not by trying to observe lost output: I
+// could not get the old wiring to drop a single line on this platform
+// across many trials, with a real docker build and with a plain burst-and-
+// exit child, contended and uncontended. A test that tried to catch it by
+// counting lines would therefore pass against the very code it exists to
+// reject, which is worse than no test. What IS reliably true is that
+// attaching an io.Writer makes os/exec own the copy and makes Wait block
+// on it (awaitGoroutines), while StdoutPipe leaves Stdout nil and hands
+// the caller a race it has to get right by hand. So: assert the wiring.
+func TestWireDockerBuildOutput_AttachesAWriterRatherThanPipes(t *testing.T) {
+	cmd := exec.Command("docker", "build", ".")
+	tracker := newDockerBuildProgressTracker(defaultDockerBuildBounds, time.Now())
+	tap := wireDockerBuildOutput(cmd, tracker)
+
+	if cmd.Stdout == nil || cmd.Stderr == nil {
+		t.Fatal("Stdout/Stderr left nil, which is what StdoutPipe/StderrPipe do; os/exec then cannot synchronise Wait against the reads and the transcript can be truncated by Wait closing the pipe")
+	}
+	if cmd.Stdout != cmd.Stderr {
+		t.Error("the two streams are not the same writer, so os/exec gives each its own pipe and the merged transcript can interleave the two out of order")
+	}
+	if cmd.Stdout != any(tap) {
+		t.Errorf("Stdout is %T, want the returned *dockerBuildLineTap: the tap is what feeds the tracker, so a stream not pointed at it is a stream the watchdog cannot see progress on", cmd.Stdout)
+	}
+
+	// And the tap really does feed the tracker, since the wiring being
+	// right is only useful if what it is wired to measures something.
+	if _, err := tap.Write([]byte("#5 [2/4] RUN apk add\n")); err != nil {
+		t.Fatalf("tap.Write: %v", err)
+	}
+	tracker.mu.Lock()
+	lines, last := tracker.lines, tracker.lastLine
+	tracker.mu.Unlock()
+	if lines != 1 || last != "#5 [2/4] RUN apk add" {
+		t.Errorf("after one complete line the tracker saw lines=%d last=%q, want 1 and the line itself", lines, last)
+	}
+}
+
+func TestDockerBuildLineTap_SplitsLinesAcrossWritesAndKeepsEverything(t *testing.T) {
+	// The tap replaced a bufio.Scanner, so the line splitting is this
+	// file's own responsibility now: a line arriving in pieces must still
+	// reach the tracker exactly once, and the verbatim transcript must
+	// keep every byte including a trailing partial line that never got its
+	// newline (a build killed mid-write leaves exactly that, and it is
+	// often the most interesting part of the output).
+	var got []string
+	tap := &dockerBuildLineTap{onLine: func(line string) { got = append(got, line) }}
+
+	for _, chunk := range []string{"#1 load", " definition\n#2 FROM al", "pine\n#3 partial-no-newline"} {
+		if _, err := tap.Write([]byte(chunk)); err != nil {
+			t.Fatalf("tap.Write(%q): %v", chunk, err)
+		}
+	}
+
+	want := []string{"#1 load definition", "#2 FROM alpine"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("lines handed to the tracker = %q, want %q", got, want)
+	}
+	if wantAll := "#1 load definition\n#2 FROM alpine\n#3 partial-no-newline"; string(tap.Bytes()) != wantAll {
+		t.Errorf("captured transcript = %q, want %q: the unterminated last line must survive", tap.Bytes(), wantAll)
+	}
+}
+
+func TestRunDockerBuildWatched_CapturesEveryLineARealBuildEmits(t *testing.T) {
+	// End-to-end companion to the wiring assertion above: whatever the
+	// build prints comes back. Sized well under BuildKit's own output cap
+	// on a single step, which I measured at 16,608 lines on this daemon:
+	// past that, output is dropped by BuildKit before this code ever sees
+	// it, so a bigger assertion here would fail for a reason that has
+	// nothing to do with this function.
+	requireDocker(t)
+
+	const wantLines = 200
+	nonce := strconv.FormatInt(time.Now().UnixNano(), 10)
+	dir := t.TempDir()
+	// The nonce keeps the RUN layer out of the build cache, so the step
+	// really re-executes and really re-emits rather than being replayed.
+	dockerfile := fmt.Sprintf("FROM alpine:3.20\nRUN echo %s >/dev/null && for i in $(seq 1 %d); do echo ZZLINE-$i; done\n", nonce, wantLines)
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o644); err != nil {
+		t.Fatalf("writing Dockerfile: %v", err)
+	}
+	tag := "rclone-manager-test-dockerbuild-capture:" + nonce
+	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	out, err := runDockerBuildWatched(ctx, defaultDockerBuildBounds, 200*time.Millisecond, tag, dir)
+	if err != nil {
+		t.Fatalf("a real, ordinary build failed: %v\n%s", err, out)
+	}
+	// Counted per exact token rather than by substring: the Dockerfile's
+	// own command text is echoed back by BuildKit as the step header, and
+	// it contains the bare prefix, so a substring count is off by one.
+	missing := 0
+	for i := 1; i <= wantLines; i++ {
+		if !strings.Contains(string(out), fmt.Sprintf("ZZLINE-%d\n", i)) {
+			missing++
+		}
+	}
+	if missing != 0 {
+		t.Fatalf("%d of the %d lines the build emitted never reached the caller, so output is being lost between the child writing it and this function returning it (%d bytes captured)",
+			missing, wantLines, len(out))
 	}
 }
 
@@ -461,4 +711,12 @@ func TestRunDockerBuildWatched_ARealHangIsCaught(t *testing.T) {
 	if !strings.Contains(string(out), "about-to-hang") {
 		t.Fatalf("captured output does not contain the real progress emitted before the hang:\n%s", out)
 	}
+	// What this proves, stated exactly: the bound tripped, the error says
+	// it was a timeout rather than a build failure, and the local `docker`
+	// CLI was reaped (cmd.Wait returned, or this test would still be
+	// blocked in runDockerBuildWatched). It does NOT prove the daemon tore
+	// the server-side BuildKit step down: killing the client does not
+	// reliably cancel a running server-side build, which is BuildKit's own
+	// behaviour and outside what this function can promise. The same was
+	// true of the fixed-timeout version this replaced.
 }
