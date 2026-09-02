@@ -683,19 +683,19 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep %d\necho done > %s\n", shQuote(pidFile), int(hookNeverAnswers.Seconds()), shQuote(markerFile)))
 
 	start := time.Now()
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
 		Artifact: rec.Artifact, AttemptKey: "a1",
-		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}},
+		Validation: config.Validation{Command: &config.Command{Executable: script, Timeout: config.Duration(hookTimeoutBudget)}},
 	})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if elapsed > 3*time.Second {
-		t.Fatalf("Verify took %s to return; the validator should have been killed well before its 5s sleep finished", elapsed)
+	if elapsed > hookReturnBudget {
+		t.Fatalf("Verify took %s to return; the validator should have been killed well before its %s sleep finished", elapsed, hookNeverAnswers)
 	}
 	if out.Record.State != string(Quarantined) {
 		t.Fatalf("state = %q, want %q: a validator that never answers must fail closed", out.Record.State, Quarantined)
@@ -704,14 +704,7 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 		t.Fatalf("ValidationDetail = %q, want it to mention the timeout", out.Record.ValidationDetail)
 	}
 
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("reading pid file (the validator should have written it immediately on starting): %v", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		t.Fatalf("parsing pid: %v", err)
-	}
+	pid := timedOutHookPID(t, pidFile)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
@@ -727,6 +720,63 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("marker file exists: the validator ran to completion despite its timeout, so it was not actually killed")
+	}
+}
+
+// hookTimeoutBudget is the timeout the two "a hook that never answers is
+// killed" tests give their script, and it is deliberately not tight.
+//
+// Both tests prove the same contract: the process really is killed, not
+// abandoned. Proving "really killed" needs the script's own pid, which
+// means the script has to be forked, scheduled and get one line written
+// before the timeout fires. At 200ms it did not, on a machine running
+// several full gate runs at once: the fork lost the race, the pid file
+// never appeared, and the test failed on a missing file rather than on
+// anything about the behaviour it exists to prove (issue #373).
+//
+// Nothing about the contract needs the budget to be small. It has to be
+// short enough that the test is quick and long enough that a fork cannot
+// lose, and every assertion downstream is what actually carries the
+// meaning: the call has to return far sooner than the script's own sleep
+// would allow, the script's process has to be gone afterwards, and its
+// completion marker must not exist. Those hold at any budget with a
+// margin under hookNeverAnswers.
+const hookTimeoutBudget = 2 * time.Second
+
+// hookNeverAnswers is how long the test script sleeps for. It is an order
+// of magnitude above hookTimeoutBudget so that "returned before the sleep
+// finished" cannot be true by accident on a slow machine.
+const hookNeverAnswers = 30 * time.Second
+
+// hookReturnBudget bounds how long the call under test may take. Well
+// under hookNeverAnswers, so it still proves the sleep was cut short,
+// and well over hookTimeoutBudget, so a descheduled goroutine does not
+// turn a correct kill into a failure.
+const hookReturnBudget = 10 * time.Second
+
+// timedOutHookPID reads the pid the killed script wrote. It polls rather
+// than reading once: the write happens on the child's own schedule, and a
+// filesystem that has not made it visible yet is not the same thing as a
+// script that never started. The failure message names the difference,
+// because that is what took the longest to work out the first time.
+func timedOutHookPID(t *testing.T, pidFile string) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		pidBytes, err := os.ReadFile(pidFile)
+		if err == nil {
+			pid, convErr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+			if convErr == nil {
+				return pid
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("pid file holds %q, which is not a pid: %v", string(pidBytes), convErr)
+			}
+		} else if time.Now().After(deadline) {
+			t.Fatalf("no pid file after %s: the script never got far enough to write one, which means it was killed before it started rather than while it was hanging. On a loaded machine that is a fork losing a race with the timeout, not a defect in the code under test (issue #373): %v",
+				hookTimeoutBudget, err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
