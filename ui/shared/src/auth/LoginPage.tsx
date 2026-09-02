@@ -6,6 +6,7 @@ import type { OperatorFailure } from "@shared/api/failure";
 import { Logo, Wordmark } from "@shared/components/Logo";
 import { ErrorState } from "@shared/components/EmptyState";
 import { HelpField } from "@shared/components/FieldHelp";
+import { PasswordInput } from "@shared/components/PasswordInput";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 
 /** Issue #274, one view over from the enrolment page it was filed against:
@@ -67,14 +68,14 @@ export function LoginPage({ onSignedIn }: { onSignedIn(): void }) {
           )}
         </HelpField>
         <HelpField label="Password" help={FIELD_HELP.loginPassword}>
-          {(helpId) => (
-            <input
-              className="input"
-              type="password"
-              aria-describedby={helpId}
+          {(helpId, field) => (
+            <PasswordInput
+              label={field.label}
+              labelledBy={field.id}
               autoComplete="current-password"
+              describedBy={helpId}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={setPassword}
               required
             />
           )}
