@@ -877,10 +877,21 @@ func buildSFTPFixtureImage(t *testing.T, authorizedKeyLine string) string {
 	// later, so t.Cleanup's LIFO order removes the containers first.
 	t.Cleanup(func() { _ = exec.Command("docker", "image", "rm", "-f", tag).Run() })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "build", "-t", tag, dir)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	// Not a fixed wall-clock budget (issue #309): under real host/daemon
+	// load a build that is still making progress can legitimately take
+	// longer than any fixed number picked on a quiet machine, and a
+	// timeout that cannot tell "busy" from "stuck" used to kill it anyway
+	// at almost exactly 120s, with an error that read as a Docker-side
+	// failure rather than a timeout. runDockerBuildWatched derives its
+	// bound from this build's own observed progress instead, under
+	// absolute ceilings that keep the derived value from widening past
+	// `go test`'s own per-package budget; see dockerbuild_test.go. The
+	// context stays plain Background on purpose: the ceiling lives in the
+	// bounds, where tripping it still produces a diagnostic naming the
+	// step, rather than in a context deadline, whose bare "context
+	// canceled" is the unreadable error #309 was filed about.
+	out, err := runDockerBuildWatched(context.Background(), defaultDockerBuildBounds, time.Second, tag, dir)
+	if err != nil {
 		t.Fatalf("docker build failed: %v\n%s", err, out)
 	}
 	return tag
