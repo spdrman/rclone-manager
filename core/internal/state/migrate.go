@@ -148,16 +148,77 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
+	pending := make([]migration, 0, len(known))
 	for _, m := range known {
 		if _, ok := applied[m.version]; ok {
 			continue
 		}
+		pending = append(pending, m)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	restoreForeignKeys, err := suspendForeignKeys(ctx, db)
+	if err != nil {
+		return err
+	}
+	defer restoreForeignKeys()
+
+	for _, m := range pending {
 		if err := applyMigration(ctx, db, m); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// suspendForeignKeys turns foreign key enforcement off for the duration of
+// a migration run and returns the function that puts it back exactly as it
+// was, whatever that was.
+//
+// This is SQLite's own documented procedure for "making other kinds of
+// table schema changes" (sqlite.org/lang_altertable.html), and this schema
+// needs it because it cannot alter a CHECK constraint in place: widening
+// artifacts.state means creating a new table, copying the rows across,
+// dropping the old one and renaming, which 0002 and 0006 both do. DROP
+// TABLE runs an implicit DELETE FROM first, and with foreign keys on that
+// delete trips every row in state_transitions pointing at the table being
+// replaced.
+//
+// That is not hypothetical. Open (state.go) enables foreign_keys, v0.1.0
+// shipped schema version 4, and 0006 landed after it, so every deployment
+// that had ever discovered one artifact refused to migrate to the next
+// release with "FOREIGN KEY constraint failed" and no journal at all. An
+// empty database has no referencing rows and sails through, which is why
+// this package's whole migration suite was green while the upgrade was
+// broken; see TestMigrate_AppliesToAPopulatedDatabaseAtEveryShippedVersion.
+//
+// Correctness is not given up in exchange. applyMigration runs
+// PRAGMA foreign_key_check inside each migration's own transaction before
+// committing it, so a migration that really does leave a dangling
+// reference is refused and rolled back rather than quietly written down.
+// The pragma has to be toggled out here rather than inside that
+// transaction because SQLite makes it a no-op while one is open.
+func suspendForeignKeys(ctx context.Context, db *sql.DB) (restore func(), err error) {
+	var was int
+	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&was); err != nil {
+		return nil, fmt.Errorf("state: reading foreign_keys pragma: %w", err)
+	}
+	if was == 0 {
+		return func() {}, nil
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = OFF"); err != nil {
+		return nil, fmt.Errorf("state: suspending foreign key enforcement for migration: %w", err)
+	}
+	return func() {
+		// Best effort by necessity: there is nothing useful a caller
+		// could do with a failure here that it is not already doing with
+		// the migration error it is on its way to returning, and the
+		// handle is closed on that path anyway (see Open).
+		_, _ = db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+	}, nil
 }
 
 func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]string, error) {
@@ -198,6 +259,10 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("state: apply migration %d (%s): %w", m.version, m.name, err)
 		}
+	}
+
+	if err := checkForeignKeys(ctx, tx); err != nil {
+		return fmt.Errorf("state: apply migration %d (%s): %w", m.version, m.name, err)
 	}
 
 	if _, err := tx.ExecContext(ctx,
@@ -314,4 +379,42 @@ func PendingMigration(ctx context.Context, path string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// checkForeignKeys is the other half of suspendForeignKeys: enforcement is
+// off while a migration runs, so this asks SQLite to verify, inside the
+// migration's own transaction and before it commits, that the schema the
+// migration just built has no dangling references left in it.
+//
+// PRAGMA foreign_key_check returns one row per violation and no rows when
+// everything resolves, so an error here is "this migration would have left
+// the journal referentially broken" and the caller's rollback is the right
+// answer to it. Only the first violation is reported: a migration is
+// wrong or it is not, and a list of every orphan in a large journal is not
+// more actionable than the first one plus the table it is in.
+func checkForeignKeys(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	defer rows.Close()
+
+	if rows.Next() {
+		// The pragma's columns are (table, rowid, parent, fkid). rowid is
+		// NULL for a WITHOUT ROWID table, so it is scanned as a nullable.
+		var (
+			table  string
+			rowID  sql.NullInt64
+			parent string
+			fkID   int
+		)
+		if err := rows.Scan(&table, &rowID, &parent, &fkID); err != nil {
+			return fmt.Errorf("foreign key check: %w", err)
+		}
+		return fmt.Errorf("would leave a dangling reference: a row in %s points at a missing row in %s", table, parent)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("foreign key check: %w", err)
+	}
+	return nil
 }
