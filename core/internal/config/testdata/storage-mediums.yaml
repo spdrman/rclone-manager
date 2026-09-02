@@ -1,0 +1,67 @@
+# EPIC E, FR-27: a top-level storage_mediums list, and retention tiers
+# that name one. Spelled the way the specification's example spells it, so
+# the schema is proven to parse the shape the docs promise rather than a
+# shape only a Go struct literal can reach.
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: sftp
+          host: production.example.internal
+          user: backup
+          key_file: /run/secrets/backup_ssh_key
+          known_hosts: /etc/backup-manager/known_hosts
+        remote_path: /backups/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+retention:
+  timezone: UTC
+  week_starts_on: monday
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7
+    - name: monthly
+      granularity: month
+      keep: 12
+      medium: offsite_s3
+    - name: annual
+      granularity: year
+      keep: 7
+      medium: offsite_cold
+
+storage_mediums:
+  - id: offsite_s3
+    type: s3
+    region: us-east-1
+    endpoint: ""
+    bucket: nas-backups
+    prefix: rclone-manager
+    storage_class: STANDARD
+    upload_verification: readback
+    credentials:
+      file: /var/lib/backup-manager/s3/offsite_s3.creds
+  - id: offsite_cold
+    type: s3
+    region: us-east-1
+    bucket: nas-backups-cold
+    storage_class: DEEP_ARCHIVE
+    credentials:
+      command: ["/usr/bin/op", "read", "op://infra/backup-manager/s3-cold"]
+  # A declared medium no tier references is legal: an operator staging a
+  # destination before pointing a tier at it (FR-27).
+  - id: staging_only
+    type: s3
+    bucket: nas-backups-staging
+    credentials:
+      env: BACKUP_S3_STAGING
