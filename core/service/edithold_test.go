@@ -3,11 +3,25 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/model"
 )
+
+// fixtureModelSetID is fixtureSetID as the typed id a CycleReport
+// carries, so the stubbed reports below name the same backup set the
+// rest of this file drives.
+func fixtureModelSetID(t *testing.T) model.BackupSetID {
+	t.Helper()
+	id, err := model.NewBackupSetID("production", "postgres-primary")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	return id
+}
 
 // TestBeginBackupSetEdit_StopsTheSchedulerStartingAPassForThatSet is the
 // end-to-end proof of the issue's "the scheduler is held too, not just
@@ -334,5 +348,54 @@ func TestBackupSetEditHold_SurvivesAConfigurationHotReload(t *testing.T) {
 	}
 	if !state.Held {
 		t.Error("the hold was lost when saving one field hot-reloaded the configuration")
+	}
+}
+
+// TestSubmitRunCycle_AHoldStoppingASetDoesNotFailTheOperation is the
+// service-layer half of app.ErrBackupSetHeldForEditing. Pressing Edit
+// while a run an operator submitted is in flight stops that set's pass,
+// which is what the operator asked for; marking the whole operation
+// FAILED for it puts "context canceled" in the activity feed as the
+// reason a backup did not happen, and teaches an operator to distrust the
+// one signal this product exists to produce.
+//
+// It drives the real executeRunCycle through the runCycle seam rather
+// than racing a real transfer, because what is under test here is how
+// this layer CLASSIFIES a report, not whether internal/app produces one
+// (holds_test.go over there already proves that, against a real cycle).
+func TestSubmitRunCycle_AHoldStoppingASetDoesNotFailTheOperation(t *testing.T) {
+	svc, _ := openTestService(t)
+	withStubbedRunCycle(t, func(_ *app.Service, _ context.Context) app.CycleReport {
+		return app.CycleReport{Sets: []app.BackupSetCycleResult{
+			{Set: fixtureModelSetID(t), Err: app.ErrBackupSetHeldForEditing},
+		}}
+	})
+
+	final := submitOneCycle(t, svc)
+
+	if final.Status != "completed" {
+		t.Errorf("operation status = %q (Error = %q), want completed: a set stopped because an operator entered edit mode has not failed",
+			final.Status, final.Error)
+	}
+}
+
+// TestSubmitRunCycle_ARealSetFailureStillFailsTheOperation is the control
+// the test above needs. Without it, an executeRunCycle that had stopped
+// classifying anything as a failure would pass.
+func TestSubmitRunCycle_ARealSetFailureStillFailsTheOperation(t *testing.T) {
+	svc, _ := openTestService(t)
+	withStubbedRunCycle(t, func(_ *app.Service, _ context.Context) app.CycleReport {
+		return app.CycleReport{Sets: []app.BackupSetCycleResult{
+			{Set: fixtureModelSetID(t), Err: errors.New("the source went unreachable")},
+		}}
+	})
+
+	final := submitOneCycle(t, svc)
+
+	if final.Status != "failed" {
+		t.Fatalf("operation status = %q, want failed", final.Status)
+	}
+	if !strings.Contains(final.Error, "the source went unreachable") {
+		t.Errorf("operation error = %q, want it to name the real failure", final.Error)
 	}
 }

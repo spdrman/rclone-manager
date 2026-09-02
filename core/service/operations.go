@@ -393,9 +393,14 @@ func (b *BackupService) executeRunCycle(operationID string) {
 			app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch}),
 			b.holds))
 
+	// SystemicFailure, not Err != nil: a set whose pass was stopped
+	// because an operator entered edit mode (issue #350's hold) carries
+	// an error saying so, and failing this operation for it would put
+	// "a backup did not happen" in the activity feed for something the
+	// operator themselves asked for.
 	var failed string
 	for _, set := range report.Sets {
-		if set.Err != nil {
+		if set.SystemicFailure() {
 			failed = set.Err.Error()
 			break
 		}
