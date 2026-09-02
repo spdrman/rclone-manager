@@ -83,6 +83,39 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const [warnAbout, setWarnAbout] = useState<RunningWork | null>(null);
   const [stopped, setStopped] = useState<RunningWork | null>(null);
 
+  // The backup set this page is currently showing. Every piece of edit
+  // state above belongs to ONE set, and React Router does not remount
+  // this page for a :source/:set change alone (the same property this
+  // page already guards its FETCH against, further down). Without
+  // noticing that change here, walking from set A to set B while editing
+  // would carry A's draft onto B's page under B's heading, and a Save
+  // there would write A's values to B.
+  const [pageSetId, setPageSetId] = useState(setId);
+
+  // Committed synchronously during render rather than in an effect: the
+  // same pattern, and the same reasoning, the edit dialog this mode
+  // replaced used for its own reset and BackupSetWizardPage still uses
+  // for its reset-on-mount. An effect runs after the paint, so B's page
+  // would flash A's draft before correcting itself, and eslint is right
+  // that it is a cascading render besides. Doing it here also means
+  // `editing` is already false by the time the hold effect below runs, so
+  // that effect's cleanup releases A's hold and its next run does
+  // nothing, rather than briefly arming a heartbeat for a set nothing
+  // holds.
+  if (pageSetId !== setId) {
+    setPageSetId(setId);
+    setEditing(false);
+    setDraft(null);
+    setBaseline(null);
+    setSnapshot(null);
+    setFieldErrors({});
+    setSavingFields([]);
+    setStale(false);
+    setStopped(null);
+    setWarnAbout(null);
+    setEnterError(null);
+  }
+
   // The hold's lifetime, tied to `editing` rather than to any one button.
   // The cleanup runs when edit mode is left by ANY route, this component
   // unmounting included, which is the issue's "exiting edit mode releases
