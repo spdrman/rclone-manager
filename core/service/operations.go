@@ -338,6 +338,12 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	// one to hand a client that is polling every second.
 	live := b.progress.begin(operationID)
 	defer b.progress.end(operationID)
+	// The process-wide reading beside the operation-scoped one, so
+	// "what would entering edit mode for this set stop" can be answered
+	// for an API-submitted cycle and a scheduled one identically
+	// (edithold.go's cycleWatch).
+	b.cycleWatch.begin()
+	defer b.cycleWatch.end()
 	defer b.runOnce.Unlock()
 	defer func() {
 		if r := recover(); r != nil {
@@ -374,7 +380,10 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	// rides on it because live progress is scoped to exactly this
 	// operation, and a field on the shared internal/app.Service would be
 	// one cycle's reading in a place a second cycle could overwrite.
-	report := runCycle(b.state.Load().inner, app.WithProgressObserver(b.ctx, live))
+	report := runCycle(b.state.Load().inner,
+		app.WithBackupSetHolds(
+			app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch}),
+			b.holds))
 
 	var failed string
 	for _, set := range report.Sets {

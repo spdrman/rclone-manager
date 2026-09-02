@@ -81,6 +81,12 @@ type fakeTransport struct {
 	failForSourceID string
 	failErr         error
 
+	// beforeCopy, when set, runs at the very start of every CopyToLocal,
+	// before any byte is written. It is what lets a test act at the exact
+	// moment a transfer is in flight (issue #350's "Edit pressed while a
+	// transfer is running") without racing a sleep against real work.
+	beforeCopy func()
+
 	// poison, when set, makes DeleteRemote fail the test the instant it is
 	// called, rather than merely counting the call for a later assertion.
 	// Issue #282's own acceptance criterion asks for proof "not by
@@ -146,6 +152,9 @@ func (f *fakeTransport) Stat(ctx context.Context, source transport.Source, remot
 
 func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source, remotePath, localPartialPath string) (transport.TransferResult, error) {
 	atomic.AddInt32(&f.copyToLocalCallsCount, 1)
+	if f.beforeCopy != nil {
+		f.beforeCopy()
+	}
 	obj, ok := f.objects[remotePath]
 	if !ok {
 		return transport.TransferResult{}, transport.NewError(transport.NotFound, "copy_to_local", errors.New("not found"))
