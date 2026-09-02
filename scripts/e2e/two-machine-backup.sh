@@ -739,6 +739,29 @@ run_case() {
   fi
 
   step "  case $case_name passed"
+
+  # Released here rather than left to the exit trap. Each manager machine
+  # is a whole Docker daemon with the image under test loaded into it and
+  # two product containers running, and the Docker VM this was written on
+  # has under 4 GiB: four cases holding on to all of that at once is how a
+  # run starts failing for reasons that are about the machine rather than
+  # about the product. The trap still names them, so a case that dies
+  # before reaching this line is still cleaned up, and --keep-on-failure
+  # still keeps what failed.
+  release_case "$net" "$src" "$mgr"
+}
+
+# release_case removes one finished case's containers and network. Safe to
+# run twice: the exit trap will try again on everything, and `docker rm` on
+# something already gone is not an error worth reporting.
+release_case() {
+  local net="$1"; shift
+  for c in "$@"; do
+    docker rm -f "$c" >/dev/null 2>&1 || true
+  done
+  # After the containers, never before: a network with an endpoint on it
+  # cannot be removed.
+  docker network rm "$net" >/dev/null 2>&1 || true
 }
 
 # ==================================== #343: upgrade, then factory reset
