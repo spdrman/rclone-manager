@@ -116,11 +116,20 @@ func checkMediumPlacement(ctx context.Context, deps Deps, rec state.Record, p st
 			return false, false, "", "", verifyErr
 		}
 		// A class that could not be attempted is not a verdict about the
-		// artifact. Reporting it as unchecked leaves the due-ness clock
-		// alone, so the artifact stays selectable next cycle instead of
-		// looking freshly checked because a bucket was briefly
-		// unreachable.
-		return false, true, "", fmt.Sprintf("nothing could be checked on medium %q: %v", p.Medium, verifyErr), nil
+		// artifact, and it is not a configuration fact either: the medium
+		// was there to ask and did not answer. So it is routed the way
+		// this package already routes a restore-test hook that fails to
+		// start, as a per-artifact ERROR rather than as an unchecked
+		// finding.
+		//
+		// The distinction is worth the extra branch. An unchecked finding
+		// says "nothing here was configured to check", which an operator
+		// reads past; an error says "this backup could not be checked and
+		// somebody should find out why", which is the true statement when
+		// a bucket does not answer. Either way the journal is untouched
+		// and the due-ness clock does not move, so the artifact stays
+		// selectable next cycle rather than looking freshly verified.
+		return false, false, "", "", fmt.Errorf("medium %q: %w", p.Medium, verifyErr)
 	}
 
 	return true, result.Passed, result.Class, result.Detail, nil

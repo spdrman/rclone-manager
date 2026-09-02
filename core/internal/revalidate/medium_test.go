@@ -191,16 +191,6 @@ func TestAMediumPlacementThisDeploymentCannotReachIsNotAPass(t *testing.T) {
 				return Deps{Journal: j, Store: &countingStore{}, Mediums: fixedMediums{id: "some_other_medium"}}
 			},
 		},
-		{
-			name: "the medium cannot be reached",
-			deps: func(j *state.Journal) Deps {
-				return Deps{
-					Journal: j,
-					Store:   &countingStore{statErr: transport.NewError(transport.Transient, "stat_object", errors.New("connection reset"))},
-					Mediums: fixedMediums{id: "offsite_s3"},
-				}
-			},
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			j := openJournal(t)
@@ -239,6 +229,57 @@ func TestAMediumPlacementThisDeploymentCannotReachIsNotAPass(t *testing.T) {
 				t.Errorf("an unreachable medium changed the artifact's state from %q to %q", before.State, after.State)
 			}
 		})
+	}
+}
+
+// TestAMediumThatDoesNotAnswerIsReportedAsAnError is the other half of
+// the same distinction. A medium this deployment was never configured to
+// reach is a configuration fact, which an operator reads past; a medium
+// that was there to ask and did not answer is a backup nobody could check,
+// which somebody should find out about. So the first is an unchecked
+// finding and the second is an error, and neither touches the journal.
+func TestAMediumThatDoesNotAnswerIsReportedAsAnError(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "on-medium.dump")
+	content := []byte("bytes in a bucket that did not answer")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+	moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+	before, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get before: %v", err)
+	}
+
+	deps := Deps{
+		Journal: j,
+		Store:   &countingStore{statErr: transport.NewError(transport.Transient, "stat_object", errors.New("connection reset"))},
+		Mediums: fixedMediums{id: "offsite_s3"},
+	}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 1 {
+		t.Fatalf("Errors = %+v, want exactly one; a bucket that did not answer is a backup nobody could check", report.Errors)
+	}
+	if len(report.Findings) != 0 {
+		t.Errorf("Findings = %+v, want none: an artifact nothing could check has no verdict", report.Findings)
+	}
+
+	after, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing checked", before.UpdatedAt, after.UpdatedAt)
+	}
+	if after.State != before.State {
+		t.Errorf("an unreachable medium changed the artifact's state from %q to %q", before.State, after.State)
 	}
 }
 
