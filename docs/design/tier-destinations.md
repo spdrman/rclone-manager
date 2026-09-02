@@ -10,11 +10,11 @@ retention still has exactly one verb, delete. A future adapter author
 should read this before adding a backend, because several of the choices
 below are load-bearing and are easier to keep than to rediscover.
 
-## What exists now
+## What exists now, and what is not wired up
 
 `core/internal/artifactstore` defines `Store`, and `Local` implements it
-over the backup root this product has always written to. The one formula
-for where a committed artifact sits now lives there, and both
+over the backup root this product has always written to. The formula for
+where a committed artifact sits now lives there, and both
 `lifecycle.finalPath` and `retention.pruneFinalPath` delegate to it.
 
 Those two previously each carried a comment naming the other as the only
@@ -22,6 +22,30 @@ other place in the project allowed to compute that join. Two guarded
 copies was the right answer while there was nowhere better to put it;
 a store is that better place, because knowing where its own bytes go is
 what a store is for.
+
+Those two, not every join of a root and an artifact name.
+`retention.pruneVerifySafeToDelete` still finishes by joining the
+artifact's name onto the root `filepath.EvalSymlinks` handed back. Same
+shape, different question: that line's job is to produce the resolved,
+symlink-free path the safety checks just proved, and routing it back
+through the configured root would throw that resolution away. It stays
+where it is and it fails closed.
+
+**The interface itself has no production caller.** Be blunt about it,
+because everything below reads like a description of a live seam. The
+only production use of the package is the package-level function
+`artifactstore.LocalLocator`, from `lifecycle/transfer.go` and
+`retention/prune.go`, and both of those hold a directory string rather
+than a `Store`, so both bypass `Store` entirely. `Store`, `Local`,
+`NewLocal`, `Kind`, `Stat`, `Open`, `Put`, `Remove`, `ErrNotPresent` and
+`ErrAlreadyPresent` are a design fixture: the contract a mover and a
+second backend get built against, landed before either exists so the
+shape is argued once, in review, rather than discovered under a deadline.
+
+So the conversion #334 needs is relocated, not reduced. Those two call
+sites are it: resolving a `Store` for the backup set and asking it,
+instead of composing a path out of `LocalPath`. What landing the contract
+first buys is that the thing they convert *to* is already written down.
 
 No behaviour changed. The lifecycle and retention suites pass unmodified,
 which is the point: an existing deployment computes exactly the same
@@ -71,8 +95,93 @@ Nothing enforces this ordering yet, because nothing moves yet. What the
 seam does is make the dangerous ordering require *adding a method*
 rather than merely calling two existing ones in the wrong sequence.
 
-`TestStoreHasNoMoveMethod` exists to make that deliberate rather than
-incidental.
+`TestSeamOffersNoMoveMethod` exists to make that deliberate rather than
+incidental. It reflects over the `Store` interface and over `Local`, and
+matches on the method *name*, because the decision is about the concept
+and not about one signature: an earlier version pinned one exact
+signature and an artifact-addressed `Move`, the shape this package's own
+doc says operations should have, went straight past it.
+
+`TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage` guards the half a
+missing method cannot. The FR-12 commit path must keep writing its own
+`.partial` and hard-linking it, because `Put` does not reproduce that
+path's crash-safety obligations; an absent `Move` takes someone writing
+code to defeat, but a present `Put` takes someone calling it. So
+`lifecycle` may reference exactly one symbol from this package, the
+shared join, and the test parses `internal/lifecycle` and fails on
+anything else.
+
+## Decision: `Put` refuses an occupied locator, and fsyncs the directory
+
+`Put` is the only operation in the package that can destroy an artifact's
+bytes, and the no-`Move` argument above does not protect it. Adding
+`Move` takes someone writing code; overwriting takes someone calling the
+method that is already there, and a rename over a live artifact is not
+recoverable.
+
+So `Put` writes through a temp file in the same directory and **hard
+links** it into place rather than renaming. `os.Rename` replaces whatever
+is at the destination; `os.Link` fails with `EEXIST`, reported as
+`ErrAlreadyPresent`. That is the same choice `lifecycle`'s
+`linkWithoutClobbering` makes for FR-12's commit, for the same reason. A
+destination that already holds something different is a case a person
+decides about, and it is also the resumable case: the mover confirms by
+`Stat` and finishes the remove the previous run did not reach.
+
+`Put` then **fsyncs the containing directory**. The "never zero copies"
+claim is about power loss, not just about a killed process, so it needs
+the destination's *name* to be durable and not merely its content. A
+directory is a separate inode with its own writeback state; skip the
+fsync and a crash after the origin's remove reaches disk and before the
+destination's directory entry does leaves zero copies, which is exactly
+the outcome the failure model says is impossible. `commit.go`'s FR-14
+treatment is the long version of the same argument, and this is the third
+copy of `fsyncDir` in the repository. Consolidating it means moving
+`commit.go`'s durability primitive, which belongs in a change about that
+path rather than in a refactor claiming no behaviour change.
+
+The interface says all three obligations out loud, because the obvious
+streaming `Put` (open the destination, copy into it) satisfies "the bytes
+end up there" and breaks the model: the mover `Stat`s a truncated object,
+confirms it, and removes the origin.
+
+## Decision: a store is built for one backup set, and never sees the config struct
+
+`Store` methods do not take a `config.BackupSet`. An S3 adapter handed
+one would receive the validation command, the SSH key path and the
+schedule, while the only field it could act on, `LocalPath`, is
+local-specific, and there is no field at all for where a non-local
+store's bytes go.
+
+Instead a store takes what it needs at construction: `NewLocal(root)`
+takes the backup set's configured `local_path`, and a second backend
+takes its bucket, prefix and credentials the same way. That is the
+constructor convention to copy. It also settles whether an implementation
+should hold per-set state: yes, that is what the value is for.
+
+The backup set is not passed to the methods either, because
+`model.ArtifactID` already carries its own `BackupSetID`, and a second
+source of truth for the same fact is a mismatch someone has to guard.
+
+There is a second reason to keep the struct out. `config.BackupSet`
+carries fields with two different lifecycles and nothing distinguishes
+them: `LocalPath` is meaningful straight out of YAML, while `ID` and
+`ReadOnly` are the zero value until `Validate` has run. A store that
+never sees the struct cannot read the wrong half of it. `NewLocal` takes
+the raw path, and `Locator`'s doc says it reads no configuration at all.
+
+## Decision: no enumeration
+
+There is no `List`. The catalog, not a scan, is this product's answer to
+"which artifacts exist and where": config describes intent, and a scan
+can only ever see one backend at a time, so an enumerate method is how a
+second, disagreeing inventory gets built by accident.
+
+The obvious need is a reconciler hunting for an orphaned destination copy
+after an interrupted move, and it does not need one: the catalog knows
+which locator the move was writing, so the question is a `Stat` of one
+locator. If a real need turns up later it should arrive with the argument
+for why the catalog cannot answer it.
 
 ## Decision: safety proofs belong to the implementation, not the interface
 
@@ -87,14 +196,22 @@ Hoisting them into the interface would produce methods a non-local
 adapter could only stub, and a stubbed safety check is worse than an
 absent one because it reads as satisfied.
 
-So the interface states the obligation, `Remove` deletes exactly the
-artifact named or refuses and says which check refused it, and leaves the
-proof to the implementation. FR-20's checks stay in
-`internal/retention`, re-derived from the artifact's own record
-immediately before the delete, exactly as before.
+So the interface states the obligation and leaves the proof to the
+caller. `Remove` deletes exactly the artifact named and nothing else,
+follows no symlink to a different object, and never widens the target;
+what it does *not* do is prove that this particular artifact is safe to
+delete. That proof stays in `internal/retention`, re-derived from the
+artifact's own record immediately before the delete, exactly as before,
+and `Local.Remove` is a bare `os.Remove` for exactly that reason.
 
-A future adapter owes an equivalent proof in its own terms. It does not
-owe these six.
+`Store.Remove`'s doc says that plainly now. The first version said it
+"refuses and returns an error naming the check that refused it", which
+the only implementation does not do and was never going to, and an
+adapter author reading the method rather than the package doc a hundred
+lines above would reasonably have put checks inside their own `Remove`.
+
+A future adapter owes an equivalent proof in its own terms, on the caller
+side. It does not owe these six.
 
 ## Decision: no `destination:` config key yet
 
