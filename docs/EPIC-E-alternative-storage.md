@@ -244,12 +244,14 @@ type MediumStore interface {
 
 An artifact's location becomes part of its durable record, in a new table rather than new columns on the artifact row, because one artifact can have several copies during a move and zero local copies after one.
 
-Migration `0004_placements.sql` SHALL create:
+Migration `0007_placements.sql` SHALL create (this document said `0004` when it was written, and three migrations landed between then and E1.4: the rule is section 2's "the next free `core/migrations/NNNN_*.sql`", and `loadMigrations` refuses two files claiming one version):
 
 - `placements`: one row per durable copy. Artifact FK, medium id (`local` or a configured id), location (an absolute path for local, a key for s3), size, hash, hash algorithm, verification class achieved (FR-31), verified-at, status (`ACTIVE`, `DELETE_PENDING`, `GONE`), created/updated timestamps.
 - `placement_moves`: one row per migration, the FR-30 journal. Artifact FK, source placement, destination medium, destination key, phase, bytes, error, timestamps.
 
-The same migration SHALL backfill one `ACTIVE` `local` placement for every existing artifact row, derived from its `local_path`, `local_hash` and `local_hash_alg`, inside the migration transaction, so no code path ever observes an artifact with no placement. Existing behavior (schema-version fail-closed on downgrade, forward-migration tests, TDD invariant 6) applies unchanged.
+The same migration SHALL backfill one `ACTIVE` `local` placement for every existing artifact row that has a DURABLE local copy, derived from its `local_path`, `local_hash` and `local_hash_alg`, inside the migration transaction, so no code path ever observes an artifact with durable bytes and no placement.
+
+"Durable" is load-bearing and was under-specified here: `local_path` names the `.partial` being written at `TRANSFERRING` and only names the finished artifact from `COMMITTED` onward, so backfilling every row would put a placement in this table claiming a committed copy exists where only a half-written file does. An artifact before its transfer therefore has zero placements, which is correct rather than a gap: it has zero copies. Existing behavior (schema-version fail-closed on downgrade, forward-migration tests, TDD invariant 6) applies unchanged.
 
 `state.Record` gains its placements; `LocalPath` keeps meaning what it means today (the ingestion landing path) and stays valid while a local placement is ACTIVE. Code that asks "can I read this artifact locally" SHALL ask the placements, not assume `LocalPath` readable, and the compiler-assisted sweep of those call sites (lifecycle verify, revalidate, prune, recovery manifest, health) is part of this FR's scope.
 
