@@ -104,7 +104,8 @@ func TestRunRestoreCheck_Timeout_KillsProcess(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, warmingPrelude+fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	mustWarmScript(t, script)
 
 	start := time.Now()
 	result, err := RunRestoreCheck(context.Background(), config.Command{Executable: script, Timeout: config.Duration(200 * time.Millisecond)}, path)

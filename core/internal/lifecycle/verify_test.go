@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -186,6 +187,50 @@ func mustScript(t *testing.T, body string) string {
 		t.Fatalf("writing validator script: %v", err)
 	}
 	return path
+}
+
+// warmArgument is the first argument mustWarmScript passes, and the one a
+// script written for a timing-sensitive test answers by exiting straight
+// away. Nothing in the product ever passes it: both call sites hand their
+// subprocess an artifact path and nothing else.
+const warmArgument = "--warm-this-script"
+
+// warmingPrelude is the line a script needs at the top to be warmable. It
+// is a separate constant from warmArgument's own use so the two cannot
+// drift into disagreeing about the spelling.
+const warmingPrelude = "case \"$1\" in " + warmArgument + ") exit 0;; esac\n"
+
+// mustWarmScript execs path once, cheaply, before a test times anything
+// that runs it.
+//
+// # Why this is needed
+//
+// The two tests that prove a subprocess is actually KILLED on timeout give
+// it 200ms and then assert it managed to write its own pid first. That
+// assertion is about the kill, but it was accidentally also an assertion
+// about how fast a brand-new executable can start, because both tests write
+// a fresh script into a fresh temp directory on every run and therefore
+// always pay the operating system's first-exec cost for it: on macOS a
+// newly written executable is inspected before its first line runs, and on
+// this project's machines that inspection now takes longer than 200ms. The
+// second exec of the same file is fast. It reproduces with no Go involved
+// (issue #371 has the shell one-liner).
+//
+// So the fix is to stop measuring the cold start. The timeout the code
+// under test receives is untouched, because 200ms is a legitimate value for
+// an operator to configure and it is the behaviour being tested. The pid
+// assertion is untouched, because proving the process was killed rather
+// than abandoned is the whole point. What changes is that the exec is
+// already warm when the clock starts.
+//
+// A failed warm-up is fatal rather than ignored: silently skipping it would
+// put the flake straight back, and this is exactly the shape of check that
+// passes for the wrong reason when nobody looks.
+func mustWarmScript(t *testing.T, path string) {
+	t.Helper()
+	if err := exec.Command(path, warmArgument).Run(); err != nil {
+		t.Fatalf("warming %s before the timed run failed: %v; the timed assertion below would then be measuring a cold exec rather than the timeout", path, err)
+	}
 }
 
 func sha256Hex(content []byte) string {
@@ -683,7 +728,8 @@ func TestVerify_Validator_Timeout_KillsProcess_Quarantines(t *testing.T) {
 
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	markerFile := filepath.Join(t.TempDir(), "marker")
-	script := mustScript(t, fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	script := mustScript(t, warmingPrelude+fmt.Sprintf("echo $$ > %s\nsleep 5\necho done > %s\n", shQuote(pidFile), shQuote(markerFile)))
+	mustWarmScript(t, script)
 
 	start := time.Now()
 	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
