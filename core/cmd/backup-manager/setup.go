@@ -218,7 +218,11 @@ func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 		}
 		code = 1
 		if v.NothingGotThrough() {
-			fmt.Fprintf(w, "backup-manager: %s backed nothing up this cycle: %d walked, %d got through\n",
+			// Deliberately unchecked, like every other diagnostic this
+			// binary prints: a write to stderr failing cannot change the
+			// verdict that is being reported, and swallowing the verdict
+			// because the terminal went away would be the worse answer.
+			_, _ = fmt.Fprintf(w, "backup-manager: %s backed nothing up this cycle: %d walked, %d got through\n",
 				v.Set, v.Progress.Walked, v.Progress.Durable)
 		}
 	}
