@@ -908,6 +908,10 @@ class TestPersistenceUnit(unittest.TestCase):
     def doctor(self):
         d = installer.BridgeDoctor(Fixture(self).args())
         d.iptables = "/sbin/iptables"
+        # Set directly, the same way d.iptables is above: rule_specs()
+        # asks bridge_interfaces(), and nothing here should need a live
+        # Docker daemon to be exercised.
+        d._bridge_interfaces = ["docker0", "br-0123456789ab"]
         return d
 
     def test_the_unit_asserts_exactly_the_rules_the_interactive_path_does(self):
@@ -1073,6 +1077,11 @@ class TestPersistenceVerification(unittest.TestCase):
         not just print it and return successfully."""
         d = installer.BridgeDoctor(Fixture(self).args())
         d.sudo = installer.Sudo(sudo_path=None)
+        # doctor.sudo.run_script is stubbed below, but its argument -
+        # doctor.unit_install_script() - is evaluated eagerly before the
+        # call, and that path reaches rule_specs() -> bridge_interfaces().
+        # Set directly so this test needs no live Docker daemon either.
+        d._bridge_interfaces = ["docker0", "br-0123456789ab"]
         d.sudo.run_script = lambda *a, **kw: None  # the unit-install call itself, stubbed out
 
         original_run = installer.run
