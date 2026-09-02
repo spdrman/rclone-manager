@@ -8,34 +8,32 @@
     "distribution/packaging's test suite fails the build if any platform's",
     "own metadata disagrees with a value in here."
   ],
-
   "image": {
     "registry": "ghcr.io",
     "repository": "spdrman/backup-manager",
-    "tag": "0.1.0",
-    "reference": "ghcr.io/spdrman/backup-manager:0.1.0",
+    "tag": "0.2.0",
+    "reference": "ghcr.io/spdrman/backup-manager:0.2.0",
     "published": false,
     "note": [
-      "published:false is the honest state, matching container/release-manifest.json's",
-      "own note: the registry is settled (ghcr.io) but nothing has been pushed to it,",
-      "so this reference resolves to nothing today, and the manifest's per-architecture",
-      "registry_digest is null for exactly as long as this stays false. It is the",
-      "intended publish target and the one string",
-      "every provider package must carry, so that pointing the project at a real",
-      "registry is a one-line change here rather than an edit in four metadata formats.",
-      "Every acceptance procedure in docs/acceptance/ opens with a step 0 covering how",
-      "to make the image resolvable in the meantime (push to your own registry, or",
-      "docker save/load), and every profile keeps the reference substitutable."
+      "published:false. 0.2.0 is cut but not pushed: container/release-manifest.json carries a",
+      "registry_digest of null per architecture and a null index_digest, and this flag says the",
+      "same thing from the other side. That file and this flag move together:",
+      "TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag refuses a published flag",
+      "with no digest and a digest with no flag, because either one alone is a half-truth. The",
+      "release workflow does the push, and the digests are recorded back here afterwards.",
+      "0.1.0 remains published and signed for anyone who wants the previous release.",
+      "This reference is the one string every provider package must carry, so pointing the",
+      "project at a different registry stays a one-line change here rather than an edit in four",
+      "metadata formats. Every acceptance procedure in docs/acceptance/ keeps its step 0 for a",
+      "deployment that cannot reach ghcr.io (push to your own registry, or docker save/load),",
+      "and every profile keeps the reference substitutable."
     ]
   },
-
   "architectures": [
     "amd64",
     "arm64"
   ],
-
   "runtimeContract": "1.2.0",
-
   "_derivation_comment": [
     "Issue #169's derivation contract. Every platform below is a THIN ADAPTER:",
     "its runtime fields are derived from the authoritative Compose definition",
@@ -50,7 +48,6 @@
     "said so, which is the difference between a version number and a version",
     "check."
   ],
-
   "profiles": [
     "generic",
     "ugos",
@@ -60,7 +57,6 @@
     "proxmox",
     "synology"
   ],
-
   "_uiBridge_comment": [
     "Every platform says which frontend bridge it ships, and \"none\" is a real",
     "answer rather than an omission (issue #170). The five Phase 4 platforms",
@@ -82,7 +78,6 @@
     "profile and serve the bundle compiled into the binary, and the UI describes",
     "them as the Docker Compose deployments they are."
   ],
-
   "healthchecks": {
     "engine": [
       "CMD",
@@ -97,11 +92,8 @@
       "healthcheck"
     ]
   },
-
   "listenPort": 8080,
-
   "authMode": "local-account",
-
   "_healthcheck_comment": [
     "DERIVED, not authored. Both values restate container/compose.yaml's own",
     "healthcheck tests for the two roles, which is the authoritative runtime",
@@ -140,7 +132,6 @@
     "seam is `docker run --health-cmd`, which is shell form the distroless image",
     "cannot run)."
   ],
-
   "commands": {
     "engine": [
       "/backup-manager-web",
@@ -163,12 +154,10 @@
       "status"
     ]
   },
-
   "binaries": [
     "/backup-manager",
     "/backup-manager-web"
   ],
-
   "containerPaths": {
     "state": "/data/state",
     "backups": "/data/backups",
@@ -176,9 +165,7 @@
     "sshKey": "/etc/backup-manager/id_ed25519",
     "knownHosts": "/etc/backup-manager/known_hosts"
   },
-
   "configFileName": "config.yaml",
-
   "_config_role_comment": [
     "The config role is a WRITABLE DIRECTORY the application owns, with",
     "config.yaml inside it (issue #196). It used to be a read-only single-file",
@@ -200,18 +187,15 @@
     "Key material stays a read-only single-file mount. Nothing writes it, the",
     "engine only ever reads it, and the shapes are different claims."
   ],
-
   "readOnlyContainerPaths": [
     "/etc/backup-manager/id_ed25519",
     "/etc/backup-manager/known_hosts"
   ],
-
   "writableContainerPaths": [
     "/data/state",
     "/data/backups",
     "/etc/backup-manager/config"
   ],
-
   "platforms": {
     "truenas": {
       "uiBridge": "apps/truenas/frontend/platform.ts",
@@ -246,7 +230,7 @@
         "sshKey": "/mnt/user/appdata/backup-manager/secrets/id_ed25519",
         "knownHosts": "/mnt/user/appdata/backup-manager/secrets/known_hosts"
       },
-      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; §19.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
+      "hostPathNote": "appdata holds private state, and retained artifacts land in a directory of the app's own inside the backups user share; \u00a719.2 keeps those two separate security domains. The backup root is deliberately a dedicated child of the share rather than the share itself: the share is very likely to be one the operator already uses, and step 0 of the acceptance procedure creates and owns only paths it created.",
       "trustForwardedHeaders": false,
       "trustForwardedHeadersNote": "Unraid's two templates join `backup-manager`, a durable, host-wide, generically named user-defined bridge the operator creates by hand. Every container on such a bridge reaches every port of every other one, so the engine's isolation from anything else attached later is a convention, not a topology, and apps/common/auth/local requires a topology. The engine therefore does not trust forwarded headers here and rate-limits on the proxy's own address: one shared bucket for all clients, which over-limits rather than not limiting at all. This is the one place the Unraid profile is weaker than the compose ones, and apps/unraid/README.md says so.",
       "profile": "unraid",
@@ -318,7 +302,6 @@
       "trustForwardedHeaders": true,
       "trustForwardedHeadersNote": "The Container Manager project declares its own project network, created and destroyed with the project, whose only two members are these two containers. This is the same topology the other compose profiles have, and it is why the Container Manager path can trust forwarded headers where the .spk cannot: the .spk's engine binds loopback on the NAS itself, which any local process can reach."
     },
-
     "portainer": {
       "uiBridge": "none",
       "uiBridgeNote": "No frontend bridge. A Portainer App Template has no payload to carry a bundle in, the canonical image has 347,956 bytes of headroom and a bundle costs roughly 352 KB, and a bridge would need this platform's id in the /api/v1 contract, the capability table, the profile table and the bundle list, which is core and shared-UI code. The deployment selects the generic profile and the shared UI describes it as the Docker Compose deployment it is.",
@@ -341,7 +324,6 @@
         "contract": "1.2.0"
       }
     },
-
     "dockge": {
       "uiBridge": "none",
       "uiBridgeNote": "No frontend bridge, and no packaging either: Dockge is supported by compatibility with the canonical Compose stack, so there is nothing in apps/dockge/ that could carry a bundle. The stack it imports is container/compose.yaml, which serves the bundle compiled into the binary.",
@@ -364,7 +346,6 @@
         "contract": "1.2.0"
       }
     },
-
     "casaos": {
       "uiBridge": "none",
       "uiBridgeNote": "No frontend bridge. A store compose file has no payload to carry a bundle in and the canonical image cannot carry a sixth one; a bridge would also need a CasaOS platform id in the /api/v1 contract, the capability table, the profile table and the bundle list, and this adapter's own contract says no CasaOS import may enter the Go core or the shared UI.",
@@ -387,7 +368,6 @@
         "contract": "1.2.0"
       }
     },
-
     "zimaos": {
       "uiBridge": "none",
       "uiBridgeNote": "No frontend bridge, for the same three reasons CasaOS ships none: no payload, no room in the image, and a bridge would put a ZimaOS platform id into the Go core and the shared UI.",

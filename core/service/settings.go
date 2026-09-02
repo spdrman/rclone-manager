@@ -105,11 +105,80 @@ type RetentionSettings struct {
 	ProtectLastKnownGood bool
 }
 
+// CapacitySettings is FR-21's configuration as it is actually deciding
+// (issue #286): the operator's storage cap, the two levels a reading is
+// weighed against, the safety margin held back before every transfer, and
+// the filesystem all of that is measured on.
+//
+// Every number is bytes. The MB/GB picker beside the field in the UI is
+// display only and converts at the edge; nothing on this boundary or in
+// the config file carries a unit, because a number whose meaning depends
+// on a second field is a two-order-of-magnitude mistake waiting to be
+// made.
+type CapacitySettings struct {
+	// CapBytes is the ceiling, and zero means no cap. See
+	// config.Capacity.CapBytes: it is a sentinel, and neither this
+	// boundary nor anything under it may resolve it to a number.
+	CapBytes int64
+
+	// WarningFreeBytes, CriticalFreeBytes and SafetyMarginBytes are the
+	// rest of FR-21's numbers. Zero means "no line here" for the first
+	// two, which is the default.
+	WarningFreeBytes  int64
+	CriticalFreeBytes int64
+	SafetyMarginBytes int64
+
+	// BackupRoot is the directory whose filesystem a manager-wide storage
+	// reading is taken from, ALREADY RESOLVED: the configured value when
+	// there is one, and otherwise the directory every backup set's
+	// destination has in common. Empty means this configuration cannot say
+	// (no backup sets, or sets on genuinely different volumes), which a
+	// form has to render as "not known yet" rather than as a blank path.
+	//
+	// It is reported so an operator can see which mount the cap is
+	// measured against before trusting a number drawn from it. The engine
+	// runs in a container, and a reading taken from the wrong mount is a
+	// confident wrong number nobody would notice.
+	BackupRoot string
+
+	// BackupRootConfigured separates a root an operator chose from one
+	// this product derived. A form that showed the derived value in an
+	// input box would turn the next save into an explicit choice, pinning
+	// today's derivation into the file forever.
+	BackupRootConfigured bool
+}
+
 // Settings is every server-side setting this API can report. One field
 // per section, so a future section is an added field rather than a new
 // method or a new route.
 type Settings struct {
 	Retention RetentionSettings
+	Capacity  CapacitySettings
+}
+
+// CapacityUpdate names the capacity fields a settings write should change.
+// Every field is a pointer, and nil means "leave this alone".
+//
+// The pointers are load-bearing rather than stylistic, and more so here
+// than anywhere else in this file: zero is a MEANING in three of these
+// four fields ("no cap", "no warning line", "no critical line"), so a
+// plain int64 could not tell "remove my cap" from "I did not mention the
+// cap". Those are opposite requests.
+type CapacityUpdate struct {
+	CapBytes          *int64
+	WarningFreeBytes  *int64
+	CriticalFreeBytes *int64
+	SafetyMarginBytes *int64
+}
+
+// namesNothing reports a capacity section that carries no field at all,
+// which UpdateSettings refuses exactly as it refuses an absent one. See
+// RetentionUpdate.namesNothing for why the check is structural.
+func (u CapacityUpdate) namesNothing() bool {
+	return u.CapBytes == nil &&
+		u.WarningFreeBytes == nil &&
+		u.CriticalFreeBytes == nil &&
+		u.SafetyMarginBytes == nil
 }
 
 // RetentionUpdate names the retention fields a settings write should
@@ -183,6 +252,39 @@ func (u RetentionUpdate) namesNothing() bool {
 // refused the same way (see RetentionUpdate.namesNothing).
 type UpdateSettingsRequest struct {
 	Retention *RetentionUpdate
+	Capacity  *CapacityUpdate
+}
+
+// namesNothing reports a request that asks for no change at all: no
+// section present, or every section present carrying no field. It is
+// structural rather than per-section for the reason UpdateSettings' own
+// doc gives: a present-but-empty section asks for nothing just as surely
+// as an absent one, and honouring it would rewrite the operator's file,
+// move ConfigRevision and answer 200 for a request with no content.
+func (r UpdateSettingsRequest) namesNothing() bool {
+	named := false
+	if r.Retention != nil {
+		if !r.Retention.namesNothing() {
+			named = true
+		}
+	}
+	if r.Capacity != nil {
+		if !r.Capacity.namesNothing() {
+			named = true
+		}
+	}
+	return !named
+}
+
+// anySectionIsEmpty reports a section that was sent but carries no field.
+// It is refused separately from namesNothing so that a request naming a
+// real retention change AND an empty capacity object is still refused: the
+// empty object is a caller mistake, and silently ignoring half a request
+// is how a settings page reports success for a change that never
+// happened.
+func (r UpdateSettingsRequest) anySectionIsEmpty() bool {
+	return (r.Retention != nil && r.Retention.namesNothing()) ||
+		(r.Capacity != nil && r.Capacity.namesNothing())
 }
 
 // RetentionSchemaInfo is the closed value sets and bounds
@@ -236,7 +338,25 @@ func RetentionSchema() RetentionSchemaInfo {
 // re-read the file before writing, so an out-of-band edit is never
 // clobbered — the two are answering different questions on purpose.
 func (b *BackupService) Settings(_ context.Context) (Settings, error) {
-	return Settings{Retention: toRetentionSettings(b.state.Load().inner.Config.Retention)}, nil
+	cfg := b.state.Load().inner.Config
+	return Settings{
+		Retention: toRetentionSettings(cfg.Retention),
+		Capacity:  toCapacitySettings(cfg),
+	}, nil
+}
+
+// toCapacitySettings projects the capacity block onto the boundary shape,
+// resolving BackupRoot on the way out so a caller never has to re-derive
+// it and cannot derive it differently.
+func toCapacitySettings(cfg *config.Config) CapacitySettings {
+	return CapacitySettings{
+		CapBytes:             cfg.Capacity.CapBytes,
+		WarningFreeBytes:     cfg.Capacity.WarningFreeBytes,
+		CriticalFreeBytes:    cfg.Capacity.CriticalFreeBytes,
+		SafetyMarginBytes:    cfg.Capacity.SafetyMarginBytes,
+		BackupRoot:           cfg.EffectiveBackupRoot(),
+		BackupRootConfigured: cfg.Capacity.BackupRoot != "",
+	}
 }
 
 // UpdateSettings validates req against the config file's current content,
@@ -266,10 +386,13 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	// request with no content. UpdateSettingsRequest's own doc promises a
 	// caller never gets a 200 for a request that did nothing, and only the
 	// structural form of the check keeps that promise.
-	if req.Retention == nil || req.Retention.namesNothing() {
+	if req.namesNothing() {
 		return Settings{}, fmt.Errorf("%w: a settings write must name at least one setting to change", ErrInvalidRequest)
 	}
-	if req.Retention.Tiers != nil && len(req.Retention.Tiers) == 0 {
+	if req.anySectionIsEmpty() {
+		return Settings{}, fmt.Errorf("%w: a settings section was sent with no field in it; omit the section instead of sending an empty one", ErrInvalidRequest)
+	}
+	if req.Retention != nil && req.Retention.Tiers != nil && len(req.Retention.Tiers) == 0 {
 		// See RetentionUpdate.Tiers' own doc. The message has to carry
 		// what an empty chain would actually mean, or an operator reads
 		// the refusal as a form-validation quibble and never learns that
@@ -290,7 +413,12 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 		return Settings{}, fmt.Errorf("service: re-reading configuration: %w", err)
 	}
 
-	applyRetentionUpdate(&cfg.Retention, *req.Retention)
+	if req.Retention != nil {
+		applyRetentionUpdate(&cfg.Retention, *req.Retention)
+	}
+	if req.Capacity != nil {
+		applyCapacityUpdate(&cfg.Capacity, *req.Capacity)
+	}
 
 	// Encode what will be written BEFORE cfg.Validate, and write these
 	// bytes rather than re-encoding the validated struct.
@@ -368,7 +496,33 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	}
 	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
 
-	return Settings{Retention: toRetentionSettings(cfg.Retention)}, nil
+	return Settings{
+		Retention: toRetentionSettings(cfg.Retention),
+		Capacity:  toCapacitySettings(cfg),
+	}, nil
+}
+
+// applyCapacityUpdate folds u onto c in place, and validates nothing: the
+// caller runs the WHOLE config through the identical config.Validate a
+// hand-edited YAML file goes through at boot, so a cap refused here is
+// refused for exactly the reason the same number in the file would be.
+//
+// An explicit zero is written through as a zero, which is the whole reason
+// these are pointers: on this block zero is a request ("no cap", "no
+// warning line"), not an omission.
+func applyCapacityUpdate(c *config.Capacity, u CapacityUpdate) {
+	if u.CapBytes != nil {
+		c.CapBytes = *u.CapBytes
+	}
+	if u.WarningFreeBytes != nil {
+		c.WarningFreeBytes = *u.WarningFreeBytes
+	}
+	if u.CriticalFreeBytes != nil {
+		c.CriticalFreeBytes = *u.CriticalFreeBytes
+	}
+	if u.SafetyMarginBytes != nil {
+		c.SafetyMarginBytes = *u.SafetyMarginBytes
+	}
 }
 
 // applyRetentionUpdate folds u onto r in place. It never validates: the

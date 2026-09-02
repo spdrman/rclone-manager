@@ -117,8 +117,8 @@ func TestHandler_EnrollWithoutBootstrapTokenIsRefused(t *testing.T) {
 		map[string]string{CSRFHeaderName: csrf})
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d (BOOTSTRAP_TOKEN_INVALID)", resp.StatusCode, http.StatusForbidden)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d (BOOTSTRAP_TOKEN_INVALID)", resp.StatusCode, http.StatusUnauthorized)
 	}
 }
 

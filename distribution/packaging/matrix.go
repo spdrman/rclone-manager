@@ -860,6 +860,22 @@ type ReleaseManifest struct {
 	// Absent means false, which is what every honest run writes.
 	UnsafeLocalBuild bool                  `json:"unsafe_local_build"`
 	Architectures    []ReleaseArchitecture `json:"architectures"`
+	// IndexDigest is the digest of the multi-architecture image index
+	// `docker buildx build --push` produced, read back with
+	// `docker buildx imagetools inspect` the same way each architecture's
+	// own RegistryDigest is: what the push believes it sent is not what
+	// this records, what the registry holds is. It is what cosign signs
+	// and attaches the SBOM attestation to, one level above the
+	// per-architecture manifests RegistryDigest names.
+	//
+	// A pointer for the same reason RegistryDigest is one: "not pushed
+	// yet" and "pushed, index digest not recorded" have to stay different
+	// values, never the same empty string. IndexDigestComplaints holds it
+	// to canonical.json's image.published flag exactly as
+	// registryDigestComplaints already holds every RegistryDigest, so a
+	// published flag with a top-level digest missing is refused the same
+	// way a per-architecture one missing already was.
+	IndexDigest *string `json:"index_digest"`
 }
 
 // ReleaseArchitecture is one architecture's recorded build.
@@ -873,13 +889,13 @@ type ReleaseArchitecture struct {
 	// "pushed, digest not recorded" are different values rather than the
 	// same empty string.
 	//
-	// It is null throughout today, which is the honest reading of
-	// canonical.json's image.published false: the registry is settled
-	// (ghcr.io/spdrman/backup-manager) and nothing has been pushed to it.
-	// The manifest's sibling field local_image_id_sha256 is deliberately
-	// NOT modelled here, because it is not a digest and nothing outside
-	// the machine that built it can resolve it. Filling this in from a
-	// real push is #88's work.
+	// It is real as of the 0.1.0 push: canonical.json records
+	// image.published true, and this is the per-architecture manifest
+	// digest read back with `docker buildx imagetools inspect`, not
+	// scraped from the push's own output. The manifest's sibling field
+	// local_image_id_sha256 is deliberately NOT modelled here, because it
+	// is not a digest and nothing outside the machine that built it can
+	// resolve it.
 	RegistryDigest *string `json:"registry_digest"`
 }
 
@@ -1061,11 +1077,29 @@ func ResolveReachableAncestryRef(repoDir, commit string) (AncestryRef, bool, err
 			return AncestryRef{Ref: ref, Why: releaseAncestryRefWhy[ref]}, true, nil
 		}
 	}
+	return classifyUnreachedOutcome(repoDir, commit, asked, undecided)
+}
+
+// classifyUnreachedOutcome turns the results of asking every rewrite-free
+// ref into the verdict ResolveReachableAncestryRef returns once none of
+// them answered yes. Split out from the loop above so the rule that
+// matters - one undecided ref must not be swallowed by the others
+// answering no - is a fact this package can assert directly, rather than
+// one that only shows up through a git fixture engineered to make merge-base
+// fail for exactly one ref in a preference list and succeed for the rest.
+//
+// A single undecided ref is enough to withhold a "not reachable" verdict.
+// "no" from the refs that did decide is not evidence about the one that
+// did not: that ref could just as easily have said yes, and reporting
+// false here is reporting a fact about the manifest (#174's "unreachable
+// commit") when what actually happened is a fact about the checkout (a
+// shallow clone, a missing object).
+func classifyUnreachedOutcome(repoDir, commit string, asked, undecided []string) (AncestryRef, bool, error) {
 	switch {
 	case len(asked) == 0:
 		return AncestryRef{}, false, fmt.Errorf("none of %v resolves to a commit in %s, so there is nothing to check reachability against", releaseAncestryRefPreference, repoDir)
-	case len(undecided) == len(asked):
-		return AncestryRef{}, false, fmt.Errorf("git could not decide whether %s is reachable from any of %v; that is a fact about this checkout (a shallow clone, a missing object), not about the commit", commit, undecided)
+	case len(undecided) > 0:
+		return AncestryRef{}, false, fmt.Errorf("git could not decide whether %s is reachable from %v (asked %v in total); that is a fact about this checkout (a shallow clone, a missing object), not about the commit", commit, undecided, asked)
 	}
 	return AncestryRef{Why: fmt.Sprintf("asked %v", asked)}, false, nil
 }

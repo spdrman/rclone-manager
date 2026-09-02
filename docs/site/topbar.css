@@ -1,0 +1,649 @@
+/* ============================================================
+   rclone-manager docs shared header.
+   Same element on every page. On the home page it starts as the
+   full hero (mark + tagline + badges) and shrinks into a sticky
+   bar as the reader scrolls: the .is-hero class plus three
+   scroll-driven CSS variables (--p1, --p2, --p3) drive the
+   transition. Inner pages omit .is-hero (and so pin the variables
+   to 1) and begin in the collapsed bar shape.
+
+   The burger button on the right opens a drawer holding every nav
+   link plus the light/dark toggle.
+
+   The only palette tokens this file reads are --hero-bg, --white
+   and --max-width. Everything else lives in theme.css, so a
+   palette change never has to come in here.
+   ============================================================ */
+
+:root {
+  --topbar-zindex: 1000;
+  /* Height of the bar in its fully-collapsed shape. Used as
+     scroll-margin for hash anchors so deep links don't end up
+     under the bar. The hero state is taller and laid out in flow,
+     so it doesn't need a separate offset. */
+  --topbar-collapsed-height: 3.4rem;
+}
+
+.topbar {
+  /* Defaults are the *collapsed* values — inner pages render that
+     way without any JS. .is-hero overrides them to start at 0. */
+  --p1: 1;  /* fades pronunciation/tagline/badges */
+  --p2: 1;  /* shrinks logo + brand name */
+  --p3: 1;  /* shrinks padding; controls collapse layout flip */
+
+  /* `sticky` is the default; once .collapsed is added, `fixed` (rule
+     below) pins the bar to the viewport top reliably across browsers
+     — iOS Safari has long-running quirks with sticky on dynamically
+     resizing elements that are easier to dodge than to debug. */
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: var(--topbar-zindex);
+  background: var(--hero-bg, #16283a);
+  color: var(--white, #fff);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  padding: calc(0.5rem + 2.5rem * (1 - var(--p3))) 1.25rem
+           calc(0.5rem + 2rem * (1 - var(--p3)));
+  /* IBM Plex Sans, the face the application itself is set in and the
+     only one this site loads. Naming a font the page does not fetch
+     would render differently on a machine that happens to have it
+     installed, which is how a design gets two looks nobody chose. */
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
+               "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  text-align: center;
+  /* Top-level flex container so brand (in hero) and inline nav (on
+     desktop) can sit side-by-side when collapsed. */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+.topbar.collapsed {
+  flex-direction: row;
+  align-items: center;
+  gap: 1rem;
+  text-align: left;
+  /* Pin the collapsed bar to the viewport top regardless of scroll
+     position. body:has(.topbar.collapsed) (rule below) reserves the
+     vertical space the bar no longer occupies in flow. */
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Defensive: let flex children shrink when the bar is narrow.
+   Without this, a long brand name or ribbon can force the row to
+   grow past the viewport edge. */
+.topbar.collapsed > * { min-width: 0; }
+
+/* :has() is supported in every 2026 browser baseline. */
+body:has(.topbar.collapsed) {
+  padding-top: var(--topbar-collapsed-height);
+}
+
+/* Kill horizontal overflow at the document root so a stray wide
+   element (long code block, wide table, oversized image) can't
+   force the page wider than the viewport on mobile. `clip` is used
+   instead of `hidden` because `clip` doesn't create a new scrolling
+   container — `position: sticky` on the topbar (hero state) and
+   anchor scroll-margin still work. */
+html, body {
+  overflow-x: clip;
+  max-width: 100%;
+}
+
+.topbar.is-hero {
+  --p1: 0;
+  --p2: 0;
+  --p3: 0;
+}
+
+/* In hero state .topbar-content stacks vertically and centres; in
+   collapsed state it flips to a horizontal row with brand left,
+   burger right. */
+.topbar-content {
+  max-width: var(--max-width, 860px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.topbar.collapsed .topbar-content {
+  flex-direction: row;
+  align-items: center;
+  gap: 1rem;
+  text-align: left;
+}
+
+/* Brand: logo + project name. Always links to the site root. */
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(0.55rem + 0.7rem * (1 - var(--p2)));
+  margin-bottom: calc(1rem * (1 - var(--p2)));
+  text-decoration: none;
+  color: var(--white);
+  flex-shrink: 0;
+}
+
+.topbar.collapsed .topbar-brand { margin-bottom: 0; }
+
+.topbar-brand img {
+  width: calc(28px + 52px * (1 - var(--p2)));
+  height: auto;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.3));
+  transition: filter 0.2s;
+}
+
+.topbar.collapsed .topbar-brand img { filter: none; }
+
+.topbar-brand .brand-name {
+  /* IBM Plex Mono, matching the application's own wordmark
+     (ui/shared/src/components/Logo.tsx renders it in --font-mono), so
+     the name in this bar and the name in every screenshot below are
+     the same lockup rather than two takes on it. */
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(1.1rem + 1.7rem * (1 - var(--p2)));
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+/* The hyphen is dimmed in the application's wordmark. Same here. */
+.topbar-brand .brand-name .brand-dash { opacity: 0.55; }
+
+.topbar-brand .brand-sub {
+  font-size: 0.85rem;
+  font-weight: 400;
+  opacity: 0.7;
+  margin-left: 0.4rem;
+}
+
+/* Hero-only content: pronunciation + tagline + badges. They fade
+   away (opacity + max-height + margin) under --p1 control, then
+   the .collapsed flip removes them entirely so they don't take
+   any layout space. */
+.topbar .pronunciation,
+.topbar .tagline,
+.topbar .badges {
+  opacity: calc(1 - var(--p1));
+  overflow: hidden;
+}
+
+.topbar.collapsed .pronunciation,
+.topbar.collapsed .tagline,
+.topbar.collapsed .badges {
+  display: none;
+}
+
+.topbar .pronunciation {
+  font-size: 0.95rem;
+  color: var(--white);
+  font-style: italic;
+  max-height: calc((1 - var(--p1)) * 3rem);
+  margin-bottom: calc((1 - var(--p1)) * 0.75rem);
+  letter-spacing: 0.5px;
+}
+
+.topbar .tagline {
+  font-size: 1.15rem;
+  color: var(--white);
+  max-width: 600px;
+  max-height: calc((1 - var(--p1)) * 5rem);
+  margin: 0 auto calc((1 - var(--p1)) * 1.5rem);
+}
+
+.topbar .badges {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+  max-height: calc((1 - var(--p1)) * 3rem);
+  margin-bottom: calc((1 - var(--p1)) * 1.5rem);
+}
+
+.topbar .badges img { height: 20px; }
+
+/* Ribbon (only present on the home page). Floats top-right of the
+   hero; in collapsed state it inlines next to the burger as a small
+   chip. */
+.topbar .ribbon {
+  position: absolute;
+  top: 24px;
+  right: -65px;
+  width: 250px;
+  text-align: center;
+  padding: 0.35rem 0;
+  background: #cc3333;
+  color: var(--white);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  transform: rotate(45deg);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+}
+
+.topbar.collapsed .ribbon {
+  position: static;
+  width: auto;
+  top: auto;
+  right: auto;
+  transform: none;
+  padding: 0.25rem 0.55rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  box-shadow: none;
+  flex-shrink: 0;
+  /* DOM has the ribbon as the first child of <header>; flex-order
+     pulls it visually after .topbar-content, with .topbar-menu after
+     it, so the collapsed bar reads: brand · ribbon · nav strip. */
+  order: 1;
+}
+
+.topbar.collapsed .topbar-content { order: 0; }
+.topbar.collapsed .topbar-menu    { order: 2; }
+.topbar.collapsed .topbar-burger  { order: 3; }
+
+/* Reading left-to-right in the collapsed bar:
+   1. brand (.topbar-content)         order 0
+   2. version chip (.ribbon)          order 1
+   3. inline nav (.topbar-menu, desktop only — display: none on mobile)
+   4. burger (.topbar-burger)         order 3, pushed to the far right
+                                      by margin-left: auto
+
+   On mobile the menu is `display: none` (drawer mode), so the visual
+   layout becomes [brand] [ribbon] [——— gap ———] [burger]. */
+
+.topbar.collapsed .topbar-content {
+  margin: 0;          /* override default `margin: 0 auto`, which would
+                         expand the brand block inside the flex row. */
+  flex: 0 0 auto;
+}
+
+/* Ribbon stays visible in collapsed state on every viewport — flex
+   `order` (set above) places it to the right of .topbar-content. */
+.ribbon-drawer { display: none !important; }
+
+/* Burger toggle — fixed top-right of the bar in every state.
+   Visible at every viewport width; this is the primary nav. */
+.topbar-burger {
+  position: absolute;
+  top: 0.85rem;
+  right: 0.85rem;
+  width: 2.4rem;
+  height: 2.4rem;
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: var(--white);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, top 0.2s, right 0.2s;
+  z-index: calc(var(--topbar-zindex) + 1);
+}
+
+.topbar.collapsed .topbar-burger {
+  /* In hero state the burger sits absolute-positioned in the corner;
+     in collapsed state it joins the flex row at the far right. */
+  position: static;
+  top: auto;
+  right: auto;
+  width: 2rem;
+  height: 2rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.topbar-burger:hover { background: rgba(255, 255, 255, 0.25); }
+
+.topbar-burger .burger-icon,
+.topbar-burger .burger-icon::before,
+.topbar-burger .burger-icon::after {
+  display: block;
+  width: 1.2rem;
+  height: 2px;
+  background: var(--white);
+  border-radius: 1px;
+  transition: transform 0.25s ease, top 0.25s ease, opacity 0.2s ease, background 0.2s ease;
+}
+
+.topbar-burger .burger-icon { position: relative; }
+.topbar-burger .burger-icon::before { content: ''; position: absolute; left: 0; top: -7px; }
+.topbar-burger .burger-icon::after  { content: ''; position: absolute; left: 0; top:  7px; }
+
+.topbar.menu-open .topbar-burger .burger-icon { background: transparent; }
+.topbar.menu-open .topbar-burger .burger-icon::before { top: 0; transform: rotate(45deg); }
+.topbar.menu-open .topbar-burger .burger-icon::after  { top: 0; transform: rotate(-45deg); }
+
+/* Drawer — overlays page content via position: absolute below the
+   bar. Hidden by default; .menu-open on the bar reveals it. */
+.topbar-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--hero-bg, #16283a);
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.3);
+  padding: 0.5rem;
+  z-index: var(--topbar-zindex);
+  text-align: left;
+}
+
+.topbar.menu-open .topbar-menu { display: block; }
+
+.topbar-menu-inner {
+  max-width: var(--max-width, 860px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.topbar-menu a,
+.topbar-menu .topbar-theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  color: var(--white);
+  text-decoration: none;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+  box-sizing: border-box;
+}
+
+.topbar-menu a:hover,
+.topbar-menu .topbar-theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.topbar-menu a.is-current { background: rgba(255, 255, 255, 0.18); }
+
+.topbar-menu .menu-divider {
+  height: 1px;
+  margin: 0.35rem 0.5rem;
+  background: rgba(255, 255, 255, 0.15);
+  border: none;
+}
+
+.topbar-theme-toggle .theme-glyph {
+  display: inline-block;
+  width: 1.1rem;
+  text-align: center;
+}
+
+@media (max-width: 600px) {
+  .topbar-burger { width: 2.1rem; height: 2.1rem; top: 0.45rem; right: 0.5rem; }
+  .topbar-brand .brand-sub { display: none; }
+  /* Tighten the hero on phones so the burger doesn't feel cramped. */
+  .topbar.is-hero .topbar-brand img {
+    width: calc(28px + 28px * (1 - var(--p2)));   /* 28 → 56 */
+  }
+  .topbar.is-hero .topbar-brand .brand-name {
+    font-size: calc(1rem + 1rem * (1 - var(--p2)));  /* 1 → 2rem */
+  }
+}
+
+/* Phone-sized collapsed bar: tighter padding + gap so the brand
+   sits comfortably on the left and the burger on the right with
+   nothing pushed off-viewport. The breakpoint is 700 px to match
+   the desktop/mobile divide used for the burger and inline nav. */
+@media (max-width: 700px) {
+  .topbar.collapsed {
+    padding: 0.45rem 0.65rem;
+    gap: 0.55rem;
+  }
+
+  /* Cluster brand + ribbon tightly together — they read as one unit
+     on the left side of the bar. */
+  .topbar.collapsed .topbar-content { margin-right: 0.4rem; }
+  .topbar.collapsed .ribbon { margin: 0; }
+
+  /* Ribbon already sits via `order: 1` after the brand; the burger
+     uses `order: 3` and `margin-left: auto` to pin to the far right. */
+}
+
+/* ============================================================
+   Desktop overrides (≥ 701 px).
+   No burger menu — nav items list inline in the hero, then
+   horizontally across the bar when collapsed. The corner
+   ribbon stays visible always; the drawer-only ribbon is
+   hidden because there's no drawer to live in.
+   ============================================================ */
+@media (min-width: 701px) {
+  .topbar-burger { display: none; }
+
+  /* Drawer becomes an inline strip; no overlay positioning. */
+  .topbar-menu {
+    display: block;
+    position: static;
+    background: transparent;
+    border-top: none;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .topbar-menu-inner {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Inline nav items styled as outline buttons (matches the original
+     .btn-outline strip the home page used to ship). */
+  .topbar-menu a,
+  .topbar-menu .topbar-theme-toggle {
+    width: auto;
+    padding: 0.55rem 1.1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    background: transparent;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    border-radius: 4px;
+    line-height: 1.2;
+    transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+  }
+
+  .topbar-menu a:hover,
+  .topbar-menu .topbar-theme-toggle:hover {
+    opacity: 0.9;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.6);
+  }
+
+  /* Highlight the current page with a filled primary chip. */
+  .topbar-menu a.is-current {
+    background: var(--primary, #3a628f);
+    border-color: var(--primary, #3a628f);
+  }
+
+  .topbar-menu a.is-current:hover { opacity: 0.9; background: var(--primary, #3a628f); }
+
+  /* The mobile-only divider has no purpose in the inline strip. */
+  .topbar-menu .menu-divider { display: none; }
+
+  /* Drawer-only ribbon never shows on desktop (corner ribbon is the
+     authoritative one here). */
+  .ribbon-drawer { display: none !important; }
+
+  /* Collapsed state on desktop: brand on the left, inline nav on the
+     right, corner ribbon stays visible. */
+  .topbar.collapsed .topbar-content {
+    flex: 0 0 auto;
+  }
+
+  .topbar.collapsed .topbar-menu {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin: 0;
+  }
+
+  .topbar.collapsed .ribbon {
+    display: inline-flex;     /* restored — see mobile rule above */
+    align-items: center;
+  }
+
+  /* Hero state on desktop: nav strip sits in flow below the badges. */
+  .topbar.is-hero:not(.collapsed) .topbar-menu {
+    margin-top: 0.5rem;
+    padding-bottom: 0.5rem;
+  }
+
+  /* ----------------------------------------------------------
+     Collapsed-bar form on desktop: nav items swap to short
+     labels / icons, and the theme toggle morphs into an
+     iOS-style sun/moon slider. Hero state and the mobile
+     drawer (handled by the ≤ 700 px rules above) keep the
+     full labels and the original ☾ Dark mode chip.
+     ---------------------------------------------------------- */
+
+  /* By default (hero state on desktop, mobile drawer) the icon
+     SVGs are hidden — full labels do the talking. */
+  .topbar-menu .nav-icon { display: none; }
+
+  /* Short labels are also hidden by default; they only appear
+     when the bar collapses on desktop. */
+  .topbar-menu .nav-label-short { display: none; }
+
+  /* Collapsed-on-desktop label/icon swap. */
+  .topbar.collapsed .topbar-menu .nav-item .nav-icon {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    color: currentColor;
+  }
+
+  /* If a nav item carries an icon, hide its full text label so the
+     icon stands alone (Home, GitHub). */
+  .topbar.collapsed .topbar-menu .nav-item:has(.nav-icon) .nav-label-full {
+    display: none;
+  }
+
+  /* If a nav item provides a short label, prefer it over the full
+     one (CLI Docs, Bench, Build Man). */
+  .topbar.collapsed .topbar-menu .nav-item:has(.nav-label-short) .nav-label-full {
+    display: none;
+  }
+
+  .topbar.collapsed .topbar-menu .nav-item .nav-label-short {
+    display: inline;
+  }
+
+  /* Items that only have a full label (API Docs, Downloads,
+     Issues) keep showing it — no rule needed, but make sure the
+     hide-on-icon rule above doesn't accidentally apply. */
+  .topbar.collapsed .topbar-menu .nav-item:not(:has(.nav-icon)):not(:has(.nav-label-short)) .nav-label-full {
+    display: inline;
+  }
+
+  /* ---- Theme slider ----
+     The slider sub-tree is hidden everywhere by default; the
+     existing glyph + label chip remains visible in the drawer
+     and in the desktop hero strip. */
+  .topbar-theme-toggle .theme-slider { display: none; }
+
+  /* In collapsed-bar form on desktop the chip morphs: hide the
+     glyph + word, show the slider, and tighten the button so it
+     sits like a small inline pill alongside the nav items. */
+  .topbar.collapsed .topbar-menu .topbar-theme-toggle {
+    padding: 0.25rem 0.45rem;
+    background: transparent;
+    border: 1.5px solid rgba(255, 255, 255, 0.4);
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    line-height: 1;
+  }
+
+  .topbar.collapsed .topbar-menu .topbar-theme-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.6);
+  }
+
+  .topbar.collapsed .topbar-menu .topbar-theme-toggle .theme-glyph,
+  .topbar.collapsed .topbar-menu .topbar-theme-toggle .theme-label {
+    display: none;
+  }
+
+  .topbar.collapsed .topbar-menu .topbar-theme-toggle .theme-slider {
+    display: inline-block;
+    line-height: 1;
+  }
+
+  /* The track: ~3rem × ~1.4rem rounded pill with sun on the
+     left, moon on the right, knob sliding between. */
+  .topbar.collapsed .topbar-menu .theme-slider-track {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    box-sizing: border-box;
+    width: 3rem;
+    height: 1.4rem;
+    padding: 0 0.3rem;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 999px;
+    font-size: 0.75rem;
+    line-height: 1;
+    color: var(--white, #fff);
+    transition: background 0.2s ease;
+  }
+
+  .topbar.collapsed .topbar-menu .theme-slider-sun,
+  .topbar.collapsed .topbar-menu .theme-slider-moon {
+    position: relative;
+    z-index: 1;
+    pointer-events: none;
+    line-height: 1;
+  }
+
+  /* Knob: a ~1.1rem white circle that slides along the track. In
+     light mode it sits on the left (covering the sun); in dark
+     mode it slides right (covering the moon). */
+  .topbar.collapsed .topbar-menu .theme-slider-knob {
+    position: absolute;
+    top: 50%;
+    left: 0.15rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    background: var(--white, #fff);
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    transform: translateY(-50%);
+    transition: transform 0.25s ease, left 0.25s ease;
+  }
+
+  /* Dark theme: slide the knob to the right end of the track
+     (track is 3rem wide with 1.1rem knob and 0.15rem inset, so
+     translate by 3rem - 1.1rem - 0.3rem = 1.6rem). */
+  :root[data-theme="dark"] .topbar.collapsed .topbar-menu .theme-slider-knob {
+    transform: translate(1.6rem, -50%);
+  }
+}

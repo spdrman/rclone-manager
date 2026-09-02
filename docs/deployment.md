@@ -447,6 +447,65 @@ all. `backup-manager status` works identically either way, since it is always a 
 read-only check against the shared state database file, independent of which binary is
 actually running as `rclone-manager`'s main process.
 
+## Storage capacity, and capping what this manager may use
+
+By default backup manager measures the filesystem your backup root is on and reports
+against the whole volume: no configuration, and useful from the moment setup finishes.
+If you would rather it stayed inside an allowance, set a cap:
+
+```yaml
+capacity:
+  # The ceiling on how much space this manager may occupy, in BYTES.
+  # 0, or no capacity block at all, means no cap: use the whole volume.
+  cap_bytes: 107374182400   # 100 GiB
+
+  # Report WARNING at or below this much remaining headroom, and REFUSE a
+  # transfer at or below this much. Both default to 0, meaning no line.
+  # The warning line must be at or above the critical floor.
+  warning_free_bytes: 21474836480
+  critical_free_bytes: 10737418240
+
+  # Held back on top of every incoming artifact's size before a transfer is
+  # admitted, for listing drift and block rounding.
+  safety_margin_bytes: 1073741824
+```
+
+Everything here is bytes. The Settings page shows an MB/GB picker beside the field and
+converts before it saves, so the file never carries a number whose meaning depends on a
+second key.
+
+**The cap is enforced, not displayed.** FR-21's existing guard already refuses a transfer
+the disk cannot hold; with a cap set it also refuses one that would push this manager
+past the ceiling, and it refuses on whichever of the two runs out first, because a cap
+does not help if the volume fills first. A refused transfer leaves the remote copy
+exactly where it is and is retried on a later cycle. Nothing is ever deleted to make
+room: FR-21's second rule is that retention is not something a full disk gets to
+trigger.
+
+**How "how much are we using" is measured.** From the catalog, not from the disk: the
+state database already records what was transferred and how big each artifact was, so
+the answer is one aggregate query that counts only files this manager put there. A `du`
+over the backup root would be slow on a large tree and would count everything else
+sharing the mount. The dashboard reports that figure alongside the volume's own used
+space, so a gap between the two, which means something else is writing into your backup
+root, is visible rather than folded away.
+
+**Which filesystem gets measured.** The one your backup root is on, as the container
+sees it. That root is derived from the directory your backup sets' `local_path` values
+have in common, which for the shipped layout is the `/data/backups` mount. If your sets
+sit on genuinely different volumes there is nothing to derive, and the dashboard says
+capacity is not known rather than measuring the container's own root filesystem and
+reporting a confident number about the wrong disk. Name the one you mean if that
+happens:
+
+```yaml
+capacity:
+  backup_root: /data/backups
+```
+
+Every reading says which path it was taken from, so a wrong mount is something you can
+see rather than something you have to suspect.
+
 ## Proactive alerting
 
 Backup manager can tell an administrator that something is wrong without anyone
@@ -535,17 +594,20 @@ found by hand.
 The manifest checked in today was produced this way at `8ad3100`, and a second run from
 the same clean checkout reproduced its binary hashes exactly.
 
-**What this doesn't record**: a registry digest. The registry is settled,
-`ghcr.io/spdrman/backup-manager` (`distribution/packaging/canonical.json` is the single
-source of truth for the reference), so the gap is no longer that no registry exists. It
-is that nothing has been pushed to it, which `canonical.json` records as
-`image.published: false`. The manifest carries an explicit `registry_digest` slot per
-architecture, `null` while that stays false, and
-`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` makes the two move
-together: the day a release is pushed and `published` flips to `true`, the manifest is
-required to carry the digest `docker buildx build --push` printed (or
-`docker buildx imagetools inspect ghcr.io/spdrman/backup-manager:<tag>` reads back).
-`local_image_id_sha256` stays what it always was, the local Docker image ID that build
-produced, which resolves nowhere but the machine that built it and is never a stand-in
-for a digest. Doing the push, and signing and attesting what it points at, is issue
-#88's work.
+**What this records about the registry**: nothing yet, for the version currently cut.
+`distribution/packaging/canonical.json` records `image.published: false` for
+`ghcr.io/spdrman/backup-manager:0.2.0`, and the manifest carries a `registry_digest` of
+`null` per architecture and a null `index_digest` to say the same thing from the other
+side. `TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag` holds the two
+together in both directions: a published flag with no digest and a digest with no
+published flag are both half-truths.
+
+They are filled in from a real push rather than from the push's own output. That is how
+`0.1.0` was recorded: `docker buildx imagetools inspect` read each architecture's digest
+back out of ghcr.io, because the push says what it believes it sent and the registry says
+what it holds, and the multi-architecture index those two sat under, `sha256:533e7540`,
+was keylessly signed through the release workflow's own OIDC identity with the SBOM
+attested beside it. `0.2.0` gets the same treatment once the workflow pushes it.
+`local_image_id_sha256` stays what it always was, the local Docker image ID the
+recording build produced, which resolves nowhere but the machine that built it and is
+never a stand-in for a digest.

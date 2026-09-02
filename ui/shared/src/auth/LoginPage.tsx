@@ -1,8 +1,30 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
+import { apiErrorOf, describeFailure } from "@shared/api/failure";
+import type { OperatorFailure } from "@shared/api/failure";
 import { Logo, Wordmark } from "@shared/components/Logo";
 import { ErrorState } from "@shared/components/EmptyState";
+import { HelpField } from "@shared/components/FieldHelp";
+import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
+
+/** Issue #274, one view over from the enrolment page it was filed against:
+ *  a wrong password and a rate-limited address are different problems with
+ *  different answers, and both used to read as a wrong password under a
+ *  correlation id, the literal `cid_login`, that no log has ever held. */
+export function describeLoginFailure(e: unknown): OperatorFailure {
+  const api = apiErrorOf(e);
+  if (api?.code === "UNAUTHENTICATED") {
+    // The service's own words for this are already exact, and this is the
+    // one refusal where saying less is the point: which half was wrong is
+    // deliberately not distinguished, by the handler or here.
+    return {
+      message: "That username and password combination was not accepted.",
+      correlationId: api.correlationId
+    };
+  }
+  return describeFailure(e, "Signing in did not succeed.");
+}
 
 /** §30 — deliberately NOT styled like a NAS system login. An operator must never
  *  believe they are handing NAS OS credentials to this app. */
@@ -10,17 +32,17 @@ export function LoginPage({ onSignedIn }: { onSignedIn(): void }) {
   const api = useApi();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<OperatorFailure | null>(null);
   const [busy, setBusy] = useState(false);
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    setError(null);
+    setFailure(null);
     api
       .login(username, password)
       .then(onSignedIn)
-      .catch(() => setError("That username and password combination was not accepted."))
+      .catch((e: unknown) => setFailure(describeLoginFailure(e)))
       .finally(() => setBusy(false));
   };
 
@@ -32,29 +54,37 @@ export function LoginPage({ onSignedIn }: { onSignedIn(): void }) {
         NAS operating-system login.
       </p>
       <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <label className="field">
-          <span className="field__label">Username</span>
-          <input
-            className="input input--mono"
-            autoComplete="username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
+        <HelpField label="Username" help={FIELD_HELP.loginUsername}>
+          {(helpId) => (
+            <input
+              className="input input--mono"
+              aria-describedby={helpId}
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          )}
+        </HelpField>
+        <HelpField label="Password" help={FIELD_HELP.loginPassword}>
+          {(helpId) => (
+            <input
+              className="input"
+              type="password"
+              aria-describedby={helpId}
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          )}
+        </HelpField>
+        {failure ? (
+          <ErrorState
+            message={failure.message}
+            remediation={failure.remediation}
+            correlationId={failure.correlationId}
           />
-        </label>
-        <label className="field">
-          <span className="field__label">Password</span>
-          <input
-            className="input"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
-        {error ? (
-          <ErrorState message={error} correlationId="cid_login" />
         ) : null}
         <button className="btn btn--primary" type="submit" disabled={busy} style={{ height: 40 }}>
           {busy ? "Signing in…" : "Sign in"}

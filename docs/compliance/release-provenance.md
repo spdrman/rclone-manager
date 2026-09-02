@@ -77,6 +77,10 @@ cosign verify \
   ghcr.io/spdrman/backup-manager:0.1.0
 ```
 
+The tag in that example is `0.1.0` rather than the `0.2.0` this tree declares, because
+`0.2.0` is not pushed yet and there is nothing at that tag to verify. Move it once the
+release workflow has published, at the same time the digests are recorded back.
+
 The SBOM is attached as an attestation over the same digest
 (`cosign attest --type spdxjson`), not baked into the image. That keeps the
 image bytes unchanged by the signing work, which matters because image size is a
@@ -122,14 +126,20 @@ not hold where the script runs.
 
 ## Publishing
 
-Nothing has been pushed to `ghcr.io/spdrman/backup-manager` yet.
-`distribution/packaging/canonical.json` records that as `image.published: false`,
-and the release manifest records the same fact from the other side as a
-`registry_digest` of `null` on every architecture. The two are held together by
-`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag`, so neither can
-move alone.
+`ghcr.io/spdrman/backup-manager:0.2.0` is cut and not pushed.
+`distribution/packaging/canonical.json` records `image.published: false`, and the release
+manifest records the same fact from the other side as a `registry_digest` of `null` per
+architecture and a null `index_digest`. The two are held together by
+`TestReleaseManifestRegistryDigestTracksTheCanonicalPublishFlag`, so neither can move
+alone, and the push below is what fills both in.
 
-The mechanism exists and the push does not happen automatically:
+`0.1.0` was pushed this way and remains published: its image index is `sha256:533e7540`,
+signed keylessly through the release workflow's own OIDC identity with the SBOM attested
+beside it, and each architecture's digest was read back with
+`docker buildx imagetools inspect` rather than taken from the push's own output.
+
+The mechanism that did the push is not automatic, and a later release repeats it by
+hand:
 
 ```
 scripts/release/publish-image.sh
@@ -180,17 +190,17 @@ the manifest is a claim about what the registry holds.
 `container/release-manifest.json`'s `version` is the `VERSION` build argument the
 binaries were stamped with, which is what `/backup-manager version` answers.
 `canonical.json`'s `image.tag` is the semantic version every provider package
-advertises. Those are the same string in a real release and they are not the
-same string today: the generator defaults `VERSION` to
-`git describe --tags --always`, this repository has no tags, so the recorded
-build version is an abbreviated commit while the packages point at `1.0.0`.
+advertises. Those have to be the same string in a real release, and now they are:
+both record `0.2.0`, the tag cut for this release rather than the generator's
+`git describe --tags --always` fallback that produced an abbreviated commit before
+this repository had any tags.
 
-That gap is recorded rather than glossed:
-`releaseManifest.versionIsABuildStamp` in the provenance bundle is `true`, and
+That parity is checked rather than assumed:
+`releaseManifest.versionIsABuildStamp` in the provenance bundle is `false`, and
 `TestVersionParityComplaints` refuses a bundle that misstates it in either
-direction. It becomes a hard failure the moment `image.published` goes true,
-because at that point a store advertises `:1.0.0` and the binary inside answers
-with a commit SHA. Cutting a real tag before the first push closes it.
+direction. Cutting the real tag before the push is what closed the gap this section
+used to describe: a store advertising `:1.0.0` while the binary inside answered with a
+commit SHA was the failure a push before tagging would have shipped.
 
 ## Verifying a release by hand
 
@@ -207,9 +217,6 @@ digests, and the image additionally by its signature.
 
 Stated here rather than left to be discovered:
 
-- **Nothing is published, so nothing is signed.** The bundle records
-  `signing.status: unsigned`, and a test refuses any other value while
-  `image.published` is false.
 - **The links are not publicly reachable.** Every link target exists and has
   substance, and the repository is private, so a store reviewer following any of
   them gets a 404. `links.publiclyReachable` is `false` and

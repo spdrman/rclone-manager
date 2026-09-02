@@ -16,10 +16,11 @@
 # Substitute, in this file only:
 #   * "tank" in every host path, for your own pool;
 #   * 568:568, if your datasets are owned by a different uid/gid;
-#   * the image reference, if you have not pushed to the recorded one
-#     (the registry is settled and nothing has been pushed to it yet;
-#     distribution/packaging/canonical.json is the single source of truth
-#     for the reference and records image.published: false).
+#   * the image reference, only if you want to run a locally-built image
+#     instead of the released one (the recorded reference is real,
+#     published, keyless-signed and SBOM-attested --
+#     distribution/packaging/canonical.json records image.published: true
+#     -- and resolves as pulled with no push or side-load needed).
 #
 # distribution/packaging holds this file to the shared source of truth on
 # every commit: image reference, container-side mount points, port, and
@@ -32,7 +33,7 @@ services:
   # all. Reachable only from backup-manager-ui, over this project's own
   # network.
   backup-manager:
-    image: ghcr.io/spdrman/backup-manager:0.1.0
+    image: ghcr.io/spdrman/backup-manager:0.2.0
     command: ["/backup-manager-web", "serve", "--profile=truenas"]
 
     user: "568:568"
@@ -119,7 +120,7 @@ services:
   # engine. The only container with a published port, and the only one
   # TrueNAS's Web Portal button should ever open.
   backup-manager-ui:
-    image: ghcr.io/spdrman/backup-manager:0.1.0
+    image: ghcr.io/spdrman/backup-manager:0.2.0
     command: ["/backup-manager-web", "serve-ui", "--profile=truenas"]
 
     depends_on:

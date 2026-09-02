@@ -16,8 +16,9 @@
 //     the producer to make a positive, atomic assertion rather than asking
 //     this package to infer one.
 //   - "marker": a sibling completion marker (see markerSuffix) or a
-//     directory-level manifest marker (see manifestMarkerName) tells this
-//     package the producer finished writing.
+//     directory-level manifest marker (see effectiveManifestMarker,
+//     config.Completion.ManifestMarker, issue #291) tells this package the
+//     producer finished writing.
 //   - "stable": config.Completion.StableFor says how long a candidate's
 //     remote modification time must already be in the past before it is
 //     presumed done. This is the weakest of the three: it is inference, not
@@ -227,7 +228,7 @@ func Discover(ctx context.Context, deps Deps, source transport.Source, set confi
 			continue
 		}
 
-		if isMarkerObject(base) {
+		if isMarkerObject(base, set.Completion) {
 			// A completion signal, not a payload. Never a candidate in its
 			// own right, in any strategy: reporting it as Pending/Rejected
 			// would just be noise every discovery pass repeats forever.

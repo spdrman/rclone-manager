@@ -111,6 +111,15 @@ type BackupSet struct {
 	ValidatorID ValidatorID
 
 	Disabled bool
+
+	// ReadOnly is the fully-resolved answer to issue #282's "may this
+	// backup set's remote source ever be deleted" (config.BackupSet.ReadOnly,
+	// already resolved from that set's own override or its source's
+	// default by config.Validate before this is ever read). A caller
+	// outside core/ never sees the per-set override or the source-level
+	// default separately, and never needs to: it never has to reconstruct
+	// what a hand-edited config.yaml already answered.
+	ReadOnly bool
 }
 
 // CreateBackupSetRequest is what a caller submits to persist one new
@@ -181,6 +190,17 @@ type CreateBackupSetRequest struct {
 	// Disabled excludes this backup set from RunCycle from the moment
 	// it is created ("Save disabled", the wizard's third save tier).
 	Disabled bool
+
+	// ReadOnly declares this backup set's remote source read-only from
+	// the moment it is created: issue #282's "pull from here, never
+	// delete here", set through the API/wizard rather than by
+	// hand-editing config.yaml (issue #316). It is always persisted as
+	// this ONE set's own explicit override (config.BackupSet.ReadOnlyConfig),
+	// never as a change to its source's default — the wizard has no UI
+	// concept of source (see defaultSourceName's own doc), so there is
+	// no source-level answer here for it to express, only this set's
+	// own.
+	ReadOnly bool
 
 	// RunImmediately submits a run_cycle operation (the same one
 	// SubmitRunCycle exposes) immediately after this backup set is
@@ -297,6 +317,19 @@ func newBackupSetFor(configPath, sourceName, keyFile string, req CreateBackupSet
 		Validation: config.Validation{Hash: "", ValidatorID: string(req.ValidatorID)},
 		Disabled:   req.Disabled,
 	}
+	// A pointer to a fresh local, never &req.ReadOnly: req is this
+	// function's own by-value parameter, so its address is safe to persist
+	// here, but taking it directly would make newSet.ReadOnlyConfig alias
+	// the caller's request struct for no reason. This is always an
+	// explicit override (see CreateBackupSetRequest.ReadOnly's own doc),
+	// never a nil left for the parent source's default to fill in: unlike
+	// a hand-edited config.yaml, an API/wizard request has always given an
+	// explicit answer (false is what every request before this issue, and
+	// every wizard save that leaves the new checkbox unticked, already
+	// means), and cfg.Validate resolves it into newSet.ReadOnly right
+	// after this function returns.
+	readOnly := req.ReadOnly
+	newSet.ReadOnlyConfig = &readOnly
 	if req.CompletionStrategy == "stable" {
 		newSet.Completion.StableFor = config.Duration(req.StableFor)
 	}
@@ -363,6 +396,19 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		cfg.Sources = append(cfg.Sources, config.Source{Name: sourceName, BackupSets: []config.BackupSet{newSet}})
 	}
 
+	// Encoded before cfg.Validate, which resolves Retention and Alerts IN
+	// PLACE (validateRetention's own doc says so). cfg here is the file
+	// this method just re-read plus the new backup set, so a retention or
+	// alerts choice the operator never made (or never made yet, on a
+	// config.yaml issue #294's CreateInitialConfig fix now leaves without
+	// one) has to survive adding an unrelated backup set exactly as it
+	// survives a settings edit; see UpdateSettings' own comment (above,
+	// in settings.go) for the full reasoning this shares.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return CreateBackupSetResult{}, fmt.Errorf("service: encoding configuration: %w", err)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		// cfg.Validate's ValidationError text is built entirely from this
 		// package's own field descriptions and the caller's own request
@@ -380,7 +426,7 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// once. What comes back is a pure in-memory assignment, applied after
 	// the write, that cannot fail.
 	//
-	// The ordering is the point. A failure after writeConfigAtomically
+	// The ordering is the point. A failure after writeConfigBytesAtomically
 	// returns an error with an empty Set.ID, which the API layer correctly
 	// reads as "creation never happened", for a backup set that is
 	// durably in config.yaml -- the same split state #155's M6 fixed for
@@ -398,7 +444,13 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 		return CreateBackupSetResult{}, err
 	}
 
-	if err := writeConfigAtomically(b.configPath, cfg); err != nil {
+	// encoded was captured above, before cfg.Validate resolved Retention
+	// and Alerts in place, so this write carries the file's own
+	// omissions rather than a copy of today's defaults. cfg itself stays
+	// fully resolved for planValidatorCatalog above and everything below
+	// that rebuilds this BackupService's in-memory state — only the
+	// bytes on disk differ from it.
+	if err := writeConfigBytesAtomically(b.configPath, encoded); err != nil {
 		return CreateBackupSetResult{}, fmt.Errorf("service: persisting configuration: %w", err)
 	}
 
@@ -603,6 +655,15 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		CompletionStrategy: bs.Completion.Strategy,
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
+		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the
+		// resolved answer, the same discipline this field's own doc in
+		// config.go documents for every other consumer. Every bs this
+		// function is ever handed has already gone through cfg.Validate
+		// (CreateBackupSet calls it before newBackupSetFor's result is
+		// ever re-read back with findBackupSet, and ListBackupSets/
+		// GetBackupSet read from a state built from an already-validated
+		// Config), so this is never the pre-resolution zero value.
+		ReadOnly: bs.ReadOnly,
 	}
 }
 
@@ -647,8 +708,9 @@ func writeConfigAtomically(path string, cfg *config.Config) error {
 // writeConfigBytesAtomically is writeConfigAtomically's second half, for a
 // caller that has to choose WHICH encoding of the config lands on disk
 // rather than encoding whatever struct it happens to be holding.
-// UpdateSettings (settings.go) is that caller: it encodes before
-// config.Validate resolves its defaults in place, so the operator's file
+// UpdateSettings (settings.go), backupsetenabled.go's toggle, and
+// CreateBackupSet above are those callers: each encodes before
+// config.Validate resolves its defaults in place, so the file on disk
 // keeps its own omissions instead of gaining a frozen copy of today's
 // defaults, while the running process still uses the validated struct.
 func writeConfigBytesAtomically(path string, b []byte) error {
@@ -750,30 +812,44 @@ func resolveSSHKeyFileIn(configPath, id string) (string, error) {
 	return path, nil
 }
 
-// ImportSSHKey validates raw as an unencrypted SSH private key (reusing
+// ImportSSHKey validates raw as an SSH private key (reusing
 // internal/transport/rclone.ValidateImportedPrivateKey — the exact check
 // a key.env/key.command resolver's own output already goes through, see
 // that function's doc) and persists it to a dedicated file with 0600
 // permissions, the same trust level docs/ssh-setup.md already assumes
 // for a manually provisioned key.file.
 //
+// passphrase is "" for an unencrypted key, and #269's answer to this
+// method's own acceptance criteria otherwise: when raw is passphrase-
+// protected, passphrase is checked against it right here, at import time,
+// through the exact same validateAndWrapKey verdict a key.file +
+// key.passphrase configuration reaches at connection time — so the two
+// can never disagree about what a usable key is. A wrong passphrase is
+// refused here, before anything is written to disk, rather than accepted
+// and only discovered broken the first time a cycle tries to connect.
+// raw is persisted exactly as given, still passphrase-protected on disk
+// if it was to begin with: this method changes nothing about how an
+// imported key is stored (that is #298's separate concern), only whether
+// an encrypted one is accepted at all and, if so, whether it is proven to
+// actually decrypt before it is trusted.
+//
 // This is the backend half of the wizard's "Import key" step (#98):
 // BackupSetWizardPage.tsx already collects the pasted key client-side and
 // discards it from the page the instant this call returns; raw is never
 // logged, never echoed back, and this process's own copy of it is
 // overwritten immediately after the file write below.
-func (b *BackupService) ImportSSHKey(_ context.Context, raw []byte) (SSHKeyRef, error) {
-	return importSSHKeyInto(b.configPath, raw)
+func (b *BackupService) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (SSHKeyRef, error) {
+	return importSSHKeyInto(b.configPath, raw, passphrase)
 }
 
 // importSSHKeyInto is ImportSSHKey's configPath-only half; see keysDirIn
 // above for why the split exists. A first-run install imports its key
 // through exactly this function, so a fresh instance cannot be talked
 // into persisting material a configured one would refuse.
-func importSSHKeyInto(configPath string, raw []byte) (SSHKeyRef, error) {
+func importSSHKeyInto(configPath string, raw []byte, passphrase string) (SSHKeyRef, error) {
 	// The validated obs.Secret wrapper is not itself what gets persisted:
 	// raw (below) is, once validation confirms it is safe to write.
-	_, algorithm, fingerprint, err := rclone.ValidateImportedPrivateKey(raw)
+	_, algorithm, fingerprint, err := rclone.ValidateImportedPrivateKey(raw, passphrase)
 	if err != nil {
 		return SSHKeyRef{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
@@ -851,14 +927,21 @@ type ConnectionTestResult struct {
 // (see the wizard's pre-save "Verify server"/review flow, where no trust
 // decision is final until CreateBackupSet actually runs).
 func (b *BackupService) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
-	return testConnectionVia(ctx, b.state.Load().inner.Transport, b.configPath, req)
+	st := b.state.Load()
+	return testConnectionVia(ctx, st.inner.Transport, b.configPath, st.inner.Config.KeyEncryption, req)
 }
 
 // testConnectionVia is TestConnection's transport-and-configPath-only
 // half; see keysDirIn above for why the split exists. The first-run
 // surface wires a transport of its own (firstrun.go) because it has no
-// internal/app.Service to read one off yet.
-func testConnectionVia(ctx context.Context, tr transport.Transport, configPath string, req ConnectionTestRequest) (ConnectionTestResult, error) {
+// internal/app.Service to read one off yet, and passes config.KeyEncryption{}
+// (its zero value) for keyEnc: a first-run instance has no config.yaml to
+// read a key_encryption block from yet, so #298's encryption is
+// necessarily off for the very first connection test an operator ever
+// runs, exactly the same "nothing to opt into yet" case every other
+// config-driven behavior starts from here (see firstrun.go's own package
+// doc, "What this type deliberately is not").
+func testConnectionVia(ctx context.Context, tr transport.Transport, configPath string, keyEnc config.KeyEncryption, req ConnectionTestRequest) (ConnectionTestResult, error) {
 	if req.Host == "" || req.User == "" || req.SSHKeyID == "" || req.KnownHostsLine == "" {
 		return ConnectionTestResult{}, fmt.Errorf("%w: host, user, ssh_key_id and known_hosts_line are all required", ErrInvalidRequest)
 	}
@@ -891,14 +974,17 @@ func testConnectionVia(ctx context.Context, tr transport.Transport, configPath s
 	defer cancel()
 
 	src := transport.Source{
-		ID:         "connection-test",
-		Type:       "sftp",
-		Host:       req.Host,
-		Port:       req.Port,
-		User:       req.User,
-		KeyFile:    keyFile,
-		KnownHosts: tmpPath,
-		Root:       root,
+		ID:                   "connection-test",
+		Type:                 "sftp",
+		Host:                 req.Host,
+		Port:                 req.Port,
+		User:                 req.User,
+		KeyFile:              keyFile,
+		KeyEncryptionFile:    keyEnc.File,
+		KeyEncryptionEnv:     keyEnc.Env,
+		KeyEncryptionCommand: keyEnc.Command,
+		KnownHosts:           tmpPath,
+		Root:                 root,
 	}
 
 	if _, err := tr.List(testCtx, src); err != nil {

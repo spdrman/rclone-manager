@@ -15,10 +15,16 @@ import (
 // since moved to QUARANTINED_LOST is excluded too, because this checks the
 // artifact's *current* state, not its history: its one copy is gone, so it
 // cannot be a restore point any more no matter what it used to be.
+// RemoteRetained (issue #282) counts as known-good too: it is a durable
+// local restore point exactly like Complete, just one whose remote copy
+// this manager will never delete rather than one it already has. A
+// read-only backup set that is working exactly as declared must not read
+// as STALE simply because none of its artifacts will ever reach Complete.
 var knownGood = map[lifecycle.State]bool{
 	lifecycle.Committed:           true,
 	lifecycle.RemoteDeletePending: true,
 	lifecycle.Complete:            true,
+	lifecycle.RemoteRetained:      true,
 }
 
 // evidence is the only input decideState accepts. It is deliberately
@@ -106,6 +112,7 @@ type aggregate struct {
 	failures              int
 	quarantinedCount      int
 	quarantinedLostCount  int
+	readOnlyRetainedCount int
 }
 
 // countReinstatedRemoteRetained is issue #227's join: of the artifacts the
@@ -224,6 +231,8 @@ func buildAggregate(records []state.Record, staleThreshold time.Duration, now ti
 			agg.quarantinedCount++
 			agg.quarantinedLostCount++
 			agg.hasQuarantinedLost = true
+		case lifecycle.RemoteRetained:
+			agg.readOnlyRetainedCount++
 		}
 	}
 
@@ -284,6 +293,7 @@ func ComputeBackupSetHealth(set model.BackupSetID, records []state.Record, reins
 		QuarantinedLostCount: agg.quarantinedLostCount,
 
 		ReinstatedRemoteRetainedCount: countReinstatedRemoteRetained(records, reinstated),
+		ReadOnlyRetainedCount:         agg.readOnlyRetainedCount,
 
 		LastRetentionRunAt: in.LastRetentionRunAt,
 		FreeBytes:          in.FreeBytes,

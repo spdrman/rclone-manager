@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -96,6 +97,11 @@ func TestNilLoggerIsSafeNoOp(t *testing.T) {
 	// A Logger derived from a nil Logger via With must also stay nil-safe.
 	derived := l.With("k", "v")
 	derived.Event(context.Background(), LevelInfo, "e", "m")
+
+	// Same for WithRedaction: a nil *Logger stays nil, and the result is
+	// still safe to call.
+	withRedaction := l.WithRedaction(NewRedactor(Endpoint{Host: "example.internal"}))
+	withRedaction.Event(context.Background(), LevelInfo, "e", "m")
 }
 
 type errTest string
@@ -151,5 +157,96 @@ func TestFieldEventKeyIsEvent(t *testing.T) {
 
 	if !strings.Contains(buf.String(), `"event":"x"`) {
 		t.Errorf("expected the event field to be keyed %q, got: %s", fieldEvent, buf.String())
+	}
+}
+
+// TestWithRedactionFiltersStringAttrsAndMsg is issue #295's unit-level
+// proof for emit's own seam: every string-valued attr, and msg itself, is
+// run through the configured Redactor, while a non-string attr (an int
+// here) is left completely alone, since a Redactor only ever matches
+// substrings of a string.
+func TestWithRedactionFiltersStringAttrsAndMsg(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(&buf, LevelInfo).WithRedaction(NewRedactor(Endpoint{Host: "127.0.0.1", Port: 55570, User: "backupuser"}))
+
+	l.Event(context.Background(), LevelError, "unit_test",
+		"dial tcp 127.0.0.1:55570: connect: connection refused",
+		slog.String("error", `source "prod/set": dial tcp 127.0.0.1:55570: connect: connection refused`),
+		slog.Int("attempt", 55570), // an int that happens to equal the port must survive untouched
+	)
+
+	lines := decodeLines(t, &buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1", len(lines))
+	}
+	line := lines[0]
+
+	if strings.Contains(line["msg"].(string), "55570") {
+		t.Errorf("msg still contains the port: %v", line["msg"])
+	}
+	if !strings.Contains(line["msg"].(string), redacted) {
+		t.Errorf("msg was not redacted at all: %v", line["msg"])
+	}
+	if strings.Contains(line["error"].(string), "55570") || strings.Contains(line["error"].(string), "127.0.0.1") {
+		t.Errorf("error attr still contains the endpoint: %v", line["error"])
+	}
+	if !strings.Contains(line["error"].(string), "prod/set") {
+		t.Errorf("error attr lost the source id, want it preserved: %v", line["error"])
+	}
+	if attempt, ok := line["attempt"].(float64); !ok || attempt != 55570 {
+		t.Errorf("attempt (a non-string attr) = %v, want the untouched int 55570", line["attempt"])
+	}
+}
+
+// TestWithRedactionNilRedactorLeavesOutputUnchanged is the regression
+// control: WithRedaction(nil), which is what a Logger for a deployment
+// with no sensitive remote gets (internal/app.New always calls
+// WithRedaction, with whatever obs.NewRedactor(sensitiveEndpoints(cfg)...)
+// returns, and that is nil when nothing opted in), must produce the exact
+// same fields New alone would, field for field (excluding "time", which
+// New's own real-clock timestamp makes non-deterministic independent of
+// anything this test is about).
+func TestWithRedactionNilRedactorLeavesOutputUnchanged(t *testing.T) {
+	var plain, withNilRedaction bytes.Buffer
+	msg := "dial tcp 127.0.0.1:55570: connect: connection refused"
+	attrs := []slog.Attr{slog.String("error", msg)}
+
+	New(&plain, LevelInfo).Event(context.Background(), LevelError, "unit_test", msg, attrs...)
+	New(&withNilRedaction, LevelInfo).WithRedaction(nil).Event(context.Background(), LevelError, "unit_test", msg, attrs...)
+
+	plainLines := decodeLines(t, &plain)
+	withNilLines := decodeLines(t, &withNilRedaction)
+	if len(plainLines) != 1 || len(withNilLines) != 1 {
+		t.Fatalf("got %d and %d lines, want 1 and 1", len(plainLines), len(withNilLines))
+	}
+	delete(plainLines[0], "time")
+	delete(withNilLines[0], "time")
+	if fmt.Sprint(plainLines[0]) != fmt.Sprint(withNilLines[0]) {
+		t.Fatalf("WithRedaction(nil) changed the output:\nplain:              %v\nwithRedaction(nil): %v", plainLines[0], withNilLines[0])
+	}
+}
+
+// TestWithPreservesRedaction proves With, called after WithRedaction (or
+// the other way around), never drops the redactor: a caller that attaches
+// a persistent attribute via With to a Logger already configured for
+// redaction must keep redacting, since nothing about attaching a
+// persistent field is a request to also turn redaction off.
+func TestWithPreservesRedaction(t *testing.T) {
+	var buf bytes.Buffer
+	l := New(&buf, LevelInfo).
+		WithRedaction(NewRedactor(Endpoint{Host: "127.0.0.1", Port: 55570})).
+		With("backup_set", "prod/postgres")
+
+	l.Event(context.Background(), LevelError, "unit_test", "dial tcp 127.0.0.1:55570: connect: connection refused")
+
+	lines := decodeLines(t, &buf)
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1", len(lines))
+	}
+	if strings.Contains(lines[0]["msg"].(string), "55570") {
+		t.Errorf("With dropped the redactor WithRedaction had already configured: msg = %v", lines[0]["msg"])
+	}
+	if lines[0]["backup_set"] != "prod/postgres" {
+		t.Errorf("With's own attached attr was lost: backup_set = %v", lines[0]["backup_set"])
 	}
 }

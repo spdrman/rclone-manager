@@ -15,7 +15,24 @@ import { ActivityTimeline } from "@shared/components/ActivityTimeline";
 import { WarningBanner } from "@shared/components/WarningBanner";
 import { HaltBanner } from "@shared/components/HaltBanner";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
+import { isNotConfigured } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
+import { backupSetPath } from "@shared/utilities/routes";
+
+/**
+ * The one evidence-navigating action each halt reason actually has on the
+ * backup set's own detail page (issue #285's second defect). Host-key-
+ * changed has a fingerprint panel there ("Connection", FingerprintDisplay)
+ * to send an operator to; authentication-failed has no equivalent
+ * evidence section, so it carries no entry here rather than borrowing the
+ * fingerprint one. HaltBanner's own doc is the rule this map exists to
+ * satisfy: actions are for navigating to the evidence, never a stand-in
+ * for it, and a reason with no matching entry gets no action at all
+ * rather than the wrong one.
+ */
+const HALT_ACTION_LABEL: Partial<Record<NonNullable<BackupSet["haltReason"]>, string>> = {
+  "host-key-changed": "Review fingerprint"
+};
 
 export function DashboardPage({
   health,
@@ -40,6 +57,32 @@ export function DashboardPage({
   // the endpoint actually returns.
   const active = operations.data?.filter((op) => op.status === "running" || op.status === "queued") ?? null;
   const activity = useAsync(() => api.listActivity(), [api]);
+  // Issue #286: a separate fetch, not derived from `health` above. GET
+  // /system/storage's `manager` object answers a different question than
+  // GET /system/health's per-set list (see ManagerStorage's own doc for
+  // why summing that list cannot answer it), and it is the one this
+  // panel is meant to show.
+  const storage = useAsync(() => api.getStorage(), [api]);
+
+  // #275: an instance with no configuration refuses every read here, and
+  // that is not a fault to report, it is a setup step nobody has taken.
+  if (isNotConfigured(health.error))
+    return (
+      <>
+        <PageHeader title="Dashboard" subtitle="Not configured yet" />
+        <EmptyState
+          title="Nothing is being backed up yet"
+          action={
+            <button className="btn btn--primary" onClick={() => navigate("/sets/new")}>
+              Add backup set
+            </button>
+          }
+        >
+          This instance has no configuration. Adding your first backup set is what writes
+          it, and this page starts reporting the moment that set runs.
+        </EmptyState>
+      </>
+    );
 
   if (health.error)
     return <ErrorState {...health.error} onRetry={health.reload} />;
@@ -98,9 +141,14 @@ export function DashboardPage({
         <HaltBanner
           set={haltedSet}
           actions={
-            <button className="btn btn--sm" onClick={() => navigate("/sets/" + haltedSet.id)}>
-              Review fingerprint
-            </button>
+            haltedSet.haltReason && HALT_ACTION_LABEL[haltedSet.haltReason] ? (
+              <button
+                className="btn btn--sm"
+                onClick={() => navigate(backupSetPath(haltedSet.source, haltedSet.set))}
+              >
+                {HALT_ACTION_LABEL[haltedSet.haltReason]}
+              </button>
+            ) : null
           }
         />
       ) : null}
@@ -125,13 +173,26 @@ export function DashboardPage({
               value={String(h.quarantinedCount)}
               detail="need review"
             />
-            <MetricCard label="Storage" value={bytes(h.storageFreeBytes) + " free"}>
+            <MetricCard
+              label="Storage"
+              value={
+                storage.data
+                  ? storage.data.known
+                    ? bytes(storage.data.freeBytes) + " free"
+                    : "Not known yet"
+                  : "…"
+              }
+            >
               <div style={{ marginTop: 8 }}>
-                <StorageGauge
-                  freeBytes={h.storageFreeBytes}
-                  totalBytes={h.storageTotalBytes}
-                  state={h.storageState}
-                />
+                {storage.data ? (
+                  <StorageGauge storage={storage.data} />
+                ) : storage.error ? (
+                  <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }}>
+                    {"Storage capacity is unavailable (" + storage.error.message + ")."}
+                  </div>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 13, color: "var(--text-3)" }}>Checking storage…</p>
+                )}
               </div>
             </MetricCard>
           </div>

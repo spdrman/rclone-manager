@@ -9,6 +9,7 @@ import { createMockApi } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import type { SystemHealth } from "@shared/types/operation";
 import { resetGraphForTests } from "@shared/state/graph";
+import { backupSetPath } from "@shared/utilities/routes";
 
 /**
  * Issue #245. These two banners existed before this and could not fire:
@@ -35,10 +36,10 @@ function renderDetail(set: BackupSet) {
   const api = createMockApi();
   vi.spyOn(api, "getSet").mockResolvedValue(set);
   return render(
-    <MemoryRouter initialEntries={["/sets/" + set.id]}>
+    <MemoryRouter initialEntries={[backupSetPath(set.source, set.set)]}>
       <ApiProvider api={api}>
         <Routes>
-          <Route path="/sets/:setId" element={<BackupSetDetailPage readOnly={false} />} />
+          <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
         </Routes>
       </ApiProvider>
     </MemoryRouter>
@@ -58,6 +59,7 @@ const idleHealth: SystemHealth = {
   setsStale: 0,
   setsFailing: 0,
   quarantinedCount: 0,
+  readOnlyRetainedCount: 0,
   storageFreeBytes: 1,
   storageTotalBytes: 2,
   storageState: "nominal",
@@ -101,6 +103,15 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
     expect(banner.textContent).not.toMatch(/SSH host key/i);
   });
 
+  it("the detail page names a key-permission problem when that is the reason, not a rejected login (#293)", async () => {
+    renderDetail(await setFixture({ haltReason: "key-permissions" }));
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toMatch(/permission/i);
+    expect(banner.textContent).not.toMatch(/SSH host key/i);
+    expect(banner.textContent).not.toMatch(/rejected|log in|sign in/i);
+  });
+
   it("the detail page shows no halt banner for a set with no reason", async () => {
     renderDetail(await setFixture());
 
@@ -122,6 +133,30 @@ describe("the halt banners fire from a reason the service reported (issue #245)"
 
     const banner = await screen.findByRole("alert");
     expect(banner.textContent).toMatch(/could not (log in|sign in|authenticate)|rejected/i);
+    expect(banner.textContent).not.toMatch(/SSH host key/i);
+  });
+
+  // Second defect in the same report (issue #285): DashboardPage.tsx used
+  // to pass one hardcoded action, "Review fingerprint", regardless of
+  // haltReason, so a rejected-credential halt offered a button for a
+  // problem it did not have. A fingerprint has nothing to do with a
+  // rejected login, and HaltBanner's own doc is the rule this breaks:
+  // actions are for navigating to the evidence, and there is no
+  // fingerprint evidence to navigate to here. The right fix is no
+  // action, not a relabelled one — an action naming the wrong remedy
+  // sends an operator to check the wrong thing.
+  it("offers no action for a rejected login, rather than the host-key one", async () => {
+    renderDashboard([await setFixture({ haltReason: "authentication-failed" })]);
+
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("button", { name: "Review fingerprint" })).toBeNull();
+  });
+
+  it("the dashboard raises a key-permission problem under its own words (#293)", async () => {
+    renderDashboard([await setFixture({ haltReason: "key-permissions" })]);
+
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toMatch(/permission/i);
     expect(banner.textContent).not.toMatch(/SSH host key/i);
   });
 

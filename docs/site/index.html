@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>rclone-manager: a backup lifecycle manager for a NAS</title>
+  <meta name="description" content="rclone-manager pulls completed backup artifacts off a remote server over SFTP, verifies them, commits them durably to a NAS, and only then deletes the remote copy.">
+  <link rel="icon" type="image/svg+xml" href="assets/icon.svg">
+  <link rel="icon" type="image/x-icon" href="assets/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/favicon-16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="assets/apple-touch-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="theme.css">
+  <link rel="stylesheet" href="topbar.css">
+  <script src="topbar.js" defer></script>
+</head>
+<body>
+
+<header class="topbar is-hero" id="topbar">
+  <div class="topbar-content">
+    <a class="topbar-brand" href="index.html">
+      <img src="assets/logo-mark-light.svg" alt="rclone-manager mark: a broken ring standing for a transfer cycle in progress">
+      <h1 class="brand-name">rclone<span class="brand-dash">-</span>manager</h1>
+    </a>
+    <p class="tagline">Pulls finished backups off a remote server, verifies them, commits them to the NAS, and only then deletes the original.</p>
+    <div class="badges">
+      <img src="https://img.shields.io/badge/go-1.27%2B-00ADD8?logo=go" alt="Go 1.27+">
+      <img src="https://img.shields.io/badge/licence-Apache--2.0-blue" alt="Apache-2.0 licence">
+      <img src="https://img.shields.io/badge/image-unpublished-lightgrey" alt="Container image not yet published">
+    </div>
+  </div>
+
+  <button class="topbar-burger" id="topbarBurger" type="button"
+          aria-label="Toggle menu" aria-expanded="false" aria-controls="topbar-menu">
+    <span class="burger-icon" aria-hidden="true"></span>
+  </button>
+
+  <nav class="topbar-menu" id="topbar-menu" aria-hidden="true">
+    <div class="topbar-menu-inner">
+      <a href="index.html" class="nav-item nav-item-home is-current">
+        <svg class="nav-icon nav-icon-home" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 3 2 12h3v8h5v-5h4v5h5v-8h3L12 3z"/>
+        </svg>
+        <span class="nav-label nav-label-full">Home</span>
+      </a>
+
+      <a href="first-run.html" class="nav-item">
+        <span class="nav-label nav-label-full">First-run tutorial</span>
+        <span class="nav-label nav-label-short">First run</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager" target="_blank" rel="noopener" class="nav-item nav-item-github" aria-label="GitHub repository">
+        <svg class="nav-icon nav-icon-github" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/>
+        </svg>
+        <span class="nav-label nav-label-full">GitHub</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">README</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/deployment.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Deployment</span>
+        <span class="nav-label nav-label-short">Deploy</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/blob/main/docs/recovery.md" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Recovery</span>
+      </a>
+
+      <a href="https://github.com/spdrman/rclone-manager/issues" target="_blank" rel="noopener" class="nav-item">
+        <span class="nav-label nav-label-full">Issues</span>
+      </a>
+
+      <hr class="menu-divider">
+
+      <button type="button" class="topbar-theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Toggle theme">
+        <span class="theme-glyph" aria-hidden="true">&#9790;</span>
+        <span class="theme-label">Dark mode</span>
+        <span class="theme-slider" aria-hidden="true">
+          <span class="theme-slider-track">
+            <span class="theme-slider-sun">&#9728;</span>
+            <span class="theme-slider-moon">&#9790;</span>
+            <span class="theme-slider-knob"></span>
+          </span>
+        </span>
+      </button>
+    </div>
+  </nav>
+</header>
+
+<main>
+
+  <section>
+    <p>A backup producer somewhere writes a dump, an archive or a snapshot to disk. That machine has finite space, so something has to move the artifact off it and something has to delete the original. rclone-manager is the half of that job that runs on the NAS: it discovers finished artifacts on the remote server over SFTP, pulls them, verifies them, commits them durably, records that it did, and only then removes the remote copy.</p>
+    <p>It is a standalone Go binary that embeds pinned rclone Go packages. It does not fork rclone, and it does not shell out to the <code>rclone</code> command line for normal data movement.</p>
+  </section>
+
+  <a href="first-run.html" class="clipping">
+    <span class="clipping-tag">Tutorial</span>
+    <p>Setting one up for the first time means an enrolment link printed to a container log, an administrator account that is not your NAS login, and a six-step wizard whose answers become a <code>config.yaml</code> you will live with. The first-run walkthrough shows every screen, with an example for every field and a sentence on what that entry actually causes the product to do, including the two places where the wizard shows you a control that is not yet wired to anything.</p>
+    <span class="clipping-read">Walk the first run &rarr;</span>
+  </a>
+
+  <section>
+    <h2 id="the-rule">The rule everything else serves</h2>
+    <div class="note danger">
+      <span class="note-label">Invariant</span>
+      <p>A remote backup artifact must not be deleted until a verified and durably committed NAS copy exists. If state is uncertain, the remote copy is preserved.</p>
+    </div>
+    <p>Every design decision below is either enforcing that rule or admitting where the enforcement does not exist yet. It is why the delete comes last, why the journal is written before the delete rather than after it, and why a changed SSH host key halts a backup set instead of carrying on.</p>
+  </section>
+
+  <section>
+    <h2 id="lifecycle">What one artifact goes through</h2>
+    <p>The stages below are the ones the interface names, and the order is fixed. Deletion of the remote source is the last thing that happens, after the local copy has been written, verified, fsynced and recorded.</p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>What happens</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><strong>Discovered</strong></td><td>The artifact appears in the remote folder and matches the include patterns. Nothing is copied until the completion method says the producer has finished writing it.</td></tr>
+          <tr><td><strong>Transferred</strong></td><td>Pulled to the NAS destination over SFTP.</td></tr>
+          <tr><td><strong>Verified</strong></td><td>Transfer verification, then a SHA-256 checksum, then the application validator if the backup set names one. A validator that rejects an artifact quarantines it and leaves the remote copy alone.</td></tr>
+          <tr><td><strong>Committed</strong></td><td>The local copy is made durable, and a sidecar recovery manifest is written beside it so the catalog can be rebuilt if the state database is ever lost.</td></tr>
+          <tr><td><strong>Safe state persisted</strong></td><td>The lifecycle journal records that a good NAS copy exists. This write happens before the delete, not after, so a crash in between leaves two copies rather than none.</td></tr>
+          <tr><td><strong>Remote artifact deleted</strong></td><td>The remote source is removed, with a check that it is still the same file that was verified.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="cli">The command line</h2>
+    <p>Everything the web interface does, and several things it does not, are reachable from <code>backup-manager</code>. Every command except <code>version</code> takes <code>--config</code>, defaulting to <code>/etc/backup-manager/config.yaml</code>.</p>
+    <div class="scroll-x">
+      <table>
+        <thead>
+          <tr><th>Command</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>run</code></td><td>perform one processing cycle and exit</td></tr>
+          <tr><td><code>daemon</code></td><td>repeat the processing cycle at <code>poll_interval</code></td></tr>
+          <tr><td><code>check</code></td><td>validate config and the state database, then exit</td></tr>
+          <tr><td><code>status</code></td><td>report process and backup-set health, exiting non-zero unless every set is healthy</td></tr>
+          <tr><td><code>sources</code></td><td>list configured sources and backup sets</td></tr>
+          <tr><td><code>artifacts</code></td><td>list journal artifacts, optionally filtered by source and backup set</td></tr>
+          <tr><td><code>fetch</code></td><td>run one backup set's cycle on demand</td></tr>
+          <tr><td><code>retention</code></td><td>preview retention decisions, with per-run policy overrides</td></tr>
+          <tr><td><code>reconcile</code></td><td>reconcile the journal against what is actually on disk, for every backup set</td></tr>
+          <tr><td><code>validate</code></td><td>re-check one artifact's durable local copy</td></tr>
+          <tr><td><code>catalog</code></td><td><code>catalog rebuild</code> reconstructs a lost or corrupted state database from the sidecar recovery manifests</td></tr>
+          <tr><td><code>version</code></td><td>report the binary, Go and embedded rclone versions</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The <a href="https://github.com/spdrman/rclone-manager/blob/main/README.md">README</a>'s copy of this table is checked against the binary's own dispatch table on every run of the repository's gate, so it cannot quietly go stale. The copy above is a transcription of it and is not checked, so if the two ever disagree, the README is right.</p>
+  </section>
+
+  <section>
+    <h2 id="install">Installing it</h2>
+    <p>There is one product here, not eleven. Every supported platform wraps the same multi-architecture image and the same Compose topology, and the differences between them are host paths and metadata formats.</p>
+    <p>Two services, one image. <code>rclone-manager</code> runs the engine, the scheduler, local authentication and <code>/api/v1</code> in one process, with no published port at all. <code>web-ui</code> serves the static interface and reverse-proxies the API to it, and it is the only service with a LAN-facing port. They meet on a private project-scoped bridge network, which is what makes the engine's isolation a topology rather than a convention.</p>
+    <div class="note warn">
+      <span class="note-label">Before the first start</span>
+      <p>The runtime image is distroless and has no root step, and a bind mount does not chown its source. Create the host directories yourself and chown them to the container's uid and gid before the first <code>docker compose up</code>, or the engine will not be able to write its own configuration, keys or journal.</p>
+    </div>
+    <p>The configuration directory in particular is mounted writable, as a directory rather than a single file, because a directory is the only shape that can honestly be empty. That is what makes an install that has never been configured reach the setup screen instead of refusing to start. <a href="first-run.html">The first-run tutorial</a> picks up from there.</p>
+  </section>
+
+  <section>
+    <h2 id="honest">What has not been proven</h2>
+    <p>This section exists because the README has one, and a documentation site that quietly drops the uncomfortable half is worse than no site.</p>
+    <ul>
+      <li><strong>No acceptance procedure has been run on real hardware.</strong> The procedures for TrueNAS, Unraid, OpenMediaVault, Synology and Proxmox VE are written, reviewed and specific, and nobody working on the repository has one of those machines to execute them on. Every one of those platforms is build-supported and uncertified.</li>
+      <li><strong>The container image has never been published.</strong> <code>ghcr.io/spdrman/backup-manager</code> is the settled target and the packaging metadata records it as unpublished, so that reference resolves to nothing today.</li>
+      <li><strong>There is no restore command and no restore endpoint.</strong> Restore execution is out of scope by design. Recovering a backup is a documented manual procedure, and that procedure is the whole of it.</li>
+      <li><strong>There is no metrics endpoint.</strong> A Prometheus renderer exists in the tree and nothing imports it. No listener serves <code>/metrics</code>.</li>
+      <li><strong>The screenshots on this site come from a mock.</strong> Every picture in <a href="first-run.html">the first-run tutorial</a> was taken against the development server's in-memory fixture API, not against a running engine. The layout, the copy and the flow are the real ones. The data is not, and that page says so beside each picture.</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer>
+  <p>rclone-manager is Apache-2.0 licensed. <a href="https://github.com/spdrman/rclone-manager">View on GitHub</a></p>
+  <p>Not affiliated with the rclone project. rclone is embedded as a pinned Go library under its own licence.</p>
+</footer>
+
+</body>
+</html>

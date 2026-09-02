@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -37,11 +38,228 @@ import (
 // A Config fresh out of Load has not been checked for semantic sense: call
 // Validate (or use LoadAndValidate) before anything reads it for real.
 type Config struct {
-	PollInterval Duration  `yaml:"poll_interval"`
-	State        State     `yaml:"state"`
-	Sources      []Source  `yaml:"sources"`
-	Retention    Retention `yaml:"retention"`
-	Alerts       Alerts    `yaml:"alerts"`
+	PollInterval  Duration      `yaml:"poll_interval"`
+	State         State         `yaml:"state"`
+	Sources       []Source      `yaml:"sources"`
+	Retention     Retention     `yaml:"retention"`
+	Alerts        Alerts        `yaml:"alerts"`
+	Capacity      Capacity      `yaml:"capacity,omitempty"`
+	KeyEncryption KeyEncryption `yaml:"key_encryption,omitempty"`
+}
+
+// KeyEncryption names an optional, config-wide way to obtain the key
+// (#298) that protects secret material this manager persists to disk
+// under configPath's sibling directories -- today, an imported SSH
+// private key under keysDirIn's ssh_keys/ (core/service/backupsets.go);
+// a future medium credential (EPIC E's S3 keys, #235) is expected to
+// reuse this same field rather than inventing its own, since the
+// question ("how is a secret this program itself must write to disk
+// protected at rest") does not change with the kind of secret.
+//
+// It mirrors Key and Passphrase's own File/Env/Command shape exactly
+// (three ways to name where a secret comes from, never a field to paste
+// one into directly), for the same reason those two do: a bare
+// "key_encryption: <value>" field an operator could type directly into
+// YAML would be one more credential sitting in the clear next to
+// everything else in this file, the exact problem #298 exists to close
+// for the key it protects.
+//
+// It is entirely optional. The zero value (File, Env and Command all
+// empty) means "no encryption key is configured", which is every
+// config.yaml written before this field existed and every one written
+// since that simply does not opt in: an imported key is then persisted
+// exactly as before #298, a plaintext file protected only by filesystem
+// permissions (#293). That is a deliberate, documented trade, not a
+// silent downgrade: see docs/ssh-setup.md's "Encrypting the key store at
+// rest" section for the threat this does and does not cover, and in
+// particular why the resolved key here MUST live outside whatever
+// directory tree an SMB/AFP share exports, or protecting the key file
+// buys nothing at all against the exact exposure #298 was filed over.
+type KeyEncryption struct {
+	// File points at a file holding the encryption key, read directly by
+	// this process at the point a secret file is written or first
+	// decrypted -- there is no rclone-shaped backend here for this to
+	// hand a path to instead, unlike Key.File, so this file's content
+	// necessarily enters this process's memory. See the type doc above
+	// for why that is an accepted, documented cost rather than an
+	// oversight.
+	File string `yaml:"file"`
+
+	// Env names an environment variable this process reads the
+	// encryption key from.
+	Env string `yaml:"env"`
+
+	// Command is an argv array: Command[0] is the executable, invoked
+	// directly (never through a shell), and the rest are its arguments.
+	// Its stdout is treated as the encryption key. Mirrors Key.Command
+	// and Passphrase.Command exactly, for the identical reason: this is
+	// the path a secrets manager (OpenBao, Vault, SOPS, 1Password, AWS
+	// Secrets Manager, ...) adopts without this project taking a
+	// dependency on any of their SDKs.
+	Command []string `yaml:"command"`
+}
+
+// isZero reports whether none of KeyEncryption's three sources are set:
+// "no encryption key is configured", the case for every config that
+// predates #298 and for every one since that has not opted in.
+func (e KeyEncryption) isZero() bool {
+	return e.File == "" && e.Env == "" && len(e.Command) == 0
+}
+
+// Capacity is FR-21's configuration: how much space this manager is allowed
+// to occupy, and the two levels at which it should say something about it
+// (issue #286).
+//
+// # Why this block exists at all, and why it exists all at once
+//
+// internal/capacity has enforced FR-21 since it was written, but with
+// caller-supplied numbers nothing outside a test ever supplied: apps/common
+// /webhost's storage route said, in so many words, that its warning and
+// critical figures were "structurally zero until internal/config grows
+// capacity fields". This is that block. The cap an operator asked for and
+// the thresholds the guard has always wanted are the same missing
+// configuration, so they land together rather than the second set arriving
+// as a near-identical block a release later.
+//
+// # Bytes, always
+//
+// Every number here is a byte count. A units picker belongs to the form an
+// operator types into, not to the file: a config that could carry either
+// "100" meaning megabytes or "100" meaning gigabytes is a config whose
+// meaning depends on a second field, and getting that pair out of step is
+// a two-order-of-magnitude mistake nobody would see. The Settings UI shows
+// MB/GB and converts at the edge; what lands here is bytes.
+type Capacity struct {
+	// CapBytes is the ceiling on how much space this manager may occupy on
+	// the filesystem underneath BackupRoot.
+	//
+	// ZERO MEANS NO CAP: use the whole volume, and report the reading
+	// against the volume. That is this product's default, and it is a
+	// sentinel rather than a literal, so nothing anywhere may resolve it
+	// to a number or read it as "a ceiling of zero bytes, refuse
+	// everything". Completion.DeleteSafetyDelay resolves ITS zero to a
+	// documented default for the opposite reason: reading that zero
+	// literally would turn a safety gate off, whereas reading this one
+	// literally would turn the product off. Validate refuses a negative
+	// value and says, in the refusal, that 0 is how an operator asks for
+	// no cap.
+	//
+	// The cap is enforced, not merely displayed. internal/capacity weighs
+	// it against how much this manager is already using and refuses a
+	// transfer that would exceed it, exactly as it already refuses one the
+	// disk cannot hold; see that package's "Two different questions"
+	// section for why the refusal fires on whichever of the two is
+	// smaller.
+	CapBytes int64 `yaml:"cap_bytes,omitempty"`
+
+	// WarningFreeBytes and CriticalFreeBytes are FR-21's two levels,
+	// measured against whatever headroom actually binds: the disk's free
+	// space with no cap set, and the cap's remaining allowance with one.
+	//
+	// Zero means "no line here", which is the default and is what every
+	// deployment has effectively been running with. A warning line below
+	// the critical floor cannot be honoured (internal/capacity.Thresholds
+	// .Validate refuses it, and the level would jump straight from OK to
+	// CRITICAL), so Validate refuses that pair at load rather than letting
+	// every storage reading come back "misconfigured" with nothing naming
+	// the two numbers responsible. That rule also means a critical floor
+	// with no warning line is refused: state both, or neither.
+	WarningFreeBytes  int64 `yaml:"warning_free_bytes,omitempty"`
+	CriticalFreeBytes int64 `yaml:"critical_free_bytes,omitempty"`
+
+	// SafetyMarginBytes is held back on top of every incoming artifact's
+	// own size before a transfer is admitted. See internal/capacity's
+	// headroom-arithmetic section for what it is meant to cover (listing
+	// drift, block rounding, other writers on the same volume) and for why
+	// it is deliberately a plain byte count this product does not try to
+	// compute on an operator's behalf.
+	SafetyMarginBytes int64 `yaml:"safety_margin_bytes,omitempty"`
+
+	// BackupRoot names the one directory whose filesystem the manager-wide
+	// storage reading is taken from.
+	//
+	// Leave it unset and it is derived: see EffectiveBackupRoot, which
+	// takes the directory every configured backup set's local_path has in
+	// common. That covers the deployment this product actually ships (one
+	// bind-mounted backup volume, every set beneath it) with no operator
+	// input at all. Set it when the derivation cannot answer honestly,
+	// which is when backup sets sit on genuinely different volumes.
+	//
+	// It exists as a field rather than as pure derivation because of the
+	// container-versus-host trap: the engine runs in a container, and the
+	// filesystem to measure is the one the backup root is on AS THE
+	// CONTAINER SEES IT, never the container's own root filesystem and
+	// never the host's "/". A derivation that fell back to "/" would
+	// report a confident number about the wrong disk, which is worse than
+	// reporting nothing because nobody would notice; so the derivation
+	// gives up instead, and this field is how an operator answers when it
+	// does.
+	BackupRoot string `yaml:"backup_root,omitempty"`
+}
+
+// EffectiveBackupRoot is the directory whose filesystem a manager-wide
+// storage reading should be taken from, or "" when this configuration does
+// not know.
+//
+// An empty answer is a real answer and must be rendered as "capacity is not
+// known yet", never as zero bytes and never as a percentage. There are two
+// ways to get one: a configuration with no backup sets at all, and one
+// whose sets share no ancestor but the filesystem root (see
+// Capacity.BackupRoot for why "/" is refused rather than returned).
+//
+// Purely derived, never written back into the Config. Resolving it in place
+// during Validate would freeze today's derivation into an operator's file
+// the next time anything re-marshals it, so a later release that learned to
+// answer better would be ignored on exactly the deployments that never
+// chose a root.
+func (c *Config) EffectiveBackupRoot() string {
+	if c.Capacity.BackupRoot != "" {
+		return c.Capacity.BackupRoot
+	}
+
+	root := ""
+	for _, src := range c.Sources {
+		for _, bs := range src.BackupSets {
+			if bs.LocalPath == "" {
+				continue
+			}
+			// A disabled backup set still occupies its destination, and
+			// still shares the volume this reading is about, so it counts
+			// towards the root exactly like an enabled one.
+			if root == "" {
+				root = filepath.Clean(bs.LocalPath)
+				continue
+			}
+			root = commonAncestorDir(root, filepath.Clean(bs.LocalPath))
+		}
+	}
+	if root == "/" {
+		return ""
+	}
+	return root
+}
+
+// commonAncestorDir is the deepest directory a and b are both inside,
+// comparing whole path segments rather than characters: "/data/backups" and
+// "/data/backups-old" share "/data", never "/data/backups", and a prefix
+// comparison that missed that would measure a sibling volume.
+func commonAncestorDir(a, b string) string {
+	as := strings.Split(a, "/")
+	bs := strings.Split(b, "/")
+	n := len(as)
+	if len(bs) < n {
+		n = len(bs)
+	}
+	shared := 0
+	for shared < n && as[shared] == bs[shared] {
+		shared++
+	}
+	if shared <= 1 {
+		// Only the empty leading segment matched, so the two share
+		// nothing but "/".
+		return "/"
+	}
+	return strings.Join(as[:shared], "/")
 }
 
 // DefaultRepeatedFailureThreshold is how many artifacts have to be
@@ -109,6 +327,20 @@ type State struct {
 type Source struct {
 	Name       string      `yaml:"id"`
 	BackupSets []BackupSet `yaml:"backup_sets"`
+
+	// ReadOnly is issue #282's source-level default for every backup set
+	// declared under this source: "pull from here, never delete here".
+	// It exists at this level, and not only per set, because read-only-ness
+	// is normally a property of the whole host (a production machine an
+	// engagement is only allowed to read from), not of one particular
+	// backup set on it; grouping sources the way these deployments actually
+	// are means declaring it once here covers every set under it without
+	// repeating the flag per set.
+	//
+	// A set's own BackupSet.ReadOnlyConfig, when set, overrides this
+	// default; see that field's doc for the full precedence rule and
+	// Validate for where the two are resolved into BackupSet.ReadOnly.
+	ReadOnly bool `yaml:"read_only,omitempty"`
 }
 
 // BackupSet is one stream of logically interchangeable restore points
@@ -141,6 +373,51 @@ type BackupSet struct {
 	// unchanged after an upgrade.
 	Disabled bool `yaml:"disabled"`
 
+	// ReadOnlyConfig is issue #282's per-set override of the parent
+	// Source's ReadOnly default: "pull from here, never delete here",
+	// declared for this one backup set specifically. It is a pointer, not
+	// a plain bool, because the three-way choice it has to express -- "not
+	// set here, inherit the source's default", "explicitly read-only
+	// regardless of the source default", "explicitly NOT read-only
+	// regardless of the source default" -- has no honest two-value
+	// encoding: a plain bool's zero value (false) could never be told
+	// apart from an operator who typed `read_only: false` on purpose to
+	// carve one set out of an otherwise read-only source.
+	//
+	// This field is never read directly outside Validate. Every other
+	// consumer in this codebase reads the resolved ReadOnly field below,
+	// exactly as every consumer of a backup set's identity reads ID rather
+	// than reassembling it from Name and a parent Source, so "did this
+	// come from Validate yet" is never a question call sites have to ask
+	// twice.
+	ReadOnlyConfig *bool `yaml:"read_only,omitempty"`
+
+	// ReadOnly is the fully-resolved answer to "may this backup set's
+	// remote source ever be deleted", filled in by Validate from
+	// ReadOnlyConfig (when set) or the parent Source's ReadOnly default
+	// (otherwise) -- the same before/after-Validate discipline ID follows.
+	// An unvalidated BackupSet reads false here regardless of what YAML
+	// said, same as an unresolved ID reads "".
+	//
+	// With this true, FR-15's whole delete step never runs for this set:
+	// core/internal/app's pipeline calls lifecycle.RetainRemote instead of
+	// lifecycle.DeleteRemote, so transport.Transport.DeleteRemote is never
+	// invoked, full stop, rather than merely being asked and refused (see
+	// internal/lifecycle/remotedelete.go's package doc for why "usually
+	// refuses" is not the same promise, and issue #282 for the deployment
+	// that made the difference matter). An artifact that reaches
+	// COMMITTED under a read-only set is routed to the REMOTE_RETAINED
+	// terminal state instead of REMOTE_DELETE_PENDING -> COMPLETE.
+	//
+	// The default (false, including by omission of both this field and the
+	// source's) is unchanged from every configuration written before this
+	// field existed: FR-15's delete step runs exactly as it always has.
+	// This cannot be inferred from a set's own history -- a source that
+	// has never had a successful delete has told this package nothing
+	// either way -- so it is only ever set by an explicit yaml key, never
+	// derived.
+	ReadOnly bool `yaml:"-"`
+
 	Validation   Validation   `yaml:"validation"`
 	Revalidation Revalidation `yaml:"revalidation"`
 }
@@ -169,6 +446,26 @@ type Remote struct {
 	Key Key `yaml:"key"`
 
 	KnownHosts string `yaml:"known_hosts"`
+
+	// Sensitive marks this remote's endpoint identity, its Host, Port and
+	// User, as something that must never reach a log line or a journal
+	// detail (issue #295). It is opt-in and defaults to false: whether a
+	// port is a credential is a deployment's decision, not a universal
+	// fact (issue #264 states the rule for the one deployment that needs
+	// it), and a log line that omits "connection refused to WHAT" is a
+	// worse default for every deployment that hasn't made that call. It
+	// is set per remote, not globally, because two backup sets in the
+	// same config file are free to differ (a public mirror beside an
+	// internal host only reachable on the operator's own network).
+	//
+	// internal/app.New reads this across every configured Source's
+	// BackupSets at startup (and again on every hot config reload) and
+	// builds the obs.Redactor both the process logger and the state
+	// journal filter every rendered error message and journal detail
+	// through before either one is written down. Nothing here changes
+	// what this manager does, only what its own observability output is
+	// allowed to contain.
+	Sensitive bool `yaml:"sensitive_endpoint,omitempty"`
 }
 
 // Key names exactly one way for an sftp Remote to obtain its SSH private
@@ -205,6 +502,21 @@ type Key struct {
 	// adopts without this project taking a dependency on any of their SDKs
 	// or picking a winner among them.
 	Command []string `yaml:"command"`
+
+	// Passphrase names exactly one way to obtain the passphrase that
+	// decrypts File, Env or Command when the key material they resolve to
+	// is itself passphrase-protected (#269). It is optional: the zero
+	// value means "this key is not passphrase-protected", which is every
+	// config.yaml written before this field existed, so an unencrypted
+	// key.file continues to work with nothing here to configure.
+	//
+	// It offers the same three resolvers (File, Env, Command) that File,
+	// Env and Command above already do, for the same reason those exist: a
+	// bare passphrase field an operator could type directly in YAML would
+	// be one more credential sitting in the clear next to everything else
+	// in this file. See the Passphrase type's own doc for why it is a
+	// separate type rather than a field of type Key.
+	Passphrase Passphrase `yaml:"passphrase"`
 }
 
 // isZero reports whether none of Key's three sources are set, so callers
@@ -212,6 +524,43 @@ type Key struct {
 // empty value in one of its fields.
 func (k Key) isZero() bool {
 	return k.File == "" && k.Env == "" && len(k.Command) == 0
+}
+
+// Passphrase names exactly one way to obtain the passphrase that decrypts a
+// passphrase-protected Key (#269): File, Env or Command, mirroring Key's
+// own three fields both in name and in meaning. It is a separate type from
+// Key, rather than Key growing a field of Key's own type, because Go
+// refuses a struct that directly contains itself; the two are otherwise
+// identical in shape on purpose, "the same three resolvers" the issue
+// itself asked for as the smallest change that keeps Key's existing shape.
+//
+// Exactly one of File, Env or Command may be set when any is; Validate
+// enforces that, mirroring Key's own rule. Unlike Key.File, Passphrase.File
+// IS read by this program: rclone's sftp backend has no option of its own
+// for "read the passphrase from this file", only key_file_pass, which
+// takes the passphrase text itself (internal/transport/rclone/ssh.go). So
+// there is no way to keep a passphrase out of this process's memory the
+// way Key.File keeps the key material out, and this type does not pretend
+// otherwise.
+type Passphrase struct {
+	// File points at a file holding the passphrase, read directly by this
+	// process (see the type doc above for why that differs from Key.File).
+	File string `yaml:"file"`
+
+	// Env names an environment variable this process reads the passphrase
+	// from at connection time.
+	Env string `yaml:"env"`
+
+	// Command is an argv array, run directly and never through a shell,
+	// exactly like Key.Command; its stdout is treated as the passphrase.
+	Command []string `yaml:"command"`
+}
+
+// isZero reports whether none of Passphrase's three sources are set: "this
+// key is not passphrase-protected", the case for every config that
+// predates #269.
+func (p Passphrase) isZero() bool {
+	return p.File == "" && p.Env == "" && len(p.Command) == 0
 }
 
 // Completion selects how a backup set decides a remote artifact is finished
@@ -244,6 +593,29 @@ type Completion struct {
 	// silently turn the gate off on exactly the deployments that never
 	// got the chance to opt in. Only a negative value is refused.
 	DeleteSafetyDelay Duration `yaml:"delete_safety_delay"`
+
+	// ManifestMarker is the directory-level completion marker filename the
+	// "marker" strategy looks for (issue #291), only used when
+	// Strategy == "marker". Before this field existed, that filename was
+	// the fixed literal "_SUCCESS" (borrowed from the well-known
+	// Hadoop/Spark convention), a choice internal/discovery/complete.go's
+	// package doc used to call out as deliberate rather than an oversight.
+	// It stopped being defensible the moment a real read-only producer
+	// showed up with its own completion signal under a different name
+	// (SHA256SUMS, written last, after every artifact) that this manager
+	// has no ability to rename to match: the producer cannot be
+	// reconfigured, so the manager has to be able to recognise the name
+	// the producer already uses.
+	//
+	// A zero value is not read literally, the same way DeleteSafetyDelay's
+	// isn't: Validate resolves it to DefaultManifestMarker, so every config
+	// written before this field existed keeps recognising exactly the
+	// marker it recognised before. The resolved name is validated as a
+	// bare filename, on the same terms Include patterns are: no path
+	// separator, no "."/".." traversal. It is a single literal name, never
+	// a pattern; the sibling per-artifact marker convention (markerSuffix,
+	// "<artifact>.complete") is unrelated to this field and stays fixed.
+	ManifestMarker string `yaml:"manifest_marker"`
 }
 
 // DefaultDeleteSafetyDelay is the Completion.DeleteSafetyDelay that
@@ -257,6 +629,13 @@ type Completion struct {
 // answer different questions: stable_for gates starting work on an
 // artifact, this gates destroying the only other copy of it.
 const DefaultDeleteSafetyDelay = time.Hour
+
+// DefaultManifestMarker is the Completion.ManifestMarker that Validate
+// fills in when a "marker" backup set does not set one. It is the name
+// internal/discovery/complete.go recognised unconditionally before this
+// field existed, so an unset manifest_marker leaves every existing
+// configuration behaving exactly as it did before (issue #291).
+const DefaultManifestMarker = "_SUCCESS"
 
 // Validation configures how a transferred artifact gets checked before it's
 // allowed to be treated as a good restore point (FR-13).

@@ -519,6 +519,163 @@ func TestKeyCommandEmptyExecutableRejected(t *testing.T) {
 	}
 }
 
+// --- #269: key.passphrase.file, key.passphrase.env, key.passphrase.command ---
+
+func TestKeyPassphraseIsOptional(t *testing.T) {
+	cfg := validConfig()
+	// validConfig's Key.Passphrase is already the zero value; Validate
+	// must accept that exactly as it always has, since every config.yaml
+	// written before #269 looks like this.
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a key with no passphrase configured was rejected: %v", err)
+	}
+}
+
+func TestKeyPassphraseExactlyOneSourceAllowed(t *testing.T) {
+	t.Run("file alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{File: "/run/secrets/backup_ssh_key_passphrase"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("env alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Env: "BACKUP_SSH_KEY_PASSPHRASE"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("command alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/private-key-passphrase"}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		passphrase Passphrase
+	}{
+		{"file and env", Passphrase{File: "/a/path", Env: "SOME_VAR"}},
+		{"file and command", Passphrase{File: "/a/path", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+		{"env and command", Passphrase{Env: "SOME_VAR", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+	} {
+		t.Run(tc.name+" together rejected", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = tc.passphrase
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("%s set together were accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestKeyPassphraseCommandExecutableMustBeAbsolute(t *testing.T) {
+	cfg := validConfig()
+	cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{"op", "read", "op://infra/backup-manager/private-key-passphrase"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a relative key.passphrase.command executable was accepted")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error %q does not explain the absolute-path requirement", err.Error())
+	}
+}
+
+func TestKeyPassphraseCommandEmptyExecutableRejected(t *testing.T) {
+	cfg := validConfig()
+	cfg.Sources[0].BackupSets[0].Remote.Key.Passphrase = Passphrase{Command: []string{""}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a key.passphrase.command with an empty executable was accepted")
+	}
+}
+
+// --- #298: key_encryption.file, key_encryption.env, key_encryption.command ---
+
+// TestKeyEncryptionOptional is #298's version of TestKeyExactlyOneSourceRequired's
+// "zero sources" case for Key.isZero, except in the OPPOSITE direction:
+// KeyEncryption is optional (mirroring Passphrase, not Key), so the zero
+// value -- no key_encryption block at all, every config.yaml written
+// before #298 -- must be ACCEPTED, not rejected. This is the config-layer
+// half of "REGRESSION: with no DEK configured, everything behaves exactly
+// as before."
+func TestKeyEncryptionOptional(t *testing.T) {
+	cfg := validConfig()
+	if !cfg.KeyEncryption.isZero() {
+		t.Fatalf("validConfig()'s KeyEncryption should be the zero value, got %+v", cfg.KeyEncryption)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a config with no key_encryption block at all was rejected: %v", err)
+	}
+}
+
+func TestKeyEncryptionExactlyOneSourceEnforced(t *testing.T) {
+	t.Run("file alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.KeyEncryption = KeyEncryption{File: "/etc/backup-manager/key.dek"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("env alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.KeyEncryption = KeyEncryption{Env: "BACKUP_KEY_DEK"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	t.Run("command alone is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.KeyEncryption = KeyEncryption{Command: []string{"/usr/local/bin/op", "read", "op://infra/backup-manager/dek"}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		ke   KeyEncryption
+	}{
+		{"file and env", KeyEncryption{File: "/etc/backup-manager/key.dek", Env: "BACKUP_KEY_DEK"}},
+		{"file and command", KeyEncryption{File: "/etc/backup-manager/key.dek", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+		{"env and command", KeyEncryption{Env: "BACKUP_KEY_DEK", Command: []string{"/usr/local/bin/op", "read", "x"}}},
+	} {
+		t.Run(tc.name+" together rejected", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.KeyEncryption = tc.ke
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("%s set together were accepted", tc.name)
+			}
+		})
+	}
+}
+
+func TestKeyEncryptionCommandExecutableMustBeAbsolute(t *testing.T) {
+	cfg := validConfig()
+	cfg.KeyEncryption = KeyEncryption{Command: []string{"op", "read", "op://infra/backup-manager/dek"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a relative key_encryption.command executable was accepted")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("error %q does not explain the absolute-path requirement", err.Error())
+	}
+}
+
+func TestKeyEncryptionCommandEmptyExecutableRejected(t *testing.T) {
+	cfg := validConfig()
+	cfg.KeyEncryption = KeyEncryption{Command: []string{""}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a key_encryption.command with an empty executable was accepted")
+	}
+}
+
 func TestKeyValidateIsIdempotent(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -612,6 +769,7 @@ func TestLocalTypeRejectsSftpFields(t *testing.T) {
 		{"key.file", func(r *Remote) { r.Key = Key{File: "/key"} }},
 		{"key.env", func(r *Remote) { r.Key = Key{Env: "SOME_VAR"} }},
 		{"key.command", func(r *Remote) { r.Key = Key{Command: []string{"/bin/cat", "/dev/null"}} }},
+		{"key.passphrase.env", func(r *Remote) { r.Key = Key{Passphrase: Passphrase{Env: "SOME_VAR"}} }},
 		{"known_hosts", func(r *Remote) { r.KnownHosts = "/known_hosts" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -791,6 +949,148 @@ func TestCompletionStrategyValidation(t *testing.T) {
 		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "vibes"}
 		if err := cfg.Validate(); err == nil {
 			t.Fatal("an unknown completion strategy was accepted")
+		}
+	})
+}
+
+// --- manifest_marker (issue #291) ---
+
+func TestManifestMarkerValidation(t *testing.T) {
+	t.Run("unset defaults to _SUCCESS, so an existing config is unaffected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("strategy marker with no manifest_marker was rejected: %v", err)
+		}
+		if got := cfg.Sources[0].BackupSets[0].Completion.ManifestMarker; got != DefaultManifestMarker {
+			t.Fatalf("manifest_marker resolved to %q, want the default %q", got, DefaultManifestMarker)
+		}
+	})
+
+	t.Run("an explicit bare filename is kept, not overwritten", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a valid manifest_marker was rejected: %v", err)
+		}
+		if got, want := cfg.Sources[0].BackupSets[0].Completion.ManifestMarker, "SHA256SUMS"; got != want {
+			t.Fatalf("manifest_marker = %q, want the operator's %q", got, want)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		marker string
+	}{
+		{"contains forward slash", "sub/SHA256SUMS"},
+		{"contains backslash", `sub\SHA256SUMS`},
+		{"is a single dot", "."},
+		{"is a double dot", ".."},
+	} {
+		t.Run(tc.name+" rejected", func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: tc.marker}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("manifest_marker %q was accepted", tc.marker)
+			}
+			if !strings.Contains(err.Error(), "manifest_marker") {
+				t.Fatalf("error does not name the offending field: %v", err)
+			}
+		})
+	}
+
+	// A literal glob metacharacter is not rejected: manifest_marker is
+	// matched as an exact literal filename in internal/discovery/complete.go,
+	// never as a pattern (unlike include), so a character that would be an
+	// invalid glob is still a perfectly valid literal filename here.
+	t.Run("a glob-looking literal is accepted, since it is never used as a pattern", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "[unterminated"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a literal manifest_marker containing glob metacharacters was rejected: %v", err)
+		}
+	})
+
+	for _, strategy := range []string{"rename", "stable"} {
+		t.Run(strategy+" rejects manifest_marker", func(t *testing.T) {
+			cfg := validConfig()
+			c := Completion{Strategy: strategy, ManifestMarker: "SHA256SUMS"}
+			if strategy == "stable" {
+				c.StableFor = Duration(10 * time.Minute)
+			}
+			cfg.Sources[0].BackupSets[0].Completion = c
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("strategy %s with manifest_marker set was accepted", strategy)
+			}
+		})
+	}
+}
+
+// --- manifest_marker vs include collision (safety & reliability finding on
+// #307): before manifest_marker was operator-configurable it was always the
+// fixed literal "_SUCCESS", implicitly never a real payload name. Now that
+// an operator picks it, a marker name that happens to match the backup
+// set's own include patterns would make discovery.Discover silently and
+// permanently drop that payload on every run: isMarkerObject is checked
+// before include filtering and unconditionally skips a match, with no
+// error, no rejection entry, no warning. ---
+
+func TestManifestMarkerIncludeCollision(t *testing.T) {
+	t.Run("explicit marker matching an explicit include pattern is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.dump.zst"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "backup.dump.zst"}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("a manifest_marker matching the set's own include pattern was accepted")
+		}
+		if !strings.Contains(err.Error(), "manifest_marker") || !strings.Contains(err.Error(), "include") {
+			t.Fatalf("error does not name both colliding fields: %v", err)
+		}
+	})
+
+	t.Run("defaulted marker matching an explicit include pattern is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"_SUCCESS", "*.dump.zst"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker"}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("a defaulted _SUCCESS marker matching the set's own include pattern was accepted")
+		}
+		if !strings.Contains(err.Error(), "manifest_marker") {
+			t.Fatalf("error does not name the offending field: %v", err)
+		}
+	})
+
+	t.Run("marker matching one of several include patterns is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.dump.zst", "MANIFEST-*", "*.tar"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "MANIFEST-001"}
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("a manifest_marker matching one of several include patterns was accepted")
+		}
+	})
+
+	t.Run("marker not matching any include pattern is accepted", func(t *testing.T) {
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = []string{"*.dump.zst"}
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "SHA256SUMS"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a non-colliding manifest_marker was rejected: %v", err)
+		}
+	})
+
+	t.Run("no include patterns configured, nothing to collide with", func(t *testing.T) {
+		// An empty include list has no configured patterns to cross-check
+		// against; that is the same "no explicit filter" baseline that let
+		// the old hardcoded "_SUCCESS" work unconditionally before this
+		// field existed, so it stays out of scope for this check.
+		cfg := validConfig()
+		cfg.Sources[0].BackupSets[0].Include = nil
+		cfg.Sources[0].BackupSets[0].Completion = Completion{Strategy: "marker", ManifestMarker: "_SUCCESS"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a manifest_marker with no include patterns configured was rejected: %v", err)
 		}
 	})
 }

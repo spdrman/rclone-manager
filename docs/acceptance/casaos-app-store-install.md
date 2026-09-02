@@ -27,11 +27,14 @@ CasaOS packaging, so nothing here is a migration from an earlier one.
 
 ### 0.2 Make the canonical image resolvable
 
-`distribution/packaging/canonical.json` records `published: false`: no registry
-is configured for this repository yet, so `ghcr.io/spdrman/backup-manager:0.1.0`
-resolves to nothing until you make it resolve. Either push a build to a registry
-this host can reach and change the image reference in one place, or build
-elsewhere and load it:
+`ghcr.io/spdrman/backup-manager:0.2.0` is cut but not pushed yet:
+`distribution/packaging/canonical.json` records `image.published: false`, and
+`container/release-manifest.json` carries a `registry_digest` of `null` per
+architecture. So the reference does not resolve from the registry today, and the
+steps below are how you make it resolve, by pushing a build to a registry this host
+can reach or building elsewhere and loading it. The previous release,
+`ghcr.io/spdrman/backup-manager:0.1.0`, stays published and signed if you would
+rather run that:
 
 ```bash
 docker buildx build --platform=linux/amd64,linux/arm64 -f container/Dockerfile -t backup-manager:acceptance .

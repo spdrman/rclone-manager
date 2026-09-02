@@ -493,6 +493,78 @@ func TestSetBackupSetEnabled_RefusesAnUnknownBackupSet(t *testing.T) {
 	}
 }
 
+// TestSetBackupSetReadOnly_PersistsAndHotReloads is issue #316's CRUD
+// parity RED case for POST /api/v1/backup-sets/{source}/{set}/read-only:
+// before this method existed, there was no way at all to flip an
+// already-persisted backup set's read-only declaration except by
+// hand-editing config.yaml and restarting. Mirrors
+// TestSetBackupSetEnabled_PersistsAndHotReloads above field for field.
+func TestSetBackupSetReadOnly_PersistsAndHotReloads(t *testing.T) {
+	svc, configPath := openTestService(t)
+	ctx := context.Background()
+
+	before, err := svc.GetBackupSet(ctx, "production/postgres-primary")
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	if before.ReadOnly {
+		t.Fatal("the fixture backup set is already read-only, so declaring it read-only proves nothing")
+	}
+	revisionBefore := svc.ConfigRevision()
+
+	updated, err := svc.SetBackupSetReadOnly(ctx, "production/postgres-primary", true)
+	if err != nil {
+		t.Fatalf("SetBackupSetReadOnly(true): %v", err)
+	}
+	if !updated.ReadOnly {
+		t.Error("the returned backup set still reports ReadOnly = false")
+	}
+
+	live, err := svc.GetBackupSet(ctx, "production/postgres-primary")
+	if err != nil {
+		t.Fatalf("GetBackupSet (after): %v", err)
+	}
+	if !live.ReadOnly {
+		t.Error("the running service still reports the set as writable: the hot reload did not happen")
+	}
+	if svc.ConfigRevision() == revisionBefore {
+		t.Error("ConfigRevision did not move")
+	}
+
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(onDisk), "read_only: true") {
+		t.Errorf("the configuration file does not record the change:\n%s", onDisk)
+	}
+
+	// And back off again, so the operation is proven reversible rather
+	// than one-way — see SetBackupSetReadOnly's own doc for what
+	// reversing it does NOT undo (an already-retained artifact stays
+	// retained).
+	if _, err := svc.SetBackupSetReadOnly(ctx, "production/postgres-primary", false); err != nil {
+		t.Fatalf("SetBackupSetReadOnly(false): %v", err)
+	}
+	reWritable, err := svc.GetBackupSet(ctx, "production/postgres-primary")
+	if err != nil {
+		t.Fatalf("GetBackupSet (re-writable): %v", err)
+	}
+	if reWritable.ReadOnly {
+		t.Error("the set is still read-only after being turned back off")
+	}
+}
+
+func TestSetBackupSetReadOnly_RefusesAnUnknownBackupSet(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	for _, id := range []string{"production/nope", "no-such-source/postgres-primary", "malformed"} {
+		if _, err := svc.SetBackupSetReadOnly(context.Background(), id, true); !errors.Is(err, ErrBackupSetNotFound) {
+			t.Errorf("SetBackupSetReadOnly(%q) error = %v, want ErrBackupSetNotFound", id, err)
+		}
+	}
+}
+
 // TestTestBackupSetConnection_ChecksThePersistedSetWithoutBeingToldItsSecrets
 // is the persisted half of POST /api/v1/backup-sets/test-connection. The
 // fixture's source is a local one, so a successful list here proves the
@@ -579,6 +651,7 @@ func TestToServiceBackupSetHealth_CarriesEveryCountThrough(t *testing.T) {
 		QuarantinedCount:              4,
 		QuarantinedLostCount:          1,
 		ReinstatedRemoteRetainedCount: 5,
+		ReadOnlyRetainedCount:         6,
 	})
 
 	for _, c := range []struct {
@@ -590,6 +663,7 @@ func TestToServiceBackupSetHealth_CarriesEveryCountThrough(t *testing.T) {
 		{"QuarantinedCount", got.QuarantinedCount, 4},
 		{"QuarantinedLostCount", got.QuarantinedLostCount, 1},
 		{"ReinstatedRemoteRetainedCount", got.ReinstatedRemoteRetainedCount, 5},
+		{"ReadOnlyRetainedCount", got.ReadOnlyRetainedCount, 6},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)

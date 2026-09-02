@@ -79,6 +79,12 @@ type Journal interface {
 	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
 
+	// LastEnteredDetail is LastEnteredAt plus the free-text detail that
+	// exact transition recorded (issue #284): GetArtifactDetail's whole
+	// reason for existing is that state_transitions.detail is otherwise
+	// unreachable outside internal/state (see that method's own doc).
+	LastEnteredDetail(ctx context.Context, id model.ArtifactID, st string) (detail string, occurredAt time.Time, found bool, err error)
+
 	// ArtifactsWithAnyTransition is the set-wide form of LastTransition:
 	// which artifacts in one backup set have any of a given set of edges
 	// in the append-only log. BuildHealthReport needs it to report how
@@ -87,6 +93,15 @@ type Journal interface {
 	// once per backup set rather than once per artifact per edge on every
 	// status call and dashboard load.
 	ArtifactsWithAnyTransition(ctx context.Context, set model.BackupSetID, edges []state.TransitionEdge) ([]model.ArtifactID, error)
+
+	// LocalBytesInUse is FR-21's other input, added with the storage cap
+	// (issue #286): how much space this manager itself is occupying,
+	// summed from the sizes this journal already records. admitCapacity
+	// needs it before every transfer, because a cap cannot be enforced
+	// from a statfs reading alone; see internal/capacity's "Two different
+	// questions" section. The state vocabulary travels as an argument
+	// because internal/lifecycle owns it, not internal/state.
+	LocalBytesInUse(ctx context.Context, states []string) (uint64, error)
 
 	// The durable per-backup-set connection refusal (issue #245).
 	// RunCycle writes through the first two at the end of every pass and
@@ -156,18 +171,20 @@ type Service struct {
 	Now func() time.Time
 
 	// Capacity is FR-21's thresholds, consulted before every transfer
-	// begins (see pipeline.go's admitCapacity). Its zero value
-	// (WarningFreeBytes, CriticalFreeBytes and SafetyMarginBytes all 0) is
-	// valid (internal/capacity.Thresholds.Validate requires only that
-	// Warning >= Critical) and still enforces FR-21's hard rule, "do not
-	// begin a transfer known not to fit at all", because
-	// internal/capacity.Assess reports Critical whenever the artifact
-	// simply does not fit, regardless of what the thresholds are. What the
-	// zero value cannot do is warn before the disk is actually full, since
-	// there is no configured margin to warn against. See this package's
-	// introducing PR description for why: internal/config.BackupSet has no
-	// warning_free_bytes / critical_free_bytes / safety_margin_bytes
-	// fields yet, and extending it is out of this package's file scope.
+	// begins (see pipeline.go's admitCapacity).
+	//
+	// New fills it in from Config.Capacity, which is where an operator's
+	// cap and threshold numbers live since issue #286. Before that block
+	// existed nothing outside a test ever assigned this field, so every
+	// running deployment ran on the zero value: still a real FR-21 guard
+	// ("do not begin a transfer known not to fit at all", which Assess
+	// reports as Critical regardless of thresholds), but with no warning
+	// level ahead of it and no ceiling of its own.
+	//
+	// The zero value remains valid and remains the default: a cap of zero
+	// is no cap, and thresholds of zero are no warning and no critical
+	// line. See internal/config.Capacity for what each number means and
+	// which combinations config.Validate refuses outright.
 	Capacity capacity.Thresholds
 
 	// RetryPolicy bounds this package's own network-facing retries (see
@@ -192,13 +209,94 @@ type Service struct {
 // that do not need them; New itself never rejects a nil value here, since
 // which fields a given CLI command actually needs is that command's own
 // business (see cmd/backup-manager).
+//
+// # Issue #295's redaction wiring
+//
+// New is the one place a *config.Config, a Journal and an *obs.Logger are
+// all in hand together, for every caller this package has: cmd/backup-
+// manager's own openService and service.Open both call this directly, and
+// service.New wraps it, so a config hot-reload (service/backupsets.go,
+// settings.go, backupsetenabled.go all call app.New again against the
+// SAME long-lived journal and a fresh cfg) rewires redaction exactly as a
+// fresh process start does. That makes this the correct, single seam to
+// read cfg.Sources for every config.Remote.Sensitive opt-in and build the
+// obs.Redactor both the returned Service's Logger and journal (when it is
+// a concrete *state.Journal) filter their rendered output through, rather
+// than something every one of those callers would otherwise have to
+// remember to do itself.
+//
+// journal is only ever a *state.Journal in production (see the
+// var _ Journal = (*state.Journal)(nil) assertion above); the type
+// assertion below is what lets this stay a plain function call instead of
+// growing Journal a SetRedactor method every fake implementing that
+// interface across this repository's tests would then have to satisfy
+// just to keep compiling, for a capability only the real journal needs.
 func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *obs.Logger) *Service {
+	redactor := obs.NewRedactor(sensitiveEndpoints(cfg)...)
+	logger = logger.WithRedaction(redactor)
+	if sj, ok := journal.(*state.Journal); ok {
+		sj.SetRedactor(redactor)
+	}
 	return &Service{
 		Config:    cfg,
 		Journal:   journal,
 		Transport: tr,
 		Logger:    logger,
+		Capacity:  thresholdsFrom(cfg),
 	}
+}
+
+// sensitiveEndpoints collects the obs.Endpoint for every configured Remote
+// that opted into issue #295's redaction (config.Remote.Sensitive), across
+// every Source and BackupSet cfg carries. This is the one place that
+// translation happens, mirroring sourceFor just below: internal/obs must
+// not import internal/config (see redact.go's own containment argument),
+// so this package, which already imports both, is where the two
+// vocabularies meet.
+func sensitiveEndpoints(cfg *config.Config) []obs.Endpoint {
+	if cfg == nil {
+		return nil
+	}
+	var out []obs.Endpoint
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			r := bs.Remote
+			if !r.Sensitive {
+				continue
+			}
+			out = append(out, obs.Endpoint{Host: r.Host, Port: r.Port, User: r.User})
+		}
+	}
+	return out
+}
+
+// thresholdsFrom translates internal/config's capacity block into the plain
+// struct internal/capacity takes. It is the one place the two shapes meet,
+// which is exactly why internal/capacity does not import internal/config
+// (see that package's doc).
+//
+// Every conversion here is from a validated int64 to a uint64.
+// config.Validate refuses a negative value in any of these fields, so a
+// Config that reached this function cannot produce a wrapped byte count;
+// the guards are here anyway, because "cannot happen" plus an unsigned
+// conversion is how eighteen exabytes of imaginary headroom gets invented.
+func thresholdsFrom(cfg *config.Config) capacity.Thresholds {
+	if cfg == nil {
+		return capacity.Thresholds{}
+	}
+	return capacity.Thresholds{
+		CapBytes:          nonNegative(cfg.Capacity.CapBytes),
+		WarningFreeBytes:  nonNegative(cfg.Capacity.WarningFreeBytes),
+		CriticalFreeBytes: nonNegative(cfg.Capacity.CriticalFreeBytes),
+		SafetyMarginBytes: nonNegative(cfg.Capacity.SafetyMarginBytes),
+	}
+}
+
+func nonNegative(n int64) uint64 {
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
 }
 
 func (s *Service) now() time.Time {
@@ -227,7 +325,7 @@ func (s *Service) lifecycleDeps() lifecycle.Deps {
 // describes. This is the one place config.Remote's fields are translated
 // into transport.Source's, so every use case in this package (the cycle,
 // fetch, reconcile) agrees on exactly how that translation works.
-func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
+func sourceFor(cfg *config.Config, src config.Source, bs config.BackupSet) transport.Source {
 	r := bs.Remote
 	return transport.Source{
 		ID:   bs.ID.String(),
@@ -243,8 +341,23 @@ func sourceFor(src config.Source, bs config.BackupSet) transport.Source {
 		KeyFile:    r.Key.File,
 		KeyEnv:     r.Key.Env,
 		KeyCommand: r.Key.Command,
-		KnownHosts: r.KnownHosts,
-		Root:       bs.RemotePath,
+		// The passphrase's own three sources (#269) travel the same way,
+		// for the same reason: config.Validate has already refused
+		// anything but at most one of them, and forwarding all three here
+		// is what makes key.passphrase.env and key.passphrase.command work
+		// in a real run rather than only in the adapter's own tests.
+		PassphraseFile:    r.Key.Passphrase.File,
+		PassphraseEnv:     r.Key.Passphrase.Env,
+		PassphraseCommand: r.Key.Passphrase.Command,
+		// KeyEncryption is config-wide (#298), not per-Remote, so it comes
+		// from cfg rather than r; see transport.Source's own doc for why
+		// it still travels on every Source built here rather than through
+		// a separate parameter.
+		KeyEncryptionFile:    cfg.KeyEncryption.File,
+		KeyEncryptionEnv:     cfg.KeyEncryption.Env,
+		KeyEncryptionCommand: cfg.KeyEncryption.Command,
+		KnownHosts:           r.KnownHosts,
+		Root:                 bs.RemotePath,
 	}
 }
 

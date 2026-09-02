@@ -309,6 +309,24 @@ type BackupSetHealth struct {
 	// with a field it cannot compute honestly.
 	ReinstatedRemoteRetainedCount int
 
+	// ReadOnlyRetainedCount is how many artifacts in this set currently
+	// sit at REMOTE_RETAINED: this backup set is declared read-only
+	// (config.BackupSet.ReadOnly, issue #282), and this manager has never
+	// called, and structurally cannot call, transport.Transport.DeleteRemote
+	// for them.
+	//
+	// Unlike ReinstatedRemoteRetainedCount, this is a direct count of the
+	// artifacts' own CURRENT journal state, not a join against transition
+	// history: REMOTE_RETAINED is unambiguous the moment it is read, so
+	// there is no "was this artifact ever retained" question that only the
+	// append-only log could answer. It shares that field's doc's other
+	// reasoning, though: no bytes figure is reported beside it, for the
+	// same reason (this manager's only size reading for these objects is
+	// the one taken at discovery, and it may be stale by an unknown
+	// amount), and it is never omitted, because zero is a real, common
+	// reading here (every backup set with no read_only flag set).
+	ReadOnlyRetainedCount int
+
 	// LastRetentionRunAt, FreeBytes and HaltReason are injected; see
 	// BackupSetInputs.
 	LastRetentionRunAt *time.Time

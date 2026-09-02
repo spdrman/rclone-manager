@@ -376,6 +376,29 @@ var settingsWriteSurface = map[string]string{
 	"Retention.Tiers.Keep":           "a bounded count, read at plan time.",
 	"Retention.Tiers.WindowUnit":     "a closed value set, read at plan time.",
 	"Retention.ProtectLastKnownGood": "FR-19's protection. The dangerous one, and the reason #171 was asked in the first place: turning it off WIDENS what a later retention apply may delete. That apply is plan-bound (see this file's doc comment), and the scheduler never performs one.",
+
+	// FR-21's capacity block (issue #286). Every one of these four is an
+	// input to a REFUSAL and to nothing else. internal/capacity contains
+	// no deletion of any kind, of anything, anywhere (its own package doc
+	// makes that a structural claim, not a convention), and no value here
+	// can reach internal/retention's apply path: apps/common/webhost is a
+	// separate Go module that cannot import it at all. So the direction
+	// these fields move the product in is strictly "fewer transfers
+	// begin", never "more artifacts are deleted", which is the opposite of
+	// what #171's question is about.
+	//
+	// The unattended path that does read them is the scheduler's own
+	// cycle, through pipeline.go's admitCapacity. A hostile or mistaken
+	// value there can stop backups from being taken, which is a real
+	// availability fault and is why config.Validate refuses the
+	// combinations that mean "refuse everything forever" (a cap at or
+	// under the critical floor, a warning line under it). It cannot cause
+	// an unattended deletion, which is the claim this surface exists to
+	// keep true.
+	"Capacity.CapBytes":          "the ceiling on how much space this manager may occupy. Read by pipeline.go's admitCapacity before a transfer BEGINS, and by nothing that deletes. 0 means no cap; config.Validate refuses a negative value and a cap at or under the critical floor.",
+	"Capacity.WarningFreeBytes":  "the level at which a reading is reported as WARNING. Purely a report: internal/capacity never refuses on a warning, and nothing acts on one unattended.",
+	"Capacity.CriticalFreeBytes": "the floor at or below which a transfer is REFUSED. Refusing a transfer leaves the remote copy in place and the local one untouched; FR-21's second rule is that a full disk is never made room for by deleting anything.",
+	"Capacity.SafetyMarginBytes": "extra headroom held back before a transfer is admitted. Same direction as the floor: it can only make an admission stricter.",
 }
 
 // TestTheSettingsWriteSurfaceReachesNothingButRetention is the structural

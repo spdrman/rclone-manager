@@ -43,6 +43,20 @@ const SCHEMA = {
   ]
 };
 
+/** This file is about the retention form only; every fixture here carries
+ *  the product default for capacity (no cap, no thresholds), the same
+ *  shape CapacityCard's own suite exercises in isolation. */
+function defaultCapacityFixture(): AppSettings["capacity"] {
+  return {
+    capBytes: 0,
+    warningFreeBytes: 0,
+    criticalFreeBytes: 0,
+    safetyMarginBytes: 0,
+    backupRoot: "/data/backups",
+    backupRootConfigured: false
+  };
+}
+
 function settingsFixture(
   overrides: Partial<AppSettings["retention"]> = {},
   schema: AppSettings["schema"]["retention"] = SCHEMA
@@ -59,6 +73,7 @@ function settingsFixture(
       protectLastKnownGood: true,
       ...overrides
     },
+    capacity: defaultCapacityFixture(),
     schema: { retention: schema }
   };
 }
@@ -335,23 +350,23 @@ describe("SettingsPage retention policy form", () => {
       {
         name: "a tier name outside lower_snake_case",
         edit: () => fireEvent.change(tier(1).getByLabelText("Name"), { target: { value: "Daily" } }),
-        message: /lower_snake_case/i
+        message: /^Tier names are lower_snake_case/
       },
       {
         name: "the reserved last-known-good name",
         edit: () =>
           fireEvent.change(tier(1).getByLabelText("Name"), { target: { value: "last_known_good" } }),
-        message: /reserved/i
+        message: /is reserved for last-known-good protection/
       },
       {
         name: "a duplicate tier name",
         edit: () => fireEvent.change(tier(1).getByLabelText("Name"), { target: { value: "weekly" } }),
-        message: /already/i
+        message: /is already used by tier/
       },
       {
         name: "a zero keep window",
         edit: () => fireEvent.change(tier(1).getByLabelText("Keep"), { target: { value: "0" } }),
-        message: /at least 1/i
+        message: /^Keep at least 1 look-back unit/
       },
       {
         name: "a keep window past the ceiling",
@@ -388,7 +403,8 @@ describe("SettingsPage retention policy form", () => {
   });
 
   describe("disabling last-known-good protection", () => {
-    const lkg = () => screen.getByLabelText(/Protect the newest known-good backup/);
+    const lkg = () =>
+      screen.getByRole("checkbox", { name: /Protect the newest known-good backup/ });
 
     it("warns, and does not write, until the operator confirms", async () => {
       const { updateSettings } = await renderSettings();
@@ -440,7 +456,7 @@ describe("SettingsPage retention policy form", () => {
       cleanup();
 
       const off = await renderSettings({ settings: settingsFixture({ protectLastKnownGood: false }) });
-      fireEvent.click(screen.getByLabelText(/Protect the newest known-good backup/));
+      fireEvent.click(screen.getByRole("checkbox", { name: /Protect the newest known-good backup/ }));
       fireEvent.click(screen.getByRole("button", { name: "Save retention policy" }));
       await waitFor(() => expect(off.updateSettings).toHaveBeenCalledTimes(1));
       expect(screen.queryByRole("dialog", { name: /last-known-good/i })).toBeNull();
@@ -488,10 +504,17 @@ describe("SettingsPage retention policy form", () => {
     expect(screen.getByRole("button", { name: "Add tier" })).toHaveProperty("disabled", true);
     expect(tier(1).getByLabelText("Name")).toHaveProperty("disabled", true);
     expect(tier(1).getByLabelText("Keep")).toHaveProperty("disabled", true);
-    expect(screen.getByLabelText(/Protect the newest known-good backup/)).toHaveProperty("disabled", true);
+    expect(
+      screen.getByRole("checkbox", { name: /Protect the newest known-good backup/ })
+    ).toHaveProperty("disabled", true);
   });
 
   it("shows an error instead of an empty form when the settings read fails", async () => {
+    // RetentionPolicyCard and CapacityCard each fetch getSettings()
+    // independently (like the real per-set health/status cards, neither
+    // shares the other's request), so a read failure here is not one
+    // card's problem: both show it, honestly, rather than one failing
+    // silently while the other renders as if nothing were wrong.
     const getSettings = vi.fn(() =>
       Promise.reject(
         new BackupManagerError({
@@ -518,7 +541,13 @@ describe("SettingsPage retention policy form", () => {
     );
     await act(async () => {});
 
-    expect(screen.getByText(/failed to read settings/)).toBeTruthy();
+    const retentionCard = screen.getByText("Retention policy").closest("section");
+    const capacityCard = screen.getByText("Storage capacity").closest("section");
+    if (!retentionCard || !capacityCard) throw new Error("expected card sections not found");
+
+    expect(within(retentionCard).getByText(/failed to read settings/)).toBeTruthy();
+    expect(within(capacityCard).getByText(/failed to read settings/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save retention policy" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save storage capacity" })).toBeNull();
   });
 });

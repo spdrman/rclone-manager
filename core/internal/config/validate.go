@@ -61,14 +61,59 @@ func (c *Config) Validate() error {
 
 		for j := range src.BackupSets {
 			bsPath := fmt.Sprintf("%s.backup_sets[%d]", path, j)
-			v.validateBackupSet(bsPath, src.Name, &src.BackupSets[j], seenSetIDs)
+			v.validateBackupSet(bsPath, src.Name, src.ReadOnly, &src.BackupSets[j], seenSetIDs)
 		}
 	}
 
 	v.validateRetention(&c.Retention)
 	v.validateAlerts(&c.Alerts)
+	v.validateCapacity(&c.Capacity)
+	v.validateKeyEncryption(&c.KeyEncryption)
 
 	return v.err()
+}
+
+// validateKeyEncryption checks KeyEncryption's shape (#298): at most one
+// of File, Env or Command may be set, mirroring validateKey's rule for
+// Key's own three sources, except that zero is fine here -- like
+// Passphrase, KeyEncryption is entirely optional, and every config
+// written before #298 has none of the three set.
+//
+// This never reads File's content, on the same "shape only, nothing this
+// package can decide by opening a file or running a command" principle
+// validateKey's own doc states for Key.Command: whether a resolved value
+// actually decrypts a given key file is a question only
+// internal/transport/rclone can answer, once it can actually reach both.
+func (v *validator) validateKeyEncryption(e *KeyEncryption) {
+	sources := 0
+	if e.File != "" {
+		sources++
+	}
+	if e.Env != "" {
+		sources++
+	}
+	if len(e.Command) != 0 {
+		sources++
+	}
+	if sources > 1 {
+		v.addf("key_encryption: exactly one of file, env or command may be set, not more than one")
+		return
+	}
+
+	if len(e.Command) != 0 {
+		cmdPath := "key_encryption.command"
+		if e.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(e.Command[0]) {
+			// Same reasoning as validateKey's identical rule on
+			// Key.Command: a resolver has to resolve to exactly one
+			// binary regardless of the process's working directory or
+			// $PATH at the moment a key file is actually read or
+			// written, which matters here just as much as it does for
+			// the key material itself.
+			v.addf("%s: executable %q must be an absolute path", cmdPath, e.Command[0])
+		}
+	}
 }
 
 // validateAlerts resolves the Alerts block (docs/EPIC-B-multi-nas.md
@@ -94,9 +139,81 @@ func (v *validator) validateAlerts(a *Alerts) {
 	}
 }
 
-func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, seenSetIDs map[string]string) {
+// validateCapacity checks FR-21's configuration block (issue #286).
+//
+// It resolves nothing. Every other block in this file fills in a documented
+// default for a field left at zero, and this one deliberately does not:
+// zero is the meaning here, not the absence of one. capacity.cap_bytes at
+// zero is "no cap, use the whole volume", and the two thresholds at zero
+// are "no line here", which is what every deployment written before this
+// block existed has been running with and must keep running with after an
+// upgrade.
+//
+// What it does instead is refuse three configurations that are individually
+// well-formed and jointly mean something an operator did not intend:
+//
+//   - A negative byte count anywhere. Nothing below zero has a meaning, and
+//     for the cap the refusal has to say so out loud, because "-1" is a
+//     plausible way for somebody to try to spell "no cap".
+//   - A warning line below the critical floor, including the common case of
+//     a critical floor with no warning line at all.
+//     internal/capacity.Thresholds.Validate refuses that pair, so accepting
+//     it here would mean every storage reading on the running deployment
+//     coming back "misconfigured" with nothing naming the two numbers that
+//     did it.
+//   - A cap at or below the critical floor. Each number is fine; together
+//     they mean no transfer can ever be admitted, because finishing any of
+//     them would leave the allowance at or under the floor. Left to run, it
+//     is indistinguishable from a broken product.
+func (v *validator) validateCapacity(c *Capacity) {
+	if c.CapBytes < 0 {
+		v.addf("capacity.cap_bytes: must not be negative (got %d); use 0 for no cap, meaning this manager may use the whole volume", c.CapBytes)
+	}
+	if c.WarningFreeBytes < 0 {
+		v.addf("capacity.warning_free_bytes: must not be negative (got %d); use 0 for no warning level", c.WarningFreeBytes)
+	}
+	if c.CriticalFreeBytes < 0 {
+		v.addf("capacity.critical_free_bytes: must not be negative (got %d); use 0 for no critical level", c.CriticalFreeBytes)
+	}
+	if c.SafetyMarginBytes < 0 {
+		v.addf("capacity.safety_margin_bytes: must not be negative (got %d)", c.SafetyMarginBytes)
+	}
+
+	if c.WarningFreeBytes >= 0 && c.CriticalFreeBytes >= 0 && c.WarningFreeBytes < c.CriticalFreeBytes {
+		v.addf(
+			"capacity.warning_free_bytes (%d) must be at or above capacity.critical_free_bytes (%d): free space crosses the warning line first as it drops, so the pair cannot be honoured the other way round; set both or neither",
+			c.WarningFreeBytes, c.CriticalFreeBytes,
+		)
+	}
+
+	if c.CapBytes > 0 && c.CriticalFreeBytes > 0 && c.CapBytes <= c.CriticalFreeBytes {
+		v.addf(
+			"capacity.cap_bytes (%d) must be above capacity.critical_free_bytes (%d): a cap at or below the critical floor leaves no headroom any transfer could ever be admitted into",
+			c.CapBytes, c.CriticalFreeBytes,
+		)
+	}
+
+	if c.BackupRoot != "" {
+		if err := validAbsolutePath(c.BackupRoot); err != nil {
+			v.addf("capacity.backup_root %v", err)
+		}
+	}
+}
+
+func (v *validator) validateBackupSet(path, sourceName string, sourceReadOnly bool, bs *BackupSet, seenSetIDs map[string]string) {
 	if bs.Name == "" {
 		v.addf("%s: id must not be empty", path)
+	}
+
+	// Issue #282: resolve the fully-answered ReadOnly from this set's own
+	// override, falling back to the parent source's default. Nothing here
+	// can be wrong the way most other fields in this function can: every
+	// bool is a meaningful, acceptable answer, so this is resolution, not
+	// validation, exactly like ID just below it.
+	if bs.ReadOnlyConfig != nil {
+		bs.ReadOnly = *bs.ReadOnlyConfig
+	} else {
+		bs.ReadOnly = sourceReadOnly
 	}
 
 	// FR-7: the identity is source-plus-set, and it goes through
@@ -150,7 +267,7 @@ func (v *validator) validateBackupSet(path, sourceName string, bs *BackupSet, se
 		}
 	}
 
-	v.validateCompletion(path+".completion", &bs.Completion)
+	v.validateCompletion(path+".completion", &bs.Completion, bs.Include)
 
 	// A stale_after that parses to the zero Duration must not be read as
 	// "age >= 0 is always true, so every backup is stale": that would make
@@ -190,7 +307,7 @@ func (v *validator) validateRemote(path string, r *Remote) {
 			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
 		}
 	case "local":
-		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || r.KnownHosts != "" || r.Port != 0 {
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 {
 			v.addf("%s: host, port, user, key_file/key and known_hosts are not used for type \"local\"; remove them", path)
 		}
 	case "":
@@ -275,13 +392,53 @@ func (v *validator) validateKey(path string, r *Remote) {
 		}
 	}
 
+	v.validatePassphrase(path, &r.Key.Passphrase)
+
 	if fileValue != "" {
 		r.KeyFile = fileValue
 		r.Key.File = fileValue
 	}
 }
 
-func (v *validator) validateCompletion(path string, c *Completion) {
+// validatePassphrase checks Key.Passphrase's shape (#269): at most one of
+// File, Env or Command may be set, mirroring validateKey's own rule for
+// Key's three sources, except that zero is fine here -- Passphrase is
+// optional, unlike Key itself, since most keys are not passphrase-
+// protected at all.
+//
+// This never reads Passphrase.File's content, on the same "shape only,
+// nothing this package can decide by opening a file or running a command"
+// principle validateKey's own doc states for Key.Command: whether a
+// passphrase actually decrypts the key it is paired with is a question
+// only internal/transport/rclone can answer, once it can actually reach
+// both.
+func (v *validator) validatePassphrase(path string, p *Passphrase) {
+	sources := 0
+	if p.File != "" {
+		sources++
+	}
+	if p.Env != "" {
+		sources++
+	}
+	if len(p.Command) != 0 {
+		sources++
+	}
+	if sources > 1 {
+		v.addf("%s: exactly one of key.passphrase.file, key.passphrase.env or key.passphrase.command may be set, not more than one", path)
+		return
+	}
+
+	if len(p.Command) != 0 {
+		cmdPath := path + ".key.passphrase.command"
+		if p.Command[0] == "" {
+			v.addf("%s: the first element (the executable) must not be empty", cmdPath)
+		} else if !filepath.IsAbs(p.Command[0]) {
+			v.addf("%s: executable %q must be an absolute path", cmdPath, p.Command[0])
+		}
+	}
+}
+
+func (v *validator) validateCompletion(path string, c *Completion, include []string) {
 	switch c.Strategy {
 	case "stable":
 		if c.StableFor.Duration() <= 0 {
@@ -314,17 +471,95 @@ func (v *validator) validateCompletion(path string, c *Completion) {
 		case c.DeleteSafetyDelay.Duration() == 0:
 			c.DeleteSafetyDelay = Duration(DefaultDeleteSafetyDelay)
 		}
-	case "rename", "marker":
+		if c.ManifestMarker != "" {
+			v.addf("%s: manifest_marker is not used by strategy %q; remove it", path, c.Strategy)
+		}
+	case "marker":
 		if c.StableFor.Duration() != 0 {
 			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
 		}
 		if c.DeleteSafetyDelay.Duration() != 0 {
 			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
 		}
+		v.validateManifestMarker(path, c, include)
+	case "rename":
+		if c.StableFor.Duration() != 0 {
+			v.addf("%s: stable_for is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.DeleteSafetyDelay.Duration() != 0 {
+			v.addf("%s: delete_safety_delay is not used by strategy %q; remove it", path, c.Strategy)
+		}
+		if c.ManifestMarker != "" {
+			v.addf("%s: manifest_marker is not used by strategy %q; remove it", path, c.Strategy)
+		}
 	case "":
 		v.addf("%s: strategy must be set (\"rename\", \"marker\" or \"stable\", FR-8)", path)
 	default:
 		v.addf("%s: unsupported strategy %q; must be \"rename\", \"marker\" or \"stable\" (FR-8)", path, c.Strategy)
+	}
+}
+
+// validateManifestMarker checks c.ManifestMarker's shape, resolves it to
+// DefaultManifestMarker if it is unset (issue #291), and then cross-checks
+// the resolved name against this backup set's own include patterns. Only
+// called when c.Strategy == "marker".
+//
+// The shape checks mirror validateBackupSet's Include pattern validation on
+// purpose: an operator-supplied filename read back off a remote listing is
+// exactly the kind of untrusted-adjacent string include patterns already
+// guard (no path separator, since this is a basename never a path; no "."
+// or ".." segment, since those are directory references, not filenames,
+// and model.ArtifactID would refuse them downstream anyway). It is
+// deliberately not run through filepath.Match the way an include pattern
+// is: ManifestMarker is a single literal name, matched by exact string
+// comparison in internal/discovery/complete.go, never a glob, so a
+// character that would be an invalid glob metachar (say, an unmatched "[")
+// is still a perfectly valid literal filename here.
+//
+// include is this backup set's Include, threaded down from
+// validateBackupSet through validateCompletion rather than read off a
+// shared struct, since Completion, unlike BackupSet, has no field for it.
+//
+// The collision check is a safety & reliability finding, not a shape one:
+// before ManifestMarker was operator-configurable it was always the fixed
+// literal "_SUCCESS", implicitly never a real payload name. Now that an
+// operator picks it, nothing stops them picking a name their own Include
+// patterns would otherwise match. discovery.Discover's isMarkerObject
+// check runs before Include filtering and unconditionally skips a match
+// (see discovery.go's Discover), so an undetected collision here would
+// silently and permanently exclude a real artifact from every backup,
+// forever, with no error, no rejection entry, no warning. Matching uses
+// filepath.Match, the same as the Include pattern shape check just above
+// this function's call site: both operands are already guaranteed
+// separator-free basenames by this point, so it agrees with
+// internal/discovery/complete.go's includeMatches (which uses path.Match
+// for GOOS-independence at actual matching time) on every input that
+// reaches here. Only patterns actually configured are checked: an empty
+// Include list has nothing to cross-check against, which is the same "no
+// explicit filter" baseline that let "_SUCCESS" work unconditionally
+// before this field existed.
+func (v *validator) validateManifestMarker(path string, c *Completion, include []string) {
+	markerPath := path + ".manifest_marker"
+	switch {
+	case c.ManifestMarker == "":
+		c.ManifestMarker = DefaultManifestMarker
+	case strings.ContainsAny(c.ManifestMarker, `/\`):
+		// Mirrors the Include pattern message: this matches a remote
+		// directory's basename, never a path, so a value that could
+		// itself contain a path separator invites exactly the kind of
+		// traversal ArtifactID is built to reject downstream.
+		v.addf("%s: %q must be a filename, not a path", markerPath, c.ManifestMarker)
+		return
+	case c.ManifestMarker == "." || c.ManifestMarker == "..":
+		v.addf("%s: %q must not be a directory reference", markerPath, c.ManifestMarker)
+		return
+	}
+
+	for _, pat := range include {
+		if ok, err := filepath.Match(pat, c.ManifestMarker); err == nil && ok {
+			v.addf("%s: %q matches this backup set's own include pattern %q; a real artifact with that name would be silently and permanently excluded from every backup, since discovery treats a manifest-marker match as a completion signal, never a candidate", markerPath, c.ManifestMarker, pat)
+			break
+		}
 	}
 }
 

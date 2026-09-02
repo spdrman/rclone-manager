@@ -237,6 +237,11 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// touches backup data (destructiveGateExemptRoutes, router_test.go,
 		// and the handler's own doc).
 		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/enabled", h.setBackupSetEnabled)
+		// Issue #316: the read-only CRUD-parity counterpart to /enabled
+		// immediately above, registered the same way and for the same
+		// reason (a fixed source/set arity, and a literal "/read-only"
+		// tail a catch-all would swallow).
+		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/read-only", h.setBackupSetReadOnly)
 		r.Get("/backup-sets/*", h.getBackupSet)
 
 		// Issue #211: the backups this deployment actually holds, and the

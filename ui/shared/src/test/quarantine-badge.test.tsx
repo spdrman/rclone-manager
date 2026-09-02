@@ -32,6 +32,7 @@ function artifact(id: string, filename: string): BackupArtifact {
     remoteSourceRemovedAt: null,
     quarantine: {
       reason: "checksum-mismatch",
+      detail: "sha256 mismatch: local file hashes to deadbeef, remote reports feedface",
       detectedAt: "2026-08-28T02:06:00+02:00",
       remoteSourceRetained: true
     }

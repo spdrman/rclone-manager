@@ -9,13 +9,17 @@ import { createMockApi } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
 import { graph, resetGraphForTests } from "@shared/state/graph";
 import { currentSetDetailNode } from "@shared/state/backupSetDetailNodes";
+import { backupSetPath } from "@shared/utilities/routes";
 
-function renderDetail(setId: string, api: BackupManagerApi, readOnly = false) {
+// Two segments (source, set), not one flat id: a real backup set id
+// (model.BackupSetID.String(), core/internal/model/ids.go) is the two
+// joined by "/", and the route matches that shape (issue #285).
+function renderDetail(source: string, set: string, api: BackupManagerApi, readOnly = false) {
   return render(
-    <MemoryRouter initialEntries={["/sets/" + setId]}>
+    <MemoryRouter initialEntries={[backupSetPath(source, set)]}>
       <ApiProvider api={api}>
         <Routes>
-          <Route path="/sets/:setId" element={<BackupSetDetailPage readOnly={readOnly} />} />
+          <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={readOnly} />} />
         </Routes>
       </ApiProvider>
     </MemoryRouter>
@@ -38,7 +42,7 @@ describe("backup set detail page reads the set", () => {
     const sets = await createMockApi().listSets();
     const target = sets[0];
 
-    renderDetail(target.id, api);
+    renderDetail(target.source, target.set, api);
 
     await screen.findByText(target.name);
   });
@@ -49,7 +53,7 @@ describe("backup set detail page reads the set", () => {
       new BackupManagerError({ code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_test" })
     );
 
-    renderDetail("does-not-exist", api);
+    renderDetail("does-not-exist", "does-not-exist", api);
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText("That backup set no longer exists.")).toBeTruthy();
@@ -78,16 +82,16 @@ describe("backup set detail page reads the set", () => {
       const navigate = useNavigate();
       return (
         <>
-          <button onClick={() => navigate("/sets/" + second.id)}>go to second</button>
+          <button onClick={() => navigate(backupSetPath(second.source, second.set))}>go to second</button>
           <Routes>
-            <Route path="/sets/:setId" element={<BackupSetDetailPage readOnly={false} />} />
+            <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
           </Routes>
         </>
       );
     }
 
     render(
-      <MemoryRouter initialEntries={["/sets/" + first.id]}>
+      <MemoryRouter initialEntries={[backupSetPath(first.source, first.set)]}>
         <ApiProvider api={api}>
           <Harness />
         </ApiProvider>
@@ -116,7 +120,7 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
     const sets = await createMockApi().listSets();
     const target = sets[0];
 
-    renderDetail(target.id, api);
+    renderDetail(target.source, target.set, api);
     await screen.findByText(target.name);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -130,7 +134,7 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
     const sets = await createMockApi().listSets();
     const target = sets[0];
 
-    renderDetail(target.id, api);
+    renderDetail(target.source, target.set, api);
     await screen.findByText(target.name);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -156,7 +160,7 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
     const sets = await createMockApi().listSets();
     const target = sets[0];
 
-    renderDetail(target.id, api);
+    renderDetail(target.source, target.set, api);
     await screen.findByText(target.name);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -169,5 +173,53 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
     // the honest outcome of a non-stale submit is a clear "not saved"
     // notice, never a silent no-op that looks like success.
     expect(await screen.findByText(/doesn.t yet support saving/i)).toBeTruthy();
+  });
+});
+
+// Issue #316's RED case for this page: before this control existed,
+// there was no way to declare an already-persisted backup set read-only
+// (or withdraw it) anywhere in the UI — only by hand-editing config.yaml.
+describe("declaring a backup set read-only (issue #316)", () => {
+  afterEach(() => {
+    resetGraphForTests();
+  });
+
+  it("shows 'No' for a set that is not read-only, and flips it on with a call to api.setReadOnly", async () => {
+    const api = createMockApi();
+    const sets = await createMockApi().listSets();
+    // The fixture's first set (postgres-primary) is not read-only —
+    // see mock.ts's own SETS literal.
+    const target = sets[0];
+    const spy = vi.spyOn(api, "setReadOnly");
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    expect(screen.getByText("No")).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Declare source read-only" });
+
+    fireEvent.click(toggle);
+
+    expect(spy).toHaveBeenCalledWith(target.source, target.set, true);
+  });
+
+  it("shows the retained count and offers to turn it back off for a set that is already read-only", async () => {
+    const api = createMockApi();
+    const sets = await createMockApi().listSets();
+    // The media-archive fixture is the mock's one read-only set, with a
+    // nonzero retained count — see mock.ts's own SETS literal.
+    const target = sets.find((s) => s.readOnly);
+    if (!target) throw new Error("fixture setup: no read-only set in the mock data");
+    const spy = vi.spyOn(api, "setReadOnly");
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    expect(screen.getByText(/Yes.*retained/)).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Allow remote deletion again" });
+
+    fireEvent.click(toggle);
+
+    expect(spy).toHaveBeenCalledWith(target.source, target.set, false);
   });
 });

@@ -177,3 +177,32 @@ func TestBackupSetHalt_RefusesAReasonTheSchemaDoesNotDeclare(t *testing.T) {
 		t.Fatalf("ListBackupSetHalts = %v, want the one declared halt", got)
 	}
 }
+
+// TestBackupSetHalt_RecordsKeyPermissions is issue #293's addition to the
+// vocabulary: migration 0005 widened the CHECK constraint 0004 declared,
+// and this is the regression that would catch a schema left behind if the
+// Go constant were ever added without it (or vice versa).
+func TestBackupSetHalt_RecordsKeyPermissions(t *testing.T) {
+	j, _ := openJournal(t)
+	ctx := context.Background()
+	set := haltSetID(t, "production", "postgres-primary")
+	at := time.Date(2026, 8, 29, 4, 12, 8, 0, time.UTC)
+
+	if err := j.RecordBackupSetHalt(ctx, set, HaltKeyPermissions, at); err != nil {
+		t.Fatalf("RecordBackupSetHalt(HaltKeyPermissions): %v", err)
+	}
+
+	halts := haltsBySet(t, j)
+	if got := halts[set.String()].Reason; got != HaltKeyPermissions {
+		t.Errorf("reason = %q, want %q", got, HaltKeyPermissions)
+	}
+
+	// A cycle that reconnects (the key's mode corrected, or the key
+	// re-imported) clears it exactly like the other two reasons.
+	if err := j.ClearBackupSetHalt(ctx, set); err != nil {
+		t.Fatalf("ClearBackupSetHalt: %v", err)
+	}
+	if got := haltsBySet(t, j); len(got) != 0 {
+		t.Fatalf("ListBackupSetHalts after clearing = %v, want empty", got)
+	}
+}

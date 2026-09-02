@@ -183,11 +183,12 @@ func (f *FirstRun) Configured() bool {
 }
 
 // ImportSSHKey is BackupService.ImportSSHKey for an instance that has no
-// BackupService yet: the same validation, the same 0600 file, in the same
-// directory beside the config file, so the key an operator imports during
-// setup is the key the configuration written seconds later points at.
-func (f *FirstRun) ImportSSHKey(_ context.Context, raw []byte) (SSHKeyRef, error) {
-	return importSSHKeyInto(f.defaults.ConfigPath, raw)
+// BackupService yet: the same validation (including #269's passphrase
+// check), the same 0600 file, in the same directory beside the config
+// file, so the key an operator imports during setup is the key the
+// configuration written seconds later points at.
+func (f *FirstRun) ImportSSHKey(_ context.Context, raw []byte, passphrase string) (SSHKeyRef, error) {
+	return importSSHKeyInto(f.defaults.ConfigPath, raw, passphrase)
 }
 
 // ProbeHostKey is BackupService.ProbeHostKey for an unconfigured
@@ -208,7 +209,9 @@ func (f *FirstRun) ProbeHostKey(ctx context.Context, host string, port int) (Hos
 // can find out their credentials are wrong before writing a
 // configuration around them rather than after.
 func (f *FirstRun) TestConnection(ctx context.Context, req ConnectionTestRequest) (ConnectionTestResult, error) {
-	return testConnectionVia(ctx, f.transport, f.defaults.ConfigPath, req)
+	// config.KeyEncryption{} (the zero value): see testConnectionVia's own
+	// doc for why a first-run instance always passes the zero value here.
+	return testConnectionVia(ctx, f.transport, f.defaults.ConfigPath, config.KeyEncryption{}, req)
 }
 
 // CreateInitialConfig writes this deployment's FIRST configuration: the
@@ -277,6 +280,20 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 	// resolved numbers into the file instead would freeze them, so an
 	// operator who never touched retention would silently keep an old
 	// release's policy across an upgrade.
+	//
+	// So cfg is encoded HERE, before anything below mutates it.
+	// config.Validate resolves Retention and Alerts IN PLACE
+	// (validateRetention's own doc says so), and cfg is the same pointer
+	// Validate is about to be called on, so capturing the bytes first is
+	// what actually keeps the promise the paragraph above makes. This is
+	// the same fix settings.go's UpdateSettings and backupsetenabled.go's
+	// toggle already carry for the identical re-marshal-after-Validate
+	// shape; see UpdateSettings' own comment for the full reasoning.
+	encoded, err := yaml.Marshal(cfg)
+	if err != nil {
+		return BackupSet{}, fmt.Errorf("service: encoding the first configuration: %w", err)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		// cfg.Validate's message is built from internal/config's own field
 		// descriptions and this caller's own values, never from a state or
@@ -306,10 +323,12 @@ func (f *FirstRun) CreateInitialConfig(_ context.Context, req CreateBackupSetReq
 		return BackupSet{}, err
 	}
 
-	encoded, err := yaml.Marshal(cfg)
-	if err != nil {
-		return BackupSet{}, fmt.Errorf("service: encoding the first configuration: %w", err)
-	}
+	// encoded was captured above, before cfg.Validate resolved Retention
+	// and Alerts in place, so this write carries the operator's own
+	// omissions rather than a copy of today's defaults; see the comment
+	// beside that capture for why. cfg itself stays fully resolved for
+	// planValidatorCatalog above and findBackupSet below — only the bytes
+	// on disk differ from it.
 	if err := writeConfigExclusively(f.defaults.ConfigPath, encoded); err != nil {
 		return BackupSet{}, err
 	}

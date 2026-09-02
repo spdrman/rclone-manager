@@ -97,9 +97,21 @@ type Artifact struct {
 	// case with no remote source left to re-ingest from.
 	Quarantined             bool
 	QuarantineIrrecoverable bool
-	// QuarantineReason is the last error recorded against this artifact,
-	// which is what routed it into quarantine. Empty when it is not
-	// quarantined.
+	// QuarantineReason is the literal diagnostic sentence recorded on the
+	// journal transition that quarantined this artifact (issue #308): the
+	// same append-only state_transitions.detail text issue #284's CLI
+	// `artifacts <id>` command's own "reason" field reads back, through
+	// the same seam (internal/state.Journal.LastEnteredDetail). Empty
+	// when the artifact is not quarantined, or when that transition
+	// itself carried no detail text (honest, not a failure).
+	//
+	// It used to be derived from rec.LastError (only ever set at RELEASE
+	// time by internal/lifecycle.ReleaseFromQuarantine, so always empty
+	// for an artifact still sitting in quarantine) falling back to
+	// rec.ValidationDetail (only set by the application-validator path).
+	// Both were wrong far more often than right: empty for a hash
+	// mismatch, and empty for anything internal/reconcile or
+	// internal/revalidate quarantined. See attachQuarantineReason.
 	QuarantineReason string
 
 	// RetentionTier is the tier that most recently selected this artifact
@@ -160,6 +172,11 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 	out := make([]Artifact, 0, len(records))
 	for _, rec := range records {
 		a := toServiceArtifact(rec)
+		if a.Quarantined {
+			if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
+				return nil, err
+			}
+		}
 		if filter.QuarantinedOnly && !a.Quarantined {
 			continue
 		}
@@ -182,7 +199,55 @@ func (b *BackupService) GetArtifact(ctx context.Context, id string) (Artifact, e
 		}
 		return Artifact{}, fmt.Errorf("service: loading artifact %s: %w", id, err)
 	}
-	return toServiceArtifact(rec), nil
+	a := toServiceArtifact(rec)
+	if a.Quarantined {
+		if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
+			return Artifact{}, err
+		}
+	}
+	return a, nil
+}
+
+// attachQuarantineReason populates a.QuarantineReason with the literal
+// diagnostic sentence recorded on the transition that put rec into its
+// current quarantine state (issue #308), read back from
+// state_transitions.detail via the same seam issue #284 built for the
+// CLI's own `artifacts <id>` "reason" field
+// (internal/state.Journal.LastEnteredDetail). It covers every quarantine
+// cause uniformly: a hash mismatch caught at VERIFYING
+// (internal/lifecycle/verify.go), an application validator's rejection
+// (same file), a durable local copy internal/reconcile found invalid
+// after COMMITTED/REMOTE_DELETE_PENDING/COMPLETE, and Phase 4's scheduled
+// internal/revalidate checks. None of those attach a second copy of the
+// text anywhere else, so this is the one place quarantine_reason comes
+// from now, not a fallback alongside an older guess.
+//
+// a.QuarantineReason can still come back empty: that means the
+// transition itself carried no Detail, not that this call failed.
+//
+// # Redaction (issue #295)
+//
+// state_transitions.detail can legitimately carry a sensitive source's
+// host/port when the text a lifecycle step recorded came from an
+// upstream transport error (see verify.go's hash-verification-failure
+// branch). Issue #295 wires an obs.Redactor into
+// internal/state.Journal.RecordTransition itself, the one write path
+// every quarantine transition already goes through (as of this writing
+// #295 is still an open PR, #304, not yet merged into main or this
+// branch), so once it lands every Detail this method can ever read back
+// is already redacted at the source. This method only reads what
+// RecordTransition wrote; it has no second copy of the text to leak
+// around that filter, the same property internal/app.GetArtifactDetail's
+// own doc already relies on for issue #284's CLI reason field.
+func (b *BackupService) attachQuarantineReason(ctx context.Context, a *Artifact, rec state.Record) error {
+	detail, _, found, err := b.journal.LastEnteredDetail(ctx, rec.Artifact, rec.State)
+	if err != nil {
+		return fmt.Errorf("service: reading quarantine reason for %s: %w", rec.Artifact, err)
+	}
+	if found {
+		a.QuarantineReason = detail
+	}
+	return nil
 }
 
 // RevalidateArtifact re-runs the durable-local-copy checks against one
@@ -367,14 +432,11 @@ func toServiceArtifact(rec state.Record) Artifact {
 		a.Quarantined = true
 		a.QuarantineIrrecoverable = true
 	}
-	if a.Quarantined {
-		// LastError is what the transition into quarantine recorded, and
-		// ValidationDetail is what a failed validator said; either can be
-		// the reason, and neither is guaranteed to be set.
-		a.QuarantineReason = rec.LastError
-		if a.QuarantineReason == "" {
-			a.QuarantineReason = rec.ValidationDetail
-		}
-	}
+	// QuarantineReason is deliberately left unset here: toServiceArtifact
+	// only has rec, and the real answer (issue #308) needs a second
+	// journal read (state_transitions.detail), which only a caller
+	// holding b.journal and ctx can make. ListArtifacts and GetArtifact
+	// both call attachQuarantineReason right after this returns, for
+	// every record where Quarantined ends up true.
 	return a
 }

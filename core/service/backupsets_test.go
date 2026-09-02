@@ -1,16 +1,22 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -49,7 +55,7 @@ func openTestService(t *testing.T) (*BackupService, string) {
 
 func validCreateReq(t *testing.T, svc *BackupService, name string) CreateBackupSetRequest {
 	t.Helper()
-	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -152,6 +158,85 @@ func TestCreateBackupSet_PersistsAndIsImmediatelyVisible(t *testing.T) {
 	}
 	if got.Name != "postgres-primary" {
 		t.Errorf("original set's Name = %q, want %q", got.Name, "postgres-primary")
+	}
+}
+
+// TestCreateBackupSet_ReadOnly_PersistsAsAnExplicitPerSetOverride is issue
+// #316's create-side RED case: before this, CreateBackupSetRequest had no
+// ReadOnly field at all, so there was no way to create a read-only backup
+// set through the API/wizard — only by hand-editing config.yaml after the
+// fact. This proves the request field reaches config.BackupSet.ReadOnly
+// (resolved), is durable on disk as this ONE set's own `read_only: true`
+// line (not a change to its source's default), and is visible again
+// through GetBackupSet/ListBackupSets with no restart.
+func TestCreateBackupSet_ReadOnly_PersistsAsAnExplicitPerSetOverride(t *testing.T) {
+	svc, configPath := openTestService(t)
+
+	req := validCreateReq(t, svc, "readonly-set")
+	req.ReadOnly = true
+
+	result, err := svc.CreateBackupSet(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+	if !result.Set.ReadOnly {
+		t.Error("Set.ReadOnly = false, want true")
+	}
+
+	got, err := svc.GetBackupSet(context.Background(), "api/readonly-set")
+	if err != nil {
+		t.Fatalf("GetBackupSet: %v", err)
+	}
+	if !got.ReadOnly {
+		t.Error("GetBackupSet: ReadOnly = false, want true")
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var onDisk config.Config
+	if err := yaml.Unmarshal(raw, &onDisk); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	found := false
+	for _, src := range onDisk.Sources {
+		if src.Name != "api" {
+			continue
+		}
+		if src.ReadOnly {
+			t.Error("the source itself was marked read_only: this must be a per-set override, not a source-level default")
+		}
+		for _, bs := range src.BackupSets {
+			if bs.Name == "readonly-set" {
+				found = true
+				if bs.ReadOnlyConfig == nil || !*bs.ReadOnlyConfig {
+					t.Errorf("on-disk read_only for readonly-set = %v, want an explicit true", bs.ReadOnlyConfig)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the new backup set is not on disk:\n%s", raw)
+	}
+}
+
+// TestCreateBackupSet_ReadOnlyDefaultsFalse is this issue's regression
+// guarantee at the CRUD layer: a request that never mentions ReadOnly (the
+// zero value, exactly what every request before this issue already sent)
+// creates a set that is NOT read-only, the identical delete-eligible
+// behaviour every existing deployment and every earlier wizard save
+// already has.
+func TestCreateBackupSet_ReadOnlyDefaultsFalse(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	req := validCreateReq(t, svc, "ordinary-set")
+	result, err := svc.CreateBackupSet(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+	if result.Set.ReadOnly {
+		t.Error("Set.ReadOnly = true for a request that never set it, want false")
 	}
 }
 
@@ -269,11 +354,21 @@ func TestCreateBackupSet_InvalidCompletionStrategyIsCaughtByConfigValidate(t *te
 // stable path at all before this test: the one completion test here uses
 // "marker" on purpose.
 //
-// The three assertions are one claim each: the create succeeds, the
-// operator's own stable_for survives the round trip, and the FR-15 delete
-// gate ends up armed at the documented default rather than at a literal
-// zero, which would be the same as having no gate. The last one is what
-// keeps "make it load again" from being fixed the wrong way.
+// The assertions are one claim each: the create succeeds, the operator's
+// own stable_for survives the round trip, and the FR-15 delete gate ends
+// up armed at the documented default rather than at a literal zero,
+// which would be the same as having no gate. The last one is what keeps
+// "make it load again" from being fixed the wrong way.
+//
+// completion.delete_safety_delay is checked against a RELOAD of the
+// file, not the raw bytes it wrote, because of issue #294: CreateBackupSet
+// now encodes cfg before cfg.Validate resolves its defaults in place
+// (this field's own doc gives the identical reasoning validateRetention
+// does — a zero here means "never chose one", not "the gate is off" — see
+// backupsets.go's comment beside cfg.Validate for the full fix), so a
+// value nobody chose stays zero ON DISK and is only resolved when the
+// file is loaded. Checking the raw bytes for 1h would now fail even
+// though the gate is correctly armed.
 func TestCreateBackupSet_StableStrategy(t *testing.T) {
 	svc, configPath := openTestService(t)
 	req := validCreateReq(t, svc, "stable-set")
@@ -293,18 +388,8 @@ func TestCreateBackupSet_StableStrategy(t *testing.T) {
 		t.Fatalf("yaml.Unmarshal(configPath): %v", err)
 	}
 
-	var created *config.BackupSet
-	for i, src := range onDisk.Sources {
-		if src.Name != "api" {
-			continue
-		}
-		for j := range onDisk.Sources[i].BackupSets {
-			if onDisk.Sources[i].BackupSets[j].Name == "stable-set" {
-				created = &onDisk.Sources[i].BackupSets[j]
-			}
-		}
-	}
-	if created == nil {
+	created := findBackupSet(&onDisk, "api", "stable-set")
+	if created.Name == "" {
 		t.Fatalf("the on-disk config file does not contain the new stable backup set:\n%s", raw)
 	}
 
@@ -314,8 +399,17 @@ func TestCreateBackupSet_StableStrategy(t *testing.T) {
 	if got, want := created.Completion.StableFor.Duration(), 10*time.Minute; got != want {
 		t.Errorf("persisted completion.stable_for = %s, want %s", got, want)
 	}
-	if got := created.Completion.DeleteSafetyDelay.Duration(); got != config.DefaultDeleteSafetyDelay {
-		t.Errorf("persisted completion.delete_safety_delay = %s, want the default %s; a zero here disarms the FR-15 stable-completion delete gate entirely", got, config.DefaultDeleteSafetyDelay)
+
+	reloaded, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	reloadedSet := findBackupSet(reloaded, "api", "stable-set")
+	if reloadedSet.Name == "" {
+		t.Fatalf("the reloaded config no longer contains the new stable backup set")
+	}
+	if got := reloadedSet.Completion.DeleteSafetyDelay.Duration(); got != config.DefaultDeleteSafetyDelay {
+		t.Errorf("reloaded completion.delete_safety_delay = %s, want the default %s; a zero here disarms the FR-15 stable-completion delete gate entirely", got, config.DefaultDeleteSafetyDelay)
 	}
 }
 
@@ -477,7 +571,7 @@ func TestCreateBackupSet_ConcurrentWithReadersDoesNotRace(t *testing.T) {
 func TestImportSSHKey_Success_PersistsFileAndReportsFingerprint(t *testing.T) {
 	svc, configPath := openTestService(t)
 
-	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key))
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
 	if err != nil {
 		t.Fatalf("ImportSSHKey: %v", err)
 	}
@@ -511,9 +605,98 @@ func TestImportSSHKey_Success_PersistsFileAndReportsFingerprint(t *testing.T) {
 	}
 }
 
+// TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext is #298's
+// explicit REGRESSION test: with no key_encryption source configured (the
+// default, and every config.yaml written before #298 existed), an
+// imported key is persisted exactly as before this feature -- a plain
+// PEM file, protected only by #293's filesystem-permission hardening.
+// TestImportSSHKey_Success_PersistsFileAndReportsFingerprint already
+// asserts this same fact as part of a broader test; this one exists
+// purely so the regression guarantee has its own name and can be read on
+// its own, and it is also #298's RED baseline: run against the code as
+// it stood before this issue, it already passed, which is the proof the
+// gap #298 was filed over was real.
+func TestImportSSHKey_NoKeyEncryptionConfigured_StaysPlaintext(t *testing.T) {
+	svc, _ := openTestService(t)
+	ke := svc.state.Load().inner.Config.KeyEncryption
+	if ke.File != "" || ke.Env != "" || len(ke.Command) != 0 {
+		t.Fatal("openTestService's config unexpectedly configured a key_encryption source")
+	}
+
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
+	if err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+
+	persisted, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("ReadFile(KeyFile): %v", err)
+	}
+	if string(persisted) != testFixtureEd25519Key {
+		t.Fatal("an imported key is no longer stored as plain, parseable PEM with no key_encryption source configured")
+	}
+	if !bytes.HasPrefix(persisted, []byte("-----BEGIN ")) {
+		t.Fatal("an imported key with no key_encryption source configured does not look like a plain PEM key on disk")
+	}
+}
+
+// TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured is
+// #298's migration path (issue step 3), proven through the real,
+// production Open()-constructed BackupService rather than against
+// resolveKeyFileForSFTP directly: it proves config.KeyEncryption set on
+// this Service's already-loaded configuration actually reaches the
+// transport layer (internal/app's sourceFor and this file's own
+// testConnectionVia both have to forward it correctly for this to work
+// at all), and that the first real use of an imported key after a
+// key_encryption source is configured rewrites it in place.
+//
+// The connection itself is against an address nothing listens on, so it
+// fails -- TestConnection reports that as OK: false, never as a Go error
+// (see its own doc) -- but key resolution (and, here, migration) happens
+// synchronously inside sftpConfig, before any network I/O is attempted,
+// so the migration this test cares about has already happened regardless
+// of the connection's own outcome.
+func TestConnection_MigratesImportedKeyToAtRestEncryptionWhenConfigured(t *testing.T) {
+	svc, _ := openTestService(t)
+
+	ref, err := svc.ImportSSHKey(context.Background(), []byte(testFixtureEd25519Key), "")
+	if err != nil {
+		t.Fatalf("ImportSSHKey: %v", err)
+	}
+	before, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("reading imported key file: %v", err)
+	}
+
+	const envName = "RCLONE_MANAGER_TEST_TESTCONNECTION_MIGRATION_DEK"
+	t.Setenv(envName, "test-connection-level-dek")
+	svc.state.Load().inner.Config.KeyEncryption = config.KeyEncryption{Env: envName}
+
+	if _, err := svc.TestConnection(context.Background(), ConnectionTestRequest{
+		Host:           "127.0.0.1",
+		Port:           1, // nothing listens on port 1; the dial itself is expected to fail
+		User:           "backup-agent",
+		SSHKeyID:       ref.ID,
+		KnownHostsLine: "example.internal ssh-ed25519 AAAAtestfixtureline",
+	}); err != nil {
+		t.Fatalf("TestConnection returned a Go error rather than ConnectionTestResult.OK == false: %v", err)
+	}
+
+	after, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("reading key file after TestConnection: %v", err)
+	}
+	if bytes.Equal(after, before) {
+		t.Fatal("TestConnection did not migrate the key file to at-rest encryption once key_encryption was configured")
+	}
+	if bytes.HasPrefix(after, []byte("-----BEGIN ")) {
+		t.Fatal("the key file still looks like a plain PEM key after migration")
+	}
+}
+
 func TestImportSSHKey_NotAKeyReturnsErrInvalidRequestWithoutEchoingInput(t *testing.T) {
 	svc, _ := openTestService(t)
-	_, err := svc.ImportSSHKey(context.Background(), []byte("this-is-not-an-ssh-key-at-all"))
+	_, err := svc.ImportSSHKey(context.Background(), []byte("this-is-not-an-ssh-key-at-all"), "")
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("err = %v, want ErrInvalidRequest", err)
 	}
@@ -524,9 +707,106 @@ func TestImportSSHKey_NotAKeyReturnsErrInvalidRequestWithoutEchoingInput(t *test
 
 func TestImportSSHKey_EmptyReturnsErrInvalidRequest(t *testing.T) {
 	svc, _ := openTestService(t)
-	_, err := svc.ImportSSHKey(context.Background(), []byte(""))
+	_, err := svc.ImportSSHKey(context.Background(), []byte(""), "")
 	if !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+}
+
+// testEncryptedFixtureKeyPassphrase is the passphrase
+// mustEncryptedFixtureKeyPEM always encrypts with.
+const testEncryptedFixtureKeyPassphrase = "correct horse battery staple"
+
+// mustEncryptedFixtureKeyPEM generates a fresh, throwaway, passphrase-
+// protected ed25519 private key for #269's ImportSSHKey tests: real
+// encrypted key bytes, generated the same Go-native way
+// internal/transport/rclone/ssh_test.go's generateEncryptedClientSSHKeyPair
+// does (x/crypto/ssh's own MarshalPrivateKeyWithPassphrase), rather than
+// shelling out to ssh-keygen. Like testFixtureEd25519Key above, it
+// authorizes access to nothing: no server anywhere trusts its public half.
+func mustEncryptedFixtureKeyPEM(t *testing.T) []byte {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "backupsets-test-fixture", []byte(testEncryptedFixtureKeyPassphrase))
+	if err != nil {
+		t.Fatalf("ssh.MarshalPrivateKeyWithPassphrase: %v", err)
+	}
+	return pem.EncodeToMemory(block)
+}
+
+// TestImportSSHKey_EncryptedKeyWithCorrectPassphraseSucceeds is #269's
+// GREEN case for the import endpoint's backing method: a passphrase-
+// protected key, imported with the correct passphrase, is accepted and
+// persisted exactly like an unencrypted one, still encrypted on disk (this
+// method changes nothing about key storage, #298's separate concern).
+func TestImportSSHKey_EncryptedKeyWithCorrectPassphraseSucceeds(t *testing.T) {
+	svc, _ := openTestService(t)
+	raw := mustEncryptedFixtureKeyPEM(t)
+
+	ref, err := svc.ImportSSHKey(context.Background(), raw, testEncryptedFixtureKeyPassphrase)
+	if err != nil {
+		t.Fatalf("ImportSSHKey with the correct passphrase: %v", err)
+	}
+	if ref.ID == "" {
+		t.Error("ID is empty")
+	}
+	if !strings.HasPrefix(ref.Fingerprint, "SHA256:") {
+		t.Errorf("Fingerprint = %q, want a SHA256: prefix", ref.Fingerprint)
+	}
+	persisted, err := os.ReadFile(ref.KeyFile)
+	if err != nil {
+		t.Fatalf("ReadFile(KeyFile): %v", err)
+	}
+	if string(persisted) != string(raw) {
+		t.Error("persisted key file content does not match the imported (still encrypted) key")
+	}
+}
+
+// TestImportSSHKey_EncryptedKeyWithNoPassphraseIsRefused is #269's
+// unchanged-refusal case: an encrypted key imported with no passphrase at
+// all still fails exactly as it always has, by name, never silently
+// accepted.
+func TestImportSSHKey_EncryptedKeyWithNoPassphraseIsRefused(t *testing.T) {
+	svc, _ := openTestService(t)
+	raw := mustEncryptedFixtureKeyPEM(t)
+
+	_, err := svc.ImportSSHKey(context.Background(), raw, "")
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+	if !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("error %q does not name the actual problem (passphrase-protected)", err.Error())
+	}
+}
+
+// TestImportSSHKey_EncryptedKeyWithWrongPassphraseIsRefusedAtImport is
+// #269's central acceptance criterion, proven at the service method POST
+// /ssh-keys actually calls: "whatever is added is refused at
+// configuration time rather than at the first cycle" means a wrong
+// passphrase must fail HERE, before anything is persisted, not be
+// accepted and only discovered broken the first time a backup cycle tries
+// to connect.
+func TestImportSSHKey_EncryptedKeyWithWrongPassphraseIsRefusedAtImport(t *testing.T) {
+	svc, configPath := openTestService(t)
+	raw := mustEncryptedFixtureKeyPEM(t)
+
+	_, err := svc.ImportSSHKey(context.Background(), raw, "definitely the wrong passphrase")
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("err = %v, want ErrInvalidRequest", err)
+	}
+	if strings.Contains(err.Error(), "definitely the wrong passphrase") {
+		t.Fatalf("error echoed the passphrase back: %v", err)
+	}
+
+	// Nothing was written: a refused import must not leave a key file
+	// behind for a later step to trip over.
+	keysDir := filepath.Join(filepath.Dir(configPath), "ssh_keys")
+	entries, statErr := os.ReadDir(keysDir)
+	if statErr == nil && len(entries) != 0 {
+		t.Fatalf("a refused import still persisted %d file(s) in %s", len(entries), keysDir)
 	}
 }
 
@@ -582,6 +862,76 @@ func TestProbeHostKey_UnreachableHostReturnsAnError(t *testing.T) {
 // config.Validate refuses (the two spellings are mutually exclusive), and
 // a refused config means LoadAndValidate fails, no BackupService is
 // constructed, and there is no UI left to undo it from.
+// TestCreateBackupSet_DoesNotFreezeResolvedDefaultsIntoAFileThatNeverChoseThem
+// is issue #294's second half. CreateBackupSet re-reads the config file,
+// folds in the new backup set, and validates the WHOLE result before
+// writing -- its own comment on cfg.Validate says so -- and
+// config.Validate resolves Retention/Alerts IN PLACE. A config file that
+// never named a retention or alerts choice (a hand-written file, or one
+// CreateInitialConfig produced now that #294 is fixed) must come back
+// from adding an unrelated backup set with that same omission, not with
+// today's resolved numbers silently pinned into it, or every deployment
+// set up and then extended through the API/CLI would drift onto whatever
+// release happened to be running the day the second set was added.
+func TestCreateBackupSet_DoesNotFreezeResolvedDefaultsIntoAFileThatNeverChoseThem(t *testing.T) {
+	configPath := writeTestConfigFileWithRetention(t, "")
+	svc, cleanup, err := Open(context.Background(), configPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = cleanup() })
+
+	if _, err := svc.CreateBackupSet(context.Background(), validCreateReq(t, svc, "second-set")); err != nil {
+		t.Fatalf("CreateBackupSet: %v", err)
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	written := string(raw)
+
+	// The write did happen: without this the absences below would be
+	// satisfied by a no-op.
+	if !strings.Contains(written, "second-set") {
+		t.Fatalf("precondition failed: CreateBackupSet's write did not reach the file:\n%s", written)
+	}
+
+	frozen := []string{
+		"timezone: UTC",
+		"week_starts_on: monday",
+		"daily_days:",
+		"weekly_months:",
+		"monthly_months:",
+		"protect_last_known_good: true",
+		"repeated_failure_threshold: " + strconv.Itoa(config.DefaultRepeatedFailureThreshold),
+	}
+	for _, spelling := range frozen {
+		if strings.Contains(written, spelling) {
+			t.Errorf("CreateBackupSet froze the resolved default %q into a file that never chose retention or alerts:\n%s", spelling, written)
+		}
+	}
+
+	// Positive control, the same shape settings_test.go's
+	// TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile
+	// uses for the identical claim: encoding the VALIDATED config does
+	// produce every spelling above, so their absence from the file is not
+	// vacuous.
+	validated, err := config.LoadAndValidate(configPath)
+	if err != nil {
+		t.Fatalf("LoadAndValidate: %v", err)
+	}
+	encoded, err := yaml.Marshal(validated)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, spelling := range frozen {
+		if !strings.Contains(string(encoded), spelling) {
+			t.Errorf("control failed: encoding the validated config does not produce %q, so the absence assertions above prove nothing", spelling)
+		}
+	}
+}
+
 func TestCreateBackupSet_ConfigRoundTripKeepsOneRetentionSpelling(t *testing.T) {
 	roundTrip := func(t *testing.T, retention string) string {
 		t.Helper()

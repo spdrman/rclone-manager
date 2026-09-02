@@ -47,13 +47,26 @@ export function HealthSummary({ health }: { health: SystemHealth }) {
               {"Storage " + health.storageState}
             </StatusBadge>
             {health.setsStale > 0 ? (
-              <StatusBadge tone="warn" glyph="\u25b2">{health.setsStale + " set stale"}</StatusBadge>
+              <StatusBadge tone="warn" glyph={"\u25b2"}>{health.setsStale + " set stale"}</StatusBadge>
             ) : null}
             {health.setsDegraded > 0 ? (
-              <StatusBadge tone="warn" glyph="\u25b2">{health.setsDegraded + " set degraded"}</StatusBadge>
+              <StatusBadge tone="warn" glyph={"\u25b2"}>{health.setsDegraded + " set degraded"}</StatusBadge>
             ) : null}
             {health.setsFailing > 0 ? (
-              <StatusBadge tone="danger" glyph="\u2715">{health.setsFailing + " set halted"}</StatusBadge>
+              <StatusBadge tone="danger" glyph={"\u2715"}>{health.setsFailing + " set halted"}</StatusBadge>
+            ) : null}
+            {/* Issue #282/#316: shown only when it is not zero, the same
+                "a permanently-resting figure is a line an operator stops
+                seeing" reasoning `status`'s own CLI output already
+                follows for this exact count \u2014 most deployments never
+                declare a set read-only, and this stays zero forever.
+                Informational, not a problem: tone "ok", not "warn",
+                because a growing count here is this manager doing
+                exactly what a read-only source was declared for. */}
+            {health.readOnlyRetainedCount > 0 ? (
+              <StatusBadge tone="ok" glyph={"\u25cf"}>
+                {health.readOnlyRetainedCount + " retained (read-only source)"}
+              </StatusBadge>
             ) : null}
           </div>
         </div>

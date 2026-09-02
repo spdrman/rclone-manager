@@ -59,7 +59,7 @@ func (s *Service) ReconcileAll(ctx context.Context) []ReconcileSetReport {
 				out = append(out, ReconcileSetReport{Set: bs.ID, Err: err})
 				return out
 			}
-			source := sourceFor(src, bs)
+			source := sourceFor(s.Config, src, bs)
 			rep, err := s.reconcileOne(ctx, source, bs.ID)
 			out = append(out, ReconcileSetReport{Set: bs.ID, Report: rep, Err: err})
 		}

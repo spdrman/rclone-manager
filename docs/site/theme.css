@@ -1,0 +1,392 @@
+/* ============================================================
+   rclone-manager docs palette and base page styles.
+
+   # The palette, and why it is this one
+
+   Most of what this site shows is screenshots of the application,
+   so the site takes its colours from the application rather than
+   choosing its own. ui/shared/src/design-system/tokens.css sets
+   --platform-accent to oklch(0.52 0.09 255), which is the slate
+   blue #446b9c, and docs/assets/logo-light.svg already draws the
+   product mark in exactly that. Anything else here would make
+   every picture on the page look like it came from a different
+   product.
+
+   So: slate blue for links and rules, a deep navy for the hero, and
+   the application's own near-neutral warm greys for surfaces and
+   text (--text #191a19 and --text-2 #5b5d5b are lifted straight out
+   of tokens.css). The primary is pulled a little darker than the
+   application's accent, to #3a628f, because the app renders it on
+   its own white cards while this page renders it as body-copy links
+   on an off-white ground and that needs the extra contrast.
+
+   The one hue that is not the application's is --accent, a muted
+   teal. It marks the "what this entry actually does" annotations on
+   the tutorial, and those have to be distinguishable at a glance
+   from a link, a warning and a piece of chrome. Teal against slate
+   is a cool analogous pair, which is the point: it reads as
+   infrastructure and it cannot be mistaken for a status colour.
+
+   Warning and danger are the application's --warn and --danger,
+   flattened out of oklch, so a caution on this page is the same
+   colour as the caution in the screenshot beside it.
+
+   # Both themes are load-bearing
+
+   Every colour is declared as a custom property in both blocks
+   below. Nothing anywhere else in this site may write a literal
+   colour, because a literal survives the theme switch and then one
+   element is wrong in exactly one theme, which is the failure mode
+   nobody notices until a reader reports it.
+   ============================================================ */
+
+:root, [data-theme="light"] {
+  --primary: #3a628f;
+  /* The hero bar is dark in both themes, and topbar.css paints its
+     own text with var(--white). It is a literal, not a surface. */
+  --white: #ffffff;
+  --primary-dark: #21384f;
+  --accent: #2c6f63;
+  --bg: #f4f4f2;
+  --text: #191a19;
+  --text-light: #5b5d5b;
+  --text-faint: #8b8d8a;
+  --code-bg: #ececea;
+  --border: #dedcd8;
+  --border-strong: #c8c7c3;
+  --hero-bg: #16283a;
+  /* Raised surfaces: cards, callouts, the screenshot mat. */
+  --surface: #ffffff;
+  --table-header-bg: #ececea;
+
+  --ok: #2c6e49;
+  --ok-bg: #e9f2ec;
+  --warn: #8a5d0c;
+  --warn-bg: #fbf1de;
+  --danger: #a03823;
+  --danger-bg: #fbeae6;
+
+  --max-width: 900px;
+}
+
+[data-theme="dark"] {
+  --primary: #7fa8d6;
+  --primary-dark: #a9c6e6;
+  --accent: #63bdab;
+  --bg: #121312;
+  --text: #eceeeb;
+  --text-light: #a3a6a2;
+  --text-faint: #767976;
+  --code-bg: #1e201e;
+  --border: #313331;
+  --border-strong: #454745;
+  --hero-bg: #0d1720;
+  --surface: #1b1d1b;
+  --table-header-bg: #1e201e;
+
+  --ok: #6cbf95;
+  --ok-bg: #17261e;
+  --warn: #d9a340;
+  --warn-bg: #2a2113;
+  --danger: #e08772;
+  --danger-bg: #2c1a16;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  /* IBM Plex, the same pair ui/shared/index.html loads, so the prose
+     around a screenshot is set in the face the screenshot is set in. */
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  overflow-anchor: none;
+}
+
+main {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 4rem;
+}
+
+section { margin-bottom: 2.75rem; }
+
+h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--primary-dark);
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid var(--border);
+  scroll-margin-top: calc(var(--topbar-collapsed-height) + 1rem);
+}
+
+h3 {
+  font-size: 1.08rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 1.75rem 0 0.5rem;
+  scroll-margin-top: calc(var(--topbar-collapsed-height) + 1rem);
+}
+
+h4 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 1.25rem 0 0.35rem;
+}
+
+p { margin-bottom: 0.75rem; color: var(--text-light); }
+p strong, li strong { color: var(--text); }
+
+a { color: var(--primary); }
+a:hover { color: var(--primary-dark); }
+
+ul, ol { list-style: none; padding: 0; }
+
+ul li {
+  position: relative;
+  padding: 0.3rem 0 0.3rem 1.4rem;
+  color: var(--text-light);
+}
+
+ul li::before {
+  content: "\25B8";
+  position: absolute;
+  left: 0;
+  color: var(--primary);
+  font-weight: bold;
+}
+
+ol { counter-reset: step; }
+
+ol li {
+  position: relative;
+  padding: 0.3rem 0 0.3rem 1.8rem;
+  color: var(--text-light);
+  counter-increment: step;
+}
+
+ol li::before {
+  content: counter(step) ".";
+  position: absolute;
+  left: 0;
+  color: var(--primary);
+  font-weight: 600;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  font-weight: 600;
+  color: var(--primary-dark);
+  background: var(--table-header-bg);
+}
+
+td { color: var(--text-light); }
+td strong { color: var(--text); }
+
+/* A short identifier in a first column is a label, not prose: letting
+   it wrap turns "monthly" into "month / ly" and costs more width than
+   keeping it whole ever would. Later columns still wrap freely. */
+.scroll-x table td:first-child code { white-space: nowrap; }
+
+code {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+:not(pre) > code {
+  background: var(--code-bg);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  word-break: break-word;
+}
+
+pre {
+  background: var(--code-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.55;
+  margin-bottom: 0.75rem;
+}
+
+pre code { background: none; padding: 0; }
+
+/* Minimal YAML/shell tinting. Same class names the rest of the site
+   uses, so a future page can highlight without inventing a scheme. */
+.cm { color: var(--text-faint); font-style: italic; }
+.key { color: var(--primary); }
+.str { color: var(--ok); }
+.num { color: var(--warn); }
+
+/* ---------------------------------------------------------------
+   Callouts. Three tones, each one carrying a word as well as a
+   colour, because the product's own UI rule (§ status is never
+   colour alone) is a reasonable rule for its documentation too.
+   --------------------------------------------------------------- */
+.note {
+  border: 1px solid var(--border-strong);
+  border-left: 4px solid var(--primary);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface);
+  padding: 0.9rem 1.1rem;
+  margin: 1rem 0 1.25rem;
+}
+
+.note.warn   { border-left-color: var(--warn);   background: var(--warn-bg); }
+.note.danger { border-left-color: var(--danger); background: var(--danger-bg); }
+.note.ok     { border-left-color: var(--ok);     background: var(--ok-bg); }
+
+.note p:last-child { margin-bottom: 0; }
+
+.note-label {
+  display: block;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  color: var(--primary);
+}
+
+.note.warn   .note-label { color: var(--warn); }
+.note.danger .note-label { color: var(--danger); }
+.note.ok     .note-label { color: var(--ok); }
+
+/* ---------------------------------------------------------------
+   Screenshots. A figure, a caption, and a hard rule that the
+   caption says where the picture came from.
+   --------------------------------------------------------------- */
+figure {
+  margin: 1.25rem 0 1.75rem;
+}
+
+figure img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+/* ---------------------------------------------------------------
+   The per-field tables that carry most of the tutorial. "What it
+   does" is the column that matters, so it gets the room.
+   --------------------------------------------------------------- */
+.fields { margin: 1rem 0 1.25rem; }
+.fields th:nth-child(1), .fields td:nth-child(1) { width: 21%; }
+.fields th:nth-child(2), .fields td:nth-child(2) { width: 26%; }
+.fields td:nth-child(2) { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; word-break: break-word; }
+
+.does {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Wide content scrolls inside itself rather than widening the page. */
+.scroll-x { overflow-x: auto; }
+
+/* ---------------------------------------------------------------
+   Step headers on the tutorial.
+   --------------------------------------------------------------- */
+.step-eyebrow {
+  display: inline-block;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 0.15rem;
+}
+
+/* ---------------------------------------------------------------
+   Home page teaser card, the shape the reference site used for its
+   benchmark clipping.
+   --------------------------------------------------------------- */
+.clipping {
+  display: block;
+  margin: 0 0 2.5rem;
+  padding: 1.4rem 1.6rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: 0 6px 6px 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  text-decoration: none;
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+
+.clipping:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.12); transform: translateY(-1px); }
+
+.clipping-tag {
+  display: inline-block;
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--primary);
+  margin-bottom: 0.4rem;
+}
+
+.clipping p { color: var(--text-light); margin-bottom: 0.6rem; }
+.clipping-read { font-size: 0.85rem; font-weight: 600; color: var(--primary); }
+
+/* ---------------------------------------------------------------
+   Table of contents on the tutorial.
+   --------------------------------------------------------------- */
+.toc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.toc ol { columns: 2; column-gap: 2rem; }
+.toc li { padding: 0.22rem 0 0.22rem 1.8rem; break-inside: avoid; }
+
+@media (max-width: 640px) {
+  .toc ol { columns: 1; }
+  .fields th:nth-child(1), .fields td:nth-child(1),
+  .fields th:nth-child(2), .fields td:nth-child(2) { width: auto; }
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 1.75rem 1.5rem 2.5rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-faint);
+}
+
+footer p { color: var(--text-faint); margin-bottom: 0.3rem; }
