@@ -47,6 +47,7 @@ package rclone
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"strings"
 
@@ -68,6 +69,142 @@ import (
 // stable public contract as an error string gets without being a typed
 // value.
 const integrityFailurePrefix = "corrupted on transfer"
+
+// apiError is the part of the S3 error model this file matches on: a code
+// naming what the service said went wrong.
+//
+// # Why this is a locally-declared interface and not an SDK import
+//
+// The real types are github.com/aws/smithy-go's APIError and the s3 service
+// package's own error types, and matching them by identity is exactly what
+// this file's package doc says to do wherever a library rclone embeds
+// exposes a typed error. But importing them would put a provider SDK in
+// this repository's own import graph, which is what FR-28 forbids and what
+// backends_test.go's TestNoCloudProviderSDKIsImportedDirectly enforces with
+// no exception for this package.
+//
+// Go interfaces are structural, so there is no conflict to resolve: an
+// interface declared here matches any error in the chain that has the
+// method, whoever wrote it, and errors.As does the walking. That is
+// strictly BETTER than importing smithy, not a compromise: it survives
+// rclone swapping its SDK, it costs no dependency, and it cannot drift out
+// of sync with an upstream type this project does not control. What it
+// gives up is compile-time proof that the real errors satisfy it, so the
+// MinIO integration suite provides that proof at runtime instead, against a
+// real endpoint returning real NoSuchBucket, NoSuchKey and AccessDenied.
+//
+// The risk of a false match is an unrelated error type with an
+// ErrorCode() string method landing in a chain this classifier sees.
+// Nothing in this repository has one, and a code this table does not
+// recognise falls through to the rest of Classify unchanged, so the cost of
+// one would be nil.
+type apiError interface {
+	error
+	ErrorCode() string
+}
+
+// s3ErrorCategories maps an S3 error code to the FR-22 category it means,
+// per FR-28: "throttling and 5xx are Transient, NoSuchBucket and endpoint
+// resolution failures are Configuration, AccessDenied and signature
+// failures are Auth, NoSuchKey is NotFound".
+//
+// Codes rather than HTTP status, because a code says what happened and a
+// status says only how the service felt about it: 404 covers both "this key
+// is not here", which is a fact about one artifact, and "this bucket does
+// not exist", which is a fact about the configuration and needs a person.
+// Those two must not collapse, and the code is the only thing that
+// separates them.
+//
+// A code absent from this table is not classified here at all; Classify
+// falls through to its existing sentinel checks and, failing those, to
+// Permanent. That is the safe direction: an unrecognised failure treated as
+// retryable would spend a backoff budget on something that cannot succeed,
+// and treated as a capability absence would read as "nothing to worry
+// about".
+var s3ErrorCategories = map[string]transport.Category{
+	// Throttling and service-side failures. Retrying these is the whole
+	// reason FR-22 has a Transient category.
+	"SlowDown":                               transport.Transient,
+	"RequestLimitExceeded":                   transport.Transient,
+	"RequestThrottled":                       transport.Transient,
+	"RequestThrottledException":              transport.Transient,
+	"Throttling":                             transport.Transient,
+	"ThrottlingException":                    transport.Transient,
+	"TooManyRequestsException":               transport.Transient,
+	"ProvisionedThroughputExceededException": transport.Transient,
+	"InternalError":                          transport.Transient,
+	"InternalFailure":                        transport.Transient,
+	"ServiceUnavailable":                     transport.Transient,
+	"RequestTimeout":                         transport.Transient,
+	"RequestTimeoutException":                transport.Transient,
+
+	// Facts about the configuration. None of these starts being untrue on
+	// a second attempt; every one of them needs somebody to edit a config
+	// file.
+	//
+	// PermanentRedirect and AuthorizationHeaderMalformed are both what a
+	// wrong REGION looks like from the outside, which is worth having here
+	// because "your region is wrong" reads nothing like either code.
+	"NoSuchBucket":                       transport.Configuration,
+	"InvalidBucketName":                  transport.Configuration,
+	"PermanentRedirect":                  transport.Configuration,
+	"AuthorizationHeaderMalformed":       transport.Configuration,
+	"IllegalLocationConstraintException": transport.Configuration,
+	"InvalidLocationConstraint":          transport.Configuration,
+
+	// Credentials. FR-28 puts AccessDenied here rather than under
+	// PermissionDenied on purpose: against an object store, "denied" is
+	// overwhelmingly a key or a policy attached to a key, which is the
+	// same thing an operator has to go and fix, and PermissionDenied in
+	// this vocabulary means a remote-side refusal reached over a
+	// perfectly good session (see internal/app/halt.go's haltReasonFor).
+	"AccessDenied":                transport.Authentication,
+	"InvalidAccessKeyId":          transport.Authentication,
+	"SignatureDoesNotMatch":       transport.Authentication,
+	"InvalidSecurity":             transport.Authentication,
+	"InvalidToken":                transport.Authentication,
+	"ExpiredToken":                transport.Authentication,
+	"TokenRefreshRequired":        transport.Authentication,
+	"AuthFailure":                 transport.Authentication,
+	"UnrecognizedClientException": transport.Authentication,
+	"MissingAuthenticationToken":  transport.Authentication,
+	"AccountProblem":              transport.Authentication,
+
+	// One object, absent.
+	"NoSuchKey":    transport.NotFound,
+	"NotFound":     transport.NotFound,
+	"NoSuchUpload": transport.NotFound,
+
+	// The bytes arrived and did not match what was declared. This is the
+	// one category where a retry is actively wrong: it would re-upload the
+	// same corrupt payload.
+	"BadDigest":                 transport.IntegrityFailure,
+	"InvalidDigest":             transport.IntegrityFailure,
+	"XAmzContentSHA256Mismatch": transport.IntegrityFailure,
+
+	// InvalidObjectState is an object in an archive class that has to be
+	// restored before it can be read (FR-34). It is a capability absence
+	// at this moment rather than a permanent one, and #241 owns turning it
+	// into an explicit restore; until then UnsupportedCapability is the
+	// honest label, because no retry changes it and nothing is wrong.
+	"InvalidObjectState": transport.UnsupportedCapability,
+	"NotImplemented":     transport.UnsupportedCapability,
+
+	"BucketAlreadyExists":     transport.Conflict,
+	"BucketAlreadyOwnedByYou": transport.Conflict,
+}
+
+// classifyS3Error reads an S3 error code out of err's chain and maps it.
+// ok is false when there is no code, or the code is one this table does not
+// place, so the caller keeps looking.
+func classifyS3Error(err error) (transport.Category, bool) {
+	var api apiError
+	if !errors.As(err, &api) {
+		return transport.Unclassified, false
+	}
+	category, ok := s3ErrorCategories[api.ErrorCode()]
+	return category, ok
+}
 
 // Classify translates err, as returned by this package's Adapter, into the
 // manager-owned transport.Category lifecycle code is allowed to switch on.
@@ -95,6 +232,34 @@ func Classify(err error) transport.Category {
 	// "Cancellation SHALL propagate through Go contexts").
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return transport.Cancelled
+	}
+
+	// The S3 code comes BEFORE every sentinel check below, and the order is
+	// load-bearing rather than incidental. rclone's s3 backend translates
+	// some failures into its own filesystem-shaped sentinels on the way
+	// out (a 404 becomes fs.ErrorObjectNotFound or fs.ErrorDirNotFound),
+	// and where it does, the code is gone. Where it does NOT, the code is
+	// the only thing that can tell "this key is absent" apart from "this
+	// bucket does not exist", which are the same status and completely
+	// different problems. So the code is read first, wherever one survived.
+	if category, ok := classifyS3Error(err); ok {
+		return category
+	}
+
+	// An endpoint that does not resolve is a fact about the configuration,
+	// and FR-28 says so explicitly. This has to come before the
+	// fserrors.ShouldRetry fallback at the bottom, which treats a DNS
+	// failure as a network condition worth retrying: NXDOMAIN is not a
+	// network condition, it is a hostname nobody has ever registered, and
+	// a backup job retrying it for its whole backoff budget every cycle
+	// tells the operator nothing.
+	//
+	// Only IsNotFound. A DNS server that is temporarily unreachable is a
+	// genuine transient and is left to ShouldRetry, which is better at
+	// that question than this file would be.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return transport.Configuration
 	}
 
 	// golang.org/x/crypto/ssh/knownhosts is the exact library rclone's sftp
@@ -160,7 +325,7 @@ func Classify(err error) transport.Category {
 	// a way that makes this operation ambiguous". See the package comment:
 	// this adapter's current surface has no reachable path to it, but the
 	// sentinel is real and cheap to recognize regardless.
-	if errors.Is(err, rclonefs.ErrorDirExists) {
+	if errors.Is(err, rclonefs.ErrorDirExists) || errors.Is(err, ErrObjectAlreadyPresent) {
 		return transport.Conflict
 	}
 
