@@ -81,10 +81,11 @@ export function ActivityPage() {
             </select>
           )}
         </FieldHelp>
-        <select className="select" style={{ height: 32 }} aria-label="Time range" defaultValue="24">
-          <option value="24">Last 24 hours</option>
-          <option value="168">Last 7 days</option>
-        </select>
+        {/* Issue #299: a "Time range" select used to sit here,
+            `defaultValue="24"` with no `onChange` and nothing reading it.
+            Removed rather than wired: listActivity() takes no window
+            argument, and building server-side windowing is out of scope
+            for that issue. */}
       </div>
 
       {filtered.length === 0 ? (

@@ -34,28 +34,15 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.3fr) minmax(0, 1fr)", gap: 14, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <section className="card">
-            <div className="card__header"><h2 className="eyebrow">Service</h2></div>
-            <div
-              className="card__body"
-              style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(196px, 1fr))", gap: "15px 18px" }}
-            >
-              <label className="field">
-                <span className="field__label">Polling interval</span>
-                <select className="select" defaultValue="30" disabled={readOnly}>
-                  <option value="15">15 seconds</option>
-                  <option value="30">30 seconds</option>
-                  <option value="60">60 seconds</option>
-                </select>
-              </label>
-              <label className="field">
-                <span className="field__label">Log level</span>
-                <select className="select" defaultValue="info" disabled={readOnly}>
-                  <option>error</option><option>warn</option><option>info</option><option>debug</option>
-                </select>
-              </label>
-            </div>
-          </section>
+          {/* Issue #299: this used to be a "Service" card holding two
+              decorative controls, "Polling interval" (15/30/60 SECONDS)
+              and "Log level" — both `defaultValue`, no `onChange`, nothing
+              saved. Removed rather than wired: the real `poll_interval`
+              config key is a duration (minutes, defaults to 15m) so this
+              control was even answering the wrong unit, and there is no
+              log-level concept anywhere in config.Config to wire the
+              second one to. `poll_interval` is still real and still
+              editable — just directly in config.yaml, not here. */}
 
           {/* Issue #286: the storage cap and its two FR-21 thresholds
               used to sit here as three decorative controls that saved
@@ -83,13 +70,16 @@ export function SettingsPage({ readOnly }: { readOnly: boolean }) {
                 <span aria-hidden="true" style={{ color: "var(--text-3)" }}>i</span>
                 <span>{notificationCopy(bridge.capabilities(), bridge.name)}</span>
               </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 13px", border: "1px solid var(--border)", borderRadius: 7, fontSize: 13, cursor: "pointer" }}>
-                <input type="checkbox" defaultChecked disabled={readOnly} style={{ accentColor: "var(--accent)" }} />
-                <span style={{ flex: 1 }}>Webhook notifications</span>
-                <span className="mono" style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>
-                  https://hooks.internal/bm
-                </span>
-              </label>
+              {/* Issue #299: this row used to present
+                  "https://hooks.internal/bm" as a live webhook delivery
+                  target. config.Alerts' own doc comment says where an
+                  alert goes is deliberately not configurable in this
+                  product — there was never a URL for this row to
+                  validate, save, or actually deliver to. Removed rather
+                  than wired, since wiring it would mean reversing that
+                  design decision, which this issue does not do. This was
+                  the most urgent item in #299: not a control that merely
+                  failed to save, a specific fake fact stated as true. */}
             </div>
           </section>
 

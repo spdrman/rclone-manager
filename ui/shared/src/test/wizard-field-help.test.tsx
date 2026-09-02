@@ -18,8 +18,9 @@ import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
  * check field-help-pages.test.tsx runs for every other page. FieldHelp's
  * own suite proves the interaction works; this proves the RIGHT copy
  * reaches the RIGHT control on a page assembled across six steps rather
- * than one screen, and that the still-decorative controls (#299) were
- * left alone rather than gaining a plausible-looking pop-up.
+ * than one screen, and that the controls #299 later removed or turned
+ * into plain non-interactive statements never gained a plausible-looking
+ * pop-up in the meantime.
  *
  * Two of the honest fields (key source, completion method) explain a
  * GROUP of radios rather than one control, so their copy is asserted
@@ -36,10 +37,6 @@ function expectHelp(control: HTMLElement, copy: FieldHelpCopy) {
   expect(described?.textContent).toContain(copy.what);
   expect(described?.textContent).toContain(copy.example);
   expect(described?.textContent).toContain(copy.effect);
-}
-
-function expectNoHelp(control: HTMLElement) {
-  expect(control.getAttribute("aria-describedby")).toBeNull();
 }
 
 function renderWizard() {
@@ -81,8 +78,8 @@ describe("the wizard's honest fields are wired to their own copy", () => {
     expectHelp(screen.getByRole("radiogroup", { name: "Key source" }), FIELD_HELP.wizardKeySource);
 
     // The private-key field only renders once "Import key" is selected;
-    // the default choice is "Generate", whose own panel is decorative
-    // and deliberately left unexplained (#299).
+    // the default choice is "Generate", whose own panel is a plain
+    // statement of fact (#299), not a control, so it gets no tooltip.
     await user.click(screen.getByRole("radio", { name: /Import key/ }));
     expectHelp(screen.getByLabelText(/private key/i), FIELD_HELP.wizardPrivateKey);
   });
@@ -98,17 +95,16 @@ describe("the wizard's honest fields are wired to their own copy", () => {
     // A <fieldset> is role "group", named by its own <legend>.
     expectHelp(screen.getByRole("group", { name: "Completion method" }), FIELD_HELP.wizardCompletionMethod);
 
-    // Exclude patterns sits in the same grid, defaultValue-only and
-    // unwired to anything the server reads (config.BackupSet has no
-    // exclude field): no honest sentence exists for it, so it gets none.
-    expectNoHelp(screen.getByLabelText("Exclude patterns"));
+    // Exclude patterns was removed entirely by #299 (config.BackupSet has
+    // no exclude field, and nothing read it) — see wizard-decorative-
+    // fields.test.tsx for the proof it's gone. Nothing to explain here.
   });
 
-  it("on the Storage & retention step, and not on its per-set retention controls", async () => {
+  it("on the Storage & validation step", async () => {
     const user = userEvent.setup();
     renderWizard();
 
-    await user.click(screen.getByRole("button", { name: "Storage & retention" }));
+    await user.click(screen.getByRole("button", { name: "Storage & validation" }));
 
     // Both labels also wrap a caption sentence (and, for NAS destination,
     // a button) besides their own field name, so testing-library's exact
@@ -118,11 +114,10 @@ describe("the wizard's honest fields are wired to their own copy", () => {
     expectHelp(screen.getByLabelText("NAS destination", { exact: false }), FIELD_HELP.wizardNasDestination);
     expectHelp(screen.getByLabelText("Application validation", { exact: false }), FIELD_HELP.wizardValidatorId);
 
-    // #111 settled retention as one global policy; these three still draw
-    // the per-set shape it warned against, so they stay unexplained.
-    expectNoHelp(screen.getByLabelText("Daily"));
-    expectNoHelp(screen.getByLabelText("Weekly"));
-    expectNoHelp(screen.getByLabelText("Monthly"));
+    // #111 settled retention as one global policy; the per-set Daily/
+    // Weekly/Monthly/Week-starts fields that used to draw the shape it
+    // warned against were removed by #299, not merely left unexplained —
+    // see wizard-decorative-fields.test.tsx for the proof they're gone.
   });
 
   it("on the Review step's acknowledgement checkbox", async () => {

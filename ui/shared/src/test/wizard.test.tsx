@@ -134,7 +134,7 @@ describe("add backup set wizard", () => {
 
   it("does not offer a native storage picker on a platform without one", async () => {
     renderWizard();
-    await userEvent.click(screen.getByRole("button", { name: "Storage & retention" }));
+    await userEvent.click(screen.getByRole("button", { name: "Storage & validation" }));
     expect(screen.getByRole("button", { name: "Validate path" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Browse volumes/ })).toBeNull();
   });
@@ -142,7 +142,11 @@ describe("add backup set wizard", () => {
   it("never renders a private key", async () => {
     renderWizard();
     await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
-    expect(screen.getByText(/ssh-ed25519 AAAA/)).toBeTruthy();
+    // Default key source is "Generate", whose panel (#299) says plainly
+    // that this path can't be saved yet rather than showing a fixed
+    // sample key, so this is the positive control that we're on the
+    // right panel at all.
+    expect(screen.getByText(/Generating a key on save isn.t available yet/)).toBeTruthy();
     // Match key MATERIAL, not the words. The step deliberately says
     // "Private keys stay on this NAS and are never shown after
     // creation", which is the correct thing to tell an operator, and a
@@ -202,11 +206,16 @@ describe("add backup set wizard", () => {
       expect(screen.queryByText(/shape only/i)).toBeNull();
     });
 
-    it("shows that a managed key already in use cannot simply be deleted", async () => {
+    // #299: this used to assert a fabricated "Already installed on 2
+    // other backup sets" fact with no managed-key store behind it. The
+    // panel now says plainly that this path can't be saved yet, same as
+    // "Generate" above.
+    it("says a managed key can't be reused on save yet, rather than showing a fabricated in-use count", async () => {
       renderWizard();
       await userEvent.click(screen.getByRole("button", { name: "Authentication" }));
       await userEvent.click(screen.getByRole("radio", { name: /Use managed key/ }));
-      expect(screen.getByText(/other backup sets/i)).toBeTruthy();
+      expect(screen.getByText(/Reusing a managed key on save isn.t available yet/)).toBeTruthy();
+      expect(screen.queryByText(/other backup sets/i)).toBeNull();
     });
   });
 
@@ -414,7 +423,7 @@ describe("add backup set wizard", () => {
       const spy = vi.spyOn(api, "createBackupSet");
       renderWizardWithRoutes(api);
 
-      await userEvent.click(screen.getByRole("button", { name: "Storage & retention" }));
+      await userEvent.click(screen.getByRole("button", { name: "Storage & validation" }));
       const picker = await screen.findByLabelText(/application validation/i);
       // A real picklist, not the decorative toggle #98 shipped: the
       // options come from the backend's own registered catalog.
@@ -452,7 +461,7 @@ describe("add backup set wizard", () => {
       );
       renderWizard(false, api);
 
-      await userEvent.click(screen.getByRole("button", { name: "Storage & retention" }));
+      await userEvent.click(screen.getByRole("button", { name: "Storage & validation" }));
       expect(await screen.findByText(/could not load the available validators/i)).toBeTruthy();
     });
 
