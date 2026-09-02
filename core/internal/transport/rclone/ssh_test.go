@@ -387,43 +387,99 @@ func TestSftpConfig_PortOmittedWhenZero(t *testing.T) {
 // TestSftpConfig_KeyFileNeverProducesKeyPem and the key_env/key_command
 // cases below for the other half of that claim: key_pem appears ONLY when
 // the source actually chose one of those two resolvers.
+//
+// It runs over several sources rather than one, and that is load-bearing
+// rather than thoroughness for its own sake. A key sftpConfig only sets
+// inside an `if` is invisible to a fixture that never takes that branch,
+// so a single-source version of this test claims to pin the whole
+// producible set while actually pinning whichever subset one source
+// happens to reach. #355 found exactly that: `connections` had been a
+// producible key for a while and this test had never once seen it,
+// because the source it used left the ceiling at zero.
 func TestSftpConfig_OnlyAllowlistedKeysAreSet(t *testing.T) {
-	dir := t.TempDir()
-	src := validSource(t, dir)
-	cfg, err := sftpConfig(src)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
 	allowed := map[string]bool{
 		"host":             true,
 		"port":             true,
 		"user":             true,
 		"key_file":         true,
 		"key_pem":          true,
+		"key_file_pass":    true,
 		"known_hosts_file": true,
-		// Not part of the FR-6 security posture: these three exist because
+		// Not part of the FR-6 security posture: these four exist because
 		// fsFor calls info.NewFs directly and so gets none of rclone's own
-		// option defaults (see the comment in sftpConfig). Without them
-		// every sftp operation fails before it does anything, security
-		// posture aside.
-		"subsystem":   true,
-		"chunk_size":  true,
-		"concurrency": true,
-	}
-	for k := range cfg {
-		if !allowed[k] {
-			t.Errorf("sftpConfig set unexpected key %q; every key this function can set must be reviewed for FR-6 impact", k)
-		}
+		// option defaults (see the comment in sftpConfig). Without the
+		// first three every sftp operation fails before it does anything,
+		// security posture aside; the fourth restores rclone's own pool
+		// drainer, which without it never exists at all.
+		"subsystem":    true,
+		"chunk_size":   true,
+		"concurrency":  true,
+		"idle_timeout": true,
+		// #264/#355: the operator's connection ceiling, set only when one
+		// was actually asked for.
+		"connections": true,
 	}
 
-	// And the values that matter for FR-6 are exactly what was configured,
-	// not silently substituted or defaulted to something looser.
-	if v, _ := cfg.Get("key_file"); v != src.KeyFile {
-		t.Errorf("key_file = %q, want %q", v, src.KeyFile)
-	}
-	if v, _ := cfg.Get("known_hosts_file"); v != src.KnownHosts {
-		t.Errorf("known_hosts_file = %q, want %q", v, src.KnownHosts)
+	for _, tc := range []struct {
+		name    string
+		mutate  func(t *testing.T, src *transport.Source)
+		mustSet []string
+	}{
+		{
+			name:    "plain",
+			mutate:  func(*testing.T, *transport.Source) {},
+			mustSet: []string{"key_file", "known_hosts_file", "subsystem", "chunk_size", "concurrency", "idle_timeout"},
+		},
+		{
+			name: "with a connection ceiling",
+			mutate: func(_ *testing.T, src *transport.Source) {
+				src.MaxConnections = 2
+			},
+			mustSet: []string{"connections"},
+		},
+		{
+			name: "with a key passphrase",
+			mutate: func(t *testing.T, src *transport.Source) {
+				t.Setenv("TEST_SFTP_KEY_PASSPHRASE", "not-a-real-passphrase")
+				src.PassphraseEnv = "TEST_SFTP_KEY_PASSPHRASE"
+			},
+			mustSet: []string{"key_file_pass"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			src := validSource(t, dir)
+			tc.mutate(t, &src)
+			cfg, err := sftpConfig(src)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			for k := range cfg {
+				if !allowed[k] {
+					t.Errorf("sftpConfig set unexpected key %q; every key this function can set must be reviewed for FR-6 impact", k)
+				}
+			}
+
+			// The branch this case exists to reach really was reached, so
+			// "no unexpected key" above is a statement about a config
+			// that actually contains the key in question.
+			for _, k := range tc.mustSet {
+				if _, ok := cfg.Get(k); !ok {
+					t.Errorf("this case is supposed to make sftpConfig set %q and it did not, so it pins nothing", k)
+				}
+			}
+
+			// And the values that matter for FR-6 are exactly what was
+			// configured, not silently substituted or defaulted to
+			// something looser.
+			if v, _ := cfg.Get("key_file"); v != src.KeyFile {
+				t.Errorf("key_file = %q, want %q", v, src.KeyFile)
+			}
+			if v, _ := cfg.Get("known_hosts_file"); v != src.KnownHosts {
+				t.Errorf("known_hosts_file = %q, want %q", v, src.KnownHosts)
+			}
+		})
 	}
 }
 

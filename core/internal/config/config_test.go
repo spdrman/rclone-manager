@@ -47,6 +47,9 @@ func TestLoadParsesFullExample(t *testing.T) {
 	if !bs.Remote.Sensitive {
 		t.Fatalf("Remote.Sensitive = false, want true (full.yaml sets sensitive_endpoint: true)")
 	}
+	if bs.Remote.MaxConnections != 2 {
+		t.Fatalf("Remote.MaxConnections = %d, want 2 (full.yaml sets max_connections: 2)", bs.Remote.MaxConnections)
+	}
 	if len(bs.Include) != 1 || bs.Include[0] != "*.dump.zst" {
 		t.Fatalf("Include decoded wrong: %#v", bs.Include)
 	}

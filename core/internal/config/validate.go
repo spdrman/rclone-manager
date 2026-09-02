@@ -336,9 +336,28 @@ func (v *validator) validateRemote(path string, r *Remote) {
 		if r.Port < 0 || r.Port > 65535 {
 			v.addf("%s: port %d is out of range (0 selects the default port)", path, r.Port)
 		}
+		// #264: zero is meaningful and correct (it is rclone's own
+		// unlimited default, and what every config written before this
+		// field existed means), so it is deliberately not refused here.
+		//
+		// Both ends are refused, though. A negative one rclone takes and
+		// then fails every backend operation with. A pathological
+		// positive one is not a no-op either: rclone builds a token
+		// dispenser of exactly this many tokens at every NewFs, filling
+		// the channel one send at a time (lib/pacer.NewTokenDispenser),
+		// so a fat-fingered 100000000 is a fill loop on every single
+		// operation. maxConnectionsCeiling is not a tuning limit, it is
+		// the point past which the value has stopped being a ceiling for
+		// any host that exists.
+		if r.MaxConnections < 0 {
+			v.addf("%s: max_connections %d cannot be negative (omit it, or set 0, for no ceiling)", path, r.MaxConnections)
+		}
+		if r.MaxConnections > maxConnectionsCeiling {
+			v.addf("%s: max_connections %d is above the %d this manager will accept (omit it, or set 0, for no ceiling)", path, r.MaxConnections, maxConnectionsCeiling)
+		}
 	case "local":
-		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 {
-			v.addf("%s: host, port, user, key_file/key and known_hosts are not used for type \"local\"; remove them", path)
+		if r.Host != "" || r.User != "" || r.KeyFile != "" || !r.Key.isZero() || !r.Key.Passphrase.isZero() || r.KnownHosts != "" || r.Port != 0 || r.MaxConnections != 0 {
+			v.addf("%s: host, port, user, key_file/key, known_hosts and max_connections are not used for type \"local\"; remove them", path)
 		}
 	case "":
 		v.addf("%s: type must be set (\"local\" or \"sftp\")", path)
@@ -1055,6 +1074,21 @@ func RetentionWindowUnits() []string {
 // can apply the identical rule before submitting, for the same
 // single-source reason as RetentionGranularities above.
 var retentionTierNamePattern = regexp.MustCompile(RetentionTierNamePattern)
+
+// maxConnectionsCeiling is the largest per-remote connection ceiling this
+// manager accepts (#355 finding 10).
+//
+// It is not a tuning limit and there is nothing to tune towards: the field
+// exists to keep this manager UNDER a host's own limit, and no host caps
+// SSH connections from one address anywhere near a thousand. What the
+// bound actually buys is that a fat-fingered value cannot be handed to
+// rclone, which builds a token dispenser of exactly this many tokens at
+// every NewFs by sending into a channel one token at a time. An
+// unbounded field turns a typo into a fill loop on every operation, which
+// is the same "an out-of-range number has no business being unbounded in
+// the last check before real work" reasoning the retention ceilings below
+// are built on.
+const maxConnectionsCeiling = 1024
 
 // RetentionTierNamePattern is the regular expression source
 // retentionTierNamePattern is compiled from, in a syntax

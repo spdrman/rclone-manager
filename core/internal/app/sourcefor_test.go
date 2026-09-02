@@ -157,3 +157,33 @@ func TestSourceForForwardsKeyEncryption(t *testing.T) {
 		})
 	}
 }
+
+// TestSourceForForwardsTheConnectionCeiling is #355's version of the tests
+// above, and it exists because this line had none: deleting
+// `MaxConnections: r.MaxConnections` from sourceFor left every test in
+// ./internal/... and ./service/... green, so the one line carrying an
+// operator's configured ceiling into the adapter was unpinned. A ceiling
+// that never arrives is worse than no ceiling at all, because the operator
+// has been told they set one.
+func TestSourceForForwardsTheConnectionCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  int
+	}{
+		{"unset", 0},
+		{"a real ceiling", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bs := testBackupSet(t, "/var/backups/postgres")
+			bs.Remote.Type = "sftp"
+			bs.Remote.Key = config.Key{File: "/etc/backup-manager/id_ed25519"}
+			bs.Remote.MaxConnections = tc.set
+
+			got := sourceFor(&config.Config{}, testSource("production", bs), bs)
+
+			if got.MaxConnections != tc.set {
+				t.Errorf("MaxConnections = %d, want %d: an operator's configured ceiling has to reach the adapter, or it is only enforced by the host refusing the connection", got.MaxConnections, tc.set)
+			}
+		})
+	}
+}

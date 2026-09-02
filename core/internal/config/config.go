@@ -542,6 +542,38 @@ type Remote struct {
 	// what this manager does, only what its own observability output is
 	// allowed to contain.
 	Sensitive bool `yaml:"sensitive_endpoint,omitempty"`
+
+	// MaxConnections caps how many simultaneous SFTP connections ONE
+	// OPERATION against this remote may open. Zero, including by omission,
+	// means unlimited, which is rclone's own default and is what every
+	// config written before this field existed means, so adding it changes
+	// no existing deployment.
+	//
+	// Read "one operation" literally, because the name promises more than
+	// the setting delivers and the difference is the kind that bites at
+	// three in the morning. rclone hands out connection tokens per Fs, and
+	// this manager builds a fresh Fs for every list, stat, copy, hash and
+	// delete (see internal/transport/rclone/adapter.go and #355). So this
+	// bounds an operation, not a remote: a scheduled cycle and an operator
+	// clicking "test connection" in the web UI are two operations, and a
+	// host that sees them at the same time sees up to twice this number.
+	//
+	// It is per remote rather than global because whether a host caps
+	// concurrent connections is a fact about that host, not about this
+	// manager: a hardened VPS and a NAS on the same LAN are free to differ,
+	// the same reasoning sensitive_endpoint above is built on.
+	//
+	// Setting it is a belt, not the braces. A host that caps connections
+	// usually REJECTS the surplus rather than queueing it, so exceeding
+	// the cap is not slow, it is a failed backup reported as a bare
+	// connection error (issue #264: both production sources reject a third
+	// simultaneous connection from one address with a TCP reset). What
+	// keeps this manager under such a cap is the adapter opening one
+	// connection per operation by construction, which it does whether or
+	// not this is set. This is what an operator can point rclone at
+	// directly, and it is what still holds if a future rclone or a future
+	// backend decides to open more.
+	MaxConnections int `yaml:"max_connections,omitempty"`
 }
 
 // Key names exactly one way for an sftp Remote to obtain its SSH private

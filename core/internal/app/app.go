@@ -333,6 +333,10 @@ func sourceFor(cfg *config.Config, src config.Source, bs config.BackupSet) trans
 		Host: r.Host,
 		Port: r.Port,
 		User: r.User,
+		// #264: a host that caps concurrent connections rejects the
+		// surplus, so this has to reach the adapter or the cap is only
+		// enforced by the remote refusing us.
+		MaxConnections: r.MaxConnections,
 		// All three key sources have to travel, not just the file one.
 		// config.Validate has already refused anything but exactly one of
 		// them, and normalized the deprecated key_file into Key.File, so
