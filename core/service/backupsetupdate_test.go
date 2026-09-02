@@ -523,14 +523,27 @@ func writeRichTestConfigFile(t *testing.T) string {
 		"  - id: production\n" +
 		"    backup_sets:\n" +
 		"      - id: postgres-primary\n" +
-		"        remote:\n          type: local\n" +
+		"        remote:\n" +
+		"          type: sftp\n" +
+		"          host: nas.internal\n" +
+		"          port: 2222\n" +
+		"          user: backup-agent\n" +
+		"          known_hosts: " + filepath.Join(dir, "known_hosts") + "\n" +
+		"          sensitive_endpoint: true\n" +
+		"          max_connections: 4\n" +
+		"          key:\n" +
+		"            file: " + filepath.Join(dir, "id_ed25519") + "\n" +
+		"            passphrase:\n              file: " + filepath.Join(dir, "passphrase") + "\n" +
 		"        remote_path: " + remoteDir + "\n" +
 		"        local_path: " + filepath.Join(dir, "local") + "\n" +
 		"        include:\n          - \"*.dump\"\n" +
-		"        completion:\n          strategy: rename\n" +
+		"        completion:\n" +
+		"          strategy: stable\n" +
+		"          stable_for: 90s\n" +
+		"          delete_safety_delay: 30s\n" +
 		"        stale_after: 24h\n" +
 		"        read_only: true\n" +
-		"        validation:\n          hash: sha256\n" +
+		"        validation:\n          hash: sha256\n          validator_id: trailer-marker\n" +
 		"        retention:\n" +
 		"          daily_days: 90\n" +
 		"          weekly_months: 24\n" +
@@ -632,6 +645,17 @@ var exemptFromIsolationFixture = map[string]string{
 	"ReadOnly":     "the RESOLVED answer, filled in by Validate from ReadOnlyConfig; the override is what the fixture sets",
 	"Disabled":     "a bool whose zero value IS its ordinary state (an enabled set), so \"non-zero\" cannot be required of it. UpdateBackupSetRequest cannot reach it either: enabling and disabling is POST /enabled's own route",
 	"Revalidation": "issue #315's re-check schedule, which no update-path request field can reach and which config.Validate does not require",
+
+	// One level down, and every one of these is a field that CANNOT be
+	// set alongside what the fixture already sets, rather than one nobody
+	// got round to.
+	"Remote.KeyFile":                "the deprecated spelling of Key.File (#74). config.Validate refuses a remote that sets both, so the fixture can carry exactly one of the two and it carries the current one",
+	"Remote.Key.Env":                "one of Key's three mutually exclusive sources; validateKey refuses more than one, and the fixture uses File",
+	"Remote.Key.Command":            "the third of those three, refused alongside File for the same reason",
+	"Remote.Key.Passphrase.Env":     "one of Passphrase's three mutually exclusive sources; the fixture uses File",
+	"Remote.Key.Passphrase.Command": "the third of those three, refused alongside File for the same reason",
+	"Completion.ManifestMarker":     "issue #291's marker filename, used only by the \"marker\" strategy and refused by Validate alongside \"stable\", which is the strategy this fixture uses so that stable_for (a field the update path CAN set) is exercised instead",
+	"Validation.Command":            "the RESOLVED validator command, this deployment's own materialized script path. newBackupSetFor's doc is explicit that a config.yaml holding a stale copy of it fails every artifact in the set after the next restart, so a fixture that wrote one would be pinning the thing the applier deliberately clears",
 }
 
 // TestUpdateBackupSetIsolationFixtureExercisesEveryField is a control on
@@ -651,34 +675,70 @@ func TestUpdateBackupSetIsolationFixtureExercisesEveryField(t *testing.T) {
 	configPath := writeRichTestConfigFile(t)
 	bs := readBackupSetFromDisk(t, configPath, "production", "postgres-primary")
 
-	rt := reflect.TypeOf(bs)
-	rv := reflect.ValueOf(bs)
+	seen := map[string]bool{}
+	checked := walkIsolationFixture(t, "", reflect.ValueOf(bs), seen)
+
+	if checked == 0 {
+		t.Fatal("every field was exempt, so this control checked nothing")
+	}
+
+	// The exemption list may not name a path that no longer exists, which
+	// is how a ledger rots into a list of excuses for things that are not
+	// there any more.
+	for name := range exemptFromIsolationFixture {
+		if !seen[name] {
+			t.Errorf("exemptFromIsolationFixture names %q, which config.BackupSet no longer has at that path; remove the entry", name)
+		}
+	}
+}
+
+// walkIsolationFixture is the check above, applied at every depth.
+//
+// It RECURSES into nested structs, and that is the whole point of this
+// version. The first one walked config.BackupSet's own fields only, so a
+// field one level down was invisible to it: Remote counted as "set"
+// because Type was, and the fixture's `remote: {type: local}` left Host,
+// Port and User at their zero values. Those are the three fields an
+// operator edits most, and the whole-struct isolation comparison was
+// silently saying nothing about any of them. #354 then added
+// Remote.MaxConnections, and this control did not notice that either.
+//
+// Depth is bounded by the exemption ledger rather than by a number: a
+// struct nobody can set is exempt at its own path and its interior is
+// never reached, which is what keeps a mutually-exclusive pair (key_file
+// versus key.file) expressible.
+//
+// Pointers are NOT followed. A pointer field is checked for being nil and
+// left there: what the applier does with one is replace it or leave it
+// alone, never edit through it, so the interesting question about
+// RetentionConfig is "is it still the operator's block", which is
+// TestUpdateBackupSet_LeavesAPerSetRetentionOverrideAlone's job and not a
+// field-by-field walk's.
+func walkIsolationFixture(t *testing.T, prefix string, rv reflect.Value, seen map[string]bool) int {
+	t.Helper()
+	rt := rv.Type()
 	checked := 0
 	for i := 0; i < rt.NumField(); i++ {
-		name := rt.Field(i).Name
+		name := prefix + rt.Field(i).Name
+		seen[name] = true
 		if reason, exempt := exemptFromIsolationFixture[name]; exempt {
 			if reason == "" {
 				t.Errorf("%s is exempt with no reason recorded; the reason is the whole value of the exemption", name)
 			}
 			continue
 		}
+		fv := rv.Field(i)
+		// A plain struct, not a named scalar like config.Duration (whose
+		// Kind is Int64) and not a pointer.
+		if fv.Kind() == reflect.Struct {
+			checked += walkIsolationFixture(t, name+".", fv, seen)
+			continue
+		}
 		checked++
-		if rv.Field(i).IsZero() {
+		if fv.IsZero() {
 			t.Errorf("config.BackupSet.%s is at its zero value in the isolation fixture, so TestUpdateBackupSet_WritesOnlyTheFieldsTheRequestNames compares it equal on both sides no matter what the patch applier does to it.\n"+
 				"Either set it in writeRichTestConfigFile, or add it to exemptFromIsolationFixture with the reason it cannot be set.", name)
 		}
 	}
-
-	if checked == 0 {
-		t.Fatal("every field was exempt, so this control checked nothing")
-	}
-
-	// The exemption list may not name a field that no longer exists,
-	// which is how a ledger rots into a list of excuses for things that
-	// are not there any more.
-	for name := range exemptFromIsolationFixture {
-		if _, ok := rt.FieldByName(name); !ok {
-			t.Errorf("exemptFromIsolationFixture names %q, which config.BackupSet no longer has; remove the entry", name)
-		}
-	}
+	return checked
 }
