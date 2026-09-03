@@ -15,6 +15,8 @@ import type {
   WireArtifactReinstateResponse,
   WireBackupSet,
   WireBackupSetRetention,
+  WireBackupSetEditHold,
+  WireBackupSetEditHoldState,
   WireBackupSetHealth,
   WireBackupSetSpec,
   WireCapacitySettings,
@@ -35,6 +37,7 @@ import type {
   WireRetentionPlan,
   WireRetentionSettings,
   WireRetentionTier,
+  WireRunningWork,
   WireSettingsResponse,
   WireUpdateCapacitySettings,
   WireVersionResponse
@@ -44,6 +47,7 @@ import type {
   AppSettings,
   BackupManagerApi,
   BackupSetRetention,
+  BackupSetPatch,
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -54,6 +58,7 @@ import type {
   RetentionOverride,
   RetentionSettings,
   RetentionTierSetting,
+  RunningWork,
   SSHKeyImportResult,
   UpdateSettingsRequest
 } from "./contracts";
@@ -348,6 +353,7 @@ function fromWireBackupSet(bs: WireBackupSet, health?: WireBackupSetHealth): Bac
     includePatterns: bs.include,
     excludePatterns: [],
     completionMethod: COMPLETION_STRATEGY_TO_METHOD[bs.completion_strategy] ?? "atomic-rename",
+    stableForSeconds: bs.stable_for_seconds,
     destination: bs.local_path,
     // Issue #333. This used to be a hardcoded zero policy, which the
     // card and the detail page both drew: "0 / 0 / 0" and "0 kept",
@@ -1014,6 +1020,56 @@ function fromWireCatalogReport(body: WireCatalogReportResponse): CatalogScanPrev
  * state note says the verdict is missing. The failure that matters, the
  * dashboard's own health call, still surfaces through getHealth().
  */
+/**
+ * Turns a BackupSetPatch into the PATCH body, dropping every key the
+ * caller left undefined.
+ *
+ * The dropping is the point, and it is why this is not a field-by-field
+ * object literal: an object literal with `port: patch.port` still carries
+ * the key with an undefined value, JSON.stringify removes it, and that
+ * happens to work, which is worse than either alternative because it
+ * works by accident. Doing it explicitly means a future field added here
+ * cannot be the one where it stops working.
+ *
+ * completionMethod is translated back to core's own strategy vocabulary
+ * (rename/marker/stable) here, in the one place this boundary is
+ * crossed, exactly as fromWireBackupSet translates it the other way.
+ */
+function wireBackupSetPatch(patch: BackupSetPatch): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  const put = (key: string, value: unknown) => {
+    if (value !== undefined) body[key] = value;
+  };
+  put("host", patch.host);
+  put("port", patch.port);
+  put("user", patch.username);
+  put("remote_path", patch.remoteFolder);
+  put("local_path", patch.destination);
+  put("include", patch.includePatterns);
+  put("completion_strategy", patch.completionMethod && COMPLETION_METHOD_TO_STRATEGY[patch.completionMethod]);
+  put("stable_for_seconds", patch.stableForSeconds);
+  put("stale_after_seconds", patch.staleAfterSeconds);
+  // Sent only when the caller actually set it, like every key above, so
+  // an ordinary save is never a pre-acknowledged one.
+  put("acknowledge_repoint", patch.acknowledgeRepoint);
+  return body;
+}
+
+/** The inverse of COMPLETION_STRATEGY_TO_METHOD, built from it rather
+ *  than written out again, so the two can never disagree about which
+ *  method means which strategy. */
+const COMPLETION_METHOD_TO_STRATEGY: Record<CompletionMethod, string> = Object.fromEntries(
+  Object.entries(COMPLETION_STRATEGY_TO_METHOD).map(([strategy, method]) => [method, strategy])
+) as Record<CompletionMethod, string>;
+
+/** null stays null: "nothing is running" and "something is running with
+ *  no name yet" are different facts, and collapsing them onto a
+ *  zero-valued object would make every Edit press warn. */
+function fromWireRunningWork(w: WireRunningWork | null | undefined): RunningWork | null {
+  if (!w) return null;
+  return { artifact: w.artifact, stage: w.stage };
+}
+
 function perSetHealth(): Promise<Map<string, WireBackupSetHealth>> {
   return request<WireHealthResponse>("/system/health")
     .then((r) => new Map((r.backup_sets ?? []).map((set) => [set.backup_set_id, set])))
@@ -1091,6 +1147,40 @@ export const httpApi: BackupManagerApi = {
   setEnabled: (source, set, enabled) => post(backupSetPath(source, set) + "/enabled", { enabled }),
   setReadOnly: (source, set, readOnly) =>
     post(backupSetPath(source, set) + "/read-only", { read_only: readOnly }),
+
+  // Issue #350. The body carries ONLY the keys the caller set, which is
+  // what makes a per-box Save persist only that box: wireBackupSetPatch
+  // below drops every undefined rather than sending a zero, because a
+  // zero is a real answer for `port` and sending one for a field the
+  // operator never touched is exactly the silent clobber this route's
+  // sparse shape exists to prevent.
+  //
+  // It reads the whole set back, health included, the same pair getSet
+  // fetches, so a caller can put the persisted truth on the graph rather
+  // than the value it hoped it had written. Fetching health again is not
+  // wasted work: the freshness verdict can genuinely change as a result
+  // of the edit (a new stale_after, a moved local path), and a page that
+  // kept the old verdict beside a new value would be showing two moments
+  // at once.
+  updateBackupSet: (source, set, patch) =>
+    Promise.all([
+      request<WireBackupSet>(backupSetPath(source, set), {
+        method: "PATCH",
+        body: JSON.stringify(wireBackupSetPatch(patch))
+      }),
+      perSetHealth()
+    ]).then(([bs, health]) => fromWireBackupSet(bs, health.get(bs.id))),
+
+  getEditHold: (source, set) =>
+    request<WireBackupSetEditHoldState>(backupSetPath(source, set) + "/edit-hold").then((r) => ({
+      held: r.held,
+      running: fromWireRunningWork(r.running)
+    })),
+  takeEditHold: (source, set) =>
+    request<WireBackupSetEditHold>(backupSetPath(source, set) + "/edit-hold", { method: "POST" }).then(
+      (r) => ({ expiresAt: r.expires_at, stopped: fromWireRunningWork(r.stopped) })
+    ),
+  releaseEditHold: (source, set) => post(backupSetPath(source, set) + "/edit-hold/release"),
 
   createBackupSet: (req) =>
     request<WireCreateBackupSetResponse>("/backup-sets", {

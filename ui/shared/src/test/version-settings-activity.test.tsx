@@ -32,7 +32,7 @@ const SET: BackupSet = {
   remoteFolder: "/backups/postgresql/",
   includePatterns: ["*.dump.zst"],
   excludePatterns: ["*.tmp"],
-  completionMethod: "completion-marker",
+  completionMethod: "completion-marker", stableForSeconds: 0,
   destination: "/data/backups/production/postgres/",
   retentionIsOverride: false,
   validations: ["transfer", "checksum"],

@@ -63,6 +63,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     includePatterns: [],
     excludePatterns: [],
     completionMethod: "atomic-rename",
+    stableForSeconds: 0,
     destination: "/data/backups/production/api-server/",
     retentionIsOverride: false,
     validations: ["transfer"],

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -46,6 +47,44 @@ type BackupSetCycleResult struct {
 	// achieved for this backup set (see CycleProgress): how much work
 	// was in front of it, and how much of that moved.
 	Progress CycleProgress
+}
+
+// SystemicFailure is the question every consumer of Err is actually
+// asking: did this backup set's pass FAIL, as opposed to having been
+// stopped on purpose.
+//
+// The distinction exists because issue #350's edit hold gave this report
+// a second reason to end a set early. Cancelling a pass because an
+// operator pressed Edit is something this manager was asked to do, and a
+// report that spells it the same way it spells a source that has gone
+// unreachable makes an ordinary edit look like a backup that broke:
+// core/service would fail the operation the operator submitted,
+// `backup-manager run` would exit 1, and the activity feed would carry
+// "context canceled" as the reason a backup did not happen. In a product
+// whose whole job is to be believed about backups, a false alarm is not
+// a cosmetic defect.
+//
+// It says nothing about FailedArtifacts, which is the other half of "did
+// this cycle fail" (see this type's own doc) and is counted the same way
+// however the pass ended. A stopped pass leaves its in-flight artifact
+// pre-durable rather than FAILED, so that half comes out zero on its
+// own; this method deliberately does not reach over and decide it.
+func (r BackupSetCycleResult) SystemicFailure() bool {
+	return r.Err != nil && !errors.Is(r.Err, ErrBackupSetHeldForEditing)
+}
+
+// StoppedForEditing is the positive half of the same distinction: this
+// pass ended early because an operator took an edit hold on the set.
+//
+// SystemicFailure being false is not enough to conclude it, because a
+// pass that simply finished has no error at all, and the two have to be
+// told apart by anything that reasons about how much of the set's work
+// actually happened. CycleVerdict.NothingGotThrough is the one that
+// matters: a pass stopped mid-walk has rows counted and none of them
+// through, so on the arithmetic alone it looks exactly like a set that
+// backed nothing up.
+func (r BackupSetCycleResult) StoppedForEditing() bool {
+	return errors.Is(r.Err, ErrBackupSetHeldForEditing)
 }
 
 // CycleReport is what RunCycle returns: one BackupSetCycleResult per
@@ -136,6 +175,16 @@ sourcesLoop:
 			if bs.Disabled {
 				continue
 			}
+			// A backup set held for editing (issue #350) is skipped for
+			// the same reason and in the same place a disabled one is:
+			// starting a pass against a definition an operator is
+			// currently changing is two writers on one set, and stopping
+			// the in-flight run while leaving the poll interval free
+			// would be the same race with extra steps. Unlike Disabled
+			// this is not persisted anywhere; see holds.go.
+			if holds := BackupSetHoldsFrom(ctx); holds != nil && holds.Held(bs.ID.String()) {
+				continue
+			}
 			report.Sets = append(report.Sets, s.processBackupSet(ctx, src, bs))
 		}
 	}
@@ -176,6 +225,30 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	result := BackupSetCycleResult{Set: bs.ID}
 	source := sourceFor(s.Config, src, bs)
 
+	// From here on this set runs on its own context, cancelled the moment
+	// an edit hold lands on it (issue #350, holds.go). Every ctx.Err()
+	// check below and inside processArtifact is already positioned so a
+	// cancellation stops the pass at a safe boundary, which is why a hold
+	// needs no new stopping mechanism of its own. With no holds registry
+	// on ctx this is ctx itself and a no-op cancel.
+	ctx, cancelOnHold, stoppedByHold := withHoldCancellation(ctx, bs.ID.String())
+	defer cancelOnHold()
+
+	// stopReason turns "this context is done" into the reason it is done,
+	// so a pass an operator stopped is not reported in the same words as
+	// a pass that failed. See SystemicFailure for why the difference is
+	// load bearing rather than cosmetic.
+	stopReason := func() error {
+		err := ctx.Err()
+		if err == nil {
+			return nil
+		}
+		if stoppedByHold() {
+			return ErrBackupSetHeldForEditing
+		}
+		return err
+	}
+
 	// Deferred, so a set counts as finished however this returns. A set
 	// whose reconcile or discovery failed is still a set this cycle is
 	// done with, and leaving it uncounted would freeze "set 2 of 5" for
@@ -184,8 +257,8 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	prog.enterSet(bs.ID.String())
 	defer prog.finishSet()
 
-	if ctx.Err() != nil {
-		result.Err = ctx.Err()
+	if err := stopReason(); err != nil {
+		result.Err = err
 		return result
 	}
 	recRep, err := s.reconcileOne(ctx, source, bs.ID)
@@ -201,8 +274,8 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 		return result
 	}
 
-	if ctx.Err() != nil {
-		result.Err = ctx.Err()
+	if err := stopReason(); err != nil {
+		result.Err = err
 		return result
 	}
 	discRes, err := s.discoverOne(ctx, source, bs)
@@ -224,8 +297,8 @@ func (s *Service) processBackupSet(ctx context.Context, src config.Source, bs co
 	walk := s.processArtifacts(ctx, source, bs, records)
 	result.FailedArtifacts = walk.Failed
 	result.Progress = foldDiscoveryErrors(walk, discRes)
-	if ctx.Err() != nil {
-		result.Err = ctx.Err()
+	if err := stopReason(); err != nil {
+		result.Err = err
 	}
 
 	if ctx.Err() == nil {

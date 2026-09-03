@@ -46,6 +46,15 @@
 # suite now runs from (#158 moved it to spdrman/rclone-manager-tests, #197
 # is why it runs at all).
 #
+# The two-machine end-to-end backup proof (#356) is the fourth, with one
+# extra state. Docker being absent is the same shape as everything above.
+# A Docker daemon that is present and refuses a PRIVILEGED container is a
+# capability question too: the manager machine is docker-in-docker, because
+# mounting the host socket instead would install onto the developer's own
+# host rather than onto a fresh machine. The script says CANNOT RUN and
+# exits 3 for both, this gate ledgers that, and CI_LOCAL_SKIP_TWO_MACHINE=1
+# is the out-loud opt-out.
+#
 # Three outcomes, three exit statuses, so a wrapper does not have to parse
 # prose: 0 for "ci-local: ok", 3 for "ci-local: INCOMPLETE", and whatever
 # failed for "ci-local: FAILED".
@@ -272,6 +281,48 @@ if [ "$FAST" != "1" ]; then
   else
     gate_step "browser e2e + CLI smoke, from rclone-manager-tests at the pinned sha (#197)"
     bash scripts/e2e/run-tests-repo-gate.sh
+  fi
+fi
+
+# The two-machine end-to-end backup proof (#356). Everything between
+# "nothing installed" and "an artifact is on disk" was proven in pieces and
+# nowhere joined up, so the one claim a user actually makes (a fresh
+# install can be pointed at a machine and pull a backup off it) had no
+# test anywhere. This is that test: two throwaway containers on a temporary
+# network, the real installer, a backup set created through the CLI, and
+# the artifact compared to the source by digest.
+#
+# Non-FAST only, like the browser suite, and for the same reason: it costs
+# a container image build plus about a minute per case. CI_LOCAL_SKIP_TWO_MACHINE=1
+# is the separate out-loud opt-out, and it ledgers.
+#
+# Three outcomes, not two, which is the part that matters. The script exits
+# 3 when this machine CANNOT perform the proof (no Docker, or a daemon that
+# refuses a privileged container so docker-in-docker cannot start), and
+# that is neither a pass nor a failure: it is ledgered, exactly as a
+# missing browser or a stopped daemon is, so the run ends INCOMPLETE and
+# says which proof it could not perform. Reporting ok for a backup nobody
+# proved would be the single worst version of #160.
+if [ "$FAST" != "1" ]; then
+  if [ "${CI_LOCAL_SKIP_TWO_MACHINE:-0}" = "1" ]; then
+    gate_note_skip "the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install can pull a real backup off a real machine (CI_LOCAL_SKIP_TWO_MACHINE=1)"
+  else
+    gate_step "two throwaway machines, one temporary network, one real backup (#356)"
+    # Not under `set -e`: exit 3 is a verdict this script has to READ, and
+    # `set -e` would end the run on it before the ledger ever saw it.
+    set +e
+    bash scripts/e2e/two-machine-backup.sh
+    two_machine_status=$?
+    set -e
+    case "$two_machine_status" in
+      0) ;;
+      3)
+        gate_note_skip "the two-machine end-to-end backup proof (#356): this machine could not perform it, and said why above"
+        ;;
+      *)
+        exit "$two_machine_status"
+        ;;
+    esac
   fi
 fi
 

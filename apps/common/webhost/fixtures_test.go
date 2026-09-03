@@ -320,6 +320,20 @@ func (f *syncFakeBackend) CreateBackupSet(context.Context, service.CreateBackupS
 	return service.CreateBackupSetResult{}, errors.New("syncFakeBackend: CreateBackupSet not implemented")
 }
 
+func (f *syncFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	return service.BackupSetEditState{BackupSetID: id}, nil
+}
+
+func (f *syncFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	return service.EditHold{BackupSetID: id, ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *syncFakeBackend) EndBackupSetEdit(context.Context, string) error { return nil }
+
+func (f *syncFakeBackend) UpdateBackupSet(context.Context, string, service.UpdateBackupSetRequest) (service.BackupSet, error) {
+	return service.BackupSet{}, errors.New("syncFakeBackend: UpdateBackupSet not implemented")
+}
+
 func (f *syncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("syncFakeBackend: ImportSSHKey not implemented")
 }
@@ -702,6 +716,20 @@ func (f *asyncFakeBackend) CreateBackupSet(context.Context, service.CreateBackup
 	return service.CreateBackupSetResult{}, errors.New("asyncFakeBackend: CreateBackupSet not implemented")
 }
 
+func (f *asyncFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	return service.BackupSetEditState{BackupSetID: id}, nil
+}
+
+func (f *asyncFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	return service.EditHold{BackupSetID: id, ExpiresAt: time.Now().UTC().Add(time.Minute)}, nil
+}
+
+func (f *asyncFakeBackend) EndBackupSetEdit(context.Context, string) error { return nil }
+
+func (f *asyncFakeBackend) UpdateBackupSet(context.Context, string, service.UpdateBackupSetRequest) (service.BackupSet, error) {
+	return service.BackupSet{}, errors.New("asyncFakeBackend: UpdateBackupSet not implemented")
+}
+
 func (f *asyncFakeBackend) ImportSSHKey(context.Context, []byte, string) (service.SSHKeyRef, error) {
 	return service.SSHKeyRef{}, errors.New("asyncFakeBackend: ImportSSHKey not implemented")
 }
@@ -824,12 +852,33 @@ type backupSetFakeBackend struct {
 	// accepted by the JSON decoder.
 	lastImportPassphrase string
 
+	// lastUpdateReq records the exact service.UpdateBackupSetRequest the
+	// PATCH handler built, so a test can assert which fields crossed the
+	// HTTP-to-core seam as SET and which crossed as nil. That distinction
+	// is the whole point of the sparse request (issue #350), and asserting
+	// only on the response would not see it: a handler that filled every
+	// field in from the set it just read would produce an identical 200.
+	lastUpdateReq service.UpdateBackupSetRequest
+
+	// running is what the fake reports a cycle is doing for whichever set
+	// is asked about, or nil for "nothing is running". It is a field
+	// rather than a setter because a test arranges this fixture, it does
+	// not script it.
+	running *service.RunningWork
+
+	// beginCallCount and endCallCount record that the hold routes reached
+	// the backend at all. A handler that answered 200 without holding
+	// anything would otherwise look identical to one that held.
+	beginCallCount int
+	endCallCount   int
+
 	errOnCreate  error
 	errOnList    error
 	errOnGet     error
 	errOnImport  error
 	errOnProbe   error
 	errOnConnect error
+	errOnUpdate  error
 
 	probeResult      service.HostKeyProbe
 	connectionResult service.ConnectionTestResult
@@ -842,6 +891,105 @@ func newBackupSetFakeBackend() *backupSetFakeBackend {
 		keys:             map[string]service.SSHKeyRef{},
 		connectionResult: service.ConnectionTestResult{OK: true},
 	}
+}
+
+// UpdateBackupSet mirrors the real service's sparse semantics rather than
+// replacing the stored set wholesale: a field the request left nil must
+// stay exactly as it was, or a handler that quietly filled in everything
+// would look correct here.
+func (f *backupSetFakeBackend) UpdateBackupSet(_ context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error) {
+	f.mu.Lock()
+	f.lastUpdateReq = req
+	f.mu.Unlock()
+	if f.errOnUpdate != nil {
+		return service.BackupSet{}, f.errOnUpdate
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	set, ok := f.sets[id]
+	if !ok {
+		return service.BackupSet{}, service.ErrBackupSetNotFound
+	}
+	if req.Host != nil {
+		set.Host = *req.Host
+	}
+	if req.Port != nil {
+		set.Port = *req.Port
+	}
+	if req.User != nil {
+		set.User = *req.User
+	}
+	if req.RemotePath != nil {
+		set.RemotePath = *req.RemotePath
+	}
+	if req.LocalPath != nil {
+		set.LocalPath = *req.LocalPath
+	}
+	if req.Include != nil {
+		set.Include = append([]string(nil), (*req.Include)...)
+	}
+	if req.CompletionStrategy != nil {
+		set.CompletionStrategy = *req.CompletionStrategy
+	}
+	if req.ValidatorID != nil {
+		set.ValidatorID = *req.ValidatorID
+	}
+	f.sets[id] = set
+	return set, nil
+}
+
+func (f *backupSetFakeBackend) BackupSetEditState(_ context.Context, id string) (service.BackupSetEditState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.BackupSetEditState{}, service.ErrBackupSetNotFound
+	}
+	return service.BackupSetEditState{BackupSetID: id, Running: f.running}, nil
+}
+
+func (f *backupSetFakeBackend) BeginBackupSetEdit(_ context.Context, id string) (service.EditHold, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.EditHold{}, service.ErrBackupSetNotFound
+	}
+	f.beginCallCount++
+	return service.EditHold{
+		BackupSetID: id,
+		ExpiresAt:   time.Now().UTC().Add(90 * time.Second),
+		Stopped:     f.running,
+	}, nil
+}
+
+func (f *backupSetFakeBackend) EndBackupSetEdit(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.sets[id]; !ok {
+		return service.ErrBackupSetNotFound
+	}
+	f.endCallCount++
+	return nil
+}
+
+func (f *backupSetFakeBackend) beginCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.beginCallCount
+}
+
+func (f *backupSetFakeBackend) endCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.endCallCount
+}
+
+// lastUpdate reads back the request UpdateBackupSet was last called with,
+// under the same lock the handler goroutine writes it with.
+func (f *backupSetFakeBackend) lastUpdate() service.UpdateBackupSetRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastUpdateReq
 }
 
 func (f *backupSetFakeBackend) ListBackupSets(context.Context) ([]service.BackupSet, error) {

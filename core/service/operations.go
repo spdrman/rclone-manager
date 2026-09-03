@@ -339,6 +339,20 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	live := b.progress.begin(operationID)
 	defer b.progress.end(operationID)
 	defer b.runOnce.Unlock()
+	// The process-wide reading beside the operation-scoped one, so
+	// "what would entering edit mode for this set stop" can be answered
+	// for an API-submitted cycle and a scheduled one identically
+	// (edithold.go's cycleWatch).
+	//
+	// Registered AFTER b.runOnce.Unlock above, so that it runs BEFORE it:
+	// defers unwind in reverse, and releasing the single-flight lock
+	// first would let a scheduled tick take it, call cycleWatch.begin and
+	// publish its first reading, only for this deferred end() to wipe it.
+	// The window is microseconds and self-heals on the next reading, but
+	// it is the kind of thing that is free to get right here and
+	// expensive to diagnose later.
+	b.cycleWatch.begin()
+	defer b.cycleWatch.end()
 	defer func() {
 		if r := recover(); r != nil {
 			b.logger.Error(context.Background(), "execute-run-cycle-panic", fmt.Errorf("recovered panic: %v", r))
@@ -374,11 +388,19 @@ func (b *BackupService) executeRunCycle(operationID string) {
 	// rides on it because live progress is scoped to exactly this
 	// operation, and a field on the shared internal/app.Service would be
 	// one cycle's reading in a place a second cycle could overwrite.
-	report := runCycle(b.state.Load().inner, app.WithProgressObserver(b.ctx, live))
+	report := runCycle(b.state.Load().inner,
+		app.WithBackupSetHolds(
+			app.WithProgressObserver(b.ctx, progressFanout{live, b.cycleWatch}),
+			b.holds))
 
+	// SystemicFailure, not Err != nil: a set whose pass was stopped
+	// because an operator entered edit mode (issue #350's hold) carries
+	// an error saying so, and failing this operation for it would put
+	// "a backup did not happen" in the activity feed for something the
+	// operator themselves asked for.
 	var failed string
 	for _, set := range report.Sets {
-		if set.Err != nil {
+		if set.SystemicFailure() {
 			failed = set.Err.Error()
 			break
 		}

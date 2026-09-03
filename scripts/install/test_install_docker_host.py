@@ -1303,6 +1303,90 @@ class TestArchivingIsInsideTheRefusalContract(unittest.TestCase):
                         "it refuses before it touches anything")
 
 
+class TestAnUpgradeThatDiesHalfWayLeavesAWorkingInstall(unittest.TestCase):
+    """#343 states this and nothing held it: "A refused or failed upgrade
+    leaves the old install working."
+
+    An upgrade COPIES its archive and a factory reset MOVES it, and the
+    two branches differ by one keyword argument in prepare_for_mode. Get
+    that word wrong and a failed upgrade takes the administrator record
+    and the catalog with it, which is the one outcome an upgrade is
+    supposed to be incapable of. The tests around this one all watch the
+    archive; this one watches the INSTALL, which is the thing that has to
+    still be there afterwards.
+    """
+
+    def _installed(self):
+        fx = Fixture(self)
+        args = fx.args(command="install")
+        installer.stage_payload(args)
+        args.state_dir.mkdir(parents=True, exist_ok=True)
+        args.config_dir.mkdir(parents=True, exist_ok=True)
+        (args.state_dir / "local-auth.json").write_text('{"username":"rom"}')
+        (args.state_dir / "state.db").write_text("SQLite format 3")
+        (args.state_dir / "state.db-wal").write_text("the committed transactions")
+        (args.config_dir / "config.yaml").write_text("sets: [one]\n")
+        (args.config_dir / "ssh_keys").mkdir(parents=True, exist_ok=True)
+        (args.config_dir / "ssh_keys" / "imported.key").write_text("an imported key")
+        installer.stop_stack = lambda a, *, remove: None
+        return fx, args
+
+    def setUp(self):
+        self._real_stop = installer.stop_stack
+        self.addCleanup(setattr, installer, "stop_stack", self._real_stop)
+
+    def _everything(self, args):
+        """Every file the deployment needs to start, by content, so a
+        truncated or emptied one is as visible as a missing one."""
+        seen = {}
+        for p in installer.archive_plan(args) + [args.prefix / "compose.yaml",
+                                                 args.prefix / "compose.image.yaml",
+                                                 args.prefix / ".env"]:
+            if p.is_file():
+                seen[str(p)] = p.read_bytes()
+            elif p.is_dir():
+                seen[str(p)] = sorted(q.name for q in p.iterdir())
+        return seen
+
+    def test_an_upgrade_that_dies_mid_archive_leaves_every_file_in_place(self):
+        _fx, args = self._installed()
+        before = self._everything(args)
+        self.assertIn(str(args.state_dir / "local-auth.json"), before, "the setup has to be real")
+
+        real_copy = installer.shutil.copy2
+
+        def explode(src, dst):
+            if str(src).endswith("state.db"):
+                raise OSError(28, "No space left on device")
+            return real_copy(src, dst)
+
+        installer.shutil.copy2 = explode
+        self.addCleanup(setattr, installer.shutil, "copy2", real_copy)
+
+        exc = refusal_from(installer.prepare_for_mode, args, "upgrade", installed=True)
+        self.assertIsNotNone(exc, "an OSError here reaches the operator as a traceback")
+        self.assertEqual(self._everything(args), before,
+                         "an upgrade that died half way took something the stack needs to start")
+        self.assertIn("Nothing was removed from the install", exc.remedy,
+                      "and it has to say so, because the next step depends on it")
+
+    def test_the_upgrade_archive_is_a_copy_and_the_reset_archive_is_a_move(self):
+        """The one keyword that separates the two, asserted on what is left
+        behind rather than on the flag, because the flag is what would be
+        wrong."""
+        _fx, args = self._installed()
+        installer.prepare_for_mode(args, "upgrade", installed=True)
+        self.assertTrue((args.state_dir / "local-auth.json").is_file(),
+                        "an upgrade keeps the administrator record where the engine looks for it")
+        self.assertTrue((args.state_dir / "state.db").is_file())
+
+        installer.prepare_for_mode(args, "factory-reset", installed=True)
+        self.assertFalse((args.state_dir / "local-auth.json").exists(),
+                         "a factory reset that leaves the administrator record produces an install "
+                         "nobody can log into and no enrollment link")
+        self.assertFalse((args.state_dir / "state.db").exists())
+
+
 class TestTheInstalledLayoutIsNotOverridden(unittest.TestCase):
     """Every path this installer archives, destroys or rewrites came from
     THIS run's flags, and it wrote prefix/.env without ever reading it
@@ -2947,6 +3031,346 @@ class TestPreflightDoesNotCryAboutWhatInstallWillCreate(unittest.TestCase):
             installer.Preflight(args).check_credentials()
         self.assertIn("install creates it", out.getvalue())
         self.assertIn(str(args.ssh_key), out.getvalue())
+
+
+class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
+    """#347 gave --ssh-key and --known-hosts defaults so a bare `install`
+    could work. On a host that was first installed with those flags
+    pointing somewhere else, a later bare `install --mode upgrade` then
+    took the DEFAULTS, generated a brand new keypair under
+    <prefix>/secrets, and rewrote .env to point at it.
+
+    Nothing refused and nothing warned. The stack came back up healthy
+    holding a key no source has ever authorised, the pinned host keys
+    were replaced by an empty file, and the key every source does trust
+    sat where it always had with nothing referencing it. Every signal was
+    green and every backup afterwards failed to authenticate.
+
+    check_layout_matches already refuses the same shape for STATE_DIR,
+    BACKUP_DIR and CONFIG_DIR. SSH_KEY_FILE and KNOWN_HOSTS_FILE are in
+    the same .env, written by the same renderer, and were not held to
+    anything.
+    """
+
+    def _installed(self, tmp):
+        """A deployment installed with both credential flags pointing
+        outside the prefix, exactly as an operator with an existing key
+        would have installed it."""
+        root = Path(tmp.name)
+        prefix = root / "rclone-manager"
+        elsewhere = root / "home" / ".ssh"
+        elsewhere.mkdir(parents=True)
+        key = elsewhere / "backup_ed25519"
+        key.write_text("the key every source already trusts\n")
+        os.chmod(key, 0o600)
+        known = elsewhere / "known_hosts"
+        known.write_text("source.example.com ssh-ed25519 AAAApinned\n")
+        first = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(prefix), "--ssh-key", str(key),
+             "--known-hosts", str(known), "--compose-file", str(CANONICAL_COMPOSE)]))
+        installer.stage_payload(first)
+        return prefix, key, known, installer.read_env_file(prefix / ".env")
+
+    def _rerun(self, prefix, *extra):
+        return installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(prefix), "--mode", "upgrade",
+             "--compose-file", str(CANONICAL_COMPOSE), *extra]))
+
+    def test_a_bare_rerun_keeps_pointing_at_the_installed_key(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, env = self._installed(tmp)
+
+        again = self._rerun(prefix)
+        self.assertNotEqual(again.ssh_key, key,
+                            "the default is what this run starts from; that is the setup, not the assertion")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_credentials(again, env)
+
+        self.assertEqual(str(again.ssh_key), str(key),
+                         "the installed key is what the deployment authenticates with")
+        self.assertEqual(str(again.known_hosts), str(known),
+                         "and the pinned host keys go with it")
+        self.assertTrue(again.ssh_key_supplied,
+                        "an .env naming a path is this deployment stating one, so it gets the same "
+                        "treatment a typed flag gets rather than being generated into")
+        self.assertTrue(again.known_hosts_supplied)
+
+    def test_preflight_checks_the_same_paths_install_would_use(self):
+        """preflight is advertised as a dry run of install. Reporting on the
+        computed defaults while install runs on what the .env names makes
+        the two disagree on exactly the host where it matters: preflight
+        says it will create a key, install keeps the existing one.
+
+        Driven through preflight's own credential check rather than through
+        main(), which would need a Docker daemon to get that far.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, env = self._installed(tmp)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["preflight", "--prefix", str(prefix)]))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.adopt_installed_credentials(args, env)
+            installer.Preflight(args).check_credentials()
+        printed = out.getvalue()
+        self.assertEqual(str(args.ssh_key), str(key))
+        self.assertNotIn("install creates it", printed,
+                         "the installed key is right there; saying install will make one is a lie")
+        self.assertIn("owner-only", printed, "it checked the real key rather than skipping")
+
+    def test_preflight_adopts_too(self):
+        """Structural, because the divergence above is invisible in
+        preflight's own output once it is fixed: the check that keeps them
+        in step is that both commands call this."""
+        import ast
+        source = Path(installer.__file__).read_text(encoding="utf-8")
+        for name in ("cmd_install", "cmd_preflight"):
+            body = next(n for n in ast.walk(ast.parse(source))
+                        if isinstance(n, ast.FunctionDef) and n.name == name)
+            called = [n.func.id for n in ast.walk(body)
+                      if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+            self.assertIn("adopt_installed_credentials", called, f"{name} has to adopt")
+
+    def test_nothing_is_generated_over_an_installed_deployment(self):
+        """The whole failure, driven end to end: adopt, then the credential
+        step, then staging. A new keypair anywhere under the prefix means
+        the deployment was re-pointed at a key no source has seen."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, env = self._installed(tmp)
+
+        again = self._rerun(prefix)
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_credentials(again, env)
+            installer.ensure_credentials(again)
+            installer.stage_payload(again)
+
+        self.assertFalse((prefix / "secrets" / "id_ed25519").exists(),
+                         "generating a key here is the bug: the far host has never seen it")
+        after = installer.read_env_file(prefix / ".env")
+        self.assertEqual(after["SSH_KEY_FILE"], str(key))
+        self.assertEqual(after["KNOWN_HOSTS_FILE"], str(known))
+        self.assertEqual(key.read_text(), "the key every source already trusts\n")
+        self.assertIn("AAAApinned", known.read_text(),
+                      "an empty known_hosts is correct before any source exists and wrong after one")
+
+    def test_a_bare_upgrade_run_generates_nothing_over_an_installed_key(self):
+        """The failure driven through cmd_install, which is what an
+        operator actually types.
+
+        Every other case in this class calls adopt_installed_credentials
+        by name, so against the code as it was they die on that name not
+        existing rather than on the deployment being re-pointed, and a
+        test that can only fail with AttributeError says nothing about
+        behaviour. This one names nothing that did not already exist.
+        cmd_install is driven until Preflight, which is one step past the
+        function that creates the keypair, and then the assertions are
+        about what is on disk and which paths this run ended up holding.
+
+        Preflight is where it stops because check_all is the first thing
+        in cmd_install that needs a Docker daemon. Everything the failure
+        is made of happens before it.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, _env = self._installed(tmp)
+
+        class ReachedPreflight(Exception):
+            pass
+
+        def stop_here(_self):
+            raise ReachedPreflight()
+
+        was = installer.Preflight.check_all
+        installer.Preflight.check_all = stop_here
+        self.addCleanup(setattr, installer.Preflight, "check_all", was)
+
+        again = self._rerun(prefix)
+        self.assertNotEqual(str(again.ssh_key), str(key),
+                            "the computed default is where this run starts; that is the setup")
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(ReachedPreflight):
+                installer.cmd_install(again)
+
+        self.assertFalse((prefix / "secrets" / "id_ed25519").exists(),
+                         "a keypair generated here is one no source has ever authorised, and the "
+                         "install goes on to report success while every backup fails to authenticate")
+        self.assertFalse((prefix / "secrets" / "known_hosts").exists(),
+                         "and an empty known_hosts beside it throws away every pinned host key")
+        self.assertEqual(str(again.ssh_key), str(key),
+                         "the run has to be holding the key the deployment authenticates with")
+        self.assertEqual(str(again.known_hosts), str(known))
+        self.assertEqual(key.read_text(), "the key every source already trusts\n",
+                         "and the one that does work must not have been written over")
+
+    def test_adopting_is_announced(self):
+        """Silently right is still silently. An operator reading the log of
+        an upgrade is entitled to see which key the deployment kept."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, env = self._installed(tmp)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.adopt_installed_credentials(self._rerun(prefix), env)
+        printed = out.getvalue()
+        self.assertIn(str(key), printed)
+        self.assertIn(str(known), printed)
+
+    def test_an_installed_path_with_nothing_there_refuses(self):
+        """The one case that must not be filled in. The deployment names a
+        key, the file is gone, and generating a replacement under that name
+        hands every source a key it has never seen while reporting success.
+        compose.yaml mounts it with `:?` anyway, so the stack cannot start."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, env = self._installed(tmp)
+        key.unlink()
+
+        again = self._rerun(prefix)
+        exc = refusal_from(installer.adopt_installed_credentials, again, env)
+        self.assertIsNotNone(exc, "quietly generating a different key here is the failure")
+        self.assertEqual(exc.code, installer.EXIT_PREREQ_CREDENTIALS)
+        self.assertIn(str(key), exc.message, "the path the deployment names has to be named")
+        self.assertIn(".env", exc.message, "and where that path came from")
+
+    def test_an_explicit_flag_still_wins_and_says_it_is_moving_the_deployment(self):
+        """#347's contract is that explicit flags win. Rotating the key is a
+        real operation; doing it without saying so is not."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, env = self._installed(tmp)
+        rotated = Path(tmp.name) / "home" / ".ssh" / "rotated_ed25519"
+        rotated.write_text("the new key\n")
+        os.chmod(rotated, 0o600)
+
+        again = self._rerun(prefix, "--ssh-key", str(rotated))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.adopt_installed_credentials(again, env)
+        self.assertEqual(str(again.ssh_key), str(rotated), "the flag the operator typed wins")
+        printed = out.getvalue()
+        self.assertIn(str(key), printed, "the path being left behind is named")
+        self.assertIn(str(rotated), printed)
+
+    def test_it_never_raises_for_a_command_that_has_no_credential_flags(self):
+        """The same protection resolve() has, for the same reason. Since
+        #330's subparsers split, only preflight and install declare
+        --ssh-key and --known-hosts, so those attributes are simply absent
+        from the Namespace for the other four. Only those two call this
+        today, and an AttributeError deep inside a privileged repair path
+        is the failure a guard nobody exercises does not prevent."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix = Path(tmp.name) / "rclone-manager"
+        env = {"SSH_KEY_FILE": "/somewhere/else/id_ed25519",
+               "KNOWN_HOSTS_FILE": "/somewhere/else/known_hosts"}
+        for command in ("preflight", "install", "status", "uninstall",
+                        "network-doctor", "network-undo"):
+            args = installer.resolve(installer.build_parser().parse_args(
+                [command, "--prefix", str(prefix)]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                exc = refusal_from(installer.adopt_installed_credentials, args, env)
+            if command in ("preflight", "install"):
+                self.assertIsNotNone(exc, f"{command} reads these paths, so a missing one refuses")
+            else:
+                self.assertIsNone(exc, f"{command} does not declare these flags and must not trip over them")
+
+    def test_a_fresh_host_adopts_nothing(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix = Path(tmp.name) / "rclone-manager"
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(prefix)]))
+        was = args.ssh_key
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.adopt_installed_credentials(args, {})
+        self.assertEqual(args.ssh_key, was)
+        self.assertFalse(args.ssh_key_supplied,
+                         "a fresh host still generates: adopting nothing must not look like a typed flag")
+
+    def test_an_install_already_on_the_defaults_is_left_alone(self):
+        """The common case, and it must stay silent. A previous no-argument
+        install recorded the same paths this run computes, so there is
+        nothing to adopt and nothing to say."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix = Path(tmp.name) / "rclone-manager"
+        first = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(prefix), "--compose-file", str(CANONICAL_COMPOSE)]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.ensure_credentials(first)
+            installer.stage_payload(first)
+        env = installer.read_env_file(prefix / ".env")
+
+        again = self._rerun(prefix)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.adopt_installed_credentials(again, env)
+        self.assertEqual(str(again.ssh_key), env["SSH_KEY_FILE"])
+        self.assertEqual(out.getvalue(), "",
+                         "nothing changed, so there is nothing to tell anyone")
+
+    def test_cmd_install_adopts_before_it_creates_anything(self):
+        """Order, not behaviour, and it is the whole fix. ensure_credentials
+        runs before detect_existing reads the .env, so a check bolted on
+        after it would refuse a key that had already been generated."""
+        import ast
+        source = Path(installer.__file__).read_text(encoding="utf-8")
+        body = next(n for n in ast.walk(ast.parse(source))
+                    if isinstance(n, ast.FunctionDef) and n.name == "cmd_install")
+        called = [n.func.id for n in ast.walk(body)
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+        self.assertIn("adopt_installed_credentials", called)
+        self.assertLess(called.index("adopt_installed_credentials"), called.index("ensure_credentials"),
+                        "adopting after the key is generated is adopting too late")
+
+
+class TestReplacingTheStagedComposeIsAnnounced(unittest.TestCase):
+    """<prefix>/compose.yaml is the installer's own staged copy of a gated
+    artifact and is restaged on every run, which is how a runtime-contract
+    change reaches an installed host. That is right, and it is also how an
+    operator who edited it in place loses the edit with nothing said.
+
+    A notice rather than a refusal, deliberately: refusing would block
+    every upgrade that carries a legitimate runtime change, which is most
+    of them. Host-specific settings belong in .env, and that is what the
+    notice says.
+    """
+
+    def test_replacing_different_bytes_says_so(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager"),
+             "--compose-file", str(CANONICAL_COMPOSE)]))
+        installer.stage_payload(args)
+        staged = args.prefix / "compose.yaml"
+        staged.write_bytes(staged.read_bytes() + b"\n# an operator added a mount here\n")
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.stage_payload(args)
+        printed = out.getvalue()
+        self.assertIn(str(staged), printed)
+        self.assertIn(".env", printed, "the notice has to name where host-specific settings do belong")
+        self.assertEqual(staged.read_bytes(), CANONICAL_COMPOSE.read_bytes(),
+                         "the canonical definition still wins: this is a notice, not a refusal")
+
+    def test_restaging_the_same_bytes_says_nothing(self):
+        """Every re-run restages. A notice on the unchanged case is noise
+        that trains people to stop reading the changed one."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        args = installer.resolve(installer.build_parser().parse_args(
+            ["install", "--prefix", str(Path(tmp.name) / "rclone-manager"),
+             "--compose-file", str(CANONICAL_COMPOSE)]))
+        installer.stage_payload(args)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            installer.stage_payload(args)
+        self.assertNotIn("compose.yaml", out.getvalue())
 
 
 if __name__ == "__main__":

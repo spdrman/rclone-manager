@@ -79,6 +79,15 @@ type CycleVerdict struct {
 	// journal listing failing outright, or a shutdown mid-cycle.
 	Systemic bool
 
+	// Stopped is the other way a pass can end early, and it is not a
+	// failure: this manager was ASKED to stop, by an operator taking an
+	// edit hold on the set (issue #350). It is separate from Systemic
+	// rather than folded into it because the two mean opposite things to
+	// a reader, and separate from "not failed" because a stopped pass
+	// has the arithmetic of a barren one without being one. See
+	// NothingGotThrough.
+	Stopped bool
+
 	// ReconcileErrors is how many of this backup set's already-managed
 	// artifacts reconciliation could not reach a verdict on. Unlike a
 	// discovery error, this is about an artifact already under
@@ -105,8 +114,15 @@ type CycleVerdict struct {
 // never reached its pipeline, not because nothing got through. Saying
 // "nothing got through" there would put an invented cause in front of an
 // operator who has a real one sitting in the log.
+//
+// Stopped is excluded for the same reason and it is the sharper case,
+// because a pass held for editing is stopped MID-WALK rather than before
+// it: its rows are counted, none of them got through, and the arithmetic
+// alone therefore says "backed nothing up this cycle" about a set an
+// operator deliberately paused a second ago. That is the false alarm
+// issue #350 exists to remove, arriving by a second route.
 func (v CycleVerdict) NothingGotThrough() bool {
-	return !v.Systemic && v.Progress.NothingGotThrough()
+	return !v.Systemic && !v.Stopped && v.Progress.NothingGotThrough()
 }
 
 // Verdict is this cycle result's share of the exit-status decision. See
@@ -114,7 +130,8 @@ func (v CycleVerdict) NothingGotThrough() bool {
 func (r BackupSetCycleResult) Verdict() CycleVerdict {
 	return CycleVerdict{
 		Set:             r.Set.String(),
-		Systemic:        r.Err != nil,
+		Systemic:        r.SystemicFailure(),
+		Stopped:         r.StoppedForEditing(),
 		ReconcileErrors: len(r.Reconcile.Errors),
 		FailedArtifacts: r.FailedArtifacts,
 		Progress:        r.Progress,
@@ -125,11 +142,15 @@ func (r BackupSetCycleResult) Verdict() CycleVerdict {
 // exactly as RunCycle's is so `fetch` and `run` cannot disagree. Systemic
 // is always false here because Fetch reports a systemic failure by
 // returning an error, which its caller has already acted on by the time
-// it asks for a verdict.
+// it asks for a verdict. Stopped is always false for a narrower reason:
+// Fetch does not install a hold watcher at all (see withHoldCancellation,
+// whose only caller is processBackupSet), so nothing can stop one of
+// these passes on purpose.
 func (r FetchResult) Verdict() CycleVerdict {
 	return CycleVerdict{
 		Set:             r.Set.String(),
 		Systemic:        false,
+		Stopped:         false,
 		ReconcileErrors: len(r.Reconcile.Errors),
 		FailedArtifacts: r.FailedArtifacts,
 		Progress:        r.Progress,

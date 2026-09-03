@@ -84,6 +84,16 @@ var ErrConfigNotFileBacked = errors.New("service: this backup service has no con
 // previously persisted.
 var ErrSSHKeyNotFound = errors.New("service: imported SSH key not found")
 
+// ErrRepointNotAcknowledged is UpdateBackupSet refusing to move a backup
+// set that already has artifacts on record to different data without
+// being told that is what was meant (issue #350). It is its own sentinel
+// rather than an ErrInvalidRequest because it is not a malformed request:
+// it is a well-formed one whose consequences a caller has to see first,
+// and a client has to be able to tell the two apart to offer the
+// operator anything better than "400". backupsetrepoint.go has the whole
+// argument.
+var ErrRepointNotAcknowledged = errors.New("service: this edit would point the backup set at different data")
+
 // BackupSet is the plain, provider-agnostic shape of one configured
 // backup set (mirrors config.BackupSet the same way Operation mirrors
 // state.Operation): a caller outside core/ never sees a config.BackupSet
@@ -102,6 +112,22 @@ type BackupSet struct {
 	Include    []string
 
 	CompletionStrategy string // "rename", "marker" or "stable"
+	// StableFor is the window the "stable" strategy waits for, and is
+	// zero for every other strategy (config.Completion.StableFor; a
+	// non-stable set never carries one, see newBackupSetFor). It is
+	// reported because an edit surface that offers the strategy has to be
+	// able to offer the window with it: selecting "stable" on a set that
+	// has no window is a configuration validateCreateRequest refuses, so
+	// a UI that could not read or set the window could only ever produce
+	// a save that fails (issue #350).
+	StableFor time.Duration
+
+	// StaleAfter is FR-24's freshness budget for this set
+	// (config.BackupSet.StaleAfter). Reported for the same reason
+	// StableFor is: the update path can change it, and a surface that can
+	// write a field it cannot read back has no way to show an operator
+	// what they changed it from.
+	StaleAfter time.Duration
 
 	// ValidatorID is the registered application validator this backup set
 	// selected (validator.go), or "" for none. It is the id, never the
@@ -610,48 +636,58 @@ func validateCreateRequest(req CreateBackupSetRequest) error {
 			problems = append(problems, err.Error())
 		}
 	}
-	if req.Host == "" {
-		problems = append(problems, "host is required")
-	}
-	if req.User == "" {
-		problems = append(problems, "user is required")
-	}
+	problems = appendProblem(problems, requiredFieldProblem("host", req.Host))
+	problems = appendProblem(problems, requiredFieldProblem("user", req.User))
 	if req.SSHKeyID == "" {
 		problems = append(problems, "ssh_key_id is required (import an SSH key first)")
 	}
 	if req.KnownHostsLine == "" {
 		problems = append(problems, "known_hosts_line is required (probe and trust the host key first)")
 	}
-	if req.RemotePath == "" {
-		problems = append(problems, "remote_path is required")
+	problems = appendProblem(problems, requiredFieldProblem("remote_path", req.RemotePath))
+	problems = appendProblem(problems, requiredFieldProblem("local_path", req.LocalPath))
+	problems = append(problems, completionProblems(req.CompletionStrategy, req.StableFor)...)
+	problems = appendProblem(problems, validatorIDProblem(req.ValidatorID))
+	return joinProblems(problems)
+}
+
+// requiredFieldProblem, completionProblems and validatorIDProblem are the
+// individual field rules validateCreateRequest above is made of, pulled
+// out so UpdateBackupSet (backupsetupdate.go) can run the SAME checks
+// rather than a second list that happens to agree today. The issue that
+// asked for the update path asked for "validation equal to creation's"
+// specifically; sharing the checks is what makes that structural instead
+// of a claim in a comment.
+func requiredFieldProblem(field, value string) string {
+	if value == "" {
+		return field + " is required"
 	}
-	if req.LocalPath == "" {
-		problems = append(problems, "local_path is required")
-	}
-	switch req.CompletionStrategy {
+	return ""
+}
+
+func completionProblems(strategy string, stableFor time.Duration) []string {
+	var problems []string
+	switch strategy {
 	case "rename", "marker", "stable":
 	default:
 		problems = append(problems, `completion_strategy must be "rename", "marker" or "stable"`)
 	}
-	if req.CompletionStrategy == "stable" && req.StableFor <= 0 {
+	if strategy == "stable" && stableFor <= 0 {
 		problems = append(problems, `stable_for must be positive when completion_strategy is "stable"`)
 	}
-	if req.ValidatorID != "" && !isRegisteredValidator(req.ValidatorID) {
+	return problems
+}
+
+func validatorIDProblem(id ValidatorID) string {
+	if id != "" && !isRegisteredValidator(id) {
 		// Deliberately does not echo the value back. An unregistered id is
 		// refused structurally, whatever it looks like, and repeating a
 		// caller-supplied string that may well BE an attempted executable
 		// path into an error a UI renders is not worth the marginally
 		// better message.
-		problems = append(problems, "validator_id is not a registered validator; choose one the validator catalog lists")
+		return "validator_id is not a registered validator; choose one the validator catalog lists"
 	}
-	if len(problems) == 0 {
-		return nil
-	}
-	msg := problems[0]
-	for _, p := range problems[1:] {
-		msg += "; " + p
-	}
-	return errors.New(msg)
+	return ""
 }
 
 func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
@@ -666,6 +702,8 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		LocalPath:          bs.LocalPath,
 		Include:            bs.Include,
 		CompletionStrategy: bs.Completion.Strategy,
+		StableFor:          bs.Completion.StableFor.Duration(),
+		StaleAfter:         bs.StaleAfter.Duration(),
 		ValidatorID:        ValidatorID(bs.Validation.ValidatorID),
 		Disabled:           bs.Disabled,
 		// bs.ReadOnly, not bs.ReadOnlyConfig: every caller here reads the

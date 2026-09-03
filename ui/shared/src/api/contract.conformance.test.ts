@@ -182,6 +182,12 @@ describe("every request the shared client makes is a declared operation", () => 
       ["testConnection", () => httpApi.testConnection("set-1")],
       ["setEnabled", () => httpApi.setEnabled("src", "set-1", true)],
       ["setReadOnly", () => httpApi.setReadOnly("src", "set-1", true)],
+      // Issue #350: the edit path and its hold. Every one of them keys on
+      // the same {source}/{set} pair setEnabled and setReadOnly do.
+      ["updateBackupSet", () => httpApi.updateBackupSet("src", "set-1", { remoteFolder: "/r" })],
+      ["getEditHold", () => httpApi.getEditHold("src", "set-1")],
+      ["takeEditHold", () => httpApi.takeEditHold("src", "set-1")],
+      ["releaseEditHold", () => httpApi.releaseEditHold("src", "set-1")],
       ["createBackupSet", () => httpApi.createBackupSet({
         name: "n", host: "h", port: 22, user: "u", sshKeyId: "k",
         knownHostsLine: "l", remotePath: "/r", localPath: "/l",
@@ -228,7 +234,11 @@ describe("every request the shared client makes is a declared operation", () => 
     // relaxed into ">= calls.length": a method that quietly grew a second
     // request is worth seeing in a diff, which is the whole reason this
     // count is asserted at all.
-    const MULTI_REQUEST_METHODS = ["listSets", "getSet"];
+    // updateBackupSet joins the same per-set health report onto its
+    // answer that getSet does, and for the same reason: an edit can
+    // genuinely change the freshness verdict, and a page showing a new
+    // value beside the old verdict would be showing two moments at once.
+    const MULTI_REQUEST_METHODS = ["listSets", "getSet", "updateBackupSet"];
     expect(observed.length).toBe(calls.length + MULTI_REQUEST_METHODS.length);
 
     // Nothing above asserted that `calls` covers httpApi, so a client

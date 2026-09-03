@@ -1,6 +1,6 @@
 import { API_ERROR_CODES as GENERATED_API_ERROR_CODES } from "./generated/contract";
 import type { ApiErrorCode } from "./generated/contract";
-import type { BackupArtifact, BackupSet, RetentionPlan } from "@shared/types/backup";
+import type { BackupArtifact, BackupSet, CompletionMethod, RetentionPlan } from "@shared/types/backup";
 import type {
   ActivityEvent,
   Operation,
@@ -108,6 +108,70 @@ export interface ValidatorCatalogEntry {
   id: string;
   /** One operator-facing sentence: what this validator checks. */
   summary: string;
+}
+
+/**
+ * Issue #350: a sparse edit of one already-persisted backup set. Every
+ * field is optional, and an omitted one is left alone rather than
+ * cleared, which is the property the detail page's per-box Save rests on.
+ *
+ * It carries no name and no source, deliberately: a backup set's identity
+ * keys every journal row, artifact id and recovery manifest it has ever
+ * produced, so renaming one is a migration rather than an edit
+ * (core/service/backupsetupdate.go's own package doc). It carries no key
+ * reference and no trusted host line either: those are the results of the
+ * wizard's import and probe steps, and re-trusting a host is a trust
+ * decision rather than a field.
+ */
+export interface BackupSetPatch {
+  host?: string;
+  /** 0 selects the default port, so it is a meaningful value rather than
+   *  an absent one; omit the key to leave the port alone. */
+  port?: number;
+  username?: string;
+  remoteFolder?: string;
+  destination?: string;
+  includePatterns?: string[];
+  completionMethod?: CompletionMethod;
+  /** Only meaningful when the completion method in effect after this edit
+   *  is "stable-size". */
+  stableForSeconds?: number;
+  staleAfterSeconds?: number;
+  /** Confirms an edit that moves this set to different data. Needed only
+   *  when `host`, `remoteFolder` or `destination` actually change on a
+   *  set that already has artifacts on record; without it the service
+   *  refuses with BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED and writes nothing.
+   *  It is not a property of the backup set: it answers one refusal, for
+   *  one request. */
+  acknowledgeRepoint?: boolean;
+}
+
+/** What a run cycle is doing for one backup set right now: the content of
+ *  the warning shown before edit mode opens. Discarding a partial
+ *  transfer of a named artifact is a materially different cost from
+ *  cancelling a tick that has not started work, which is why this names
+ *  both rather than saying "something is running". */
+export interface RunningWork {
+  /** The artifact being worked on, or "" during discovery. */
+  artifact: string;
+  /** One of the cycle's own stage names ("discovering", "transferring",
+   *  "verifying", "committing", "cleaning-remote"). */
+  stage: string;
+}
+
+/** What GET /backup-sets/{source}/{set}/edit-hold answers. */
+export interface EditHoldState {
+  held: boolean;
+  /** Null when no cycle is currently inside this set, which is what lets
+   *  edit mode open with no prompt for a risk that does not exist. */
+  running: RunningWork | null;
+}
+
+/** What taking the hold answers: `stopped` is null when nothing was
+ *  running, so a caller never claims to have interrupted something. */
+export interface EditHoldTaken {
+  expiresAt: string;
+  stopped: RunningWork | null;
 }
 
 export interface CreateBackupSetRequest {
@@ -612,6 +676,46 @@ export interface BackupManagerApi {
    * setEnabled above takes.
    */
   setReadOnly(source: string, set: string, readOnly: boolean): Promise<void>;
+
+  /**
+   * Issue #350: changes one already-persisted backup set. Sparse, and
+   * that is the contract rather than a convenience: a key this patch
+   * omits is left exactly as it is, which is what lets the detail page's
+   * per-box Save persist only the box it belongs to. A Save that wrote
+   * every field would be lying about its scope, and an operator who
+   * changed two boxes and saved one would silently ship both.
+   *
+   * It resolves to the whole backup set as it now stands, so a caller can
+   * put the persisted truth back on the graph rather than the value it
+   * hoped it had written.
+   *
+   * `source`/`set` are BackupSet's own two-part identity, the same pair
+   * setEnabled and setReadOnly take.
+   */
+  updateBackupSet(source: string, set: string, patch: BackupSetPatch): Promise<BackupSet>;
+
+  /**
+   * Issue #350's edit hold. A backup set being edited while a cycle runs
+   * against it is two writers on one definition, so entering edit mode
+   * holds that one set: the pass currently running against it stops, and
+   * the scheduler starts no new one until the hold is released or its
+   * lease lapses.
+   *
+   * The read is separate from the take on purpose, and that split is what
+   * makes declining possible: a caller reads first, shows the operator
+   * what pressing Edit would interrupt, and only takes the hold once they
+   * accept. `running` is null when nothing is in flight for this set,
+   * which is what lets edit mode open with no prompt at all.
+   */
+  getEditHold(source: string, set: string): Promise<EditHoldState>;
+  /** Takes the hold, or renews one already held (the same call: see the
+   *  route's own doc for why a late heartbeat must not be refused).
+   *  Resolves with what it interrupted, or null when nothing was
+   *  running, so a caller never claims to have stopped something. */
+  takeEditHold(source: string, set: string): Promise<EditHoldTaken>;
+  /** Leaves edit mode. Every route out of edit mode calls it, and
+   *  releasing a hold that is not held is a success. */
+  releaseEditHold(source: string, set: string): Promise<void>;
 
   /** Issue #146 (B2.7): the wizard's three Save buttons. */
   createBackupSet(req: CreateBackupSetRequest): Promise<CreatedBackupSet>;

@@ -81,6 +81,26 @@ import (
 // for TestResolveKeyFromCommand_Timeout without an actual 15-second test.
 var keyCommandTimeout = 15 * time.Second
 
+// resolverReapBackstop is os/exec's own backstop, set as c.WaitDelay on
+// every resolver subprocess in this package: that long after the context
+// is done, os/exec kills the child and stops waiting for its pipes to
+// drain, whatever c.Cancel did or failed to do.
+//
+// It is named, and read by the test, because it is the SECOND of the two
+// regimes a timeout test has to tell apart, and the one that makes such a
+// test vacuous if a bound is drawn above it (#394). A resolver whose
+// c.Cancel really kills the process group returns at about
+// keyCommandTimeout. One whose c.Cancel does nothing returns at
+// keyCommandTimeout + resolverReapBackstop, because this is what finally
+// reaps it, and every other assertion in that test passes either way. So
+// the bound has to sit strictly between the two, which it cannot do
+// reliably if the test has to guess this number.
+//
+// internal/lifecycle/verify_test.go's hookReapBackstop mirrors the same
+// value as a test-side constant and says in its own doc that nothing reads
+// it from the production code. This is that gap closed on this side.
+const resolverReapBackstop = 5 * time.Second
+
 // maxResolvedKeySize bounds how many bytes of a command's stdout, or an
 // environment variable's value, this resolver will accept. The largest
 // private key this project has any real reason to see (an RSA-4096 PEM) is
@@ -173,7 +193,7 @@ func resolveKeyFromCommand(argv []string, passphrase string) (obs.Secret, error)
 		}
 		return nil
 	}
-	c.WaitDelay = 5 * time.Second
+	c.WaitDelay = resolverReapBackstop
 
 	stdout := &boundedBuffer{limit: maxResolvedKeySize}
 	stderr := &boundedBuffer{limit: maxCapturedStderr}
