@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -22,35 +21,22 @@ import (
 // to see that is to look at a process's real stdout, real stderr and real
 // exit status. An in-process call would also have had to live in package
 // main, where every other lane is editing.
+// It builds into outDir, which every caller gets from t.TempDir(), so the
+// binary is cleaned up by the framework that made the directory. An
+// earlier version cached one build in an os.MkdirTemp of its own to save
+// the second test a rebuild; it saved about a second against a warm Go
+// build cache and left a binary behind in the system temp directory on
+// every run, which is a bad trade.
 func buildCLI(coreRoot, outDir string) (string, error) {
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "compat-backup-manager")
-		if err != nil {
-			builtErr = err
-			return
-		}
-		bin := filepath.Join(dir, "backup-manager")
-		cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
-		cmd.Dir = coreRoot
-		cmd.Env = append(os.Environ(), "GOWORK=off")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			builtErr = fmt.Errorf("building backup-manager: %w\n%s", err, out)
-			return
-		}
-		builtBin = bin
-	})
-	return builtBin, builtErr
+	bin := filepath.Join(outDir, "backup-manager")
+	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
+	cmd.Dir = coreRoot
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("building backup-manager: %w\n%s", err, out)
+	}
+	return bin, nil
 }
-
-// Built once per test binary. Two tests in this package each run a full
-// capture, and building the same unchanged tree twice is thirteen seconds
-// of nothing. outDir is therefore no longer used and stays in the
-// signature only so a future caller that needs its own copy can say so.
-var (
-	buildOnce sync.Once
-	builtBin  string
-	builtErr  error
-)
 
 // cliCase is one invocation to pin.
 type cliCase struct {
