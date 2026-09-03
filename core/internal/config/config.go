@@ -867,26 +867,44 @@ type Revalidation struct {
 // left at its YAML zero value, and why those particular defaults were
 // chosen rather than the field's literal zero value.
 //
-// # Global, not per-backup-set (issue #111 decision)
+// # The deployment's policy, which a backup set may override
 //
-// This block is deliberately one policy for the whole Config, applied to
-// every backup set through GFSDecide/PruneDecide's shared cfg argument,
-// not a field on BackupSet. That is a decision, not an oversight: the
-// shared web UI's own BackupSet type (ui/shared/src/types/backup.ts)
-// already models a `retention` field per backup set, and its mock
-// fixtures (ui/shared/src/api/mock.ts) already give two backup sets
-// different override values, which could easily be mistaken for evidence
-// that per-set retention is already a real, working capability. It is
-// not: nothing in this package or internal/retention has ever supported
-// a per-backup-set override, and issue #111 keeps it that way rather than
-// letting the UI's already-drawn shape settle the question by accident.
-// Introducing real per-set overrides is a legitimate future capability,
-// but it is a separate, larger change (new schema, new validation, a new
-// resolution order between set-level and global values) that deserves its
-// own issue rather than riding in on a config/CLI-first change.
+// This block is the deployment-wide policy, and it is the default every
+// backup set is retained under. It is no longer the ONLY one: since issue
+// #362, BackupSet.RetentionConfig lets one set declare a whole chain of
+// its own, and Validate resolves each set's BackupSet.Retention from that
+// override when it exists and from this block otherwise.
+//
+// Nothing decides retention from this block directly any more. Every
+// consumer reads the set's own resolved BackupSet.Retention, and the rule
+// that falls out of that is written on that field: any mutation of this
+// block has to be followed by Validate, or every set goes on deciding
+// under the policy in force when it was last resolved.
+//
+// This doc used to say the opposite, at length, and it is worth recording
+// why rather than just deleting it. Issue #111 decided to KEEP retention
+// global for the time being, specifically so that the shared web UI's own
+// already-drawn per-set `retention` field (ui/shared/src/types/backup.ts,
+// and mock.ts's fixtures giving two sets different values) could not
+// settle the question by accident: a field the UI draws and nothing reads
+// is not evidence of a capability. #333 is that question answered
+// deliberately, with a schema, a validation seam and a resolution order,
+// which is exactly the "separate, larger change" this paragraph asked for.
 type Retention struct {
-	Timezone     string `yaml:"timezone"`
-	WeekStartsOn string `yaml:"week_starts_on"`
+	// Timezone and WeekStartsOn carry omitempty for the round-trip reason
+	// the three scalars below already document, and #333 made it matter
+	// rather than merely tidy. A per-set override that names neither
+	// INHERITS the deployment's, and this struct is what gets marshalled
+	// back into config.yaml: without omitempty a set that inherited the
+	// calendar came back from a save with `timezone: ""` written under it,
+	// which still resolves to inheritance but reads to an operator (and to
+	// anyone hand-editing the file afterwards) as a configured empty
+	// timezone. The file has to keep exactly what was submitted.
+	//
+	// Nothing changes at the top level, where Validate resolves both to a
+	// real value before anything decides with them.
+	Timezone     string `yaml:"timezone,omitempty"`
+	WeekStartsOn string `yaml:"week_starts_on,omitempty"`
 
 	// DailyDays, WeeklyMonths and MonthlyMonths are the original
 	// three-scalar spelling of FR-18's default chain, kept as sugar for
@@ -962,7 +980,14 @@ type Retention struct {
 	// then rejects outright under Load's KnownFields(true).
 	Tiers []RetentionTier `yaml:"tiers,omitempty"`
 
-	ProtectLastKnownGood *bool `yaml:"protect_last_known_good"`
+	// ProtectLastKnownGood carries omitempty for the same round trip, and
+	// the pointer is what makes it safe: yaml omits a NIL pointer, never a
+	// pointer to false, so an operator who deliberately turned FR-19's
+	// protection off keeps an explicit `protect_last_known_good: false` in
+	// their file. Only "I said nothing about it" is omitted, which for a
+	// per-set override means "inherit the deployment's posture" and at the
+	// top level means the documented default of true.
+	ProtectLastKnownGood *bool `yaml:"protect_last_known_good,omitempty"`
 }
 
 // Retention granularity names. These are the values RetentionTier's

@@ -299,6 +299,15 @@ export interface RetentionTierSetting {
   periodDays?: number;
   keep: number;
   windowUnit?: string;
+  /** The storage medium this tier's artifacts live on (FR-27); undefined
+   *  means the local backup root.
+   *
+   *  Nothing in this UI edits it yet, and it is carried anyway because a
+   *  chain write REPLACES the whole chain: a field this type drops is a
+   *  field the next save deletes from the operator's configuration file.
+   *  Editing daily's keep must not quietly move monthly's artifacts back
+   *  onto local disk. */
+  medium?: string;
 }
 
 /** The FR-18/FR-19 policy as it is actually deciding. `tiers` is always
@@ -314,6 +323,67 @@ export interface RetentionSettings {
    *  materially more dangerous configuration, and SettingsPage confirms
    *  it before the write. */
   protectLastKnownGood: boolean;
+}
+
+/**
+ * Issue #333: one backup set's OWN retention policy, unresolved, exactly
+ * as its configuration file carries it.
+ *
+ * Every field is optional and an omitted one INHERITS from the
+ * deployment's resolved policy rather than falling back to a product
+ * default. That is the whole difference between this type and
+ * RetentionSettings above, which is always fully resolved: this one
+ * answers "what does the file say", and a form that resolved it would
+ * turn every inherited field into an explicit one the moment somebody
+ * re-saved a policy they had not edited.
+ *
+ * A policy has to name the WHOLE chain. Half of one is refused by the
+ * server, in the same words a hand-edited config.yaml is refused with,
+ * because completing the missing half from the product defaults is how a
+ * set silently ends up retaining less than the operator who wrote the
+ * deployment's policy believes. Nothing in this UI ever builds a partial
+ * one: the editor starts from a whole resolved chain and every edit is on
+ * top of that.
+ */
+export interface RetentionOverride {
+  timezone?: string;
+  weekStartsOn?: string;
+  /** FR-18's original three-scalar chain. All three or none. This UI
+   *  never sends them (it edits the chain, exactly as the deployment's
+   *  own retention form does), and the type carries them because the
+   *  server round-trips a policy an operator wrote by hand. */
+  dailyDays?: number;
+  weeklyMonths?: number;
+  monthlyMonths?: number;
+  tiers?: RetentionTierSetting[];
+  protectLastKnownGood?: boolean;
+}
+
+/**
+ * Which retention policy one backup set is retained under, and where that
+ * policy came from (issue #333).
+ *
+ * `isOverride` is served rather than derived by comparing `effective`
+ * against `deployment`: a set that deliberately pinned a chain identical
+ * to the deployment's is NOT inheriting, and the whole point of pinning
+ * it is that a later edit to the deployment's policy will not move it.
+ *
+ * `deployment` travels with every answer, including for a set that is
+ * inheriting. It is what "this is what clearing would return you to"
+ * means for a set that overrides, and it is the honest starting point for
+ * a form about to create one, which is what stops a first submission
+ * being half a policy.
+ */
+export interface BackupSetRetention {
+  backupSetId: string;
+  isOverride: boolean;
+  /** The policy actually deciding for this set, resolved. */
+  effective: RetentionSettings;
+  /** The deployment's own policy, resolved, whether or not this set is
+   *  currently retained under it. */
+  deployment: RetentionSettings;
+  /** The raw policy this set declared, or undefined when it inherits. */
+  override?: RetentionOverride;
 }
 
 /**
@@ -715,6 +785,29 @@ export interface BackupManagerApi {
    */
   previewRetention(source: string, set: string): Promise<RetentionPlan>;
   applyRetention(source: string, set: string, planId: string): Promise<RetentionPlan>;
+
+  /**
+   * Issue #333: one backup set's OWN retention policy, as three
+   * operations on one sub-resource rather than as fields on the backup
+   * set.
+   *
+   * `setBackupSetRetention` replaces the set's whole policy and never
+   * merges with anything, and `clearBackupSetRetention` is the only way
+   * to say "go back to inheriting the deployment's policy": that cannot
+   * be a value on an update where an absent field already means "leave
+   * this alone", since those are opposite requests.
+   *
+   * All three answer with the same shape, so a caller re-renders from
+   * what the server says is now deciding rather than from its own
+   * request.
+   */
+  getBackupSetRetention(source: string, set: string): Promise<BackupSetRetention>;
+  setBackupSetRetention(
+    source: string,
+    set: string,
+    policy: RetentionOverride
+  ): Promise<BackupSetRetention>;
+  clearBackupSetRetention(source: string, set: string): Promise<BackupSetRetention>;
 
   /** Issue #140 (B3.7): the settings surface. getSettings reads the
    *  policy in effect plus the schema it is validated against;

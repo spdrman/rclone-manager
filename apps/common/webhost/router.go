@@ -242,6 +242,30 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// reason (a fixed source/set arity, and a literal "/read-only"
 		// tail a catch-all would swallow).
 		r.With(requireCSRF).Post("/backup-sets/{source}/{set}/read-only", h.setBackupSetReadOnly)
+		// Issue #333: one backup set's own retention policy, as a
+		// sub-resource with three methods rather than as keys on the set
+		// itself. PUT because an override replaces the deployment's whole
+		// chain and is never merged with it, and DELETE because "go back
+		// to inheriting" cannot be spelled as a value on a request where
+		// an absent field already means "leave this alone" (see
+		// handlers_backupsetretention.go's own doc for both).
+		//
+		// Registered with the same two named segments and literal tail as
+		// /enabled and /read-only above, and ahead of the "/backup-sets/*"
+		// catch-all in the same way the retention/preview route already
+		// is: chi's trie matches static, then param, then catch-all, so a
+		// GET on this exact shape reaches this handler and every other GET
+		// still falls through to getBackupSet.
+		//
+		// CSRF on the two writes, no destructive gate on any of them: this
+		// writes configuration and moves no backup data. It does change
+		// what a later retention apply would delete, in both directions,
+		// which is precisely the case the comment on PATCH /settings below
+		// already settles for turning FR-19's protection off — the apply
+		// is the gated act and it re-reads the policy at plan time.
+		r.Get("/backup-sets/{source}/{set}/retention", h.getBackupSetRetention)
+		r.With(requireCSRF).Put("/backup-sets/{source}/{set}/retention", h.setBackupSetRetention)
+		r.With(requireCSRF).Delete("/backup-sets/{source}/{set}/retention", h.clearBackupSetRetention)
 		// Issue #350: the edit half of backup-set CRUD. Registered as two
 		// named segments with no tail, which is why it needs a method chi
 		// can tell apart from getBackupSet's "/backup-sets/*" catch-all

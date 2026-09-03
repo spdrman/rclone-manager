@@ -105,6 +105,14 @@ var contractBindings = map[string]contractBinding{
 	"reinstateArtifact":      {"/api/v1/quarantine/{source}/{set}/{name}/reinstate", nil, artifactReinstateResponse{}, "/api/v1/quarantine/src/set-1/backup.dump/reinstate"},
 	"setBackupSetEnabled":    {"/api/v1/backup-sets/{source}/{set}/enabled", setEnabledRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/enabled"},
 	"setBackupSetReadOnly":   {"/api/v1/backup-sets/{source}/{set}/read-only", setReadOnlyRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1/read-only"},
+
+	// Issue #333. Three operations on one path, which is the point of a
+	// sub-resource: the method is what says whether the policy is being
+	// read, replaced or removed, and none of the three is a field on the
+	// backup set itself.
+	"getBackupSetRetention":   {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"setBackupSetRetention":   {"/api/v1/backup-sets/{source}/{set}/retention", retentionOverrideBody{}, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
+	"clearBackupSetRetention": {"/api/v1/backup-sets/{source}/{set}/retention", nil, backupSetRetentionResponse{}, "/api/v1/backup-sets/src/set-1/retention"},
 	// Issue #350's edit route. It shares its path template with
 	// getBackupSet's "/api/v1/backup-sets/*" catch-all and does not
 	// collide with it, because chi routes on the method too.

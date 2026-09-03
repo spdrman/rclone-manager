@@ -129,6 +129,33 @@ type retentionTierBody struct {
 	PeriodDays  int    `json:"period_days,omitempty"`
 	Keep        int    `json:"keep"`
 	WindowUnit  string `json:"window_unit,omitempty"`
+
+	// Medium names the storage medium this tier's artifacts live on
+	// (FR-27), empty meaning the local backup root.
+	//
+	// It is on the wire for the reason service.RetentionTier.Medium's own
+	// doc gives, which is stronger than symmetry with the config schema:
+	// a chain write REPLACES the operator's whole chain, so a field this
+	// shape cannot hold is a field a save DELETES from their file. Before
+	// this key existed, editing daily's keep through the settings form
+	// would have quietly moved monthly's artifacts back onto local disk.
+	// A lossy boundary between the file and the form is a configuration
+	// change nobody asked for, made by the act of changing something else.
+	Medium string `json:"medium,omitempty"`
+}
+
+// toService projects one tier off the wire. Shared by the settings write
+// and by issue #333's per-set retention write, so the two cannot come to
+// carry different subsets of a tier.
+func (t retentionTierBody) toService() service.RetentionTier {
+	return service.RetentionTier{
+		Name:        t.Name,
+		Granularity: t.Granularity,
+		PeriodDays:  t.PeriodDays,
+		Keep:        t.Keep,
+		WindowUnit:  t.WindowUnit,
+		Medium:      t.Medium,
+	}
 }
 
 // settingsResponse is what both GET and PATCH /api/v1/settings return:
@@ -301,13 +328,7 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 		if body.Retention.Tiers != nil {
 			update.Tiers = make([]service.RetentionTier, 0, len(body.Retention.Tiers))
 			for _, t := range body.Retention.Tiers {
-				update.Tiers = append(update.Tiers, service.RetentionTier{
-					Name:        t.Name,
-					Granularity: t.Granularity,
-					PeriodDays:  t.PeriodDays,
-					Keep:        t.Keep,
-					WindowUnit:  t.WindowUnit,
-				})
+				update.Tiers = append(update.Tiers, t.toService())
 			}
 		}
 		out.Retention = &update
@@ -326,15 +347,9 @@ func toUpdateSettingsRequest(body settingsRequest) (service.UpdateSettingsReques
 }
 
 func toSettingsResponse(s service.Settings) settingsResponse {
-	tiers := toTierBodies(s.Retention.Tiers)
 	schema := service.RetentionSchema()
 	return settingsResponse{
-		Retention: retentionSettingsBody{
-			Timezone:             s.Retention.Timezone,
-			WeekStartsOn:         s.Retention.WeekStartsOn,
-			Tiers:                tiers,
-			ProtectLastKnownGood: s.Retention.ProtectLastKnownGood,
-		},
+		Retention: toRetentionSettingsBody(s.Retention),
 		Capacity: capacitySettingsBody{
 			CapBytes:             s.Capacity.CapBytes,
 			WarningFreeBytes:     s.Capacity.WarningFreeBytes,
@@ -369,9 +384,23 @@ func toTierBodies(tiers []service.RetentionTier) []retentionTierBody {
 			PeriodDays:  t.PeriodDays,
 			Keep:        t.Keep,
 			WindowUnit:  t.WindowUnit,
+			Medium:      t.Medium,
 		})
 	}
 	return out
+}
+
+// toRetentionSettingsBody projects a resolved policy onto the wire.
+// Shared by GET/PATCH /settings and by issue #333's per-set retention
+// routes, which report the same resolved shape twice (this set's
+// effective policy, and the deployment's).
+func toRetentionSettingsBody(r service.RetentionSettings) retentionSettingsBody {
+	return retentionSettingsBody{
+		Timezone:             r.Timezone,
+		WeekStartsOn:         r.WeekStartsOn,
+		Tiers:                toTierBodies(r.Tiers),
+		ProtectLastKnownGood: r.ProtectLastKnownGood,
+	}
 }
 
 // writeSettingsDecodeError extends writeDecodeError

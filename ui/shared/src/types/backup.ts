@@ -1,3 +1,5 @@
+import type { RetentionSettings } from "@shared/api/contracts";
+
 export type HealthState = "healthy" | "degraded" | "stale" | "failing";
 
 export type CompletionMethod =
@@ -10,29 +12,22 @@ export type RetentionClass = "daily" | "weekly" | "monthly" | "protected";
 export type ValidationKind = "transfer" | "checksum" | "application";
 
 /**
- * Mirrors core's config.Retention (core/internal/config/config.go) shape,
- * field for field.
+ * Issue #299's rule, applied to the field that used to sit here.
  *
- * This type is modeled per BackupSet below, and mock.ts's fixtures give
- * different backup sets different values, but that is not evidence a
- * per-set override is a real, working capability: the actual backend
- * (internal/config, internal/retention) has exactly one Retention block
- * for the whole Config, applied to every backup set. Issue #111 (B3.6)
- * decided, explicitly, to keep retention policy global for now rather
- * than let this type's already-drawn per-set shape settle the question by
- * accident; see config.go's own "Global, not per-backup-set" doc for the
- * full reasoning. A real per-backup-set override is a legitimate future
- * capability, but it needs its own schema/validation/resolution-order
- * design on the backend first, which this type alone does not provide.
+ * This type carried a full per-set `RetentionPolicy` (daily/weekly/
+ * monthly, timezone, week start, protection) that NOTHING computed:
+ * client.ts's own mapper filled it with zeros and "UTC" for every set, so
+ * the backup set card and the detail page both drew "0 / 0 / 0" and
+ * "0 kept" against real deployments. A field the UI draws and nothing
+ * reads is exactly what #299 removed from the wizard, and it was still
+ * here.
+ *
+ * #333 replaced it with the answer that is actually computed. A backup
+ * set carries whether it is retained under its own policy or the
+ * deployment's (below); the policy itself is served by
+ * `getBackupSetRetention`, on demand, on the page that can show a whole
+ * chain rather than three numbers that only fit one shape of chain.
  */
-export interface RetentionPolicy {
-  daily: number;
-  weekly: number;
-  monthly: number;
-  timezone: string;
-  weekStartsOn: "monday" | "sunday";
-  protectLastKnownGood: boolean;
-}
 
 export interface BackupSet {
   id: string;
@@ -68,7 +63,11 @@ export interface BackupSet {
    */
   stableForSeconds: number;
   destination: string;
-  retention: RetentionPolicy;
+  /** Whether this set declares its own retention policy rather than being
+   *  retained under the deployment's (issue #333, config.BackupSet's own
+   *  RetentionIsOverride). The chain itself is not here: see the note
+   *  above this interface. */
+  retentionIsOverride: boolean;
   validations: ValidationKind[];
   state: HealthState;
   /** Human sentence explaining the state. Never rely on colour alone. */
@@ -296,4 +295,22 @@ export interface RetentionPlan {
    *  a preview returned — a preview creates no operation. */
   operationId?: string;
   verdicts: RetentionVerdict[];
+
+  /** The policy these verdicts were decided under, resolved (issue #333).
+   *
+   *  It travels with the plan rather than being fetched beside it because
+   *  a plan is pinned to the configuration revision it was computed
+   *  against and a second read is not: a dialog that fetched the policy
+   *  on its own could show a chain that did not decide the verdicts
+   *  underneath it. */
+  retention: RetentionSettings;
+
+  /** Whether `retention` above is this backup set's OWN policy rather
+   *  than the deployment's.
+   *
+   *  "Why is this backup about to be deleted" has a different answer, and
+   *  a different place to go and change it, depending on which one was in
+   *  force, and that is the question this dialog exists to answer before
+   *  an operator authorises a deletion. */
+  retentionIsOverride: boolean;
 }

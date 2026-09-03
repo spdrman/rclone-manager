@@ -590,7 +590,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -763,6 +763,13 @@
             "items": {
               "$ref": "#/components/schemas/RetentionVerdict"
             }
+          },
+          "retention": {
+            "$ref": "#/components/schemas/RetentionSettings"
+          },
+          "retention_is_override": {
+            "type": "boolean",
+            "description": "Whether this plan was computed under the backup set's own retention policy rather than the deployment's. 'Why is this artifact being deleted' has a different answer, and a different fix, depending on which one was in force."
           }
         },
         "required": [
@@ -774,7 +781,9 @@
           "keep_count",
           "delete_count",
           "reclaim_bytes",
-          "verdicts"
+          "verdicts",
+          "retention",
+          "retention_is_override"
         ]
       },
       "ApplyRetentionRequest": {
@@ -870,6 +879,10 @@
           },
           "read_only": {
             "type": "boolean"
+          },
+          "retention_is_override": {
+            "type": "boolean",
+            "description": "Whether this backup set declares its own retention policy rather than being retained under the deployment's (issue #333). The policy itself is not here: read it from /backup-sets/{source}/{set}/retention, which serves the resolved chain, the deployment's chain beside it, and the raw override. A list of sets needs the attribution, not three numbers that only fit one shape of chain."
           }
         },
         "required": [
@@ -886,7 +899,8 @@
           "validator_id",
           "disabled",
           "read_only",
-          "stable_for_seconds"
+          "stable_for_seconds",
+          "retention_is_override"
         ]
       },
       "CreateBackupSetResponse": {
@@ -1096,7 +1110,7 @@
       },
       "RetentionTier": {
         "type": "object",
-        "description": "One link in the retention chain, on the wire. The same shape is read and written, so a client round-trips exactly what it was served.",
+        "description": "One link in the retention chain, on the wire. The same shape is read and written, so a client round-trips exactly what it was served. That round trip is why every field a tier can carry is here: a chain write REPLACES the whole chain, so a field this shape omits is a field the save deletes from the operator's configuration file.",
         "additionalProperties": false,
         "properties": {
           "name": {
@@ -1116,6 +1130,11 @@
           },
           "window_unit": {
             "type": "string",
+            "x-go-omitempty": true
+          },
+          "medium": {
+            "type": "string",
+            "description": "The storage medium this tier's artifacts live on (FR-27); absent means the local backup root, which is what every chain written before storage mediums existed means. Carried on the wire so a chain write does not delete it.",
             "x-go-omitempty": true
           }
         },
@@ -2208,6 +2227,83 @@
         "required": [
           "backup_set_id",
           "expires_at"
+        ]
+      },
+      "RetentionOverride": {
+        "type": "object",
+        "description": "One backup set's OWN retention policy, exactly as its configuration file carries it: unresolved, with every omitted field still omitted. An override names the WHOLE chain (a tiers list, or all three of daily_days, weekly_months and monthly_months) and half a chain is refused, because completing the missing half from the product defaults is how a set silently ends up retaining less than the operator who wrote the deployment's policy believes. Everything that is not the chain inherits from the deployment's resolved policy when omitted, so an override that names no timezone is reckoned in the deployment's, not in UTC.",
+        "additionalProperties": false,
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "description": "Absent inherits the deployment's timezone.",
+            "x-go-omitempty": true
+          },
+          "week_starts_on": {
+            "type": "string",
+            "description": "Absent inherits the deployment's week start.",
+            "x-go-omitempty": true
+          },
+          "daily_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "FR-18's original three-scalar chain. All three or none.",
+            "x-go-omitempty": true
+          },
+          "weekly_months": {
+            "type": "integer",
+            "format": "int32",
+            "x-go-omitempty": true
+          },
+          "monthly_months": {
+            "type": "integer",
+            "format": "int32",
+            "x-go-omitempty": true
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RetentionTier"
+            },
+            "description": "FR-18's general chain, mutually exclusive with the three scalars above. An explicitly empty list is refused rather than applied: emptying a chain reinstates the default daily/weekly/monthly policy rather than keeping nothing.",
+            "x-go-omitempty": true
+          },
+          "protect_last_known_good": {
+            "type": "boolean",
+            "description": "Absent inherits the deployment's FR-19 posture.",
+            "x-go-pointer": true
+          }
+        },
+        "required": []
+      },
+      "BackupSetRetention": {
+        "type": "object",
+        "description": "Which retention policy one backup set is retained under, and where that policy came from. All of it is served together because 'what is deciding' and 'is that this set's own or the deployment's' are one question for an operator reading a preview that is about to delete something, and answering it in two calls is how a surface shows a chain beside the wrong attribution.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_set_id": {
+            "type": "string"
+          },
+          "is_override": {
+            "type": "boolean",
+            "description": "True when this set declares its own policy. It is reported rather than derived by comparing the two chains: a set that deliberately pinned a chain identical to the deployment's is NOT inheriting, and the whole point of pinning it is that a later edit to the deployment's policy will not move it."
+          },
+          "effective": {
+            "$ref": "#/components/schemas/RetentionSettings"
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/RetentionSettings"
+          },
+          "override": {
+            "$ref": "#/components/schemas/RetentionOverride",
+            "x-go-pointer": true
+          }
+        },
+        "required": [
+          "backup_set_id",
+          "is_override",
+          "effective",
+          "deployment"
         ]
       }
     },
@@ -5733,6 +5829,375 @@
             },
             "x-error-codes": [
               "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      }
+    },
+    "/backup-sets/{source}/{set}/retention": {
+      "get": {
+        "operationId": "getBackupSetRetention",
+        "summary": "Report which retention policy this backup set is retained under: its own or the deployment's, the resolved chain either way, and the deployment's chain beside it so a client can show what clearing an override would go back to. Read-only.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetRetention"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": false,
+        "x-authenticated": true
+      },
+      "put": {
+        "operationId": "setBackupSetRetention",
+        "summary": "Give this backup set a retention policy of its own. PUT, not PATCH: an override REPLACES the deployment's whole chain and is never merged with it field by field, so the body is the whole policy and the verb says so. Half a chain is refused with the same words a hand-edited configuration file is refused with.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetentionOverride"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetRetention"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST. Includes a policy that names only part of a chain, an empty policy, and every refusal the same policy written into the configuration file would get.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      },
+      "delete": {
+        "operationId": "clearBackupSetRetention",
+        "summary": "Remove this backup set's own retention policy, so it is retained under the deployment's again with no residue of the chain it used to declare. This is the only way to spell 'go back to inheriting': it cannot be a value on an update request, where an absent field already means 'leave this alone'.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. The set now reports is_override false and the deployment's chain as its effective policy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupSetRetention"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          },
+          "503": {
+            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "NOT_CONFIGURED"
             ]
           }
         },

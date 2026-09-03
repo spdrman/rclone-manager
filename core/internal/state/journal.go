@@ -73,6 +73,16 @@ type Transition struct {
 	Retry      *RetryUpdate
 	Deletion   *DeletionUpdate
 	Retention  *RetentionUpdate
+
+	// Placement, when non-nil, records where one durable copy of this
+	// artifact now is (EPIC E, FR-29). It is written inside this
+	// transition's own transaction, so a copy the journal believes in and
+	// a transition that justifies it can never come apart.
+	//
+	// It is caller-supplied rather than derived from LocalPath here; see
+	// PlacementUpdate's own doc for why this package cannot tell a
+	// durable copy from a half-written .partial on its own.
+	Placement *PlacementUpdate
 }
 
 // Outcome reports what RecordTransition actually did.
@@ -199,6 +209,16 @@ func (j *Journal) RecordTransition(ctx context.Context, t Transition) (Outcome, 
 		artifactRowID, t.Key, t.From, t.To, formatTime(t.OccurredAt), redact.Filter(t.Detail),
 	); err != nil {
 		return Outcome{}, fmt.Errorf("state: record transition: %w", err)
+	}
+
+	// Inside the same transaction as the artifact row and the transition
+	// log entry, deliberately: a placement is a claim about where bytes
+	// are, and a claim that survived a crash while the transition that
+	// justified it did not would be exactly the lie FR-29 exists to stop.
+	if t.Placement != nil {
+		if err := upsertPlacement(ctx, tx, artifactRowID, *t.Placement, t.OccurredAt); err != nil {
+			return Outcome{}, err
+		}
 	}
 
 	rec, err := getByRowID(ctx, tx, artifactRowID)

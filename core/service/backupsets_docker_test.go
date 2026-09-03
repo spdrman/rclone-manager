@@ -5,31 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
-
-// waitForTerminalStatusPatient is waitForTerminalStatus (service_test.go)
-// with a deadline sized for a real Docker+SSH round trip instead of an
-// in-memory/local-transport one.
-func waitForTerminalStatusPatient(t *testing.T, svc *BackupService, id string) Operation {
-	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		op, err := svc.GetOperation(context.Background(), id)
-		if err != nil {
-			t.Fatalf("GetOperation(%q): %v", id, err)
-		}
-		if op.Status == "completed" || op.Status == "failed" {
-			return op
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("operation %q did not reach a terminal status within the deadline (last status %q)", id, op.Status)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
 
 // TestCreateBackupSet_EndToEndAgainstARealSFTPFixture is issue #146's own
 // INTEGRATION requirement made concrete: "complete the wizard for real
@@ -167,11 +145,13 @@ func TestCreateBackupSet_EndToEndAgainstARealSFTPFixture(t *testing.T) {
 	// (discover, transfer, verify, commit, remote-delete) against the
 	// real server — the strongest form of "not just a UI toast".
 	//
-	// waitForTerminalStatusPatient, not the shared waitForTerminalStatus
-	// (service_test.go): that helper's 2-second deadline is calibrated
-	// for the in-memory/local-transport tests around it, and is too
-	// tight for a real Docker+SSH round trip.
-	done := waitForTerminalStatusPatient(t, svc, result.Operation.ID)
+	// The shared waitForTerminalStatus (service_test.go). This used to
+	// need a second, more patient copy of that helper, because the shared
+	// one gave every operation a flat two seconds and a real Docker+SSH
+	// round trip needs more than that. terminalStatusBudget is the thirty
+	// seconds that copy asked for, so there is one helper again and one
+	// place to argue about the number (issue #385).
+	done := waitForTerminalStatus(t, svc, result.Operation.ID)
 	if done.Status != "completed" {
 		t.Fatalf("run_cycle Operation.Status = %q, want %q (error: %s)", done.Status, "completed", done.Error)
 	}
