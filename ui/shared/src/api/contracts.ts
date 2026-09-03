@@ -218,6 +218,44 @@ export interface RunCycleSubmission {
   status: string;
 }
 
+/** What an operator fills in to ask for one archived copy to be restored
+ *  (EPIC E, FR-34). */
+export interface RestoreCopyRequest {
+  /** The backup, as "source/set/name". */
+  artifactId: string;
+  /** The id of the storage medium holding the copy to restore. */
+  medium: string;
+  /** How many days the restored copy should stay readable, 1 to 30.
+   *  Zero is not a shorter restore, it is one that is billed and then
+   *  immediately unavailable. */
+  windowDays: number;
+  /** The operator saying they know this is billed and takes hours.
+   *  Required true; see BackupApi.restoreCopy. */
+  acknowledged: boolean;
+  /** The configuration revision the caller is displaying. */
+  configRevision: string;
+}
+
+/** What a restore looks like the instant it has been accepted.
+ *
+ *  There is no percent, no finishesAt and no cost, and there is nowhere
+ *  to add one without editing this comment: the provider reports a
+ *  restore as running or finished and nothing else, and this deployment
+ *  has no price list. */
+export interface RestoreSubmission {
+  operationId: string;
+  status: string;
+  /** The window that was actually asked for, in days. */
+  windowDays: number;
+  /** The storage class's OWN published restore time, in plain words. A
+   *  documented property of the class, and never an estimate for this
+   *  particular restore, so a UI must not render it as a countdown. */
+  wait: string;
+  /** The statement that a bill exists, with no amount. Empty for a class
+   *  the provider does not charge retrieval on. */
+  billing: string;
+}
+
 export interface CreatedBackupSet {
   id: string;
   sourceName: string;
@@ -653,6 +691,29 @@ export interface BackupManagerApi {
    * against a setup nobody looking at it has seen.
    */
   runCycle(configRevision: string): Promise<void>;
+  /**
+   * Asks for one archived copy of one backup to be made readable again
+   * (EPIC E, FR-34).
+   *
+   * `acknowledged` is a required true rather than a defaulted one, and
+   * that is the whole mechanism behind "make an accidental restore hard":
+   * a caller that forgot to ask a human gets a refusal, not a bill,
+   * because the value that costs nothing is the one you get by leaving
+   * the field alone. Compare a `force` flag, where the forgetful caller
+   * is the one who spends the money.
+   *
+   * `configRevision` is the revision the CALLER is displaying, for the
+   * reason runCycle's own doc gives, plus one that is sharper here: this
+   * request names a medium by id, and a configuration that moved while
+   * the screen was open may have repointed that id at a different bucket.
+   *
+   * What comes back says how long the storage class publishes a restore
+   * as taking and that a bill exists. It never says a percentage, a
+   * finishing time or an amount, and there is nowhere in the type to put
+   * one: S3 reports a restore as running or finished and nothing else,
+   * and this product holds no price list.
+   */
+  restoreCopy(req: RestoreCopyRequest): Promise<RestoreSubmission>;
   /** Re-checks an ALREADY persisted backup set's connection, by id. The
    *  connection details come from the configuration, so nothing about the
    *  key or the trusted host line travels from here. */

@@ -57,6 +57,7 @@ var commands = map[string]func([]string) int{
 	"validate":   cmdValidate,
 	"catalog":    cmdCatalog,
 	"quarantine": cmdQuarantine,
+	"restore":    cmdRestore,
 	"settings":   cmdSettings,
 	"version":    cmdVersion,
 }
@@ -101,6 +102,12 @@ commands:
                                                   act on one quarantined artifact: revalidate re-checks it and moves
                                                   nothing; retry re-enters the pipeline from DISCOVERED; reinstate
                                                   trusts it again in place and forfeits any future remote delete
+  restore <source/backup-set/artifact> --medium M [--days N] --acknowledge
+                                                  ask the storage provider to make one archived copy readable again
+                                                  (EPIC E, FR-34). --acknowledge is required rather than a --force
+                                                  to skip, because a restore is billed and takes hours; --days
+                                                  defaults to 7 and is bounded to 1..30. artifacts <id> lists
+                                                  which medium each copy is on
   settings [patch [--timezone T] [--week-starts-on D] [--protect-last-known-good=BOOL]
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
                                                   report the live retention/capacity settings, or change one in place;

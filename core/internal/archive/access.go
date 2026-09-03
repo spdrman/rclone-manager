@@ -9,7 +9,19 @@ import (
 )
 
 // State is FR-34's closed vocabulary for what can be done with one durable
-// copy right now.
+// copy right now, and it is the ONLY definition of it in this repository.
+//
+// #241's review found the four words written down twice, here and in
+// internal/placement, with each copy documenting the duplication in prose
+// and neither collapsing it. This is the survivor, because the vocabulary
+// is about what an archive class does to a copy's readability, which is
+// what this package exists for. Nothing collapses on the other side in
+// this branch: internal/placement/access.go has not landed on main, so
+// there was no second copy here to delete. What keeps it that way once
+// somebody's rebase brings one is
+// TestTheAccessVocabularyIsDefinedInExactlyOnePlace (composition_test.go),
+// which fails on a second declaration of any of the four strings anywhere
+// under core/internal.
 //
 // Four values, and no fifth. In particular there is no "unknown": a
 // surface that cannot work out which of these applies has a bug or a

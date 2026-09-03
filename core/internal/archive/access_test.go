@@ -185,7 +185,7 @@ func TestNothingRenderedAboutARestoreCarriesAPercentageAPriceOrAnETA(t *testing.
 		if err != nil {
 			t.Fatalf("Of(%q): %v", class, err)
 		}
-		rendered = append(rendered, b.RestoreWait, billingStatement(b))
+		rendered = append(rendered, b.RestoreWait, BillingStatement(b))
 		for _, s := range States {
 			rendered = append(rendered,
 				Describe(s, class, nil),
@@ -210,7 +210,7 @@ func TestNothingRenderedAboutARestoreCarriesAPercentageAPriceOrAnETA(t *testing.
 		if err != nil {
 			t.Fatalf("Of(%q): %v", class, err)
 		}
-		if bill := billingStatement(b); strings.ContainsAny(bill, "0123456789") {
+		if bill := BillingStatement(b); strings.ContainsAny(bill, "0123456789") {
 			t.Errorf("the billing statement for %s contains a number, and this product holds no price list to get one from: %q", class, bill)
 		}
 	}

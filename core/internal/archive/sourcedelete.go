@@ -85,6 +85,29 @@ func (c Copy) CanStandIn() bool {
 // caller has already gathered, so it can be tested for the case that
 // actually loses data without staging a real move against a real bucket.
 //
+// # How it composes with the move engine's own guard, and why only one way
+//
+// #238 has a source-delete guard of its own, and the two are not rivals to
+// be reconciled: this one is a precondition of that one, and the direction
+// is forced rather than chosen.
+//
+// That guard asks the journal-shaped question, which is whether a
+// destination copy exists and was verified. This one asks whether any
+// SURVIVING copy can actually be read right now. The second cannot be
+// inferred from the first, because nothing rewrites verification_class
+// when a bucket lifecycle rule transitions an object or a restore window
+// expires: the recorded verification really did happen, and the record of
+// it stays true while the bytes go out of reach. And the composition
+// cannot run the other way round, because this package holds no journal
+// read, so it has nothing to call. The move engine has already loaded the
+// copies; passing them here costs it nothing.
+//
+// The guard that makes a mover which forgets fail the build rather than
+// pass review is TestNothingDeletesACopyWithoutAskingWhetherAnotherOneIsReadable
+// (composition_test.go). It lives on this side because the caller does not
+// exist in this tree yet, and a rule that only lives in a merged pull
+// request description is a rule the next lane never reads.
+//
 // # The data-loss path it closes
 //
 // A move to an archive class ends with a destination placement row that

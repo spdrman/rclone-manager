@@ -1135,6 +1135,38 @@ export const httpApi: BackupManagerApi = {
   // against a configuration the caller has not seen.
   runCycle: (configRevision) =>
     post("/operations", { action: "run_cycle", config_revision: configRevision }),
+  // The same route as runCycle above, with a different action and its own
+  // parameter object. Not a route of its own, deliberately: a restore is
+  // a durable, idempotency-keyed, configuration-revision-checked
+  // operation whose row outlives the request, which is exactly what
+  // /operations was built for, and a second route would give this
+  // deployment two answers to "how does a long-running job get started".
+  //
+  // Nothing is read out of the response except the four fields below.
+  // In particular nothing here reads or invents a percentage: a restore
+  // has none, and the type it resolves to has nowhere to put one.
+  restoreCopy: async (req) => {
+    const r = await request<WireOperation>("/operations", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "restore_placement",
+        config_revision: req.configRevision,
+        restore: {
+          artifact_id: req.artifactId,
+          medium: req.medium,
+          window_days: req.windowDays,
+          acknowledged: req.acknowledged
+        }
+      })
+    });
+    return {
+      operationId: r.operation_id,
+      status: r.status,
+      windowDays: r.restore?.window_days ?? req.windowDays,
+      wait: r.restore?.wait ?? "",
+      billing: r.restore?.billing ?? ""
+    };
+  },
   // The persisted-set mode of the shared test-connection route. Sending
   // only the id is the point: this client neither knows nor should have to
   // echo back the key reference and trusted host line the set is
