@@ -268,7 +268,19 @@ func TestRunCycle_ResumingACommittingRowReusesTheSameCommittingKey(t *testing.T)
 // point: a state added to the state machine and to none of the three
 // buckets fails this, instead of being discovered the way this one was.
 func TestEveryLifecycleState_IsVisibleToTheCycleVerdict(t *testing.T) {
+	// A table-driven guard over an empty table passes over nothing, which
+	// is the same way a widened timeout stops discriminating: no red, just
+	// a test that has quietly stopped asking anything. So the table is
+	// checked before it is walked, and each bucket has to end up with
+	// something in it.
+	if len(lifecycle.AllStates) == 0 {
+		t.Fatal("lifecycle.AllStates is empty, so everything below iterates nothing and proves nothing")
+	}
+	seen := map[lifecycle.State]bool{}
+	filled := map[string]int{}
+
 	for _, st := range lifecycle.AllStates {
+		seen[st] = true
 		buckets := []string{}
 		if acquiring(st) {
 			buckets = append(buckets, "acquiring")
@@ -278,6 +290,9 @@ func TestEveryLifecycleState_IsVisibleToTheCycleVerdict(t *testing.T) {
 		}
 		if terminalFailure(st) {
 			buckets = append(buckets, "terminalFailure")
+		}
+		for _, b := range buckets {
+			filled[b]++
 		}
 		switch len(buckets) {
 		case 1:
@@ -289,6 +304,19 @@ func TestEveryLifecycleState_IsVisibleToTheCycleVerdict(t *testing.T) {
 		default:
 			t.Errorf("%s is in %v at once; the three are meant to partition the states, and a row counted "+
 				"twice is counted twice in the verdict", st, buckets)
+		}
+	}
+
+	// COMMITTING by name, because it is the state issue #372 is about: a
+	// table that no longer carries it would take this guard with it.
+	if !seen[lifecycle.Committing] {
+		t.Errorf("lifecycle.AllStates does not carry %s, so this test no longer says anything about the "+
+			"state issue #372 was filed for", lifecycle.Committing)
+	}
+	for _, bucket := range []string{"acquiring", "durable", "terminalFailure"} {
+		if filled[bucket] == 0 {
+			t.Errorf("no state in lifecycle.AllStates landed in %s; a partition with an empty part means "+
+				"this test walked a table that cannot exercise it", bucket)
 		}
 	}
 }
