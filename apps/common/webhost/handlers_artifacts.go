@@ -37,6 +37,15 @@ type artifactResponse struct {
 	RemotePath string `json:"remote_path"`
 	LocalPath  string `json:"local_path"`
 
+	// Placements is every durable copy this backup currently has.
+	//
+	// An empty array means there is no copy anywhere yet, which is the
+	// honest answer for a backup still arriving, and is emphatically not
+	// "we could not work it out". local_path above is the path ingestion
+	// landed on and is not evidence that a readable file is sitting
+	// there: a client asking where the bytes are reads this.
+	Placements []placementResponse `json:"placements"`
+
 	State        string `json:"state"`
 	DiscoveredAt string `json:"discovered_at"`
 	UpdatedAt    string `json:"updated_at"`
@@ -58,6 +67,35 @@ type artifactResponse struct {
 	QuarantineReason        string `json:"quarantine_reason,omitempty"`
 
 	RetentionTier string `json:"retention_tier,omitempty"`
+}
+
+// placementResponse is one durable copy on the wire, a field-for-field
+// mirror of core/service.Placement.
+//
+// Three fields are omitted rather than emptied, and each omission is a
+// distinct statement: storage_class is absent for a local copy, which has
+// no such thing; verification_class is absent when NOTHING has verified
+// this copy, which is a different fact from a weak pass and must never be
+// rendered as one; verified_at is absent exactly when verification_class
+// is. A zero-valued spelling of any of the three would hand a client a
+// value to render, and every value it could render would be a claim
+// nobody made.
+//
+// size_bytes is a pointer for the reason core/service.Placement.SizeBytes
+// is one: an artifact can genuinely be zero bytes, so a zero must stay
+// distinguishable from nothing recorded.
+type placementResponse struct {
+	Medium     string `json:"medium"`
+	MediumType string `json:"medium_type"`
+	Location   string `json:"location"`
+	SizeBytes  *int64 `json:"size_bytes,omitempty"`
+
+	StorageClass      string `json:"storage_class,omitempty"`
+	VerificationClass string `json:"verification_class,omitempty"`
+	VerifiedAt        string `json:"verified_at,omitempty"`
+
+	Access string `json:"access"`
+	Status string `json:"status"`
 }
 
 // listArtifactsResponse is the body of both GET /api/v1/backups and GET
@@ -111,6 +149,7 @@ func toArtifactResponse(a service.Artifact) artifactResponse {
 		QuarantineIrrecoverable: a.QuarantineIrrecoverable,
 		QuarantineReason:        a.QuarantineReason,
 		RetentionTier:           a.RetentionTier,
+		Placements:              toPlacementResponses(a.Placements),
 	}
 	resp.DiscoveredAt = formatTime(a.DiscoveredAt)
 	resp.UpdatedAt = formatTime(a.UpdatedAt)
@@ -327,4 +366,29 @@ func writeArtifactActionError(w http.ResponseWriter, err error, fallback string)
 		// default case gives.
 		writeError(w, http.StatusInternalServerError, "INTERNAL", fallback)
 	}
+}
+
+// toPlacementResponses projects an artifact's copies onto the wire.
+//
+// The result is always a non-nil slice, so a backup with no copy serves
+// [] rather than null. That is not cosmetic: a client that has to handle
+// null as well as [] is a client with two code paths for one fact, and
+// the one somebody forgets is the one that renders "no copies" as a
+// crash or, worse, as nothing at all.
+func toPlacementResponses(placements []service.Placement) []placementResponse {
+	out := make([]placementResponse, 0, len(placements))
+	for _, p := range placements {
+		out = append(out, placementResponse{
+			Medium:            p.Medium,
+			MediumType:        p.MediumType,
+			Location:          p.Location,
+			SizeBytes:         p.SizeBytes,
+			StorageClass:      p.StorageClass,
+			VerificationClass: p.VerificationClass,
+			VerifiedAt:        formatTime(p.VerifiedAt),
+			Access:            p.Access,
+			Status:            p.Status,
+		})
+	}
+	return out
 }
