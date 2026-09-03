@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/service"
 )
@@ -435,4 +436,193 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// ------------------------------------------------------- over the wire ----
+
+// TestGetArtifact_ServesAnEmptyPlacementsArrayRatherThanNull is the
+// smallest thing that can go wrong between a correct read model and a
+// client that renders "no copies" as a crash.
+//
+// A backup with no copy has to serve `"placements": []`. A Go nil slice
+// marshals to `null`, and a client handling both null and [] is a client
+// with two code paths for one fact, one of which somebody forgets. Since
+// this is exactly the state a backup still transferring is in, the
+// forgotten path is the one that matters.
+func TestGetArtifact_ServesAnEmptyPlacementsArrayRatherThanNull(t *testing.T) {
+	backend := newSyncFakeBackend()
+	backend.artifacts = []service.Artifact{{
+		ID:          "src/set-1/arriving.dump",
+		BackupSetID: "src/set-1",
+		SourceName:  "src",
+		SetName:     "set-1",
+		Name:        "arriving.dump",
+		LocalPath:   "/data/backups/src/set-1/arriving.dump.partial",
+		State:       "TRANSFERRING",
+		Validation:  "pending",
+		// No placements: this backup is still arriving, and the partial
+		// file above is not a copy.
+	}}
+	router := NewRouter(RouterConfig{
+		Platform: allowingPlatform("alice"), Backend: backend, Gate: alwaysPassGate{},
+		BinaryVersion: "test", Commit: "test",
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/backups/src/set-1/arriving.dump", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"placements":[]`) {
+		t.Errorf("the response does not carry an empty placements array:\n%s", body)
+	}
+	if strings.Contains(body, `"placements":null`) {
+		t.Errorf("the response carries a null placements array; a client then has two spellings of \"no copy\":\n%s", body)
+	}
+}
+
+// TestGetArtifact_ServesEveryFieldOfACopyAndOmitsWhatNobodySaid is the
+// wire shape of one copy, both halves.
+//
+// The omissions are the point. An absent verification_class is how "nobody
+// has checked this copy" is spelled, and a zero-valued one would hand a
+// client a rung to render. Same for verified_at, storage_class on a local
+// copy, and a size nobody recorded.
+func TestGetArtifact_ServesEveryFieldOfACopyAndOmitsWhatNobodySaid(t *testing.T) {
+	size := int64(4096)
+	verified := time.Date(2026, 8, 28, 2, 0, 59, 0, time.UTC)
+	backend := newSyncFakeBackend()
+	backend.artifacts = []service.Artifact{{
+		ID: "src/set-1/a.dump", BackupSetID: "src/set-1", SourceName: "src", SetName: "set-1",
+		Name: "a.dump", State: "COMPLETE", Validation: "passed",
+		Placements: []service.Placement{
+			{
+				Medium: "local", MediumType: "local", Location: "/data/backups/src/set-1/a.dump",
+				SizeBytes: &size, VerificationClass: "content", VerifiedAt: verified,
+				Access: "immediate", Status: "ACTIVE",
+			},
+			{
+				Medium: "offsite_cold", MediumType: "s3", Location: "p/src/set-1/a.dump",
+				StorageClass: "DEEP_ARCHIVE",
+				Access:       "requires_restore", Status: "ACTIVE",
+			},
+		},
+	}}
+	router := NewRouter(RouterConfig{
+		Platform: allowingPlatform("alice"), Backend: backend, Gate: alwaysPassGate{},
+		BinaryVersion: "test", Commit: "test",
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/backups/src/set-1/a.dump", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Placements []map[string]any `json:"placements"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshalling the artifact: %v", err)
+	}
+	if len(body.Placements) != 2 {
+		t.Fatalf("got %d copies, want 2: %s", len(body.Placements), rec.Body.String())
+	}
+
+	local, archive := body.Placements[0], body.Placements[1]
+	if local["verification_class"] != "content" || local["verified_at"] != verified.Format(time.RFC3339Nano) {
+		t.Errorf("the verified local copy came back as %v", local)
+	}
+	if _, present := local["storage_class"]; present {
+		t.Errorf("the local copy carries a storage_class, which a local copy does not have: %v", local)
+	}
+
+	if archive["access"] != "requires_restore" || archive["storage_class"] != "DEEP_ARCHIVE" {
+		t.Errorf("the archive copy came back as %v", archive)
+	}
+	// The three absences, each a distinct statement, and each one a value
+	// a client would otherwise render.
+	for _, field := range []string{"verification_class", "verified_at", "size_bytes"} {
+		if _, present := archive[field]; present {
+			t.Errorf("the archive copy carries %q; nobody verified it and nobody recorded its size, and an empty value there reads as a measurement: %v", field, archive)
+		}
+	}
+}
+
+// TestGetSettings_ServesTheMediumsAndTheLadderButNoCredential is the
+// settings surface over the wire, with the FR-33 canary the type-level
+// test cannot reach: this one drives the real handler and scans the real
+// bytes.
+func TestGetSettings_ServesTheMediumsAndTheLadderButNoCredential(t *testing.T) {
+	backend := newSettingsFakeBackend()
+	backend.settings.Mediums = []service.StorageMediumSummary{{
+		ID: "offsite_cold", Type: "s3", Bucket: "nas-archive", Region: "us-east-1",
+		StorageClass: "DEEP_ARCHIVE", ReadsRequireRestore: true,
+	}}
+	router := NewRouter(RouterConfig{
+		Platform: allowingPlatform("alice"), Backend: backend, Gate: alwaysPassGate{},
+		BinaryVersion: "test", Commit: "test",
+	})
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Mediums []map[string]any `json:"mediums"`
+		Schema  struct {
+			Storage struct {
+				VerificationClasses []map[string]any `json:"verification_classes"`
+				MediumDisclosure    string           `json:"medium_disclosure"`
+				RetrievalDisclosure string           `json:"retrieval_disclosure"`
+			} `json:"storage"`
+		} `json:"schema"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshalling the settings: %v", err)
+	}
+
+	if len(body.Mediums) != 1 || body.Mediums[0]["id"] != "offsite_cold" {
+		t.Fatalf("mediums = %v, want the one the backend declares", body.Mediums)
+	}
+	if body.Mediums[0]["reads_require_restore"] != true {
+		t.Errorf("a DEEP_ARCHIVE medium does not report that reads need a restore: %v", body.Mediums[0])
+	}
+
+	// The ladder arrives with the engine's own words, so a frontend never
+	// has to keep its own copy of what a rung proves.
+	if len(body.Schema.Storage.VerificationClasses) != len(service.VerificationClasses()) {
+		t.Fatalf("the served ladder has %d rungs, the engine has %d", len(body.Schema.Storage.VerificationClasses), len(service.VerificationClasses()))
+	}
+	egress := 0
+	for _, c := range body.Schema.Storage.VerificationClasses {
+		if c["proves"] == "" || c["cost"] == "" {
+			t.Errorf("rung %v arrived without the words that make it a choice", c["class"])
+		}
+		if c["costs_egress"] == true {
+			egress++
+		}
+	}
+	if egress != 1 {
+		t.Errorf("%d rungs report costing egress, want exactly 1: a ladder where none does lets a surface offer every class as free", egress)
+	}
+	if !strings.Contains(body.Schema.Storage.MediumDisclosure, "delete") {
+		t.Errorf("the served disclosure does not name the deletion consequence: %q", body.Schema.Storage.MediumDisclosure)
+	}
+	if body.Schema.Storage.RetrievalDisclosure == "" {
+		t.Error("no retrieval disclosure was served, so a surface has nothing but its own words to use")
+	}
+
+	// FR-33 over the wire: no credential material, and nothing naming
+	// where a credential comes from, in the bytes an API caller receives.
+	rendered := strings.ToLower(rec.Body.String())
+	for _, forbidden := range []string{"secret", "access_key", "credential", "/var/lib", "backup_s3"} {
+		if strings.Contains(rendered, forbidden) {
+			t.Errorf("the settings response carries %q:\n%s", forbidden, rec.Body.String())
+		}
+	}
 }

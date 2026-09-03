@@ -43,27 +43,27 @@ import { bytes, stamp } from "@shared/utilities/format";
 const ACCESS: Record<PlacementAccess, { tone: StatusTone; glyph: string; label: string; detail: string }> = {
   immediate: {
     tone: "ok",
-    glyph: "●",
+    glyph: "\u25cf",
     label: "Readable now",
     detail: ""
   },
   requires_restore: {
     tone: "warn",
-    glyph: "▲",
+    glyph: "\u25b2",
     label: "Needs a restore",
     detail:
       "This storage class cannot be read on demand. Getting this backup back means asking for a restore first and waiting hours, and the provider reports no progress while it waits."
   },
   restoring: {
     tone: "warn",
-    glyph: "▲",
+    glyph: "\u25b2",
     label: "Restore in progress",
     detail:
       "A restore has been asked for and has not finished. The provider reports no percentage, so there is none to show."
   },
   unreachable: {
     tone: "warn",
-    glyph: "▲",
+    glyph: "\u25b2",
     label: "Out of reach",
     detail:
       "This deployment has no way to reach that place, so nothing here can confirm this copy. That is not the same as the copy being gone."
@@ -108,7 +108,7 @@ export function PlacementList({
       {placements.length === 0 ? (
         <div style={{ padding: "16px 18px" }}>
           <div className="banner banner--info">
-            <span aria-hidden="true" style={{ color: "var(--text-2)" }}>{"●"}</span>
+            <span aria-hidden="true" style={{ color: "var(--text-2)" }}>{"\u25cf"}</span>
             <div>
               <div style={{ fontWeight: 500 }}>No confirmed copy yet</div>
               <p style={{ margin: "4px 0 0", fontSize: "var(--text-sm)", color: "var(--text-2)", maxWidth: "68ch" }}>
@@ -170,7 +170,7 @@ export function PlacementList({
                       )}
                     </td>
                     <td className="mono" style={{ fontSize: "var(--text-sm)", whiteSpace: "nowrap" }}>
-                      {p.storageClass || <span style={{ color: "var(--text-3)" }}>{"—"}</span>}
+                      {p.storageClass || <span style={{ color: "var(--text-3)" }}>{"\u2014"}</span>}
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       <StatusBadge tone={access.tone} glyph={access.glyph}>{access.label}</StatusBadge>
