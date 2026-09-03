@@ -416,13 +416,43 @@ func (e *Engine) destinationLocator(rec state.Record, destination string) (strin
 		if err != nil {
 			return "", err
 		}
-		return artifactstore.LocalLocator(bs.LocalPath, rec.Artifact), nil
+		return localArtifactPath(bs, rec.Artifact)
 	}
 	medium, _, err := e.resolve(destination)
 	if err != nil {
 		return "", err
 	}
 	return transport.MediumKey(medium.Prefix, rec.Artifact)
+}
+
+// localArtifactPath asks the backup set's own Local store where an
+// artifact belongs, and it is the only way this package computes a local
+// path. Both callers are one step from a delete: destinationLocator names
+// the object a move back to local lands on, and proveLocalSourceSafe names
+// the path the source delete is allowed to consider.
+//
+// It asks a store rather than joining a root onto a name because issue
+// #390 removed artifactstore.LocalLocator, the exported free function this
+// package originally called. That removal is the point of the seam: a
+// caller that composes the path itself is a second implementation that can
+// drift from the store's, and this package is the last one that should
+// have one. #334's package doc named the two conversions #390 did, this is
+// the third, and there is now no way to address a local artifact except
+// through a Local.
+//
+// The error is real rather than ceremony. NewLocal refuses an empty root,
+// so a backup set with no configured local_path now fails here instead of
+// producing the artifact's bare name, which is a path relative to whatever
+// directory the daemon started in. config.Validate refuses that
+// configuration, so no cycle can reach it, but a move engine that would
+// have deleted a source against a relative path should say so rather than
+// rely on validation upstream.
+func localArtifactPath(bs config.BackupSet, artifact model.ArtifactID) (string, error) {
+	store, err := artifactstore.NewLocal(bs.LocalPath)
+	if err != nil {
+		return "", fmt.Errorf("placement: backup set %s: %w", bs.ID, err)
+	}
+	return store.Locator(artifact)
 }
 
 func (e *Engine) resolve(id string) (transport.Medium, Class, error) {
@@ -752,11 +782,18 @@ func (e *Engine) intendSourceDelete(ctx context.Context, mv state.Move) (state.M
 
 // deleteSource is the dangerous one.
 //
-// It re-verifies the destination from scratch, writes that fresh result
-// into the destination's placement so the guard below reads a journal fact
-// newer than the check that justifies it, re-derives every precondition
-// from the durable journal and the real filesystem, and only then removes
-// the source copy.
+// It re-verifies the destination from scratch, does NOT write that fresh
+// result anywhere, re-derives every precondition from the durable journal
+// and the real filesystem, and only then removes the source copy.
+//
+// That "does NOT" was the wrong way round here until now: this comment used
+// to say the fresh result is written into the destination's placement "so
+// the guard below reads a journal fact newer than the check that justifies
+// it", which is the exact mistake the comment in the body of the function
+// exists to argue against, and it is the one a reader hits first. Two
+// structural tests in destructive_test.go now hold the code to the body's
+// version, because a rule that lives only in a comment is a rule two
+// comments can disagree about.
 //
 // On a destination that fails re-verification it goes back to COPYING with
 // the source placement restored to ACTIVE, which is FR-30's own restart

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -201,7 +200,10 @@ func (e *Engine) proveLocalSourceSafe(rec state.Record, src state.Placement) (st
 	// The path this backup set's root and this artifact's name compute,
 	// which is the only path this function will ever consider. Nothing
 	// here is derived from the string being deleted.
-	expected := artifactstore.LocalLocator(bs.LocalPath, rec.Artifact)
+	expected, err := localArtifactPath(bs, rec.Artifact)
+	if err != nil {
+		return refuse("%v", err)
+	}
 	if strings.HasSuffix(expected, partialSuffix) {
 		return refuse("the computed path %q carries the %s marker", expected, partialSuffix)
 	}
