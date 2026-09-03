@@ -78,19 +78,14 @@ const integrityFailurePrefix = "corrupted on transfer"
 // failure-safety violation, not classifying it as narrowly as possible.
 //
 // Classify is idempotent: calling it on an error that already carries a
-// *transport.Error (for example, one Wrap already produced) returns that
+// *transport.Error (for example, one WrapCtx already produced) returns that
 // same Category rather than reclassifying, so wrapping twice by accident
 // cannot change the answer.
-// ClassifyCtx is Classify with the caller's own context in hand. It is a
-// seam only at this point in history: it defers to Classify and decides
-// nothing of its own yet, so the tree still behaves exactly as it did. The
-// commit after this one is where it starts telling rclone's deadlines apart
-// from the caller's (issue #388).
-func ClassifyCtx(ctx context.Context, err error) transport.Category {
-	_ = ctx
-	return Classify(err)
-}
-
+//
+// Classify judges the error and nothing else, so it can never return
+// Cancelled for a deadline: it has no way to know whose deadline expired.
+// ClassifyCtx is the entry point that does, and every call inside this
+// package goes through it.
 func Classify(err error) transport.Category {
 	if err == nil {
 		return transport.Unclassified
@@ -102,8 +97,13 @@ func Classify(err error) transport.Category {
 
 	// Cancellation is a program decision, not a judgement about the error's
 	// cause, so it takes priority over every category below (FR-22:
-	// "Cancellation SHALL propagate through Go contexts").
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	// "Cancellation SHALL propagate through Go contexts"). Only something
+	// that was explicitly cancelled counts, and context.DeadlineExceeded is
+	// deliberately not checked: an expired deadline says nothing about whose
+	// deadline it was, and rclone sets several of its own that no caller
+	// asked for. ClassifyCtx is where a deadline gets decided, from the
+	// caller's context rather than from the error. See issue #388.
+	if errors.Is(err, context.Canceled) {
 		return transport.Cancelled
 	}
 
@@ -195,13 +195,54 @@ func Classify(err error) transport.Category {
 	return transport.Permanent
 }
 
-// Wrap classifies err and packages it as a *transport.Error tagged with op,
-// the transport operation that produced it (for example "stat" or
-// "copy_to_local"). It returns nil for a nil err, so it is safe to call
-// unconditionally on a call's returned error.
-func Wrap(op string, err error) error {
+// ClassifyCtx is Classify with the caller's own context in hand, and it is
+// what everything inside this package uses. Prefer it anywhere a context is
+// available, because the context is the only thing that can tell a deadline
+// the caller set apart from a deadline rclone set for itself.
+//
+// rclone builds both of its dials with --contimeout: fs/fshttp's NewDialer
+// sets net.Dialer.Timeout from ci.ConnectTimeout, and backend/sftp sets
+// ssh.ClientConfig.Timeout from the same value. When one of those fires, the
+// *net.OpError underneath usually carries *net.timeoutError, whose Is method
+// answers true for context.DeadlineExceeded. A caller's own
+// context.WithTimeout expiring inside the same dial produces a byte-identical
+// error, down to the "i/o timeout" text, because net.Dialer applies whichever
+// deadline comes first and maps both through the same mapErr. So there is no
+// shape to tell them apart by, and issue #388 is what happens when you try:
+// rclone's own connect timeout came back as transport.Cancelled, which reads
+// everywhere as "the operator decided", and retry.DefaultIsTransient will not
+// retry it.
+//
+// Cancelled therefore means exactly one thing here: the context this call was
+// given is done. Everything else is classified on the error alone, which puts
+// a connect timeout where it belongs, in Transient.
+//
+// A nil ctx is treated as a caller that never asked for anything, the same as
+// context.Background().
+func ClassifyCtx(ctx context.Context, err error) transport.Category {
+	if err == nil {
+		return transport.Unclassified
+	}
+	if category, ok := transport.CategoryOf(err); ok {
+		return category
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return transport.Cancelled
+	}
+	return Classify(err)
+}
+
+// WrapCtx classifies err with ClassifyCtx and packages it as a
+// *transport.Error tagged with op, the transport operation that produced it
+// (for example "stat" or "copy_to_local"). It returns nil for a nil err, so
+// it is safe to call unconditionally on a call's returned error.
+//
+// ctx is the context the failed call was given. It takes a context rather
+// than classifying the error alone because that is the only way rclone's own
+// deadlines stay out of transport.Cancelled; see ClassifyCtx and issue #388.
+func WrapCtx(ctx context.Context, op string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return transport.NewError(Classify(err), op, err)
+	return transport.NewError(ClassifyCtx(ctx, err), op, err)
 }

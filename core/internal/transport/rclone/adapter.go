@@ -255,12 +255,12 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return nil, Wrap("list", err)
+		return nil, WrapCtx(ctx, "list", err)
 	}
 	defer shutdownFs(ctx, f)
 	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
 	if err != nil {
-		return nil, Wrap("list", err)
+		return nil, WrapCtx(ctx, "list", err)
 	}
 	out := make([]transport.RemoteArtifact, 0, len(objs))
 	for _, o := range objs {
@@ -314,12 +314,12 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.RemoteArtifact{}, Wrap("stat", err)
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat", err)
 	}
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.RemoteArtifact{}, Wrap("stat", err)
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat", err)
 	}
 
 	art := toArtifact(o)
@@ -343,17 +343,17 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	defer shutdownFs(ctx, srcFs)
 	o, err := srcFs.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	dstDir, dstName := splitPath(localPartialPath)
 	dstFs, err := fs.NewFs(ctx, dstDir)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	// Copy, never Move. The remote source is deleted later, by the lifecycle
 	// manager, and only after a durable commit (FR-11, FR-15).
@@ -370,7 +370,7 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 		dst, copyErr = operations.Copy(ctx, dstFs, nil, dstName, o)
 		return copyErr
 	}); err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	return transport.TransferResult{BytesTransferred: dst.Size()}, nil
 }
@@ -379,12 +379,12 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsForHashing(ctx, src)
 	if err != nil {
-		return "", Wrap("remote_hash", err)
+		return "", WrapCtx(ctx, "remote_hash", err)
 	}
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return "", Wrap("remote_hash", err)
+		return "", WrapCtx(ctx, "remote_hash", err)
 	}
 	var ht hash.Type
 	switch alg {
@@ -435,14 +435,14 @@ func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remote
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return Wrap("delete_remote", err)
+		return WrapCtx(ctx, "delete_remote", err)
 	}
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return Wrap("delete_remote", err)
+		return WrapCtx(ctx, "delete_remote", err)
 	}
-	return Wrap("delete_remote", o.Remove(ctx))
+	return WrapCtx(ctx, "delete_remote", o.Remove(ctx))
 }
 
 func splitPath(p string) (dir, name string) {

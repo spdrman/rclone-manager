@@ -353,18 +353,31 @@ func decide(ctx context.Context, d Deps, source transport.Source, rec state.Reco
 
 // isCancellation reports whether err represents this call being stopped
 // externally (a caller's context being cancelled or timing out) rather than
-// the operation itself failing. It checks transport.CategoryOf first
-// (retry.Do wraps a cancellation it observes as transport.Cancelled), and
-// falls back to a raw context error check for a transport implementation
-// that returns ctx.Err() unwrapped: capability-absence and every other
+// the operation itself failing. Capability-absence and every other
 // classified failure must still fall through to a real Failed/Quarantined
 // verdict, so this must never match anything but an actual cancellation.
+//
+// A classified error answers for itself and the raw check never runs on it.
+// That ordering is the whole point rather than a tidiness preference:
+// transport.Error keeps its cause reachable through Unwrap, so an error a
+// transport already looked at and called Transient still answers
+// errors.Is(err, context.DeadlineExceeded) if a deadline is what it was
+// underneath. A connect timeout rclone imposed on itself is exactly that
+// shape (see transport/rclone.ClassifyCtx and issue #388), and reading it
+// here as a stop request would leave the journal at VERIFYING with no
+// verdict at all, for a failure nobody asked for and everybody wants
+// recorded.
+//
+// The raw check is still the right answer for an error nothing classified,
+// which is what a transport implementation returning ctx.Err() unwrapped
+// produces, and what runValidator returns when the context it was given
+// expires.
 func isCancellation(err error) bool {
 	if err == nil {
 		return false
 	}
-	if category, ok := transport.CategoryOf(err); ok && category == transport.Cancelled {
-		return true
+	if category, ok := transport.CategoryOf(err); ok {
+		return category == transport.Cancelled
 	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
