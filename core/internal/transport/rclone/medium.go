@@ -278,17 +278,20 @@ var errBucketAbsent = errors.New("the medium's bucket does not exist")
 // does not call it: an upload's own failure carries the real NoSuchBucket
 // code intact, and probing there would put a round trip on the hot path to
 // answer a question the endpoint already answered.
-func (a *Adapter) confirmBucket(ctx context.Context, f fs.Fs, medium transport.Medium) error {
+// The op the CALLER was performing is threaded through rather than being
+// this function's own name, so an operator reads "delete_object: the
+// medium's bucket does not exist" and knows which operation hit it.
+func (a *Adapter) confirmBucket(ctx context.Context, f fs.Fs, medium transport.Medium, op string) error {
 	if _, err := f.List(ctx, ""); err != nil {
 		if errors.Is(err, fs.ErrorDirNotFound) {
-			return transport.NewError(transport.Configuration, "confirm_bucket", fmt.Errorf(
+			return transport.NewError(transport.Configuration, op, fmt.Errorf(
 				"%w: medium %q names bucket %q and the endpoint does not have it",
 				errBucketAbsent, medium.ID, medium.Bucket))
 		}
 		// The probe itself failed for some other reason (unreachable,
 		// unauthorized). That is a better answer than the not-found the
 		// caller was about to give, so it is the one that is returned.
-		return Wrap("confirm_bucket", err)
+		return Wrap(op, err)
 	}
 	return nil
 }
@@ -302,7 +305,7 @@ func (a *Adapter) confirmBucket(ctx context.Context, f fs.Fs, medium transport.M
 // is deliberate: getting this at three of the four is a silent half-fix,
 // and the one that was missed would be the one that reports success.
 func (a *Adapter) absenceOrMissingBucket(ctx context.Context, f fs.Fs, medium transport.Medium, op string, absence error) error {
-	if err := a.confirmBucket(ctx, f, medium); err != nil {
+	if err := a.confirmBucket(ctx, f, medium, op); err != nil {
 		return err
 	}
 	return Wrap(op, absence)
@@ -510,7 +513,7 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 			// bucket it would have been in is known to exist. Without
 			// that check a delete against a mistyped bucket reported
 			// success and the prune marked the placement GONE.
-			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+			if berr := a.confirmBucket(ctx, f, medium, "delete_object"); berr != nil {
 				return berr
 			}
 			return nil
@@ -540,7 +543,7 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 			// A prefix holding nothing is an empty listing, but a bucket
 			// that is not there must never be reported as one: a catalog
 			// rebuild reading that concludes the medium holds nothing.
-			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+			if berr := a.confirmBucket(ctx, f, medium, "list_objects"); berr != nil {
 				return nil, berr
 			}
 			return nil, nil

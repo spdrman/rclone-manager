@@ -55,7 +55,7 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 
 	t.Run("StatObject", func(t *testing.T) {
 		_, err := adapter.StatObject(ctx, absent, key)
-		requireConfigurationNotNotFound(t, err, "StatObject")
+		requireConfigurationNotNotFound(t, err, "StatObject", "stat_object")
 
 		// Positive control: the same key in a container that DOES exist
 		// still has to come back NotFound, or this adapter has stopped
@@ -69,7 +69,7 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 		if rc != nil {
 			_ = rc.Close()
 		}
-		requireConfigurationNotNotFound(t, err, "OpenObject")
+		requireConfigurationNotNotFound(t, err, "OpenObject", "open_object")
 
 		rc, err = adapter.OpenObject(ctx, present, key)
 		if rc != nil {
@@ -84,7 +84,7 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 			t.Fatalf("ListObjects against a container that does not exist returned %d objects and no error; "+
 				"a catalog rebuild reading that concludes the medium holds nothing", len(objects))
 		}
-		requireConfigurationNotNotFound(t, err, "ListObjects")
+		requireConfigurationNotNotFound(t, err, "ListObjects", "list_objects")
 
 		// Positive control, and the one that matters most: an EMPTY
 		// container must still list empty with no error, or this fix has
@@ -106,7 +106,7 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 			t.Fatal("DeleteObject against a container that does not exist reported SUCCESS. " +
 				"Under FR-30's medium-aware prune that marks every placement on the medium GONE for artifacts nobody deleted")
 		}
-		requireConfigurationNotNotFound(t, err, "DeleteObject")
+		requireConfigurationNotNotFound(t, err, "DeleteObject", "delete_object")
 
 		// Positive control: deleting something already absent from a
 		// container that exists is still success, because the caller's
@@ -150,7 +150,7 @@ func TestAMissingContainerIsNeverReportedAsAMissingObject(t *testing.T) {
 	})
 }
 
-func requireConfigurationNotNotFound(t *testing.T, err error, op string) {
+func requireConfigurationNotNotFound(t *testing.T, err error, op, wantOp string) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("%s against a container that does not exist succeeded", op)
@@ -170,6 +170,12 @@ func requireConfigurationNotNotFound(t *testing.T, err error, op string) {
 	}
 	if !strings.Contains(err.Error(), "does not exist") {
 		t.Errorf("%s: the refusal does not say the container is missing, so an operator cannot act on it: %v", op, err)
+	}
+	// The verdict carries the operation the CALLER was performing, not the
+	// name of the probe that produced it. An operator reading "the medium's
+	// bucket does not exist" needs to know which operation hit it.
+	if !strings.HasPrefix(err.Error(), wantOp+":") {
+		t.Errorf("%s: the refusal is reported under a different operation than the one that failed (want %q): %v", op, wantOp, err)
 	}
 }
 
