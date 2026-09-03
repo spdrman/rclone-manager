@@ -49,7 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
-| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350) |
+| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350). `backup-set remove <source/backup-set>` takes one out of the configuration; the backups it collected stay on storage and stay listed by `artifacts`, and creating the set again with the same source and name takes them back (issue #391) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |

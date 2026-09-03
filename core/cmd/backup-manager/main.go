@@ -82,6 +82,11 @@ commands:
                     [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
                                                   change one configured backup set in place; only the flags you pass are
                                                   changed, and the change is persisted and hot-reloaded (#350)
+  backup-set remove <source/backup-set>          take one backup set out of the configuration, the same operation
+                                                  DELETE /api/v1/backup-sets/{source}/{set} performs. Configuration
+                                                  only: the backups it collected stay on storage and stay listed by
+                                                  artifacts, and creating the set again with the same source and
+                                                  name takes them back (#391)
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)

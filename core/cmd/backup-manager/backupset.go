@@ -5,7 +5,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,16 +17,20 @@ import (
 )
 
 // cmdBackupSet is `backup-manager backup-set <verb> <source/backup-set>
-// [flags]`, the CLI's own half of the backup-set write surface. Two verbs
-// live here, and they arrived from two issues at once:
+// [flags]`, the CLI's own half of the backup-set write surface. Three
+// verbs share this command's flag set, and they arrived from three
+// issues:
 //
 //	create   issue #356
 //	patch    issue #350
+//	remove   issue #391
 //
-// One command rather than two top-level ones, because they are the same
-// noun over the same operand and a reader who has learned one has learned
-// the other. It also means one place splits an id, one place turns a
-// comma-separated --include into a list, and one place prints a set back.
+// (retention, issue #333, lives under the same noun with a flag set of
+// its own; see backupSetVerbs.) One command rather than several
+// top-level ones, because they are the same noun over the same operand
+// and a reader who has learned one has learned the others. It also means
+// one place splits an id, one place turns a comma-separated --include
+// into a list, and one place prints a set back.
 //
 // # Why the CLI gets either of these at all
 //
@@ -40,8 +46,10 @@ import (
 //
 // Before patch, hand-editing config.yaml was the ONLY way to change a
 // configured set, which is what an operator standing at a real NAS had to
-// do. Both verbs exist so the two surfaces cannot diverge, which is what
-// suites/equivalence is there to catch.
+// do. Before remove, there was no way at all, on any surface: the Web
+// UI's confirmation closed and called nothing. All three verbs exist so
+// the surfaces cannot diverge, which is what suites/equivalence is there
+// to catch.
 //
 // # They share the service layer, and that is the point
 //
@@ -103,6 +111,24 @@ var backupSetVerbs = map[string]func([]string) int{
 	"retention": cmdBackupSetRetention,
 }
 
+// backupSetSharedFlagVerbs are the verbs that share declareBackupSetFlags
+// and go through the switch in cmdBackupSet, in the order usage() lists
+// them. The switch dispatches on these literals; this list exists so the
+// usage messages and the test that checks usage() against the verbs read
+// them from one place rather than three.
+var backupSetSharedFlagVerbs = []string{"create", "patch", "remove"}
+
+// backupSetVerbNames is every verb `backup-set` dispatches, sorted: the
+// shared-flag ones above and the ones with a flag set of their own.
+func backupSetVerbNames() []string {
+	names := append([]string{}, backupSetSharedFlagVerbs...)
+	for verb := range backupSetVerbs {
+		names = append(names, verb)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func cmdBackupSet(args []string) int {
 	for _, a := range args {
 		if verb, ok := backupSetVerbs[a]; ok {
@@ -136,30 +162,32 @@ func cmdBackupSet(args []string) int {
 		}
 		return backupSetPatch(f, operands[1])
 	case "remove":
-		// remove names one set and nothing else, so it refuses every flag
-		// this command declares rather than a verb's worth of them. The
-		// reason is the one refuseFlagsOfTheOtherVerb already gives:
-		// silently ignoring is worse than refusing, and `backup-set
-		// remove a/b --read-only` exiting 0 having removed the set is a
-		// command that did something other than what it was told.
-		if code := f.refuseFlagsOfTheOtherVerb("remove", backupSetNonRemoveFlags); code != 0 {
+		// remove names one set and nothing else, so it is said as an
+		// allow-list of the one flag it takes rather than a deny-list of
+		// the eighteen it does not. A deny-list is only complete while
+		// somebody remembers to extend it, and a flag declared without
+		// being listed would be one remove quietly accepted and ignored,
+		// which is `backup-set remove a/b --read-only` exiting 0 having
+		// removed the set: a command that did something other than what
+		// it was told. An allow-list cannot rot that way.
+		if code := f.refuseEveryFlagBut("remove", "config"); code != 0 {
 			return code
 		}
 		return backupSetRemove(f, operands[1])
 	default:
-		return usageError("backup-set: %q is not a backup-set verb; the verbs are create, patch, remove and retention", operands[0])
+		return usageError("backup-set: %q is not a backup-set verb; the verbs are %s", operands[0], strings.Join(backupSetVerbNames(), ", "))
 	}
 }
 
 // backupSetFlags is every flag this command declares. One struct rather
-// than a dozen parameters per verb, because the two verbs share ten of
-// them and passing the shared ones positionally to both is how they drift
-// apart.
+// than a dozen parameters per verb, because create and patch share ten
+// of them and passing the shared ones positionally to both is how they
+// drift apart. remove takes none of them.
 type backupSetFlags struct {
 	fs      *flag.FlagSet
 	cfgPath *string
 
-	// Shared by both verbs. Each is a field of the backup set itself.
+	// Shared by create and patch. Each is a field of the backup set itself.
 	host               *string
 	port               *int
 	user               *string
@@ -185,27 +213,15 @@ type backupSetFlags struct {
 	acknowledgeRepoint *bool
 }
 
-// The two verbs' own flags, by name, so each verb can refuse the other's
-// rather than silently ignoring it. Silently ignoring is the worse
-// failure by a distance: `backup-set patch ... --read-only` would exit 0
-// having changed nothing about the posture the operator just asked for.
+// create's and patch's own flags, by name, so each verb can refuse the
+// other's rather than silently ignoring it. Silently ignoring is the
+// worse failure by a distance: `backup-set patch ... --read-only` would
+// exit 0 having changed nothing about the posture the operator just
+// asked for. remove has no list of its own: it refuses everything but
+// --config by construction (refuseEveryFlagBut).
 var (
 	backupSetCreateOnlyFlags = []string{"ssh-key-file", "ssh-key-id", "known-hosts-line", "trust-host-key", "disabled", "read-only", "run", "state-database"}
 	backupSetPatchOnlyFlags  = []string{"acknowledge-repoint"}
-
-	// backupSetSharedFlags are the ten create and patch both take: each
-	// one is a field of the backup set itself.
-	backupSetSharedFlags = []string{
-		"host", "port", "user", "remote-path", "local-path", "include",
-		"completion-strategy", "stable-for", "stale-after", "validator-id",
-	}
-
-	// backupSetNonRemoveFlags is every flag this command declares except
-	// --config, because remove takes none of them: it names a set and
-	// removes it. Built from the three lists above rather than typed out
-	// again, so a flag added to create or patch later cannot become one
-	// remove quietly accepts and ignores.
-	backupSetNonRemoveFlags = append(append(append([]string{}, backupSetSharedFlags...), backupSetCreateOnlyFlags...), backupSetPatchOnlyFlags...)
 )
 
 func declareBackupSetFlags() *backupSetFlags {
@@ -250,6 +266,29 @@ func (f *backupSetFlags) refuseFlagsOfTheOtherVerb(verb string, notMine []string
 			if fl.Name == name && wrong == "" {
 				wrong = name
 			}
+		}
+	})
+	if wrong == "" {
+		return 0
+	}
+	return usageError("backup-set %s: --%s is not a %s flag; passing it here would change nothing and exit 0", verb, wrong, verb)
+}
+
+// refuseEveryFlagBut is refuseFlagsOfTheOtherVerb turned inside out, for
+// a verb that takes almost nothing: a usage exit code for any flag that
+// was PASSED (fs.Visit) and is not one of mine. remove takes only
+// --config, and saying that is one word that cannot go stale, where the
+// list of everything it does not take went stale the moment anyone
+// declared a flag without also listing it.
+func (f *backupSetFlags) refuseEveryFlagBut(verb string, mine ...string) int {
+	allowed := map[string]bool{}
+	for _, name := range mine {
+		allowed[name] = true
+	}
+	wrong := ""
+	f.fs.Visit(func(fl *flag.Flag) {
+		if !allowed[fl.Name] && wrong == "" {
+			wrong = fl.Name
 		}
 	})
 	if wrong == "" {
@@ -364,12 +403,38 @@ func backupSetRemove(f *backupSetFlags, id string) int {
 
 	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 
-	kept, err := svc.ListArtifacts(ctx, service.ArtifactFilter{BackupSetID: id})
-	if err != nil {
-		// Read before the removal, because afterwards this filter names
-		// a set the configuration no longer has and is refused (#187).
-		// A failure here is the removal's failure too: a caller told
-		// "removed" with no idea what was kept has been told half of it.
+	return backupSetRemoveWith(ctx, svc, id, os.Stdout)
+}
+
+// backupSetRemover is the two calls the remove verb makes, as an
+// interface for the same reason backupSetCreatePrereqs is one: so the
+// one failure the real service cannot be made to produce on demand (the
+// journal read failing while the configuration write works) can be
+// driven in a test.
+type backupSetRemover interface {
+	ListArtifacts(ctx context.Context, filter service.ArtifactFilter) ([]service.Artifact, error)
+	RemoveBackupSet(ctx context.Context, id string) error
+}
+
+// backupSetRemoveWith is the remove verb once the service is open.
+//
+// The count of what stays is read BEFORE the removal, because afterwards
+// this filter names a set the configuration no longer has and is refused
+// (#187). It is a courtesy, not a precondition: a journal read failing
+// here must not turn into "the removal failed", because the operator
+// asked for a set to stop collecting and the configuration can be
+// written, and leaving the set running for the sake of a number in a
+// sentence would be the wrong trade. A count that could not be taken is
+// said to be exactly that, never printed as 0, which is a specific and
+// reassuring claim about a thing that was not looked at. This mirrors
+// BackupService.artifactCountFor's own -1.
+func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, out io.Writer) int {
+	kept := -1
+	if listed, err := svc.ListArtifacts(ctx, service.ArtifactFilter{BackupSetID: id}); err == nil {
+		kept = len(listed)
+	} else if errors.Is(err, service.ErrBackupSetNotFound) {
+		// Not a read failure: the set is not configured, and the removal
+		// below is the call whose refusal says so.
 		return fail(err)
 	}
 
@@ -377,9 +442,13 @@ func backupSetRemove(f *backupSetFlags, id string) int {
 		return fail(err)
 	}
 
-	fmt.Printf("removed the configuration for %s\n", id)
-	fmt.Printf("%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", len(kept))
-	fmt.Printf("creating %s again takes all of them back\n", id)
+	fmt.Fprintf(out, "removed the configuration for %s\n", id)
+	if kept < 0 {
+		fmt.Fprintf(out, "could not count the backups that stay on storage (the journal read failed); they are still there, and `backup-manager artifacts` lists them\n")
+	} else {
+		fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", kept)
+	}
+	fmt.Fprintf(out, "creating %s again takes all of them back\n", id)
 	return 0
 }
 

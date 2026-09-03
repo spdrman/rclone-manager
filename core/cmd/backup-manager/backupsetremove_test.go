@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"flag"
 	"os"
 	"strings"
 	"testing"
@@ -8,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/service"
 )
 
 // setNamesIn reads configPath the way a fresh boot would and lists the
@@ -166,4 +171,115 @@ func TestRun_BackupSetRemove_ArtifactsStillListsWhatStayed(t *testing.T) {
 	if !strings.Contains(after, "production/postgres-primary/backup.dump") {
 		t.Errorf("`artifacts` no longer lists the removed set's backup, which the removal just promised it would:\n%s", after)
 	}
+}
+
+// removeFake is the seam backupSetRemoveWith drives, so the one failure
+// mode the real service cannot be made to produce on demand (a journal
+// read failing while the configuration write works) can be produced.
+type removeFake struct {
+	listErr error
+	listed  int
+	removed []string
+}
+
+func (f *removeFake) ListArtifacts(_ context.Context, _ service.ArtifactFilter) ([]service.Artifact, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return make([]service.Artifact, f.listed), nil
+}
+
+func (f *removeFake) RemoveBackupSet(_ context.Context, id string) error {
+	f.removed = append(f.removed, id)
+	return nil
+}
+
+// TestBackupSetRemove_ACountThatCannotBeTakenDoesNotStopTheRemoval. The
+// verb counts what stays before it removes, because afterwards that
+// filter names a set the configuration no longer has. That count is a
+// courtesy. A journal read failing must not turn into "the removal
+// failed": the operator asked for a set to stop collecting, the
+// configuration can be written, and refusing to write it because a
+// number could not be looked up leaves the set running for the sake of
+// a sentence.
+func TestBackupSetRemove_ACountThatCannotBeTakenDoesNotStopTheRemoval(t *testing.T) {
+	fake := &removeFake{listErr: errors.New("journal: database is locked")}
+	var out bytes.Buffer
+
+	code := backupSetRemoveWith(context.Background(), fake, "production/postgres-primary", &out)
+
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; the removal itself succeeded", code)
+	}
+	if len(fake.removed) != 1 || fake.removed[0] != "production/postgres-primary" {
+		t.Errorf("RemoveBackupSet was called with %v, want exactly [production/postgres-primary]; a failed count aborted the removal", fake.removed)
+	}
+	text := out.String()
+	if !strings.Contains(text, "removed the configuration for production/postgres-primary") {
+		t.Errorf("the output does not say what it removed:\n%s", text)
+	}
+	if !strings.Contains(text, "could not count") || !strings.Contains(text, "stay on storage") {
+		t.Errorf("the output neither admits the count could not be taken nor says the backups are still there:\n%s", text)
+	}
+	if strings.Contains(text, "0 backup(s)") {
+		t.Errorf("the output claims 0 backups stayed, which is a specific and reassuring number for a count that was never taken:\n%s", text)
+	}
+}
+
+// The control for the case above: with the count available, the verb
+// reports it, so the test above is not passing against a verb that never
+// counts anything.
+func TestBackupSetRemove_ReportsTheCountWhenItCanBeTaken(t *testing.T) {
+	fake := &removeFake{listed: 3}
+	var out bytes.Buffer
+
+	if code := backupSetRemoveWith(context.Background(), fake, "production/postgres-primary", &out); code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if !strings.Contains(out.String(), "3 backup(s) stay on storage") {
+		t.Errorf("the output does not report the 3 backups that stayed:\n%s", out.String())
+	}
+}
+
+// TestRun_BackupSetRemove_RefusesEveryDeclaredFlagButConfig walks the
+// flag set itself rather than a hand-picked seven, so a flag declared
+// tomorrow is checked today. With the refusal expressed as "everything
+// but --config" this cannot fail by omission; the test is here so that
+// property is stated somewhere a widening of the allow-list would trip.
+func TestRun_BackupSetRemove_RefusesEveryDeclaredFlagButConfig(t *testing.T) {
+	var names []string
+	declareBackupSetFlags().fs.VisitAll(func(fl *flag.Flag) {
+		if fl.Name != "config" {
+			names = append(names, fl.Name)
+		}
+	})
+	if len(names) < 15 {
+		t.Fatalf("declareBackupSetFlags declares %d flags besides --config (%v); that is fewer than the verbs are known to take, so the walk is not seeing them", len(names), names)
+	}
+
+	for _, name := range names {
+		configPath := writeTestConfig(t)
+		args := []string{"backup-set", "--config", configPath, "remove", "production/postgres-primary", "--" + name}
+		if fl := declareBackupSetFlags().fs.Lookup(name); fl != nil && !isBoolFlag(fl) {
+			args = append(args, "value")
+		}
+		out := captureStderr(t, func() {
+			if code := run(args); code != 2 {
+				t.Errorf("run(%v) = %d, want 2 (a usage error); remove accepted --%s", args, code, name)
+			}
+		})
+		if !strings.Contains(out, name) {
+			t.Errorf("the refusal for --%s does not name it: %q", name, out)
+		}
+		if got := setNamesIn(t, configPath); len(got) != 1 {
+			t.Errorf("--%s: the refused removal still changed the configuration, which now declares %v", name, got)
+		}
+	}
+}
+
+// isBoolFlag reports whether fl takes no value, the way the flag package
+// itself decides it.
+func isBoolFlag(fl *flag.Flag) bool {
+	b, ok := fl.Value.(interface{ IsBoolFlag() bool })
+	return ok && b.IsBoolFlag()
 }
