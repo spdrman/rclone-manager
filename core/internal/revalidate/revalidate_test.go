@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -857,3 +859,77 @@ func (t *statMismatchTransport) DeleteRemote(context.Context, transport.Source, 
 }
 
 var _ transport.Transport = (*statMismatchTransport)(nil)
+
+// TestIsCancelled_AClassifiedFailureIsNeverACancellation is the revalidate
+// half of issue #388, and it is a direct test of the predicate rather than a
+// scenario because nothing on this package's current call graph hands
+// isCancelled a transport-classified error: runChecks reaches the local
+// filesystem and the restore-test hook, never a Transport. That is exactly
+// why this needs pinning now. The moment a check here does talk to a remote,
+// a raw errors.Is fallback would read rclone's own connect timeout, which
+// transport/rclone classifies as Transient and whose cause stays reachable
+// as context.DeadlineExceeded through transport.Error's Unwrap, as an
+// operator stopping the run.
+//
+// verify.go's isCancellation is the same predicate for the same reason, and
+// the two are meant to agree.
+func TestIsCancelled_AClassifiedFailureIsNeverACancellation(t *testing.T) {
+	// The shape transport/rclone now produces for a connect timeout rclone
+	// imposed on itself: Transient, with the deadline still reachable
+	// underneath.
+	connectTimeout := transport.NewError(transport.Transient, "remote_hash",
+		fmt.Errorf(`source "prod": NewFs: couldn't connect SSH: dial tcp 192.0.2.1:22: %w`, context.DeadlineExceeded))
+	if !errors.Is(connectTimeout, context.DeadlineExceeded) {
+		t.Fatal("this error no longer carries context.DeadlineExceeded, so it cannot exercise the confusion this test exists for")
+	}
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "a connect timeout rclone imposed, already classified Transient",
+			err:  connectTimeout,
+			want: false,
+		},
+		{
+			name: "an unsupported capability, already classified",
+			err:  transport.NewError(transport.UnsupportedCapability, "remote_hash", errors.New("backend cannot compute sha256")),
+			want: false,
+		},
+		{
+			name: "a real cancellation the transport classified",
+			err:  transport.NewError(transport.Cancelled, "remote_hash", context.Canceled),
+			want: true,
+		},
+		{
+			name: "a raw context.Canceled from something that never classified it",
+			err:  fmt.Errorf("restore-test hook: %w", context.Canceled),
+			want: true,
+		},
+		{
+			name: "a raw context.DeadlineExceeded from something that never classified it",
+			err:  fmt.Errorf("restore-test hook: %w", context.DeadlineExceeded),
+			want: true,
+		},
+		{
+			name: "an ordinary failure",
+			err:  errors.New("local final file could not be read"),
+			want: false,
+		},
+		{
+			name: "no error at all",
+			err:  nil,
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isCancelled(tc.err); got != tc.want {
+				t.Fatalf("isCancelled(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}

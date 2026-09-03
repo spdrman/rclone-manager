@@ -12,6 +12,7 @@ import (
 	"time"
 
 	rclonefs "github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/fs/accounting"
 
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 
@@ -162,6 +163,269 @@ func TestClassify_Transient_RealConnectionRefused(t *testing.T) {
 	if got := Classify(err); got != transport.Transient {
 		t.Fatalf("Classify(%v) = %v, want Transient", err, got)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue #388: rclone's own connect timeout is a network condition, not a
+// cancellation, and the caller's context is the only thing that can tell the
+// two apart.
+//
+// rclone builds both of its dials with --contimeout: fs/fshttp's NewDialer
+// sets net.Dialer.Timeout from ci.ConnectTimeout, and backend/sftp sets
+// ssh.ClientConfig.Timeout from the same value. When one of those fires, the
+// *net.OpError underneath usually carries *net.timeoutError, whose Is method
+// answers true for context.DeadlineExceeded, so a plain errors.Is check reads
+// a timeout nobody asked for as a cancellation somebody did.
+//
+// "Usually" is the other half of why this test asserts a category and never
+// an error identity. Both of net.Dialer's deadlines (the socket's and the
+// context's) expire on the same instant, and net's connect() returns
+// whichever one it notices first: *net.timeoutError when the context timer
+// has already run, *poll.DeadlineExceededError (which has no Is method at
+// all, so errors.Is never sees a deadline in it) when it has not.
+//
+// Measured against 192.0.2.1 on the machine this was written on: a bare
+// net.Dialer, one dial at a time, 29 of 30 drew *net.timeoutError; with 30
+// dials in flight that fell to 122 of 300, and with 50 in flight to 416 of
+// 1000. Through rclone's own sftp dial, one at a time, it was 33 of 40. Same
+// network condition, two error shapes, and before this fix two different
+// categories, with the odds depending on how busy the machine is.
+// ---------------------------------------------------------------------------
+
+// blackholedHost is TEST-NET-1 (RFC 5737), reserved for documentation and
+// routed nowhere. It has to blackhole rather than refuse: a closed port
+// refuses instantly, which is a different error on a different code path and
+// would never reach a connect timeout at all.
+const (
+	blackholedHost = "192.0.2.1"
+	blackholedPort = 9000
+	// contimeoutForTest is what this test hands rclone as --contimeout. It
+	// is the deadline row 1 expects to be enforced, and the floor row 1's
+	// elapsed-time precondition checks against.
+	contimeoutForTest = 500 * time.Millisecond
+	// connectTimeoutSamples is how many times row 1 dials. One dial samples
+	// one side of the race described above, and the side it draws decides
+	// whether the row is discriminating at all, so it dials several times
+	// and demands the same category from every one of them. Measured through
+	// this exact path (rclone's sftp backend at 192.0.2.1, 40 dials), 33 of
+	// 40 carried context.DeadlineExceeded, which puts the odds of six
+	// samples all drawing the other shape at roughly three in a hundred
+	// thousand.
+	connectTimeoutSamples = 6
+)
+
+func TestClassify_ConnectTimeoutRcloneImposedIsTransient(t *testing.T) {
+	cases := []struct {
+		name string
+		// run performs one or more real operations, returns the caller
+		// context they were given and every error they produced, and fails
+		// the test itself if its own preconditions did not hold (see each
+		// one: an assertion about the category is worthless if the scenario
+		// it names never happened). Row 1 returns several errors on purpose,
+		// because one dial only samples one side of the race described
+		// above; every one of them has to land in the same category.
+		run  func(t *testing.T) (context.Context, []error)
+		want transport.Category
+	}{
+		{
+			name: "rclone's own connect timeout, caller context never asked for anything",
+			run:  rcloneImposedConnectTimeout,
+			want: transport.Transient,
+		},
+		{
+			name: "caller context cancelled before the call started",
+			run:  callerCancelledBeforeTheCall,
+			want: transport.Cancelled,
+		},
+		{
+			name: "caller deadline that genuinely fires mid-copy",
+			run:  callerDeadlineFiresMidCopy,
+			want: transport.Cancelled,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, errs := tc.run(t)
+			if len(errs) == 0 {
+				t.Fatalf("the operation produced no error, so there is nothing to classify")
+			}
+			for i, err := range errs {
+				if err == nil {
+					t.Fatalf("attempt %d succeeded, so there is nothing to classify", i+1)
+				}
+				if got := ClassifyCtx(ctx, err); got != tc.want {
+					t.Fatalf("attempt %d: ClassifyCtx = %v, want %v (error was: %v)", i+1, got, tc.want, err)
+				}
+			}
+		})
+	}
+}
+
+// rcloneImposedConnectTimeout drives the real sftp backend, through this
+// adapter exactly as production code does, at an address that blackholes,
+// with --contimeout set and a caller context that has no deadline and is
+// never cancelled. The only deadline anywhere in this scenario is rclone's
+// own, which is the whole point.
+func rcloneImposedConnectTimeout(t *testing.T) (context.Context, []error) {
+	t.Helper()
+
+	dir := t.TempDir()
+	keyPath, _ := generateClientSSHKeyPair(t) // needs to parse, never needs to authenticate
+	knownHostsPath := filepath.Join(dir, "known_hosts")
+	if err := os.WriteFile(knownHostsPath, nil, 0o600); err != nil {
+		t.Fatalf("writing empty known_hosts: %v", err)
+	}
+
+	ctx, ci := rclonefs.AddConfig(context.Background())
+	ci.ConnectTimeout = rclonefs.Duration(contimeoutForTest)
+	// One attempt, so the elapsed-time precondition below reads as one
+	// connect timeout rather than however many rclone felt like stacking up.
+	ci.LowLevelRetries = 1
+
+	source := transport.Source{
+		ID:         "cls-388-contimeout",
+		Type:       "sftp",
+		Host:       blackholedHost,
+		Port:       blackholedPort,
+		User:       "backup",
+		KeyFile:    keyPath,
+		KnownHosts: knownHostsPath,
+	}
+
+	var (
+		errs               []error
+		carriedDeadlineErr int
+	)
+	for attempt := 1; attempt <= connectTimeoutSamples; attempt++ {
+		start := time.Now()
+		_, err := New().List(ctx, source)
+		elapsed := time.Since(start)
+
+		if err == nil {
+			t.Fatalf("attempt %d: List succeeded against %s:%d, which is supposed to be unroutable", attempt, blackholedHost, blackholedPort)
+		}
+		// Preconditions first, because both of them are ways this row could
+		// go green without ever reaching a connect timeout.
+		//
+		// A network that answers "no route to host" or "connection refused"
+		// instead of blackholing returns in milliseconds, and that error is
+		// Transient today with or without this fix, so the row would prove
+		// nothing at all.
+		if elapsed < contimeoutForTest {
+			t.Fatalf("attempt %d: List gave up after %s, well short of the %s connect timeout it was given; "+
+				"this network answers %s:%d instead of blackholing it, so nothing here reached a connect timeout: %v",
+				attempt, elapsed, contimeoutForTest, blackholedHost, blackholedPort, err)
+		}
+		// And the caller context has to be genuinely untouched, or
+		// "Transient" would just be describing a context that never expired
+		// for a different reason than the one this row is about.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			t.Fatalf("attempt %d: the caller context is done (%v), so this row cannot say anything about rclone's own deadline", attempt, ctxErr)
+		}
+
+		if errors.Is(err, context.DeadlineExceeded) {
+			carriedDeadlineErr++
+		}
+		errs = append(errs, err)
+		t.Logf("attempt %d: connect timeout after %s; errors.Is(err, context.DeadlineExceeded) = %v; err = %v",
+			attempt, elapsed, errors.Is(err, context.DeadlineExceeded), err)
+	}
+
+	// The last precondition, and the one the race makes necessary: at least
+	// one of these dials has to have drawn the *net.timeoutError shape, or
+	// every sample here was already Transient before the fix and the row
+	// proves nothing. Failing loudly beats a green that means nothing.
+	if carriedDeadlineErr == 0 {
+		t.Fatalf("none of %d connect timeouts carried context.DeadlineExceeded, so this run drew only the shape that was already classified correctly; "+
+			"re-run, and if it keeps happening this machine's dial race has moved and this row needs more samples", connectTimeoutSamples)
+	}
+	t.Logf("%d of %d connect timeouts carried context.DeadlineExceeded (the shape that read as Cancelled before #388)", carriedDeadlineErr, connectTimeoutSamples)
+	return ctx, errs
+}
+
+// callerCancelledBeforeTheCall is the positive control from the other side:
+// a context the caller cancelled itself, which must still read as Cancelled.
+func callerCancelledBeforeTheCall(t *testing.T) (context.Context, []error) {
+	t.Helper()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "big.bin"), bytes.Repeat([]byte("cancel-me-"), 4096), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	ctx := alreadyCancelledContext()
+	_, err := New().CopyToLocal(ctx,
+		transport.Source{ID: "cls-388-cancelled", Type: "local", Root: root},
+		"big.bin", filepath.Join(t.TempDir(), "big.bin.partial"))
+	return ctx, []error{err}
+}
+
+// callerDeadlineFiresMidCopy is the row that separates a real fix from a
+// lazy one. Dropping the context.DeadlineExceeded check and stopping there
+// makes row 1 pass, and makes this row fail: a caller's own deadline
+// expiring during a transfer arrives as a bare context.DeadlineExceeded and
+// is a cancellation, whatever the classifier can see of the error alone.
+//
+// The copy is throttled rather than made huge, which is gate_test.go's
+// MidTransferCancellation technique: rclone's accounting layer checks
+// ctx.Err() before every chunk read (fs/accounting's checkReadBefore), so a
+// slow small transfer proves an interruption as well as a fast big one, and
+// the accounting group below is what proves bytes had actually started
+// moving rather than the deadline having fired before the copy began.
+func callerDeadlineFiresMidCopy(t *testing.T) (context.Context, []error) {
+	t.Helper()
+
+	const (
+		payload  = 1 << 20 // 1 MiB
+		bwLimit  = "64Ki"  // bytes/sec, so ~16s for the whole payload
+		deadline = 400 * time.Millisecond
+	)
+	estimatedFullDuration := payload / (64 * 1024) * time.Second
+
+	// --bwlimit is process-global in rclone, so it gets put back afterwards.
+	// Note the unit suffix: rclone reads a bare "65536" as 64Mi, not 64Ki,
+	// which throttles nothing at this payload size.
+	bwCtx, ci := rclonefs.AddConfig(context.Background())
+	if err := (&ci.BwLimit).Set(bwLimit); err != nil {
+		t.Fatalf("setting --bwlimit: %v", err)
+	}
+	accounting.TokenBucket.StartTokenBucket(bwCtx)
+	t.Cleanup(func() {
+		unthrottled, _ := rclonefs.AddConfig(context.Background())
+		accounting.TokenBucket.StartTokenBucket(unthrottled)
+	})
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "slow.bin"), make([]byte, payload), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	group := fmt.Sprintf("cls-388-mid-copy-%d", time.Now().UnixNano())
+	ctx, cancel := context.WithTimeout(accounting.WithStatsGroup(context.Background(), group), deadline)
+	t.Cleanup(cancel)
+
+	start := time.Now()
+	_, err := New().CopyToLocal(ctx,
+		transport.Source{ID: "cls-388-mid-copy", Type: "local", Root: root},
+		"slow.bin", filepath.Join(t.TempDir(), "slow.bin.partial"))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("a %s deadline did not interrupt a copy estimated to need ~%s; this environment is not throttled", deadline, estimatedFullDuration)
+	}
+	if elapsed >= estimatedFullDuration {
+		t.Fatalf("the copy ran for %s, at or past the ~%s an uninterrupted one needs, so nothing was interrupted mid-flight", elapsed, estimatedFullDuration)
+	}
+	// The precondition that makes this "mid-copy" rather than "before the
+	// copy": bytes actually moved before the deadline landed.
+	if moved := accounting.StatsGroup(ctx, group).GetBytes(); moved <= 0 {
+		t.Fatalf("no bytes were transferred before the deadline fired, so this is a preflight refusal, not a mid-copy interruption")
+	} else if moved >= payload {
+		t.Fatalf("all %d bytes moved, so the copy finished and the deadline interrupted nothing", moved)
+	} else {
+		t.Logf("deadline fired after %s with %d of %d bytes moved; err = %v", elapsed, moved, payload, err)
+	}
+	return ctx, []error{err}
 }
 
 // ---------------------------------------------------------------------------

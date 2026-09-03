@@ -81,6 +81,16 @@ const integrityFailurePrefix = "corrupted on transfer"
 // *transport.Error (for example, one Wrap already produced) returns that
 // same Category rather than reclassifying, so wrapping twice by accident
 // cannot change the answer.
+// ClassifyCtx is Classify with the caller's own context in hand. It is a
+// seam only at this point in history: it defers to Classify and decides
+// nothing of its own yet, so the tree still behaves exactly as it did. The
+// commit after this one is where it starts telling rclone's deadlines apart
+// from the caller's (issue #388).
+func ClassifyCtx(ctx context.Context, err error) transport.Category {
+	_ = ctx
+	return Classify(err)
+}
+
 func Classify(err error) transport.Category {
 	if err == nil {
 		return transport.Unclassified
