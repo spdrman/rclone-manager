@@ -284,3 +284,35 @@ describe("the backups list only grows a Medium column when there is one", () => 
     expect(within(arriving as HTMLElement).getByText("No copy yet")).toBeTruthy();
   });
 });
+
+// The dev-server scenario the browser suite drives FR-35's compatibility
+// case from. It is asserted here as well as over there because a fixture
+// that quietly stopped producing the shape it names would make the browser
+// spec pass by testing the wrong instance.
+describe("the no-medium scenario is a deployment that never heard of storage mediums", () => {
+  it("gives every backup one local copy and declares no medium anywhere", async () => {
+    const api = createMockApi("no-medium");
+
+    const list = await api.listArtifacts();
+    expect(list.length).toBeGreaterThan(0);
+    for (const a of list) {
+      expect(a.placements.map((p) => p.medium)).toEqual(["local"]);
+      expect(a.placements[0].access).toBe("immediate");
+    }
+
+    const settings = await api.getSettings();
+    expect(settings.mediums).toEqual([]);
+    expect(settings.retention.tiers.every((t) => t.medium === undefined)).toBe(true);
+    // The ladder is a property of the product, not of a configuration, so
+    // it stays: a deployment with one local copy per backup still has
+    // copies whose verification class means something.
+    expect(settings.schema.storage.verificationClasses.length).toBeGreaterThan(0);
+  });
+
+  it("is not what the default scenario serves, or the comparison above proves nothing", async () => {
+    const api = createMockApi();
+    const list = await api.listArtifacts();
+    expect(list.some((a) => a.placements.some((p) => p.medium !== "local"))).toBe(true);
+    expect((await api.getSettings()).mediums.length).toBeGreaterThan(0);
+  });
+});

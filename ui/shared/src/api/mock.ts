@@ -33,11 +33,11 @@ import type {
  *  "empty" one with a configuration and no backup sets. Toggle scenarios
  *  with ?scenario= in the URL. */
 
-export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run";
+export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run" | "no-medium";
 
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
-  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run"];
+  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run", "no-medium"];
   return (allowed as string[]).includes(s ?? "") ? (s as Scenario) : "default";
 }
 
@@ -863,6 +863,13 @@ function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => bo
 
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
+  // Every deployment written before storage mediums existed, which is the
+  // compatibility case FR-35 pins: no medium declared anywhere, so every
+  // backup has exactly one local copy, no tier names a medium, and the
+  // pages have no Medium column and no medium picker at all. It is a
+  // scenario rather than a variant of "empty" because the point is a
+  // FULLY populated instance that simply never heard of the feature.
+  const noMedium = scenario === "no-medium";
   // Every previewRetention call advances this backup set's "inventory" by
   // one tick and issues a plan captured against it. applyRetention only
   // ever honors the plan_id from the LATEST tick — anything older is,
@@ -876,6 +883,35 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // same way the real backend's hot reload makes a write visible to the
   // next read (issue #140).
   const settings = defaultSettings();
+  if (noMedium) {
+    // The FR-35 case: no medium declared, and no tier naming one. The
+    // storage SCHEMA stays, because the verification ladder is a property
+    // of the product rather than of a configuration, and a deployment with
+    // one local copy per backup still has copies whose class means
+    // something.
+    settings.mediums = [];
+    settings.retention.tiers = settings.retention.tiers.map((t) => ({ ...t, medium: undefined }));
+  }
+  // Every backup keeps exactly one local copy under that scenario: the
+  // shape migration 0007's backfill leaves every pre-EPIC-E deployment in.
+  const artifacts = noMedium
+    ? ARTIFACTS.map((a) => ({
+        ...a,
+        placements: [
+          {
+            medium: "local",
+            mediumType: "local",
+            location: a.localPath,
+            sizeBytes: a.sizeBytes,
+            storageClass: "",
+            verificationClass: "content" as const,
+            verifiedAt: a.receivedAt,
+            access: "immediate" as const,
+            status: "ACTIVE" as const
+          }
+        ]
+      }))
+    : ARTIFACTS;
   // Issue #176: a fresh app-store install has no configuration at all.
   // Mutable, because completing setup is what makes it configured — the
   // same one-way transition the real backend makes in-process.
@@ -1057,12 +1093,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     testCandidateConnection: (): Promise<ConnectionTestOutcome> => delay({ ok: true }),
 
     listArtifacts: (setId) =>
-      delay(empty ? [] : ARTIFACTS.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
-    getArtifact: (id) => delay(ARTIFACTS.find((a) => a.id === id) ?? ARTIFACTS[0]),
+      delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
+    getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
     listActivity: () => delay(empty ? [] : ACTIVITY),
-    listQuarantine: () => delay(empty ? [] : ARTIFACTS.filter((a) => a.quarantine)),
+    listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),
     reinstate: () =>
