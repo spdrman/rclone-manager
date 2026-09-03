@@ -120,17 +120,29 @@ readable form of it is `license.acceptedNonPermissive` in
 fails if it stops naming any of these licences, versions or addresses. A third
 encumbered module arriving turns this page red until somebody writes its offer.
 
-**Where this offer currently reaches, and where it does not.** It is in this
-file and in `NOTICE`, both of which are in the source tree and both of which
-travel with the compliance materials a store reviewer is handed. Nothing this
-project distributes carries them yet: `container/Dockerfile`'s runtime stage
-copies the two binaries and the frontend bundle and not `LICENSE` or `NOTICE`,
-so somebody who has only the image has to come here for the offer. That is a
-gap in delivery rather than in the offer, it predates this section and applies
-to Apache-2.0 §4(d) just as much, and it is tracked in #407. It is recorded
-here rather than left out, for the same reason `sourceRepository.visibility`
-records that this repository is private instead of implying the source link
-resolves.
+**Where this offer reaches.** It is in this file and in `NOTICE`, and `NOTICE`
+travels inside the image: `container/Dockerfile`'s runtime stage copies
+`LICENSE` to `/licenses/LICENSE` and `NOTICE` to `/licenses/NOTICE`, so
+somebody whose only contact with the product is `docker pull` has the licence
+and this offer without needing this repository, which is private. The image has
+no shell, so read them from outside it:
+
+```
+docker create --name bm <image>
+docker cp bm:/licenses/NOTICE .
+docker rm bm
+```
+
+That was not always true. Until this section existed the runtime stage copied
+the two binaries and the frontend bundle and nothing else, which was a gap in
+delivery rather than in the offer, and it applied to Apache-2.0 §4(d) just as
+much as to the MPL. `TestTheImageCarriesTheLicenceAndTheNotice` in
+`distribution/packaging` reads the runtime stage and fails the build if either
+`COPY` goes. What the image still does not carry is
+`provenance/third-party-licenses.json`, the machine-readable inventory this
+file and `NOTICE` both point at; that half stays with #407, along with the
+question of whether the compose-only distribution targets need a copy of their
+own.
 
 ## What is generated
 

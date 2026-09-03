@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "105a98db4b81581e0d5562fcb292084670738ef2ac582d517d3801f2f1138f76",
+    "sha256": "1fcda1debd9e947e6b910140acc896411a1e413d787152bf876cecd83423d44b",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -163,7 +163,7 @@
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "392129540f61b4c0f1b134725f136fe305e9c210529d9eb4751fcff0c3a6e2da"
+      "sha256": "038a06550669f21df3a4d927b2cc7a84a79b5912d8ea8a5c799747ff2f26ba2b"
     },
     {
       "target": "generic",
