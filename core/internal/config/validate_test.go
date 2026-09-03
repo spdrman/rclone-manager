@@ -1307,11 +1307,34 @@ func TestAtLeastOneSourceRequired(t *testing.T) {
 	}
 }
 
-func TestAtLeastOneBackupSetRequired(t *testing.T) {
+// TestASourceWithNoBackupSetsIsAccepted pins issue #391's one relaxation,
+// and it replaces a test that asserted the opposite.
+//
+// Removing a backup set's configuration has to write a file that passes
+// this exact function, because it is the same one the daemon runs at
+// boot. Refusing a source whose last set has just been removed would mean
+// an operator removes their last set through the UI and then finds the
+// service will not start again, so the rule had to go. The source itself
+// stays behind rather than being cascaded away, because it carries
+// ReadOnly (issue #282) and a set created under the same name later would
+// otherwise come back with a silently different posture.
+func TestASourceWithNoBackupSetsIsAccepted(t *testing.T) {
 	cfg := validConfig()
 	cfg.Sources[0].BackupSets = nil
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a source with no backup sets was refused: %v\nA removal writes exactly this shape, and the daemon has to be able to boot on it.", err)
+	}
+}
+
+// TestAnEmptySourceDoesNotWeakenTheWholeFileRule is the control beside it.
+// The relaxation above is one rule, not two: a configuration with no
+// sources at all is still refused, and removal can never produce one now
+// that the source stays behind.
+func TestAnEmptySourceDoesNotWeakenTheWholeFileRule(t *testing.T) {
+	cfg := validConfig()
+	cfg.Sources = []Source{}
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("a source with no backup sets was accepted")
+		t.Fatal("a config with an empty (not nil) sources list was accepted")
 	}
 }
 

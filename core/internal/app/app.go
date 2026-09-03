@@ -76,6 +76,15 @@ type Journal interface {
 	RecordTransition(ctx context.Context, t state.Transition) (state.Outcome, error)
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
 	ListByState(ctx context.Context, st string) ([]state.Record, error)
+
+	// ListBackupSetIDs is every backup set this journal holds history
+	// for, which stopped being the same list as "every backup set the
+	// configuration names" the moment a set's configuration could be
+	// removed (issue #391). ListArtifacts needs it so an unfiltered
+	// backups list still carries the artifacts of a removed set, which is
+	// what the removal confirmation promises; see that method's own doc
+	// for why this is the only read that widens.
+	ListBackupSetIDs(ctx context.Context) ([]model.BackupSetID, error)
 	LastEnteredAt(ctx context.Context, id model.ArtifactID, st string) (time.Time, bool, error)
 	LastTransition(ctx context.Context, id model.ArtifactID, from, to string) (time.Time, bool, error)
 

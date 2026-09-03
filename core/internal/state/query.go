@@ -359,6 +359,45 @@ func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([
 	return j.listRecords(ctx, "list by backup set", "a.source = ? AND a.backup_set = ?", set.Source, set.Set)
 }
 
+// ListBackupSetIDs returns every backup set id the journal holds at least
+// one artifact for, in a stable order.
+//
+// It reads the JOURNAL rather than the configuration, and that is the
+// whole reason it exists (issue #391): once a backup set's configuration
+// can be removed, the set of ids with history on record and the set of
+// ids currently configured stop being the same thing, and the backups
+// list has to keep showing the first one. See app.ListArtifacts for what
+// it is used for and what deliberately still walks the configuration
+// instead.
+func (j *Journal) ListBackupSetIDs(ctx context.Context) ([]model.BackupSetID, error) {
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT DISTINCT source, backup_set FROM artifacts ORDER BY source, backup_set`)
+	if err != nil {
+		return nil, fmt.Errorf("state: list backup set ids: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.BackupSetID
+	for rows.Next() {
+		var source, set string
+		if err := rows.Scan(&source, &set); err != nil {
+			return nil, fmt.Errorf("state: scan backup set id: %w", err)
+		}
+		id, err := model.NewBackupSetID(source, set)
+		if err != nil {
+			// A row the journal wrote can only carry a valid pair, so
+			// this is corruption rather than a query result to skip past
+			// quietly.
+			return nil, fmt.Errorf("state: list backup set ids: %q/%q: %w", source, set, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state: list backup set ids: %w", err)
+	}
+	return out, nil
+}
+
 // listRecords reads every artifact matching one predicate, with its
 // placements.
 //

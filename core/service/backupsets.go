@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -536,6 +538,32 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 
 	created := toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name))
 	result := CreateBackupSetResult{Set: created}
+
+	// Issue #391. Two things, both about a set coming back under an id
+	// that has been here before.
+	//
+	// The hold first: removing a set holds its id permanently, so a cycle
+	// still running against the old configuration snapshot cannot process
+	// something an operator removed (edithold.go). Configuring the id
+	// again is the one event that makes that hold wrong, so this is where
+	// it is dropped. Dropping one that was never taken is free.
+	b.holds.forgetRemoved(created.ID)
+	// Then the adoption. A backup set is identified by its source and its
+	// name (model.NewArtifactID is source/set/name), so a set created
+	// under an id that already has journal rows takes all of them, plus
+	// their retention history, from the moment it exists. That is the
+	// right behaviour and the reason removal can be undone at all, but
+	// silence about it is what would make it a nasty surprise six months
+	// later, so it goes on the record here, at the moment it happens,
+	// with the number in it. Nothing about this can fail the creation:
+	// the set is already durably written by now.
+	if adopted := b.artifactCountFor(ctx, created.ID); adopted > 0 {
+		b.logger.Event(ctx, obs.LevelInfo, "backup_set_adopted_history",
+			"this backup set was created over artifacts already on record for its id, and now owns them",
+			slog.String("backup_set", created.ID),
+			slog.Int("adopted_artifacts", adopted),
+		)
+	}
 
 	if req.RunImmediately && !req.Disabled {
 		op, err := b.SubmitRunCycle(ctx, RunCycleRequest{
