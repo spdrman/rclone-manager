@@ -161,13 +161,36 @@ var destructiveGateExemptRoutes = map[string]bool{
 	//     Scan is that same pass with nothing written.
 	//
 	// None of them can reach a deletion, which is what this list is for.
-	"POST /api/v1/backup-sets/{source}/{set}/enabled":          true,
-	"POST /api/v1/backup-sets/{source}/{set}/read-only":        true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate": true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":      true,
-	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":  true,
-	"POST /api/v1/catalog/scan":                                true,
-	"POST /api/v1/catalog/rebuild":                             true,
+	"POST /api/v1/backup-sets/{source}/{set}/enabled":   true,
+	"POST /api/v1/backup-sets/{source}/{set}/read-only": true,
+
+	// Issue #350: editing a backup set is §50's "create/edit backup set"
+	// bucket, the same one POST /api/v1/backup-sets is already exempt
+	// under two entries above. Nothing reachable from here touches, moves
+	// or deletes a byte of backup data: it rewrites config.yaml and
+	// hot-reloads, and the next cycle acts on the new definition. Gating
+	// it would mean an operator who has not turned destructive operations
+	// on cannot fix a typo'd remote path, which is the opposite of what
+	// the gate protects. TestUpdateBackupSet_IsNotBehindTheDestructiveGate
+	// pins that directly, so this entry's justification is a test and not
+	// only this comment.
+	"PATCH /api/v1/backup-sets/{source}/{set}": true,
+
+	// Issue #350's edit hold. Both writes STOP a backup set's processing
+	// rather than starting or deleting anything: taking the hold cancels
+	// the pass currently running against that one set and keeps the
+	// scheduler from starting another, and releasing it lets normal
+	// scheduling resume. Neither can reach a deletion, which is what this
+	// list is for, and gating them would mean an operator who has not
+	// turned destructive operations on cannot safely edit a set at all.
+	// TestBackupSetEditHold_IsNotBehindTheDestructiveGate pins it.
+	"POST /api/v1/backup-sets/{source}/{set}/edit-hold":         true,
+	"POST /api/v1/backup-sets/{source}/{set}/edit-hold/release": true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/revalidate":  true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/retry":       true,
+	"POST /api/v1/quarantine/{source}/{set}/{name}/reinstate":   true,
+	"POST /api/v1/catalog/scan":                                 true,
+	"POST /api/v1/catalog/rebuild":                              true,
 }
 
 // TestEveryMutatingAPIRouteRefusesARequestWithNoCSRFPair walks the route

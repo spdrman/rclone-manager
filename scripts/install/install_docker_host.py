@@ -1403,6 +1403,77 @@ def check_layout_matches(args, installed_env: dict) -> None:
     )
 
 
+# The two .env keys that name a credential rather than a directory.
+# check_layout_matches holds STATE_DIR, BACKUP_DIR and CONFIG_DIR because
+# taking this run's value for those archives nothing; these two are the
+# same shape with a different consequence, and they were not held to
+# anything until an upgrade proved it.
+INSTALLED_CREDENTIAL_KEYS = (
+    ("SSH_KEY_FILE", "ssh_key", "--ssh-key"),
+    ("KNOWN_HOSTS_FILE", "known_hosts", "--known-hosts"),
+)
+
+
+def adopt_installed_credentials(args, installed_env: dict) -> None:
+    """Keep pointing at the key and known_hosts the deployment already uses.
+
+    #347 gave --ssh-key and --known-hosts defaults under <prefix>/secrets
+    so a bare `install` could work on a fresh host, and that is right. On
+    a host first installed with those flags pointing somewhere else it was
+    also how a later bare re-run generated a brand new keypair, rewrote
+    .env to name it, and brought the stack back up holding a key no source
+    has ever authorised, with the pinned host keys replaced by an empty
+    file. Nothing refused, nothing warned, the engine came up healthy, and
+    every backup afterwards failed to authenticate.
+
+    Adopting rather than refusing, and the difference from
+    check_layout_matches is the point. There the operator has typed a flag
+    and the two answers disagree, so naming the disagreement is the only
+    honest move. Here the operator has typed nothing: one side is a value
+    this run COMPUTED from --prefix and the other is what the deployment
+    actually runs on, and preferring the evidence over the guess ignores
+    nobody. A flag that was typed still wins, because that is #347's own
+    contract, and this says plainly that it is moving the deployment.
+
+    The one thing that is never filled in is a path the .env names with no
+    file at it. Generating a replacement there hands every source a key it
+    has never seen while reporting success, which is the exact failure
+    this whole function exists to stop, and container/compose.yaml mounts
+    both of these with `:?` so the stack could not start anyway.
+    """
+    for key, attr, flag in INSTALLED_CREDENTIAL_KEYS:
+        was = installed_env.get(key)
+        if not was or not hasattr(args, attr):
+            continue
+        installed = Path(was).expanduser()
+        current = getattr(args, attr)
+        if _same_directory(installed, current):
+            # Including the ordinary case: a previous no-argument install
+            # recorded exactly what this run computes. Nothing changed, so
+            # nothing is said.
+            continue
+        if getattr(args, f"{attr}_supplied", False):
+            say(f"==> {flag} moves this deployment off {installed}")
+            say(f"     onto {current}. Sources still trusting the old one will stop authenticating.")
+            continue
+        if not installed.exists():
+            raise Refusal(
+                EXIT_PREREQ_CREDENTIALS,
+                f"the install here names {installed} as its {flag} in {args.prefix / '.env'}, "
+                f"and there is no file there.",
+                f"This will not generate a replacement under that name: a new key is one no source "
+                f"has ever authorised, and it would install cleanly and fail every backup "
+                f"afterwards. Put the file back, or pass {flag} naming the one this deployment "
+                f"should use from now on. Nothing has been touched.",
+            )
+        setattr(args, attr, installed)
+        # Supplied from here on, because an .env naming a path IS this
+        # deployment stating one. It stops ensure_credentials generating
+        # into it and gives it the same refusal an operator-typed path gets.
+        setattr(args, f"{attr}_supplied", True)
+        say(f"==> Keeping the {flag} this install already uses: {installed}")
+
+
 def _other_containers_from_ps_ndjson(raw: str, project: str):
     """Every entry in a `docker ps --format json` NDJSON stream that is
     NOT part of `project`, as (name, image) pairs.
@@ -2179,6 +2250,40 @@ def ensure_credentials(args) -> None:
         say(f"              key_permissions, run: chmod go-w {d}")
 
 
+def note_replaced_compose(dest: Path, incoming: bytes) -> None:
+    """Say when the compose.yaml being replaced is not the one going in.
+
+    <prefix>/compose.yaml is this installer's own staged copy of a gated
+    artifact and is restaged on every run, which is how a runtime-contract
+    change reaches an installed host. That is right, and it is also how an
+    operator who edited it in place loses the edit with nothing said.
+
+    A notice and not a refusal, deliberately. Refusing would block every
+    upgrade carrying a legitimate runtime change, which is most of them,
+    and the file is the installer's to own: docs/install.md says in as
+    many words that it is staged byte for byte and that everything varying
+    per host belongs in the .env. So this names the file, names where
+    those settings do belong, and gets out of the way.
+
+    Silent when the bytes match, which is every ordinary re-run. A notice
+    on the unchanged case is noise that trains people not to read the one
+    that matters.
+    """
+    if not dest.is_file():
+        return
+    try:
+        if dest.read_bytes() == incoming:
+            return
+    except OSError:
+        # Unreadable is not the same as different, and this is a notice,
+        # not a check. The write below is what gets to fail about it.
+        return
+    say(f"     Replacing {dest}, which is not the definition this installer stages.")
+    say("     It is a staged copy of the canonical runtime contract and is rewritten on every")
+    say("     run, so an edit made here does not survive one. Per-host settings belong in the")
+    say(f"     .env beside it: {dest.parent / '.env'}")
+
+
 def stage_payload(args) -> None:
     # make_secure_dir, not a bare mkdir. host_dirs carries ssh_keys, and
     # the engine walks that directory's whole ancestry before it will use
@@ -2199,16 +2304,17 @@ def stage_payload(args) -> None:
     # opinion of its own about the runtime; it just no longer needs a
     # checkout on the host to state the one opinion there is.
     dest = args.prefix / "compose.yaml"
-    if args.compose_file is None:
-        # write_bytes, not write_text. write_text encodes with the
-        # LOCALE's codec, and this file carries a section sign and em
-        # dashes, so under LC_ALL=C it raises UnicodeEncodeError partway
-        # through staging. Bytes also make this branch byte-identical to
-        # the shutil.copyfile branch below rather than merely similar,
-        # which is what lets a test compare the two.
-        dest.write_bytes(embedded_compose_bytes())
-    else:
-        shutil.copyfile(str(args.compose_file), str(dest))
+    # Bytes on both branches, not write_text on one and copyfile on the
+    # other. write_text encodes with the LOCALE's codec, and this file
+    # carries a section sign and em dashes, so under LC_ALL=C it raises
+    # UnicodeEncodeError partway through staging. One value also makes the
+    # two branches byte-identical rather than merely similar, which is what
+    # lets a test compare them, and gives the notice below something to
+    # compare against before anything is overwritten.
+    incoming = (embedded_compose_bytes() if args.compose_file is None
+                else args.compose_file.read_bytes())
+    note_replaced_compose(dest, incoming)
+    dest.write_bytes(incoming)
     (args.prefix / "compose.image.yaml").write_text(render_image_override(args), encoding="utf-8")
 
     env_path = args.prefix / ".env"
@@ -2284,6 +2390,11 @@ def probe_web_ui(args, timeout: int):
 
 
 def cmd_preflight(args) -> int:
+    # preflight is a dry run of install, so it has to be looking at the
+    # same paths install would. Without this it reports on the computed
+    # defaults while install runs on whatever the .env names, and the two
+    # answers disagree on exactly the host where the answer matters.
+    adopt_installed_credentials(args, read_env_file(args.prefix / ".env"))
     say("==> Preflight")
     pf = Preflight(args)
     pf.check_all()
@@ -2476,6 +2587,15 @@ def prepare_for_mode(args, mode, *, installed):
 
 
 def cmd_install(args) -> int:
+    # Read here rather than waiting for detect_existing, and the ordering
+    # is the whole fix. ensure_credentials CREATES a keypair when the
+    # defaults point at nothing, and it runs before anything has looked at
+    # what is installed, so a check bolted on afterwards would be refusing
+    # over a key that had already been generated. detect_existing reads
+    # this file again below for the layout check; it is a handful of lines
+    # and reading it twice is cheaper than threading it through.
+    adopt_installed_credentials(args, read_env_file(args.prefix / ".env"))
+
     # Before Preflight, because Preflight VALIDATES these and this CREATES
     # them. A fresh host has neither, and validating first would refuse
     # every no-argument install on exactly the machines this is meant to

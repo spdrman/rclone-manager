@@ -50,12 +50,26 @@ const defaultRetention = {
   protectLastKnownGood: true
 };
 
+/**
+ * The fixture backup sets, and the ONE piece of state in this module that
+ * survives a createMockApi() call, because two of the fake's methods
+ * genuinely change it: createBackupSet appends (so a set created in a
+ * session shows up in a later listSets, the behaviour the real backend
+ * has) and, since issue #350, updateBackupSet applies its patch (so a
+ * per-box Save that sent the wrong field is visible instead of being
+ * echoed back as though it had worked).
+ *
+ * That makes test ORDER matter, which it did not before. resetMockFixtures
+ * below is the way out, and a test that asserts against a fixture's
+ * current values should call it rather than assume it is looking at the
+ * declaration on this page.
+ */
 const SETS: BackupSet[] = [
   {
     id: "production/postgres-primary", source: "production", set: "postgres-primary", name: "Production PostgreSQL",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
-    excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker",
+    excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker", stableForSeconds: 0,
     destination: "/data/backups/production/postgres/", retention: defaultRetention,
     validations: ["transfer", "checksum", "application"],
     state: "healthy",
@@ -72,7 +86,7 @@ const SETS: BackupSet[] = [
     id: "production/billing-mysql", source: "production", set: "billing-mysql", name: "Billing MySQL",
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
-    excludePatterns: ["*.part"], completionMethod: "atomic-rename",
+    excludePatterns: ["*.part"], completionMethod: "atomic-rename", stableForSeconds: 0,
     destination: "/data/backups/production/billing/", retention: defaultRetention,
     validations: ["transfer", "checksum"],
     state: "stale",
@@ -89,7 +103,7 @@ const SETS: BackupSet[] = [
     id: "production/auth-config", source: "production", set: "auth-config", name: "Auth service config",
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
-    excludePatterns: [], completionMethod: "stable-size",
+    excludePatterns: [], completionMethod: "stable-size", stableForSeconds: 300,
     destination: "/data/backups/production/auth/",
     retention: { ...defaultRetention, weekly: 4, monthly: 6 },
     validations: ["transfer", "checksum"],
@@ -107,7 +121,7 @@ const SETS: BackupSet[] = [
     id: "media/weekly-archive", source: "media", set: "weekly-archive", name: "Media archive",
     host: "media-01.internal", port: 2222, username: "archive",
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
-    excludePatterns: [], completionMethod: "completion-marker",
+    excludePatterns: [], completionMethod: "completion-marker", stableForSeconds: 0,
     destination: "/data/backups/media/",
     retention: { ...defaultRetention, daily: 0, weekly: 8, monthly: 24 },
     validations: ["transfer", "checksum"],
@@ -126,6 +140,36 @@ const SETS: BackupSet[] = [
     fingerprintTrustedAt: "2026-05-11T14:20:00+02:00"
   }
 ];
+
+/** A copy of SETS as declared, taken at module load and never written to,
+ *  so resetMockFixtures has something pristine to restore from. */
+const PRISTINE_SETS: BackupSet[] = SETS.map((set) => ({
+  ...set,
+  includePatterns: [...set.includePatterns],
+  excludePatterns: [...set.excludePatterns]
+}));
+
+/**
+ * Puts the fixture backup sets back exactly as this module declares them.
+ *
+ * Call it in a test's afterEach when the test drives a mutating method
+ * (createBackupSet, updateBackupSet). Without it, a suite's Nth test sees
+ * whatever its predecessors wrote, which is not a hypothetical: the
+ * inline-edit suite's "never send a hidden field" case first failed
+ * because an earlier case in the same file had already switched the
+ * fixture's completion method to the very value it was checking was
+ * absent.
+ *
+ * The clone is deep enough for what these fixtures hold: the arrays are
+ * arrays of strings, so copying them is what stops a patch that replaces
+ * includePatterns leaking into the pristine copy.
+ */
+export function resetMockFixtures(): void {
+  SETS.length = 0;
+  for (const set of PRISTINE_SETS) {
+    SETS.push({ ...set, includePatterns: [...set.includePatterns], excludePatterns: [...set.excludePatterns] });
+  }
+}
 
 const ARTIFACTS: BackupArtifact[] = [
   {
@@ -433,6 +477,7 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     includePatterns: req.include,
     excludePatterns: [],
     completionMethod: completionMethodFromStrategy(req.completionStrategy),
+    stableForSeconds: req.stableForSeconds ?? 0,
     destination: req.localPath,
     retention: defaultRetention,
     validations: ["transfer"],
@@ -677,6 +722,41 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
     setEnabled: () => delay(undefined),
     setReadOnly: () => delay(undefined),
+
+    // Issue #350. The mock APPLIES the patch to its own SETS entry
+    // rather than echoing the request, and applies only the keys the
+    // patch carries. Echoing would make every per-box Save look correct
+    // in the browser suite no matter what the page sent, which is
+    // exactly the class of green-by-construction the e2e harness has
+    // been caught by before: a page that sent every field on every Save
+    // would be indistinguishable from one that sent only the dirty box.
+    updateBackupSet: (source, set, patch) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
+          })
+        );
+      if (patch.host !== undefined) found.host = patch.host;
+      if (patch.port !== undefined) found.port = patch.port;
+      if (patch.username !== undefined) found.username = patch.username;
+      if (patch.remoteFolder !== undefined) found.remoteFolder = patch.remoteFolder;
+      if (patch.destination !== undefined) found.destination = patch.destination;
+      if (patch.includePatterns !== undefined) found.includePatterns = [...patch.includePatterns];
+      if (patch.completionMethod !== undefined) found.completionMethod = patch.completionMethod;
+      return delay({ ...found });
+    },
+
+    // Nothing is ever running in the mock, so edit mode opens with no
+    // prompt. That is the honest default rather than a convenience: a
+    // fixture that claimed a transfer was in flight would make every
+    // Edit press in the browser suite go through a confirmation the real
+    // product only shows sometimes. A test that wants the warning stubs
+    // this one call.
+    getEditHold: () => delay({ held: false, running: null }),
+    takeEditHold: () => delay({ expiresAt: new Date(Date.now() + 90_000).toISOString(), stopped: null }),
+    releaseEditHold: () => delay(undefined),
 
     createBackupSet: (req: CreateBackupSetRequest): Promise<CreatedBackupSet> => {
       const set = mockBackupSetFromCreateRequest(req);
