@@ -42,26 +42,40 @@ func runChecks(ctx context.Context, cfg config.Revalidation, rec state.Record) (
 	var reasons []string
 	passed = true
 
+	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
+	// rather than of rec.LocalPath directly. In Phase 1 the two are the
+	// same value for every artifact that has one, so nothing here behaves
+	// differently; the point is that #237 makes this the seam where a
+	// placement on a storage medium takes a different route entirely,
+	// rather than being re-checked as a local file that is not there.
+	localPath, hasLocal := rec.ReadableLocalPath()
+
 	if cfg.Hash && rec.LocalHashAlg == string(transport.SHA256) && rec.LocalHash != "" {
 		checked = true
-		sum, readErr := recomputeLocalHash(rec.LocalPath)
 		switch {
-		case readErr != nil:
+		case !hasLocal:
 			passed = false
-			reasons = append(reasons, fmt.Sprintf("local final file %s could not be read: %v", rec.LocalPath, readErr))
-		case !strings.EqualFold(sum, rec.LocalHash):
-			passed = false
-			reasons = append(reasons, fmt.Sprintf(
-				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash,
-			))
+			reasons = append(reasons, "no local copy of this artifact is recorded, so its content cannot be re-read")
 		default:
-			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
+			sum, readErr := recomputeLocalHash(localPath)
+			switch {
+			case readErr != nil:
+				passed = false
+				reasons = append(reasons, fmt.Sprintf("local final file %s could not be read: %v", localPath, readErr))
+			case !strings.EqualFold(sum, rec.LocalHash):
+				passed = false
+				reasons = append(reasons, fmt.Sprintf(
+					"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
+					localPath, sum, rec.LocalHashAlg, rec.LocalHash,
+				))
+			default:
+				reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
+			}
 		}
 	}
 
 	if cfg.Command != nil {
-		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cfg.Command, rec.LocalPath)
+		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cfg.Command, localPath)
 		if hookErr != nil {
 			if isCancelled(hookErr) {
 				return false, false, "", hookErr

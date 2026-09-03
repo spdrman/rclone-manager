@@ -224,6 +224,27 @@ export function RetentionPreviewDialog({
                 <Stat label="Reclaim" value={bytes(p.reclaimBytes)} />
               </div>
 
+              {/* Issue #333: which policy produced these verdicts, and
+                  what that policy says.
+                  "Why is this backup about to be deleted" has a different
+                  answer, and a different place to go and change it,
+                  depending on whether this set's own chain or the
+                  deployment's decided it, and this is the dialog that
+                  asks an operator to authorise a deletion. It is read
+                  off the plan rather than fetched beside it: a plan is
+                  pinned to the configuration revision it was computed
+                  against, so a separately-fetched policy could describe
+                  a chain that did not decide the list underneath it. */}
+              <p
+                style={{ margin: "12px 22px 0", fontSize: "var(--text-sm)", color: "var(--text-2)" }}
+              >
+                {(p.retentionIsOverride
+                  ? "Decided under this backup set's own retention policy: "
+                  : "Decided under the deployment's retention policy: ") +
+                  p.retention.tiers.map((t) => t.name + " " + t.keep).join(", ") +
+                  " · " + p.retention.timezone}
+              </p>
+
               <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 16 }}>
                 <div>
                   <div className="eyebrow" style={{ color: "var(--ok)", marginBottom: 8 }}>

@@ -74,6 +74,21 @@ type BackupServiceClient interface {
 	// for the persist-then-hot-reload sequence this method performs.
 	CreateBackupSet(ctx context.Context, req service.CreateBackupSetRequest) (service.CreateBackupSetResult, error)
 
+	// UpdateBackupSet backs PATCH /api/v1/backup-sets/{source}/{set}
+	// (issue #350): the edit half of backup-set CRUD, which #146 never
+	// built, so until now a configured set could only be changed by
+	// hand-editing config.yaml on the machine it runs on.
+	//
+	// The request is sparse (every field a pointer, nil means leave
+	// alone), which is what makes the Web UI's per-box Save write only
+	// that box at the layer that persists rather than as a promise the UI
+	// makes. State-changing but not destructive, so this package wraps
+	// the route in requireCSRF and NOT requireDestructiveGate, following
+	// POST /api/v1/backup-sets' own precedent; see
+	// core/service.UpdateBackupSet's own doc for the persist-then-reload
+	// sequence it shares with creation.
+	UpdateBackupSet(ctx context.Context, id string, req service.UpdateBackupSetRequest) (service.BackupSet, error)
+
 	// ImportSSHKey backs POST /api/v1/ssh-keys: the wizard's "Import
 	// key" step, persisting client-validated key material server-side
 	// for the first time (issue #146). passphrase is "" for an
@@ -154,6 +169,38 @@ type BackupServiceClient interface {
 	// core/service.SetBackupSetReadOnly's own doc for what each direction
 	// does and, in particular, does not undo.
 	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
+
+	// BackupSetRetention, SetBackupSetRetention and
+	// ClearBackupSetRetention back GET/PUT/DELETE
+	// /api/v1/backup-sets/{source}/{set}/retention (issue #333): read
+	// which retention policy one backup set is retained under, give that
+	// set a whole policy of its own, or remove it so the set inherits the
+	// deployment's again.
+	//
+	// Three methods rather than one sparse update, because "give this set
+	// no policy of its own" cannot be a value on a request where a nil
+	// field already means "leave this alone" — see
+	// core/service/backupsetretention.go's own package doc. State-changing
+	// but not destructive: this writes configuration, and the retention
+	// apply it can change the outcome of stays behind the destructive gate
+	// and re-reads the policy at plan time.
+	BackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+	SetBackupSetRetention(ctx context.Context, id string, o service.RetentionOverride) (service.BackupSetRetention, error)
+	ClearBackupSetRetention(ctx context.Context, id string) (service.BackupSetRetention, error)
+	// BackupSetEditState, BeginBackupSetEdit, RenewBackupSetEdit and
+	// EndBackupSetEdit back the three /edit-hold routes (issue #350).
+	//
+	// A backup set being edited while a cycle runs against it is two
+	// writers on one definition, so entering edit mode holds that one
+	// set: the pass currently running against it stops, and the scheduler
+	// starts no new one until the hold is released or its lease lapses.
+	// The read is separate from the write precisely so an operator can be
+	// shown what they are about to stop and then decline; see
+	// core/service/edithold.go for the lease, and for why it is a lease
+	// rather than a flag.
+	BackupSetEditState(ctx context.Context, id string) (service.BackupSetEditState, error)
+	BeginBackupSetEdit(ctx context.Context, id string) (service.EditHold, error)
+	EndBackupSetEdit(ctx context.Context, id string) error
 
 	// TestBackupSetConnection backs the persisted-set mode of POST
 	// /api/v1/backup-sets/test-connection (issue #211): the same

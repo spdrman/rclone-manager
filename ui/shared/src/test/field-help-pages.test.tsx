@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { ApiProvider } from "@shared/api/ApiContext";
-import { createMockApi } from "@shared/api/mock";
+import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import { PlatformProvider } from "@shared/platform/PlatformContext";
 import { genericBridge } from "../../../../apps/generic/frontend/platform";
 import { graph, resetGraphForTests } from "@shared/state/graph";
@@ -14,7 +14,9 @@ import { EnrollmentPage } from "@shared/auth/EnrollmentPage";
 import { SettingsPage } from "@shared/pages/SettingsPage";
 import { ActivityPage } from "@shared/pages/ActivityPage";
 import { BackupsPage } from "@shared/pages/BackupsPage";
-import { EditBackupSetDialog } from "@shared/pages/EditBackupSetDialog";
+import { BackupSetDetailPage } from "@shared/pages/BackupSetDetailPage";
+import { EDIT_FIELDS } from "@shared/pages/backupSetEditFields";
+import { backupSetPath } from "@shared/utilities/routes";
 import type { BackupSet } from "@shared/types/backup";
 import type { VersionInfo } from "@shared/types/operation";
 
@@ -71,6 +73,7 @@ function seedSets(sets: BackupSet[]) {
 
 describe("every explained field is wired to its own copy", () => {
   afterEach(() => {
+    resetMockFixtures();
     cleanup();
     resetGraphForTests();
   });
@@ -192,12 +195,40 @@ describe("every explained field is wired to its own copy", () => {
     expectHelp(screen.getByLabelText("Filter by backup set"), FIELD_HELP.backupsSetFilter);
   });
 
-  it("on the edit-backup-set form", async () => {
-    const sets = await createMockApi().listSets();
+  // Issue #350 replaced the edit DIALOG with an inline mode on the detail
+  // page, so this walks the real page into edit mode rather than
+  // rendering a component that no longer exists. It checks every editable
+  // box, not one, which is what the dialog's single Name field had been
+  // standing in for.
+  it("on every box of the inline edit mode", async () => {
+    const api = createMockApi();
+    const target = (await createMockApi().listSets())[0];
 
-    render(<EditBackupSetDialog set={sets[0]} open onClose={() => {}} />);
+    render(
+      <MemoryRouter initialEntries={[backupSetPath(target.source, target.set)]}>
+        <ApiProvider api={api}>
+          <Routes>
+            <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
+          </Routes>
+        </ApiProvider>
+      </MemoryRouter>
+    );
+    await screen.findByText(target.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
+    await screen.findByRole("button", { name: "SAVE ALL & EXIT EDIT" });
 
-    expectHelp(screen.getByLabelText("Name"), FIELD_HELP.editSetName);
+    // The stable-size window is a conditional box, shown only while that
+    // completion method is selected. Selecting it here is what makes this
+    // loop cover EVERY field rather than every unconditional one, which
+    // is the difference between a test that grows with the table and one
+    // that quietly stops covering whatever is added conditionally.
+    fireEvent.change(screen.getByLabelText("Completion method"), { target: { value: "stable-size" } });
+
+    for (const field of EDIT_FIELDS) {
+      expectHelp(screen.getByLabelText(field.label), field.help);
+    }
   });
 });
 

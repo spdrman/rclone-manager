@@ -36,7 +36,7 @@ machine can decide into tests rather than sentences (see
 ### The engine and the CLI are real
 
 `core/` is a working backup engine with a working command line. `backup-manager` registers
-fourteen commands, and the list below is checked against the dispatch table in
+fifteen commands, and the list below is checked against the dispatch table in
 `core/cmd/backup-manager/main.go` on every run of the gate, so it cannot quietly go stale
 the way its predecessor did.
 
@@ -49,6 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
+| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
@@ -57,6 +58,7 @@ the way its predecessor did.
 | `catalog` | `catalog rebuild` reconstructs a lost or corrupted state database from the sidecar recovery manifests |
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
+| `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
 | `version` | report the binary, Go and embedded rclone versions |
 
 <!-- END CLI-COMMANDS -->
@@ -165,11 +167,33 @@ and unreachable got their own CLI commands in the same change (`quarantine` and 
 both documented in their own sections above); one gap turned out to need real new product
 work and is out of scope here (see the bottom of this section).
 
-**Creating or editing a backup set is a config-file edit, on purpose, and this is that
-answer written down.** `POST /backup-sets` is what the setup wizard calls; the CLI's answer
-is that a wizard is unnecessary, not that one is missing. Write `config.yaml` by hand
+**Creating a backup set is `backup-set create`, and changing one is `backup-set patch`.**
+This paragraph used to say a create verb was unnecessary rather than missing, and that a
+hand-edited `config.yaml` plus `check` was the CLI's answer to `POST /backup-sets`. Issue
+#356 is what changed that reading: proving a fresh install can actually pull a backup means
+saying what to back up over SSH with no browser anywhere, and "edit a YAML file by hand" is
+the absence of a command written as though it were a feature.
+
+```bash
+backup-manager backup-set create production/postgres \
+    --host db.example.internal --user backup \
+    --ssh-key-file ./id_ed25519 --trust-host-key \
+    --remote-path /srv/backups --local-path /volume1/backups/postgres \
+    --completion-strategy rename --read-only
+```
+
+It calls the same `core/service.BackupService.CreateBackupSet` the API route does, so the
+two surfaces cannot drift; `suites/equivalence` in `rclone-manager-tests` drives both over
+identical work directories and compares what each persisted. `--ssh-key-file` imports the
+key the same way `POST /ssh-keys` does, and `--trust-host-key` probes the host and prints
+the fingerprint before trusting it, which is what the wizard's Verify-server step does.
+`--known-hosts-line` is the alternative when the key is already known and trust on first use
+is not wanted.
+
+Writing `config.yaml` by hand still works and is still worth knowing
 (`core/internal/config`'s own doc comments are the fullest explanation of the schema in this
-tree, and `core/internal/config/testdata/full.yaml` is a worked, if terse, example), then:
+tree, and `core/internal/config/testdata/full.yaml` is a worked, if terse, example).
+However the file got written, the same loop checks it:
 
 ```bash
 backup-manager check --config ./config.yaml      # validates the file and the state database
@@ -178,9 +202,55 @@ backup-manager fetch --config ./config.yaml --source S --backup-set B --dry-run
                                                   # proves it really reaches the host (see below)
 ```
 
-That is a create-and-verify loop with no browser in it. There is no `backup-manager sets
-add` command and none is planned: `validate` and `check` exist specifically so a hand-edited
-file does not have to be trusted blind.
+That is a create-and-verify loop with no browser in it: `validate` and `check` exist
+specifically so a hand-edited file does not have to be trusted blind.
+
+Changing a set that already exists is a different question, and until issue #350 the answer
+was the same file edit, which meant opening an editor on the NAS itself. `backup-set patch`
+is what replaces that:
+
+```bash
+backup-manager backup-set --config ./config.yaml patch production/postgres-primary \
+  --remote-path /var/backups/postgresql --include "*.dump,*.tar.zst"
+```
+
+Only the flags you pass are changed; anything you leave out is left exactly as it is, which
+is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
+one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
+cannot drift. The change is validated against the same `config.Validate` a hand-edited file
+goes through at boot and written through the same atomic replace.
+
+One thing to be plain about, because it is the same for `settings patch` and is easy to
+assume otherwise: the hot reload is in-process. A change made through the API takes effect
+immediately in the engine that served it, because that engine is also the thing running the
+schedule. A change made by a separate `backup-manager backup-set patch` invocation writes
+`config.yaml` and reloads that invocation's own view of it, and a `daemon` already running
+in another process keeps using the configuration it loaded at start until it is restarted.
+There is no config watcher and no SIGHUP reload in this build.
+
+A set's name and source are deliberately not patchable: they key every journal row, artifact
+id and recovery manifest the set has ever produced, so renaming one is a migration rather
+than an edit.
+
+Three fields that *are* patchable ask first, once the set has artifacts on record:
+`--host`, `--remote-path` and `--local-path`. Together they are what "the data this set is
+about" means, and the artifacts already on record stay with the set rather than moving with
+them:
+
+- A remote root pointed at a **different** dataset whose file names match ones already on
+  record makes every candidate come back already-known. The cycle reports success, health
+  stays green, and nothing is fetched. That is a backup that has silently stopped happening.
+- Artifacts stored under the **old** `local_path` stop matching what retention computes for
+  them, so retention refuses them rather than pruning them from then on, and `catalog
+  rebuild` stops seeing them.
+
+Neither destroys anything, and pointing the field back restores both, which is why this is
+an acknowledgement rather than a refusal: an operator whose NAS got a new address, or whose
+volume moved, has a real change to make. Add `--acknowledge-repoint` (or
+`"acknowledge_repoint": true` on the API, or **Save anyway** in the Web UI) once the message
+has been read. If the new location holds a *different* dataset, make it a separate backup
+set instead. `--port` and `--user` are not in that list: neither changes which directory on
+which machine holds the data.
 
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to
@@ -191,6 +261,13 @@ has never needed a first-run ceremony at all: `check`, `sources`, `fetch`, every
 command just reads `config.yaml`, whether that file is the first one ever written for this
 deployment or the hundredth edit of an existing one. Write the file, run `check`; there is no
 "unconfigured" state for the CLI to be in.
+
+`backup-set create` holds that line rather than breaking it. On a machine with no
+`config.yaml` it writes the first one, through the same `FirstRun.CreateInitialConfig` the
+wizard's route calls, and `--state-database` names the journal that first configuration
+points at (defaulting to `/data/state/state.db`, the packaged mount). An operator standing
+at a freshly installed NAS therefore has one command to type, not a wizard to open, and the
+two surfaces still reach the same code.
 
 **Enabling or disabling a backup set is a config-file field.** `POST
 /backup-sets/{source}/{set}/enabled` flips `config.BackupSet.Disabled`. Set `disabled: true`
@@ -227,8 +304,15 @@ retry` and `quarantine reinstate`. `backup-manager settings` reports the live, r
 FR-18/FR-19 retention policy and FR-21 capacity settings (the [CLI-COMMANDS](#status-what-actually-runs-today)
 table above has both), and `backup-manager settings patch [flags]` changes one in place,
 hot-reloaded the same way `PATCH /api/v1/settings` already is. A full retention tier-chain
-replacement stays a config-file edit; every other retention and capacity field is reachable
-through `settings patch` without a restart.
+replacement of the *deployment's* policy stays a config-file edit; every other retention and
+capacity field is reachable through `settings patch` without a restart.
+
+**A backup set's own retention policy is not a config-file edit either (issue #333).**
+`backup-manager backup-set retention` shows which policy a set is retained under, gives the
+set a whole policy of its own, and `--inherit` takes it back off. It is the same three
+operations `GET`/`PUT`/`DELETE /api/v1/backup-sets/{source}/{set}/retention` expose and the
+same three the Web UI draws, all through one method in `core/service`. See [One backup set
+on its own retention policy](#one-backup-set-on-its-own-retention-policy).
 
 **What is not covered here: authentication and account management.** `/auth/enroll`,
 `/auth/login` and `/auth/password` are genuinely out of scope for a CLI wrapper, not merely
@@ -767,6 +851,39 @@ decided with; a set with no marker inherited the deployment's. The
 the *deployment's* policy for that one invocation, so they move every inheriting set and
 leave a set that declares its own alone.
 
+**None of this needs a config-file edit any more (issue #333).** The three operations are
+show, set and clear, and they are the same three on every surface:
+
+```bash
+backup-manager backup-set retention production/scratch-analytics
+# which policy is in force, where it came from, and (for a set that overrides)
+# the deployment's policy beside it, so you can see what clearing returns you to
+
+backup-manager backup-set retention production/scratch-analytics \
+    --daily-days 3 --weekly-months 1 --monthly-months 1
+
+backup-manager backup-set retention production/scratch-analytics --policy-file ./policy.yaml
+# the contents of a retention: block, key omitted; the only way to name a tiers chain,
+# because a compact command-line grammar for one would be a second spelling of something
+# this project already spells exactly one way. "-" reads standard input.
+
+backup-manager backup-set retention production/scratch-analytics --inherit
+# back to the deployment's policy, with no residue of the chain it declared
+```
+
+Over HTTP the same three are `GET`, `PUT` and `DELETE` on
+`/api/v1/backup-sets/{source}/{set}/retention`. `PUT` rather than `PATCH` because an
+override replaces the whole chain and is never merged with it; `DELETE` because "go back to
+inheriting" has no spelling on a request where an absent field already means "leave this
+alone". In the Web UI it is the Retention section of a backup set's own page, which names
+the policy in force on both branches and shows the deployment's chain beside an override
+before you clear it.
+
+All three surfaces reach one method in `core/service`, and none of them validates anything
+itself: a submitted policy goes through the identical `config.Validate` a hand-edited
+`config.yaml` goes through at boot, so half a chain is refused with the same sentence in
+the browser, at the terminal and in the file.
+
 One rollback note: unknown keys are a parse error, so a config file carrying a set-level
 `retention:` block cannot be read by a build from before this feature. Writing one is a
 one-way door for a deployment that might need to go back.
@@ -1015,6 +1132,7 @@ Three environment variables change what runs:
 | `CI_LOCAL_FAST=1` | Fast iteration loop: skips `core/`'s `./tests/...` (the crash matrix and the SFTP integration tests), both cross-compiles, the production builds, the conformance suite, the structure proofs and the gate's own self-test. It does not skip `apps/generic`, whose tests bring a compose stack up, so a FAST run is not a Docker-free run. Always ends INCOMPLETE. |
 | `CI_LOCAL_SKIP_JS=1` | Proceeds past the preflight with uninstalled JS workspaces instead of failing, for a change that only touches Go. Ends INCOMPLETE whenever it actually left a workspace out; with everything installed it changes nothing and the run can still be `ok`. |
 | `CI_LOCAL_SKIP_DOCKER=1` | Proceeds past the preflight with the daemon down instead of failing. Ends INCOMPLETE, because the Docker-backed suites will have reported `ok` without running. |
+| `CI_LOCAL_SKIP_TWO_MACHINE=1` | Leaves out the two-machine end-to-end backup proof (#356), which is the only test anywhere that a fresh install pulls a real backup off a real machine. Ends INCOMPLETE. |
 
 A run that skipped anything ends with `==> ci-local: INCOMPLETE`, lists what did not run,
 and exits 3. A run that performed every check it invoked ends with `==> ci-local: ok` and
@@ -1039,6 +1157,15 @@ On a machine with no Playwright browser the step refuses and names the install c
 `INCOMPLETE` rather than `ok`, the same way a stopped Docker daemon does.
 `scripts/e2e/README.md` has the mechanics, including how to move the pin and what to do
 when the pin and the working tree legitimately disagree.
+
+A non-FAST run also performs the two-machine end-to-end backup proof (#356): two throwaway
+containers on a temporary network, the real installer, a backup set created through the
+CLI, and the artifact compared to the source by SHA-256. It has three outcomes rather than
+two, and the third is the point. A machine with no Docker, or one whose daemon refuses a
+privileged container so docker-in-docker cannot start, cannot perform the proof at all: the
+script says `CANNOT RUN` and exits 3, this gate ledgers that, and the run ends `INCOMPLETE`
+naming the proof it could not perform. Reporting `ok` for a backup nobody proved would be
+the worst version of the failure this whole ledger exists to prevent.
 
 A component that is not in the tree at all is not a skip: its checks are inapplicable, and
 the run can still be `ok`. Today `apps/ugos/backend` and `apps/ugos/frontend/upk-proof`

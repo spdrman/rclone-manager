@@ -97,4 +97,19 @@ type Record struct {
 
 	RetentionTier      string
 	RetentionExpiresAt *time.Time
+
+	// Placements is where this artifact's durable copies actually are
+	// (EPIC E, FR-29), one entry per copy, ordered by medium.
+	//
+	// It is empty for an artifact that has no durable copy yet, which is a
+	// real state and not a gap: a DISCOVERED artifact has zero copies. It
+	// is also empty on a Record built by hand rather than read from the
+	// journal, which is how most of this repository's tests build one, and
+	// ReadableLocalPath's fallback is what keeps those honest.
+	//
+	// LocalPath keeps meaning exactly what it always meant, the ingestion
+	// landing path. What changed is that the callers asking "can I read
+	// this artifact off disk" ask ReadableLocalPath instead of assuming
+	// that field names a readable file.
+	Placements []Placement
 }

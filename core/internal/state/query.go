@@ -179,6 +179,11 @@ func getByRowID(ctx context.Context, q querier, rowID int64) (Record, error) {
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacements(ctx, q, rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements
 	return rec, nil
 }
 
@@ -188,13 +193,18 @@ func (j *Journal) Get(ctx context.Context, artifact model.ArtifactID) (Record, e
 		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? AND artifact_name = ?`,
 		artifact.Set.Source, artifact.Set.Set, artifact.Name,
 	)
-	rec, _, err := scanRecord(row)
+	rec, rowID, err := scanRecord(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, artifact)
 	}
 	if err != nil {
 		return Record{}, fmt.Errorf("state: load artifact: %w", err)
 	}
+	placements, err := loadPlacements(ctx, j.db, rowID)
+	if err != nil {
+		return Record{}, err
+	}
+	rec.Placements = placements
 	return rec, nil
 }
 
@@ -340,39 +350,64 @@ func (j *Journal) LastTransition(ctx context.Context, artifact model.ArtifactID,
 // ListByState returns every artifact currently recorded in the given state.
 // Reconciliation (FR-17) and retry scheduling are the expected callers.
 func (j *Journal) ListByState(ctx context.Context, state string) ([]Record, error) {
-	rows, err := j.db.QueryContext(ctx, `SELECT `+selectColumns+` FROM artifacts WHERE state = ? ORDER BY id`, state)
-	if err != nil {
-		return nil, fmt.Errorf("state: list by state: %w", err)
-	}
-	return scanRecords(rows)
+	return j.listRecords(ctx, "list by state", "a.state = ?", state)
 }
 
 // ListByBackupSet returns every artifact recorded for one backup set (FR-7):
 // retention and health calculations must never cross this boundary.
 func (j *Journal) ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]Record, error) {
-	rows, err := j.db.QueryContext(ctx,
-		`SELECT `+selectColumns+` FROM artifacts WHERE source = ? AND backup_set = ? ORDER BY id`,
-		set.Source, set.Set,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("state: list by backup set: %w", err)
-	}
-	return scanRecords(rows)
+	return j.listRecords(ctx, "list by backup set", "a.source = ? AND a.backup_set = ?", set.Source, set.Set)
 }
 
-func scanRecords(rows *sql.Rows) ([]Record, error) {
+// listRecords reads every artifact matching one predicate, with its
+// placements.
+//
+// The predicate is a parameter rather than inlined into each caller's SQL
+// because it is used twice, once for the artifact rows and once for their
+// placements (see loadPlacementsFor for why the placement read re-runs it
+// rather than listing the ids it already has). Writing it once here is what
+// stops the two halves drifting into asking about different sets of
+// artifacts, which is a failure that would show up as records silently
+// missing their placements rather than as an error.
+func (j *Journal) listRecords(ctx context.Context, what, artifactWhere string, args ...any) ([]Record, error) {
+	rows, err := j.db.QueryContext(ctx,
+		`SELECT `+selectColumns+` FROM artifacts a WHERE `+artifactWhere+` ORDER BY a.id`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("state: %s: %w", what, err)
+	}
+	return scanRecords(ctx, j.db, rows, artifactWhere, args...)
+}
+
+// scanRecords decodes a whole result set and then attaches every record's
+// placements in ONE further query rather than one per record.
+//
+// The N+1 it avoids is not hypothetical: the list paths are what a
+// retention cycle runs over every backup set on every pass, and a NAS with
+// a few thousand artifacts would pay a round trip per artifact per cycle
+// for a table that is almost always tiny.
+func scanRecords(ctx context.Context, q querier, rows *sql.Rows, artifactWhere string, args ...any) ([]Record, error) {
 	defer rows.Close()
 
 	var out []Record
+	var rowIDs []int64
 	for rows.Next() {
-		rec, _, err := scanRecord(rows)
+		rec, rowID, err := scanRecord(rows)
 		if err != nil {
 			return nil, fmt.Errorf("state: scan artifact: %w", err)
 		}
 		out = append(out, rec)
+		rowIDs = append(rowIDs, rowID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("state: list artifacts: %w", err)
+	}
+
+	byArtifact, err := loadPlacementsFor(ctx, q, artifactWhere, args...)
+	if err != nil {
+		return nil, err
+	}
+	for i, rowID := range rowIDs {
+		out[i].Placements = byArtifact[rowID]
 	}
 	return out, nil
 }

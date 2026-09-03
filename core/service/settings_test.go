@@ -868,12 +868,26 @@ func TestUpdateSettings_DoesNotFreezeResolvedDefaultsIntoTheOperatorsFile(t *tes
 	}
 
 	// The opposite half, so the assertions above cannot be satisfied by a
-	// write that simply dropped the keys: the omissions are still there,
-	// spelled as the "not chosen" values config.Validate resolves on load.
-	for _, kept := range []string{"delete_safety_delay: 0s", "protect_last_known_good: null"} {
+	// write that simply dropped the keys: the omission is still there,
+	// spelled as the "not chosen" value config.Validate resolves on load.
+	//
+	// This list used to carry "protect_last_known_good: null" too, and
+	// issue #333 moved that key from "emitted as null" to "omitted": a
+	// per-set retention override that inherits the deployment's FR-19
+	// posture must not come back from a save with the key written under
+	// it, and the same omitempty that fixes it one level down applies
+	// here. Absence is a STRONGER form of "the operator did not choose"
+	// than an explicit null, and the frozen list above is what keeps this
+	// honest: it still requires "protect_last_known_good: true" to be
+	// absent, so a write that had frozen the resolved default fails there
+	// rather than passing here.
+	for _, kept := range []string{"delete_safety_delay: 0s"} {
 		if !strings.Contains(written, kept) {
 			t.Errorf("the written config no longer carries %q, so the operator's omission was not preserved:\n%s", kept, written)
 		}
+	}
+	if strings.Contains(written, "protect_last_known_good:") {
+		t.Errorf("the written config carries protect_last_known_good at all; a file that never chose it must not gain the key:\n%s", written)
 	}
 
 	// Positive control: every frozen spelling IS produced by encoding the

@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -69,28 +70,139 @@ func newTestService(t *testing.T, sources ...config.Source) *BackupService {
 	return New(testConfig(sources...), openTestJournal(t), nil, nil)
 }
 
+// terminalStatusBudget is how long waitForTerminalStatus gives an
+// asynchronous cycle to reach a terminal status.
+//
+// It is not a latency assertion, and no test that goes through this
+// helper is about how fast a cycle is: they are about what the cycle did.
+// The only failure a budget here can catch is an operation that will
+// never reach a terminal status at all, and for that failure no budget is
+// too generous. So the number comes from the two things that actually
+// bound it, one on each side, rather than from how long a cycle happens
+// to take on a quiet laptop (issues #384 and #385: it used to be a flat
+// two seconds, and a correct cycle was measured at 2.65s on this machine
+// while a cold build ran beside it).
+//
+// The floor comes from the product. internal/state.Open gives every
+// journal PRAGMA busy_timeout = 5000 over a single connection
+// (SetMaxOpenConns(1)), so one journal write inside a perfectly correct
+// cycle may block five seconds on another connection's lock and still
+// succeed, and a cycle makes several of them. Two services over one state
+// directory is a supported case this package tests on purpose
+// (TestClose_LeavesTheValidatorScriptsForAProcessStillUsingThem), so that
+// is not hypothetical. Any budget under five seconds is below the
+// product's own tolerated wait for one write. Thirty seconds is six of
+// them, and it is also what backupsets_docker_test.go's second copy of
+// this helper asked for to cover a real Docker+SSH round trip, which is
+// why there is no longer a second copy.
+//
+// The ceiling comes from go test, which gives the whole package one
+// deadline. A budget big enough to eat that deadline turns a wedged
+// operation into a runtime panic and a dump of every goroutine in the
+// binary instead of this test failing by name with the message below, so
+// terminalStatusWait also caps any single wait at a share of what the
+// binary actually has left. TestTerminalStatusBudget_StaysBetweenItsBounds
+// (waitterminal_test.go) fails if either side of that is edited away.
+//
+// A var rather than a const so that test can shrink it and watch the
+// timeout fire, instead of waiting out the real value; closeDrainTimeout
+// (service.go) is a var for the same reason.
+var terminalStatusBudget = 30 * time.Second
+
+// terminalStatusDeadlineShare is the largest share of the test binary's
+// own remaining time that one wait may spend. Four leaves three quarters
+// of it for the binary to report the failure and finish the rest of the
+// package, and it keeps shrinking if several waits time out in a row, so
+// the sum of them can never reach the deadline. See terminalStatusBudget.
+const terminalStatusDeadlineShare = 4
+
+// terminalStatusWait returns how long a single wait may take, given the
+// test binary's own deadline (t.Deadline(), which go test sets from
+// -timeout and hasDeadline reports the presence of). It is split out from
+// awaitTerminalStatus so the cap can be asserted directly rather than
+// inferred from a passing test.
+func terminalStatusWait(now time.Time, binaryDeadline time.Time, hasDeadline bool) time.Duration {
+	if !hasDeadline {
+		return terminalStatusBudget
+	}
+	if share := binaryDeadline.Sub(now) / terminalStatusDeadlineShare; share < terminalStatusBudget {
+		return share
+	}
+	return terminalStatusBudget
+}
+
 // waitForTerminalStatus polls GetOperation until it reports a terminal
-// status (completed or failed) or the deadline expires. The background
-// executor runs on its own goroutine (see SubmitRunCycle), so every test
-// that cares about the outcome of that execution, rather than just the
-// fact that a row was queued, has to observe it this way instead of
-// assuming any particular timing.
+// status (completed or failed) or terminalStatusBudget expires. The
+// background executor runs on its own goroutine (see SubmitRunCycle), so
+// every test that cares about the outcome of that execution, rather than
+// just the fact that a row was queued, has to observe it this way instead
+// of assuming any particular timing.
 func waitForTerminalStatus(t *testing.T, svc *BackupService, id string) Operation {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	op, err := awaitTerminalStatus(t, svc, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return op
+}
+
+// awaitTerminalStatus is waitForTerminalStatus's body with the failure
+// returned rather than fataled, so the failure itself can be asserted on
+// (waitterminal_test.go). A helper whose timeout nobody has ever watched
+// fire is a helper nobody knows still works.
+func awaitTerminalStatus(t *testing.T, svc *BackupService, id string) (Operation, error) {
+	t.Helper()
+	binaryDeadline, hasDeadline := t.Deadline()
+	started := time.Now()
+	budget := terminalStatusWait(started, binaryDeadline, hasDeadline)
+	deadline := started.Add(budget)
+
+	// The poll backs off instead of staying at its opening interval.
+	// GetOperation reads the same journal the running cycle is writing to,
+	// over the one connection internal/state.Open allows it, so every poll
+	// is a poll that cycle cannot be using. A 2ms loop was affordable
+	// against two seconds; held against thirty it would spend the whole
+	// wait taking the connection away from the work it is waiting for.
+	const (
+		firstPoll = 2 * time.Millisecond
+		maxPoll   = 50 * time.Millisecond
+	)
+	poll := firstPoll
+
 	for {
 		op, err := svc.GetOperation(context.Background(), id)
 		if err != nil {
-			t.Fatalf("GetOperation(%q): %v", id, err)
+			return Operation{}, fmt.Errorf("GetOperation(%q): %v", id, err)
 		}
 		if op.Status == "completed" || op.Status == "failed" {
-			return op
+			return op, nil
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("operation %q did not reach a terminal status within the deadline (last status %q)", id, op.Status)
+			return Operation{}, fmt.Errorf(
+				"operation %q did not reach a terminal status within %s (last status %q, %s). "+
+					"That budget is not a latency bound: it is long enough that a correct cycle "+
+					"cannot lose it on a loaded host, so reaching it means the operation is wedged, not slow",
+				id, budget, op.Status, describeLiveProgress(op))
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(poll)
+		poll *= 2
+		if poll > maxPoll {
+			poll = maxPoll
+		}
 	}
+}
+
+// describeLiveProgress renders whatever the live progress registry still
+// has for op, which is what tells a wedged cycle apart from a slow one at
+// a glance: OperationProgress.Sequence exists precisely so a reader can
+// see the service still producing readings even when the numbers in them
+// have not moved (see that field's own doc).
+func describeLiveProgress(op Operation) string {
+	if op.Progress == nil {
+		return "no live progress reading"
+	}
+	return fmt.Sprintf("live progress: stage %q, reading %d, taken %s ago",
+		op.Progress.Stage, op.Progress.Sequence, time.Since(op.Progress.ObservedAt).Round(time.Millisecond))
 }
 
 // TestSubmitRunCycle_PersistsQueuedOperationBeforeReturning is the core of

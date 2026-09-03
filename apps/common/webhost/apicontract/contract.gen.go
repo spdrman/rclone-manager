@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7"
+const ContractSHA256 = "2c1f5ca4ae57a54e9f6a6494662509c423a9a4557c3753d9bbca664014ddc951"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -36,42 +36,43 @@ type ErrorCode string
 // here, and ui/shared reads the same registry through the TypeScript half of
 // these bindings, so the two can never hold different lists.
 const (
-	ErrorCodeAuthenticationFailed          ErrorCode = "authentication-failed"
-	ErrorCodeSSHHostKeyChanged             ErrorCode = "ssh-host-key-changed"
-	ErrorCodePermissionDenied              ErrorCode = "permission-denied"
-	ErrorCodeRemotePathMissing             ErrorCode = "remote-path-missing"
-	ErrorCodeChecksumMismatch              ErrorCode = "checksum-mismatch"
-	ErrorCodeBackupStale                   ErrorCode = "backup-stale"
-	ErrorCodeStorageCritical               ErrorCode = "storage-critical"
-	ErrorCodeVersionMismatch               ErrorCode = "version-mismatch"
-	ErrorCodeOperationConflict             ErrorCode = "operation-conflict"
-	ErrorCodeUnknown                       ErrorCode = "unknown"
-	ErrorCodeUnauthenticated               ErrorCode = "UNAUTHENTICATED"
-	ErrorCodeRateLimited                   ErrorCode = "RATE_LIMITED"
-	ErrorCodeInvalidRequest                ErrorCode = "INVALID_REQUEST"
-	ErrorCodeEnrollmentClosed              ErrorCode = "ENROLLMENT_CLOSED"
-	ErrorCodeBootstrapTokenInvalid         ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
-	ErrorCodeInternalError                 ErrorCode = "INTERNAL_ERROR"
-	ErrorCodeCSRFTokenMissing              ErrorCode = "CSRF_TOKEN_MISSING"
-	ErrorCodeCSRFTokenMismatch             ErrorCode = "CSRF_TOKEN_MISMATCH"
-	ErrorCodeRetentionPlanStale            ErrorCode = "RETENTION_PLAN_STALE"
-	ErrorCodeRetentionPlanNotFound         ErrorCode = "RETENTION_PLAN_NOT_FOUND"
-	ErrorCodeRetentionApplyBusy            ErrorCode = "RETENTION_APPLY_BUSY"
-	ErrorCodeBackupSetNotFound             ErrorCode = "BACKUP_SET_NOT_FOUND"
-	ErrorCodeOperationNotFound             ErrorCode = "OPERATION_NOT_FOUND"
-	ErrorCodeOperationAlreadyRunning       ErrorCode = "OPERATION_ALREADY_RUNNING"
-	ErrorCodeIdempotencyKeyConflict        ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
-	ErrorCodeConfigRevisionStale           ErrorCode = "CONFIG_REVISION_STALE"
-	ErrorCodeSSHKeyNotFound                ErrorCode = "SSH_KEY_NOT_FOUND"
-	ErrorCodeHostKeyProbeFailed            ErrorCode = "HOST_KEY_PROBE_FAILED"
-	ErrorCodeDestructiveOperationsDisabled ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
-	ErrorCodeInternal                      ErrorCode = "INTERNAL"
-	ErrorCodeAlreadyConfigured             ErrorCode = "ALREADY_CONFIGURED"
-	ErrorCodeNotConfigured                 ErrorCode = "NOT_CONFIGURED"
-	ErrorCodeArtifactNotFound              ErrorCode = "ARTIFACT_NOT_FOUND"
-	ErrorCodeArtifactNotQuarantined        ErrorCode = "ARTIFACT_NOT_QUARANTINED"
-	ErrorCodeArtifactIrrecoverable         ErrorCode = "ARTIFACT_IRRECOVERABLE"
-	ErrorCodeReinstatementRefused          ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeAuthenticationFailed            ErrorCode = "authentication-failed"
+	ErrorCodeSSHHostKeyChanged               ErrorCode = "ssh-host-key-changed"
+	ErrorCodePermissionDenied                ErrorCode = "permission-denied"
+	ErrorCodeRemotePathMissing               ErrorCode = "remote-path-missing"
+	ErrorCodeChecksumMismatch                ErrorCode = "checksum-mismatch"
+	ErrorCodeBackupStale                     ErrorCode = "backup-stale"
+	ErrorCodeStorageCritical                 ErrorCode = "storage-critical"
+	ErrorCodeVersionMismatch                 ErrorCode = "version-mismatch"
+	ErrorCodeOperationConflict               ErrorCode = "operation-conflict"
+	ErrorCodeUnknown                         ErrorCode = "unknown"
+	ErrorCodeUnauthenticated                 ErrorCode = "UNAUTHENTICATED"
+	ErrorCodeRateLimited                     ErrorCode = "RATE_LIMITED"
+	ErrorCodeInvalidRequest                  ErrorCode = "INVALID_REQUEST"
+	ErrorCodeEnrollmentClosed                ErrorCode = "ENROLLMENT_CLOSED"
+	ErrorCodeBootstrapTokenInvalid           ErrorCode = "BOOTSTRAP_TOKEN_INVALID"
+	ErrorCodeInternalError                   ErrorCode = "INTERNAL_ERROR"
+	ErrorCodeCSRFTokenMissing                ErrorCode = "CSRF_TOKEN_MISSING"
+	ErrorCodeCSRFTokenMismatch               ErrorCode = "CSRF_TOKEN_MISMATCH"
+	ErrorCodeRetentionPlanStale              ErrorCode = "RETENTION_PLAN_STALE"
+	ErrorCodeRetentionPlanNotFound           ErrorCode = "RETENTION_PLAN_NOT_FOUND"
+	ErrorCodeRetentionApplyBusy              ErrorCode = "RETENTION_APPLY_BUSY"
+	ErrorCodeBackupSetNotFound               ErrorCode = "BACKUP_SET_NOT_FOUND"
+	ErrorCodeOperationNotFound               ErrorCode = "OPERATION_NOT_FOUND"
+	ErrorCodeOperationAlreadyRunning         ErrorCode = "OPERATION_ALREADY_RUNNING"
+	ErrorCodeIdempotencyKeyConflict          ErrorCode = "IDEMPOTENCY_KEY_CONFLICT"
+	ErrorCodeConfigRevisionStale             ErrorCode = "CONFIG_REVISION_STALE"
+	ErrorCodeSSHKeyNotFound                  ErrorCode = "SSH_KEY_NOT_FOUND"
+	ErrorCodeHostKeyProbeFailed              ErrorCode = "HOST_KEY_PROBE_FAILED"
+	ErrorCodeDestructiveOperationsDisabled   ErrorCode = "DESTRUCTIVE_OPERATIONS_DISABLED"
+	ErrorCodeInternal                        ErrorCode = "INTERNAL"
+	ErrorCodeAlreadyConfigured               ErrorCode = "ALREADY_CONFIGURED"
+	ErrorCodeNotConfigured                   ErrorCode = "NOT_CONFIGURED"
+	ErrorCodeArtifactNotFound                ErrorCode = "ARTIFACT_NOT_FOUND"
+	ErrorCodeArtifactNotQuarantined          ErrorCode = "ARTIFACT_NOT_QUARANTINED"
+	ErrorCodeArtifactIrrecoverable           ErrorCode = "ARTIFACT_IRRECOVERABLE"
+	ErrorCodeReinstatementRefused            ErrorCode = "REINSTATEMENT_REFUSED"
+	ErrorCodeBackupSetRepointNotAcknowledged ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -102,6 +103,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
+	ErrorCodeBackupSetRepointNotAcknowledged,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -156,6 +158,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeArtifactNotQuarantined,
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
+	ErrorCodeBackupSetRepointNotAcknowledged,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -163,7 +166,7 @@ var ErrorCodes = []ErrorCode{
 var ErrorClasses = map[string][]ErrorCode{
 	"authentication": {ErrorCodeUnauthenticated, ErrorCodeBootstrapTokenInvalid},
 	"authorization":  {ErrorCodeEnrollmentClosed, ErrorCodeDestructiveOperationsDisabled, ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused},
+	"conflict":       {ErrorCodeRetentionPlanStale, ErrorCodeRetentionApplyBusy, ErrorCodeOperationAlreadyRunning, ErrorCodeIdempotencyKeyConflict, ErrorCodeConfigRevisionStale, ErrorCodeAlreadyConfigured, ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable, ErrorCodeReinstatementRefused, ErrorCodeBackupSetRepointNotAcknowledged},
 	"internal":       {ErrorCodeInternal, ErrorCodeInternalError},
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
 	"throttling":     {ErrorCodeRateLimited},
@@ -300,6 +303,51 @@ var Endpoints = []Endpoint{
 		},
 	},
 	{
+		ID: "updateBackupSet", Method: "PATCH", Path: "/backup-sets/{source}/{set}",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "UpdateBackupSetRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			409: {ErrorCodeBackupSetRepointNotAcknowledged},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "getBackupSetEditHold", Method: "GET", Path: "/backup-sets/{source}/{set}/edit-hold",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetEditHoldState", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "takeBackupSetEditHold", Method: "POST", Path: "/backup-sets/{source}/{set}/edit-hold",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetEditHold", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "releaseBackupSetEditHold", Method: "POST", Path: "/backup-sets/{source}/{set}/edit-hold/release",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "", SuccessStatus: 204,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+		},
+	},
+	{
 		ID: "setBackupSetEnabled", Method: "POST", Path: "/backup-sets/{source}/{set}/enabled",
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "SetEnabledRequest", ResponseSchema: "BackupSet", SuccessStatus: 200,
@@ -321,6 +369,43 @@ var Endpoints = []Endpoint{
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
 			500: {ErrorCodeInternal},
+		},
+	},
+	{
+		ID: "clearBackupSetRetention", Method: "DELETE", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "getBackupSetRetention", Method: "GET", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: false, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			401: {ErrorCodeUnauthenticated},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
+		},
+	},
+	{
+		ID: "setBackupSetRetention", Method: "PUT", Path: "/backup-sets/{source}/{set}/retention",
+		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
+		RequestSchema: "RetentionOverride", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
+		ErrorCodes: map[int][]ErrorCode{
+			400: {ErrorCodeInvalidRequest},
+			401: {ErrorCodeUnauthenticated},
+			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
+			404: {ErrorCodeBackupSetNotFound},
+			500: {ErrorCodeInternal},
+			503: {ErrorCodeNotConfigured},
 		},
 	},
 	{
@@ -672,19 +757,43 @@ type AuthErrorResponse struct {
 
 // BackupSet is A persisted backup set as the API reports it.
 type BackupSet struct {
-	CompletionStrategy string   `json:"completion_strategy"`
-	Disabled           bool     `json:"disabled"`
-	Host               string   `json:"host"`
-	ID                 string   `json:"id"`
-	Include            []string `json:"include"`
-	LocalPath          string   `json:"local_path"`
-	Name               string   `json:"name"`
-	Port               int      `json:"port"`
-	ReadOnly           bool     `json:"read_only"`
-	RemotePath         string   `json:"remote_path"`
-	SourceName         string   `json:"source_name"`
-	User               string   `json:"user"`
-	ValidatorID        string   `json:"validator_id"`
+	CompletionStrategy  string   `json:"completion_strategy"`
+	Disabled            bool     `json:"disabled"`
+	Host                string   `json:"host"`
+	ID                  string   `json:"id"`
+	Include             []string `json:"include"`
+	LocalPath           string   `json:"local_path"`
+	Name                string   `json:"name"`
+	Port                int      `json:"port"`
+	ReadOnly            bool     `json:"read_only"`
+	RemotePath          string   `json:"remote_path"`
+	RetentionIsOverride bool     `json:"retention_is_override"`
+	SourceName          string   `json:"source_name"`
+	StableForSeconds    int      `json:"stable_for_seconds"`
+	User                string   `json:"user"`
+	ValidatorID         string   `json:"validator_id"`
+}
+
+// BackupSetEditHold is POST /backup-sets/{source}/{set}/edit-hold. The lease just taken
+// or renewed, plus what taking it interrupted. `stopped` is null
+// when nothing was running, so a client never claims to have stopped
+// something it did not.
+type BackupSetEditHold struct {
+	BackupSetID string       `json:"backup_set_id"`
+	ExpiresAt   string       `json:"expires_at"`
+	Stopped     *RunningWork `json:"stopped"`
+}
+
+// BackupSetEditHoldState is GET /backup-sets/{source}/{set}/edit-hold. What entering edit mode
+// for this backup set would interrupt, and whether a hold is already
+// in force. `running` is null when no cycle is currently inside this
+// set, which is what lets a client open edit mode with no prompt for
+// a risk that does not exist.
+type BackupSetEditHoldState struct {
+	BackupSetID string       `json:"backup_set_id"`
+	ExpiresAt   string       `json:"expires_at,omitempty"`
+	Held        bool         `json:"held"`
+	Running     *RunningWork `json:"running"`
 }
 
 // BackupSetHealth is one backup set's freshness verdict. This is the backup half of
@@ -711,6 +820,20 @@ type BackupSetHealth struct {
 	State                         string `json:"state"`
 	StorageLevel                  string `json:"storage_level,omitempty"`
 	TotalBytes                    uint64 `json:"total_bytes,omitempty"`
+}
+
+// BackupSetRetention is which retention policy one backup set is retained under, and where
+// that policy came from. All of it is served together because 'what
+// is deciding' and 'is that this set's own or the deployment's' are
+// one question for an operator reading a preview that is about to
+// delete something, and answering it in two calls is how a surface
+// shows a chain beside the wrong attribution.
+type BackupSetRetention struct {
+	BackupSetID string             `json:"backup_set_id"`
+	Deployment  RetentionSettings  `json:"deployment"`
+	Effective   RetentionSettings  `json:"effective"`
+	IsOverride  bool               `json:"is_override"`
+	Override    *RetentionOverride `json:"override"`
 }
 
 // BackupSetSpec is everything it takes to DESCRIBE one backup set: where it reads
@@ -1018,19 +1141,42 @@ type OperationProgress struct {
 	Stage            string `json:"stage"`
 }
 
+// RetentionOverride is one backup set's OWN retention policy, exactly as its
+// configuration file carries it: unresolved, with every omitted
+// field still omitted. An override names the WHOLE chain (a tiers
+// list, or all three of daily_days, weekly_months and
+// monthly_months) and half a chain is refused, because completing
+// the missing half from the product defaults is how a set silently
+// ends up retaining less than the operator who wrote the
+// deployment's policy believes. Everything that is not the chain
+// inherits from the deployment's resolved policy when omitted, so an
+// override that names no timezone is reckoned in the deployment's,
+// not in UTC.
+type RetentionOverride struct {
+	DailyDays            int             `json:"daily_days,omitempty"`
+	MonthlyMonths        int             `json:"monthly_months,omitempty"`
+	ProtectLastKnownGood *bool           `json:"protect_last_known_good"`
+	Tiers                []RetentionTier `json:"tiers,omitempty"`
+	Timezone             string          `json:"timezone,omitempty"`
+	WeekStartsOn         string          `json:"week_starts_on,omitempty"`
+	WeeklyMonths         int             `json:"weekly_months,omitempty"`
+}
+
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
 // id; it never proposes what to delete.
 type RetentionPlan struct {
-	BackupSetID       string             `json:"backup_set_id"`
-	ConfigRevision    string             `json:"config_revision"`
-	DeleteCount       int                `json:"delete_count"`
-	ExpiresAt         string             `json:"expires_at"`
-	InventoryRevision string             `json:"inventory_revision"`
-	KeepCount         int                `json:"keep_count"`
-	OperationID       string             `json:"operation_id,omitempty"`
-	PlanID            string             `json:"plan_id"`
-	ReclaimBytes      int64              `json:"reclaim_bytes"`
-	Verdicts          []RetentionVerdict `json:"verdicts"`
+	BackupSetID         string             `json:"backup_set_id"`
+	ConfigRevision      string             `json:"config_revision"`
+	DeleteCount         int                `json:"delete_count"`
+	ExpiresAt           string             `json:"expires_at"`
+	InventoryRevision   string             `json:"inventory_revision"`
+	KeepCount           int                `json:"keep_count"`
+	OperationID         string             `json:"operation_id,omitempty"`
+	PlanID              string             `json:"plan_id"`
+	ReclaimBytes        int64              `json:"reclaim_bytes"`
+	Retention           RetentionSettings  `json:"retention"`
+	RetentionIsOverride bool               `json:"retention_is_override"`
+	Verdicts            []RetentionVerdict `json:"verdicts"`
 }
 
 // RetentionSchema is the closed value sets and bounds a retention chain is validated
@@ -1056,10 +1202,14 @@ type RetentionSettings struct {
 
 // RetentionTier is one link in the retention chain, on the wire. The same shape is
 // read and written, so a client round-trips exactly what it was
-// served.
+// served. That round trip is why every field a tier can carry is
+// here: a chain write REPLACES the whole chain, so a field this
+// shape omits is a field the save deletes from the operator's
+// configuration file.
 type RetentionTier struct {
 	Granularity string `json:"granularity"`
 	Keep        int    `json:"keep"`
+	Medium      string `json:"medium,omitempty"`
 	Name        string `json:"name"`
 	PeriodDays  int    `json:"period_days,omitempty"`
 	WindowUnit  string `json:"window_unit,omitempty"`
@@ -1092,6 +1242,17 @@ type RetentionVerdict struct {
 type RotatePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
+}
+
+// RunningWork is what a run cycle is doing for one backup set right now (issue
+// #350). It is the content of the warning shown before edit mode
+// opens: discarding a partial transfer of a named artifact is a
+// materially different cost from cancelling a scheduler tick that
+// has not started work, and only a message saying which one it is
+// lets an operator decide.
+type RunningWork struct {
+	Artifact string `json:"artifact"`
+	Stage    string `json:"stage"`
 }
 
 // SessionResponse is GET /auth/session.
@@ -1173,6 +1334,31 @@ type TestConnectionResponse struct {
 	OK      bool   `json:"ok"`
 }
 
+// UpdateBackupSetRequest is PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
+// already-persisted backup set (issue #350): every property is
+// optional, and a property this body omits is left exactly as it is
+// rather than cleared. That is what lets the Web UI's per-box Save
+// persist only the box it belongs to. It deliberately carries no
+// name/source_name (a backup set's identity keys every journal row,
+// artifact id and recovery manifest it has ever produced, so a
+// rename is a migration rather than an edit) and no
+// ssh_key_id/known_hosts_line (those are the results of the import
+// and probe steps, and re-trusting a host is a trust decision rather
+// than an edit).
+type UpdateBackupSetRequest struct {
+	AcknowledgeRepoint bool      `json:"acknowledge_repoint"`
+	CompletionStrategy *string   `json:"completion_strategy"`
+	Host               *string   `json:"host"`
+	Include            *[]string `json:"include"`
+	LocalPath          *string   `json:"local_path"`
+	Port               *int      `json:"port"`
+	RemotePath         *string   `json:"remote_path"`
+	StableForSeconds   *int      `json:"stable_for_seconds"`
+	StaleAfterSeconds  *int      `json:"stale_after_seconds"`
+	User               *string   `json:"user"`
+	ValidatorID        *string   `json:"validator_id"`
+}
+
 // UpdateCapacitySettings is A PARTIAL capacity update. An omitted field is left exactly as the
 // running configuration has it. An explicit 0 is a request, not an
 // omission: on this block zero means "no cap" and "no warning line",
@@ -1234,7 +1420,10 @@ var SchemaTypes = map[string]any{
 	"ArtifactReinstateResponse":   ArtifactReinstateResponse{},
 	"AuthErrorResponse":           AuthErrorResponse{},
 	"BackupSet":                   BackupSet{},
+	"BackupSetEditHold":           BackupSetEditHold{},
+	"BackupSetEditHoldState":      BackupSetEditHoldState{},
 	"BackupSetHealth":             BackupSetHealth{},
+	"BackupSetRetention":          BackupSetRetention{},
 	"BackupSetSpec":               BackupSetSpec{},
 	"CapabilitiesResponse":        CapabilitiesResponse{},
 	"CapacitySettings":            CapacitySettings{},
@@ -1262,6 +1451,7 @@ var SchemaTypes = map[string]any{
 	"ManagerStorage":              ManagerStorage{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
+	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
 	"RetentionSettings":           RetentionSettings{},
@@ -1269,6 +1459,7 @@ var SchemaTypes = map[string]any{
 	"RetentionTierSelection":      RetentionTierSelection{},
 	"RetentionVerdict":            RetentionVerdict{},
 	"RotatePasswordRequest":       RotatePasswordRequest{},
+	"RunningWork":                 RunningWork{},
 	"SessionResponse":             SessionResponse{},
 	"SetEnabledRequest":           SetEnabledRequest{},
 	"SetReadOnlyRequest":          SetReadOnlyRequest{},
@@ -1278,6 +1469,7 @@ var SchemaTypes = map[string]any{
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
 	"TestConnectionResponse":      TestConnectionResponse{},
+	"UpdateBackupSetRequest":      UpdateBackupSetRequest{},
 	"UpdateCapacitySettings":      UpdateCapacitySettings{},
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},
 	"UpdateSettingsRequest":       UpdateSettingsRequest{},

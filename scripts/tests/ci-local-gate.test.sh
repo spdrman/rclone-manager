@@ -110,6 +110,12 @@ SELFTEST_STUB='SELFTEST-STUB-RAN'
 # self-test stub.
 E2E_STUB='E2E-GATE-STUB-RAN'
 
+# The same, for the two-machine end-to-end backup proof (#356). Group I
+# asserts on it in both directions. The real script builds a container
+# image and stands up docker-in-docker; this fixture measures which steps
+# the gate chooses to run, so the stub prints a marker and succeeds.
+TWO_MACHINE_STUB='TWO-MACHINE-STUB-RAN'
+
 make_tree() { # -> path of a synthetic checkout carrying only the gate scripts
   # mktemp, not a counter: this runs inside $( ), so a counter would increment
   # in the subshell and every caller would get the same directory back. That
@@ -296,6 +302,16 @@ make_full_tree() {
   printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$E2E_STUB" \
     >"$tree/scripts/e2e/run-tests-repo-gate.sh"
 
+  # The two-machine end-to-end backup proof (#356), stubbed for exactly the
+  # reason the four comments above give, and this is the sixth time that
+  # lesson has had to be written down here: `bash` on a path that does not
+  # exist exits 127, the gate runs under `set -e`, and every full-tree case
+  # below the step would die for a reason that has nothing to do with what
+  # it measures. The real script builds an image from the working tree and
+  # stands up two containers on a temporary network.
+  printf '#!/usr/bin/env bash\necho "%s"\nexit 0\n' "$TWO_MACHINE_STUB" \
+    >"$tree/scripts/e2e/two-machine-backup.sh"
+
   printf '%s\n' "$tree"
 }
 
@@ -310,6 +326,7 @@ run_hook() { # <tree> [VAR=VAL ...]
   shift
   out="$(cd "$hook_tree" && env -u CI_LOCAL_FAST -u CI_LOCAL_SKIP_JS \
     -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST -u CI_LOCAL_SKIP_E2E \
+    -u CI_LOCAL_SKIP_TWO_MACHINE \
     PATH="$hook_tree/bin:$PATH" "$@" sh .husky/pre-commit 2>&1)"
   status=$?
 }
@@ -323,6 +340,7 @@ run_gate() { # <tree> [VAR=VAL ...]
   # every synthetic run as an inherited skip.
   out="$(cd "$gate_tree" && env -u CI_LOCAL_FAST -u CI_LOCAL_SKIP_JS \
     -u CI_LOCAL_SKIP_DOCKER -u CI_LOCAL_SELFTEST -u CI_LOCAL_SKIP_E2E \
+    -u CI_LOCAL_SKIP_TWO_MACHINE \
     PATH="$gate_tree/bin:$PATH" "$@" bash scripts/ci-local.sh 2>&1)"
   status=$?
 }
@@ -783,6 +801,114 @@ assert_nonzero "H1 a red installer suite fails the run" "$status"
 assert_not_contains "H1 a red installer suite cannot report success" 'ci-local: ok' "$out"
 assert_contains "H1 the verdict line names the step that failed" \
   'ci-local: FAILED (installer prerequisite refusals' "$out"
+
+# ------------- Group I: the two-machine backup proof is a real signal
+
+echo "==> I. the two-machine end-to-end backup proof (#356)"
+
+# I1 is the control for everything below it, and the same control G1 is:
+# without it, I3's absence assertion would also pass against a gate that
+# had lost the step entirely.
+tree="$(make_full_tree)"
+run_gate "$tree"
+assert_contains "I1 a complete run invokes the two-machine step" \
+  'two throwaway machines' "$out"
+assert_contains "I1 the step really ran (and was the stub)" "$TWO_MACHINE_STUB" "$out"
+assert_contains "I1 a complete run still reports success" 'ci-local: ok' "$out"
+
+# I2: the out-loud opt-out ledgers rather than printing a note and carrying
+# on, the same shape as CI_LOCAL_SKIP_DOCKER and CI_LOCAL_SKIP_E2E.
+tree="$(make_full_tree)"
+run_gate "$tree" CI_LOCAL_SKIP_TWO_MACHINE=1
+assert_not_contains "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 does not run the step" "$TWO_MACHINE_STUB" "$out"
+assert_not_contains "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 cannot report success" 'ci-local: ok' "$out"
+assert_contains "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 ends INCOMPLETE" 'ci-local: INCOMPLETE' "$out"
+assert_contains "I2 the summary names the proof that did not run" \
+  'two-machine end-to-end backup proof' "$out"
+assert_eq "I2 CI_LOCAL_SKIP_TWO_MACHINE=1 exits $INCOMPLETE" "$INCOMPLETE" "$status"
+
+# I3: FAST leaves it out, under the never-merge-on-FAST rule D4 owns.
+tree="$(make_full_tree)"
+run_gate "$tree" CI_LOCAL_FAST=1
+assert_not_contains "I3 CI_LOCAL_FAST=1 does not run the two-machine step" "$TWO_MACHINE_STUB" "$out"
+
+# I4: a failed proof refuses the commit rather than annotating it.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "the digests did not match"\nexit 1\n' \
+  >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+assert_nonzero "I4 a failed backup proof fails the run" "$status"
+assert_not_contains "I4 a failed backup proof cannot report success" 'ci-local: ok' "$out"
+assert_contains "I4 the verdict line names the step that failed" \
+  'ci-local: FAILED (two throwaway machines' "$out"
+
+# I5 is the case this step has that no other step here has, and the one
+# worth the most. "This machine cannot perform the proof" is neither a pass
+# nor a failure: no Docker, or a daemon that refuses a privileged container
+# so docker-in-docker cannot start. The script says so and exits 3. The
+# gate has to LEDGER that, which means neither reporting ok nor dying on
+# it, and the distinction is invisible in the exit status alone, which is
+# why it is asserted in all three directions.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\necho "==> two-machine: CANNOT RUN. no privileged containers here" >&2\nexit 3\n' \
+  >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+assert_not_contains "I5 a proof this machine cannot perform cannot report success" 'ci-local: ok' "$out"
+assert_contains "I5 it ends INCOMPLETE rather than FAILED" 'ci-local: INCOMPLETE' "$out"
+assert_contains "I5 the summary names what could not be performed" \
+  'this machine could not perform it' "$out"
+assert_eq "I5 it exits $INCOMPLETE" "$INCOMPLETE" "$status"
+
+# I6 is I5's positive control. Without it, I5 would also pass against a
+# gate that treated EVERY non-zero status as a ledgered skip, which would
+# turn a real digest mismatch into an INCOMPLETE nobody reads. I4 asserts
+# the failure half; this asserts that the two statuses are actually told
+# apart rather than collapsed.
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\nexit 3\n' >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+three_status="$status"
+tree="$(make_full_tree)"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$tree/scripts/e2e/two-machine-backup.sh"
+run_gate "$tree"
+if [ "$three_status" = "$INCOMPLETE" ] && [ "$status" != "$INCOMPLETE" ]; then
+  pass "I6 exit 3 and exit 1 from the proof are told apart"
+else
+  fail "I6 exit 3 and exit 1 from the proof are told apart, got $three_status and $status"
+fi
+
+# I7: every container the proof creates is removed WITH its volumes.
+#
+# Not a stub test, because the property is in the real script rather than
+# in the gate's handling of it. docker:28-dind declares
+# VOLUME /var/lib/docker, so each manager machine gets an anonymous host
+# volume carrying that machine's whole inner Docker state, and
+# `docker rm -f` leaves it behind. Nothing references a leftover, so
+# nothing complains, and the shared Docker disk fills silently until an
+# install refuses on free space. That is not hypothetical: it is how a
+# full run failed, with the installer's own preflight reporting 912 MiB
+# free against its 2048 MiB floor on a Docker VM at 98%.
+#
+# Asserted on the source rather than by running a case, because running
+# one costs a container image build and this has to hold for a removal
+# site somebody adds later, not only for the two that exist today.
+proof_script="$(dirname "$0")/../e2e/two-machine-backup.sh"
+if [ ! -f "$proof_script" ]; then
+  fail "I7 the two-machine proof script is where this expects it"
+else
+  # Comment lines are excluded, and the prose above the teardown quotes
+  # `docker rm -f` on purpose to explain why it is wrong; a check that
+  # cannot tell a command from its own explanation is not a check.
+  bare_removals="$(grep -vE '^[[:space:]]*#' "$proof_script" | grep -nE 'docker rm ' | grep -v -- '-fv' || true)"
+  if [ -z "$bare_removals" ]; then
+    pass "I7 every docker rm in the proof removes the container's volumes too"
+  else
+    fail "I7 every docker rm in the proof removes the container's volumes too, but these do not:
+$bare_removals"
+  fi
+  assert_contains "I7 the proof says why -v is load-bearing" \
+    'VOLUME /var/lib/docker' "$(cat "$proof_script")"
+fi
 
 # ------------------------------------------------------------------ result
 

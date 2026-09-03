@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "badd44cde60688b3e4959c8e87f536c0f4ab5af486599e5361145b2ea6707ce7";
+export const CONTRACT_SHA256 = "2c1f5ca4ae57a54e9f6a6494662509c423a9a4557c3753d9bbca664014ddc951";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -46,6 +46,7 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
+  "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -104,6 +105,7 @@ export const API_ERROR_CODES = [
   "ARTIFACT_NOT_QUARANTINED",
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
+  "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -113,7 +115,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 export const API_ERROR_CLASSES = {
   "authentication": ["UNAUTHENTICATED", "BOOTSTRAP_TOKEN_INVALID"],
   "authorization": ["ENROLLMENT_CLOSED", "DESTRUCTIVE_OPERATIONS_DISABLED", "CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED"],
+  "conflict": ["RETENTION_PLAN_STALE", "RETENTION_APPLY_BUSY", "OPERATION_ALREADY_RUNNING", "IDEMPOTENCY_KEY_CONFLICT", "CONFIG_REVISION_STALE", "ALREADY_CONFIGURED", "ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE", "REINSTATEMENT_REFUSED", "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
   "internal": ["INTERNAL", "INTERNAL_ERROR"],
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
@@ -339,6 +341,83 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     }
   },
   {
+    id: "updateBackupSet",
+    method: "PATCH",
+    path: "/backup-sets/{source}/{set}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "UpdateBackupSetRequest",
+    responseSchema: "BackupSet",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      409: ["BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "getBackupSetEditHold",
+    method: "GET",
+    path: "/backup-sets/{source}/{set}/edit-hold",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetEditHoldState",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "takeBackupSetEditHold",
+    method: "POST",
+    path: "/backup-sets/{source}/{set}/edit-hold",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetEditHold",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "releaseBackupSetEditHold",
+    method: "POST",
+    path: "/backup-sets/{source}/{set}/edit-hold/release",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "",
+    successStatus: 204,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+    }
+  },
+  {
     id: "setBackupSetEnabled",
     method: "POST",
     path: "/backup-sets/{source}/{set}/enabled",
@@ -376,6 +455,67 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "clearBackupSetRetention",
+    method: "DELETE",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "getBackupSetRetention",
+    method: "GET",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "setBackupSetRetention",
+    method: "PUT",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "RetentionOverride",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -918,9 +1058,33 @@ export interface WireBackupSet {
   port: number;
   read_only: boolean;
   remote_path: string;
+  retention_is_override: boolean;
   source_name: string;
+  stable_for_seconds: number;
   user: string;
   validator_id: string;
+}
+
+/** POST /backup-sets/{source}/{set}/edit-hold. The lease just taken
+ *  or renewed, plus what taking it interrupted. `stopped` is null
+ *  when nothing was running, so a client never claims to have stopped
+ *  something it did not. */
+export interface WireBackupSetEditHold {
+  backup_set_id: string;
+  expires_at: string;
+  stopped?: WireRunningWork;
+}
+
+/** GET /backup-sets/{source}/{set}/edit-hold. What entering edit mode
+ *  for this backup set would interrupt, and whether a hold is already
+ *  in force. `running` is null when no cycle is currently inside this
+ *  set, which is what lets a client open edit mode with no prompt for
+ *  a risk that does not exist. */
+export interface WireBackupSetEditHoldState {
+  backup_set_id: string;
+  expires_at?: string;
+  held: boolean;
+  running?: WireRunningWork;
 }
 
 /** One backup set's freshness verdict. This is the backup half of
@@ -947,6 +1111,20 @@ export interface WireBackupSetHealth {
   state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
   storage_level?: "OK" | "WARNING" | "CRITICAL";
   total_bytes?: number;
+}
+
+/** Which retention policy one backup set is retained under, and where
+ *  that policy came from. All of it is served together because 'what
+ *  is deciding' and 'is that this set's own or the deployment's' are
+ *  one question for an operator reading a preview that is about to
+ *  delete something, and answering it in two calls is how a surface
+ *  shows a chain beside the wrong attribution. */
+export interface WireBackupSetRetention {
+  backup_set_id: string;
+  deployment: WireRetentionSettings;
+  effective: WireRetentionSettings;
+  is_override: boolean;
+  override?: WireRetentionOverride;
 }
 
 /** Everything it takes to DESCRIBE one backup set: where it reads
@@ -1252,6 +1430,27 @@ export interface WireOperationProgress {
   stage: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
 }
 
+/** One backup set's OWN retention policy, exactly as its
+ *  configuration file carries it: unresolved, with every omitted
+ *  field still omitted. An override names the WHOLE chain (a tiers
+ *  list, or all three of daily_days, weekly_months and
+ *  monthly_months) and half a chain is refused, because completing
+ *  the missing half from the product defaults is how a set silently
+ *  ends up retaining less than the operator who wrote the
+ *  deployment's policy believes. Everything that is not the chain
+ *  inherits from the deployment's resolved policy when omitted, so an
+ *  override that names no timezone is reckoned in the deployment's,
+ *  not in UTC. */
+export interface WireRetentionOverride {
+  daily_days?: number;
+  monthly_months?: number;
+  protect_last_known_good?: boolean;
+  tiers?: WireRetentionTier[];
+  timezone?: string;
+  week_starts_on?: string;
+  weekly_months?: number;
+}
+
 /** A server-computed retention plan. The client may only apply one by
  *  id; it never proposes what to delete. */
 export interface WireRetentionPlan {
@@ -1264,6 +1463,8 @@ export interface WireRetentionPlan {
   operation_id?: string;
   plan_id: string;
   reclaim_bytes: number;
+  retention: WireRetentionSettings;
+  retention_is_override: boolean;
   verdicts: WireRetentionVerdict[];
 }
 
@@ -1290,10 +1491,14 @@ export interface WireRetentionSettings {
 
 /** One link in the retention chain, on the wire. The same shape is
  *  read and written, so a client round-trips exactly what it was
- *  served. */
+ *  served. That round trip is why every field a tier can carry is
+ *  here: a chain write REPLACES the whole chain, so a field this
+ *  shape omits is a field the save deletes from the operator's
+ *  configuration file. */
 export interface WireRetentionTier {
   granularity: string;
   keep: number;
+  medium?: string;
   name: string;
   period_days?: number;
   window_unit?: string;
@@ -1326,6 +1531,17 @@ export interface WireRetentionVerdict {
 export interface WireRotatePasswordRequest {
   currentPassword: string;
   newPassword: string;
+}
+
+/** What a run cycle is doing for one backup set right now (issue
+ *  #350). It is the content of the warning shown before edit mode
+ *  opens: discarding a partial transfer of a named artifact is a
+ *  materially different cost from cancelling a scheduler tick that
+ *  has not started work, and only a message saying which one it is
+ *  lets an operator decide. */
+export interface WireRunningWork {
+  artifact: string;
+  stage: string;
 }
 
 /** GET /auth/session. */
@@ -1405,6 +1621,31 @@ export interface WireTestConnectionRequest {
 export interface WireTestConnectionResponse {
   message?: string;
   ok: boolean;
+}
+
+/** PATCH /backup-sets/{source}/{set}. A SPARSE edit of one
+ *  already-persisted backup set (issue #350): every property is
+ *  optional, and a property this body omits is left exactly as it is
+ *  rather than cleared. That is what lets the Web UI's per-box Save
+ *  persist only the box it belongs to. It deliberately carries no
+ *  name/source_name (a backup set's identity keys every journal row,
+ *  artifact id and recovery manifest it has ever produced, so a
+ *  rename is a migration rather than an edit) and no
+ *  ssh_key_id/known_hosts_line (those are the results of the import
+ *  and probe steps, and re-trusting a host is a trust decision rather
+ *  than an edit). */
+export interface WireUpdateBackupSetRequest {
+  acknowledge_repoint?: boolean;
+  completion_strategy?: "rename" | "marker" | "stable";
+  host?: string;
+  include?: string[];
+  local_path?: string;
+  port?: number;
+  remote_path?: string;
+  stable_for_seconds?: number;
+  stale_after_seconds?: number;
+  user?: string;
+  validator_id?: string;
 }
 
 /** A PARTIAL capacity update. An omitted field is left exactly as the

@@ -49,6 +49,7 @@ var commands = map[string]func([]string) int{
 	"check":      cmdCheck,
 	"status":     cmdStatus,
 	"sources":    cmdSources,
+	"backup-set": cmdBackupSet,
 	"artifacts":  cmdArtifacts,
 	"fetch":      cmdFetch,
 	"retention":  cmdRetention,
@@ -69,6 +70,18 @@ commands:
   check                                          validate config and the state database, then exit
   status                                         report process and backup-set health (FR-24)
   sources                                        list configured sources and backup sets
+  backup-set create <source/backup-set> --host H --user U --remote-path P --local-path P
+                    --ssh-key-file K|--ssh-key-id ID --known-hosts-line L|--trust-host-key
+                    --completion-strategy rename|marker|stable [--include A,B] [--stable-for D]
+                    [--stale-after D] [--validator-id V] [--disabled] [--read-only] [--run]
+                                                  create a backup set, the same operation POST /api/v1/backup-sets
+                                                  performs and through the same service layer. On an instance with
+                                                  no config.yaml yet this writes the first one (#176), and
+                                                  --state-database names the journal it points at
+  backup-set patch <source/backup-set> [--host H] [--port N] [--user U] [--remote-path P] [--local-path P]
+                    [--include "A,B"] [--completion-strategy S] [--stable-for D] [--stale-after D] [--validator-id ID]
+                                                  change one configured backup set in place; only the flags you pass are
+                                                  changed, and the change is persisted and hot-reloaded (#350)
   artifacts [--source S] [--backup-set B]        list journal artifacts
   artifacts <source/backup-set/name>             print one artifact's full detail, including the reason
                                                   recorded for a FAILED/QUARANTINED/QUARANTINED_LOST one (#284)
@@ -87,6 +100,15 @@ commands:
                    [--cap-bytes N] [--warning-free-bytes N] [--critical-free-bytes N] [--safety-margin-bytes N]]
                                                   report the live retention/capacity settings, or change one in place;
                                                   a full retention tier-chain replacement is still a config-file edit
+  backup-set retention <source/backup-set> [--inherit] [--policy-file F]
+                       [--timezone T] [--week-starts-on D]
+                       [--daily-days N] [--weekly-months N] [--monthly-months N]
+                       [--protect-last-known-good=BOOL]
+                                                  report which retention policy this backup set is retained under and
+                                                  where it came from; with a policy flag, give the set a whole policy of
+                                                  its own; with --inherit, remove that policy so it is retained under the
+                                                  deployment's again. An override replaces the deployment's whole chain
+                                                  and is never merged with it, so it has to name a whole one
   version                                        report version information
 
 every command except version accepts --config (default /etc/backup-manager/config/config.yaml;

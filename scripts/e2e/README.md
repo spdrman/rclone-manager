@@ -87,3 +87,52 @@ change there and the pin bump in the same PR.
 
 The design, including the parts that differ from what was originally
 specified and why, is in that repository's `docs/ci-signal.md`.
+
+## The other thing in here: two throwaway machines and one real backup
+
+`two-machine-backup.sh` is issue #356, and it answers a different question
+from everything above. Suite B asks whether the pages work. The CLI smoke
+slice asks whether the binary's contract holds. Neither can say that a
+fresh install, on a machine nobody has touched, pointed at another
+machine, actually pulls a backup off it, which is the only claim a user
+makes.
+
+It stands up two containers on a temporary network per case: a source
+machine running a real sshd with a payload of known content, and a manager
+machine running docker-in-docker, so it is a box with Docker and nothing
+else. Then it installs with `scripts/install/install_docker_host.py`, the
+real installer, creates a backup set through the CLI, runs it, and
+compares the artifact's SHA-256 against the source's.
+
+Docker-in-docker rather than the host's socket, because mounting the
+socket would make the product's own containers siblings on the developer's
+machine rather than residents of the fake one, and the installer would be
+installing onto the machine the test is running on. That is the one thing
+this test exists not to do.
+
+The image under test is built from the working tree and moved across with
+`docker save | docker load`, so no registry is involved and the run proves
+this code. Every case asserts the engine reports the version and commit
+that were installed, which is #342's shape: a stale default installed
+0.1.0 once and the installer said "Installed."
+
+Four cases, and three of them exist because an issue was closed on
+evidence that stopped short of a completed install:
+
+| case | what it settles |
+|---|---|
+| `plain` | the ordinary route: an explicit `--image`, and the canonical compose copied in from a checkout |
+| `no-arguments` | #347 and #346. `install` with no arguments at all, from one copied `install_docker_host.py` on a machine with no checkout: no `--compose-file`, no `--ssh-key`, no `--prefix`, no `--image`, running all the way to a serving stack and then a real backup |
+| `connection-cap` | #264. The source refuses a third simultaneous SSH connection from one address, with an `iptables` `connlimit` rule, which is the production rule restated. The case proves the cap bites before it trusts it |
+| `lifecycle` | #343's two counting criteria: an upgrade that preserves every user, backup set and catalogued artifact, counted before and after, and a factory reset proven by the resulting install issuing an enrollment link |
+
+Three outcomes rather than two, and the third is the point. A machine with
+no Docker, or one whose daemon refuses a privileged container, cannot
+perform this proof: the script says CANNOT RUN and exits 3, and
+`ci-local.sh` ledgers that, so the run ends INCOMPLETE and names the proof
+it could not perform. `CI_LOCAL_SKIP_TWO_MACHINE=1` is the out-loud
+opt-out, and it ledgers too.
+
+Run one case on its own with `--case`, and add `--keep-on-failure` to
+leave a failing case's containers up for reading. Everything else is torn
+down on success, on failure and on interrupt.

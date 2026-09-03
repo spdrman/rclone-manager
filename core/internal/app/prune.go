@@ -38,6 +38,19 @@ type PrunePlan struct {
 	// that agrees with it, and the answer changes what an operator should
 	// go and edit.
 	RetentionIsOverride bool
+
+	// Retention is the resolved policy these verdicts were decided under,
+	// whichever of the two it came from. RetentionIsOverride says WHERE
+	// it came from; this says WHAT it says, and a preview surface needs
+	// both to answer "why is this artifact being deleted": the source
+	// tells an operator where to go and edit, the chain tells them what
+	// they will find when they get there.
+	//
+	// It is carried on the plan rather than left to the caller to look up
+	// from the config, for the same reason Records is: a second lookup is
+	// a second observation, and this one would be a second observation of
+	// a configuration that a hot reload can replace between the two.
+	Retention config.Retention
 }
 
 // PrunePreview computes set's current FR-20 KEEP/DELETE/REFUSE verdicts via
@@ -87,7 +100,7 @@ func (s *Service) PrunePreviewAt(ctx context.Context, set model.BackupSetID, at 
 	if err != nil {
 		return PrunePlan{}, fmt.Errorf("app: prune preview: %s: %w", set, err)
 	}
-	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride()}, nil
+	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride(), Retention: bs.Retention}, nil
 }
 
 // PruneApply computes set's current FR-20 verdicts and deletes the local
@@ -134,7 +147,7 @@ func (s *Service) PruneApplySnapshot(ctx context.Context, set model.BackupSetID,
 		return PrunePlan{}, fmt.Errorf("app: prune apply: %s: %w", set, err)
 	}
 	s.recordRetentionRun(set)
-	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride()}, nil
+	return PrunePlan{Set: set, Verdicts: verdicts, Records: records, RetentionIsOverride: bs.RetentionIsOverride(), Retention: bs.Retention}, nil
 }
 
 // pruneInputsFor loads the two things PruneDecide/PruneApply both need for

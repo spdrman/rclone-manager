@@ -106,7 +106,7 @@ parsing prose.
 | 14 | a host directory is missing, is not a directory, or is owned by another uid |
 | 15 | the listen port is held by something that is not this project |
 | 16 | too little free space on the backup volume |
-| 17 | an explicitly named SSH key or `known_hosts` is missing, either is not a regular file, or the key is readable beyond its owner |
+| 17 | an explicitly named SSH key or `known_hosts` is missing, or the installed `.env` names one that is no longer there, either is not a regular file, or the key is readable beyond its owner |
 | 18 | the image is neither present, nor loadable from an archive, nor pullable |
 | 19 | `--compose-file` names a path that is not there, or this installer's own embedded runtime definition does not match the digest recorded beside it |
 | 20 | an install is already here and the mode did not settle what to do about it, a factory reset was not confirmed, or this run's directories are not the installed ones |
@@ -198,6 +198,32 @@ terminal and refuses without one. It will not guess, because one of the two answ
 destroys data and the other does not, and a prompt that blocks a cron job forever is
 worse than a refusal that names the flag.
 
+### The credentials in that same `.env` are kept, not re-guessed
+
+`SSH_KEY_FILE` and `KNOWN_HOSTS_FILE` are in the same file and were not held to
+anything, and giving `--ssh-key` and `--known-hosts` defaults is what made that bite. A
+host first installed with those flags pointing at, say, `~/.ssh/backup_ed25519` and
+then re-run bare took the defaults instead, generated a fresh keypair under
+`<prefix>/secrets`, rewrote the `.env` to name it, and brought the stack back up
+holding a key no source has ever authorised, with the pinned host keys replaced by an
+empty file. Nothing refused, the engine came up healthy, and every backup after it
+failed to authenticate.
+
+So `preflight` and `install` now read those two keys back and keep them. The asymmetry
+with the three directories above is deliberate. There you typed a flag and the two
+answers disagree, so naming the disagreement is the only honest move. Here you typed
+nothing: one side is a value computed from `--prefix` and the other is what the
+deployment actually runs on, and preferring the evidence over the guess ignores nobody.
+Each adoption is printed.
+
+A flag you do type still wins, and the line it prints names the path being left behind,
+because rotating a key is a real operation and doing it without saying so is not.
+
+The one case that is never filled in is an `.env` naming a path with no file at it:
+that refuses (exit 17) and names both the path and the `.env` it came from. Generating
+a replacement there is the same silent wrong key by another route, and
+`container/compose.yaml` mounts both with `:?` so the stack could not start anyway.
+
 ## Compatibility: `--if-installed` is gone
 
 `--if-installed {converge,refuse}` was removed and reconciled into `--mode`:
@@ -248,6 +274,12 @@ and `install` verify the embedded definition against that digest before anything
 staged, and refuse with exit 19 if the script has been edited since it was generated.
 Truncation would be loud anyway, because Python stops parsing. A changed mount, network
 or healthcheck would not be, and that is the one the digest catches.
+
+`<prefix>/compose.yaml` is restaged on every run, which is how a runtime-contract
+change reaches an installed host. When the file being replaced is not the one going in,
+the installer says so and points at the `.env` beside it, because that is where
+anything varying per host belongs. It is a notice and not a refusal: refusing would
+block every upgrade carrying a legitimate runtime change, which is most of them.
 
 Running the installer **from inside a checkout does not install that checkout's**
 `container/compose.yaml`. It installs the embedded copy, like everywhere else, because
