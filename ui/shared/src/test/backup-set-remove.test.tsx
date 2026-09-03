@@ -7,7 +7,8 @@ import type { BackupManagerApi } from "@shared/api/contracts";
 import { BackupManagerError } from "@shared/api/contracts";
 import { createMockApi, resetMockFixtures } from "@shared/api/mock";
 import type { BackupSet } from "@shared/types/backup";
-import { resetGraphForTests } from "@shared/state/graph";
+import { graph, resetGraphForTests, useCausl } from "@shared/state/graph";
+import { setsNode } from "@shared/state/appNodes";
 import { backupSetPath } from "@shared/utilities/routes";
 
 /**
@@ -43,11 +44,42 @@ function renderDetailWithList(source: string, set: string, api: BackupManagerApi
   );
 }
 
-/** The mock's first set, read through a SEPARATE mock instance so the one
- *  under test keeps its own untouched copy: removeSet mutates the fixture,
- *  which is the point of that fake. */
+/** The mock's first set. Every createMockApi() shares one SETS fixture,
+ *  so this is the same set the api under test will remove; it is read
+ *  before any removal, and listSets projects fresh objects, which is what
+ *  keeps the copy this test holds honest after the fixture changes. */
 async function firstSet(): Promise<BackupSet> {
   return (await createMockApi().listSets())[0];
+}
+
+/** A /sets route that reads the SAME shared node BackupSetsPage renders
+ *  from, so "the list the operator lands on" is something a test can
+ *  read rather than a heading it has to trust. */
+function SetsFromNode() {
+  const sets = useCausl(setsNode);
+  return (
+    <>
+      <h1>Backup sets</h1>
+      <ul>
+        {(sets.data ?? []).map((s) => (
+          <li key={s.id}>{s.name}</li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function renderDetailWithNodeBackedList(source: string, set: string, api: BackupManagerApi) {
+  return render(
+    <MemoryRouter initialEntries={[backupSetPath(source, set)]}>
+      <ApiProvider api={api}>
+        <Routes>
+          <Route path="/sets/:source/:set" element={<BackupSetDetailPage readOnly={false} />} />
+          <Route path="/sets" element={<SetsFromNode />} />
+        </Routes>
+      </ApiProvider>
+    </MemoryRouter>
+  );
 }
 
 const REMOVE_BUTTON = /^Remove set configuration/;
@@ -136,6 +168,85 @@ describe("removing a backup set from the detail page", () => {
     expect(await screen.findByText(/The configuration file is not writable\./)).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Backup sets" })).toBeNull();
     expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toBeTruthy();
+  });
+
+  it("lands on a sets list that no longer shows the removed set", async () => {
+    // BackupSetsPage renders the shared setsNode, which App fetches once
+    // on mount and then only on the 30-second poll. Navigating does not
+    // remount App, so a removal that only navigated landed the operator
+    // on a list still showing the set they had just confirmed removing,
+    // for up to thirty seconds: the original defect with the truth value
+    // flipped. The create path refreshes the node before it navigates,
+    // and says why; this is its mirror image.
+    const api = createMockApi();
+    const all = await api.listSets();
+    const target = all[0];
+    const other = all[1];
+    if (!other) throw new Error("the mock fixture needs at least two sets for this to mean anything");
+    graph.commit("test/seed-sets", (tx) => tx.set(setsNode, { data: all, error: null, loading: false }));
+
+    renderDetailWithNodeBackedList(target.source, target.set, api);
+    await screen.findByText(target.name);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: REMOVE_BUTTON }));
+    });
+    await screen.findByRole("button", { name: CONFIRM_BUTTON });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
+    });
+
+    await screen.findByRole("heading", { name: "Backup sets" });
+    // The control first: the other set is listed, so an absent name
+    // below is a refreshed list and not an empty one.
+    expect(await screen.findByText(other.name)).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(target.name)).toBeNull());
+  });
+
+  it("treats a set that is already gone as removed rather than as a failure", async () => {
+    // 404 BACKUP_SET_NOT_FOUND is the answer both to a name this
+    // deployment never had and to a set an earlier call (a lost
+    // response, a second tab) already removed. The page knows which set
+    // it just asked about, so it is the one place that can tell them
+    // apart, and painting a red error under a destructive dialog for a
+    // removal that succeeded is the confidence failure #391 is about,
+    // arriving through the retry door.
+    const api = createMockApi();
+    const target = await firstSet();
+
+    await openRemoveDialog(api, target);
+    // Someone else removes it first, through the same shared fixture.
+    await createMockApi().removeSet(target.source, target.set);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
+    });
+
+    expect(await screen.findByRole("heading", { name: "Backup sets" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("still reports every other refusal and stays put", async () => {
+    // The branch above must be exactly one code wide. A refusal that is
+    // not "it is already gone" keeps the dialog open with the reason in
+    // it, and this is the case that proves the not-found branch did not
+    // swallow everything.
+    const api = createMockApi();
+    vi.spyOn(api, "removeSet").mockRejectedValue(
+      new BackupManagerError({
+        code: "INTERNAL",
+        message: "unused",
+        correlationId: "cid_test"
+      })
+    );
+    const target = await firstSet();
+
+    await openRemoveDialog(api, target);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
+    });
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Backup sets" })).toBeNull();
   });
 
   it("offers no removal at all on a read-only surface", async () => {

@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "ea21c2c6029cf877087ae5b841d934080750cbf8f7f75abd4511efd68b297d40";
+export const CONTRACT_SHA256 = "00601e396d842141a7d46e5dbe83f7b8561b462f864e47848b888b36db5970b6";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -741,7 +741,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-      404: ["ARTIFACT_NOT_FOUND"],
+      404: ["ARTIFACT_NOT_FOUND", "BACKUP_SET_NOT_FOUND"],
       409: ["ARTIFACT_NOT_QUARANTINED", "REINSTATEMENT_REFUSED"],
       500: ["INTERNAL"],
     }
@@ -761,7 +761,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-      404: ["ARTIFACT_NOT_FOUND"],
+      404: ["ARTIFACT_NOT_FOUND", "BACKUP_SET_NOT_FOUND"],
       409: ["ARTIFACT_NOT_QUARANTINED", "ARTIFACT_IRRECOVERABLE"],
       500: ["INTERNAL"],
     }
@@ -781,7 +781,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     errorCodes: {
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
-      404: ["ARTIFACT_NOT_FOUND"],
+      404: ["ARTIFACT_NOT_FOUND", "BACKUP_SET_NOT_FOUND"],
       409: ["ARTIFACT_NOT_QUARANTINED"],
       500: ["INTERNAL"],
     }

@@ -874,14 +874,19 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     // with once. Removing it also means a test can assert the set is gone
     // afterwards instead of only that a spy was called.
     //
-    // A set that is not there is rejected the way getSet rejects one, so
-    // a caller sees the same typed failure a real 404 produces.
+    // A set that is not there is rejected with the CONTRACT's code for
+    // it, BACKUP_SET_NOT_FOUND, and not the "unknown" its siblings above
+    // use: the detail page branches on that code to tell "already gone"
+    // from every other refusal, and a mock that could not produce it
+    // would leave that branch untestable through the mock, which is the
+    // green-by-construction shape check-client-paths.sh's own header
+    // warns about, one layer down.
     removeSet: (source: string, set: string) => {
       const at = SETS.findIndex((s) => s.source === source && s.set === set);
       if (at < 0)
         return Promise.reject(
           new BackupManagerError({
-            code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
+            code: "BACKUP_SET_NOT_FOUND", message: "no such backup set", correlationId: "cid_mock404"
           })
         );
       SETS.splice(at, 1);

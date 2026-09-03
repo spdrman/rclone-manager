@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useResource } from "@shared/state/resource";
+import { fetchResource, useResource } from "@shared/state/resource";
 import { graph, useCausl } from "@shared/state/graph";
-import { versionNode } from "@shared/state/appNodes";
+import { setsNode, versionNode } from "@shared/state/appNodes";
 import {
   captureSetEditSnapshot,
   currentSetActivityNode,
@@ -741,7 +741,13 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
           collecting. On success the page NAVIGATES rather than reloading:
           the set it is showing does not exist any more, so re-reading it
           would put a 404 error state in front of somebody whose action
-          had just worked. */}
+          had just worked. It refreshes the shared setsNode before it
+          goes, because BackupSetsPage renders that node and App fetches
+          it once on mount and then only on its poll; navigating does not
+          remount App, so without the refresh the list the operator lands
+          on still shows the set they just removed, for up to thirty
+          seconds. Same refresh, same reason, as the create path in
+          BackupSetWizardPage. */}
       <ConfirmationDialog
         open={removeOpen}
         destructive
@@ -756,13 +762,27 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         onConfirm={() => {
           setRemoving(true);
           setRemoveError(null);
+          const landOnTheList = () => {
+            setRemoveOpen(false);
+            fetchResource(setsNode, () => api.listSets());
+            navigate("/sets");
+          };
           void api
             .removeSet(s.source, s.set)
-            .then(() => {
-              setRemoveOpen(false);
-              navigate("/sets");
-            })
+            .then(landOnTheList)
             .catch((e: unknown) => {
+              // 404 BACKUP_SET_NOT_FOUND is one code for two situations: a
+              // name this deployment never had, and a set an earlier call
+              // already removed (a lost response, a second tab, a retry).
+              // The route cannot tell them apart and says so; this page
+              // knows exactly which set it asked about, so it is the one
+              // place that can, and the second case is a removal that
+              // worked. Every other refusal keeps the dialog open with the
+              // reason in it, which is the other half of the promise.
+              if (apiErrorOf(e)?.code === "BACKUP_SET_NOT_FOUND") {
+                landOnTheList();
+                return;
+              }
               setRemoveError(
                 describeFailure(e, "Backup Manager could not remove this backup set's configuration.").message
               );
