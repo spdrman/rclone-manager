@@ -548,3 +548,194 @@ func TestFetch_SaysSoInTheEventStreamWhenNothingGotThrough(t *testing.T) {
 		t.Errorf("nothing in the event stream says this fetch backed nothing up.\nstream:\n%s", stream.String())
 	}
 }
+
+// --- issue #412: a cycle whose report covers no backup sets at all ---
+
+// cycleErrors pulls every op="cycle" error message out of an event
+// stream, which is the one place reportBarrenSets writes a cycle-level
+// verdict (issue #361's per-set one and issue #412's whole-cycle one).
+// Reading the stream rather than a return value is the point: `daemon`
+// has no exit status, so this is the only channel it can say any of this
+// on.
+func cycleErrors(t *testing.T, stream string) []string {
+	t.Helper()
+	var found []string
+	for _, line := range strings.Split(strings.TrimSpace(stream), "\n") {
+		if line == "" {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("the event stream carries a line that is not JSON: %q", line)
+		}
+		if event["op"] != "cycle" {
+			continue
+		}
+		if msg, _ := event["error"].(string); msg != "" {
+			found = append(found, msg)
+		}
+	}
+	return found
+}
+
+// TestRunCycle_SaysSoWhenNoBackupSetsAreConfigured is issue #412's first
+// half. reportBarrenSets iterates report.Sets, so a cycle that visited no
+// backup sets at all has nothing to iterate and says nothing: cycle_start
+// and cycle_end are written exactly as they are for a healthy cycle, and
+// a deployment with nothing configured backs nothing up every poll
+// interval, forever, while reading clean.
+//
+// Removing backup sets (issue #391) means a deployment can genuinely end
+// up here, and a fresh install starts here.
+func TestRunCycle_SaysSoWhenNoBackupSetsAreConfigured(t *testing.T) {
+	var stream bytes.Buffer
+	svc := New(testConfig(t), openJournal(t), newRefusingTransport(), obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+
+	report := svc.RunCycle(context.Background())
+	if len(report.Sets) != 0 {
+		t.Fatalf("precondition: report.Sets = %+v, want none for a configuration with no backup sets in it", report.Sets)
+	}
+
+	msgs := cycleErrors(t, stream.String())
+	if len(msgs) != 1 {
+		t.Fatalf("op=cycle errors = %v, want exactly one saying this cycle had no backup sets to run at all.\nstream:\n%s", msgs, stream.String())
+	}
+	if !strings.Contains(msgs[0], "no backup sets are configured") {
+		t.Errorf("message = %q, want it to name this reason specifically: there is nothing configured", msgs[0])
+	}
+	if strings.Contains(msgs[0], "disabled") || strings.Contains(msgs[0], "held") {
+		t.Errorf("message = %q, but nothing is configured here; sending an operator to look for switched-off sets that do not exist is a different problem from the one they have", msgs[0])
+	}
+}
+
+// TestRunCycle_SaysSoWhenEveryConfiguredBackupSetIsDisabled is the second
+// half, and it is the route that already existed before backup sets could
+// be removed: RunCycle skips a disabled set before it is appended to the
+// report, so switching every set off empties report.Sets just as
+// thoroughly as configuring none.
+//
+// It must not be reported in the same words as the empty configuration
+// above. An operator acts on "everything is switched off" by turning
+// something back on, and on "nothing exists" by creating something, and a
+// single message covering both sends half of them to the wrong screen.
+func TestRunCycle_SaysSoWhenEveryConfiguredBackupSetIsDisabled(t *testing.T) {
+	first := testBackupSet(t, t.TempDir())
+	first.RemotePath = ""
+	first.Disabled = true
+	second := testBackupSet(t, t.TempDir())
+	second.Name = "redis"
+	second.ID = mustSetID(t, "production", "redis")
+	second.RemotePath = ""
+	second.Disabled = true
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", first, second)), openJournal(t), newRefusingTransport(), obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+
+	report := svc.RunCycle(context.Background())
+	if len(report.Sets) != 0 {
+		t.Fatalf("precondition: report.Sets = %+v, want none; every set in this fixture is disabled", report.Sets)
+	}
+
+	msgs := cycleErrors(t, stream.String())
+	if len(msgs) != 1 {
+		t.Fatalf("op=cycle errors = %v, want exactly one saying every configured backup set is switched off.\nstream:\n%s", msgs, stream.String())
+	}
+	if strings.Contains(msgs[0], "no backup sets are configured") {
+		t.Errorf("message = %q: two backup sets ARE configured, they are just disabled, and that is a different thing for an operator to fix", msgs[0])
+	}
+	if !strings.Contains(msgs[0], "2 configured") || !strings.Contains(msgs[0], "2 disabled") {
+		t.Errorf("message = %q, want it to name how many backup sets exist and how many of them are disabled", msgs[0])
+	}
+}
+
+// TestRunCycle_SaysSoWhenEveryConfiguredBackupSetIsHeldForEditing is the
+// third route to an empty report and the one a reader is most likely to
+// misdiagnose: an edit hold (issue #350) is skipped in the same place a
+// disabled set is, but it is transient and nobody switched anything off.
+// A message that only ever says "disabled" would have an operator hunting
+// for a setting that is not set.
+func TestRunCycle_SaysSoWhenEveryConfiguredBackupSetIsHeldForEditing(t *testing.T) {
+	bs := testBackupSet(t, t.TempDir())
+	bs.RemotePath = ""
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), newRefusingTransport(), obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+
+	ctx := WithBackupSetHolds(context.Background(), newTestHolds("production/postgres-primary"))
+	report := svc.RunCycle(ctx)
+	if len(report.Sets) != 0 {
+		t.Fatalf("precondition: report.Sets = %+v, want none; this cycle's only backup set is held", report.Sets)
+	}
+
+	msgs := cycleErrors(t, stream.String())
+	if len(msgs) != 1 {
+		t.Fatalf("op=cycle errors = %v, want exactly one saying this cycle ran nothing.\nstream:\n%s", msgs, stream.String())
+	}
+	if !strings.Contains(msgs[0], "1 configured") || !strings.Contains(msgs[0], "1 held") {
+		t.Errorf("message = %q, want it to say the one configured backup set was held rather than leaving a reader to assume somebody disabled it", msgs[0])
+	}
+	if strings.Contains(msgs[0], "1 disabled") {
+		t.Errorf("message = %q: nothing here is disabled, and pointing an operator at a switch nobody flipped is the false alarm issue #350 exists to remove", msgs[0])
+	}
+}
+
+// TestRunCycle_SaysNothingWhenAConfiguredSetGotSomethingThrough is this
+// message's control, and it is the failure mode worse than the bug: a
+// rule that cannot tell an empty cycle from a working one turns every
+// healthy poll interval into an error line.
+func TestRunCycle_SaysNothingWhenAConfiguredSetGotSomethingThrough(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+
+	set := svc.RunCycle(context.Background()).Sets[0]
+	if set.Progress.Durable != 1 {
+		t.Fatalf("precondition: Progress = %+v, want one artifact through; this control only means something against a cycle that really worked", set.Progress)
+	}
+
+	if msgs := cycleErrors(t, stream.String()); len(msgs) != 0 {
+		t.Errorf("a cycle that backed an artifact up wrote %v into the event stream.\nstream:\n%s", msgs, stream.String())
+	}
+}
+
+// TestRunCycle_DoesNotBlameConfigurationForACycleThatWasCancelled is the
+// vacuity guard, the same one CycleVerdict.NothingGotThrough already
+// applies to a stopped pass. A cycle whose context is done breaks out of
+// its loop before the first set, so report.Sets is empty for a reason
+// that has nothing to do with the configuration. Announcing "every
+// configured backup set is disabled" there would put an invented cause in
+// front of an operator whose real one (the shutdown) is in cycle_end one
+// line below.
+func TestRunCycle_DoesNotBlameConfigurationForACycleThatWasCancelled(t *testing.T) {
+	bs := testBackupSet(t, t.TempDir())
+	bs.RemotePath = ""
+
+	tr := newRefusingTransport()
+	tr.put("backup.dump", "cycle payload", epoch.Unix())
+
+	var stream bytes.Buffer
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, obs.New(&stream, obs.LevelInfo))
+	svc.Now = fixedNow(epoch)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report := svc.RunCycle(ctx)
+	if len(report.Sets) != 0 {
+		t.Fatalf("precondition: report.Sets = %+v, want none; this cycle's context was already done", report.Sets)
+	}
+
+	if msgs := cycleErrors(t, stream.String()); len(msgs) != 0 {
+		t.Errorf("a cycle cut short by shutdown reported %v; its one backup set is neither missing nor switched off.\nstream:\n%s", msgs, stream.String())
+	}
+}
