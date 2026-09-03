@@ -60,11 +60,12 @@ func CaptureAll(ctx context.Context, workDir, coreRoot, fixtureDir string) (Corp
 		return corpus, err
 	}
 
-	cliCell, err := captureCLI(ctx, bin, filepath.Join(deployRoot, "config.yaml"), deployRoot)
+	cliCell, usageCell, err := captureCLI(ctx, bin, filepath.Join(deployRoot, "config.yaml"), deployRoot)
 	if err != nil {
 		return corpus, fmt.Errorf("cli cell: %w", err)
 	}
 	corpus.Cells["06-cli-surfaces"] = cliCell
+	corpus.Cells["06b-cli-usage-block"] = usageCell
 
 	retCell, err := captureCLIRetention(ctx, bin, workDir)
 	if err != nil {

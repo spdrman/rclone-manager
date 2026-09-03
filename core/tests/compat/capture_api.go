@@ -82,17 +82,22 @@ func captureAPIContract(contractPath string) (Cell, Cell, error) {
 	for _, name := range sortedAnyKeys(schemas) {
 		s := mapOf(schemas[name])
 		lines = append(lines, fmt.Sprintf("schema %s type=%s", name, typeOf(s)))
-		if enum := anySlice(s["enum"]); len(enum) > 0 {
-			lines = append(lines, fmt.Sprintf("schema %s enum=%s", name, joinAny(enum)))
-		}
+		// One line per enum value rather than one joined line for the set.
+		//
+		// Joined, an enum that GAINS a value reads as a line that
+		// disappeared, so additive-only refuses it, and adding an error
+		// code to a response enum is an ordinary additive change this
+		// repository makes routinely. Split, adding a value adds a line
+		// and passes, and removing one takes a line away and fails, which
+		// is the direction that actually breaks a client. Found by
+		// composing this gate against a main that had just gained
+		// BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED.
+		lines = append(lines, enumLines(fmt.Sprintf("schema %s", name), s)...)
 		required := requiredSet(s)
 		props := mapOf(s["properties"])
 		for _, prop := range sortedAnyKeys(props) {
 			ps := mapOf(props[prop])
 			line := fmt.Sprintf("schema %s.%s type=%s required=%v", name, prop, typeOf(ps), required[prop])
-			if enum := anySlice(ps["enum"]); len(enum) > 0 {
-				line += " enum=" + joinAny(enum)
-			}
 			if ref, ok := ps["$ref"].(string); ok {
 				line += " ref=" + ref
 			}
@@ -100,6 +105,7 @@ func captureAPIContract(contractPath string) (Cell, Cell, error) {
 				line += " items=" + typeOf(items)
 			}
 			lines = append(lines, line)
+			lines = append(lines, enumLines(fmt.Sprintf("schema %s.%s", name, prop), ps)...)
 		}
 	}
 
@@ -111,67 +117,88 @@ func captureAPIContract(contractPath string) (Cell, Cell, error) {
 
 	reqLines := requestRequirements(doc, schemas)
 	if len(reqLines) == 0 {
-		return Cell{}, Cell{}, fmt.Errorf("no request body in %s declares a required property; that is not a contract this check can vouch for", contractPath)
+		return Cell{}, Cell{}, fmt.Errorf("%s declares no operation at all, so there is nothing this check could vouch for", contractPath)
 	}
 	requests := Cell{
-		Certifies: "FR-35, the half additive-only cannot see: a request schema that gains a required property breaks every client that was already sending the old shape, and adding one is an addition, so the additive rule would wave it through. This list is compared exactly.",
-		Rule:      RuleIdentical,
+		Certifies: "FR-35, the half the additive rule cannot see on its own: an EXISTING operation or request schema that gains a requirement breaks every client that was already calling it, and adding a requirement is an addition. One joined line per operation and per schema, so a new endpoint is a new line and an existing endpoint's requirements changing rewrites its line.",
+		Rule:      RuleAdditiveOnly,
 		Lines:     reqLines,
 	}
 
 	return contract, requests, nil
 }
 
-// requestRequirements lists what a caller is obliged to send, over every
-// schema reachable from a request body.
+// requestRequirements lists what a caller is already obliged to send, one
+// joined line per operation and per request schema.
+//
+// Joined, and additive-only, and that combination is the whole design.
+// The break worth catching is an EXISTING operation or an EXISTING schema
+// gaining a requirement, because that is what stops a client that already
+// worked from working. A brand new operation cannot break anybody, and it
+// necessarily arrives with required path parameters of its own, so a
+// line-per-requirement list compared exactly reports every new endpoint as
+// a compatibility break. It did, the first time this gate met a main that
+// had just gained PATCH /backup-sets/{source}/{set}.
+//
+// One line per key fixes both directions at once: a new key is a new line
+// and passes, and an existing key that gains or loses a requirement has
+// its line rewritten, which additive-only reads as the old line
+// disappearing and refuses.
+//
+// Every operation gets a line even when it requires nothing, spelled
+// "(none)". Without that, an operation with no required parameters has no
+// baseline line at all, and adding the first required parameter to it
+// looks like an addition. That is not hypothetical either: the control in
+// scripts/compat/selftest.sh plants exactly that on GET /activity, which
+// requires nothing today.
 func requestRequirements(doc map[string]any, schemas map[string]any) []string {
 	reachable := map[string]bool{}
 	paths, _ := doc["paths"].(map[string]any)
-	for _, p := range sortedAnyKeys(paths) {
-		item := mapOf(paths[p])
-		for _, method := range sortedAnyKeys(item) {
-			op := mapOf(item[method])
-			rb := mapOf(op["requestBody"])
-			if rb == nil {
-				continue
-			}
-			for _, ref := range refsIn(rb) {
-				markReachable(ref, schemas, reachable)
-			}
-		}
-	}
 
 	var lines []string
-	for _, name := range sortedKeysOf(reachable) {
-		s := mapOf(schemas[name])
-		req := requiredSet(s)
-		for _, prop := range sortedKeysOf(req) {
-			lines = append(lines, fmt.Sprintf("request schema %s requires %s", name, prop))
-		}
-	}
-
-	// Required parameters belong here for the identical reason the request
-	// bodies do. A parameter that becomes required takes an existing line
-	// off the additive-only cell and is caught there; a NEW required
-	// parameter only ADDS a line, so additive-only waves it through, and it
-	// breaks every caller that was not already sending it just as surely.
 	for _, p := range sortedAnyKeys(paths) {
 		item := mapOf(paths[p])
 		for _, method := range sortedAnyKeys(item) {
 			op := mapOf(item[method])
+			if op == nil {
+				continue
+			}
+
+			var required []string
 			for _, param := range anySlice(op["parameters"]) {
 				pm := mapOf(param)
-				if r, ok := pm["required"].(bool); !ok || !r {
-					continue
+				if r, ok := pm["required"].(bool); ok && r {
+					required = append(required, fmt.Sprintf("%v(in %v)", pm["name"], pm["in"]))
 				}
-				lines = append(lines, fmt.Sprintf("operation %s %s requires parameter %v (in %v)",
-					strings.ToUpper(method), p, pm["name"], pm["in"]))
+			}
+			sort.Strings(required)
+			lines = append(lines, fmt.Sprintf("operation %s %s requires parameters: %s",
+				strings.ToUpper(method), p, joinOrNone(required)))
+
+			if rb := mapOf(op["requestBody"]); rb != nil {
+				for _, ref := range refsIn(rb) {
+					markReachable(ref, schemas, reachable)
+				}
 			}
 		}
+	}
+
+	for _, name := range sortedKeysOf(reachable) {
+		lines = append(lines, fmt.Sprintf("request schema %s requires: %s",
+			name, joinOrNone(sortedKeysOf(requiredSet(mapOf(schemas[name]))))))
 	}
 
 	sort.Strings(lines)
 	return lines
+}
+
+// joinOrNone spells an empty requirement set out loud, so it has a
+// baseline line to change when it stops being empty.
+func joinOrNone(vs []string) string {
+	if len(vs) == 0 {
+		return "(none)"
+	}
+	return strings.Join(vs, "|")
 }
 
 func markReachable(ref string, schemas map[string]any, seen map[string]bool) {
@@ -259,6 +286,20 @@ func typeOf(s map[string]any) string {
 	return t
 }
 
+// enumLines renders a schema node's enum, one value per line.
+func enumLines(prefix string, node map[string]any) []string {
+	values := anySlice(node["enum"])
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, fmt.Sprintf("%s enum value=%v", prefix, v))
+	}
+	sort.Strings(out)
+	return out
+}
+
 func requiredSet(s map[string]any) map[string]bool {
 	out := map[string]bool{}
 	for _, r := range anySlice(s["required"]) {
@@ -306,13 +347,4 @@ func sortedKeysOf(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func joinAny(vs []any) string {
-	parts := make([]string, 0, len(vs))
-	for _, v := range vs {
-		parts = append(parts, fmt.Sprintf("%v", v))
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, "|")
 }

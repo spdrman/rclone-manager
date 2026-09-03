@@ -68,11 +68,9 @@ type cliCase struct {
 //
 // Of those, only `status` is a read surface EPIC E will touch, and it is
 // the one gap in this cell worth knowing about.
-func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, error) {
+func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, Cell, error) {
 	cases := []cliCase{
 		{"version", []string{"version"}},
-		{"no arguments at all", []string{}},
-		{"an unknown subcommand", []string{"definitely-not-a-command"}},
 		{"sources", []string{"sources", "--config", cfgPath}},
 		{"artifacts, unfiltered", []string{"artifacts", "--config", cfgPath}},
 		{"artifacts, filtered to the source", []string{"artifacts", "--config", cfgPath, "--source", "production"}},
@@ -90,15 +88,50 @@ func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, error) {
 	for _, c := range cases {
 		res, err := runCLI(ctx, bin, c.args, root)
 		if err != nil {
-			return Cell{}, err
+			return Cell{}, Cell{}, err
 		}
 		lines = append(lines, res...)
+	}
+
+	// The two invocations whose whole output is the usage block are their
+	// own cell, compared additively.
+	//
+	// Not to be lenient. The usage text is the one part of this surface
+	// where a pure addition is both routine and harmless: a new subcommand
+	// adds lines and changes nothing an operator was already reading, and
+	// with ten lanes active in this repository that happens often enough
+	// that an exact comparison would train people to regenerate the corpus
+	// without reading it, which is the failure this whole thing exists to
+	// prevent. It happened on the first main this gate met: #350 added
+	// `backup-set create` and `backup-set patch`, twenty-four lines, none
+	// of them touching an existing one.
+	//
+	// Additive-only still refuses everything that matters here. A usage
+	// line that is reworded, a flag that is removed, a subcommand that
+	// disappears: each takes an existing line away and fails. And the
+	// violation this cell family exists to catch, an additive column
+	// rendered where there is no non-local placement, lands in the
+	// artifact detail below, which is compared exactly.
+	var usage []string
+	for _, c := range []cliCase{
+		{"no arguments at all", []string{}},
+		{"an unknown subcommand", []string{"definitely-not-a-command"}},
+	} {
+		res, err := runCLI(ctx, bin, c.args, root)
+		if err != nil {
+			return Cell{}, Cell{}, err
+		}
+		usage = append(usage, res...)
 	}
 
 	return Cell{
 		Certifies: "FR-35 clause 4: every one of these commands prints exactly what it printed before EPIC E, and exits the same way. A medium-free deployment has no non-local placement, so FR-35 allows this surface no additive column either.",
 		Rule:      RuleIdentical,
 		Lines:     lines,
+	}, Cell{
+		Certifies: "FR-35 clause 4, the usage block: a new subcommand may add lines to it, and nothing may reword, remove or renumber a line an operator already reads there.",
+		Rule:      RuleAdditiveOnly,
+		Lines:     usage,
 	}, nil
 }
 

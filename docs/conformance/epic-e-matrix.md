@@ -36,10 +36,20 @@ nobody has looked.
 | `PARTIAL` | Part of the claim is checked and shown to fire; the rest waits on an unlanded issue. The row says which half is which. |
 | `BLOCKED` | The check is specified here and cannot conclude today, because the code it certifies is not merged. Not a pass, and not a fail. The row names the issue. |
 
+Two of the twelve cells are compared additively rather than exactly, and the
+reason is the same in both cases: the surface has a direction in which growth is
+routine and harmless, and an exact comparison there would have people
+regenerating the corpus without reading it. `03-migrated-schema` may gain tables
+and migrations because FR-29 adds both. `06b-cli-usage-block` may gain lines
+because a new subcommand adds them, which #350 did on the first main this gate
+met. Neither may change or lose a line it already has, and the violation the CLI
+family exists to catch, an additive column rendered where there is no non-local
+placement, lands in the artifact detail, which is compared exactly.
+
 `BLOCKED` is a declaration, and like the phase 4 matrix's declarations it is
 checked rather than trusted: `TestTheMatrixDoesNotCiteSuitesThatDoNotExist` in
-`core/tests/compat` reads this file and fails if a `PASS` row cites a path the
-repository does not have. A row cannot be quietly upgraded by editing a word.
+`core/tests/compat` reads this file and fails if a `PASS` or `PARTIAL` row cites
+a path the repository does not have, and fails if no row is BLOCKED at all. A row cannot be quietly upgraded by editing a word.
 
 ## Where the checks live
 
@@ -79,7 +89,7 @@ from the same run rather than a capture against a file.
 | P2.4 | BLOCKED (#239) | Prune against a medium refuses on identity mismatch, and the mandatory dry-run names the medium for every proposed deletion. | #239's prune extension | The spec's own: a fixture that swaps the object behind a key before prune. The local half of the same rule is live and caught: cell `05-prune-verdicts` goes red when prune is mutated to delete a file it could not stat instead of refusing. |
 | P2.5 | BLOCKED (#240) | A tier-to-medium settings save without the disclosure acknowledgment is refused by the API, with allow and deny tests. | #240's settings handler | A save that carries no acknowledgment and is accepted. |
 | P2.6 | PARTIAL (#241) | An artifact on an archive class shows `requires_restore`, a restore is a durable operation surviving restart, and no surface anywhere renders a cost figure or an invented ETA. | `TestTheContractServesNoCostFigureAndNoInventedETA` in `core/tests/compat` | The no-cost half is live and caught, in both directions: a cost field and an invented ETA plus a percentage each turn the check red, and the rule is tested against strings it must match and strings it must not. BLOCKED is the archive half, which needs #241's states and restore operation. |
-| P2.7 | PASS | FR-35 holds: a deployment upgraded with a medium-free config shows zero behavioral difference through config validation, retention verdicts, API responses (minus additive fields) and CLI output. | `core/tests/compat`, eleven cells | The spec's own: a migration variant that rewrites `retention_tier` during backfill. Run, caught by cell `10-upgraded-artifact-rows`, and caught again by `TestUpgradingAndInstallingFreshAgreeWithEachOther` when the corpus is regenerated around it. |
+| P2.7 | PASS | FR-35 holds: a deployment upgraded with a medium-free config shows zero behavioral difference through config validation, retention verdicts, API responses (minus additive fields) and CLI output. | `core/tests/compat`, twelve cells | The spec's own: a migration variant that rewrites `retention_tier` during backfill. Run, caught by cell `10-upgraded-artifact-rows`, and caught again by `TestUpgradingAndInstallingFreshAgreeWithEachOther` when the corpus is regenerated around it. |
 | P2.8 | PARTIAL | `check-contract-drift.sh` and `check-client-paths.sh` pass with the new operations; the layer manifest classifies every new file; `verify-core-without-distribution.sh` still passes. | `scripts/api/check-contract-drift.sh`, `scripts/api/check-client-paths.sh`, `scripts/architecture/check-layer-manifest.sh`, `scripts/architecture/verify-core-without-distribution.sh` | All four already run in `scripts/ci-local.sh` and all four already have mutation self-tests. What is not yet true is "with the new operations", because there are none: this row goes to PASS when the API lane lands and these keep passing. |
 
 ## Section 4 planted violations

@@ -251,6 +251,21 @@ open(p, "w").write(s.replace(old, new, 1))
 PY
 expect_cell_fails "the retention preview line growing a medium column for a local-only deployment" "$d" "07-cli-retention-preview"
 
+d=$(mutant cli-usage-line-reworded)
+# The usage block is compared additively so a new subcommand does not
+# force a regeneration. This is the other direction: a line an operator
+# already reads, quietly reworded.
+python3 - "$d/core/cmd/backup-manager/main.go" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = "  reconcile                                      run FR-17 reconciliation for every backup set"
+assert old in s, "the usage block no longer has the line this control rewords"
+open(p, "w").write(s.replace(old, "  reconcile                                      reconcile every backup set", 1))
+PYEOF
+expect_cell_fails "a usage line reworded under an operator who already read it" "$d" \
+  "06b-cli-usage-block"
+
 echo
 echo "==> what the /api/v1 contract already promises"
 
@@ -370,7 +385,7 @@ python3 - "$d/docs/conformance/epic-e-matrix.md" <<'PYEOF'
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = "`core/tests/compat`, eleven cells"
+old = "`core/tests/compat`, twelve cells"
 assert old in s, "the P2.7 row no longer has the shape this control mutates"
 open(p, "w").write(s.replace(old, "`core/tests/there-is-no-such-suite`", 1))
 PYEOF
