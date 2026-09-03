@@ -2,7 +2,6 @@ package rclone_test
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -189,5 +188,4 @@ func requireNotFound(t *testing.T, err error, op string) {
 		t.Fatalf("%s: classified as %v (recognised=%v), want %s. The bucket-absent check has swallowed a genuine absence, "+
 			"which is the opposite mistake and just as bad: %v", op, category, ok, transport.NotFound, err)
 	}
-	_ = errors.Is(err, os.ErrNotExist) // documented non-requirement; the category is the contract
 }
