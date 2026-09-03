@@ -390,6 +390,55 @@ func TestRemoveBackupSet_UnknownIDIsRefusedAndPausesNothing(t *testing.T) {
 	}
 }
 
+// TestRemoveBackupSet_AFailedWriteGivesTheHoldBack covers the refusals
+// that happen AFTER the hold has been taken, which is the half
+// TestRemoveBackupSet_UnknownIDIsRefusedAndPausesNothing above cannot
+// reach: an unknown id is turned away before the registry is touched at
+// all, so that test would pass against a removal that never gave a hold
+// back.
+//
+// This one gets past that check and fails at the write, and the property
+// it protects is the worst outcome available on this path: a removal that
+// refused, left the set configured, and left it permanently held would be
+// a backup set that silently stops backing up with nothing anywhere
+// saying why. The lease that covers an edit hold does not cover this one,
+// deliberately, so giving it back is the only thing that can.
+//
+// The write is made to fail by taking write permission off the directory
+// the configuration lives in, so writeConfigBytesAtomically cannot create
+// its temporary file. Skipped for root, which ignores the mode bits.
+func TestRemoveBackupSet_AFailedWriteGivesTheHoldBack(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: file mode bits do not stop a write, so this cannot fail the way it needs to")
+	}
+	svc, configPath, _, _ := openRemovalFixtureService(t)
+
+	dir := filepath.Dir(configPath)
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("Stat(%s): %v", dir, err)
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("Chmod(%s): %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, info.Mode()) })
+
+	if err := svc.RemoveBackupSet(context.Background(), "production/alpha"); err == nil {
+		t.Fatal("RemoveBackupSet succeeded against a configuration directory it cannot write to")
+	}
+
+	if svc.holds.Held("production/alpha") {
+		t.Error("the removal failed and production/alpha is still held. It is still configured, its hold does not expire, " +
+			"and nothing anywhere would say why it had stopped backing up")
+	}
+
+	// The control: the set really is still configured, so the assertion
+	// above is about a set that matters rather than one already gone.
+	if _, err := svc.GetBackupSet(context.Background(), "production/alpha"); err != nil {
+		t.Errorf("GetBackupSet(production/alpha) after a failed removal: %v, want the set to still be configured", err)
+	}
+}
+
 // TestRemoveBackupSet_SecondRemovalIsRefusedRatherThanReportedAsSuccess
 // pins the idempotency decision rather than leaving it to fall out.
 //
