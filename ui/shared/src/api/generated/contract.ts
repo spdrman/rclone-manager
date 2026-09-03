@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "ba0837e1c37937b981bc24baaf0bf4268b587766bba8a38075df1ee5c75aadb4";
+export const CONTRACT_SHA256 = "2c1f5ca4ae57a54e9f6a6494662509c423a9a4557c3753d9bbca664014ddc951";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -455,6 +455,67 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
+    }
+  },
+  {
+    id: "clearBackupSetRetention",
+    method: "DELETE",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "getBackupSetRetention",
+    method: "GET",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: false,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      401: ["UNAUTHENTICATED"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "setBackupSetRetention",
+    method: "PUT",
+    path: "/backup-sets/{source}/{set}/retention",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "RetentionOverride",
+    responseSchema: "BackupSetRetention",
+    successStatus: 200,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
+      503: ["NOT_CONFIGURED"],
     }
   },
   {
@@ -997,6 +1058,7 @@ export interface WireBackupSet {
   port: number;
   read_only: boolean;
   remote_path: string;
+  retention_is_override: boolean;
   source_name: string;
   stable_for_seconds: number;
   user: string;
@@ -1049,6 +1111,20 @@ export interface WireBackupSetHealth {
   state: "HEALTHY" | "DEGRADED" | "STALE" | "FAILING";
   storage_level?: "OK" | "WARNING" | "CRITICAL";
   total_bytes?: number;
+}
+
+/** Which retention policy one backup set is retained under, and where
+ *  that policy came from. All of it is served together because 'what
+ *  is deciding' and 'is that this set's own or the deployment's' are
+ *  one question for an operator reading a preview that is about to
+ *  delete something, and answering it in two calls is how a surface
+ *  shows a chain beside the wrong attribution. */
+export interface WireBackupSetRetention {
+  backup_set_id: string;
+  deployment: WireRetentionSettings;
+  effective: WireRetentionSettings;
+  is_override: boolean;
+  override?: WireRetentionOverride;
 }
 
 /** Everything it takes to DESCRIBE one backup set: where it reads
@@ -1354,6 +1430,27 @@ export interface WireOperationProgress {
   stage: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
 }
 
+/** One backup set's OWN retention policy, exactly as its
+ *  configuration file carries it: unresolved, with every omitted
+ *  field still omitted. An override names the WHOLE chain (a tiers
+ *  list, or all three of daily_days, weekly_months and
+ *  monthly_months) and half a chain is refused, because completing
+ *  the missing half from the product defaults is how a set silently
+ *  ends up retaining less than the operator who wrote the
+ *  deployment's policy believes. Everything that is not the chain
+ *  inherits from the deployment's resolved policy when omitted, so an
+ *  override that names no timezone is reckoned in the deployment's,
+ *  not in UTC. */
+export interface WireRetentionOverride {
+  daily_days?: number;
+  monthly_months?: number;
+  protect_last_known_good?: boolean;
+  tiers?: WireRetentionTier[];
+  timezone?: string;
+  week_starts_on?: string;
+  weekly_months?: number;
+}
+
 /** A server-computed retention plan. The client may only apply one by
  *  id; it never proposes what to delete. */
 export interface WireRetentionPlan {
@@ -1366,6 +1463,8 @@ export interface WireRetentionPlan {
   operation_id?: string;
   plan_id: string;
   reclaim_bytes: number;
+  retention: WireRetentionSettings;
+  retention_is_override: boolean;
   verdicts: WireRetentionVerdict[];
 }
 
@@ -1392,10 +1491,14 @@ export interface WireRetentionSettings {
 
 /** One link in the retention chain, on the wire. The same shape is
  *  read and written, so a client round-trips exactly what it was
- *  served. */
+ *  served. That round trip is why every field a tier can carry is
+ *  here: a chain write REPLACES the whole chain, so a field this
+ *  shape omits is a field the save deletes from the operator's
+ *  configuration file. */
 export interface WireRetentionTier {
   granularity: string;
   keep: number;
+  medium?: string;
   name: string;
   period_days?: number;
   window_unit?: string;

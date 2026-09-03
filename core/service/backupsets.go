@@ -146,6 +146,19 @@ type BackupSet struct {
 	// default separately, and never needs to: it never has to reconstruct
 	// what a hand-edited config.yaml already answered.
 	ReadOnly bool
+
+	// RetentionIsOverride reports whether this backup set declares its own
+	// retention policy rather than being retained under the deployment's
+	// (issue #333, config.BackupSet.RetentionIsOverride).
+	//
+	// The policy itself is deliberately NOT here. It is a whole chain of
+	// arbitrary length, every list of backup sets would carry one copy per
+	// set, and the surface that shows a chain is the one page that can
+	// render it: BackupSetRetention (backupsetretention.go) serves the
+	// resolved chain, the deployment's chain beside it, and the raw
+	// override, on demand. What a LIST needs is which of the two policies
+	// is in force, which is exactly this bool.
+	RetentionIsOverride bool
 }
 
 // CreateBackupSetRequest is what a caller submits to persist one new
@@ -702,6 +715,12 @@ func toServiceBackupSet(sourceName string, bs config.BackupSet) BackupSet {
 		// GetBackupSet read from a state built from an already-validated
 		// Config), so this is never the pre-resolution zero value.
 		ReadOnly: bs.ReadOnly,
+		// bs.RetentionIsOverride(), not a comparison of the resolved chain
+		// against the global one: a set that deliberately pinned a chain
+		// identical to the deployment's is NOT inheriting, and the whole
+		// point of pinning it is that a later edit to the deployment's
+		// policy will not move it.
+		RetentionIsOverride: bs.RetentionIsOverride(),
 	}
 }
 

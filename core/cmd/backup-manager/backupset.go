@@ -81,7 +81,35 @@ import (
 // What patch deliberately cannot change: the set's identity, its SSH key
 // reference and its trusted host-key line. See
 // core/service/backupsetupdate.go's own package doc for each.
+// backupSetVerbs is every verb that brings its OWN flag set, dispatched
+// before this command parses anything (issue #333).
+//
+// create and patch share one flag set and one operand shape, so they keep
+// the switch below. retention cannot: its flags are --daily-days,
+// --policy-file and friends, which declareBackupSetFlags has never heard
+// of, so parsing them against that set would fail before any dispatcher
+// ran. Finding the verb first is what lets the three coexist, and adding
+// a fourth one that owns its flags is a map entry rather than a fourth
+// argument convention.
+//
+// The handler is given the WHOLE argument list, its own verb included,
+// and finds that verb as its first operand. That is what lets a flag
+// appear on either side of it, so `backup-set --config X retention a/b`
+// runs against X exactly as `settings --config X patch` already does. A
+// dispatcher that sliced the verb off would silently drop every flag
+// written before it, which reads as a command that ran against the wrong
+// configuration file rather than as an error.
+var backupSetVerbs = map[string]func([]string) int{
+	"retention": cmdBackupSetRetention,
+}
+
 func cmdBackupSet(args []string) int {
+	for _, a := range args {
+		if verb, ok := backupSetVerbs[a]; ok {
+			return verb(args)
+		}
+	}
+
 	f := declareBackupSetFlags()
 
 	operands, err := parseFlagsAroundOperands(f.fs, args)
@@ -89,7 +117,7 @@ func cmdBackupSet(args []string) int {
 		return 2
 	}
 	if len(operands) != 2 {
-		return usageError(`backup-set: expected "create <source/backup-set>" or "patch <source/backup-set>", a verb and exactly one backup set id`)
+		return usageError(`backup-set: expected "create <source/backup-set>", "patch <source/backup-set>" or "retention <source/backup-set>", a verb and exactly one backup set id`)
 	}
 	sourceName, name, ok := splitBackupSetID(operands[1])
 	if !ok {
@@ -108,7 +136,7 @@ func cmdBackupSet(args []string) int {
 		}
 		return backupSetPatch(f, operands[1])
 	default:
-		return usageError("backup-set: %q is not a backup-set verb; the verbs are create and patch", operands[0])
+		return usageError("backup-set: %q is not a backup-set verb; the verbs are create, patch and retention", operands[0])
 	}
 }
 
@@ -448,6 +476,21 @@ func probePortFor(port int) int {
 
 // defaultSSHPort is what a backup set with no configured port connects to.
 const defaultSSHPort = 22
+
+// isBackupSetID reports whether id has a backup set id's shape.
+//
+// A backup set id is exactly source/name (core/internal/model's own rule),
+// so a value with no separator, two of them, or an empty half is refused
+// by the caller with a message that says what the shape is, rather than
+// reaching the service and coming back as a not-found for something that
+// was never an id at all.
+//
+// splitBackupSetID below answers the same question and returns the halves
+// with it; this is for the one caller that needs only the answer.
+func isBackupSetID(id string) bool {
+	_, _, ok := splitBackupSetID(id)
+	return ok
+}
 
 // splitBackupSetID splits "source/name" into its two halves, reporting
 // false for anything that is not exactly that. An id with no slash, two

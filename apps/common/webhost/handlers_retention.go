@@ -71,6 +71,21 @@ type retentionPlanResponse struct {
 	ReclaimBytes      int64                      `json:"reclaim_bytes"`
 	OperationID       string                     `json:"operation_id,omitempty"`
 	Verdicts          []retentionVerdictResponse `json:"verdicts"`
+
+	// Retention is the policy these verdicts were decided under, and
+	// RetentionIsOverride says whether it is this backup set's own or the
+	// deployment's (issue #333).
+	//
+	// A preview is read to answer "why is this artifact about to be
+	// deleted", and that question has a different answer, and a different
+	// place to go and fix it, depending on which policy was in force.
+	// Both travel with the plan rather than being fetched separately,
+	// because a plan is pinned to the configuration revision it was
+	// computed against and a second read is not: a client that fetched
+	// the attribution on its own could render a chain beside the wrong
+	// source.
+	Retention           retentionSettingsBody `json:"retention"`
+	RetentionIsOverride bool                  `json:"retention_is_override"`
 }
 
 func toRetentionPlanResponse(p service.RetentionPlan) retentionPlanResponse {
@@ -101,6 +116,9 @@ func toRetentionPlanResponse(p service.RetentionPlan) retentionPlanResponse {
 		ReclaimBytes:      p.ReclaimBytes,
 		OperationID:       p.OperationID,
 		Verdicts:          verdicts,
+
+		Retention:           toRetentionSettingsBody(p.Retention),
+		RetentionIsOverride: p.RetentionIsOverride,
 	}
 }
 

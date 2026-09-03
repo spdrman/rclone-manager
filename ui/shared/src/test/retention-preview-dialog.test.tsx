@@ -22,6 +22,17 @@ const PLAN: RetentionPlan = {
   expiresAt: EXPIRES_AT,
   keepCount: 1,
   deleteCount: 1,
+  // Issue #333: which policy decided these verdicts. Deliberately the
+  // set's OWN policy, and a chain that is not the product default, so a
+  // dialog that lost the attribution or fell back to a hardcoded chain
+  // shows something visibly wrong rather than something plausible.
+  retention: {
+    timezone: "Europe/Berlin",
+    weekStartsOn: "monday",
+    protectLastKnownGood: true,
+    tiers: [{ name: "daily", granularity: "day", keep: 4 }]
+  },
+  retentionIsOverride: true,
   reclaimBytes: 2048,
   verdicts: [
     { artifact: "a.dump", action: "KEEP", reason: "GFS daily tier", tiers: [{ tier: "DAILY", selectedBy: "BOTH" }, { tier: "LAST_KNOWN_GOOD", selectedBy: "PROTECTION" }] },
@@ -112,6 +123,40 @@ describe("RetentionPreviewDialog", () => {
     // The refuse row is not an alert — it is the plan working as intended.
     const refuseRow = screen.getByText(/sibling-prefix directory/).closest("li");
     expect(refuseRow?.getAttribute("role")).not.toBe("alert");
+  });
+
+  // Issue #333: which policy produced these verdicts. This is the dialog
+  // that asks an operator to authorise a deletion, and "why is this
+  // backup on the delete list" has a different answer, and a different
+  // place to go and change it, depending on whether this set's own chain
+  // or the deployment's decided it.
+  //
+  // Both branches are driven, because a dialog that had hardcoded either
+  // sentence would pass a test that only checked the other one.
+  it("names the policy the verdicts were decided under, on both branches", async () => {
+    const own = apiWith({});
+    const { unmount } = render(
+      <ApiProvider api={own}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+    await screen.findByText(/Decided under this backup set's own retention policy/);
+    // And the chain itself, not only the attribution: "this set's own"
+    // beside the wrong chain is still wrong.
+    expect(screen.getByText(/daily 4/)).toBeTruthy();
+    unmount();
+    resetGraphForTests();
+
+    const inherited = apiWith({
+      previewRetention: () =>
+        Promise.resolve({ ...PLAN, retentionIsOverride: false })
+    });
+    render(
+      <ApiProvider api={inherited}>
+        <RetentionPreviewDialog source="production" set="postgres-primary" open onClose={() => {}} />
+      </ApiProvider>
+    );
+    await screen.findByText(/Decided under the deployment's retention policy/);
   });
 
   it("badges a KEEP verdict from an operator-defined tier under its own name, never as \"unclassified\"", async () => {

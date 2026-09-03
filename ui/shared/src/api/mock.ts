@@ -1,6 +1,7 @@
 import type {
   AppSettings,
   BackupManagerApi,
+  BackupSetRetention,
   CapacitySettings,
   CatalogScanPreview,
   ConnectionTestOutcome,
@@ -9,6 +10,8 @@ import type {
   FirstRunResult,
   HostKeyProbeResult,
   ManagerStorage,
+  RetentionOverride,
+  RetentionSettings,
   SSHKeyImportResult,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
@@ -41,14 +44,52 @@ export function scenarioFromLocation(): Scenario {
 const GB = 1024 ** 3;
 const TB = 1024 ** 4;
 
-const defaultRetention = {
-  daily: 7,
-  weekly: 13,
-  monthly: 12,
+/**
+ * The deployment's retention policy this mock reports, and the one every
+ * inheriting set is retained under (issue #333).
+ *
+ * Deliberately NOT the product's own 7/3/12 default: a bug that reaches
+ * for the documented defaults instead of this deployment's policy is the
+ * failure #362 was written to stop, and it is invisible against a fixture
+ * where the two agree.
+ *
+ * The monthly tier names a storage medium, which nothing in this UI edits
+ * yet. It is here because a chain write REPLACES the whole chain, so it
+ * is the fixture that would catch an editor which dropped the field on
+ * the way back out.
+ */
+const deploymentRetention: RetentionSettings = {
   timezone: "Europe/Berlin",
-  weekStartsOn: "monday" as const,
-  protectLastKnownGood: true
+  weekStartsOn: "monday",
+  protectLastKnownGood: true,
+  tiers: [
+    { name: "daily", granularity: "day", keep: 7 },
+    { name: "weekly", granularity: "week", keep: 13, windowUnit: "month" },
+    { name: "monthly", granularity: "month", keep: 12, medium: "cold" }
+  ]
 };
+
+/**
+ * Which sets declare a policy of their own, keyed by "source/set", and
+ * what that raw (unresolved) policy says.
+ *
+ * Two fixture sets override, and each one is a different spelling: the
+ * media archive names a tiers chain, the auth config names the three
+ * scalars. Both are legal, so a surface that could only render one of
+ * them would look correct against half the fixtures.
+ */
+const SET_RETENTION_OVERRIDES: ReadonlyArray<readonly [string, RetentionOverride]> = ([
+  [
+    "media/weekly-archive",
+    {
+      tiers: [
+        { name: "weekly", granularity: "week", keep: 8 },
+        { name: "monthly", granularity: "month", keep: 24, medium: "cold" }
+      ]
+    }
+  ],
+  ["production/auth-config", { dailyDays: 7, weeklyMonths: 4, monthlyMonths: 6 }]
+] as const);
 
 /**
  * The fixture backup sets, and the ONE piece of state in this module that
@@ -70,7 +111,7 @@ const SETS: BackupSet[] = [
     host: "prod-db-01.internal", port: 22, username: "backup-agent",
     remoteFolder: "/backups/postgresql/", includePatterns: ["*.dump.zst"],
     excludePatterns: ["*.tmp", "*.part"], completionMethod: "completion-marker", stableForSeconds: 0,
-    destination: "/data/backups/production/postgres/", retention: defaultRetention,
+    destination: "/data/backups/production/postgres/", retentionIsOverride: false,
     validations: ["transfer", "checksum", "application"],
     state: "healthy",
     stateNote: "Verified nightly dump; application validation passed 42 minutes ago.",
@@ -87,7 +128,7 @@ const SETS: BackupSet[] = [
     host: "billing-db.internal", port: 22, username: "backup-agent",
     remoteFolder: "/srv/backups/mysql/", includePatterns: ["*.sql.gz"],
     excludePatterns: ["*.part"], completionMethod: "atomic-rename", stableForSeconds: 0,
-    destination: "/data/backups/production/billing/", retention: defaultRetention,
+    destination: "/data/backups/production/billing/", retentionIsOverride: false,
     validations: ["transfer", "checksum"],
     state: "stale",
     stateNote: "No verified backup received for 31 hours. Expected within 24 hours.",
@@ -105,7 +146,7 @@ const SETS: BackupSet[] = [
     remoteFolder: "/etc/auth-service/backups/", includePatterns: ["*.tar.zst"],
     excludePatterns: [], completionMethod: "stable-size", stableForSeconds: 300,
     destination: "/data/backups/production/auth/",
-    retention: { ...defaultRetention, weekly: 4, monthly: 6 },
+    retentionIsOverride: true,
     validations: ["transfer", "checksum"],
     state: "failing",
     stateNote: "Halted — the SSH host key changed. Remote artifacts are untouched.",
@@ -123,7 +164,7 @@ const SETS: BackupSet[] = [
     remoteFolder: "/export/weekly/", includePatterns: ["*.tar"],
     excludePatterns: [], completionMethod: "completion-marker", stableForSeconds: 0,
     destination: "/data/backups/media/",
-    retention: { ...defaultRetention, daily: 0, weekly: 8, monthly: 24 },
+    retentionIsOverride: true,
     validations: ["transfer", "checksum"],
     state: "healthy", stateNote: "Weekly cold archive; checksum verification only.",
     // This fixture is the one read-only set (issue #282, #316): a cold
@@ -395,6 +436,64 @@ const VERSION: VersionInfo = {
 };
 
 /**
+ * Resolves one backup set's retention answer the way core/internal/config
+ * does (issue #333): its own policy when it declares one, the
+ * deployment's otherwise, and the calendar inherited either way.
+ *
+ * The inheritance is modelled here rather than faked with two flat
+ * fixtures because it is the behaviour the surface is about: an override
+ * that omits the timezone is reckoned in the DEPLOYMENT's, and a mock
+ * that quietly answered UTC would make the UI look right against a rule
+ * it was breaking.
+ */
+/** Projects the shared backup set fixtures through one mock instance's own
+ *  override map, so the list card and the detail page agree after a write
+ *  the way they would against a real backend that computes both from one
+ *  configuration.
+ *
+ *  Read-time projection rather than a mutation of SETS, because SETS is
+ *  module state shared by every createMockApi() in a test run: writing
+ *  through it would make one test's override visible to the next, which
+ *  is a test-order dependency nothing in the file would explain. */
+function withRetentionAttribution(overrides: Map<string, RetentionOverride>, sets: BackupSet[]): BackupSet[] {
+  return sets.map((s) => ({ ...s, retentionIsOverride: overrides.has(s.id) }));
+}
+
+function mockBackupSetRetention(
+  overrides: Map<string, RetentionOverride>,
+  source: string,
+  set: string
+): BackupSetRetention {
+  const id = source + "/" + set;
+  const override = overrides.get(id);
+  if (!override) {
+    return { backupSetId: id, isOverride: false, effective: deploymentRetention, deployment: deploymentRetention };
+  }
+  return {
+    backupSetId: id,
+    isOverride: true,
+    override,
+    deployment: deploymentRetention,
+    effective: {
+      timezone: override.timezone ?? deploymentRetention.timezone,
+      weekStartsOn: override.weekStartsOn ?? deploymentRetention.weekStartsOn,
+      protectLastKnownGood: override.protectLastKnownGood ?? deploymentRetention.protectLastKnownGood,
+      tiers:
+        override.tiers ??
+        // The three scalars are sugar for exactly this chain
+        // (config.DefaultTierChain), expanded here because the real
+        // backend always reports the RESOLVED chain and a form that had
+        // to know the sugar exists would need two layouts for one policy.
+        [
+          { name: "daily", granularity: "day", keep: override.dailyDays ?? 0 },
+          { name: "weekly", granularity: "week", keep: override.weeklyMonths ?? 0, windowUnit: "month" },
+          { name: "monthly", granularity: "month", keep: override.monthlyMonths ?? 0 }
+        ]
+    }
+  };
+}
+
+/**
  * A fresh RetentionPlan, as apps/common/webhost's real handler would return
  * it (see fromWireRetentionPlan/client.ts) — no `stale` field. `tick` fingerprints
  * "the world as of this preview" the same way the real service's
@@ -403,8 +502,19 @@ const VERSION: VersionInfo = {
  * plan_id, exactly like ApplyRetentionPlan's own single-use, revision-
  * checked contract (core/service/retention.go).
  */
-function retentionPlan(source: string, set: string, tick: number): RetentionPlan {
+function retentionPlan(
+  overrides: Map<string, RetentionOverride>,
+  source: string,
+  set: string,
+  tick: number
+): RetentionPlan {
+  const attribution = mockBackupSetRetention(overrides, source, set);
   return {
+    // Issue #333: which policy decided these verdicts. Taken from the
+    // same per-set state the retention sub-resource serves, so giving a
+    // set its own policy in dev mode moves the preview too.
+    retention: attribution.effective,
+    retentionIsOverride: attribution.isOverride,
     planId: "retplan_mock_" + tick,
     backupSetId: source + "/" + set,
     inventoryRevision: "inv_" + tick,
@@ -479,7 +589,10 @@ function mockBackupSetFromCreateRequest(req: CreateBackupSetRequest): BackupSet 
     completionMethod: completionMethodFromStrategy(req.completionStrategy),
     stableForSeconds: req.stableForSeconds ?? 0,
     destination: req.localPath,
-    retention: defaultRetention,
+    // A newly created set has no policy of its own: it is retained under
+    // the deployment's, which is what a set with no retention block in
+    // config.yaml means.
+    retentionIsOverride: false,
     validations: ["transfer"],
     state: "healthy",
     stateNote: "Created just now; no runs yet.",
@@ -635,6 +748,10 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // ever honors the plan_id from the LATEST tick — anything older is,
   // correctly, stale — mirroring ApplyRetentionPlan's real revision check.
   let retentionTick = 0;
+  // Issue #333: which sets declare a policy of their own, per mock
+  // instance. A copy of the fixture rather than the fixture itself, so a
+  // write in one test cannot be seen by the next.
+  const retentionOverrides = new Map<string, RetentionOverride>(SET_RETENTION_OVERRIDES);
   // Held per mock instance so a PATCH is visible to the next GET, the
   // same way the real backend's hot reload makes a write visible to the
   // next read (issue #140).
@@ -700,7 +817,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     getStorage: () =>
       delay(empty ? STORAGE_EMPTY : scenario === "storage-critical" ? STORAGE_CRITICAL : STORAGE),
 
-    listSets: () => delay(empty ? [] : SETS),
+    listSets: () => delay(empty ? [] : withRetentionAttribution(retentionOverrides, SETS)),
     getSet: (id) => {
       const found = SETS.find((s) => s.id === id);
       // A rejected promise, not a synchronous throw: getSet's own type
@@ -716,7 +833,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             code: "unknown", message: "That backup set no longer exists.", correlationId: "cid_mock404"
           })
         );
-      return delay(found);
+      return delay(withRetentionAttribution(retentionOverrides, [found])[0]);
     },
     runCycle: () => delay(undefined),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
@@ -811,14 +928,45 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
 
     previewRetention: (source, set) => {
       retentionTick += 1;
-      return delay(retentionPlan(source, set, retentionTick));
+      return delay(retentionPlan(retentionOverrides, source, set, retentionTick));
+    },
+
+    // Issue #333's three per-set retention operations. The write half
+    // really applies: setBackupSetRetention stores the submitted policy
+    // and clearBackupSetRetention removes it, so the page re-renders from
+    // state that changed rather than from an echo of its own request, and
+    // a following previewRetention is decided under the new policy.
+    //
+    // The whole-chain rule is NOT modelled here. It lives in
+    // config.Validate and is proved against the real service in
+    // core/service/backupsetretention_test.go; a copy of it in a fixture
+    // would be a second rule that could pass while the real one failed.
+    // The one refusal this mock does carry is the one a form can produce
+    // by itself, which is an empty chain.
+    getBackupSetRetention: (source, set) => delay(mockBackupSetRetention(retentionOverrides, source, set)),
+    setBackupSetRetention: (source, set, policy) => {
+      if (policy.tiers && policy.tiers.length === 0)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "INVALID_REQUEST",
+            message:
+              'retention.tiers must name at least one tier; an empty chain is not "keep nothing", it reinstates the default daily/weekly/monthly policy.',
+            correlationId: "cid_mockchain"
+          })
+        );
+      retentionOverrides.set(source + "/" + set, policy);
+      return delay(mockBackupSetRetention(retentionOverrides, source, set));
+    },
+    clearBackupSetRetention: (source, set) => {
+      retentionOverrides.delete(source + "/" + set);
+      return delay(mockBackupSetRetention(retentionOverrides, source, set));
     },
     applyRetention: (source, set, planId) => {
       // This has to REJECT, not throw synchronously. applyRetention is a
       // Promise, so a bare throw escapes before a promise exists and a
       // caller's .catch() never runs — the one path that must not fail open
       // for a stale retention plan.
-      const current = retentionPlan(source, set, retentionTick);
+      const current = retentionPlan(retentionOverrides, source, set, retentionTick);
       if (planId !== current.planId)
         return Promise.reject(new BackupManagerError({
           // The literal code apps/common/webhost/handlers_retention.go

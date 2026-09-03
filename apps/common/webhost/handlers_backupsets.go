@@ -118,24 +118,35 @@ type backupSetResponse struct {
 	// a caller must be able to tell "not read-only" from "this build does
 	// not report it".
 	ReadOnly bool `json:"read_only"`
+	// RetentionIsOverride is whether this set declares its own retention
+	// policy (issue #333). Never omitted, for the reason ReadOnly above
+	// is not: a list has to be able to tell "retained under the
+	// deployment's policy" from "this build does not report it".
+	//
+	// The chain is not here. A list of sets would carry one copy of a
+	// whole chain per set, and the surface that shows a chain is
+	// /backup-sets/{source}/{set}/retention, which serves it on demand
+	// alongside the deployment's own.
+	RetentionIsOverride bool `json:"retention_is_override"`
 }
 
 func toBackupSetResponse(bs service.BackupSet) backupSetResponse {
 	return backupSetResponse{
-		ID:                 bs.ID,
-		SourceName:         bs.SourceName,
-		Name:               bs.Name,
-		Host:               bs.Host,
-		Port:               bs.Port,
-		User:               bs.User,
-		RemotePath:         bs.RemotePath,
-		LocalPath:          bs.LocalPath,
-		Include:            bs.Include,
-		CompletionStrategy: bs.CompletionStrategy,
-		StableForSeconds:   int(bs.StableFor / time.Second),
-		ValidatorID:        string(bs.ValidatorID),
-		Disabled:           bs.Disabled,
-		ReadOnly:           bs.ReadOnly,
+		ID:                  bs.ID,
+		SourceName:          bs.SourceName,
+		Name:                bs.Name,
+		Host:                bs.Host,
+		Port:                bs.Port,
+		User:                bs.User,
+		RemotePath:          bs.RemotePath,
+		LocalPath:           bs.LocalPath,
+		Include:             bs.Include,
+		CompletionStrategy:  bs.CompletionStrategy,
+		StableForSeconds:    int(bs.StableFor / time.Second),
+		ValidatorID:         string(bs.ValidatorID),
+		Disabled:            bs.Disabled,
+		ReadOnly:            bs.ReadOnly,
+		RetentionIsOverride: bs.RetentionIsOverride,
 	}
 }
 

@@ -65,10 +65,7 @@ function slashIdSet(overrides: Partial<BackupSet> = {}): BackupSet {
     completionMethod: "atomic-rename",
     stableForSeconds: 0,
     destination: "/data/backups/production/api-server/",
-    retention: {
-      daily: 7, weekly: 4, monthly: 6, timezone: "UTC",
-      weekStartsOn: "monday", protectLastKnownGood: true
-    },
+    retentionIsOverride: false,
     validations: ["transfer"],
     state: "healthy",
     stateNote: "Verified nightly.",
