@@ -147,32 +147,74 @@ func resolveKeyFromEnv(name, passphrase string) (obs.Secret, error) {
 // material, once that has been confirmed to parse as an unencrypted SSH
 // private key.
 //
-// argv[0] is the executable; the rest are its literal arguments.
-// exec.CommandContext never invokes a shell, so a shell metacharacter
-// anywhere in argv (";", "|", "$(...)", backticks, "&&", a trailing "&", ...)
-// is inert: it is passed to argv[0] as one literal byte sequence inside a
-// single argument, exactly like every other byte in that argument, never
-// interpreted as a second command, a substitution or a pipeline.
-//
-// The timeout below is rooted in context.Background(), not a ctx this
-// function's caller could supply. sftpConfig, the only caller, does not
-// carry a context of its own today (see adapter.go's fsFor, which owns the
-// context this whole call chain is running under but does not thread it
-// down this far), and adding one is a change to the shape of an existing,
-// well-tested function that this issue's scope does not require: this
-// resolver's own fixed timeout already bounds how long it can run,
-// independent of whatever the caller's context does.
+// The exec discipline it runs under (never a shell, a bounded timeout, a
+// fixed minimal environment, its own process group, bounded and zeroed
+// stdout, stderr surfaced and stdout never) lives in runResolverCommand
+// below, which mediumcreds.go's own command resolver calls too. It is the
+// same code this function always ran; #235 lifted it so the two resolvers
+// cannot drift apart.
 func resolveKeyFromCommand(argv []string, passphrase string) (obs.Secret, error) {
+	stdout, err := runResolverCommand(argv, maxResolvedKeySize)
+	if stdout != nil {
+		defer stdout.zero() // whatever happens, never leave resolved bytes sitting in this buffer
+	}
+	if err != nil {
+		return obs.Secret{}, err
+	}
+
+	secret, err := validateAndWrapKey(stdout.buf.Bytes(), passphrase)
+	if err != nil {
+		return obs.Secret{}, fmt.Errorf("key command %q: %w", argv[0], err)
+	}
+	return secret, nil
+}
+
+// runResolverCommand runs argv and returns its captured stdout, under the
+// custody discipline every secret resolver in this package shares.
+//
+// It exists as one function, rather than once per resolver, because every
+// clause below is a hardening decision, and a hardening that lives in one
+// resolver and not the other is a hardening this package does not actually
+// have. #235 added the second caller (medium credentials, mediumcreds.go);
+// this is the same code resolveKeyFromCommand always ran, lifted rather
+// than copied.
+//
+//   - argv[0] is the executable; the rest are its literal arguments.
+//     exec.CommandContext never invokes a shell, so a shell metacharacter
+//     anywhere in argv (";", "|", "$(...)", backticks, "&&", a trailing
+//     "&", ...) is inert: it reaches argv[0] as one literal byte sequence
+//     inside a single argument, never as a second command, a substitution
+//     or a pipeline.
+//   - a fixed, minimal environment, never this process's own os.Environ():
+//     the resolver command is meant to be self-sufficient, not handed
+//     ambient state this manager holds for something unrelated. Same
+//     reasoning internal/lifecycle/verify.go applies to its own external
+//     validator.
+//   - its own process group, so the timeout can kill whatever it spawned
+//     along with it.
+//   - stdout is bounded and is NEVER surfaced in an error, whatever
+//     happened to it. Stderr is diagnostic text by convention, is bounded
+//     separately, and IS surfaced, because an operator debugging a broken
+//     resolver needs it.
+//
+// The timeout is rooted in context.Background(), not a caller's ctx, for
+// the reason resolveKeyFromCommand's doc has always given: the only call
+// sites are configuration-building functions that carry no context of
+// their own, and this resolver's own fixed timeout already bounds how long
+// it can run.
+//
+// The returned buffer is non-nil whenever a command actually ran, even on
+// failure, so the caller can zero it; callers do that with a deferred
+// stdout.zero().
+func runResolverCommand(argv []string, limit int) (*boundedBuffer, error) {
 	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
-		return obs.Secret{}, errors.New("key command: no executable configured")
+		return nil, errors.New("no executable configured")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), keyCommandTimeout)
 	defer cancel()
 
-	c := exec.CommandContext(ctx, argv[0], argv[1:]...)
-
-	// A fixed, minimal environment, never this process's own os.Environ():
+	c := exec.CommandContext(ctx, argv[0], argv[1:]...) // A fixed, minimal environment, never this process's own os.Environ():
 	// the resolver command is meant to be self-sufficient (an absolute
 	// executable path, any auth it needs already configured on disk or
 	// baked into a wrapper script), not handed ambient state this manager
@@ -195,32 +237,26 @@ func resolveKeyFromCommand(argv []string, passphrase string) (obs.Secret, error)
 	}
 	c.WaitDelay = resolverReapBackstop
 
-	stdout := &boundedBuffer{limit: maxResolvedKeySize}
+	stdout := &boundedBuffer{limit: limit}
 	stderr := &boundedBuffer{limit: maxCapturedStderr}
 	c.Stdout = stdout
 	c.Stderr = stderr
-	defer stdout.zero() // whatever happens below, never leave resolved bytes sitting in this buffer
-
 	runErr := c.Run()
 
 	switch {
 	case ctx.Err() != nil:
-		return obs.Secret{}, fmt.Errorf("key command %q: killed after exceeding its %s timeout", argv[0], keyCommandTimeout)
+		return stdout, fmt.Errorf("command %q: killed after exceeding its %s timeout", argv[0], keyCommandTimeout)
 	case runErr != nil:
 		// Infrastructure failure (bad executable, non-zero exit, ...): the
 		// command's own diagnosis of what went wrong, not its stdout,
 		// which is never surfaced here regardless of whether it happened
 		// to contain anything sensitive.
-		return obs.Secret{}, fmt.Errorf("key command %q: %v (stderr: %s)", argv[0], runErr, stderr.String())
+		return stdout, fmt.Errorf("command %q: %v (stderr: %s)", argv[0], runErr, stderr.String())
 	case stdout.truncated:
-		return obs.Secret{}, fmt.Errorf("key command %q: output exceeded %d bytes, refusing to treat truncated output as key material", argv[0], maxResolvedKeySize)
+		return stdout, fmt.Errorf("command %q: output exceeded %d bytes, refusing to treat truncated output as secret material", argv[0], limit)
 	}
 
-	secret, err := validateAndWrapKey(stdout.buf.Bytes(), passphrase)
-	if err != nil {
-		return obs.Secret{}, fmt.Errorf("key command %q: %w", argv[0], err)
-	}
-	return secret, nil
+	return stdout, nil
 }
 
 // validateAndWrapKey is the one place raw resolver output is checked and, if

@@ -1,9 +1,11 @@
 // Package rclone is the only package in this repository that imports rclone.
 //
-// Exactly two backends are registered. Importing all of them for convenience
-// would cost binary size, dependency surface, initialization complexity and
-// accidental configuration exposure, so a third backend is an architecture
-// decision rather than an import line (FR-4).
+// Exactly three backends are registered. Importing all of them for
+// convenience would cost binary size, dependency surface, initialization
+// complexity and accidental configuration exposure, so each one is an
+// architecture decision rather than an import line (FR-4). local and sftp
+// are FR-4's own two; s3 is EPIC E's FR-28, and it is the entire S3
+// implementation this product has, in Go and in TypeScript alike.
 package rclone
 
 import (
@@ -12,11 +14,14 @@ import (
 	"fmt"
 	"sort"
 
-	// local and sftp are the two backends FR-4 requires. Importing them,
-	// together with fs/operations below, also registers crypt transitively.
-	// See backends.go for the traced cause, why it's accepted rather than
-	// removed, and the test that keeps this exact set enforced.
+	// local and sftp are the two backends FR-4 requires, and s3 is the
+	// third, added by EPIC E's FR-28 as the storage-medium implementation.
+	// Importing them, together with fs/operations below, also registers
+	// crypt transitively. See backends.go for the traced cause, why it's
+	// accepted rather than removed, the measured cost of s3, and the test
+	// that keeps this exact set enforced.
 	_ "github.com/rclone/rclone/backend/local"
+	_ "github.com/rclone/rclone/backend/s3"
 	_ "github.com/rclone/rclone/backend/sftp"
 
 	"github.com/rclone/rclone/fs"

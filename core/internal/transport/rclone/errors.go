@@ -50,6 +50,8 @@ import (
 	"os"
 	"strings"
 
+	"net"
+
 	rclonefs "github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fserrors"
 	rclonehash "github.com/rclone/rclone/fs/hash"
@@ -117,6 +119,28 @@ func Classify(err error) transport.Category {
 	// dependency-authored text rather than a Go value.
 	if strings.Contains(err.Error(), "unable to authenticate") {
 		return transport.Authentication
+	}
+
+	// The S3 verdicts (EPIC E, FR-28). They come first among the
+	// backend-specific checks because an S3 API error is a precise,
+	// documented statement about what went wrong, and every check below
+	// this one is a broader guess that would happily swallow it: a 403 on
+	// a HEAD looks like nothing in particular to fserrors.ShouldRetry, and
+	// "the bucket does not exist" would otherwise land in Permanent, which
+	// is this classifier's label for "I could not place this at all".
+	if code, ok := apiErrorCode(err); ok {
+		if category, known := s3Categories[code]; known {
+			return category
+		}
+	}
+
+	// An endpoint that does not resolve is a fact about the configuration,
+	// not about the network, when DNS says the name does not exist at all.
+	// A lookup that timed out or failed for any other reason is left to
+	// fserrors.ShouldRetry below, because that one genuinely can be a blip.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return transport.Configuration
 	}
 
 	// NotFound: rclone's own sentinels for the sftp/local backends
@@ -194,4 +218,140 @@ func Wrap(op string, err error) error {
 		return nil
 	}
 	return transport.NewError(Classify(err), op, err)
+}
+
+// apiErrorCode reports the S3 API error code err carries, if any.
+//
+// # Why this declares its own interface instead of importing the SDK
+//
+// FR-28 is explicit that no AWS SDK enters this repository, in Go or in
+// TypeScript: rclone's s3 backend is the entire S3 implementation, and the
+// aws-sdk-go-v2 packages under it are rclone's dependency, upgraded when
+// rclone is. Importing smithy-go here to reach its APIError type would put
+// an SDK import line in this repository's own go.mod, which is the thing
+// that FR forbids, for a value this file can obtain without it.
+//
+// So it matches on the SHAPE the SDK already exposes. Every S3 API error
+// the AWS SDK produces implements ErrorCode() string, and errors.As
+// against a locally-declared single-method interface finds it wherever it
+// sits in the chain. That is a match by Go type identity, not by parsed
+// text, which is exactly what this file's package comment asks for: it
+// survives a reworded message, and it breaks visibly (this function stops
+// matching, and errors_test.go's table fails) rather than silently if the
+// SDK ever renames the method.
+//
+// The CODES themselves are S3's own documented, wire-level API contract,
+// not an implementation detail of any SDK. "NoSuchBucket" is what the
+// service returns in the XML body, and every S3-compatible endpoint this
+// product can talk to returns the same string, which is why it is safe to
+// switch on where an error MESSAGE would not be.
+func apiErrorCode(err error) (string, bool) {
+	var coder interface{ ErrorCode() string }
+	if errors.As(err, &coder) {
+		if code := coder.ErrorCode(); code != "" {
+			return code, true
+		}
+	}
+	return "", false
+}
+
+// s3Categories is FR-28's error-classification table: S3's own API error
+// codes mapped into the manager-owned FR-22 vocabulary lifecycle code is
+// allowed to switch on.
+//
+// A code that is not in this table is not classified here at all; it falls
+// through to the generic checks below apiErrorCode's call site, and
+// ultimately to Permanent. That is deliberate. Guessing at an unlisted
+// code would produce a confident wrong answer, and the two answers that
+// matter most (is this retryable, is this safe to treat as absence) are
+// exactly the two that must never be guessed.
+var s3Categories = map[string]transport.Category{
+	// The request cannot succeed until a person edits the configuration.
+	// The bucket is named in config, and it is not there.
+	//
+	// PermanentRedirect, AuthorizationHeaderMalformed and the two
+	// location-constraint codes are all what a wrong REGION looks like
+	// from the outside, and none of them reads anything like "your region
+	// is wrong", which is exactly why they are worth naming here.
+	"NoSuchBucket":                       transport.Configuration,
+	"InvalidBucketName":                  transport.Configuration,
+	"PermanentRedirect":                  transport.Configuration,
+	"AuthorizationHeaderMalformed":       transport.Configuration,
+	"IllegalLocationConstraintException": transport.Configuration,
+	"InvalidLocationConstraint":          transport.Configuration,
+
+	// The caller is not who the endpoint will accept, or is not allowed to
+	// do this. S3 has no pre-session handshake, so a wrong key and a
+	// too-narrow policy are the same first-request failure; they share a
+	// category because there is no earlier moment at which they could have
+	// been told apart.
+	"AccessDenied":                transport.Authentication,
+	"InvalidAccessKeyId":          transport.Authentication,
+	"SignatureDoesNotMatch":       transport.Authentication,
+	"ExpiredToken":                transport.Authentication,
+	"InvalidToken":                transport.Authentication,
+	"TokenRefreshRequired":        transport.Authentication,
+	"InvalidSecurity":             transport.Authentication,
+	"AuthFailure":                 transport.Authentication,
+	"UnrecognizedClientException": transport.Authentication,
+	"MissingAuthenticationToken":  transport.Authentication,
+	"AccountProblem":              transport.Authentication,
+	// Forbidden and Unauthorized are not S3 codes at all, they are what
+	// the SDK synthesizes from the HTTP status when the response has no
+	// body to read a code out of. A HEAD is exactly that response, and a
+	// HEAD is how this adapter stats an object, so this is the code a
+	// wrong credential actually produces on the most common call: proved
+	// against MinIO in core/tests/miniointegration, and missing from an
+	// earlier version of this table that was written from the S3
+	// documentation alone.
+	"Forbidden":    transport.Authentication,
+	"Unauthorized": transport.Authentication,
+
+	// The object is not there. NotFound is what a HEAD returns; NoSuchKey
+	// is what a GET returns; both mean the same thing to this product.
+	// NoSuchUpload is a multipart upload id that has expired or been
+	// aborted, which is the same fact about a different handle.
+	"NoSuchKey":    transport.NotFound,
+	"NotFound":     transport.NotFound,
+	"NoSuchUpload": transport.NotFound,
+
+	// Throttling and the service's own 5xx family: the request may well
+	// succeed if it is made again, which is the whole meaning of
+	// Transient and the only category FR-22 lets retry.Do act on.
+	"SlowDown":                               transport.Transient,
+	"Throttling":                             transport.Transient,
+	"ThrottlingException":                    transport.Transient,
+	"RequestThrottled":                       transport.Transient,
+	"RequestThrottledException":              transport.Transient,
+	"TooManyRequests":                        transport.Transient,
+	"TooManyRequestsException":               transport.Transient,
+	"RequestLimitExceeded":                   transport.Transient,
+	"ProvisionedThroughputExceededException": transport.Transient,
+	"RequestTimeout":                         transport.Transient,
+	"RequestTimeoutException":                transport.Transient,
+	"InternalError":                          transport.Transient,
+	"InternalFailure":                        transport.Transient,
+	"ServiceUnavailable":                     transport.Transient,
+
+	// The bytes arrived and did not match what was declared. This is the
+	// one family where a retry is actively wrong: it would re-send the
+	// same corrupt payload, and FR-22 already forbids it by keeping
+	// IntegrityFailure out of Retryable.
+	"BadDigest":                 transport.IntegrityFailure,
+	"InvalidDigest":             transport.IntegrityFailure,
+	"XAmzContentSHA256Mismatch": transport.IntegrityFailure,
+
+	// InvalidObjectState is an object in an archive class that has to be
+	// restored before it can be read (FR-34). Nothing is wrong and no
+	// retry changes it, so UnsupportedCapability is the honest label until
+	// #241 lands the explicit restore that gives it a better one.
+	"InvalidObjectState": transport.UnsupportedCapability,
+	"NotImplemented":     transport.UnsupportedCapability,
+
+	// Somebody else got there first. This adapter never creates a bucket
+	// (see medium.go's package comment), so these two can only arrive from
+	// an endpoint doing something on its own, and Conflict is the category
+	// that says "a person decides".
+	"BucketAlreadyExists":     transport.Conflict,
+	"BucketAlreadyOwnedByYou": transport.Conflict,
 }

@@ -42,6 +42,21 @@ const (
 	KeyPermissions
 	NotFound
 	PermissionDenied
+	// Configuration is EPIC E's addition (FR-28): the request cannot
+	// succeed as configured, and nothing about credentials, the network or
+	// the object itself is the reason. A bucket that does not exist, and an
+	// endpoint that cannot be resolved to a service at all, are the two
+	// shapes the s3 backend produces.
+	//
+	// It sits apart from Authentication and from Permanent on purpose.
+	// Authentication says the caller is not who the endpoint wants;
+	// Configuration says the caller named a place that is not there, which
+	// a different credential does not fix and a retry does not either. And
+	// Permanent is this classifier's "I could not place this at all", which
+	// is exactly what an operator cannot act on: NoSuchBucket landing there
+	// would tell someone their backup failed permanently without telling
+	// them the one line of config to change.
+	Configuration
 	IntegrityFailure
 	Conflict
 	UnsupportedCapability
@@ -57,6 +72,7 @@ var categoryNames = [...]string{
 	KeyPermissions:        "key_permissions",
 	NotFound:              "not_found",
 	PermissionDenied:      "permission_denied",
+	Configuration:         "configuration",
 	IntegrityFailure:      "integrity_failure",
 	Conflict:              "conflict",
 	UnsupportedCapability: "unsupported_capability",
@@ -79,9 +95,10 @@ func (c Category) String() string {
 // property of the request that a retry cannot change (NotFound,
 // PermissionDenied, HostVerification, Authentication, KeyPermissions,
 // IntegrityFailure, Conflict, UnsupportedCapability), a decision already
-// made by the caller (Cancelled), or a case this classifier could not
-// place at all (Unclassified, Permanent), which must never be treated as
-// safe to retry just because it wasn't recognized.
+// made by the caller (Cancelled), a fact about the configuration that
+// only a person can change (Configuration), or a case this classifier
+// could not place at all (Unclassified, Permanent), which must never be
+// treated as safe to retry just because it wasn't recognized.
 func (c Category) Retryable() bool {
 	return c == Transient
 }
