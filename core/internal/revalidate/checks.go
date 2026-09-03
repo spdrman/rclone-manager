@@ -58,7 +58,7 @@ import (
 func runChecks(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (checked, passed bool, class placement.Class, reason string, err error) {
 	if _, local := rec.LocalPlacement(); !local {
 		if medium, ok := activeMediumPlacement(rec); ok {
-			return checkMediumPlacement(ctx, deps, rec, medium)
+			return checkMediumPlacement(ctx, deps, cfg, medium)
 		}
 	}
 	return checkLocalCopy(ctx, deps, cfg, rec)
@@ -89,7 +89,15 @@ func activeMediumPlacement(rec state.Record) (state.Placement, bool) {
 // be free. FR-31 says so directly, and the assertion below turns it from a
 // rule into a fact: whatever class this function is about to run, it
 // refuses if that class costs egress.
-func checkMediumPlacement(ctx context.Context, deps Deps, rec state.Record, p state.Placement) (checked, passed bool, class placement.Class, reason string, err error) {
+//
+// cfg.Command is skipped for the same reason and said out loud for a
+// different one. A restore test opens the artifact, so running one against
+// a bucket means downloading the artifact, which is the egress this
+// function refuses. But an operator who configured a restore test and gets
+// back a green pass has been told less than they asked for, and a check
+// that quietly stops running is how a safety feature becomes decorative.
+// So the pass names the tier that did not run.
+func checkMediumPlacement(ctx context.Context, deps Deps, cfg config.Revalidation, p state.Placement) (checked, passed bool, class placement.Class, reason string, err error) {
 	if deps.Store == nil || deps.Mediums == nil {
 		return false, true, "", fmt.Sprintf(
 			"this artifact's only durable copy is on storage medium %q, and this deployment has no way to reach one, so nothing was checked", p.Medium), nil
@@ -132,7 +140,11 @@ func checkMediumPlacement(ctx context.Context, deps Deps, rec state.Record, p st
 		return false, false, "", "", fmt.Errorf("medium %q: %w", p.Medium, verifyErr)
 	}
 
-	return true, result.Passed, result.Class, result.Detail, nil
+	detail := result.Detail
+	if cfg.Command != nil {
+		detail += "; the restore-test hook did not run, because opening this artifact means downloading it and FR-31 makes anything that costs egress operator-initiated"
+	}
+	return true, result.Passed, result.Class, detail, nil
 }
 
 // checkLocalCopy is exactly the check this package always did, against the

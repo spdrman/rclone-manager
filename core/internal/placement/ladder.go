@@ -287,6 +287,23 @@ func verifyAttested(ctx context.Context, store Store, medium transport.Medium, p
 		return Result{}, fmt.Errorf("%w: %q returned an empty attestation for %q",
 			ErrClassUnavailable, p.Medium, p.Location)
 	}
+	// The digest has to be the one that was asked for. A store that
+	// answers a SHA-256 ask with anything else has not attested this
+	// object, and comparing what it did answer against the recorded hash
+	// would produce a MISMATCH, which reads on every surface as "these
+	// bytes are corrupt" and quarantines a perfectly good backup.
+	//
+	// That is not a hypothetical shape. The digest an S3 endpoint hands
+	// back for free is the ETag's MD5, and FR-32's whole first rule is
+	// that an ETag is never a content hash. The adapter this product
+	// ships refuses rather than degrade, so this branch cannot fire
+	// through it today; it is here because Store is an interface, the
+	// refusal has to hold for whatever is behind it, and Algorithm is
+	// otherwise a field nothing reads.
+	if !strings.EqualFold(string(attestation.Algorithm), string(transport.SHA256)) {
+		return Result{}, fmt.Errorf("%w: %q attested %q for %q when %s was asked for, and a digest of the wrong algorithm compared against a recorded hash reads as corruption",
+			ErrClassUnavailable, p.Medium, attestation.Algorithm, p.Location, transport.SHA256)
+	}
 
 	if !strings.EqualFold(attestation.Value, p.Hash) {
 		return Result{

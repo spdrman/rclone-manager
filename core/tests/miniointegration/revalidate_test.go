@@ -2,6 +2,7 @@ package miniointegration_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -252,6 +253,24 @@ func TestAttestingAMinioPlacementIsRefused(t *testing.T) {
 	got, err := placement.Verify(ctx, adapter, medium, p, placement.Attested, time.Now().UTC())
 	if err == nil {
 		t.Fatalf("Verify(attested) returned %+v against a real S3 endpoint; if a newer rclone can genuinely do this, that is a capability change to adopt deliberately", got)
+	}
+	// Logged rather than only asserted, because this is the measurement
+	// FR-31 asks to be re-taken on every rclone upgrade, and the next
+	// person to take it wants to read what the endpoint actually said
+	// rather than re-derive it from a green tick.
+	t.Logf("rclone's s3 backend refused a full-object SHA-256 attestation: %v", err)
+
+	// The typed refusal, not just its prose. ErrClassUnavailable is what a
+	// caller branches on to tell "we could not check" from "we checked and
+	// it is wrong", and a refusal that only reads correctly is a refusal
+	// nothing can act on.
+	if !errors.Is(err, placement.ErrClassUnavailable) {
+		t.Errorf("the refusal is not ErrClassUnavailable: %v; a caller cannot tell it apart from a failed verification, and a failed verification quarantines", err)
+	}
+	// And it is a capability refusal all the way down, rather than a
+	// transient failure that would come back differently on a retry.
+	if category, ok := transport.CategoryOf(err); !ok || category != transport.UnsupportedCapability {
+		t.Errorf("the refusal is classified %v (recognised=%v), want %v: FR-13 asks for an explicit capability result", category, ok, transport.UnsupportedCapability)
 	}
 	if !strings.Contains(err.Error(), "attest") {
 		t.Errorf("the refusal does not say what could not be done: %v", err)

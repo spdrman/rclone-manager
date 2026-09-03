@@ -92,6 +92,48 @@ func moveToMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, med
 	}
 }
 
+// addLocalPlacement records the ACTIVE local placement that lifecycle's
+// own Commit records in production.
+//
+// The helpers in revalidate_test.go predate placements and record none, so
+// a record they build answers ReadableLocalPath out of the LocalPath
+// fallback. That is a real Phase 1 shape and worth keeping, but it is not
+// the shape a test about ACTIVE local placements can be written against.
+func addLocalPlacement(t *testing.T, j *state.Journal, artifact model.ArtifactID, localPath string, content []byte, at time.Time) {
+	t.Helper()
+	size := int64(len(content))
+	if _, err := j.RecordTransition(context.Background(), state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":local-placement", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: state.MediumLocal, Location: localPath, Size: &size,
+			Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the local placement: %v", err)
+	}
+}
+
+// addMediumPlacement records a medium placement WITHOUT retiring the local
+// one, which is the state an artifact is in mid-move: the copy has been
+// uploaded and the source has not been deleted yet, so both placements are
+// ACTIVE at once. FR-30 is why that window exists at all, since the source
+// copy survives every uncertainty.
+func addMediumPlacement(t *testing.T, j *state.Journal, artifact model.ArtifactID, mediumID string, content []byte, at time.Time) {
+	t.Helper()
+	size := int64(len(content))
+	if _, err := j.RecordTransition(context.Background(), state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":also-on-medium", From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the second placement: %v", err)
+	}
+}
+
 // TestRevalidationOfAMediumPlacementIsExistenceAndSaysSo is the issue's
 // own behavioural contract: the placement is existence-checked, the
 // recorded and reported class is existence, and no bytes are downloaded.
@@ -356,5 +398,140 @@ func TestALocalPlacementStillGetsTodaysCheck(t *testing.T) {
 	}
 	if store.stats != 0 || store.opens != 0 || store.digest != 0 {
 		t.Errorf("a local artifact's revalidation touched the medium store: %d stats, %d opens, %d digests", store.stats, store.opens, store.digest)
+	}
+}
+
+// TestAnArtifactMidMoveIsStillCheckedLocally is FR-31's "local placements
+// keep today's behaviour exactly" for the one case where the sentence has
+// any content: an artifact that has BOTH an ACTIVE local placement and an
+// ACTIVE medium placement, which is where a move leaves it between the
+// upload and the source delete.
+//
+// Without this, the local fork is untestable: every other case in this
+// file has exactly one active placement, so removing the rule that a local
+// placement wins changes nothing and the rule is a comment rather than a
+// behaviour. Getting it wrong is not cosmetic either. Checking the medium
+// copy instead would downgrade a mid-move artifact from the content check
+// it got yesterday to a HEAD, silently, for as long as the move takes.
+func TestAnArtifactMidMoveIsStillCheckedLocally(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "mid-move.dump")
+	content := []byte("bytes that are in two places at once")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	localPath := completeArtifact(t, j, artifact, content, long)
+	addLocalPlacement(t, j, artifact, localPath, content, long)
+	addMediumPlacement(t, j, artifact, "offsite_s3", content, long)
+
+	// The fixture has to actually be in the state this test is named for,
+	// or it is another single-placement test wearing a longer name.
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, hasLocal := rec.LocalPlacement(); !hasLocal {
+		t.Fatalf("the fixture has no ACTIVE local placement, so it is not mid-move: %+v", rec.Placements)
+	}
+	medium := 0
+	for _, p := range rec.Placements {
+		if !p.IsLocal() && p.Status == state.PlacementActive {
+			medium++
+		}
+	}
+	if medium != 1 {
+		t.Fatalf("the fixture has %d ACTIVE medium placements, want exactly 1: %+v", medium, rec.Placements)
+	}
+
+	store := &countingStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("a mid-move artifact did not pass: %+v", f)
+	}
+	if f.Class != placement.Content {
+		t.Errorf("Class = %q, want %q: an artifact that still has its local copy is checked the way it was checked yesterday, not downgraded to a HEAD for the duration of a move", f.Class, placement.Content)
+	}
+	if store.stats != 0 || store.opens != 0 || store.digest != 0 {
+		t.Errorf("the medium was consulted for an artifact whose local copy is still there: %d stats, %d opens, %d digests", store.stats, store.opens, store.digest)
+	}
+}
+
+// TestAConfiguredRestoreTestSaysItDidNotRunOnAMedium is the other half of
+// "report the verification that happened".
+//
+// A restore test opens the artifact, so running one against a bucket is a
+// download, and FR-31 makes anything that costs egress operator-initiated.
+// Skipping it is right. Skipping it silently is not: the operator asked
+// for two tiers, one of them stopped running the day the bytes moved, and
+// a green pass that says nothing about it is how a safety feature becomes
+// decorative.
+func TestAConfiguredRestoreTestSaysItDidNotRunOnAMedium(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	artifact := artifactNamed(t, "on-medium.dump")
+	content := []byte("bytes that now live in a bucket")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+
+	completeArtifact(t, j, artifact, content, long)
+	moveToMedium(t, j, artifact, "offsite_s3", content, long)
+
+	// A hook that would pass loudly if anything ever ran it, so a silent
+	// skip cannot be mistaken for a silent pass.
+	hook := mustScript(t, "exit 0")
+	store := &countingStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: fixedMediums{id: "offsite_s3"}}
+	cfg := config.Revalidation{
+		Interval:    config.Duration(24 * time.Hour),
+		MaxPerCycle: 10,
+		Hash:        true,
+		Command:     &config.Command{Executable: hook, Timeout: config.Duration(30 * time.Second)},
+	}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, want exactly one", report.Findings)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("the existence check did not pass: %+v", f)
+	}
+	if f.Class != placement.Existence {
+		t.Errorf("Class = %q, want %q", f.Class, placement.Existence)
+	}
+	if !strings.Contains(f.Reason, "restore-test hook did not run") {
+		t.Errorf("a pass with a configured restore test says nothing about it not having run: %q", f.Reason)
+	}
+	if store.opens != 0 {
+		t.Errorf("the restore-test hook downloaded the object %d times", store.opens)
+	}
+
+	// And the journal says it too, because the Finding is gone in an hour
+	// and the audit trail is what somebody reads in six months.
+	activity, err := j.RecentActivity(ctx, 10)
+	if err != nil {
+		t.Fatalf("RecentActivity: %v", err)
+	}
+	found := false
+	for _, a := range activity {
+		if a.Artifact == artifact && strings.Contains(a.Detail, "restore-test hook did not run") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("no recorded transition says the restore test did not run; the log holds %+v", activity)
 	}
 }

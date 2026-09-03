@@ -2,6 +2,7 @@ package placement_test
 
 import (
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -26,10 +27,13 @@ type fakeStore struct {
 	// attestErr nil means the endpoint answered with nothing, which is a
 	// shape a real backend produces and which must not read as a match.
 	attestation string
-	attestErr   error
-	statErr     error
-	openErr     error
-	size        *int64
+	// attestAlg is the algorithm the answer claims to be. Empty means the
+	// one that was asked for, which is what an honest backend does.
+	attestAlg transport.HashAlgorithm
+	attestErr error
+	statErr   error
+	openErr   error
+	size      *int64
 
 	opened  int
 	statted int
@@ -58,6 +62,9 @@ func (f *fakeStore) OpenObject(_ context.Context, _ transport.Medium, _ string) 
 func (f *fakeStore) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	if f.attestErr != nil {
 		return transport.ChecksumAttestation{}, f.attestErr
+	}
+	if f.attestAlg != "" {
+		alg = f.attestAlg
 	}
 	return transport.ChecksumAttestation{Algorithm: alg, Value: f.attestation}, nil
 }
@@ -318,3 +325,65 @@ func TestCostAndProofAreStatedForEveryRung(t *testing.T) {
 }
 
 func ptrInt64(n int64) *int64 { return &n }
+
+// TestAnAttestationOfTheWrongAlgorithmIsARefusal is the last rung of
+// FR-32's first rule, held at the boundary where it would actually cost
+// something.
+//
+// ObjectChecksum is asked for a SHA-256. A store that answers with
+// anything else has not attested this object, and the dangerous part is
+// what the obvious code does next: it compares the digest it got against
+// the recorded hash, they differ, and the artifact is reported as having
+// FAILED verification. On the revalidation path that quarantines it. So a
+// backend quietly handing back the ETag's MD5 would not look like a
+// capability gap, it would look like every backup going corrupt at once.
+//
+// The adapter this product ships cannot produce that answer: it asks
+// rclone for SHA-256 or refuses. But Store is an interface, the refusal
+// has to hold for whatever is behind it, and without this check
+// ChecksumAttestation.Algorithm is a field nothing reads.
+func TestAnAttestationOfTheWrongAlgorithmIsARefusal(t *testing.T) {
+	content := []byte("the artifact's bytes")
+	p := mediumPlacement(content)
+
+	// An MD5 of the very same bytes: the honest answer to a question
+	// nobody asked, and the one an S3 ETag actually carries.
+	md5sum := md5.Sum(content)
+	store := &fakeStore{
+		content:     content,
+		attestation: hex.EncodeToString(md5sum[:]),
+		attestAlg:   transport.HashAlgorithm("md5"),
+	}
+
+	got, err := placement.Verify(context.Background(), store, transport.Medium{ID: "offsite_s3"}, p, placement.Attested, testNow)
+	if err == nil {
+		t.Fatalf("Verify(attested) returned %+v for a digest of the wrong algorithm; comparing it to the recorded hash reports a correct object as corrupt", got)
+	}
+	if !errors.Is(err, placement.ErrClassUnavailable) {
+		t.Errorf("the refusal is not ErrClassUnavailable: %v", err)
+	}
+	if got != (placement.Result{}) {
+		t.Errorf("Verify returned %+v alongside its refusal; a caller could record that as a failed verification", got)
+	}
+	if !strings.Contains(err.Error(), "md5") {
+		t.Errorf("the refusal does not say what it was handed instead: %v", err)
+	}
+}
+
+// TestAnAttestationOfTheRightAlgorithmStillPasses is the positive control
+// for the check above. A refusal that fires on every attestation would
+// pass the test above for the wrong reason and make the whole rung
+// unreachable.
+func TestAnAttestationOfTheRightAlgorithmStillPasses(t *testing.T) {
+	content := []byte("the artifact's bytes")
+	for _, alg := range []transport.HashAlgorithm{"", transport.SHA256, transport.HashAlgorithm("SHA256")} {
+		store := &fakeStore{content: content, attestation: sha256Of(content), attestAlg: alg}
+		got, err := placement.Verify(context.Background(), store, transport.Medium{ID: "offsite_s3"}, mediumPlacement(content), placement.Attested, testNow)
+		if err != nil {
+			t.Fatalf("Verify(attested) with algorithm %q: %v", alg, err)
+		}
+		if !got.Passed || got.Class != placement.Attested {
+			t.Fatalf("Verify(attested) with algorithm %q = %+v", alg, got)
+		}
+	}
+}
