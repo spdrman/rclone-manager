@@ -117,6 +117,17 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 // migration file's content changed after it was applied here). Both are
 // refusals: this package does not attempt to reconcile, downgrade, or
 // reapply anything in either case.
+//
+// The consequence worth stating out loud, because it is not obvious and it
+// has already been proposed once as a harmless tidy-up: a migration file that
+// has shipped can never be edited again, comments included. The checksum is
+// taken over the whole file, so correcting a stale comment moves it, and
+// every deployment that already applied that version then refuses to open
+// with ErrSchemaDrift. Two of the files in this directory say something about
+// foreign keys that stopped being true when suspendForeignKeys landed, and
+// they are staying exactly as they are for that reason. If a landed migration
+// needs a correction, the correction goes here or into a new migration.
+// TestShippedMigrationsAreImmutable enforces this.
 func migrate(ctx context.Context, db *sql.DB) error {
 	known, err := loadMigrations()
 	if err != nil {
