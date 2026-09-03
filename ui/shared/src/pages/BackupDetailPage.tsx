@@ -31,6 +31,14 @@ export function BackupDetailPage() {
   // does not. It is deliberately NOT gated on: if it fails, the copies
   // still render and the explanatory sentences are simply absent, which
   // is a worse page and not a wrong one.
+  //
+  // Page-local rather than a shared graph node, matching the retention
+  // card, which fetches the same document the same way. Settings IS a
+  // singleton and would eventually belong on the graph, but putting it
+  // there means App.tsx owning a fetch and a poll for it, and this page
+  // wants the answer once, at open, and does not care if it goes stale
+  // while somebody reads one backup's detail. When a third reader
+  // appears, that is the change to make.
   const settings = useAsync(() => api.getSettings(), [api]);
 
   if (artifact.error) return <ErrorState {...artifact.error} onRetry={artifact.reload} />;
