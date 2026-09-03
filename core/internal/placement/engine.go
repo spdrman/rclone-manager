@@ -154,6 +154,13 @@ type Engine struct {
 	// ones included, the same shape revalidation's max_per_cycle has. Zero
 	// or negative means the engine does nothing at all, which is the same
 	// fail-safe direction revalidate.SelectDue takes for the same field.
+	//
+	// It is a field rather than a config key here on purpose. FR-30 names
+	// a max_moves_per_cycle guard, and the place that reads it is the
+	// retention cycle that calls RunCycle, which is #239's. Adding the
+	// schema key in this change would put a key in config.yaml that
+	// nothing reads, and FR-35's round-trip rule is specifically about not
+	// doing that.
 	MaxMovesPerCycle int
 
 	// MaxCopyAttempts bounds how many times one cycle will copy a
