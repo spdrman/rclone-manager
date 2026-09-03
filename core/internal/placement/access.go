@@ -101,9 +101,16 @@ type MediumFacts struct {
 // archive would tell an operator to wait hours for a file they could have
 // had at once.
 //
-// #241 (E2.4) is the issue that adds the restore operation itself. If it
-// grows its own idea of which classes are archive, that idea and this one
-// have to become one function, not two.
+// #241 (E2.4) is the issue that adds the restore operation itself, and as
+// of this writing its branch carries core/internal/archive with its own
+// IsArchive and its own four-value access vocabulary, spelled identically.
+// Two packages deciding the same closed set is exactly what this issue's
+// own refactor requirement forbids, so whichever of the two lands second
+// collapses them: core/internal/archive is the richer one (it knows
+// whether a restore is running and when a finished one expires), so this
+// file's job at that point is to disappear into it. Nothing in the API or
+// the UI moves when it does, because both read service.AccessStates and
+// service.Placement.Access rather than either package directly.
 var ArchiveStorageClasses = []string{config.StorageClassGlacier, config.StorageClassDeepArchive}
 
 // StorageClassNeedsRestore reports whether class has to be restored before

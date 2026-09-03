@@ -397,6 +397,17 @@ func mediumDisclosureRefusal(introduced []tierMedium) error {
 // TypeScript union the UI narrows against, and the strings the engine
 // actually writes to the journal all come from one place, which is what
 // makes a drift test possible rather than decorative.
+// # Where the access vocabulary will come from
+//
+// #241 (E2.4) is landing core/internal/archive, which defines the same
+// four values with the same strings and derives them from more than this
+// package can see: it knows whether a restore is running and when a
+// finished one expires. When it lands, this function should return its
+// vocabulary and toServicePlacement should ask it for the state, and
+// nothing else in the API or the UI moves: the contract enum, the drift
+// test that pins it, the generated TypeScript union and every surface
+// narrowing against it all read THIS function. That is the whole reason
+// it exists rather than each layer holding its own list.
 func AccessStates() []string {
 	out := make([]string, 0, len(placement.Accesses))
 	for _, a := range placement.Accesses {
