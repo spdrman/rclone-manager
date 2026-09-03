@@ -1228,6 +1228,7 @@ that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
   app/           the presentation-agnostic application service every command and handler calls
+  archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, and the seam that lets that be somewhere else later
   capacity/      disk-space admission checks
   config/        YAML config schema, loading, validation (Load takes any path)
