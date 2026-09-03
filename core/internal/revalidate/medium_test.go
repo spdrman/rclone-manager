@@ -369,6 +369,13 @@ func TestAMissingObjectOnAMediumQuarantines(t *testing.T) {
 // TestALocalPlacementStillGetsTodaysCheck is the regression half of FR-31
 // stated positively: local placements keep today's behaviour exactly, and
 // the class they achieve is the content check they have always run.
+//
+// The record it builds has no placement rows at all, which is the ordinary
+// Phase 1 shape and the one ReadableLocalPath answers out of its LocalPath
+// fallback. It is NOT the case where an ACTIVE local placement competes
+// with an ACTIVE medium one; that is TestAnArtifactMidMoveIsStillCheckedLocally,
+// and it exists because without it the rule that a local placement wins
+// the fork could be deleted with this whole file staying green.
 func TestALocalPlacementStillGetsTodaysCheck(t *testing.T) {
 	ctx := context.Background()
 	j := openJournal(t)
