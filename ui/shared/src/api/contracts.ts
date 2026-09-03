@@ -695,6 +695,30 @@ export interface BackupManagerApi {
   updateBackupSet(source: string, set: string, patch: BackupSetPatch): Promise<BackupSet>;
 
   /**
+   * Issue #391: removes one backup set's configuration, so nothing is
+   * collected for it from here on.
+   *
+   * Configuration only. Every backup the set already took stays on
+   * storage and stays listed under Backups, which is what the
+   * confirmation the operator accepted promises, and this call is why
+   * that confirmation now means something: it used to close the dialog
+   * and call nothing at all.
+   *
+   * Not reversible as a call. The undo is creating a set with the same
+   * source and name again, which re-adopts every artifact the removed one
+   * produced, because an artifact is identified by source/set/name rather
+   * than by a surrogate key.
+   *
+   * It resolves to nothing, because there is nothing left to resolve to.
+   * A caller showing the removed set has to navigate away rather than
+   * re-read it: the next `getSet` for this id is a 404.
+   *
+   * `source`/`set` are BackupSet's own two-part identity, the same pair
+   * setEnabled, setReadOnly and updateBackupSet take.
+   */
+  removeSet(source: string, set: string): Promise<void>;
+
+  /**
    * Issue #350's edit hold. A backup set being edited while a cycle runs
    * against it is two writers on one definition, so entering edit mode
    * holds that one set: the pass currently running against it stops, and

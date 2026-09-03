@@ -279,6 +279,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		// precedent, not the gate's: the gate is for run_immediately and
 		// for retention apply, not for writing a set).
 		r.With(requireCSRF).Patch("/backup-sets/{source}/{set}", h.updateBackupSet)
+		// Issue #391: removing one backup set's configuration. Registered
+		// on the same two named segments as the PATCH above, which is why
+		// it can share a path with it and with getBackupSet's
+		// "/backup-sets/*" catch-all below: chi tells the three apart by
+		// method.
+		//
+		// requireCSRF and NOT requireDestructiveGate, the same tier as the
+		// PATCH beside it and as POST /backup-sets
+		// (destructiveGateExemptRoutes, router_test.go). The word on the
+		// button is "Remove" and the dialog is styled destructive, but
+		// §50's bucket is decided by what is touched, not by how it
+		// reads: this writes configuration, and every byte of backup data
+		// the set collected stays on storage and stays listed. Gating it
+		// would also put it out of reach of an operator who has not
+		// turned destructive operations on, for an operation whose whole
+		// point is to STOP this manager doing things.
+		r.With(requireCSRF).Delete("/backup-sets/{source}/{set}", h.removeBackupSet)
 		// Issue #350's edit hold. The read is read-only (§50) and carries
 		// neither CSRF nor the gate; both writes carry CSRF and, like
 		// every other route in this group, not the destructive gate. A

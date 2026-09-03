@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "2c1f5ca4ae57a54e9f6a6494662509c423a9a4557c3753d9bbca664014ddc951";
+export const CONTRACT_SHA256 = "ea21c2c6029cf877087ae5b841d934080750cbf8f7f75abd4511efd68b297d40";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -338,6 +338,26 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       404: ["BACKUP_SET_NOT_FOUND"],
       500: ["INTERNAL"],
       503: ["NOT_CONFIGURED"],
+    }
+  },
+  {
+    id: "removeBackupSet",
+    method: "DELETE",
+    path: "/backup-sets/{source}/{set}",
+    authenticated: true,
+    csrfRequired: true,
+    idempotencyKey: "none",
+    destructiveGate: false,
+    concurrency: "",
+    requestSchema: "",
+    responseSchema: "",
+    successStatus: 204,
+    errorCodes: {
+      400: ["INVALID_REQUEST"],
+      401: ["UNAUTHENTICATED"],
+      403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
+      404: ["BACKUP_SET_NOT_FOUND"],
+      500: ["INTERNAL"],
     }
   },
   {

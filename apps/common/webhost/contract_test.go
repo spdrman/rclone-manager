@@ -117,6 +117,11 @@ var contractBindings = map[string]contractBinding{
 	// getBackupSet's "/api/v1/backup-sets/*" catch-all and does not
 	// collide with it, because chi routes on the method too.
 	"updateBackupSet": {"/api/v1/backup-sets/{source}/{set}", updateBackupSetRequest{}, backupSetResponse{}, "/api/v1/backup-sets/src/set-1"},
+	// Issue #391's removal, on the same path template and telling itself
+	// apart from the PATCH by method in the same way. It binds neither a
+	// request nor a response type: there is no body to send, and a 204
+	// leaves no resource to describe.
+	"removeBackupSet": {"/api/v1/backup-sets/{source}/{set}", nil, nil, "/api/v1/backup-sets/src/set-1"},
 	// Issue #350's edit hold. The release has no response body at all
 	// (204), so it binds no response type; the contract declares no
 	// response schema for it either, which is what keeps the two in step.

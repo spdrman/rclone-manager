@@ -159,6 +159,7 @@ type syncFakeBackend struct {
 	errOnReinstate      error
 	errOnSetEnabled     error
 	errOnSetReadOnly    error
+	errOnRemove         error
 	errOnSetRetention   error
 	errOnTestPersisted  error
 
@@ -168,6 +169,7 @@ type syncFakeBackend struct {
 	lastRevalidated       string
 	lastRetried           string
 	lastReinstated        string
+	lastRemoved           string
 	lastSetEnabled        setEnabledCall
 	lastSetReadOnly       setReadOnlyCall
 	lastTestedBackupSetID string
@@ -394,6 +396,20 @@ func (f *syncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, rea
 	defer f.mu.Unlock()
 	f.lastSetReadOnly = setReadOnlyCall{id: id, readOnly: readOnly}
 	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
+}
+
+// RemoveBackupSet is issue #391's removal, on the sync double. It records
+// what it was asked to remove, so a test can prove the handler joined the
+// two path segments back into one id rather than only that it answered
+// 204.
+func (f *syncFakeBackend) RemoveBackupSet(_ context.Context, id string) error {
+	if f.errOnRemove != nil {
+		return f.errOnRemove
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRemoved = id
+	return nil
 }
 
 // --- issue #333's per-set retention sub-resource ---
@@ -766,6 +782,10 @@ func (f *asyncFakeBackend) SetBackupSetEnabled(_ context.Context, id string, ena
 
 func (f *asyncFakeBackend) SetBackupSetReadOnly(_ context.Context, id string, readOnly bool) (service.BackupSet, error) {
 	return service.BackupSet{ID: id, ReadOnly: readOnly}, nil
+}
+
+func (f *asyncFakeBackend) RemoveBackupSet(context.Context, string) error {
+	return nil
 }
 
 func (f *asyncFakeBackend) BackupSetRetention(_ context.Context, id string) (service.BackupSetRetention, error) {

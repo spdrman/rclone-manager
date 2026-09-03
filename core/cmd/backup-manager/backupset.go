@@ -117,7 +117,7 @@ func cmdBackupSet(args []string) int {
 		return 2
 	}
 	if len(operands) != 2 {
-		return usageError(`backup-set: expected "create <source/backup-set>", "patch <source/backup-set>" or "retention <source/backup-set>", a verb and exactly one backup set id`)
+		return usageError(`backup-set: expected "create <source/backup-set>", "patch <source/backup-set>", "remove <source/backup-set>" or "retention <source/backup-set>", a verb and exactly one backup set id`)
 	}
 	sourceName, name, ok := splitBackupSetID(operands[1])
 	if !ok {
@@ -135,8 +135,19 @@ func cmdBackupSet(args []string) int {
 			return code
 		}
 		return backupSetPatch(f, operands[1])
+	case "remove":
+		// remove names one set and nothing else, so it refuses every flag
+		// this command declares rather than a verb's worth of them. The
+		// reason is the one refuseFlagsOfTheOtherVerb already gives:
+		// silently ignoring is worse than refusing, and `backup-set
+		// remove a/b --read-only` exiting 0 having removed the set is a
+		// command that did something other than what it was told.
+		if code := f.refuseFlagsOfTheOtherVerb("remove", backupSetNonRemoveFlags); code != 0 {
+			return code
+		}
+		return backupSetRemove(f, operands[1])
 	default:
-		return usageError("backup-set: %q is not a backup-set verb; the verbs are create, patch and retention", operands[0])
+		return usageError("backup-set: %q is not a backup-set verb; the verbs are create, patch, remove and retention", operands[0])
 	}
 }
 
@@ -181,6 +192,20 @@ type backupSetFlags struct {
 var (
 	backupSetCreateOnlyFlags = []string{"ssh-key-file", "ssh-key-id", "known-hosts-line", "trust-host-key", "disabled", "read-only", "run", "state-database"}
 	backupSetPatchOnlyFlags  = []string{"acknowledge-repoint"}
+
+	// backupSetSharedFlags are the ten create and patch both take: each
+	// one is a field of the backup set itself.
+	backupSetSharedFlags = []string{
+		"host", "port", "user", "remote-path", "local-path", "include",
+		"completion-strategy", "stable-for", "stale-after", "validator-id",
+	}
+
+	// backupSetNonRemoveFlags is every flag this command declares except
+	// --config, because remove takes none of them: it names a set and
+	// removes it. Built from the three lists above rather than typed out
+	// again, so a flag added to create or patch later cannot become one
+	// remove quietly accepts and ignores.
+	backupSetNonRemoveFlags = append(append(append([]string{}, backupSetSharedFlags...), backupSetCreateOnlyFlags...), backupSetPatchOnlyFlags...)
 )
 
 func declareBackupSetFlags() *backupSetFlags {
@@ -312,6 +337,49 @@ func backupSetPatch(f *backupSetFlags, id string) int {
 		return fail(err)
 	}
 	printBackupSet(updated)
+	return 0
+}
+
+// backupSetRemove is the `remove` verb: the same operation DELETE
+// /api/v1/backup-sets/{source}/{set} performs, through the same
+// BackupService.RemoveBackupSet.
+//
+// It asks for no confirmation, and that is a decision rather than an
+// omission. Nothing this removes is a backup: every artifact the set
+// collected stays on local storage and stays in the journal, `artifacts`
+// still lists them, and creating the set again with the same source and
+// name takes all of it back. A prompt in front of an operation that
+// deletes nothing is the kind of ceremony people learn to type through,
+// which is exactly what makes it useless in front of one that does.
+//
+// It prints what stayed, because that is the half a caller cannot see for
+// itself once the set is out of the configuration.
+func backupSetRemove(f *backupSetFlags, id string) int {
+	ctx := context.Background()
+	svc, cleanup, err := openBackupService(ctx, *f.cfgPath)
+	if err != nil {
+		return fail(err)
+	}
+	defer cleanup()
+
+	logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
+
+	kept, err := svc.ListArtifacts(ctx, service.ArtifactFilter{BackupSetID: id})
+	if err != nil {
+		// Read before the removal, because afterwards this filter names
+		// a set the configuration no longer has and is refused (#187).
+		// A failure here is the removal's failure too: a caller told
+		// "removed" with no idea what was kept has been told half of it.
+		return fail(err)
+	}
+
+	if err := svc.RemoveBackupSet(ctx, id); err != nil {
+		return fail(err)
+	}
+
+	fmt.Printf("removed the configuration for %s\n", id)
+	fmt.Printf("%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", len(kept))
+	fmt.Printf("creating %s again takes all of them back\n", id)
 	return 0
 }
 

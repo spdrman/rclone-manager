@@ -170,6 +170,27 @@ type BackupServiceClient interface {
 	// does and, in particular, does not undo.
 	SetBackupSetReadOnly(ctx context.Context, id string, readOnly bool) (service.BackupSet, error)
 
+	// RemoveBackupSet backs DELETE
+	// /api/v1/backup-sets/{source}/{set} (issue #391): take one backup
+	// set out of the configuration, so nothing is collected for it from
+	// here on.
+	//
+	// Configuration only, and that is the contract rather than an
+	// implementation detail. Every artifact the set produced stays on
+	// storage and stays listed under GET /api/v1/backups, which is what
+	// the confirmation an operator accepts in the Web UI has always
+	// promised; see core/service/backupsetremove.go's own package doc for
+	// what it keeps, for what a re-created set with the same id re-adopts,
+	// and for the residue an interrupted transfer can leave.
+	//
+	// State-changing but NOT destructive under docs/EPIC-B-multi-nas.md
+	// §50, in the same tier as UpdateBackupSet and CreateBackupSet:
+	// nothing reachable from here touches, moves or deletes a byte of
+	// backup data. Deleting retained backups is a different operation
+	// with a different consent model (FR-20 and the destructive gate),
+	// and it is not this one.
+	RemoveBackupSet(ctx context.Context, id string) error
+
 	// BackupSetRetention, SetBackupSetRetention and
 	// ClearBackupSetRetention back GET/PUT/DELETE
 	// /api/v1/backup-sets/{source}/{set}/retention (issue #333): read

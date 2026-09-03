@@ -5279,6 +5279,114 @@
         "x-optimistic-concurrency": null,
         "x-csrf-required": true,
         "x-authenticated": true
+      },
+      "delete": {
+        "operationId": "removeBackupSet",
+        "summary": "Remove one backup set's configuration (issue #391). Configuration only: the backups this set already collected stay on storage and stay listed under GET /backups, which is what the confirmation an operator accepts promises. Nothing this can reach deletes a byte of backup data, so it carries CSRF and not the destructive gate, in the same tier as PATCH on this path and POST /backup-sets. Not reversible as an operation: the undo is creating a set with the same source and name again, which re-adopts every artifact the removed one produced, because an artifact is identified by source/set/name.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed. The set is gone from the configuration and there is no resource left to return, so there is no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND. A second removal of the same set answers this too: the effect is idempotent, the status deliberately is not, because on a destructive control a mistyped name must not come back as success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
       }
     },
     "/backup-sets/{source}/{set}/edit-hold": {

@@ -479,6 +479,38 @@ func (h *handlers) setBackupSetReadOnly(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, toBackupSetResponse(updated))
 }
 
+// removeBackupSet is DELETE /api/v1/backup-sets/{source}/{set} (issue
+// #391): take one backup set out of the configuration.
+//
+// It answers 204 with no body, matching releaseBackupSetEditHold, because
+// there is no resource left to return. Every other write in this group
+// returns the set it changed; this one changed it into nothing.
+//
+// A set this deployment does not configure, INCLUDING one an earlier call
+// already removed, gets 404 BACKUP_SET_NOT_FOUND. So the effect is
+// idempotent and the status deliberately is not: a client that retries
+// after a lost response learns the set is gone either way, and a client
+// that typed the name wrong is told so rather than being congratulated on
+// a removal that did not happen. That is the whole shape of the defect
+// this issue is about, and it is not worth reintroducing for the sake of
+// a tidier verb table.
+//
+// The id comes from two named segments, exactly like /enabled,
+// /read-only and the PATCH above, for the identical reason: a backup set
+// id is always exactly source/name.
+func (h *handlers) removeBackupSet(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "source") + "/" + chi.URLParam(r, "set")
+	if err := h.backend.RemoveBackupSet(r.Context(), id); err != nil {
+		if errors.Is(err, service.ErrBackupSetNotFound) {
+			writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+			return
+		}
+		writeBackupSetError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // updateBackupSetRequest is PATCH /api/v1/backup-sets/{source}/{set}'s
 // body: issue #350's edit surface, and a sparse one.
 //
