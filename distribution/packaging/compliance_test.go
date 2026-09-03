@@ -3,6 +3,7 @@ package packaging
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -226,9 +227,11 @@ func TestProjectLicenseIsInTheTreeAndIsWhatItSaysItIs(t *testing.T) {
 }
 
 // TestLicensePolicyComplaints is the executable form of the premise
-// behind choosing Apache-2.0: nothing in the graph is copyleft. That is a
-// fact about today's go.mod, not a property of the project, so it is
-// checked rather than remembered.
+// behind choosing Apache-2.0: every linked component is either permissive
+// or under one of the non-permissive licences this project accepts on
+// purpose with its obligation recorded. That is a fact about today's
+// go.mod, not a property of the project, so it is checked rather than
+// remembered.
 func TestLicensePolicyComplaints(t *testing.T) {
 	c := MustLoadCompliance()
 	base := func(comps ...Component) Inventory {
@@ -244,7 +247,17 @@ func TestLicensePolicyComplaints(t *testing.T) {
 		{"a permissive component", base(ok), ""},
 		{"a GPL component", base(Component{Name: "example.com/g", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "GPL-3.0-only"}), "which is copyleft"},
 		{"an AGPL component", base(Component{Name: "example.com/a", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "AGPL-3.0-only"}), "which is copyleft"},
-		{"an MPL component", base(Component{Name: "example.com/m", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "MPL-2.0"}), "which is copyleft"},
+		// MPL-2.0 used to be refused here and is now accepted, and
+		// the reason is #402: rclone's s3 backend links two MPL-2.0
+		// modules and cannot be registered without them, so the
+		// project accepted the licence with its §3.2 obligation
+		// recorded rather than pretend the graph is permissive.
+		// The acceptance is what makes this row pass, and
+		// TestTheAcceptedNonPermissiveCategoryRefusesAnEmptyAcceptance
+		// is the control that proves so.
+		{"one of the MPL releases this project accepts on purpose", base(Component{Name: "github.com/hashicorp/go-cleanhttp", Version: "v0.5.2", Ecosystem: EcosystemGo, LicenseID: "MPL-2.0"}), ""},
+		{"a different MPL release, which nobody has read", base(Component{Name: "github.com/hashicorp/go-cleanhttp", Version: "v0.5.3", Ecosystem: EcosystemGo, LicenseID: "MPL-2.0"}), "not for this release"},
+		{"a copyleft licence nobody accepted", base(Component{Name: "example.com/e", Version: "v1", Ecosystem: EcosystemGo, LicenseID: "EPL-2.0"}), "which is copyleft"},
 		{"a component whose licence could not be identified", base(Component{Name: "example.com/u", Version: "v1", Ecosystem: EcosystemGo}), "not evidence of a permissive one"},
 
 		// The rows a denylist cannot reach. Each of these is
@@ -406,7 +419,17 @@ func TestLicensePolicyAgainstTheRealInventory(t *testing.T) {
 	if inv.Schema != InventorySchema {
 		t.Errorf("%s declares schema %q and this code reads %q", InventoryPath, inv.Schema, InventorySchema)
 	}
-	for _, complaint := range LicensePolicyComplaints(MustLoadCompliance(), inv) {
+	c := MustLoadCompliance()
+	for _, complaint := range LicensePolicyComplaints(c, inv) {
+		t.Error(complaint)
+	}
+	// The second half. LicensePolicyComplaints can only judge whether
+	// an acceptance is declared properly; this is the one that reads
+	// NOTICE and the source offer and asks whether they carry it. An
+	// accepted licence whose artifacts stop naming the module, the
+	// version or the address is the failure mode that would otherwise
+	// look exactly like a pass.
+	for _, complaint := range LicenceObligationComplaints(c, inv, RepoReader()) {
 		t.Error(complaint)
 	}
 }
@@ -581,5 +604,599 @@ func TestSigningRecordMatchesWhetherAnythingIsPublished(t *testing.T) {
 	}
 	if p.Signing.Method != "sigstore-keyless" {
 		t.Errorf("the bundle records signing method %q; keyless is the design, and it is what makes it true that this repository holds no signing key", p.Signing.Method)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The third category: accepted, non-permissive, obligation recorded
+// ---------------------------------------------------------------------
+//
+// Issue #402. Registering rclone's s3 backend links go-cleanhttp and
+// go-retryablehttp, both MPL-2.0, into both shipped binaries, and there
+// is no build tag that separates them from the backend. The one-line way
+// out was to put MPL-2.0 on permissiveIds, and these tests exist because
+// that would have been a lie in the file whose whole job is to be true.
+//
+// So acceptance is its own category with its own shape, and the tests
+// below are about the shape rather than the licence: an acceptance that
+// records nothing admits nothing, an acceptance whose artifacts do not
+// carry the offer admits nothing, and a licence nobody accepted is
+// refused exactly as it was before.
+
+// acceptedFixture is a self-contained project with one accepted
+// non-permissive licence and one component under it.
+//
+// The encumbered module's path carries a capital letter on purpose. A Go
+// module proxy path is case-escaped, so the address a recipient follows
+// is not the module path with a prefix glued on, and a fixture whose
+// paths are all lower-case cannot tell the difference between the code
+// getting that right and the code ignoring it.
+func acceptedFixture() (Compliance, Inventory) {
+	c := Compliance{
+		License: ComplianceLicense{
+			SPDXID:                         "Apache-2.0",
+			CopyleftBlocksTheLicenseChoice: true,
+			PermissiveIDs:                  []string{"MIT"},
+			CopyleftIDs:                    []string{"MPL-2.0", "GPL-3.0-only"},
+			AcceptedNonPermissive: []AcceptedNonPermissiveLicence{{
+				SPDXID:          "MPL-2.0",
+				Scope:           "File-level weak copyleft.",
+				Obligation:      "MPL-2.0 §3.2: make the Source Code Form of the covered files available.",
+				LicenceTextURL:  "https://mozilla.org/MPL/2.0/",
+				SourceRetrieval: "https://proxy.golang.org/{module}/@v/{version}.zip",
+				Components:      []string{"example.com/Encumbered@v2.3.4"},
+				DischargedBy:    []string{"THE-OFFER"},
+			}},
+		},
+	}
+	inv := Inventory{
+		ProjectLicense: "Apache-2.0",
+		Components: []Component{
+			{Name: "example.com/plain", Version: "v1.0.0", Ecosystem: EcosystemGo, LicenseID: "MIT", LinkedInto: []string{"a-binary"}},
+			{Name: "example.com/Encumbered", Version: "v2.3.4", Ecosystem: EcosystemGo, LicenseID: "MPL-2.0", LinkedInto: []string{"a-binary"}},
+		},
+	}
+	return c, inv
+}
+
+// encumberedSourceURL is the address the fixture's offer has to carry.
+const encumberedSourceURL = "https://proxy.golang.org/example.com/!encumbered/@v/v2.3.4.zip"
+
+// completeOffer is an artifact that discharges the fixture's obligation.
+func completeOffer() string {
+	return "This product links MPL-2.0 components.\n" +
+		"Licence: https://mozilla.org/MPL/2.0/\n" +
+		"example.com/Encumbered@v2.3.4\n" +
+		"source: " + encumberedSourceURL + "\n"
+}
+
+// TestTheAcceptedNonPermissiveCategoryAdmitsOnlyWhatItRecords drives the
+// pure half.
+//
+// Every row here is the same component under the same licence, and what
+// changes is how much the acceptance wrote down. A category that admits
+// a component on the strength of the id alone is permissiveIds with more
+// syntax, which is the whole thing #402 refused.
+func TestTheAcceptedNonPermissiveCategoryAdmitsOnlyWhatItRecords(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*AcceptedNonPermissiveLicence)
+		want string
+	}{
+		{"a complete acceptance", func(*AcceptedNonPermissiveLicence) {}, ""},
+		{"no scope", func(a *AcceptedNonPermissiveLicence) { a.Scope = "" }, "names no scope"},
+		{"no obligation", func(a *AcceptedNonPermissiveLicence) { a.Obligation = "" }, "names no obligation"},
+		{"nowhere to read the licence", func(a *AcceptedNonPermissiveLicence) { a.LicenceTextURL = "" }, "obtain the licence text"},
+		{"nowhere to get the source", func(a *AcceptedNonPermissiveLicence) { a.SourceRetrieval = "" }, "obtain the source"},
+		{"a source address that names a project rather than a release",
+			func(a *AcceptedNonPermissiveLicence) { a.SourceRetrieval = "https://github.com/hashicorp/go-cleanhttp" },
+			"does not vary by component"},
+		{"a source address with no version in it",
+			func(a *AcceptedNonPermissiveLicence) { a.SourceRetrieval = "https://proxy.golang.org/{module}/" },
+			"does not vary by component"},
+		{"nothing that carries the offer", func(a *AcceptedNonPermissiveLicence) { a.DischargedBy = nil }, "names no artifact"},
+		{"no component, so it accepts an id rather than a release", func(a *AcceptedNonPermissiveLicence) { a.Components = nil }, "names no component"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, inv := acceptedFixture()
+			tc.edit(&c.License.AcceptedNonPermissive[0])
+			got := LicensePolicyComplaints(c, inv)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("a complete acceptance still refuses its own component: %v", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected exactly one complaint containing %q, got %v", tc.want, got)
+			}
+			if !strings.Contains(got[0], tc.want) {
+				t.Errorf("the complaint does not say what is missing: got %q, want it to contain %q", got[0], tc.want)
+			}
+			if !strings.Contains(got[0], "example.com/Encumbered@v2.3.4") {
+				t.Errorf("the complaint never names the component it refuses: %q", got[0])
+			}
+		})
+	}
+}
+
+// TestAnUnacceptedNonPermissiveLicenceIsStillRefused is the control for
+// the category as a whole.
+//
+// The point of a third category is that it admits ONE licence somebody
+// read and decided about. If accepting MPL-2.0 also softened the answer
+// for GPL-3.0, AGPL-3.0 or an id nobody has ever looked at, the category
+// would be a wider allowlist and this suite would be theatre.
+func TestAnUnacceptedNonPermissiveLicenceIsStillRefused(t *testing.T) {
+	for _, id := range []string{"GPL-3.0-only", "AGPL-3.0-only", "LGPL-3.0-only", "SSPL-1.0", "EUPL-1.2", "MPL-1.1"} {
+		t.Run(id, func(t *testing.T) {
+			c, inv := acceptedFixture()
+			inv.Components = append(inv.Components, Component{
+				Name: "example.com/other", Version: "v9", Ecosystem: EcosystemGo, LicenseID: id, LinkedInto: []string{"a-binary"},
+			})
+			got := LicensePolicyComplaints(c, inv)
+			if len(got) != 1 {
+				t.Fatalf("%s produced %d complaints; accepting MPL-2.0 must not admit anything else: %v", id, len(got), got)
+			}
+			if !strings.Contains(got[0], "example.com/other@v9") {
+				t.Errorf("the refusal names the wrong component: %q", got[0])
+			}
+		})
+	}
+}
+
+// TestTheObligationIsCheckedAgainstTheArtifactsAndNotBelieved drives the
+// half that reads the tree.
+//
+// Recording an obligation is the easy part. Each row here is a complete,
+// well-formed acceptance whose artifact is missing one thing a recipient
+// would need, because those are the states that read as compliant and
+// are not.
+func TestTheObligationIsCheckedAgainstTheArtifactsAndNotBelieved(t *testing.T) {
+	offer := completeOffer()
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"an artifact that carries the whole offer", offer, ""},
+		{"an artifact that never names the licence", strings.ReplaceAll(offer, "MPL-2.0", "some licence"), "never names MPL-2.0"},
+		{"an artifact that never says where to read the licence", strings.ReplaceAll(offer, "https://mozilla.org/MPL/2.0/", "somewhere"), "never gives https://mozilla.org/MPL/2.0/"},
+		{"an artifact that names the module but not the version", strings.ReplaceAll(offer, "example.com/Encumbered@v2.3.4", "example.com/Encumbered"), "never names example.com/Encumbered@v2.3.4"},
+		{"an artifact with no source address at all", strings.ReplaceAll(offer, encumberedSourceURL, "ask us"), "never gives " + encumberedSourceURL},
+		{"an artifact whose source address skipped the proxy path escape",
+			strings.ReplaceAll(offer, encumberedSourceURL, "https://proxy.golang.org/example.com/Encumbered/@v/v2.3.4.zip"),
+			"never gives " + encumberedSourceURL},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, inv := acceptedFixture()
+			got := LicenceObligationComplaints(c, inv, readerFor(map[string]string{"THE-OFFER": tc.body}))
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("a complete offer still complains: %v", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("expected exactly one complaint containing %q, got %v", tc.want, got)
+			}
+			if !strings.Contains(got[0], tc.want) {
+				t.Errorf("got %q, want it to contain %q", got[0], tc.want)
+			}
+		})
+	}
+
+	// An artifact that is declared and is not there. A missing file
+	// read as an empty one contains none of the strings above, so it
+	// would produce four complaints about content instead of one
+	// about the file, and the four would send somebody editing a file
+	// that does not exist.
+	t.Run("an artifact that is not in the tree", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		got := LicenceObligationComplaints(c, inv, readerFor(nil))
+		if len(got) != 1 || !strings.Contains(got[0], "not in the tree") {
+			t.Fatalf("expected one complaint about the missing artifact, got %v", got)
+		}
+	})
+
+	// The mechanism rules. Both of these are ways for the acceptance
+	// to still be in the file and stop deciding anything.
+	t.Run("an id on the allowlist and in the accepted category at once", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		c.License.PermissiveIDs = append(c.License.PermissiveIDs, "MPL-2.0")
+		got := LicenceObligationComplaints(c, inv, readerFor(map[string]string{"THE-OFFER": offer}))
+		if len(got) != 1 || !strings.Contains(got[0], "allowlist decides first") {
+			t.Fatalf("an id on both lists passes silently, which is how the obligation stops being checked: %v", got)
+		}
+	})
+	t.Run("an acceptance nothing in the inventory is under", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		inv.Components = inv.Components[:1]
+		got := LicenceObligationComplaints(c, inv, readerFor(map[string]string{"THE-OFFER": offer}))
+		if len(got) != 1 || !strings.Contains(got[0], "permission granted in advance") {
+			t.Fatalf("a standing acceptance for a licence the graph does not contain is exactly what this category must not become: %v", got)
+		}
+	})
+	t.Run("an acceptance of an expression rather than a licence", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		c.License.AcceptedNonPermissive[0].SPDXID = "(MIT OR MPL-2.0)"
+		got := LicenceObligationComplaints(c, inv, readerFor(map[string]string{"THE-OFFER": offer}))
+		if len(got) != 1 || !strings.Contains(got[0], "expression rather than a decided licence") {
+			t.Fatalf("expected one complaint about the expression, got %v", got)
+		}
+	})
+}
+
+// TestTheModuleProxyPathEscapeIsApplied pins the one detail in the
+// source address that a containment check cannot catch.
+//
+// LicenceObligationComplaints asks whether an artifact contains the URL
+// it rendered. If SourceURLFor rendered a URL that 404s, the artifact
+// would contain it, the check would pass, and the offer this project
+// makes to recipients would be a dead link. github.com/IBM/go-sdk-core
+// is in this project's own graph, and the escaped and unescaped forms of
+// its proxy path were both asked of proxy.golang.org while writing this:
+// escaped answers 200 and unescaped answers 404.
+func TestTheModuleProxyPathEscapeIsApplied(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"github.com/hashicorp/go-cleanhttp", "github.com/hashicorp/go-cleanhttp"},
+		{"github.com/IBM/go-sdk-core/v5", "github.com/!i!b!m/go-sdk-core/v5"},
+		{"github.com/Azure/azure-sdk-for-go/sdk/azcore", "github.com/!azure/azure-sdk-for-go/sdk/azcore"},
+		{"", ""},
+	} {
+		if got := EscapeGoModulePath(tc.in); got != tc.want {
+			t.Errorf("EscapeGoModulePath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	a := AcceptedNonPermissiveLicence{SourceRetrieval: "https://proxy.golang.org/{module}/@v/{version}.zip"}
+	goComp := Component{Name: "github.com/IBM/go-sdk-core/v5", Version: "v5.23.1", Ecosystem: EcosystemGo}
+	if got, want := a.SourceURLFor(goComp), "https://proxy.golang.org/github.com/!i!b!m/go-sdk-core/v5/@v/v5.23.1.zip"; got != want {
+		t.Errorf("SourceURLFor a Go module = %q, want %q", got, want)
+	}
+	// The version needs the same escape as the path, because
+	// golang.org/x/mod's EscapeVersion and EscapePath are the same
+	// function. Neither MPL version in this graph has an uppercase
+	// letter today, so nothing would notice this being wrong until a
+	// pre-release tag arrived and the offer rendered a dead link that
+	// LicenceObligationComplaints would happily find in the file.
+	preRelease := Component{Name: "example.com/m", Version: "v2.0.0-RC1", Ecosystem: EcosystemGo}
+	if got, want := a.SourceURLFor(preRelease), "https://proxy.golang.org/example.com/m/@v/v2.0.0-!r!c1.zip"; got != want {
+		t.Errorf("SourceURLFor an uppercase pre-release version = %q, want %q", got, want)
+	}
+	// npm package names are already lower-case by rule, and the
+	// escape is a Go module proxy convention, so it is not applied
+	// where it would be wrong.
+	npm := Component{Name: "@scope/Thing", Version: "1.2.3", Ecosystem: EcosystemNPM}
+	b := AcceptedNonPermissiveLicence{SourceRetrieval: "https://registry.npmjs.org/{module}/-/{version}.tgz"}
+	if got, want := b.SourceURLFor(npm), "https://registry.npmjs.org/@scope/Thing/-/1.2.3.tgz"; got != want {
+		t.Errorf("SourceURLFor an npm package = %q, want %q", got, want)
+	}
+}
+
+// TestTheShippedAcceptanceIsCoherent pins the declaration in the file
+// this release actually ships.
+func TestTheShippedAcceptanceIsCoherent(t *testing.T) {
+	c := MustLoadCompliance()
+	if len(c.License.AcceptedNonPermissive) == 0 {
+		t.Skip("compliance.json accepts no non-permissive licence, so there is no declaration to check")
+	}
+	seen := map[string]bool{}
+	for _, a := range c.License.AcceptedNonPermissive {
+		if seen[strings.ToUpper(a.SPDXID)] {
+			t.Errorf("%s is accepted twice, so one of the two entries decides nothing", a.SPDXID)
+		}
+		seen[strings.ToUpper(a.SPDXID)] = true
+		if c.IsPermissive(a.SPDXID) {
+			t.Errorf("%s is on permissiveIds as well; the allowlist decides first, so the obligation recorded against it would never be read", a.SPDXID)
+		}
+		if !c.IsCopyleft(a.SPDXID) {
+			t.Errorf("%s is accepted as non-permissive and is not on copyleftIds, so a reader of the two lists cannot tell what it is", a.SPDXID)
+		}
+		if len(a.Rationale) == 0 {
+			t.Errorf("%s is accepted with no rationale; the decision to ship under a non-permissive licence is the part that wants writing down", a.SPDXID)
+		}
+	}
+}
+
+// TestAGenuineCopyleftLicenceIsRefusedAgainstTheRealFile is the
+// falsification for TestLicensePolicyAgainstTheRealInventory.
+//
+// That test is green, and a green policy test has two explanations: the
+// graph is acceptable, or the policy accepts anything. This is the
+// positive control that tells them apart. It takes the real inventory,
+// the real compliance.json, and plants one module under a licence this
+// project has not accepted and would not, then asserts the refusal names
+// that module and nothing else.
+func TestAGenuineCopyleftLicenceIsRefusedAgainstTheRealFile(t *testing.T) {
+	data, err := os.ReadFile(Path(InventoryPath))
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", InventoryPath, err)
+	}
+	live, err := ParseInventory(data)
+	if err != nil {
+		t.Fatalf("cannot parse %s: %v", InventoryPath, err)
+	}
+	c := MustLoadCompliance()
+	if got := LicensePolicyComplaints(c, live); len(got) != 0 {
+		t.Fatalf("the real inventory already complains, so nothing below measures the planted module: %v", got)
+	}
+
+	for _, id := range []string{"GPL-3.0-only", "AGPL-3.0-only", "GPL-2.0-only", "SSPL-1.0", "BUSL-1.1"} {
+		t.Run(id, func(t *testing.T) {
+			planted := Inventory{
+				ProjectLicense: live.ProjectLicense,
+				Components: append(append([]Component{}, live.Components...), Component{
+					Name:       "github.com/planted/copyleft",
+					Version:    "v1.0.0",
+					Ecosystem:  EcosystemGo,
+					LicenseID:  id,
+					LinkedInto: []string{"backup-manager"},
+				}),
+			}
+			got := LicensePolicyComplaints(c, planted)
+			if len(got) != 1 {
+				t.Fatalf("a %s module in the real inventory produced %d complaints, want exactly 1: %v", id, len(got), got)
+			}
+			if !strings.Contains(got[0], "github.com/planted/copyleft@v1.0.0") || !strings.Contains(got[0], id) {
+				t.Errorf("the refusal does not name the planted module and its licence: %q", got[0])
+			}
+		})
+	}
+
+	// And the same for the shape that is not on any list, because a
+	// denylist would let it through and this policy is an allowlist
+	// plus one named acceptance.
+	t.Run("a licence nobody has ever looked at", func(t *testing.T) {
+		planted := Inventory{
+			ProjectLicense: live.ProjectLicense,
+			Components: append(append([]Component{}, live.Components...), Component{
+				Name: "github.com/planted/unknown", Version: "v1.0.0", Ecosystem: EcosystemGo,
+				LicenseID: "Parity-7.0.0", LinkedInto: []string{"backup-manager"},
+			}),
+		}
+		got := LicensePolicyComplaints(c, planted)
+		if len(got) != 1 || !strings.Contains(got[0], "github.com/planted/unknown@v1.0.0") {
+			t.Fatalf("expected exactly one refusal naming the planted module, got %v", got)
+		}
+	})
+
+	// A second MPL-2.0 module is the interesting one, because MPL-2.0
+	// IS accepted. It has to be refused anyway, on the ground that
+	// nothing tells its recipients where its source is: the
+	// acceptance is per release, not per licence.
+	t.Run("a second module under the accepted licence, with no offer for it", func(t *testing.T) {
+		planted := Inventory{
+			ProjectLicense: live.ProjectLicense,
+			Components: append(append([]Component{}, live.Components...), Component{
+				Name: "github.com/planted/alsompl", Version: "v1.0.0", Ecosystem: EcosystemGo,
+				LicenseID: "MPL-2.0", LinkedInto: []string{"backup-manager"},
+			}),
+		}
+		got := LicenceObligationComplaints(c, planted, RepoReader())
+		if len(got) == 0 {
+			t.Fatal("a new MPL-2.0 module with no source offer anywhere passes, so accepting the licence once accepted every future module under it")
+		}
+		joined := strings.Join(got, "\n")
+		if !strings.Contains(joined, "github.com/planted/alsompl@v1.0.0") {
+			t.Errorf("the complaints never name the module nothing offers source for: %s", joined)
+		}
+	})
+}
+
+// arithmeticInProse catches a component count written into prose.
+// "54 modules" is how compliance.json came to assert a number nobody
+// checked. The pattern is #402's other lane's, and so is the rule.
+var arithmeticInProse = regexp.MustCompile(`\b\d+\s+(modules|packages|components|dependencies)\b`)
+
+// TestTheLicenceRationaleDescribesTodaysGraph is the check #402 was
+// missing.
+//
+// The rationale is prose in a data file, and until this existed nothing
+// read it. That is how it went on saying "Nothing in the graph is
+// copyleft" for as long as it did after the s3 backend made it false:
+// every other claim in this package is re-derived from the tree on every
+// run, and the one claim the licence choice actually rests on was
+// re-derived from nobody's memory.
+func TestTheLicenceRationaleDescribesTodaysGraph(t *testing.T) {
+	c := MustLoadCompliance()
+	data, err := os.ReadFile(Path(InventoryPath))
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", InventoryPath, err)
+	}
+	inv, err := ParseInventory(data)
+	if err != nil {
+		t.Fatalf("cannot parse %s: %v", InventoryPath, err)
+	}
+	if len(inv.Components) == 0 {
+		t.Fatal("the inventory lists nothing, so this measured no graph at all")
+	}
+	rationale := strings.Join(c.License.Rationale, "\n")
+	if strings.TrimSpace(rationale) == "" {
+		t.Fatal("compliance.json declares no licence rationale, so the reasoning behind the project's own licence lives in a commit message")
+	}
+
+	var nonPermissive []Component
+	for _, comp := range inv.Components {
+		if !c.IsPermissive(comp.LicenseID) {
+			nonPermissive = append(nonPermissive, comp)
+		}
+	}
+
+	// No arithmetic in prose. I first wrote this the other way, with
+	// the counts re-derived here and the rationale required to state
+	// them, and #402's other lane was right that it is the wrong
+	// trade: a count in the rationale is a second copy of a fact
+	// third-party-licenses.json owns, and the second copy is the one
+	// nobody regenerates. Requiring it also puts a prose edit in the
+	// path of every unrelated dependency bump, which buys no safety at
+	// all, because what the licence choice rests on is WHICH licences
+	// are in the graph and not how many components carry them.
+	//
+	// compliance.json's own header already says nothing in it is
+	// hand-maintained arithmetic, and the rationale was the one place
+	// that was not true.
+	for i, line := range c.License.Rationale {
+		if m := arithmeticInProse.FindString(line); m != "" {
+			t.Errorf("license.rationale line %d says %q; that count belongs to %s, which is re-derived from the module graph on every run, and a copy of it here can only go stale", i, m, c.License.Inventory)
+		}
+	}
+
+	if len(nonPermissive) == 0 {
+		return
+	}
+
+	// The sentence that was false. It is pinned rather than left to
+	// review, because it read perfectly well while being wrong and
+	// review is what missed it.
+	//
+	// Collapsed across lines before matching, because the rationale is
+	// stored as wrapped strings and this sentence straddled two of
+	// them: a search over the array as written would miss it and pass
+	// for a reason that has nothing to do with the text. That is #402's
+	// other lane's catch, and my first version had exactly that hole.
+	//
+	// The claim is one sentence and the match is that sentence, not
+	// "copyleft" anywhere near a negation. A rationale that explains
+	// why the old sentence was wrong has to be able to quote the
+	// problem, and my first version refused its own explanation.
+	collapsed := strings.Join(strings.Fields(rationale), " ")
+	for _, claim := range []string{
+		"Nothing in the graph is copyleft",
+		"nothing in the graph is copyleft",
+	} {
+		if strings.Contains(collapsed, claim) {
+			t.Errorf("the rationale says %q while %d component(s) in the inventory are not permissive; that sentence is the defect #402 reported", claim, len(nonPermissive))
+		}
+	}
+
+	// And it has to name them. A rationale that admits copyleft
+	// exists in the abstract and never says which components carry it
+	// leaves a reader no way to check the claim against the
+	// inventory.
+	for _, comp := range nonPermissive {
+		if !strings.Contains(rationale, comp.Name) {
+			t.Errorf("the rationale never names %s, which is %s and is linked into %s", comp.Name, comp.LicenseID, strings.Join(comp.LinkedInto, " and "))
+		}
+		if !strings.Contains(rationale, comp.Version) {
+			t.Errorf("the rationale names %s and not the version %s that shipped", comp.Name, comp.Version)
+		}
+		if !strings.Contains(rationale, comp.LicenseID) {
+			t.Errorf("the rationale never names %s, the licence %s is under", comp.LicenseID, comp.Name)
+		}
+	}
+}
+
+// TestTheAcceptanceIsPerReleaseAndNotPerLicence is the sharpest
+// falsification of the whole category, and it is #402's other lane's
+// idea rather than mine.
+//
+// My first cut admitted any component carrying an accepted id and left
+// the per-release question to LicenceObligationComplaints, which reads
+// the tree. That works, and I proved it works, but it puts the answer
+// behind a filesystem and it makes the pure function say yes to a
+// licence when the thing it was asked about is a release. The other
+// lane's framing is better: whatever admits go-cleanhttp@v0.5.2 has to
+// admit THAT, and not the licence it happens to carry, or accepting
+// MPL-2.0 once has quietly accepted every future module under it.
+//
+// A version bump is the case that makes it concrete. v0.7.9 is a
+// different upload: different licence bytes, notices nobody has read,
+// and a different source address, since the offer renders per release.
+// So it is refused exactly as firmly as a module from another project.
+func TestTheAcceptanceIsPerReleaseAndNotPerLicence(t *testing.T) {
+	t.Run("a module nobody recorded, under the accepted licence", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		inv.Components = append(inv.Components, Component{
+			Name: "example.com/Unrecorded", Version: "v0.4.3", Ecosystem: EcosystemGo,
+			LicenseID: "MPL-2.0", LinkedInto: []string{"a-binary"},
+		})
+		got := LicensePolicyComplaints(c, inv)
+		if len(got) != 1 {
+			t.Fatalf("an MPL-2.0 module nobody recorded produced %d complaints, want exactly one: %v", len(got), got)
+		}
+		if !strings.Contains(got[0], "example.com/Unrecorded@v0.4.3") {
+			t.Errorf("the complaint does not name the module it is about: %q", got[0])
+		}
+		if !strings.Contains(got[0], "not for this release") {
+			t.Errorf("the complaint does not say the acceptance is per release: %q", got[0])
+		}
+	})
+
+	t.Run("a drifted version of a recorded module", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		for i := range inv.Components {
+			if inv.Components[i].Name == "example.com/Encumbered" {
+				inv.Components[i].Version = "v2.3.5"
+			}
+		}
+		got := LicensePolicyComplaints(c, inv)
+		if len(got) != 1 {
+			t.Fatalf("bumping a recorded module to an unrecorded version produced %d complaints, want exactly one: %v", len(got), got)
+		}
+		if !strings.Contains(got[0], "v2.3.5") {
+			t.Errorf("the complaint does not name the version that drifted: %q", got[0])
+		}
+	})
+
+	// The control. The recorded release itself still passes, or the two
+	// refusals above are the policy refusing whatever it is handed.
+	t.Run("the recorded release itself", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		if got := LicensePolicyComplaints(c, inv); len(got) != 0 {
+			t.Fatalf("the recorded release is refused, so the refusals above are not about the version: %v", got)
+		}
+	})
+
+	// And a release recorded here that the graph no longer links is a
+	// permission left lying around. The version bump that removed it is
+	// exactly when somebody should have to look at the offer again.
+	t.Run("a recorded release the inventory no longer has", func(t *testing.T) {
+		c, inv := acceptedFixture()
+		c.License.AcceptedNonPermissive[0].Components = append(
+			c.License.AcceptedNonPermissive[0].Components, "example.com/Gone@v1.0.0")
+		got := LicenceObligationComplaints(c, inv, readerFor(map[string]string{"THE-OFFER": completeOffer()}))
+		if len(got) != 1 || !strings.Contains(got[0], "example.com/Gone@v1.0.0") {
+			t.Fatalf("expected one complaint naming the release the graph no longer links, got %v", got)
+		}
+	})
+}
+
+// TestTheShippedAcceptanceNamesTheReleasesTheInventoryActuallyHas pins
+// the two together in the file this release ships, in both directions.
+func TestTheShippedAcceptanceNamesTheReleasesTheInventoryActuallyHas(t *testing.T) {
+	c := MustLoadCompliance()
+	if len(c.License.AcceptedNonPermissive) == 0 {
+		t.Skip("compliance.json accepts no non-permissive licence")
+	}
+	data, err := os.ReadFile(Path(InventoryPath))
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", InventoryPath, err)
+	}
+	inv, err := ParseInventory(data)
+	if err != nil {
+		t.Fatalf("cannot parse %s: %v", InventoryPath, err)
+	}
+	for _, a := range c.License.AcceptedNonPermissive {
+		for _, want := range a.Components {
+			if !strings.Contains(want, "@") {
+				t.Errorf("acceptedNonPermissive lists %q for %s, which names no version; the acceptance is per release and %q is a project", want, a.SPDXID, want)
+			}
+		}
+		var found int
+		for _, comp := range inv.Components {
+			if !a.Covers(comp.LicenseID) {
+				continue
+			}
+			found++
+			if !a.Accepts(comp) {
+				t.Errorf("%s@%s is %s in the inventory and acceptedNonPermissive does not list that release", comp.Name, comp.Version, comp.LicenseID)
+			}
+		}
+		if found == 0 {
+			t.Errorf("compliance.json accepts %s and no component in the inventory is under it", a.SPDXID)
+		}
 	}
 }

@@ -10,6 +10,30 @@ rather than maintained by hand.
 This file is the NOTICE file Apache-2.0 section 4(d) refers to. Redistributing
 this work, or a derivative of it, means carrying this file with it.
 
+Source for the components that are not permissively licensed
+------------------------------------------------------------
+
+Most of this product's dependencies are permissively licensed and carry no
+obligation beyond the attribution below. The components in this section are
+not, and this is where the terms say a recipient's rights live. Each one is
+listed at the exact version that was compiled, with the address its complete
+source is served from. Nothing here is modified or vendored by this project,
+so that address serves the same source that went into the binaries, and the
+inventory's licenceSha256 for each component is the SHA-256 of the licence
+text inside it.
+
+MPL-2.0
+  Scope:      File-level weak copyleft. Reciprocity reaches the MPL-covered files themselves and nothing this project writes: a Larger Work combining them with other code may ship under other terms, which is what §3.3 says and what this release does.
+  Obligation: MPL-2.0 §3.2(a), read rather than remembered: distributing the covered files in Executable Form obliges this project to make their Source Code Form available as §3.1 describes, AND to inform recipients OF THE EXECUTABLE FORM how to obtain that Source Code Form by reasonable means, in a timely manner, at no more than the cost of distribution. §3.1 adds that recipients must be told the source is governed by the MPL and how to obtain a copy of the licence. §3.2(b) forbids the terms of the executable from limiting or altering their rights in that source, and Apache-2.0 over the Larger Work does not touch them. §3.4 forbids stripping notices out of the covered source, which is moot here because neither module is modified.
+  Licence:    https://mozilla.org/MPL/2.0/
+  Components (2), and where to get each one's source:
+    go github.com/hashicorp/go-cleanhttp@v0.5.2
+      linked into: backup-manager, backup-manager-web
+      source:      https://proxy.golang.org/github.com/hashicorp/go-cleanhttp/@v/v0.5.2.zip
+    go github.com/hashicorp/go-retryablehttp@v0.7.8
+      linked into: backup-manager, backup-manager-web
+      source:      https://proxy.golang.org/github.com/hashicorp/go-retryablehttp/@v/v0.7.8.zip
+
 Components by licence
 ---------------------
 
