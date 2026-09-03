@@ -60,6 +60,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
 // editHoldLease is how long one hold lasts without being renewed. Short,
@@ -122,6 +123,31 @@ type editHolds struct {
 	mu sync.Mutex
 	// held maps a backup set id to when its hold expires.
 	held map[string]time.Time
+	// removed names every backup set whose configuration this process has
+	// REMOVED (issue #391), and it is the one hold here that does not
+	// expire.
+	//
+	// The lease above exists because an edit hold that outlived its
+	// client would leave a set silently not backing up, and nothing worse
+	// than that can happen here. A removal is the other way round: the
+	// set is gone from the configuration, so a hold on its id stops
+	// nothing an operator still wants, and letting it lapse is what would
+	// hurt. A cycle can run for hours holding the config snapshot it
+	// started with, so a removal whose hold expired after ninety seconds
+	// would be a cycle that reaches the removed set forty minutes later,
+	// sees Held answer false again, and processes it from the old
+	// snapshot: discovering, transferring and, for a set that is not
+	// read-only, deleting from the operator's source machine, all after
+	// they removed it and watched the dialog close.
+	//
+	// It is cleared by exactly one thing: a reload of a configuration
+	// that names the id again (adoptConfig, which every write path ends
+	// in), so a set brought back gets a clean start whether it came back
+	// through CreateBackupSet or through a hand edit of config.yaml that
+	// the next write picked up. A process restart clears it too, and
+	// correctly: by then the configuration on disk no longer names the
+	// set, so nothing will reach it anyway.
+	removed map[string]bool
 	// changed is closed and replaced whenever a hold is PLACED, which is
 	// how a cycle already inside that set learns to stop. Releases
 	// deliberately do not broadcast; see BackupSetHolds.Changed's own doc.
@@ -132,7 +158,12 @@ type editHolds struct {
 }
 
 func newEditHolds() *editHolds {
-	return &editHolds{held: map[string]time.Time{}, changed: make(chan struct{}), now: func() time.Time { return now() }}
+	return &editHolds{
+		held:    map[string]time.Time{},
+		removed: map[string]bool{},
+		changed: make(chan struct{}),
+		now:     func() time.Time { return now() },
+	}
 }
 
 // Held is internal/app.BackupSetHolds.Held.
@@ -142,7 +173,21 @@ func (h *editHolds) Held(setID string) bool {
 	return h.heldLocked(setID)
 }
 
+// heldLocked is what a cycle asks: is this set held for ANY reason. A
+// removal outranks a lease and is checked first, because it is the answer
+// that must not depend on a clock.
 func (h *editHolds) heldLocked(setID string) bool {
+	if h.removed[setID] {
+		return true
+	}
+	return h.leaseHeldLocked(setID)
+}
+
+// leaseHeldLocked is the edit hold on its own, expiry and all. It is
+// separate from heldLocked so BackupSetEditState can report on edit mode
+// without a removed set's permanent hold showing up there as an edit
+// somebody is in the middle of.
+func (h *editHolds) leaseHeldLocked(setID string) bool {
 	expiry, ok := h.held[setID]
 	if !ok {
 		return false
@@ -188,11 +233,59 @@ func (h *editHolds) release(setID string) {
 	delete(h.held, setID)
 }
 
-// state reports whether setID is held and until when.
+// holdRemoved holds setID permanently, because its configuration is being
+// removed. It broadcasts exactly as place does, which is what stops a
+// cycle already inside that set: the watcher wakes, re-reads Held, and
+// cancels that set's own context.
+//
+// Called BEFORE the configuration is rewritten and the service swapped,
+// never after, and under configMu. The write swaps this service's
+// *app.Service, and a cycle already running kept the pointer and the
+// config snapshot it started with, so nothing about the write reaches
+// it. The hold is the only thing that does. Under the lock, because two
+// removals of the same set can overlap, and a hold taken outside it was
+// one the losing call could not tell from its own and gave back; see
+// RemoveBackupSet's own doc.
+func (h *editHolds) holdRemoved(setID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.removed[setID] = true
+	close(h.changed)
+	h.changed = make(chan struct{})
+}
+
+// forgetRemoved drops setID's removal hold. Called by RemoveBackupSet
+// when it fails after having taken the hold, under the same lock it took
+// it under, so the hold it drops is its own. Forgetting one that was
+// never taken is not an error, for the same reason release beside it
+// says so.
+func (h *editHolds) forgetRemoved(setID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.removed, setID)
+}
+
+// forgetRemovedNamedIn drops the removal hold of every backup set cfg
+// names. adoptConfig calls it on every hot reload, which is what keeps
+// "a set the configuration names is never removal-held" true by whatever
+// route the set came back: CreateBackupSet, or a hand-restored config.yaml
+// that an unrelated write re-read. A set cfg does not name keeps its
+// hold, which is the removal's own case.
+func (h *editHolds) forgetRemovedNamedIn(cfg *config.Config) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			delete(h.removed, src.Name+"/"+bs.Name)
+		}
+	}
+}
+
+// state reports whether setID is held for EDITING and until when.
 func (h *editHolds) state(setID string) (time.Time, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if !h.heldLocked(setID) {
+	if !h.leaseHeldLocked(setID) {
 		return time.Time{}, false
 	}
 	return h.held[setID], true

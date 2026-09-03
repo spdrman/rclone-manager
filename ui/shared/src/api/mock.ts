@@ -865,6 +865,34 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return delay({ ...found });
     },
 
+    // Issue #391. The mock actually REMOVES the set from its own SETS
+    // fixture rather than resolving and leaving it there, for the reason
+    // updateBackupSet above applies the patch rather than echoing it: a
+    // page that never called this would be indistinguishable, in the
+    // browser suite, from one that did, which is precisely the
+    // green-by-construction the no-op confirm handler already got away
+    // with once. Removing it also means a test can assert the set is gone
+    // afterwards instead of only that a spy was called.
+    //
+    // A set that is not there is rejected with the CONTRACT's code for
+    // it, BACKUP_SET_NOT_FOUND, and not the "unknown" its siblings above
+    // use: the detail page branches on that code to tell "already gone"
+    // from every other refusal, and a mock that could not produce it
+    // would leave that branch untestable through the mock, which is the
+    // green-by-construction shape check-client-paths.sh's own header
+    // warns about, one layer down.
+    removeSet: (source: string, set: string) => {
+      const at = SETS.findIndex((s) => s.source === source && s.set === set);
+      if (at < 0)
+        return Promise.reject(
+          new BackupManagerError({
+            code: "BACKUP_SET_NOT_FOUND", message: "no such backup set", correlationId: "cid_mock404"
+          })
+        );
+      SETS.splice(at, 1);
+      return delay(undefined);
+    },
+
     // Nothing is ever running in the mock, so edit mode opens with no
     // prompt. That is the honest default rather than a convenience: a
     // fixture that claimed a transfer was in flight would make every

@@ -106,6 +106,16 @@ var destructiveGateExemptRoutes = map[string]bool{
 	// for the full argument.
 	"PATCH /api/v1/settings": true,
 
+	// Issue #391: removing one backup set's configuration. Same tier as
+	// the PATCH on the same path and as POST /backup-sets, and for the
+	// same reason: nothing reachable from here touches, moves or deletes
+	// a byte of backup data. core/service pins that directly
+	// (TestRemoveBackupSet_StopsCollectionAndKeepsEverythingAlreadyCollected,
+	// which removes a set, runs a cycle, and asserts the artifacts and
+	// the files are still there afterwards). The gate's own routes are
+	// run_immediately and retention apply, and this is neither.
+	"DELETE /api/v1/backup-sets/{source}/{set}": true,
+
 	// Issue #176 (B3.x): the setup submission of an instance that has no
 	// configuration yet. Gating it would be self-defeating in the literal
 	// sense: requireDestructiveGate refuses until an operator turns

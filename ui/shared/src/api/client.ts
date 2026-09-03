@@ -1171,6 +1171,12 @@ export const httpApi: BackupManagerApi = {
       perSetHealth()
     ]).then(([bs, health]) => fromWireBackupSet(bs, health.get(bs.id))),
 
+  // Issue #391. DELETE on the set itself, which coexists with the PATCH
+  // above on the same path because chi routes on the method too. The 204
+  // is already handled by `request` (it returns undefined rather than
+  // trying to parse an empty body), so there is nothing to map here.
+  removeSet: (source, set) => request<void>(backupSetPath(source, set), { method: "DELETE" }),
+
   getEditHold: (source, set) =>
     request<WireBackupSetEditHoldState>(backupSetPath(source, set) + "/edit-hold").then((r) => ({
       held: r.held,

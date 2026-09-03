@@ -122,6 +122,15 @@ type Artifact struct {
 // ArtifactFilter narrows ListArtifacts. An empty BackupSetID matches every
 // backup set; QuarantinedOnly restricts the result to the two quarantine
 // states.
+//
+// The two are not symmetric about a backup set whose configuration has
+// been removed (issue #391). An unfiltered read lists that set's
+// artifacts, because the confirmation an operator accepted says they
+// "remain listed under Backups". A QuarantinedOnly read does not: it
+// feeds the quarantine screen, whose three actions all need a configured
+// set behind the row, and every one of them refuses such a row by name
+// (RevalidateArtifact, ReinstateArtifact, RetryArtifactIngestion below).
+// Offering a row with three refusals on it is not a service to anyone.
 type ArtifactFilter struct {
 	// BackupSetID is a "source/set" id, matched exactly. An id that names
 	// no configured backup set is REFUSED with ErrBackupSetNotFound
@@ -142,7 +151,12 @@ type ArtifactFilter struct {
 func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]Artifact, error) {
 	st := b.state.Load()
 
-	appFilter := app.ArtifactFilter{}
+	// The unfiltered backups list is the one read that carries sets the
+	// configuration no longer has; see ArtifactFilter's own doc for why
+	// the quarantine read is not that read. The app layer honours this
+	// only for a filter that names nothing, so setting it whenever the
+	// caller did not ask for quarantine is exact rather than generous.
+	appFilter := app.ArtifactFilter{IncludeUnconfigured: !filter.QuarantinedOnly}
 	if filter.BackupSetID != "" {
 		source, set, ok := splitBackupSetID(filter.BackupSetID)
 		if !ok {
@@ -266,6 +280,8 @@ func (b *BackupService) RevalidateArtifact(ctx context.Context, id string) (Arti
 		return ArtifactCheck{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
 	case errors.Is(err, app.ErrNotQuarantined):
 		return ArtifactCheck{}, fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case isUnconfiguredSet(err):
+		return ArtifactCheck{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
 	case err != nil:
 		return ArtifactCheck{}, fmt.Errorf("service: revalidating %s: %w", id, err)
 	}
@@ -327,6 +343,8 @@ func (b *BackupService) ReinstateArtifact(ctx context.Context, id, note string) 
 		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotFound, id)
 	case errors.Is(err, app.ErrNotQuarantined):
 		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case isUnconfiguredSet(err):
+		return ArtifactReinstatement{}, fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
 	case err != nil:
 		// internal/lifecycle's own two refusals are business outcomes an
 		// operator reads and acts on, not infrastructure failures, so they
@@ -374,10 +392,23 @@ func (b *BackupService) RetryArtifactIngestion(ctx context.Context, id string) e
 		return fmt.Errorf("%w: %s", ErrArtifactIrrecoverable, id)
 	case errors.Is(err, app.ErrNotQuarantined):
 		return fmt.Errorf("%w: %s", ErrArtifactNotQuarantined, id)
+	case isUnconfiguredSet(err):
+		return fmt.Errorf("%w: %s", ErrBackupSetNotFound, artifactID.Set)
 	case err != nil:
 		return fmt.Errorf("service: retrying ingestion of %s: %w", id, err)
 	}
 	return nil
+}
+
+// isUnconfiguredSet reports whether err is internal/app's refusal for an
+// artifact whose backup set the configuration no longer names (issue
+// #391). The three quarantine actions translate it to ErrBackupSetNotFound,
+// the same sentinel every other surface answers for a removed set, so a
+// caller outside core/ sees one name for one condition rather than a
+// 500 with filesystem-shaped text in it.
+func isUnconfiguredSet(err error) bool {
+	var notFound *app.NotFoundError
+	return errors.As(err, &notFound)
 }
 
 // splitBackupSetID splits a "source/set" id into its two halves. A

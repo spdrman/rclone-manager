@@ -4410,7 +4410,7 @@
     "/backups": {
       "get": {
         "operationId": "listArtifacts",
-        "summary": "Every backup this deployment holds, optionally narrowed to one backup set.",
+        "summary": "Every backup this deployment holds, optionally narrowed to one backup set. Unfiltered, this includes the backups of a backup set whose configuration has since been removed (issue #391): they stay on storage and stay listed here, which is what the removal's confirmation promises, and each is still reachable by GET /backups/{id}.",
         "tags": [
           "backups"
         ],
@@ -4427,7 +4427,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "A two-part \"source/set\" identity. An id that names no configured backup set is refused, not answered with an empty list: an empty list means the set exists and holds no backups yet, and those two call for opposite responses."
+            "description": "A two-part \"source/set\" identity. An id that names no configured backup set is refused, not answered with an empty list: an empty list means the set exists and holds no backups yet, and those two call for opposite responses. This filter is over CONFIGURED backup sets only: a set whose configuration was removed is refused here exactly like a name that never existed, even though its backups appear in the unfiltered list. Create a backup set with the same source and name again to narrow to them."
           }
         ],
         "responses": {
@@ -4641,7 +4641,7 @@
     "/quarantine": {
       "get": {
         "operationId": "listQuarantine",
-        "summary": "Every backup being held for a human, and why.",
+        "summary": "Every backup being held for a human, and why. Stops at the configuration: a quarantined backup whose set has since been removed (issue #391) is not listed here, because none of the three actions can act on it; it stays on GET /backups, marked quarantined.",
         "tags": [
           "quarantine"
         ],
@@ -4757,7 +4757,7 @@
             ]
           },
           "404": {
-            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "description": "Refused: ARTIFACT_NOT_FOUND, BACKUP_SET_NOT_FOUND. The second is a backup that exists under a backup set whose configuration has since been removed (issue #391): the row stays listed under GET /backups, but every quarantine action needs a configured set behind it, so it is refused by name rather than acted on. Create a backup set with the same source and name to act on it again.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4766,7 +4766,8 @@
               }
             },
             "x-error-codes": [
-              "ARTIFACT_NOT_FOUND"
+              "ARTIFACT_NOT_FOUND",
+              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "409": {
@@ -4858,7 +4859,7 @@
             ]
           },
           "404": {
-            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "description": "Refused: ARTIFACT_NOT_FOUND, BACKUP_SET_NOT_FOUND. The second is a backup that exists under a backup set whose configuration has since been removed (issue #391): the row stays listed under GET /backups, but every quarantine action needs a configured set behind it, so it is refused by name rather than acted on. Create a backup set with the same source and name to act on it again.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4867,7 +4868,8 @@
               }
             },
             "x-error-codes": [
-              "ARTIFACT_NOT_FOUND"
+              "ARTIFACT_NOT_FOUND",
+              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "409": {
@@ -4967,7 +4969,7 @@
             ]
           },
           "404": {
-            "description": "Refused: ARTIFACT_NOT_FOUND.",
+            "description": "Refused: ARTIFACT_NOT_FOUND, BACKUP_SET_NOT_FOUND. The second is a backup that exists under a backup set whose configuration has since been removed (issue #391): the row stays listed under GET /backups, but every quarantine action needs a configured set behind it, so it is refused by name rather than acted on. Create a backup set with the same source and name to act on it again.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4976,7 +4978,8 @@
               }
             },
             "x-error-codes": [
-              "ARTIFACT_NOT_FOUND"
+              "ARTIFACT_NOT_FOUND",
+              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "409": {
@@ -5258,6 +5261,114 @@
             },
             "x-error-codes": [
               "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+            ]
+          },
+          "500": {
+            "description": "Refused: INTERNAL.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INTERNAL"
+            ]
+          }
+        },
+        "x-destructive-gate": false,
+        "x-idempotency-key": "none",
+        "x-optimistic-concurrency": null,
+        "x-csrf-required": true,
+        "x-authenticated": true
+      },
+      "delete": {
+        "operationId": "removeBackupSet",
+        "summary": "Remove one backup set's configuration (issue #391). Configuration only: the backups this set already collected stay on storage and stay listed under GET /backups, which is what the confirmation an operator accepts promises. Nothing this can reach deletes a byte of backup data, so it carries CSRF and not the destructive gate, in the same tier as PATCH on this path and POST /backup-sets. Not reversible as an operation: the undo is creating a set with the same source and name again, which re-adopts every artifact the removed one produced, because an artifact is identified by source/set/name.",
+        "tags": [
+          "backup-sets"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "source",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The configured source this backup set belongs to."
+          },
+          {
+            "name": "set",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The backup set's own name within that source."
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed. The set is gone from the configuration and there is no resource left to return, so there is no body."
+          },
+          "400": {
+            "description": "Refused: INVALID_REQUEST.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "INVALID_REQUEST"
+            ]
+          },
+          "401": {
+            "description": "Refused: UNAUTHENTICATED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "UNAUTHENTICATED"
+            ]
+          },
+          "403": {
+            "description": "Refused: CSRF_TOKEN_MISSING, CSRF_TOKEN_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "CSRF_TOKEN_MISSING",
+              "CSRF_TOKEN_MISMATCH"
+            ]
+          },
+          "404": {
+            "description": "Refused: BACKUP_SET_NOT_FOUND. A second removal of the same set answers this too: the effect is idempotent, the status deliberately is not, because on a destructive control a mistyped name must not come back as success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "BACKUP_SET_NOT_FOUND"
             ]
           },
           "500": {

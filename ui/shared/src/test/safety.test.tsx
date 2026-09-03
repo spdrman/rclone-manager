@@ -169,9 +169,26 @@ describe("storage pressure (\u00a756)", () => {
     expect(operations.filter((name) => /retention/i.test(name))).toContain("applyRetention");
   });
 
-  it("has no deletion or removal operation at all", () => {
-    const deletes = Object.keys(httpApi).filter((name) => /delete|remove/i.test(name));
-    expect(deletes).toEqual([]);
+  // This used to assert an empty list, and it was right to until issue
+  // #391 gave the API its first removal of any kind. What §56 forbids is
+  // an operation that frees disk space by deleting backup data, and the
+  // empty-list version was a proxy for that: cheap, and exactly right
+  // while nothing in the surface was called remove-anything.
+  //
+  // removeSet is not that operation. It removes one backup set's
+  // CONFIGURATION, and every backup that set already took stays on
+  // storage and stays listed under Backups, which is what the
+  // confirmation an operator accepts promises and what
+  // core/service's own TestRemoveBackupSet_StopsCollectionAndKeeps
+  // EverythingAlreadyCollected proves against a real journal and a real
+  // disk. Nothing here can prove that from the browser side, so what this
+  // asserts instead is that the list of removal-shaped operations is
+  // EXACTLY this one: a second one arriving fails here and has to be
+  // argued for on its own terms rather than sliding in under a pattern
+  // that had already been widened once.
+  it("has exactly one removal operation, and it removes configuration rather than backups", () => {
+    const removals = Object.keys(httpApi).filter((name) => /delete|remove/i.test(name));
+    expect(removals).toEqual(["removeSet"]);
   });
 
   // applyRetention is the one call in the whole surface that removes

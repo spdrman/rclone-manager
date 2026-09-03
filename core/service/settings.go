@@ -33,7 +33,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
@@ -497,16 +496,9 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	applyValidators()
 
 	// The one atomic swap that makes the new policy take effect, with the
-	// same {inner, revision} non-torn guarantee CreateBackupSet's own
-	// Store() carries; see BackupService.state's doc. prevInner is read
-	// once, before the swap, purely to carry the already-wired Transport
-	// and alert state forward.
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	// same {inner, revision} non-torn guarantee every other write carries;
+	// see adoptConfig and BackupService.state's doc.
+	b.adoptConfig(cfg)
 
 	return Settings{
 		Retention: toRetentionSettings(cfg.Retention),

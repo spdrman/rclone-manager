@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,8 +41,8 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/obs"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 	"github.com/spdrman/rclone-manager/core/internal/transport/rclone"
 )
@@ -510,32 +511,30 @@ func (b *BackupService) CreateBackupSet(ctx context.Context, req CreateBackupSet
 	// above, while nothing had been persisted yet.
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	// Alerting is re-decided from the config file this method just
-	// re-read, then carried across the swap. This is the one moment an
-	// edited alerts.enabled can take effect in a running process, so it
-	// is the one moment it must not be ignored: an administrator who set
-	// alerts.enabled: false and then added a backup set kept getting
-	// notified until the next restart, and one who turned it on stayed
-	// silent, while repeated_failure_threshold from the same block did
-	// hot-reload. AdoptAlerts re-reads the opt-in and carries the
-	// dispatcher only if it is still on, because the dispatcher holds
-	// which conditions are currently firing (internal/alert's
-	// de-duplication state) and rebuilding it would re-alert every
-	// still-unresolved condition the next time a cycle ran, purely
-	// because somebody added a backup set. When it declines (alerting was
-	// off before this reload, or has just been turned off), the question
-	// is settled from b.alertSink instead, which is what makes turning
-	// alerting ON take effect here too.
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	newRevision := computeConfigRevision(cfg)
-	b.state.Store(&configState{inner: newInner, revision: newRevision})
+	// The swap, alerting carried across, and the removal hold reconciled:
+	// a set created over a removed id is held no longer from this point
+	// (adoptConfig, and edithold.go for why the hold was there).
+	newRevision := b.adoptConfig(cfg)
 
 	created := toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, req.Name))
 	result := CreateBackupSetResult{Set: created}
+
+	// Issue #391: the adoption. A backup set is identified by its source
+	// and its name (model.NewArtifactID is source/set/name), so a set
+	// created under an id that already has journal rows takes all of
+	// them, plus their retention history, from the moment it exists. That
+	// is the right behaviour and the reason removal can be undone at all,
+	// but silence about it is what would make it a nasty surprise six
+	// months later, so it goes on the record here, at the moment it
+	// happens, with the number in it. Nothing about this can fail the
+	// creation: the set is already durably written by now.
+	if adopted := b.artifactCountFor(ctx, created.ID); adopted > 0 {
+		b.logger.Event(ctx, obs.LevelInfo, "backup_set_adopted_history",
+			"this backup set was created over artifacts already on record for its id, and now owns them",
+			slog.String("backup_set", created.ID),
+			slog.Int("adopted_artifacts", adopted),
+		)
+	}
 
 	if req.RunImmediately && !req.Disabled {
 		op, err := b.SubmitRunCycle(ctx, RunCycleRequest{

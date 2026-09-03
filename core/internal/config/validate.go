@@ -55,9 +55,40 @@ func (c *Config) Validate() error {
 		}
 		seenSourceNames[src.Name] = true
 
-		if len(src.BackupSets) == 0 {
-			v.addf("%s: at least one backup set is required", path)
-		}
+		// A source with no backup sets under it is legal, and that is a
+		// deliberate relaxation (issue #391) rather than a check that
+		// went missing. Removing a backup set's configuration has to
+		// persist a file that passes this exact function, because it is
+		// the same one the daemon runs at boot: a removal that wrote a
+		// config Validate would refuse is an operator who removes their
+		// last set through the UI and then finds the service will not
+		// start again.
+		//
+		// The alternative was to make removal delete the source too when
+		// its last set goes, which is the mirror image of CreateBackupSet
+		// inventing a source on demand for a name it has not seen. I
+		// rejected it because a Source is not only a name: it carries
+		// ReadOnly, issue #282's "pull from here, never delete here"
+		// declared once for a whole host. Cascading it away would throw
+		// that declaration out with the last set, and a later set created
+		// under the same source name would silently come back without
+		// it, which turns a config-only removal into a change of safety
+		// posture. Leaving the source in place keeps the declaration, and
+		// CreateBackupSet appends to the source it finds rather than
+		// building a fresh one, so a re-created set inherits it again.
+		//
+		// What is genuinely lost is that a hand-written source with no
+		// sets under it used to be a boot error and is now inert. That
+		// does not open a new way for this manager to back nothing up
+		// while looking fine, because one already exists and is one click
+		// away: disable every set and RunCycle visits nothing,
+		// reportBarrenSets iterates a report with no entries in it, and
+		// the cycle completes silently. Whatever fixes that should fix
+		// both, at the cycle, where the emptiness is observable.
+		//
+		// The whole-file rule above (at least one source) is untouched,
+		// and stays reachable, because removal never empties Sources now
+		// that the source stays behind.
 
 		for j := range src.BackupSets {
 			bsPath := fmt.Sprintf("%s.backup_sets[%d]", path, j)

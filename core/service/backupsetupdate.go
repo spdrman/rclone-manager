@@ -58,7 +58,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
@@ -217,12 +216,7 @@ func (b *BackupService) UpdateBackupSet(ctx context.Context, id string, req Upda
 
 	applyValidators()
 
-	prevInner := b.state.Load().inner
-	newInner := app.New(cfg, b.journal, prevInner.Transport, b.logger)
-	if !newInner.AdoptAlerts(prevInner.Alerts) && b.alertSink != nil {
-		newInner.EnableAlerts(sinkAdapter{sink: b.alertSink})
-	}
-	b.state.Store(&configState{inner: newInner, revision: computeConfigRevision(cfg)})
+	b.adoptConfig(cfg)
 
 	return toServiceBackupSet(sourceName, findBackupSet(cfg, sourceName, setName)), nil
 }

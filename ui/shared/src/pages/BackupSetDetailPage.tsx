@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useApi } from "@shared/api/ApiContext";
-import { useResource } from "@shared/state/resource";
+import { fetchResource, useResource } from "@shared/state/resource";
 import { graph, useCausl } from "@shared/state/graph";
-import { versionNode } from "@shared/state/appNodes";
+import { setsNode, versionNode } from "@shared/state/appNodes";
 import {
   captureSetEditSnapshot,
   currentSetActivityNode,
@@ -68,6 +68,16 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const version = useCausl(versionNode);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  // Issue #391. `removing` exists so the confirm button can say what it
+  // is doing and stop being pressable while it does: removal is one
+  // request against a set that will not be there afterwards, and a
+  // double press would send a second DELETE whose honest answer is a 404
+  // the operator has done nothing wrong to deserve. `removeError` keeps
+  // the dialog OPEN on a failure, because a dialog that closed on one
+  // would be the defect this issue is about with a network call in the
+  // middle.
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // ------------------------------------------------------- issue #350
   //
@@ -725,14 +735,60 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </p>
       </ConfirmationDialog>
 
+      {/* Issue #391. This confirmation used to close and call nothing,
+          which meant an operator confirmed a destructive action, watched
+          it close, and reasonably believed the set was gone while it kept
+          collecting. On success the page NAVIGATES rather than reloading:
+          the set it is showing does not exist any more, so re-reading it
+          would put a 404 error state in front of somebody whose action
+          had just worked. It refreshes the shared setsNode before it
+          goes, because BackupSetsPage renders that node and App fetches
+          it once on mount and then only on its poll; navigating does not
+          remount App, so without the refresh the list the operator lands
+          on still shows the set they just removed, for up to thirty
+          seconds. Same refresh, same reason, as the create path in
+          BackupSetWizardPage. */}
       <ConfirmationDialog
         open={removeOpen}
         destructive
         eyebrow="Destructive action"
         title="Remove backup set configuration"
-        confirmLabel="Remove configuration"
-        onCancel={() => setRemoveOpen(false)}
-        onConfirm={() => setRemoveOpen(false)}
+        confirmLabel={removing ? "Removing..." : "Remove configuration"}
+        disabled={removing}
+        onCancel={() => {
+          setRemoveOpen(false);
+          setRemoveError(null);
+        }}
+        onConfirm={() => {
+          setRemoving(true);
+          setRemoveError(null);
+          const landOnTheList = () => {
+            setRemoveOpen(false);
+            fetchResource(setsNode, () => api.listSets());
+            navigate("/sets");
+          };
+          void api
+            .removeSet(s.source, s.set)
+            .then(landOnTheList)
+            .catch((e: unknown) => {
+              // 404 BACKUP_SET_NOT_FOUND is one code for two situations: a
+              // name this deployment never had, and a set an earlier call
+              // already removed (a lost response, a second tab, a retry).
+              // The route cannot tell them apart and says so; this page
+              // knows exactly which set it asked about, so it is the one
+              // place that can, and the second case is a removal that
+              // worked. Every other refusal keeps the dialog open with the
+              // reason in it, which is the other half of the promise.
+              if (apiErrorOf(e)?.code === "BACKUP_SET_NOT_FOUND") {
+                landOnTheList();
+                return;
+              }
+              setRemoveError(
+                describeFailure(e, "Backup Manager could not remove this backup set's configuration.").message
+              );
+            })
+            .finally(() => setRemoving(false));
+        }}
       >
         <p style={{ margin: 0 }}>
           {"Backup Manager will stop collecting backups for " + s.name + "."}
@@ -740,6 +796,14 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         <p style={{ margin: 0, color: "var(--text-2)" }}>
           {s.retainedCount + " retained backups (" + bytes(s.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
         </p>
+        <p style={{ margin: 0, color: "var(--text-2)" }}>
+          {"Creating a backup set with this source and name again takes those backups back, along with their retention history."}
+        </p>
+        {removeError ? (
+          <p role="alert" style={{ margin: 0, color: "var(--danger)" }}>
+            {removeError}
+          </p>
+        ) : null}
       </ConfirmationDialog>
     </>
   );

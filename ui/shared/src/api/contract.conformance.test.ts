@@ -185,6 +185,9 @@ describe("every request the shared client makes is a declared operation", () => 
       // Issue #350: the edit path and its hold. Every one of them keys on
       // the same {source}/{set} pair setEnabled and setReadOnly do.
       ["updateBackupSet", () => httpApi.updateBackupSet("src", "set-1", { remoteFolder: "/r" })],
+      // Issue #391: the removal, on the same {source}/{set} pair, told
+      // apart from the PATCH above by its method.
+      ["removeSet", () => httpApi.removeSet("src", "set-1")],
       ["getEditHold", () => httpApi.getEditHold("src", "set-1")],
       ["takeEditHold", () => httpApi.takeEditHold("src", "set-1")],
       ["releaseEditHold", () => httpApi.releaseEditHold("src", "set-1")],
