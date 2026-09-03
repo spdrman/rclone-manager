@@ -77,10 +77,21 @@ func (l *skipLedger) note(what string) {
 // skipped something, and an actual failure's status ahead of both,
 // because a failure is the more urgent news and INCOMPLETE would bury it.
 func (l *skipLedger) verdict(code int, w io.Writer) int {
-	// Not written yet. This is today's behaviour, stated as code so the
-	// test below is red against it: a skip changes neither the last line
-	// nor the exit status, which is the finding.
-	return code
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.notes) == 0 {
+		return code
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "==> gotestwatch self-test: INCOMPLETE (exit %d). Any PASS above means no test failed. It does not mean the watchdog's negative control ran. These checks did not:\n", gateIncomplete)
+	for _, n := range l.notes {
+		fmt.Fprintln(w, "        - "+n)
+	}
+	fmt.Fprintln(w, "==> This run is not evidence that the negative control still fires. Re-run it on a host quiet enough to measure.")
+	if code != 0 {
+		return code
+	}
+	return gateIncomplete
 }
 
 // controlSkips is this package's ledger. See skipLedger.
@@ -370,6 +381,48 @@ func (o controlOutcome) String() string {
 	}
 }
 
+// replayRecorder is the Stdout a watched run writes its reconstructed
+// `go test -v` output to, keeping every chunk with the instant it
+// arrived.
+//
+// The timestamps are the point. Run decides a trip and then kills the
+// child, so bytes can still arrive after the decision was made, and only
+// what had been replayed BEFORE it says what the watchdog had to work
+// with. bytes.Buffer cannot answer that question.
+type replayRecorder struct {
+	mu     sync.Mutex
+	chunks []replayChunk
+}
+
+type replayChunk struct {
+	at   time.Time
+	text string
+}
+
+func (r *replayRecorder) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.chunks = append(r.chunks, replayChunk{at: time.Now(), text: string(p)})
+	return len(p), nil
+}
+
+// upTo returns everything replayed at or before at. Writes are serialised
+// on r.mu, so the chunks are already in time order.
+func (r *replayRecorder) upTo(at time.Time) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var b strings.Builder
+	for _, c := range r.chunks {
+		if c.at.After(at) {
+			break
+		}
+		b.WriteString(c.text)
+	}
+	return b.String()
+}
+
+func (r *replayRecorder) String() string { return r.upTo(time.Now()) }
+
 // controlWitness is everything the negative control knows that did NOT
 // come from the tracker.
 //
@@ -406,6 +459,27 @@ type controlWitness struct {
 	elapsed time.Duration
 }
 
+// witnessRun reads the two independent facts above off a finished run.
+//
+// runStart is this test's own clock reading from just before Run, and
+// tp.elapsed is measured from Run's own, taken a few calls later, so
+// runStart+tp.elapsed lands at or before the instant the watchdog
+// actually decided. Erring early is the safe direction: it can only make
+// this credit the watchdog with having seen less than it did, never with
+// having seen more, so the defect verdicts below are never reached on a
+// technicality.
+func witnessRun(rec *replayRecorder, runStart time.Time, elapsed time.Duration, tp *trip) controlWitness {
+	replayed := rec.String()
+	if tp != nil {
+		replayed = rec.upTo(runStart.Add(tp.elapsed))
+	}
+	return controlWitness{
+		sawOutput:     strings.TrimSpace(replayed) != "",
+		testBInFlight: strings.Contains(replayed, "=== RUN   TestB") && !strings.Contains(replayed, "--- PASS: TestB"),
+		elapsed:       elapsed,
+	}
+}
+
 // judgeNegativeControl reads what running slowpkg with the derivation
 // switched off (stepFactor 1) produced, and says which of the outcomes
 // above happened, with the numbers behind it.
@@ -414,7 +488,6 @@ type controlWitness struct {
 // interval, and hostSlop the worst overshoot a sampler goroutine measured
 // on this host asking for that same interval while the run was going.
 func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration, w controlWitness) (controlOutcome, string) {
-	_ = w
 	if res.Trip == nil {
 		// With the derivation off the window can never grow past the
 		// slowest gap already measured, so the only way TestB's stall
@@ -427,6 +500,22 @@ func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration, w con
 		// the stall is always in there.
 		outran := slowpkgSecondStall + poll + hostSlop
 		if res.SlowestStep > outran {
+			// Before believing that story, check it against the one
+			// clock in here the tracker had no hand in. A run's gaps
+			// partition its timeline and never overlap, so a run that
+			// really produced a gap this long ALSO produced TestB's own
+			// stall, one after the other, and took at least the two of
+			// them added together. If it did not last that long, the gap
+			// is not a fact about this host: it is the tracker
+			// misreporting itself, and the excuse it buys the control is
+			// one the tracker wrote about the tracker.
+			if need := res.SlowestStep + slowpkgSecondStall; w.elapsed < need {
+				return controlBroken, fmt.Sprintf(
+					"the derivation was off and the run still finished, and the tracker says this host's own slowest gap was %s (%s). A run's gaps never overlap, so a run that really produced that gap spent it AND TestB's own %s stall one after the other, %s at the least. This run took %s. "+
+						"The gap is the tracker misreporting itself, not something this host did, and it would otherwise have bought the control a skip on the word of the very thing the control is testing",
+					res.SlowestStep.Round(time.Millisecond), res.SlowestLabel, slowpkgSecondStall,
+					need.Round(time.Millisecond), w.elapsed.Round(time.Millisecond))
+			}
 			return controlCannotMeasure, fmt.Sprintf(
 				"the derivation was off and the run still finished, but this host's own slowest gap was %s (%s), past the %s planted stall plus one %s poll and the %s this host was measured stealing from a goroutine sleeping on that interval. "+
 					"With the derivation off the window is that slowest gap, so it was already wider than the stall before the stall began, and nothing here says whether the derivation is load-bearing",
@@ -438,12 +527,37 @@ func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration, w con
 			slowpkgSecondStall, floor.Round(time.Millisecond), res.SlowestStep.Round(time.Millisecond), res.SlowestLabel)
 	}
 	if res.Trip.events == 0 {
+		if w.sawOutput {
+			// observeLine counts the event BEFORE it writes those bytes,
+			// and both happen under the tracker's own mutex relative to
+			// check, so output replayed before the decision means an
+			// event was counted before the decision. A trip that says
+			// otherwise is not this host's startup outgrowing the floor.
+			// It is gotestwatch failing to count, which is exactly the
+			// defect this branch used to absorb.
+			return controlBroken, fmt.Sprintf(
+				"the watchdog tripped %s after %q reporting 0 events observed, but `go test` had already replayed its own output before that decision. "+
+					"observeLine counts an event before it writes those bytes, so this is not this host's startup outgrowing the %s floor: it is gotestwatch not counting what it printed",
+				res.Trip.sinceLast.Round(time.Millisecond), res.Trip.lastEvent, floor.Round(time.Millisecond))
+		}
 		return controlCannotMeasure, fmt.Sprintf(
 			"the watchdog tripped %s after %q with no event observed yet, so it caught `go test` itself still loading packages, linking and starting the binary rather than anything the fixture did. "+
 				"The %s floor derived for this run did not clear this host's own startup, so the control never reached TestB's %s stall",
 			res.Trip.sinceLast.Round(time.Millisecond), res.Trip.lastEvent, floor.Round(time.Millisecond), slowpkgSecondStall)
 	}
 	if len(res.Trip.running) != 1 || res.Trip.running[0] != "TestB" {
+		if w.testBInFlight {
+			// go test -json emits the "run" action before a test's first
+			// output line and the "pass" action after its last, so a run
+			// that had replayed "=== RUN   TestB" and not
+			// "--- PASS: TestB" had TestB and only TestB in flight. The
+			// trip had to name it, and naming anything else is broken
+			// attribution rather than a gap this host produced early.
+			return controlBroken, fmt.Sprintf(
+				"the watchdog tripped with %v reported running, %d events in, but TestB had started and not finished by the moment it decided: `go test` had replayed \"=== RUN   TestB\" and not \"--- PASS: TestB\". "+
+					"So the planted stall is what closed the window and the trip did not say so. That is running-test attribution broken, not a gap this host produced before TestB",
+				res.Trip.running, res.Trip.events)
+		}
 		return controlCannotMeasure, fmt.Sprintf(
 			"the watchdog tripped with %v reported running rather than [TestB], %d events in: nothing after %q for %s against a %s window. "+
 				"It closed on a gap this host produced before TestB stalled, not on the planted stall, so this run cannot say whether the derivation is load-bearing",
@@ -485,14 +599,15 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 	t.Logf("no-progress floor %s, from a warm `go test` startup of %s on this host", floor.Round(time.Millisecond), startup.Round(time.Millisecond))
 
 	t.Run("derived window absorbs it", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
+		stdout := &replayRecorder{}
+		var stderr bytes.Buffer
 		start := time.Now()
 		res, err := Run(Options{
 			Dir:    dir,
 			Args:   []string{"-v", "-count=1", "./..."},
 			Bounds: tightBounds(floor, defaultBounds.stepFactor),
 			Poll:   slowpkgPoll,
-			Stdout: &stdout,
+			Stdout: stdout,
 			Stderr: &stderr,
 		})
 		elapsed := time.Since(start)
@@ -506,7 +621,18 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 			// be four times the startup measured moments earlier. That
 			// is the machine changing under the test, not a watchdog
 			// failing a progressing run.
-			t.Skipf("could not measure: the watchdog tripped %s after %q with no event observed yet, on a %s floor derived from a %s warm startup. `go test`'s own startup outgrew that floor between the warm-up and this run, so nothing here says whether a progressing run survives",
+			//
+			// Unless `go test` had in fact already printed something, in
+			// which case the tracker is contradicting the bytes the same
+			// run replayed, and this skip would be waving through a
+			// gotestwatch that counts no events at all (safety review of
+			// #406). Same guard as judgeNegativeControl's, because it is
+			// the same hole seen from the positive side.
+			if w := witnessRun(stdout, start, elapsed, res.Trip); w.sawOutput {
+				t.Fatalf("the watchdog tripped %s after %q reporting 0 events observed, but `go test` had already replayed its own output before that decision. observeLine counts an event before it writes those bytes, so this is not this host's startup outgrowing the %s floor: it is gotestwatch not counting what it printed\nstdout=%s",
+					res.Trip.sinceLast.Round(time.Millisecond), res.Trip.lastEvent, floor.Round(time.Millisecond), stdout)
+			}
+			skipCannotMeasure(t, "the watchdog tripped %s after %q with no event observed yet, on a %s floor derived from a %s warm startup. `go test`'s own startup outgrew that floor between the warm-up and this run, so nothing here says whether a progressing run survives",
 				res.Trip.sinceLast.Round(time.Millisecond), res.Trip.lastEvent, floor.Round(time.Millisecond), startup.Round(time.Millisecond))
 		}
 		if res.Trip != nil {
@@ -533,7 +659,7 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 		// saying so is the honest answer; running it anyway would report
 		// on the machine.
 		if floor+slowpkgPoll >= slowpkgSecondStall {
-			t.Skipf("could not measure: this host's %s warm `go test` startup derives a %s floor, which leaves less than one %s poll under TestB's %s stall. No floor separates startup from the planted stall here, so the control has nothing to trip on",
+			skipCannotMeasure(t, "this host's %s warm `go test` startup derives a %s floor, which leaves less than one %s poll under TestB's %s stall. No floor separates startup from the planted stall here, so the control has nothing to trip on",
 				startup.Round(time.Millisecond), floor.Round(time.Millisecond), slowpkgPoll, slowpkgSecondStall)
 		}
 
@@ -542,31 +668,34 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 		// this host stretches a sleep, and a number measured during the
 		// run beats one picked here.
 		lag := startSchedulingLagSampler(slowpkgPoll)
-		var stdout, stderr bytes.Buffer
+		stdout := &replayRecorder{}
+		var stderr bytes.Buffer
 		// stepFactor 1 is the bound with its derivation switched off: the
 		// window can never grow past the slowest gap measured so far, so
 		// it behaves like a fixed deadline again, which is the shape of
 		// go test's own -timeout that issue #256 is about.
+		start := time.Now()
 		res, err := Run(Options{
 			Dir:    dir,
 			Args:   []string{"-v", "-count=1", "./..."},
 			Bounds: tightBounds(floor, 1),
 			Poll:   slowpkgPoll,
-			Stdout: &stdout,
+			Stdout: stdout,
 			Stderr: &stderr,
 		})
+		elapsed := time.Since(start)
 		worstLag := lag.stop()
 		if err != nil {
 			t.Fatalf("Run returned an error: %v\nstderr=%s", err, stderr.String())
 		}
-		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, worstLag, controlWitness{})
+		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, worstLag, witnessRun(stdout, start, elapsed, res.Trip))
 		switch outcome {
 		case controlProved:
 			t.Log(why)
 		case controlCannotMeasure:
-			t.Skip("could not measure: " + why)
+			skipCannotMeasure(t, "%s", why)
 		default:
-			t.Fatalf("%s\nstdout=%s", why, stdout.String())
+			t.Fatalf("%s\nstdout=%s", why, stdout)
 		}
 	})
 }
