@@ -19,31 +19,25 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/obs"
 )
 
-// writeRemovalFixtureConfig is writeTestConfigFile (open_test.go) with TWO
-// backup sets under one source, both on the local transport with a real
-// file waiting on each remote.
+// writeRemovalFixtureConfigWithPosture is writeTestConfigFile (open_test.go)
+// with TWO backup sets under one source, both on the local transport with a
+// real file waiting on each remote, and the source's read_only declaration
+// under the caller's control.
 //
-// Two, because every interesting claim in this file is about telling one
-// set apart from another. A single-set fixture cannot distinguish "the
-// removed set stopped being processed" from "the cycle stopped running",
-// and those are very different products.
+// Two sets, because every interesting claim in this file is about telling one
+// set apart from another. A single-set fixture cannot distinguish "the removed
+// set stopped being processed" from "the cycle stopped running", and those are
+// very different products.
 //
-// The source declares read_only: true so this file can also prove what
-// happens to that declaration when its last set goes. It is a real safety
-// posture (issue #282, "pull from here, never delete here"), not a
-// decoration, and losing it silently is the failure this fixture exists
-// to catch.
-func writeRemovalFixtureConfig(t *testing.T) (configPath string, localA, localB string) {
-	t.Helper()
-	return writeRemovalFixtureConfigWithPosture(t, true)
-}
-
-// writeRemovalFixtureConfigWithPosture is writeRemovalFixtureConfig with
-// the source's read_only declaration under the caller's control. The
-// safety cases below need it OFF: FR-15 delete-from-source is the hazard
-// the removal hold exists to prevent, and a read-only source never
-// deletes, so a probe against the default fixture could not tell "the
-// hold stopped the cycle" from "the cycle had nothing to delete anyway".
+// The posture is a parameter because the two halves of this file need
+// opposite answers. read_only: true is a real safety posture (issue #282,
+// "pull from here, never delete here") and this file proves what happens to
+// that declaration when its last set goes, so losing it silently is a failure
+// this fixture exists to catch. The safety cases need it OFF, because FR-15
+// delete-from-source is the hazard the removal hold exists to prevent, and a
+// read-only source never deletes, so a probe against a read-only fixture could
+// not tell "the hold stopped the cycle" from "the cycle had nothing to delete
+// anyway".
 func writeRemovalFixtureConfigWithPosture(t *testing.T, readOnly bool) (configPath string, localA, localB string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -98,7 +92,7 @@ func writeRemovalFixtureConfigWithPosture(t *testing.T, readOnly bool) (configPa
 	return configPath, localA, localB
 }
 
-// openRemovalFixtureService is writeRemovalFixtureConfig plus Open, wired as
+// openRemovalFixtureService is writeRemovalFixtureConfigWithPosture plus Open, wired as
 // t.Cleanup, exactly as openTestService (backupsets_test.go) is for the
 // single-set fixture.
 func openRemovalFixtureService(t *testing.T) (*BackupService, string, string, string) {

@@ -442,13 +442,16 @@ func backupSetRemoveWith(ctx context.Context, svc backupSetRemover, id string, o
 		return fail(err)
 	}
 
-	fmt.Fprintf(out, "removed the configuration for %s\n", id)
+	// The removal has already happened by here, so a write that fails
+	// because the terminal went away must not turn a successful removal
+	// into a non-zero exit. Same reasoning as setup.go's cycle summary.
+	_, _ = fmt.Fprintf(out, "removed the configuration for %s\n", id)
 	if kept < 0 {
-		fmt.Fprintf(out, "could not count the backups that stay on storage (the journal read failed); they are still there, and `backup-manager artifacts` lists them\n")
+		_, _ = fmt.Fprintf(out, "could not count the backups that stay on storage (the journal read failed); they are still there, and `backup-manager artifacts` lists them\n")
 	} else {
-		fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", kept)
+		_, _ = fmt.Fprintf(out, "%d backup(s) stay on storage and stay listed by `backup-manager artifacts`\n", kept)
 	}
-	fmt.Fprintf(out, "creating %s again takes all of them back\n", id)
+	_, _ = fmt.Fprintf(out, "creating %s again takes all of them back\n", id)
 	return 0
 }
 
