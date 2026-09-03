@@ -77,8 +77,21 @@ var _ transport.MediumStore = (*Adapter)(nil)
 // rclone's own default is 10, and against an endpoint that is simply not
 // there that default costs almost four minutes of silence per call: rclone
 // retries the operation, the SDK retries each attempt, and the two
-// multiply. That was measured, not guessed (an unreachable endpoint took
-// 235 seconds to report through this adapter before this bound existed).
+// multiply. Measured through this adapter, StatObject against a port
+// nothing is listening on (so every attempt fails INSTANTLY, with
+// "connection refused"):
+//
+//	LowLevelRetries=10   3m47.16s
+//	LowLevelRetries=2       2.39s
+//
+// Almost all of that is backoff between attempts rather than time on the
+// wire, which is why bounding the count is the whole fix.
+//
+// It is not a fix for every shape of unreachable. Against an address that
+// BLACKHOLES rather than refuses (an unrouted 192.0.2.1, say), one TCP
+// connect attempt is itself about two minutes, so two attempts still cost
+// four. Nothing reachable from here shortens that; a per-operation
+// deadline is what bounds it, and that belongs to the caller.
 //
 // Two is the right number here because this product already has a retry
 // policy of its own, one layer up: transport/retry's bounded backoff acts

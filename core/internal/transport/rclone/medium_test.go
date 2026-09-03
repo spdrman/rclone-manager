@@ -253,3 +253,76 @@ func TestTheFsReleaseScanCanActuallyFail(t *testing.T) {
 		t.Fatal("medium.go declares fewer than six adapter methods, so the scan's method list no longer matches the file")
 	}
 }
+
+// TestEveryMediumOperationBoundsItsRetries is the guard on the other half
+// of #264's per-operation discipline: an operation that does not bound
+// rclone's low-level retries costs almost four minutes of silence against
+// an endpoint that is not there.
+//
+// It has to be checked as "mediumContext BEFORE mediumFs", not merely
+// "mediumContext somewhere", because the s3 backend reads LowLevelRetries
+// exactly once, in s3Connection, which NewFs calls at construction
+// (backend/s3/s3.go:1589 and :1869). A bound applied to the context the
+// operation RUNS under, after the Fs was built with a different one, is a
+// bound that does nothing at all and looks correct in review.
+func TestEveryMediumOperationBoundsItsRetries(t *testing.T) {
+	source, err := os.ReadFile("medium.go")
+	if err != nil {
+		t.Fatalf("reading medium.go: %v", err)
+	}
+	text := string(source)
+
+	for _, method := range []string{"StatObject", "UploadFromLocal", "OpenObject", "ObjectChecksum", "DeleteObject", "ListObjects"} {
+		t.Run(method, func(t *testing.T) {
+			body := methodBody(t, text, method)
+			bound := strings.Index(body, "ctx = mediumContext(ctx)")
+			if bound < 0 {
+				t.Fatalf("%s never bounds rclone's low-level retries; against an endpoint that is not there this costs "+
+					"3m47s per call instead of 2.4s", method)
+			}
+			built := strings.Index(body, "a.mediumFs(ctx")
+			if built < 0 {
+				return // builds no Fs of its own
+			}
+			if bound > built {
+				t.Errorf("%s bounds retries AFTER building its Fs. The s3 backend reads LowLevelRetries once, in "+
+					"s3Connection, which NewFs calls: a bound applied later does nothing and looks right", method)
+			}
+		})
+	}
+}
+
+// TestTheRetryBoundScanCanActuallyFail is the scan's positive control. A
+// source scan that matches something no method has is a check that passes
+// on an empty file, and three of those were caught in this repository in
+// one day.
+func TestTheRetryBoundScanCanActuallyFail(t *testing.T) {
+	unbounded := "func (a *Adapter) Invented(ctx context.Context) error {\n\tf, err := a.mediumFs(ctx, medium)\n\t_ = f\n\treturn err\n}\n"
+	body := methodBody(t, unbounded, "Invented")
+	if strings.Contains(body, "ctx = mediumContext(ctx)") {
+		t.Fatal("the scan's own subject matched a bound that is not there")
+	}
+
+	tooLate := "func (a *Adapter) Invented(ctx context.Context) error {\n\tf, err := a.mediumFs(ctx, medium)\n\tctx = mediumContext(ctx)\n\t_ = f\n\treturn err\n}\n"
+	body = methodBody(t, tooLate, "Invented")
+	if strings.Index(body, "ctx = mediumContext(ctx)") < strings.Index(body, "a.mediumFs(ctx") {
+		t.Fatal("the ordering check cannot tell a bound applied after construction from one applied before it, " +
+			"which is the only mistake it exists to catch")
+	}
+}
+
+// methodBody extracts one method's source text from a file, and fails
+// rather than returning nothing when the method is not there: a scan that
+// silently finds no subject is a scan that passes.
+func methodBody(t *testing.T, text, method string) string {
+	t.Helper()
+	start := strings.Index(text, "func (a *Adapter) "+method+"(")
+	if start < 0 {
+		t.Fatalf("no %s to scan; if it moved, move this check with it rather than dropping the method", method)
+	}
+	end := strings.Index(text[start:], "\n}\n")
+	if end < 0 {
+		t.Fatalf("could not find the end of %s", method)
+	}
+	return text[start : start+end]
+}
