@@ -155,6 +155,33 @@ CREATE INDEX idx_placement_moves_artifact ON placement_moves (artifact_id);
 -- one, and backfilling it would put a row in this table claiming a
 -- committed copy exists where only a half-written file does.
 --
+-- WHY QUARANTINED IS NOT A STATE, IT IS A LINEAGE. Every other state in
+-- the list above tells you on its own whether local_path names a finished
+-- artifact. QUARANTINED does not. internal/lifecycle's machine.go admits
+-- it from five places, and two of them (VERIFYING, FAILED) are before the
+-- commit rename, so those artifacts sit in QUARANTINED with local_path
+-- still naming a .partial. Backfilling on the state alone would hand an
+-- ACTIVE placement to exactly the half-written file this predicate exists
+-- to keep out.
+--
+-- So a QUARANTINED artifact is durable only if the edge that most recently
+-- carried IT into quarantine came from a durable state. That is not a new
+-- idea here: it is what lifecycle's reinstatementTargetForArtifact already
+-- does for the same reason, and for the same reason it cannot be a fixed
+-- answer per state, reading the append-only log for the exact edge that
+-- fired for this one artifact. The ORDER BY id DESC matches the ordering
+-- state.LastTransition uses, because an artifact can be quarantined and
+-- reinstated more than once and only the latest lineage is the live one.
+--
+-- A QUARANTINED artifact whose transition log says nothing gets no row:
+-- the subquery is NULL, NULL IN (...) is not true, and "no evidence" falls
+-- to the conservative side, which is the same direction every other guess
+-- in this file leans.
+--
+-- QUARANTINED_LOST needs none of this. Its sole entry is from COMPLETE
+-- (machine.go, pinned by TestOnlyCompletePrecedesQuarantinedLost), so it
+-- is durable by construction.
+--
 -- An artifact before its transfer therefore has zero placements, and that
 -- is correct rather than a gap: it has zero copies. The invariant this
 -- table is here to hold is that an artifact with durable bytes always has
@@ -202,11 +229,22 @@ SELECT
     a.updated_at
 FROM artifacts a
 WHERE a.local_path <> ''
-  AND a.state IN (
-      'COMMITTED',
-      'REMOTE_DELETE_PENDING',
-      'COMPLETE',
-      'REMOTE_RETAINED',
-      'QUARANTINED',
-      'QUARANTINED_LOST'
+  AND (
+      a.state IN (
+          'COMMITTED',
+          'REMOTE_DELETE_PENDING',
+          'COMPLETE',
+          'REMOTE_RETAINED',
+          'QUARANTINED_LOST'
+      )
+      OR (
+          a.state = 'QUARANTINED'
+          AND (
+              SELECT t.from_state
+                FROM state_transitions t
+               WHERE t.artifact_id = a.id AND t.to_state = 'QUARANTINED'
+               ORDER BY t.id DESC
+               LIMIT 1
+          ) IN ('COMMITTED', 'REMOTE_DELETE_PENDING', 'REMOTE_RETAINED')
+      )
   );

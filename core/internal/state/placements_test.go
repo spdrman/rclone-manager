@@ -76,6 +76,19 @@ type artifactFixture struct {
 	localHash     string
 	transferBytes *int64
 	retentionTier string
+
+	// quarantinedFrom is the state the most recent QUARANTINED transition
+	// came from, empty for a fixture that is not quarantined. It is a
+	// field rather than something derived from state because that is the
+	// whole point: QUARANTINED alone does not say whether local_path names
+	// a finished artifact or the .partial it was still being written to.
+	quarantinedFrom string
+
+	// wantPlacement is stated per fixture rather than looked up from a
+	// state set, so that two fixtures in the SAME state can disagree about
+	// it. Without that, no table-driven test can express the case this
+	// migration's predicate turns on.
+	wantPlacement bool
 }
 
 // seedArtifacts writes fixture rows into a database at schema version 6,
@@ -87,23 +100,39 @@ func seedArtifacts(t *testing.T, db *sql.DB) []artifactFixture {
 	bytes := func(n int64) *int64 { return &n }
 
 	fixtures := []artifactFixture{
-		{"discovered.dump", "DISCOVERED", "", "", nil, ""},
-		{"transferring.dump", "TRANSFERRING", "/backups/pg/transferring.dump.partial", "", nil, ""},
-		{"transferred.dump", "TRANSFERRED", "/backups/pg/transferred.dump.partial", "", bytes(11), ""},
-		{"verifying.dump", "VERIFYING", "/backups/pg/verifying.dump.partial", "", bytes(12), ""},
-		{"verified.dump", "VERIFIED", "/backups/pg/verified.dump.partial", "aaaa", bytes(13), ""},
-		{"committing.dump", "COMMITTING", "/backups/pg/committing.dump.partial", "bbbb", bytes(14), ""},
-		{"committed.dump", "COMMITTED", "/backups/pg/committed.dump", "cccc", bytes(15), "daily"},
-		{"pending.dump", "REMOTE_DELETE_PENDING", "/backups/pg/pending.dump", "dddd", bytes(16), "weekly"},
-		{"complete.dump", "COMPLETE", "/backups/pg/complete.dump", "eeee", bytes(17), "monthly"},
-		{"retained.dump", "REMOTE_RETAINED", "/backups/pg/retained.dump", "ffff", bytes(18), "daily"},
-		{"failed.dump", "FAILED", "", "", nil, ""},
-		{"quarantined.dump", "QUARANTINED", "/backups/pg/quarantined.dump", "9999", bytes(19), "daily"},
-		{"lost.dump", "QUARANTINED_LOST", "/backups/pg/lost.dump", "8888", bytes(20), "monthly"},
+		{name: "discovered.dump", state: "DISCOVERED"},
+		{name: "transferring.dump", state: "TRANSFERRING", localPath: "/backups/pg/transferring.dump.partial"},
+		{name: "transferred.dump", state: "TRANSFERRED", localPath: "/backups/pg/transferred.dump.partial", transferBytes: bytes(11)},
+		{name: "verifying.dump", state: "VERIFYING", localPath: "/backups/pg/verifying.dump.partial", transferBytes: bytes(12)},
+		{name: "verified.dump", state: "VERIFIED", localPath: "/backups/pg/verified.dump.partial", localHash: "aaaa", transferBytes: bytes(13)},
+		{name: "committing.dump", state: "COMMITTING", localPath: "/backups/pg/committing.dump.partial", localHash: "bbbb", transferBytes: bytes(14)},
+		{name: "committed.dump", state: "COMMITTED", localPath: "/backups/pg/committed.dump", localHash: "cccc", transferBytes: bytes(15), retentionTier: "daily", wantPlacement: true},
+		{name: "pending.dump", state: "REMOTE_DELETE_PENDING", localPath: "/backups/pg/pending.dump", localHash: "dddd", transferBytes: bytes(16), retentionTier: "weekly", wantPlacement: true},
+		{name: "complete.dump", state: "COMPLETE", localPath: "/backups/pg/complete.dump", localHash: "eeee", transferBytes: bytes(17), retentionTier: "monthly", wantPlacement: true},
+		{name: "retained.dump", state: "REMOTE_RETAINED", localPath: "/backups/pg/retained.dump", localHash: "ffff", transferBytes: bytes(18), retentionTier: "daily", wantPlacement: true},
+		{name: "failed.dump", state: "FAILED"},
+
+		// The three QUARANTINED lineages, all in one state and NOT all
+		// durable. machine.go admits QUARANTINED from COMMITTED,
+		// REMOTE_DELETE_PENDING and REMOTE_RETAINED (local_path names the
+		// finished artifact) and from VERIFYING and FAILED (it still names
+		// the .partial, because the commit rename never ran). A predicate
+		// that reads only the state cannot tell these apart, and would
+		// give the last two an ACTIVE placement pointing at a half-written
+		// file, which is the exact thing this migration refuses to do.
+		{name: "quarantined-from-committed.dump", state: "QUARANTINED", localPath: "/backups/pg/quarantined-from-committed.dump", localHash: "9999", transferBytes: bytes(19), retentionTier: "daily", quarantinedFrom: "COMMITTED", wantPlacement: true},
+		{name: "quarantined-from-retained.dump", state: "QUARANTINED", localPath: "/backups/pg/quarantined-from-retained.dump", localHash: "7777", transferBytes: bytes(22), retentionTier: "daily", quarantinedFrom: "REMOTE_RETAINED", wantPlacement: true},
+		{name: "quarantined-from-verifying.dump", state: "QUARANTINED", localPath: "/backups/pg/quarantined-from-verifying.dump.partial", localHash: "6666", transferBytes: bytes(23), quarantinedFrom: "VERIFYING"},
+		{name: "quarantined-from-failed.dump", state: "QUARANTINED", localPath: "/backups/pg/quarantined-from-failed.dump.partial", transferBytes: bytes(24), quarantinedFrom: "FAILED"},
+		// A QUARANTINED artifact whose transition log says nothing at all.
+		// No evidence is not evidence of durability, so it gets no row.
+		{name: "quarantined-no-lineage.dump", state: "QUARANTINED", localPath: "/backups/pg/quarantined-no-lineage.dump", localHash: "5555", transferBytes: bytes(25)},
+
+		{name: "lost.dump", state: "QUARANTINED_LOST", localPath: "/backups/pg/lost.dump", localHash: "8888", transferBytes: bytes(20), retentionTier: "monthly", wantPlacement: true},
 		// A committed artifact with no recorded hash: verified without
 		// hash: sha256, which is a legal configuration and the case where
 		// a backfilled placement must not claim a content verification.
-		{"nohash.dump", "COMPLETE", "/backups/pg/nohash.dump", "", bytes(21), "daily"},
+		{name: "nohash.dump", state: "COMPLETE", localPath: "/backups/pg/nohash.dump", transferBytes: bytes(21), retentionTier: "daily", wantPlacement: true},
 	}
 
 	now := formatTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
@@ -126,8 +155,13 @@ func seedArtifacts(t *testing.T, db *sql.DB) []artifactFixture {
 			t.Fatalf("seeding %s: %v", f.name, err)
 		}
 		// A COMMITTED transition for the rows that reached one, so the
-		// backfill's created_at has something honest to read.
-		if f.localHash != "" {
+		// backfill's created_at has something honest to read. A fixture
+		// quarantined out of VERIFYING or FAILED never committed, so it
+		// must not get one: that is the whole difference the predicate
+		// reads.
+		committed := f.localHash != "" &&
+			f.quarantinedFrom != "VERIFYING" && f.quarantinedFrom != "FAILED"
+		if committed {
 			if _, err := db.Exec(`
 				INSERT INTO state_transitions (artifact_id, idempotency_key, from_state, to_state, occurred_at)
 				VALUES (?, ?, ?, ?, ?)`,
@@ -135,6 +169,18 @@ func seedArtifacts(t *testing.T, db *sql.DB) []artifactFixture {
 				formatTime(time.Date(2026, 3, 4, 4, 0, 0, 0, time.UTC)),
 			); err != nil {
 				t.Fatalf("seeding a transition for %s: %v", f.name, err)
+			}
+		}
+		// And the edge that carried a quarantined fixture into quarantine,
+		// which is the only record of which lineage it has.
+		if f.quarantinedFrom != "" {
+			if _, err := db.Exec(`
+				INSERT INTO state_transitions (artifact_id, idempotency_key, from_state, to_state, occurred_at)
+				VALUES (?, ?, ?, ?, ?)`,
+				rowID, fmt.Sprintf("seed-%d-quarantined", i), f.quarantinedFrom, "QUARANTINED",
+				formatTime(time.Date(2026, 3, 4, 4, 30, 0, 0, time.UTC)),
+			); err != nil {
+				t.Fatalf("seeding a quarantine transition for %s: %v", f.name, err)
 			}
 		}
 	}
@@ -146,19 +192,6 @@ func hashAlgFor(hash string) string {
 		return ""
 	}
 	return "sha256"
-}
-
-// durableStates are the states in which local_path names a durable copy
-// rather than a partial in flight. It mirrors the migration's own WHERE
-// clause deliberately: if the two ever disagree, this test is where that
-// shows up.
-var durableStates = map[string]bool{
-	"COMMITTED":             true,
-	"REMOTE_DELETE_PENDING": true,
-	"COMPLETE":              true,
-	"REMOTE_RETAINED":       true,
-	"QUARANTINED":           true,
-	"QUARANTINED_LOST":      true,
 }
 
 // TestMigration0007BackfillsEveryDurableArtifactAndNothingElse is TDD
@@ -208,7 +241,7 @@ func TestMigration0007BackfillsEveryDurableArtifactAndNothingElse(t *testing.T) 
 				got = append(got, p)
 			}
 
-			wantPlacement := durableStates[f.state] && f.localPath != ""
+			wantPlacement := f.wantPlacement
 			if !wantPlacement {
 				if len(got) != 0 {
 					t.Fatalf("a %s artifact with local_path %q got %d placements (%+v); before its transfer an artifact has zero copies, and a .partial in flight is not a durable one",
@@ -246,6 +279,10 @@ func TestMigration0007BackfillsEveryDurableArtifactAndNothingElse(t *testing.T) 
 			if f.localHash != "" && f.state != "QUARANTINED" && f.state != "QUARANTINED_LOST" {
 				wantClass = "content"
 			}
+			// A quarantined artifact is precisely the one whose local copy
+			// did NOT verify, whatever hash sits beside it, so it keeps the
+			// empty class above.
+
 			if p.class != wantClass {
 				t.Errorf("verification_class = %q, want %q", p.class, wantClass)
 			}
@@ -1024,5 +1061,53 @@ func TestAFullRunOnAMigratedDatabaseMatchesAFullRunOnAFreshOne(t *testing.T) {
 		if got := afterRun[name]; got != want {
 			t.Errorf("pre-existing artifact %q changed across the migration and a full run:\n  before: %s\n  after:  %s", name, want, got)
 		}
+	}
+}
+
+// TestTheBackfillCannotDoubleWriteEvenIfItRanTwice is the second line of
+// defence behind TestMigration0007IsIdempotent, and it is a different
+// claim.
+//
+// That test proves the RUNNER never runs an applied migration again, which
+// is the mechanism that actually holds today. This one proves the SCHEMA
+// would refuse the damage anyway: UNIQUE (artifact_id, medium) is what
+// makes "one row per durable copy" a fact the database enforces rather
+// than a property of the runner's bookkeeping. Both matter, because the
+// move engine (#238) reads exactly one row per (artifact, medium) and a
+// second one would mean the journal believed in two copies that are in
+// fact the same copy.
+//
+// It runs the real migration's own backfill statement a second time,
+// against the database that migration just filled, which is the shape a
+// re-run would have if the runner's skip were ever lost.
+func TestTheBackfillCannotDoubleWriteEvenIfItRanTwice(t *testing.T) {
+	db, _ := openRaw(t)
+	migrateUpTo(t, db, placementsMigrationVersion-1)
+	seedArtifacts(t, db)
+
+	ctx := context.Background()
+	if err := migrate(ctx, db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	before := countPlacements(t, db)
+	if before == 0 {
+		t.Fatal("the migration backfilled nothing, so re-running its backfill proves nothing")
+	}
+
+	// The backfill is the last statement in the file.
+	stmts := splitStatements(migrationSQL(t, placementsMigrationVersion).sql)
+	backfill := stmts[len(stmts)-1]
+	if !strings.Contains(backfill, "INSERT INTO placements") {
+		t.Fatalf("the last statement of migration %d is not the backfill; this test is reading the wrong one:\n%s",
+			placementsMigrationVersion, backfill)
+	}
+
+	if _, err := db.ExecContext(ctx, backfill); err == nil {
+		t.Fatalf("re-running the backfill was accepted; placements went from %d to %d, so the schema does not actually enforce one row per (artifact, medium)",
+			before, countPlacements(t, db))
+	}
+
+	if after := countPlacements(t, db); after != before {
+		t.Errorf("placements went from %d to %d, want unchanged", before, after)
 	}
 }
