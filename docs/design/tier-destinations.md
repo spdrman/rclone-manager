@@ -31,25 +31,34 @@ symlink-free path the safety checks just proved, and routing it back
 through the configured root would throw that resolution away. It stays
 where it is and it fails closed.
 
-**The interface itself has no production caller.** Be blunt about it,
-because everything below reads like a description of a live seam. The
-only production use of the package is the package-level function
-`artifactstore.LocalLocator`, from `lifecycle/transfer.go` and
-`retention/prune.go`, and both of those hold a directory string rather
-than a `Store`, so both bypass `Store` entirely. `Store`, `Local`,
-`NewLocal`, `Kind`, `Stat`, `Open`, `Put`, `Remove`, `ErrNotPresent` and
-`ErrAlreadyPresent` are a design fixture: the contract a mover and a
-second backend get built against, landed before either exists so the
-shape is argued once, in review, rather than discovered under a deadline.
+**The interface landed with no production caller, and #390 gave it two.**
+This paragraph used to say the opposite, and being blunt about the change
+matters as much as being blunt about the original state did. #334 landed
+`Store`, `Local`, `NewLocal`, `Kind`, `Stat`, `Open`, `Put`, `Remove`,
+`ErrNotPresent` and `ErrAlreadyPresent` with nothing in production calling
+any of them: a design fixture, the contract a mover and a second backend
+get built against, landed before either exists so the shape is argued once
+in review rather than discovered under a deadline. The only production use
+was the package-level function `artifactstore.LocalLocator`, from
+`lifecycle/transfer.go` and `retention/prune.go`, and both of those held a
+directory string rather than a `Store`, so both bypassed `Store` entirely.
 
-So the conversion #334 needs is relocated, not reduced. Those two call
-sites are it: resolving a `Store` for the backup set and asking it,
-instead of composing a path out of `LocalPath`. What landing the contract
-first buys is that the thing they convert *to* is already written down.
+#390 did the conversion #334 named. Both call sites build a `Local` for
+the backup set and ask its `Locator`, and `LocalLocator` is unexported, so
+there is no longer any way to compute an artifact's location without going
+through a store. `NewLocal`, `Locator`, `Kind` and `KindLocal` have real
+production callers now; `Stat`, `Open`, `Put` and `Remove` still do not,
+which is still deliberate.
 
-No behaviour changed. The lifecycle and retention suites pass unmodified,
-which is the point: an existing deployment computes exactly the same
-paths it did before.
+That conversion is not a no-op, which is exactly why #334 deferred it.
+`NewLocal` refuses an empty root, so `finalPath` and `pruneFinalPath` grew
+an error return: an unrooted backup set is refused rather than resolving
+the artifact's bare name against whatever directory the daemon started in.
+On the prune path that refusal is `PruneRefuse`, never `PruneKeep`, and it
+is decided before the tier verdict is even looked at. `KEEP` claims a tier
+selected the artifact; a store that cannot say where the artifact lives has
+claimed nothing at all, and collapsing the two is how a prune reports a
+decision it never made.
 
 ## Decision: the unit is an artifact, not a file
 
