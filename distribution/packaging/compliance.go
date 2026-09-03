@@ -19,11 +19,21 @@
 // reviewer. One field, one truth, and flipping it is the operator action
 // that closes the criterion.
 //
-// A copyleft dependency is a hard refusal rather than a warning. The
-// project's own licence choice (Apache-2.0) is only available because the
-// whole linked graph is permissive, and that is a fact about today's
-// go.mod, not a property of the project. LicensePolicyComplaints is what
-// keeps the premise and the conclusion attached to each other.
+// A licence the project has not read is a hard refusal rather than a
+// warning. The premise behind the Apache-2.0 choice is that every
+// component linked into a shipped binary is either permissive or one of
+// the non-permissive licences this project accepts on purpose, with what
+// that acceptance obliges written down and discharged. That is a fact
+// about today's go.mod rather than a property of the project, so
+// LicensePolicyComplaints and LicenceObligationComplaints are what keep
+// the premise and the conclusion attached to each other.
+//
+// The graph is not wholly permissive and has not been since rclone's s3
+// backend was registered: two MPL-2.0 modules arrive under it and cannot
+// be unlinked from it. AcceptedNonPermissiveLicence is the category that
+// says so honestly instead of widening permissiveIds, which would have
+// cleared the same check by making this package's data file assert
+// something false.
 package packaging
 
 import (
@@ -70,8 +80,9 @@ type ComplianceLicense struct {
 	// it off is what stops it firing, which is the difference between a
 	// policy and a comment.
 	CopyleftBlocksTheLicenseChoice bool `json:"copyleftBlocksTheLicenseChoice"`
-	// PermissiveIDs is the allowlist, and it is the allowlist that
-	// makes the policy a refusal. CopyleftIDs is a denylist, and a
+	// PermissiveIDs is the allowlist of licences that are permissive,
+	// and it is the allowlist that makes the policy a refusal.
+	// CopyleftIDs is a denylist, and a
 	// denylist answers "is this one of the licences somebody thought
 	// of?", which is not the question: a bare GPL-3.0 out of npm
 	// registry metadata, a compound expression, or a recognised but
@@ -86,6 +97,131 @@ type ComplianceLicense struct {
 	// the two jobs apart is deliberate: editing this list must not be
 	// able to turn a refusal into a pass.
 	CopyleftIDs []string `json:"copyleftIds"`
+	// AcceptedNonPermissive is the third category: licences that are
+	// NOT permissive and that this project ships under anyway, each
+	// with the obligation that acceptance carries. It is deliberately
+	// not part of PermissiveIDs, and the reasoning is in
+	// AcceptedNonPermissiveLicence's own doc comment.
+	AcceptedNonPermissive []AcceptedNonPermissiveLicence `json:"acceptedNonPermissive"`
+}
+
+// AcceptedNonPermissiveLicence is one licence that is not permissive and
+// that this project ships under on purpose, with what that costs written
+// down next to it.
+//
+// It is a separate category because the alternative was one line: add
+// the id to permissiveIds and the refusal goes away. permissiveIds is a
+// statement about what a licence IS, and it is the list somebody reads
+// to find out whether this graph is permissive. MPL-2.0 is file-level
+// weak copyleft, so putting it there would make the one data file whose
+// whole job is to be true say something false, in the place it is least
+// true.
+//
+// The shape is the point: an entry here cannot be a bare id. It has to
+// name the clause the acceptance triggers, where a recipient obtains
+// the licence, where a recipient obtains the source, and which
+// artifacts carry that offer. An incomplete entry admits nothing
+// (LicensePolicyComplaints refuses the component), and a complete entry
+// whose artifacts do not actually carry the offer admits nothing either
+// (LicenceObligationComplaints reads them). Accepted here means accepted
+// and discharged, or it means refused.
+type AcceptedNonPermissiveLicence struct {
+	SPDXID string `json:"spdxId"`
+	// Scope says how far the licence's reciprocity reaches, in words.
+	// "Non-permissive" spans everything from per-file source
+	// availability to network-use copyleft, and that difference is the
+	// entire decision, so it is recorded rather than left to whoever
+	// recognises the id.
+	Scope string `json:"scope"`
+	// Obligation names the clause and says what somebody has to do
+	// about it. A section number on its own is a citation.
+	Obligation string `json:"obligation"`
+	// LicenceTextURL is where a recipient gets the licence itself.
+	// MPL-2.0 §3.1 asks for exactly this in as many words: recipients
+	// have to be told how to obtain a copy of the licence, not only
+	// that it governs the files.
+	LicenceTextURL string `json:"licenceTextUrl"`
+	// SourceRetrieval is where a recipient gets the Source Code Form,
+	// as a template over one component: {module} and {version} are
+	// substituted per component, so the offer names an exact release
+	// instead of a project. A template that does not vary by component
+	// is refused, because "the source is on GitHub somewhere" does not
+	// identify the source that was shipped.
+	//
+	// {module} is escaped the way a Go module proxy path is escaped
+	// for Go components. An unescaped capital letter is a 404, and a
+	// containment check over a file would pass on that 404 happily.
+	SourceRetrieval string `json:"sourceRetrieval"`
+	// DischargedBy are the repository paths that carry the offer to a
+	// recipient. Recording an obligation is not discharging it, so
+	// each of these is read and checked for the id, for the licence
+	// text address, and for every affected component at its exact
+	// version with its own resolved source address.
+	DischargedBy []string `json:"dischargedBy"`
+	// Rationale is why this acceptance was taken rather than the
+	// alternatives, for the reader who wants the decision and not the
+	// mechanism.
+	Rationale []string `json:"rationale"`
+}
+
+// incompleteBecause says why an acceptance records too little to stand,
+// or returns "" when it records enough.
+func (a AcceptedNonPermissiveLicence) incompleteBecause() string {
+	switch {
+	case strings.TrimSpace(a.SPDXID) == "":
+		return "names no licence, so it accepts nothing in particular"
+	case strings.TrimSpace(a.Scope) == "":
+		return "names no scope, so a reader cannot tell how far the licence reaches"
+	case strings.TrimSpace(a.Obligation) == "":
+		return "names no obligation, which makes it an allowlist entry with a longer name"
+	case strings.TrimSpace(a.LicenceTextURL) == "":
+		return "says nowhere a recipient can obtain the licence text"
+	case strings.TrimSpace(a.SourceRetrieval) == "":
+		return "says nowhere a recipient can obtain the source"
+	case !strings.Contains(a.SourceRetrieval, "{module}") || !strings.Contains(a.SourceRetrieval, "{version}"):
+		return fmt.Sprintf("gives sourceRetrieval as %q, which does not vary by component; an offer that names a project rather than a release does not identify the source that shipped", a.SourceRetrieval)
+	case len(a.DischargedBy) == 0:
+		return "names no artifact that carries the offer, so the obligation is recorded and nothing discharges it"
+	}
+	return ""
+}
+
+// Covers reports whether this acceptance is the one for an SPDX id.
+func (a AcceptedNonPermissiveLicence) Covers(spdxID string) bool {
+	return strings.EqualFold(strings.TrimSpace(a.SPDXID), strings.TrimSpace(spdxID))
+}
+
+// SourceURLFor renders the source address for one component.
+func (a AcceptedNonPermissiveLicence) SourceURLFor(comp Component) string {
+	module := comp.Name
+	if comp.Ecosystem == EcosystemGo {
+		module = EscapeGoModulePath(module)
+	}
+	url := strings.ReplaceAll(a.SourceRetrieval, "{module}", module)
+	return strings.ReplaceAll(url, "{version}", comp.Version)
+}
+
+// EscapeGoModulePath applies the module proxy's case encoding: an
+// uppercase letter becomes "!" followed by its lowercase form. Proxy
+// paths are case-folded, and the escape is how two modules differing
+// only in case stay distinct on a case-insensitive filesystem.
+//
+// This is not hypothetical here. github.com/IBM/go-sdk-core/v5 is in
+// this project's own linked graph, and unescaped its proxy URL is a 404.
+// A source offer that renders a 404 is worse than none, because the
+// check that reads the artifact only asks whether the string is present.
+func EscapeGoModulePath(path string) string {
+	var b strings.Builder
+	b.Grow(len(path) + 8)
+	for i := 0; i < len(path); i++ {
+		if c := path[i]; c >= 'A' && c <= 'Z' {
+			b.WriteByte('!')
+			b.WriteByte(c + ('a' - 'A'))
+			continue
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
 }
 
 // SourceRepository is where the source lives and who can see it.
@@ -225,6 +361,30 @@ func (c Compliance) IsPermissive(spdxID string) bool {
 	return containsFold(c.License.PermissiveIDs, spdxID)
 }
 
+// AcceptedNonPermissive returns the recorded acceptance for an SPDX id.
+//
+// It returns the entry rather than a bool so a caller cannot treat
+// "accepted" as the end of the question: the entry is what says whether
+// the acceptance records enough to stand.
+func (c Compliance) AcceptedNonPermissive(spdxID string) (AcceptedNonPermissiveLicence, bool) {
+	for _, a := range c.License.AcceptedNonPermissive {
+		if a.Covers(spdxID) {
+			return a, true
+		}
+	}
+	return AcceptedNonPermissiveLicence{}, false
+}
+
+// AcceptedNonPermissiveIDs returns the accepted non-permissive ids in
+// declaration order, for a message that has to list them.
+func (c Compliance) AcceptedNonPermissiveIDs() []string {
+	out := make([]string, 0, len(c.License.AcceptedNonPermissive))
+	for _, a := range c.License.AcceptedNonPermissive {
+		out = append(out, a.SPDXID)
+	}
+	return out
+}
+
 func containsFold(list []string, want string) bool {
 	want = strings.TrimSpace(want)
 	for _, id := range list {
@@ -337,11 +497,19 @@ func LinkComplaints(c Compliance, read ReadFileFunc) []string {
 // LicensePolicyComplaints says every way the third-party inventory
 // invalidates the project's own licence choice.
 //
-// The premise behind Apache-2.0 here is that nothing in the graph is
-// copyleft. This is that premise, executable. A component whose licence
-// could not be identified is refused too: an unidentified licence is not
-// evidence of a permissive one, and treating it as one is how a graph
-// silently acquires an obligation nobody accepted.
+// The premise behind Apache-2.0 here is that every linked component is
+// either permissive or under one of the non-permissive licences this
+// project accepts on purpose with the obligation recorded. This is that
+// premise, executable. A component whose licence could not be identified
+// is refused too: an unidentified licence is not evidence of a
+// permissive one, and treating it as one is how a graph silently
+// acquires an obligation nobody accepted.
+//
+// It is pure, and it judges the DECLARATION of an acceptance rather than
+// its discharge, because whether the NOTICE a recipient receives
+// actually carries the offer is a question about the tree and not about
+// compliance.json. LicenceObligationComplaints is that half, and the
+// real-inventory test runs both.
 func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 	var out []string
 	if len(inv.Components) == 0 {
@@ -363,8 +531,19 @@ func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 		case LicenseExpressionIsUndecided(comp.LicenseID):
 			out = append(out, fmt.Sprintf("%s@%s is listed as %q, which is an expression rather than a decided licence; a choice between licences is not evidence that the permissive branch is the one this project takes",
 				comp.Name, comp.Version, comp.LicenseID))
-		case !c.IsPermissive(comp.LicenseID):
-			out = append(out, fmt.Sprintf("%s@%s is %s, %s", comp.Name, comp.Version, comp.LicenseID, c.whyNotPermitted(comp.LicenseID)))
+		case c.IsPermissive(comp.LicenseID):
+			// Permitted by being named on the allowlist, which is
+			// the whole of what the allowlist means.
+		default:
+			accepted, ok := c.AcceptedNonPermissive(comp.LicenseID)
+			if !ok {
+				out = append(out, fmt.Sprintf("%s@%s is %s, %s", comp.Name, comp.Version, comp.LicenseID, c.whyNotPermitted(comp.LicenseID)))
+				break
+			}
+			if why := accepted.incompleteBecause(); why != "" {
+				out = append(out, fmt.Sprintf("%s@%s is %s, which compliance.json accepts as non-permissive, and the acceptance %s; a licence accepted without recording what it obliges is a wider allowlist wearing a longer name",
+					comp.Name, comp.Version, comp.LicenseID, why))
+			}
 		}
 	}
 	return out
@@ -374,10 +553,81 @@ func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 func (c Compliance) whyNotPermitted(spdxID string) string {
 	if c.IsCopyleft(spdxID) {
 		if c.License.CopyleftBlocksTheLicenseChoice {
-			return fmt.Sprintf("which is copyleft: the project's %s choice rests on the whole linked graph being permissive, and this component is the counter-example", c.License.SPDXID)
+			return fmt.Sprintf("which is copyleft: the project's %s choice rests on every linked component being permissive or an accepted non-permissive licence whose obligation is written down and discharged, and this component is neither", c.License.SPDXID)
 		}
 		return fmt.Sprintf("which is copyleft. copyleftBlocksTheLicenseChoice is off in compliance.json and it is refused regardless, because the %s choice rests on the allowlist rather than on a boolean in a data file", c.License.SPDXID)
 	}
-	return fmt.Sprintf("which is not on the permissive allowlist compliance.json declares (%s); an id nobody has read the terms of is not evidence of a permissive one",
-		strings.Join(c.License.PermissiveIDs, ", "))
+	accepted := "nothing"
+	if ids := c.AcceptedNonPermissiveIDs(); len(ids) > 0 {
+		accepted = strings.Join(ids, ", ")
+	}
+	return fmt.Sprintf("which is not on the permissive allowlist compliance.json declares (%s) and is not one of the non-permissive licences it accepts on purpose (%s); an id nobody has read the terms of is not evidence of a permissive one",
+		strings.Join(c.License.PermissiveIDs, ", "), accepted)
+}
+
+// LicenceObligationComplaints says every way an accepted non-permissive
+// licence's obligation is recorded and not actually discharged.
+//
+// This is the half that reads the tree. An acceptance whose artifacts do
+// not name the licence, do not say where the licence text is, or do not
+// give the exact release and the exact address of the source that
+// shipped, is an obligation somebody wrote down and nobody met, and this
+// project would rather have a red build than a compliance record that
+// reads well.
+//
+// Two rules here are about the mechanism rather than the paperwork. An
+// id on permissiveIds AND on acceptedNonPermissive is refused, because
+// the allowlist decides first and the obligation recorded here would
+// never be looked at again. And an acceptance nothing in the inventory
+// is under is refused, because a standing acceptance for a licence the
+// graph does not contain is a permission granted in advance, which is
+// the one thing this category must never become.
+func LicenceObligationComplaints(c Compliance, inv Inventory, read ReadFileFunc) []string {
+	var out []string
+	for _, a := range c.License.AcceptedNonPermissive {
+		if why := a.incompleteBecause(); why != "" {
+			out = append(out, fmt.Sprintf("compliance.json accepts %q as non-permissive and the acceptance %s", a.SPDXID, why))
+			continue
+		}
+		if c.IsPermissive(a.SPDXID) {
+			out = append(out, fmt.Sprintf("%s is on permissiveIds and on acceptedNonPermissive at once; the allowlist decides first, so the obligation recorded against it would never be checked and the acceptance would be a wider allowlist wearing a longer name", a.SPDXID))
+		}
+		if LicenseExpressionIsUndecided(a.SPDXID) {
+			out = append(out, fmt.Sprintf("acceptedNonPermissive carries %q, which is an expression rather than a decided licence, so it can never match a component id and accepts nothing", a.SPDXID))
+			continue
+		}
+		var affected []Component
+		for _, comp := range inv.Components {
+			if a.Covers(comp.LicenseID) {
+				affected = append(affected, comp)
+			}
+		}
+		if len(affected) == 0 {
+			out = append(out, fmt.Sprintf("compliance.json accepts %s as non-permissive and nothing in the inventory is under it; an acceptance with nothing to justify it is a permission granted in advance, so it is removed rather than kept warm", a.SPDXID))
+			continue
+		}
+		for _, rel := range a.DischargedBy {
+			data, err := read(rel)
+			if err != nil {
+				out = append(out, fmt.Sprintf("%s's obligation is declared as discharged by %s, which is not in the tree: %v", a.SPDXID, rel, err))
+				continue
+			}
+			body := string(data)
+			if !strings.Contains(body, a.SPDXID) {
+				out = append(out, fmt.Sprintf("%s never names %s, so it is not what tells a recipient which licence governs those files", rel, a.SPDXID))
+			}
+			if !strings.Contains(body, a.LicenceTextURL) {
+				out = append(out, fmt.Sprintf("%s never gives %s, so a recipient is told %s applies and not how to read it", rel, a.LicenceTextURL, a.SPDXID))
+			}
+			for _, comp := range affected {
+				if !strings.Contains(body, comp.Name+"@"+comp.Version) {
+					out = append(out, fmt.Sprintf("%s never names %s@%s, which is %s and is linked into %s", rel, comp.Name, comp.Version, a.SPDXID, strings.Join(comp.LinkedInto, " and ")))
+				}
+				if url := a.SourceURLFor(comp); !strings.Contains(body, url) {
+					out = append(out, fmt.Sprintf("%s never gives %s, so the offer for %s@%s names no address a recipient can fetch that source from", rel, url, comp.Name, comp.Version))
+				}
+			}
+		}
+	}
+	return out
 }
