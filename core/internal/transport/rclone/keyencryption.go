@@ -512,7 +512,7 @@ func resolveKeyEncryptionFromCommand(argv []string) (obs.Secret, error) {
 		}
 		return nil
 	}
-	c.WaitDelay = 5 * time.Second
+	c.WaitDelay = resolverReapBackstop
 
 	stdout := &boundedBuffer{limit: maxResolvedKeyEncryptionSecretSize}
 	stderr := &boundedBuffer{limit: maxCapturedStderr}
