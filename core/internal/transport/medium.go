@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/model"
 )
@@ -134,6 +135,35 @@ type ObjectInfo struct {
 	StorageClass string
 }
 
+// RestoreState is what a medium reports about a restore of one object
+// (EPIC E, FR-34).
+//
+// It mirrors what S3 actually returns, and nothing more. S3's restore
+// status carries a boolean and, once it has one, an expiry date; it
+// carries no percentage, no queue position and no completion estimate, and
+// this struct having nowhere to put one is how that stays true no matter
+// what a later surface would like to render.
+//
+// It lives on this boundary rather than in internal/archive because it is
+// a fact the ADAPTER learns from the endpoint, and FR-3's rule is that
+// facts crossing this line wear manager-owned types. internal/archive
+// aliases it so the domain package can still spell it in its own
+// vocabulary.
+type RestoreState struct {
+	// InProgress is the provider's own "restore in progress" flag.
+	InProgress bool
+
+	// ExpiresAt is when the provider says the restored copy stops being
+	// readable, or nil when it reports none.
+	//
+	// A pointer rather than a zero time because "the provider told me
+	// this restore lasts until Tuesday" and "the provider told me
+	// nothing" are different facts and a surface must be able to tell
+	// them apart. FR-34: when S3 reports the expiry it is shown, and
+	// until then nothing is invented in its place.
+	ExpiresAt *time.Time
+}
+
 // UploadOptions carries the per-upload choices a caller makes.
 type UploadOptions struct {
 	// StorageClass overrides the medium's own configured class for this
@@ -187,13 +217,15 @@ type ChecksumAttestation struct {
 // argument about the local seam at length; this is that argument applied
 // to the boundary a second machine sits behind.
 //
-// # Restore is not here yet
+// # Restore is here, and it is the only pair that can cost money to call
 //
-// FR-28 sketches RestoreStatus and InitiateRestore on this interface. They
-// belong to #241, which owns the archive storage classes that give them
-// something to mean, and no fixture available in Phase 1 can exercise a
-// Glacier restore, so landing them now would land two methods with no
-// implementation and no test behind them. #241 adds them here.
+// FR-28 sketched RestoreStatus and InitiateRestore on this interface and
+// left them to #241, which owns the archive storage classes that give them
+// something to mean. They are now below. Read InitiateRestore's own doc
+// before implementing it for a second backend: it is the one method on
+// this boundary whose blast radius is measured in objects rather than in
+// one object, because the provider command behind it is addressed by a
+// prefix.
 type MediumStore interface {
 	// StatObject reports what the medium holds at key. A key the medium
 	// does not hold is a NotFound-classified error, never a zero
@@ -317,6 +349,51 @@ type MediumStore interface {
 	// state is lost, and a rebuild has nothing else to read. FR-32 is what
 	// keeps that safe: everything this returns is an untrusted proposal.
 	ListObjects(ctx context.Context, medium Medium, prefix string) ([]ObjectInfo, error)
+
+	// RestoreStatus reports what the medium says about a restore of the
+	// object at key, or nil when it reports no restore status at all.
+	//
+	// nil is a real answer and not an absence of one. S3 returns no
+	// restore status for an object nobody has ever asked to restore, and
+	// also for one whose restored window has been reaped, so nil means
+	// "this medium is not telling me a restore is in play" and nothing
+	// more. It is explicitly NOT "the object is not there": a key the
+	// medium does not hold is a NotFound-classified error, the same rule
+	// StatObject follows, because a mover that confuses the two acts on a
+	// missing object as though it were merely cold.
+	//
+	// It never initiates anything. FR-34 makes that a rule rather than an
+	// implementation detail: a read that started a restore as a side
+	// effect would put a bill on the end of a status poll, and the whole
+	// point of the operation below is that somebody asked for it.
+	RestoreStatus(ctx context.Context, medium Medium, key string) (*RestoreState, error)
+
+	// InitiateRestore asks the medium to make the object at key readable
+	// for windowDays days. It returns once the request is ACCEPTED, which
+	// is hours before the object is readable.
+	//
+	// # It acts on exactly one object, and an implementation has to work at that
+	//
+	// This is the obligation on this method, stated here rather than left
+	// to each adapter to notice. rclone's own s3 `restore` backend command
+	// is addressed by a REMOTE, enumerates everything under it and
+	// restores every archived object it finds, so an implementation that
+	// hands it the medium's bucket restores the bucket. That is not a
+	// slow request, it is a per-object retrieval charge for every backup
+	// the deployment holds, and it cannot be called back once the
+	// provider has accepted it.
+	//
+	// So: exactly the object at key, and an implementation that cannot
+	// confine its backend command to one object must refuse rather than
+	// approximate. The rclone adapter confines it with a files-from
+	// filter and proves the confinement in a test that would otherwise
+	// see three objects.
+	//
+	// A medium type with no notion of an archive tier refuses with an
+	// UnsupportedCapability error rather than quietly succeeding, for
+	// FR-13's reason: a caller told "restore accepted" by something that
+	// did nothing waits hours for a state change that is never coming.
+	InitiateRestore(ctx context.Context, medium Medium, key string, windowDays int) error
 }
 
 // MediumKey builds the key an artifact's object lives at inside a medium:

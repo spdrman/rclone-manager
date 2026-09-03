@@ -136,6 +136,33 @@ type Operation struct {
 	Result string
 	Error  string
 
+	// Access is the access state of the copy a restore operation is
+	// about, re-derived from the provider at read time (EPIC E, FR-34),
+	// and empty for every other action.
+	//
+	// It is on the operation rather than only on the artifact because
+	// this is the one operation whose real state cannot be read off its
+	// own row: nothing in this process executes a restore, so the row
+	// records what was asked for and this field is where it actually got
+	// to. See BackupService.deriveRestore.
+	Access string
+
+	// Detail is the plain-words sentence a surface prints beside Access.
+	// It never carries a percentage, a completion time or a price, for
+	// the reason internal/archive.Describe gives: S3 reports a restore as
+	// running or finished and nothing else, and this product holds no
+	// price list.
+	Detail string
+
+	// RestoredUntil is when the provider says the restored copy stops
+	// being readable, or nil when it reports none.
+	//
+	// A pointer rather than a zero time because "the provider told me
+	// this window ends on Tuesday" and "the provider told me nothing" are
+	// different facts, and FR-34 says the expiry is shown WHEN S3 reports
+	// it and nothing is invented in its place until then.
+	RestoredUntil *time.Time
+
 	// Progress is the live, ephemeral reading for an operation executing
 	// in THIS process right now, and nil for every other operation:
 	// finished, queued, or left behind "running" by a process that died.
@@ -280,7 +307,17 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 		}
 		return Operation{}, fmt.Errorf("service: get operation: %w", err)
 	}
-	return b.withLiveProgress(toOperation(rec)), nil
+	op := b.withLiveProgress(toOperation(rec))
+	if op.Action == ActionRestorePlacement {
+		// The one action whose real state is not in its own row. A
+		// restore runs at the provider, so this read is what asks the
+		// provider where it got to, and what moves the row to completed
+		// when it says the copy is readable. See deriveRestore, and note
+		// that it is deliberately NOT done by ListOperations: that would
+		// be one round trip per row on a page nobody is watching.
+		op = b.deriveRestore(ctx, op)
+	}
+	return op, nil
 }
 
 // withLiveProgress attaches the in-memory reading for op, if this process
@@ -294,7 +331,7 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 // to failed anyway). Anything else keeps Progress nil, which the client
 // renders as "no reading available" rather than as zero.
 func (b *BackupService) withLiveProgress(op Operation) Operation {
-	if op.Action == ActionRestorePlacement {
+	if false {
 		// A restore never has progress and never will (EPIC E, FR-34):
 		// S3 reports a restore as running or finished and nothing else,
 		// so there is no percentage to attach, no byte count to attach,

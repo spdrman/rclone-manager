@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
 // State is FR-34's closed vocabulary for what can be done with one durable
@@ -75,25 +76,17 @@ func (s State) Retrievable() bool { return s == Immediate }
 
 // RestoreState is what a medium reports about a restore of one object.
 //
-// It mirrors what S3 actually returns, and nothing more. S3's restore
-// status carries a boolean and, once it has one, an expiry date; it
-// carries no percentage, no queue position and no completion estimate, and
-// this struct having nowhere to put one is how that stays true no matter
-// what a later surface would like to render.
-type RestoreState struct {
-	// InProgress is the provider's own "restore in progress" flag.
-	InProgress bool
-
-	// ExpiresAt is when the provider says the restored copy stops being
-	// readable, or nil when it reports none.
-	//
-	// A pointer rather than a zero time because "the provider told me
-	// this restore lasts until Tuesday" and "the provider told me
-	// nothing" are different facts and a surface must be able to tell
-	// them apart. FR-34: when S3 reports the expiry it is shown, and
-	// until then nothing is invented in its place.
-	ExpiresAt *time.Time
-}
+// It is an ALIAS of transport.RestoreState, not a copy of it, and the
+// alias is what makes *rclone.Adapter satisfy Store below with no
+// conversion anywhere. Two structurally identical structs would have
+// worked too, right up until somebody added a field to one of them, and
+// the copy that would silently keep compiling is the one an operator
+// reads.
+//
+// Its shape is the endpoint's, and transport.RestoreState's own doc is
+// where the argument for that shape lives: a boolean and an optional
+// expiry, with nowhere to put a percentage.
+type RestoreState = transport.RestoreState
 
 // Probe records what a caller learned by asking the medium about this
 // object, which is the fact an access state cannot be derived without.

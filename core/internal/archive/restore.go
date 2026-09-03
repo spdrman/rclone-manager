@@ -476,3 +476,22 @@ func (r *Restorer) observe(ctx context.Context, medium transport.Medium, params 
 	}
 	return access, rs, Describe(access, params.StorageClass, rs)
 }
+
+// ParametersOf re-reads what an operation row recorded about the restore
+// it describes.
+//
+// It is exported because the row is the only thing that knows which medium
+// a restore was against, and a caller that has just restarted needs that
+// before it can ask the provider anything. Keeping the JSON shape private
+// and handing out a parsed struct is the difference between one definition
+// of that row and two.
+func ParametersOf(raw string) (Parameters, error) {
+	var p Parameters
+	if raw == "" {
+		return Parameters{}, fmt.Errorf("%w: this operation row records no parameters", ErrInvalidRequest)
+	}
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return Parameters{}, fmt.Errorf("archive: operation parameters this build cannot read: %w", err)
+	}
+	return p, nil
+}
