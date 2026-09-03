@@ -347,13 +347,15 @@ export interface StorageMedium {
 export interface VerificationClassInfo {
   className: string;
   proves: string;
-  /** What achieving this class takes, in words. Deliberately words: the
-   *  backend has no price list, so a number here would be invented. */
-  cost: string;
-  /** True when achieving this class downloads the bytes, which the
-   *  provider bills for. The same predicate the engine refuses automatic
-   *  medium revalidation on, read rather than restated. */
-  costsEgress: boolean;
+  /** What achieving this class requires, in words. Deliberately words,
+   *  and deliberately not a field called "cost": the backend has no price
+   *  list, so a number here would be invented, and a field named for one
+   *  is one release away from holding one. */
+  requires: string;
+  /** True when achieving this class downloads the object's bytes, which
+   *  the provider bills for. The same predicate the engine refuses
+   *  automatic medium revalidation on, read rather than restated. */
+  downloadsObject: boolean;
 }
 
 /** The vocabulary and the consent text a storage-medium mapping is written

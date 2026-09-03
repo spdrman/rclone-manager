@@ -49,8 +49,8 @@ const STORAGE = {
     {
       className: "content",
       proves: "the bytes on the medium hash to the hash this product recorded when it ingested the artifact",
-      cost: "a full download of the object: time plus egress, and for an archive storage class a restore first",
-      costsEgress: true
+      requires: "a full download of the object: time plus egress, and for an archive storage class a restore first",
+      downloadsObject: true
     }
   ],
   mediumDisclosure:

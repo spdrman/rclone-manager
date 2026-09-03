@@ -258,14 +258,15 @@ type storageSchemaBody struct {
 }
 
 // verificationClassBody is one rung of the ladder with the engine's own
-// words. costs_egress is the same predicate the engine refuses automatic
-// medium revalidation on, served rather than restated: it is a mechanism,
-// and this is where a surface reads it from.
+// words. downloads_object is the same predicate the engine refuses
+// automatic medium revalidation on, served rather than restated: it is a
+// mechanism, and this is where a surface reads it from. Neither field is
+// called cost, on purpose: see service.VerificationClassInfo.
 type verificationClassBody struct {
-	Class       string `json:"class"`
-	Proves      string `json:"proves"`
-	Cost        string `json:"cost"`
-	CostsEgress bool   `json:"costs_egress"`
+	Class           string `json:"class"`
+	Proves          string `json:"proves"`
+	Requires        string `json:"requires"`
+	DownloadsObject bool   `json:"downloads_object"`
 }
 
 type retentionSchemaBody struct {
@@ -421,10 +422,10 @@ func toSettingsResponse(s service.Settings) settingsResponse {
 	classes := make([]verificationClassBody, 0, len(storage.VerificationClasses))
 	for _, c := range storage.VerificationClasses {
 		classes = append(classes, verificationClassBody{
-			Class:       c.Class,
-			Proves:      c.Proves,
-			Cost:        c.Cost,
-			CostsEgress: c.CostsEgress,
+			Class:           c.Class,
+			Proves:          c.Proves,
+			Requires:        c.Requires,
+			DownloadsObject: c.DownloadsObject,
 		})
 	}
 	mediums := make([]storageMediumBody, 0, len(s.Mediums))

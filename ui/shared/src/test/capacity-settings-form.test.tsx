@@ -64,9 +64,9 @@ function settingsFixture(capacity: Partial<CapacitySettings> = {}): AppSettings 
     schema: {
       storage: {
         verificationClasses: [
-          { className: "content", proves: "the bytes hash to what was recorded", cost: "a full download", costsEgress: true },
-          { className: "attested", proves: "the provider's checksum matches", cost: "one metadata call", costsEgress: false },
-          { className: "existence", proves: "an object exists at the recorded size", cost: "one HEAD request", costsEgress: false }
+          { className: "content", proves: "the bytes hash to what was recorded", requires: "a full download", downloadsObject: true },
+          { className: "attested", proves: "the provider's checksum matches", requires: "one metadata call", downloadsObject: false },
+          { className: "existence", proves: "an object exists at the recorded size", requires: "one HEAD request", downloadsObject: false }
         ],
         mediumDisclosure: "I delete the copy on this machine after a verified upload.",
         retrievalDisclosure: "Reading a copy back is billed by your provider."

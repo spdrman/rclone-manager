@@ -600,10 +600,10 @@ func TestGetSettings_ServesTheMediumsAndTheLadderButNoCredential(t *testing.T) {
 	}
 	egress := 0
 	for _, c := range body.Schema.Storage.VerificationClasses {
-		if c["proves"] == "" || c["cost"] == "" {
+		if c["proves"] == "" || c["requires"] == "" {
 			t.Errorf("rung %v arrived without the words that make it a choice", c["class"])
 		}
-		if c["costs_egress"] == true {
+		if c["downloads_object"] == true {
 			egress++
 		}
 	}

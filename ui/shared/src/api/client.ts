@@ -555,8 +555,8 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
         verificationClasses: (body.schema.storage.verification_classes ?? []).map((c) => ({
           className: c.class,
           proves: c.proves,
-          cost: c.cost,
-          costsEgress: c.costs_egress
+          requires: c.requires,
+          downloadsObject: c.downloads_object
         })),
         mediumDisclosure: body.schema.storage.medium_disclosure,
         retrievalDisclosure: body.schema.storage.retrieval_disclosure

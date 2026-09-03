@@ -66,20 +66,20 @@ export const STORAGE_SCHEMA: AppSettings["schema"]["storage"] = {
     {
       className: "content",
       proves: "the bytes on the medium hash to the hash this product recorded when it ingested the artifact",
-      cost: "a full download of the object: time plus egress, and for an archive storage class a restore first",
-      costsEgress: true
+      requires: "a full download of the object: time plus egress, and for an archive storage class a restore first",
+      downloadsObject: true
     },
     {
       className: "attested",
       proves: "the provider's stored full-object checksum equals the recorded hash",
-      cost: "one metadata call, no egress, trusting the endpoint's own checksum",
-      costsEgress: false
+      requires: "one metadata call, no egress, trusting the endpoint's own checksum",
+      downloadsObject: false
     },
     {
       className: "existence",
       proves: "an object exists at the recorded key, at the recorded size",
-      cost: "one HEAD request, which says nothing about the bytes",
-      costsEgress: false
+      requires: "one HEAD request, which says nothing about the bytes",
+      downloadsObject: false
     }
   ],
   mediumDisclosure:

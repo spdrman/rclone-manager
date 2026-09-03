@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "edc864e73e738c3d402be6f9fe19cbcbb4d4eafd38b809eebb9b9d1f15ef050e";
+export const CONTRACT_SHA256 = "4026e0baee4df2c6f328cf3812665ac44515ed1d8298062c7cf738a23761c83f";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1778,9 +1778,9 @@ export interface WireValidator {
  *  "existence" proves eventually says something the engine does not. */
 export interface WireVerificationClassInfo {
   class: "content" | "attested" | "existence";
-  cost: string;
-  costs_egress: boolean;
+  downloads_object: boolean;
   proves: string;
+  requires: string;
 }
 
 /** GET /system/version. Nothing here names an implementation: no

@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "edc864e73e738c3d402be6f9fe19cbcbb4d4eafd38b809eebb9b9d1f15ef050e"
+const ContractSHA256 = "4026e0baee4df2c6f328cf3812665ac44515ed1d8298062c7cf738a23761c83f"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -1481,10 +1481,10 @@ type Validator struct {
 // retention schema is served: a surface holding its own copy of what
 // "existence" proves eventually says something the engine does not.
 type VerificationClassInfo struct {
-	Class       string `json:"class"`
-	Cost        string `json:"cost"`
-	CostsEgress bool   `json:"costs_egress"`
-	Proves      string `json:"proves"`
+	Class           string `json:"class"`
+	DownloadsObject bool   `json:"downloads_object"`
+	Proves          string `json:"proves"`
+	Requires        string `json:"requires"`
 }
 
 // VersionResponse is GET /system/version. Nothing here names an implementation: no

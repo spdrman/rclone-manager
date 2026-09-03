@@ -2472,20 +2472,20 @@
             "type": "string",
             "description": "What achieving this class actually establishes."
           },
-          "cost": {
+          "requires": {
             "type": "string",
-            "description": "What achieving this class takes, in words. Deliberately words and not a number: this product has no price list and no negotiated rates, so a figure here would be invented."
+            "description": "What achieving this class requires, in words. Deliberately words and not a number, and deliberately not a field called cost: this product has no price list and no negotiated rates, so a figure here would be invented, and a field named for one is one release away from holding one. The contract's no-cost gate refuses that name, and this field is not an exception to it."
           },
-          "costs_egress": {
+          "downloads_object": {
             "type": "boolean",
-            "description": "True when achieving this class downloads the object's bytes, which the provider bills for. It is the same predicate the engine refuses automatic revalidation on, not a second note kept in step by hand."
+            "description": "True when achieving this class downloads the object's bytes, which the provider bills as egress. It is the same predicate the engine refuses automatic revalidation on, not a second note kept in step by hand."
           }
         },
         "required": [
           "class",
           "proves",
-          "cost",
-          "costs_egress"
+          "requires",
+          "downloads_object"
         ]
       },
       "StorageSchema": {

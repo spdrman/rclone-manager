@@ -128,12 +128,20 @@ type StorageMediumSummary struct {
 type VerificationClassInfo struct {
 	Class  string
 	Proves string
-	Cost   string
 
-	// CostsEgress is the same predicate the engine refuses automatic
+	// Requires is placement.Class.Cost, under the name it carries on the
+	// wire. The engine's word is fine where it lives; on the contract, a
+	// field called "cost" is a field one release away from holding a
+	// figure this product cannot compute honestly, and the contract's
+	// no-cost gate (core/tests/compat) refuses the name outright. The
+	// words are the same either way: what achieving this class takes.
+	Requires string
+
+	// DownloadsObject is placement.Class.CostsEgress, renamed for the
+	// same reason: it is the same predicate the engine refuses automatic
 	// medium revalidation on, served rather than restated. It is a
 	// mechanism, and this is where the surface reads it from.
-	CostsEgress bool
+	DownloadsObject bool
 }
 
 // StorageSchemaInfo is the closed sets and the consent text a
@@ -185,10 +193,10 @@ func StorageSchema() StorageSchemaInfo {
 	classes := make([]VerificationClassInfo, 0, len(placement.Classes))
 	for _, c := range placement.Classes {
 		classes = append(classes, VerificationClassInfo{
-			Class:       string(c),
-			Proves:      c.Proves(),
-			Cost:        c.Cost(),
-			CostsEgress: c.CostsEgress(),
+			Class:           string(c),
+			Proves:          c.Proves(),
+			Requires:        c.Cost(),
+			DownloadsObject: c.CostsEgress(),
 		})
 	}
 	return StorageSchemaInfo{

@@ -209,7 +209,7 @@ func TestToServicePlacements_AnOrdinaryLocalCopyIsUnchanged(t *testing.T) {
 // from core/internal/placement, not from a paraphrase living in a
 // frontend.
 //
-// CostsEgress in particular is a MECHANISM: it is the predicate the
+// DownloadsObject in particular is a MECHANISM: it is the predicate the
 // automatic revalidation path refuses on, so a surface reading it is
 // reading the same fact the engine acts on rather than a note somebody
 // keeps in step by hand.
@@ -227,11 +227,11 @@ func TestStorageSchema_ServesTheEngineOwnWordsForEachRung(t *testing.T) {
 		if got.Proves != c.Proves() {
 			t.Errorf("%s: Proves = %q, want the engine's own %q", c, got.Proves, c.Proves())
 		}
-		if got.Cost != c.Cost() {
-			t.Errorf("%s: Cost = %q, want the engine's own %q", c, got.Cost, c.Cost())
+		if got.Requires != c.Cost() {
+			t.Errorf("%s: Requires = %q, want the engine's own %q", c, got.Requires, c.Cost())
 		}
-		if got.CostsEgress != c.CostsEgress() {
-			t.Errorf("%s: CostsEgress = %v, want %v", c, got.CostsEgress, c.CostsEgress())
+		if got.DownloadsObject != c.CostsEgress() {
+			t.Errorf("%s: DownloadsObject = %v, want %v", c, got.DownloadsObject, c.CostsEgress())
 		}
 	}
 	// Exactly one rung downloads the bytes, and it is the strongest one.
@@ -239,7 +239,7 @@ func TestStorageSchema_ServesTheEngineOwnWordsForEachRung(t *testing.T) {
 	// free.
 	egress := 0
 	for _, c := range schema.VerificationClasses {
-		if c.CostsEgress {
+		if c.DownloadsObject {
 			egress++
 		}
 	}
