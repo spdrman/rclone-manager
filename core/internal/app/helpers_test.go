@@ -108,9 +108,10 @@ type fakeTransport struct {
 	// CopyToLocal with the .partial path it just wrote. It exists so a
 	// test can change the local directory between lifecycle.Transfer's
 	// final-name collision guard (which runs before anything else, every
-	// time -- transfer.go) and lifecycle.Commit's own rename, which is the
-	// only window in which a cycle can be made to fail its commit rather
-	// than its transfer. See TestRunCycle_ResumesAnArtifactLeftAtCommitting.
+	// time, per transfer.go) and lifecycle.Commit's own rename. That is
+	// the only window in which a cycle can be made to fail its commit
+	// rather than its transfer. See
+	// TestRunCycle_ResumesAnArtifactLeftAtCommitting.
 	afterCopyToLocal func(localPartialPath string)
 }
 

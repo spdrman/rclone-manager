@@ -250,3 +250,45 @@ func TestRunCycle_ResumingACommittingRowReusesTheSameCommittingKey(t *testing.T)
 			wedged.RetryCount, after.RetryCount)
 	}
 }
+
+// TestEveryLifecycleState_IsVisibleToTheCycleVerdict is issue #372's last
+// acceptance criterion made structural rather than argued: "a row the
+// pipeline cannot move is not silently invisible to the cycle's own
+// outcome".
+//
+// The cycle looks at a row through exactly three predicates. acquiring
+// says it is work in flight, so it counts toward #361's throughput
+// arithmetic. durable says the bytes are on local disk, so the backup
+// already happened. terminalFailure says it ended badly, so #283's exit
+// code sees it. A state in none of them is a row that can sit in the
+// journal forever while every cycle reports itself perfectly healthy,
+// which is exactly what COMMITTING was.
+//
+// Iterating lifecycle.AllStates rather than a list written here is the
+// point: a state added to the state machine and to none of the three
+// buckets fails this, instead of being discovered the way this one was.
+func TestEveryLifecycleState_IsVisibleToTheCycleVerdict(t *testing.T) {
+	for _, st := range lifecycle.AllStates {
+		buckets := []string{}
+		if acquiring(st) {
+			buckets = append(buckets, "acquiring")
+		}
+		if durable(st) {
+			buckets = append(buckets, "durable")
+		}
+		if terminalFailure(st) {
+			buckets = append(buckets, "terminalFailure")
+		}
+		switch len(buckets) {
+		case 1:
+			// Exactly what it should be.
+		case 0:
+			t.Errorf("%s is in none of acquiring/durable/terminalFailure, so a row sitting in it counts "+
+				"as neither work attempted, nor a backup, nor a failure: the cycle reports itself healthy "+
+				"while that artifact goes nowhere and says nothing", st)
+		default:
+			t.Errorf("%s is in %v at once; the three are meant to partition the states, and a row counted "+
+				"twice is counted twice in the verdict", st, buckets)
+		}
+	}
+}
