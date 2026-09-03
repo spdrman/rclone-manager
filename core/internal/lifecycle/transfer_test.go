@@ -633,3 +633,25 @@ func TestTransferRejectsMissingRequiredParams(t *testing.T) {
 		})
 	}
 }
+
+// TestFinalPathRefusesAnUnrootedStore is the behaviour issue #334 deferred
+// and issue #390 lands. Before the conversion, finalPath("", artifact)
+// returned the artifact's bare name: a path relative to whatever directory
+// the daemon started in, which nothing is backing up.
+//
+// config.Validate refuses an empty local_path, so no configuration that got
+// as far as running a cycle could reach this. That is why deferring it was
+// safe and why leaving it was not: a backstop is worth having precisely for
+// the caller that did not come through Validate.
+func TestFinalPathRefusesAnUnrootedStore(t *testing.T) {
+	artifact := testArtifact(t)
+	if got, err := finalPath("", artifact); err == nil {
+		t.Fatalf("finalPath with no local directory returned %q; a store with no root can write an artifact somewhere nobody is backing up", got)
+	}
+	if got, err := partialPath("", artifact); err == nil {
+		t.Fatalf("partialPath with no local directory returned %q", got)
+	}
+	if got, err := FinalArtifactPath("", artifact); err == nil {
+		t.Fatalf("FinalArtifactPath with no local directory returned %q", got)
+	}
+}

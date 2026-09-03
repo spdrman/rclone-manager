@@ -661,3 +661,78 @@ func TestPruneDeleteReasonNamesASiblingCollision(t *testing.T) {
 		t.Errorf("%s: Reason = %q, want it to name %s, the sibling it tied with", loser.Name, deleted.Reason, winner.Name)
 	}
 }
+
+// --- a store that cannot say where an artifact belongs ---
+
+// TestPruneRefusesWhenItCannotResolveWhereTheArtifactBelongs is issue #390's
+// heart. The prune path asks internal/artifactstore where an artifact lives
+// instead of composing the path itself, and when the store refuses to answer,
+// that refusal has to come out as PruneRefuse.
+//
+// REFUSE and KEEP are different claims. KEEP says a retention tier selected
+// this artifact and the engine decided about it. REFUSE says nothing was
+// decided at all. Collapsing the second into the first is how a prune reports
+// a decision it never made, and an operator reading a dry run cannot tell the
+// two apart from the Action alone.
+//
+// The fixture is one backup set with an empty local_path and two records: one
+// old enough that no tier selects it, and one dated today that the daily tier
+// keeps. Running those same two records against a real root first is the
+// positive control, and it is what makes the empty-root half mean anything:
+// it proves this fixture really does produce a KEEP and a DELETE, so a REFUSE
+// in the other half is the missing root talking rather than some unrelated
+// safety check refusing everything in sight.
+//
+// Both rows refuse at the empty root, the kept one included, and that is
+// deliberate rather than incidental: pruneEvaluate resolves the path before
+// it looks at the verdict, so a store that cannot answer stops the decision
+// instead of being papered over by a keep. Path stays empty on a refusal so
+// nothing downstream can act on a half-computed one.
+func TestPruneRefusesWhenItCannotResolveWhereTheArtifactBelongs(t *testing.T) {
+	root := t.TempDir()
+	set := gfsMustSet(t, "prune-unresolvable", "set")
+
+	kept := gfsMustArtifact(t, set, "todays-backup.zst")
+	doomed := gfsMustArtifact(t, set, "ancient-backup.zst")
+	keptPath := filepath.Join(root, "todays-backup.zst")
+	doomedPath := filepath.Join(root, "ancient-backup.zst")
+	pruneWriteFile(t, keptPath, "kept by the daily tier")
+	pruneWriteFile(t, doomedPath, "old enough that no tier selects it")
+
+	records := []state.Record{
+		pruneRecord(kept, lifecycle.Complete, pruneNow, keptPath),
+		pruneRecord(doomed, lifecycle.Complete, pruneNow.Add(-365*24*time.Hour), doomedPath),
+	}
+	cfg := pruneTodayOnlyChain()
+
+	control, err := PruneDecide(pruneNow, cfg, pruneBackupSet(set, root), records)
+	if err != nil {
+		t.Fatalf("PruneDecide against a real root: %v", err)
+	}
+	if v := pruneFindVerdict(t, control, "todays-backup.zst"); v.Action != PruneKeep {
+		t.Fatalf("control: todays-backup.zst = %s, want %s (reason: %s); the positive control is broken, so the empty-root half below proves nothing", v.Action, PruneKeep, v.Reason)
+	}
+	if v := pruneFindVerdict(t, control, "ancient-backup.zst"); v.Action != PruneDelete {
+		t.Fatalf("control: ancient-backup.zst = %s, want %s (reason: %s); the positive control is broken, so the empty-root half below proves nothing", v.Action, PruneDelete, v.Reason)
+	}
+
+	verdicts, err := PruneDecide(pruneNow, cfg, pruneBackupSet(set, ""), records)
+	if err != nil {
+		t.Fatalf("PruneDecide against an unrooted store: %v", err)
+	}
+	for _, name := range []string{"ancient-backup.zst", "todays-backup.zst"} {
+		v := pruneFindVerdict(t, verdicts, name)
+		if v.Action != PruneRefuse {
+			t.Errorf("with no configured local_path, %s = %s, want %s: a store that cannot say where the artifact belongs has decided nothing, and reporting that as %s claims a tier selected it (reason: %s)", name, v.Action, PruneRefuse, v.Action, v.Reason)
+		}
+		if v.Path != "" {
+			t.Errorf("%s: Path = %q, want empty: nothing downstream may act on a path the store refused to compute", name, v.Path)
+		}
+		if !strings.Contains(v.Reason, "local_path") {
+			t.Errorf("%s: Reason = %q, which does not name the missing local_path an operator has to fix", name, v.Reason)
+		}
+	}
+
+	pruneMustExist(t, keptPath)
+	pruneMustExist(t, doomedPath)
+}
