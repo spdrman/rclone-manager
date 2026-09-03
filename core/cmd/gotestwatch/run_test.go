@@ -282,21 +282,79 @@ func (o controlOutcome) String() string {
 // judgeNegativeControl reads what running slowpkg with the derivation
 // switched off (stepFactor 1) produced, and says which of the outcomes
 // above happened, with the numbers behind it.
+//
+// floor is the no-progress floor that run was given, poll its watchdog
+// interval, and hostSlop the worst overshoot a sampler goroutine measured
+// on this host asking for that same interval while the run was going.
 func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration) (controlOutcome, string) {
 	if res.Trip == nil {
+		// With the derivation off the window can never grow past the
+		// slowest gap already measured, so the only way TestB's stall
+		// survives is that this host had ALREADY produced a gap as long
+		// as the stall, before the stall began. The stall's own gap only
+		// enters the tracker's memory once TestB finishes, so on a host
+		// that did nothing of the sort the run's slowest gap IS the
+		// planted stall and nothing longer, which is what makes the two
+		// separable at all. "Under the stall" would not: after the run
+		// the stall is always in there.
+		outran := slowpkgSecondStall + poll + hostSlop
+		if res.SlowestStep > outran {
+			return controlCannotMeasure, fmt.Sprintf(
+				"the derivation was off and the run still finished, but this host's own slowest gap was %s (%s), past the %s planted stall plus one %s poll and the %s this host was measured stealing from a goroutine sleeping on that interval. "+
+					"With the derivation off the window is that slowest gap, so it was already wider than the stall before the stall began, and nothing here says whether the derivation is load-bearing",
+				res.SlowestStep.Round(time.Millisecond), res.SlowestLabel, slowpkgSecondStall, poll, hostSlop.Round(time.Millisecond))
+		}
 		return controlNotProved, fmt.Sprintf(
-			"with the derivation off, the %s stall in TestB was still absorbed against a %s floor, so the passing subtest above proves nothing about the derivation itself",
-			slowpkgSecondStall, floor.Round(time.Millisecond))
+			"with the derivation off, the %s stall in TestB was still absorbed against a %s floor, and the slowest gap this run measured at all was %s (%s), which is the planted stall itself and nothing longer. "+
+				"So the host did not decide this: no-progress detection did not fire on the one run it has to fire on, and the passing subtest above proves nothing about the derivation itself",
+			slowpkgSecondStall, floor.Round(time.Millisecond), res.SlowestStep.Round(time.Millisecond), res.SlowestLabel)
+	}
+	if res.Trip.events == 0 {
+		return controlCannotMeasure, fmt.Sprintf(
+			"the watchdog tripped %s after %q with no event observed yet, so it caught `go test` itself still loading packages, linking and starting the binary rather than anything the fixture did. "+
+				"The %s floor derived for this run did not clear this host's own startup, so the control never reached TestB's %s stall",
+			res.Trip.sinceLast.Round(time.Millisecond), res.Trip.lastEvent, floor.Round(time.Millisecond), slowpkgSecondStall)
 	}
 	if len(res.Trip.running) != 1 || res.Trip.running[0] != "TestB" {
-		return controlNotProved, fmt.Sprintf("trip.running = %v, want exactly [TestB]: %v", res.Trip.running, res.Trip)
+		return controlCannotMeasure, fmt.Sprintf(
+			"the watchdog tripped with %v reported running rather than [TestB], %d events in: nothing after %q for %s against a %s window. "+
+				"It closed on a gap this host produced before TestB stalled, not on the planted stall, so this run cannot say whether the derivation is load-bearing",
+			res.Trip.running, res.Trip.events, res.Trip.lastEvent,
+			res.Trip.sinceLast.Round(time.Millisecond), res.Trip.window.Round(time.Millisecond))
 	}
 	return controlProved, fmt.Sprintf("with the derivation off, the identical run failed: %v", res.Trip)
 }
 
 func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
-	floor := slowpkgBaseFloor
 	dir := filepath.Join("testdata", "fixtures", "slowpkg")
+
+	// The floor is measured rather than picked, for the reason
+	// TestRun_CatchesAGenuineHang above already measures its own (#379):
+	// the tracker's clock starts when Run does, and `go test` spends real
+	// time loading packages, linking and starting the binary before it
+	// emits its first event. That cost sits inside the very first window,
+	// so a floor smaller than it trips the watchdog on this test's own
+	// setup rather than on anything the fixture did.
+	//
+	// That is #401 exactly, and it needs no load to reproduce: a cold
+	// GOCACHE with a single-CPU compile pushes startup past 3s, the
+	// control below trips at "process start" with zero events observed,
+	// and it fails saying it wanted [TestB]. Three runs out of three.
+	//
+	// The first call compiles; the second pays exactly the startup the
+	// watched runs are about to pay, on this host, right now, and the
+	// floor is four times that. On a quiet machine it stays at the
+	// slowpkgBaseFloor this test has always used; on a loaded one it
+	// grows with the thing it has to cover. Four times, not two, so that
+	// the startup gap can never be the slowest gap the window derives
+	// from either: the floor dominates it by construction.
+	warmBuildCache(t, dir)
+	startup := warmBuildCache(t, dir)
+	floor := slowpkgBaseFloor
+	if measured := 4 * startup; measured > floor {
+		floor = measured
+	}
+	t.Logf("no-progress floor %s, from a warm `go test` startup of %s on this host", floor.Round(time.Millisecond), startup.Round(time.Millisecond))
 
 	t.Run("derived window absorbs it", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
@@ -312,6 +370,16 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 		elapsed := time.Since(start)
 		if err != nil {
 			t.Fatalf("Run returned an error: %v\nstderr=%s", err, stderr.String())
+		}
+		if res.Trip != nil && res.Trip.events == 0 {
+			// The same startup story as the control below, from the
+			// other side: the run tripped before `go test` emitted an
+			// event, so this host's startup outgrew a floor derived to
+			// be four times the startup measured moments earlier. That
+			// is the machine changing under the test, not a watchdog
+			// failing a progressing run.
+			t.Skipf("could not measure: the watchdog tripped %s after %q with no event observed yet, on a %s floor derived from a %s warm startup. `go test`'s own startup outgrew that floor between the warm-up and this run, so nothing here says whether a progressing run survives",
+				res.Trip.sinceLast.Round(time.Millisecond), res.Trip.lastEvent, floor.Round(time.Millisecond), startup.Round(time.Millisecond))
 		}
 		if res.Trip != nil {
 			t.Fatalf("a slow but genuinely progressing run was failed as a hang: %v\nstdout=%s", res.Trip, stdout.String())
@@ -330,6 +398,22 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 	})
 
 	t.Run("without the derivation the same run fails", func(t *testing.T) {
+		// Past this point the floor this host forced on the run is no
+		// longer under the stall the fixture plants, so there is no
+		// window that both clears `go test`'s startup and closes on
+		// TestB's sleep. The control cannot be run here at all, and
+		// saying so is the honest answer; running it anyway would report
+		// on the machine.
+		if floor+slowpkgPoll >= slowpkgSecondStall {
+			t.Skipf("could not measure: this host's %s warm `go test` startup derives a %s floor, which leaves less than one %s poll under TestB's %s stall. No floor separates startup from the planted stall here, so the control has nothing to trip on",
+				startup.Round(time.Millisecond), floor.Round(time.Millisecond), slowpkgPoll, slowpkgSecondStall)
+		}
+
+		// The same sampler TestRun_CatchesAGenuineHang uses, for the same
+		// reason: the no-trip branch of the verdict has to know how much
+		// this host stretches a sleep, and a number measured during the
+		// run beats one picked here.
+		lag := startSchedulingLagSampler(slowpkgPoll)
 		var stdout, stderr bytes.Buffer
 		// stepFactor 1 is the bound with its derivation switched off: the
 		// window can never grow past the slowest gap measured so far, so
@@ -343,13 +427,16 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 			Stdout: &stdout,
 			Stderr: &stderr,
 		})
+		worstLag := lag.stop()
 		if err != nil {
 			t.Fatalf("Run returned an error: %v\nstderr=%s", err, stderr.String())
 		}
-		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, 0)
+		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, worstLag)
 		switch outcome {
 		case controlProved:
 			t.Log(why)
+		case controlCannotMeasure:
+			t.Skip("could not measure: " + why)
 		default:
 			t.Fatalf("%s\nstdout=%s", why, stdout.String())
 		}
