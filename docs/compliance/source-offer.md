@@ -37,10 +37,10 @@ directly into `/backup-manager` behind a narrow transport adapter. There is no
 `rclone` binary anywhere in the image, and `container/Dockerfile` says so and is
 checked on it.
 
-Every other third-party component, 96 of them across the Go module graph and
-the production npm packages built into the embedded web bundle, is listed with
-its version, its SPDX licence identifier and the SHA-256 of its licence text
-in:
+Every other third-party component, across the Go module graph linked into the
+binaries and the production npm packages built into the embedded web bundle, is
+listed with its version, its SPDX licence identifier and the SHA-256 of its
+licence text in:
 
 - `NOTICE`, the human-readable attribution file Apache-2.0 section 4(d) refers
   to, grouped by licence;

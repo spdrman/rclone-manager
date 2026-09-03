@@ -73,6 +73,12 @@ var licenceMarkers = []struct {
 	// permissive dependency classified as copyleft is a wrong answer in
 	// the other direction.
 	//
+	// And it is a second ROW rather than a second needle on the row
+	// above, because the needles on one row are ANDed: every one of them
+	// has to be in the text. Both spellings on one row would match
+	// neither file. TestClassifyLicense_AMentionOfMozillaIsNotTheMPL is
+	// the control that keeps the second row exact.
+	//
 	// Registering rclone's s3 backend (#235) is what surfaced this:
 	// go-cleanhttp and go-retryablehttp arrive under it, both are
 	// MPL-2.0, and both landed in the generated NOTICE as NOASSERTION.
