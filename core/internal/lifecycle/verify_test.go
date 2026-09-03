@@ -1116,3 +1116,61 @@ func TestHookTimeoutBudgets_CanStillFail(t *testing.T) {
 		t.Fatalf("hookNeverAnswers is %s, which is not clear of %s: the script has to still be sleeping when both the kill and the backstop would have fired, or \"returned before the sleep finished\" is true by accident", hookNeverAnswers, abandoned)
 	}
 }
+
+// TestVerify_RemoteHashConnectTimeout_FailsRatherThanReadingAsACancellation
+// is the lifecycle half of issue #388. Once transport/rclone stops calling
+// rclone's own connect timeout a cancellation, the error that arrives here
+// is classified transport.Transient, and its cause is still reachable as
+// context.DeadlineExceeded through transport.Error's Unwrap. So a
+// cancellation check that falls back to a raw errors.Is on an error that has
+// already been classified still calls this a stop request, and Verify walks
+// away leaving the journal at VERIFYING with no verdict at all.
+//
+// It is not a stop request. Nobody asked for anything: the network timed out
+// and rclone gave up, which is a verdict Verify is supposed to record.
+//
+// The error below stands in for what the rclone adapter now produces for
+// this condition; the real one is proved against a real blackholed address
+// in internal/transport/rclone's
+// TestClassify_ConnectTimeoutRcloneImposedIsTransient.
+func TestVerify_RemoteHashConnectTimeout_FailsRatherThanReadingAsACancellation(t *testing.T) {
+	orig := remoteHashRetryPolicy
+	remoteHashRetryPolicy = retry.Policy{MaxAttempts: 2, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond}
+	t.Cleanup(func() { remoteHashRetryPolicy = orig })
+
+	content := []byte("dump-bytes")
+	path := verifyWriteLocalFile(t, content)
+	rec := verifyingRecord(t, path, int64(len(content)))
+	j := newVerifyJournal(rec)
+
+	connectTimeout := transport.NewError(transport.Transient, "remote_hash",
+		fmt.Errorf(`source "prod": NewFs: couldn't connect SSH: dial tcp 192.0.2.1:22: %w`, context.DeadlineExceeded))
+	tr := &verifyTransport{remoteHashFunc: func(context.Context, transport.Source, string, transport.HashAlgorithm) (string, error) {
+		return "", connectTimeout
+	}}
+
+	// The precondition that makes this test necessary rather than
+	// hypothetical: the cause survives classification, so a raw errors.Is
+	// still finds it.
+	if !errors.Is(connectTimeout, context.DeadlineExceeded) {
+		t.Fatal("this error no longer carries context.DeadlineExceeded, so it cannot exercise the confusion this test exists for")
+	}
+
+	out, err := Verify(context.Background(), Deps{Journal: j, Transport: tr}, VerifyParams{
+		Artifact: rec.Artifact, AttemptKey: "a1",
+		Validation: config.Validation{Hash: "sha256"},
+	})
+	if err != nil {
+		t.Fatalf("Verify returned an error, which is how it reports a cancellation, for a connect timeout nobody asked for: %v", err)
+	}
+	if out.Record.State != string(Failed) {
+		t.Fatalf("state = %q, want %q: a connect timeout that exhausted its retries is a verdict, not a stop request", out.Record.State, Failed)
+	}
+	failed := j.transitionsTo(Failed)
+	if len(failed) != 1 {
+		t.Fatalf("recorded %d FAILED transitions, want 1", len(failed))
+	}
+	if !strings.Contains(failed[0].Detail, "transient") {
+		t.Fatalf("FAILED detail = %q, want it to name the transient category it actually got", failed[0].Detail)
+	}
+}

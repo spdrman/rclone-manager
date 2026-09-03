@@ -218,7 +218,7 @@ func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs,
 		if f != nil {
 			shutdownFs(ctx, f)
 		}
-		return nil, Wrap("medium_fs", fmt.Errorf("medium %q: %w", medium.ID, err))
+		return nil, WrapCtx(ctx, "medium_fs", fmt.Errorf("medium %q: %w", medium.ID, err))
 	}
 	return f, nil
 }
@@ -291,7 +291,7 @@ func (a *Adapter) confirmBucket(ctx context.Context, f fs.Fs, medium transport.M
 		// The probe itself failed for some other reason (unreachable,
 		// unauthorized). That is a better answer than the not-found the
 		// caller was about to give, so it is the one that is returned.
-		return Wrap(op, err)
+		return WrapCtx(ctx, op, err)
 	}
 	return nil
 }
@@ -308,7 +308,7 @@ func (a *Adapter) absenceOrMissingBucket(ctx context.Context, f fs.Fs, medium tr
 	if err := a.confirmBucket(ctx, f, medium, op); err != nil {
 		return err
 	}
-	return Wrap(op, absence)
+	return WrapCtx(ctx, op, absence)
 }
 
 // toObjectInfo carries exactly what FR-32 allows a medium to tell this
@@ -338,7 +338,7 @@ func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key s
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		wrapped := Wrap("stat_object", err)
+		wrapped := WrapCtx(ctx, "stat_object", err)
 		if isNotFound(wrapped) {
 			// "this artifact is not on the medium" and "this medium's
 			// bucket does not exist" must not reach a caller as the same
@@ -376,12 +376,12 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 	srcDir, srcName := splitPath(localPath)
 	srcFs, err := fs.NewFs(ctx, srcDir)
 	if err != nil {
-		return transport.UploadResult{}, Wrap("upload_from_local", err)
+		return transport.UploadResult{}, WrapCtx(ctx, "upload_from_local", err)
 	}
 	defer shutdownFs(ctx, srcFs)
 	srcObj, err := srcFs.NewObject(ctx, srcName)
 	if err != nil {
-		return transport.UploadResult{}, Wrap("upload_from_local", err)
+		return transport.UploadResult{}, WrapCtx(ctx, "upload_from_local", err)
 	}
 
 	var dst fs.Object
@@ -390,7 +390,7 @@ func (a *Adapter) UploadFromLocal(ctx context.Context, medium transport.Medium, 
 		dst, copyErr = operations.Copy(ctx, dstFs, nil, key, srcObj)
 		return copyErr
 	}); err != nil {
-		return transport.UploadResult{}, Wrap("upload_from_local", err)
+		return transport.UploadResult{}, WrapCtx(ctx, "upload_from_local", err)
 	}
 	return transport.UploadResult{Key: key, BytesUploaded: dst.Size()}, nil
 }
@@ -403,7 +403,7 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		wrapped := Wrap("open_object", err)
+		wrapped := WrapCtx(ctx, "open_object", err)
 		if isNotFound(wrapped) {
 			wrapped = a.absenceOrMissingBucket(ctx, f, medium, "open_object", err)
 		}
@@ -413,7 +413,7 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 	rc, err := o.Open(ctx)
 	if err != nil {
 		shutdownFs(ctx, f)
-		return nil, Wrap("open_object", err)
+		return nil, WrapCtx(ctx, "open_object", err)
 	}
 	// This is the one method whose Fs cannot be released on the way out:
 	// the reader it returns is still reading through it. So the release
@@ -451,7 +451,7 @@ func (r *fsBoundReadCloser) Close() error {
 func (a *Adapter) ObjectChecksum(ctx context.Context, medium transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
 	ctx = mediumContext(ctx)
 	if alg != transport.SHA256 {
-		return transport.ChecksumAttestation{}, Wrap("object_checksum", fmt.Errorf(
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", fmt.Errorf(
 			"%w: this boundary attests %s and nothing else, so an ETag's MD5 can never be compared to a recorded hash: %q",
 			ErrUnsupportedHash, transport.SHA256, alg))
 	}
@@ -462,17 +462,17 @@ func (a *Adapter) ObjectChecksum(ctx context.Context, medium transport.Medium, k
 	}
 	defer shutdownFs(ctx, f)
 	if !f.Hashes().Contains(hash.SHA256) {
-		return transport.ChecksumAttestation{}, Wrap("object_checksum", fmt.Errorf(
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", fmt.Errorf(
 			"%w: medium %q (type %s) cannot attest a full-object %s",
 			ErrUnsupportedHash, medium.ID, medium.Type, transport.SHA256))
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		return transport.ChecksumAttestation{}, Wrap("object_checksum", err)
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", err)
 	}
 	sum, err := o.Hash(ctx, hash.SHA256)
 	if err != nil {
-		return transport.ChecksumAttestation{}, Wrap("object_checksum", err)
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", err)
 	}
 	if sum == "" {
 		// rclone's own convention for "this object has no such hash
@@ -480,7 +480,7 @@ func (a *Adapter) ObjectChecksum(ctx context.Context, medium transport.Medium, k
 		// digest compared against a recorded one would compare equal to
 		// nothing and unequal to everything, which is a verdict this
 		// product must not produce by accident.
-		return transport.ChecksumAttestation{}, Wrap("object_checksum", fmt.Errorf(
+		return transport.ChecksumAttestation{}, WrapCtx(ctx, "object_checksum", fmt.Errorf(
 			"%w: medium %q holds no %s for %q", ErrUnsupportedHash, medium.ID, transport.SHA256, key))
 	}
 	return transport.ChecksumAttestation{Algorithm: transport.SHA256, Value: sum}, nil
@@ -501,7 +501,7 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		if wrapped := Wrap("delete_object", err); isNotFound(wrapped) {
+		if wrapped := WrapCtx(ctx, "delete_object", err); isNotFound(wrapped) {
 			// An already-absent object is success, but only once the
 			// bucket it would have been in is known to exist. Without
 			// that check a delete against a mistyped bucket reported
@@ -511,9 +511,9 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 			}
 			return nil
 		}
-		return Wrap("delete_object", err)
+		return WrapCtx(ctx, "delete_object", err)
 	}
-	return Wrap("delete_object", o.Remove(ctx))
+	return WrapCtx(ctx, "delete_object", o.Remove(ctx))
 }
 
 // ListObjects enumerates what the medium holds under prefix.
@@ -532,7 +532,7 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 	defer shutdownFs(ctx, f)
 	objs, _, err := walk.GetAll(ctx, f, prefix, true, -1)
 	if err != nil {
-		if wrapped := Wrap("list_objects", err); isNotFound(wrapped) {
+		if wrapped := WrapCtx(ctx, "list_objects", err); isNotFound(wrapped) {
 			// A prefix holding nothing is an empty listing, but a bucket
 			// that is not there must never be reported as one: a catalog
 			// rebuild reading that concludes the medium holds nothing.
@@ -541,7 +541,7 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 			}
 			return nil, nil
 		}
-		return nil, Wrap("list_objects", err)
+		return nil, WrapCtx(ctx, "list_objects", err)
 	}
 	out := make([]transport.ObjectInfo, 0, len(objs))
 	for _, o := range objs {

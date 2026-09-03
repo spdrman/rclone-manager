@@ -101,7 +101,7 @@ type IsTransient func(err error) bool
 
 // DefaultIsTransient treats err as retryable exactly when it carries
 // transport.Transient, by way of transport.CategoryOf. A caller retrying
-// calls through transport/rclone needs no classifier of its own: Classify
+// calls through transport/rclone needs no classifier of its own: WrapCtx
 // already attached the category, and this just reads it back off.
 func DefaultIsTransient(err error) bool {
 	category, _ := transport.CategoryOf(err)

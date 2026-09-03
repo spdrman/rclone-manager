@@ -245,3 +245,47 @@ func TestHaltReasonNeverDecidesTheHealthState(t *testing.T) {
 		t.Fatalf("BackupSetHealth.HaltReason = %q with no halt supplied, want empty", without.HaltReason)
 	}
 }
+
+// TestHaltReasonFor_OnlyTheThreeRefusalCategoriesEverProduceAReason is the
+// blast-radius check for issue #388. That change moves a connect timeout
+// rclone imposed on itself out of transport.Cancelled and into
+// transport.Transient, and this is the place to be sure that move cannot
+// change what an operator is told about the connection: neither category
+// says anything about a host refusing us, and neither should.
+//
+// Reading haltReasonFor's switch says so; running it says so too, for every
+// category the classifier can produce rather than the two this issue moved
+// between.
+func TestHaltReasonFor_OnlyTheThreeRefusalCategoriesEverProduceAReason(t *testing.T) {
+	all := []transport.Category{
+		transport.Unclassified, transport.Transient, transport.Authentication,
+		transport.HostVerification, transport.KeyPermissions, transport.NotFound,
+		transport.PermissionDenied, transport.IntegrityFailure, transport.Conflict,
+		transport.UnsupportedCapability, transport.Permanent, transport.Cancelled,
+	}
+	refusals := map[transport.Category]string{
+		transport.HostVerification: state.HaltHostKeyChanged,
+		transport.Authentication:   state.HaltAuthenticationFailed,
+		transport.KeyPermissions:   state.HaltKeyPermissions,
+	}
+
+	for _, category := range all {
+		err := transport.NewError(category, "list", errors.New("something happened"))
+		reason, ok := haltReasonFor(err)
+		want, wantOK := refusals[category]
+		if ok != wantOK || reason != want {
+			t.Errorf("haltReasonFor(%s) = (%q, %v), want (%q, %v)", category, reason, ok, want, wantOK)
+		}
+	}
+
+	// And the two categories #388 moves between, said out loud, since the
+	// whole point is that an operator sees no difference here.
+	timeout := transport.NewError(transport.Transient, "list", context.DeadlineExceeded)
+	cancelled := transport.NewError(transport.Cancelled, "list", context.Canceled)
+	if _, ok := haltReasonFor(timeout); ok {
+		t.Error("a transient failure was recorded as a connection refusal")
+	}
+	if _, ok := haltReasonFor(cancelled); ok {
+		t.Error("a cancellation was recorded as a connection refusal")
+	}
+}

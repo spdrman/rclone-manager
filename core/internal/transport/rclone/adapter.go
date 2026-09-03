@@ -45,7 +45,7 @@ var _ transport.Transport = (*Adapter)(nil)
 // is one this adapter does not know how to translate to an rclone hash.Type
 // at all, or one the backend behind src cannot compute for this object.
 //
-// It exists so errors.go's Classify can recognize this case by identity
+// It exists so errors.go's classify can recognize this case by identity
 // (errors.Is) instead of matching this same package's own error strings a
 // second time. Matching a dependency's wording is unavoidable in a couple of
 // documented spots in errors.go because no typed value exists to reach for
@@ -260,12 +260,12 @@ func (a *Adapter) List(ctx context.Context, src transport.Source) ([]transport.R
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return nil, Wrap("list", err)
+		return nil, WrapCtx(ctx, "list", err)
 	}
 	defer shutdownFs(ctx, f)
 	objs, _, err := walk.GetAll(ctx, f, "", true, -1)
 	if err != nil {
-		return nil, Wrap("list", err)
+		return nil, WrapCtx(ctx, "list", err)
 	}
 	out := make([]transport.RemoteArtifact, 0, len(objs))
 	for _, o := range objs {
@@ -319,12 +319,12 @@ func (a *Adapter) Stat(ctx context.Context, src transport.Source, remotePath str
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.RemoteArtifact{}, Wrap("stat", err)
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat", err)
 	}
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.RemoteArtifact{}, Wrap("stat", err)
+		return transport.RemoteArtifact{}, WrapCtx(ctx, "stat", err)
 	}
 
 	art := toArtifact(o)
@@ -348,17 +348,17 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 	ctx = oneConnectionAtATime(ctx)
 	srcFs, err := a.fsFor(ctx, src)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	defer shutdownFs(ctx, srcFs)
 	o, err := srcFs.NewObject(ctx, remotePath)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	dstDir, dstName := splitPath(localPartialPath)
 	dstFs, err := fs.NewFs(ctx, dstDir)
 	if err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	// Copy, never Move. The remote source is deleted later, by the lifecycle
 	// manager, and only after a durable commit (FR-11, FR-15).
@@ -375,7 +375,7 @@ func (a *Adapter) CopyToLocal(ctx context.Context, src transport.Source, remoteP
 		dst, copyErr = operations.Copy(ctx, dstFs, nil, dstName, o)
 		return copyErr
 	}); err != nil {
-		return transport.TransferResult{}, Wrap("copy_to_local", err)
+		return transport.TransferResult{}, WrapCtx(ctx, "copy_to_local", err)
 	}
 	return transport.TransferResult{BytesTransferred: dst.Size()}, nil
 }
@@ -384,12 +384,12 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsForHashing(ctx, src)
 	if err != nil {
-		return "", Wrap("remote_hash", err)
+		return "", WrapCtx(ctx, "remote_hash", err)
 	}
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return "", Wrap("remote_hash", err)
+		return "", WrapCtx(ctx, "remote_hash", err)
 	}
 	var ht hash.Type
 	switch alg {
@@ -415,7 +415,7 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 		// and a failure to run it is the same fact the guard above reports:
 		// this account cannot compute this hash.
 		//
-		// Joining the sentinel keeps that fact classifiable. Classify is
+		// Joining the sentinel keeps that fact classifiable. classify is
 		// sentinel-based on purpose (see its doc), and without this a
 		// shell-less account's refusal would land in Permanent, which is
 		// the label for "we do not know what this was". The message keeps
@@ -440,14 +440,14 @@ func (a *Adapter) DeleteRemote(ctx context.Context, src transport.Source, remote
 	ctx = oneConnectionAtATime(ctx)
 	f, err := a.fsFor(ctx, src)
 	if err != nil {
-		return Wrap("delete_remote", err)
+		return WrapCtx(ctx, "delete_remote", err)
 	}
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, remotePath)
 	if err != nil {
-		return Wrap("delete_remote", err)
+		return WrapCtx(ctx, "delete_remote", err)
 	}
-	return Wrap("delete_remote", o.Remove(ctx))
+	return WrapCtx(ctx, "delete_remote", o.Remove(ctx))
 }
 
 func splitPath(p string) (dir, name string) {

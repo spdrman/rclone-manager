@@ -16,7 +16,7 @@ import (
 // convention someone has to remember.
 //
 // The concrete translation from an rclone error to one of these values
-// lives in transport/rclone (see Classify there). This file only owns the
+// lives in transport/rclone (see ClassifyCtx there). This file only owns the
 // vocabulary both sides agree on.
 type Category int
 

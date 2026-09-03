@@ -322,6 +322,22 @@ func revalidateKey(artifact model.ArtifactID, tag string, from, to lifecycle.Sta
 // package's own context handling both need a way to tell "the caller
 // asked us to stop" apart from every other kind of failure, which must
 // still fall through to a real business verdict.
+//
+// It mirrors that function's ordering too, and for the reason spelled out
+// there: a transport.Error keeps its cause reachable through Unwrap, so an
+// error already classified as anything other than Cancelled can still
+// answer errors.Is(err, context.DeadlineExceeded), and a connect timeout
+// rclone imposed on itself is that exact shape (issue #388). Nothing on
+// this package's current call graph hands it one, because runChecks
+// reaches the local filesystem and the restore-test hook rather than a
+// Transport, but the two predicates disagreeing is not a difference worth
+// leaving here for the first remote check to discover.
 func isCancelled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if category, ok := transport.CategoryOf(err); ok {
+		return category == transport.Cancelled
+	}
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
