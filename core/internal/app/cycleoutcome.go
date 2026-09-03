@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
@@ -192,9 +193,103 @@ func foldDiscoveryErrors(walk artifactWalk, discovered discovery.Result) CyclePr
 // both already in the stream from where they happened, and repeating them
 // here would double-count them on an operator's screen.
 func (s *Service) reportBarrenSets(ctx context.Context, report CycleReport) {
+	s.reportEmptyCycle(ctx, report)
 	for _, set := range report.Sets {
 		s.reportBarrenSet(ctx, set.Verdict())
 	}
+}
+
+// CycleCoverage is what a cycle had in front of it before it ran: how
+// many backup sets exist at all, and how many of those RunCycle was not
+// allowed to touch. It is issue #412's half of the same question issue
+// #361 asked one level down.
+//
+// #361 counted artifacts inside a backup set. That count cannot see the
+// case where there was no backup set to count artifacts in, because
+// reportBarrenSets reaches it by iterating report.Sets and an empty
+// report has nothing to iterate. So a deployment with every set switched
+// off writes cycle_start and cycle_end and nothing else, every poll
+// interval, and reads exactly like a deployment that is working.
+//
+// Configured counts the configuration snapshot rather than the report,
+// which is the only place the difference between "nothing exists" and
+// "everything is switched off" is visible at all: both leave report.Sets
+// empty, and an operator fixes them by opposite actions (create a backup
+// set, or turn one back on).
+//
+// Disabled and Held are recounted here rather than carried out of
+// RunCycle's loop, and Held in particular is read after the fact, so a
+// hold placed or released while the cycle ran can leave Disabled+Held
+// short of Configured. That is a diagnostic drifting by one during an
+// edit, not a verdict changing: what makes the cycle empty is that it
+// visited nothing, which the report already settles.
+type CycleCoverage struct {
+	// Configured is every backup set in the configuration, including the
+	// ones this cycle will skip.
+	Configured int
+
+	// Disabled is how many of Configured are saved disabled (issue
+	// #146's "Save disabled" tier), which RunCycle skips before the set
+	// is ever appended to the report.
+	Disabled int
+
+	// Held is how many of Configured are held for editing (issue #350),
+	// skipped in the same place and for a different reason: nobody
+	// switched anything off, an operator is part-way through a change.
+	Held int
+}
+
+// cycleCoverage counts the configuration this cycle ran against, plus
+// whatever holds ctx carries. With no holds registry on ctx, Held is
+// zero, exactly as RunCycle's own loop behaves.
+func (s *Service) cycleCoverage(ctx context.Context) CycleCoverage {
+	var c CycleCoverage
+	holds := BackupSetHoldsFrom(ctx)
+	for _, src := range s.Config.Sources {
+		for _, bs := range src.BackupSets {
+			c.Configured++
+			switch {
+			case bs.Disabled:
+				c.Disabled++
+			case holds != nil && holds.Held(bs.ID.String()):
+				c.Held++
+			}
+		}
+	}
+	return c
+}
+
+// reportEmptyCycle is issue #412: a cycle whose report covers no backup
+// sets is as much a cycle that backed nothing up as one whose sets all
+// came back barren, and it has to be as loud, in the same stream, under
+// the same op, so a log-shipping rule that already catches the one
+// catches the other.
+//
+// It says which of the two reasons it is, because they are not the same
+// problem. Nothing configured is fixed by creating a backup set; every
+// set disabled or held is fixed by turning one back on, or by finishing
+// the edit. One message covering both would send half its readers to a
+// screen with nothing on it.
+//
+// A cycle whose context is already done is excluded, for the reason
+// CycleVerdict.NothingGotThrough excludes a stopped pass: its emptiness
+// is vacuous. RunCycle breaks out of its loop before the first set on a
+// cancelled context, so the report is empty because the process is
+// shutting down, and the shutdown is already in cycle_end one line
+// below. Announcing a configuration problem there would invent a second
+// cause in front of the real one.
+func (s *Service) reportEmptyCycle(ctx context.Context, report CycleReport) {
+	if len(report.Sets) > 0 || ctx.Err() != nil {
+		return
+	}
+	c := s.cycleCoverage(ctx)
+	if c.Configured == 0 {
+		s.logger().Error(ctx, "cycle", errors.New("this cycle backed nothing up: no backup sets are configured"))
+		return
+	}
+	s.logger().Error(ctx, "cycle", fmt.Errorf(
+		"this cycle backed nothing up: every configured backup set was skipped (%d configured, %d disabled, %d held for editing)",
+		c.Configured, c.Disabled, c.Held))
 }
 
 // reportBarrenSet is the one-backup-set form, so an on-demand Fetch puts
