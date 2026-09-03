@@ -68,6 +68,16 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
   const version = useCausl(versionNode);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  // Issue #391. `removing` exists so the confirm button can say what it
+  // is doing and stop being pressable while it does: removal is one
+  // request against a set that will not be there afterwards, and a
+  // double press would send a second DELETE whose honest answer is a 404
+  // the operator has done nothing wrong to deserve. `removeError` keeps
+  // the dialog OPEN on a failure, because a dialog that closed on one
+  // would be the defect this issue is about with a network call in the
+  // middle.
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // ------------------------------------------------------- issue #350
   //
@@ -725,14 +735,40 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         </p>
       </ConfirmationDialog>
 
+      {/* Issue #391. This confirmation used to close and call nothing,
+          which meant an operator confirmed a destructive action, watched
+          it close, and reasonably believed the set was gone while it kept
+          collecting. On success the page NAVIGATES rather than reloading:
+          the set it is showing does not exist any more, so re-reading it
+          would put a 404 error state in front of somebody whose action
+          had just worked. */}
       <ConfirmationDialog
         open={removeOpen}
         destructive
         eyebrow="Destructive action"
         title="Remove backup set configuration"
-        confirmLabel="Remove configuration"
-        onCancel={() => setRemoveOpen(false)}
-        onConfirm={() => setRemoveOpen(false)}
+        confirmLabel={removing ? "Removing..." : "Remove configuration"}
+        disabled={removing}
+        onCancel={() => {
+          setRemoveOpen(false);
+          setRemoveError(null);
+        }}
+        onConfirm={() => {
+          setRemoving(true);
+          setRemoveError(null);
+          void api
+            .removeSet(s.source, s.set)
+            .then(() => {
+              setRemoveOpen(false);
+              navigate("/sets");
+            })
+            .catch((e: unknown) => {
+              setRemoveError(
+                describeFailure(e, "Backup Manager could not remove this backup set's configuration.").message
+              );
+            })
+            .finally(() => setRemoving(false));
+        }}
       >
         <p style={{ margin: 0 }}>
           {"Backup Manager will stop collecting backups for " + s.name + "."}
@@ -740,6 +776,14 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
         <p style={{ margin: 0, color: "var(--text-2)" }}>
           {s.retainedCount + " retained backups (" + bytes(s.retainedBytes) + ") stay on NAS storage and remain listed under Backups."}
         </p>
+        <p style={{ margin: 0, color: "var(--text-2)" }}>
+          {"Creating a backup set with this source and name again takes those backups back, along with their retention history."}
+        </p>
+        {removeError ? (
+          <p role="alert" style={{ margin: 0, color: "var(--danger)" }}>
+            {removeError}
+          </p>
+        ) : null}
       </ConfirmationDialog>
     </>
   );
