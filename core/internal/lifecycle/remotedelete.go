@@ -607,16 +607,23 @@ func checkStableSafetyDelay(ctx context.Context, d Deps, req DeleteRemoteRequest
 // file was correct at the moment it was durably renamed, not that it still
 // is now.
 func verifyLocalFinal(rec state.Record) error {
-	if rec.LocalPath == "" {
+	// The path comes from the artifact's own ACTIVE local placement (EPIC
+	// E, FR-29), not from rec.LocalPath directly. In Phase 1 the two are
+	// the same value for every artifact that has one, so this changes
+	// nothing; what it changes is where the answer comes from when an
+	// artifact's only copy is on a storage medium, which is a state this
+	// check must refuse rather than misread as a missing file.
+	localPath, ok := rec.ReadableLocalPath()
+	if !ok {
 		return fmt.Errorf("no local final path is recorded for this artifact")
 	}
 
-	info, err := os.Stat(rec.LocalPath)
+	info, err := os.Stat(localPath)
 	if err != nil {
-		return fmt.Errorf("expected local final file %s: %w", rec.LocalPath, err)
+		return fmt.Errorf("expected local final file %s: %w", localPath, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("expected local final file %s is a directory, not a file", rec.LocalPath)
+		return fmt.Errorf("expected local final file %s is a directory, not a file", localPath)
 	}
 
 	expected, source, err := expectedLocalSize(rec)
@@ -624,19 +631,19 @@ func verifyLocalFinal(rec state.Record) error {
 		return err
 	}
 	if info.Size() != expected {
-		return fmt.Errorf("local final file %s is %d bytes, expected %d (from %s)", rec.LocalPath, info.Size(), expected, source)
+		return fmt.Errorf("local final file %s is %d bytes, expected %d (from %s)", localPath, info.Size(), expected, source)
 	}
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return fmt.Errorf("cannot revalidate local identity: unsupported recorded local hash algorithm %q", rec.LocalHashAlg)
 		}
-		sum, err := sha256File(rec.LocalPath)
+		sum, err := sha256File(localPath)
 		if err != nil {
-			return fmt.Errorf("hashing local final file %s: %w", rec.LocalPath, err)
+			return fmt.Errorf("hashing local final file %s: %w", localPath, err)
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
-			return fmt.Errorf("local final file %s hash %s does not match the %s hash recorded at verification, %s", rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash)
+			return fmt.Errorf("local final file %s hash %s does not match the %s hash recorded at verification, %s", localPath, sum, rec.LocalHashAlg, rec.LocalHash)
 		}
 	}
 

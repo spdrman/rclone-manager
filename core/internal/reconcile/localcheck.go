@@ -28,8 +28,9 @@ type localValidity struct {
 // before a delete. I could not reuse that function directly, it is
 // unexported in a package I am not allowed to modify, so I reimplemented
 // the same three checks against the same journal fields here: the file
-// exists at rec.LocalPath, its size matches whichever of the journal's two
-// independent size records was captured, and, when a local hash was
+// exists where the artifact's own placement says it is, its size matches
+// whichever of the journal's two independent size records was captured,
+// and, when a local hash was
 // recorded at VERIFIED, its content still hashes to that value.
 //
 // A missing file counts as invalid, not as a separate "absent" case: by
@@ -38,19 +39,25 @@ type localValidity struct {
 // for these states, with no third option, and a final copy that is not
 // even there any more cannot honestly be called anything but invalid.
 func checkLocalFinal(rec state.Record) localValidity {
-	if rec.LocalPath == "" {
+	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
+	// rather than of rec.LocalPath directly. The two are the same value
+	// for every artifact that has one in Phase 1; the difference is what
+	// happens once an artifact's only copy can be on a storage medium,
+	// which this check must not read as a missing local file.
+	localPath, ok := rec.ReadableLocalPath()
+	if !ok {
 		return localValidity{Reason: "no local final path is recorded in the journal"}
 	}
 
-	info, err := os.Stat(rec.LocalPath)
+	info, err := os.Stat(localPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return localValidity{Reason: fmt.Sprintf("local final file %s is missing", rec.LocalPath)}
+			return localValidity{Reason: fmt.Sprintf("local final file %s is missing", localPath)}
 		}
-		return localValidity{Reason: fmt.Sprintf("stat %s: %v", rec.LocalPath, err)}
+		return localValidity{Reason: fmt.Sprintf("stat %s: %v", localPath, err)}
 	}
 	if info.IsDir() {
-		return localValidity{Reason: fmt.Sprintf("local final path %s is a directory, not a file", rec.LocalPath)}
+		return localValidity{Reason: fmt.Sprintf("local final path %s is a directory, not a file", localPath)}
 	}
 
 	expected, source, err := expectedLocalSize(rec)
@@ -59,21 +66,21 @@ func checkLocalFinal(rec state.Record) localValidity {
 	}
 	if source != "" && info.Size() != expected {
 		return localValidity{Reason: fmt.Sprintf(
-			"local final file %s is %d bytes, expected %d (from %s)", rec.LocalPath, info.Size(), expected, source)}
+			"local final file %s is %d bytes, expected %d (from %s)", localPath, info.Size(), expected, source)}
 	}
 
 	if rec.LocalHashAlg != "" {
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return localValidity{Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}
 		}
-		sum, err := sha256File(rec.LocalPath)
+		sum, err := sha256File(localPath)
 		if err != nil {
-			return localValidity{Reason: fmt.Sprintf("hashing %s: %v", rec.LocalPath, err)}
+			return localValidity{Reason: fmt.Sprintf("hashing %s: %v", localPath, err)}
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
 			return localValidity{Reason: fmt.Sprintf(
 				"local final file %s hash %s does not match the %s hash recorded at verification, %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash)}
+				localPath, sum, rec.LocalHashAlg, rec.LocalHash)}
 		}
 	}
 
