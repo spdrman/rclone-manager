@@ -292,6 +292,18 @@ func TestCycleExit_Matrix(t *testing.T) {
 			want:            1,
 			wantSilentAbout: "got nothing through",
 		},
+		{
+			// The same arithmetic with nothing wrong behind it. An
+			// operator pressed Edit (issue #350), the pass stopped where
+			// it stood, and its in-flight row is counted and did not
+			// land. Exit 1 and "backed nothing up this cycle" would both
+			// be false alarms about a deliberate act, which is the one
+			// thing a backup tool cannot afford to get wrong.
+			name:            "a set stopped for editing is neither failed nor barren",
+			verdicts:        []app.CycleVerdict{{Set: "production/postgres-primary", Stopped: true, Progress: app.CycleProgress{Walked: 3}}},
+			want:            0,
+			wantSilentAbout: "got nothing through",
+		},
 	}
 
 	for _, tc := range cases {

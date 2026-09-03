@@ -368,3 +368,67 @@ func TestRunCycle_AStoppedSetIsNotReportedAsAFailure(t *testing.T) {
 		}
 	}
 }
+
+// TestRunCycle_AStoppedSetIsNotReportedAsBarrenEither is the same false
+// alarm arriving by the other road, and it is the one composition
+// actually opened up.
+//
+// Issue #361 gave a cycle report a second way to fail: a set that had
+// artifacts in front of it and got none of them through. A pass an
+// operator stopped mid-transfer has exactly that arithmetic, because the
+// row it was copying is counted and did not land, so on the numbers
+// alone a set somebody pressed Edit on a second ago reads as one that
+// backed nothing up. Both halves are individually right and together
+// they put "backed nothing up this cycle" in front of an operator, and
+// exit 1 behind it, for an ordinary edit.
+//
+// SystemicFailure alone does not cover it. Excluding a stopped pass from
+// the failure test is what makes it eligible for the barren test, so the
+// two guards have to be separate, which is what CycleVerdict.Stopped is
+// for.
+//
+// The preconditions are Fatal on purpose: without a walked row and no
+// durable one, the arithmetic never reaches the guard and the test would
+// pass against an implementation that has none.
+func TestRunCycle_AStoppedSetIsNotReportedAsBarrenEither(t *testing.T) {
+	localDir := t.TempDir()
+	bs := testBackupSet(t, localDir)
+
+	holds := newTestHolds()
+	tr := newFakeTransport()
+	tr.put("first.dump", "the artifact being copied when Edit was pressed", epoch.Unix())
+	tr.beforeCopy = func() { holds.hold(bs.ID.String()) }
+
+	svc := New(testConfig(t, testSource("production", bs)), openJournal(t), tr, nil)
+	svc.Now = fixedNow(epoch)
+
+	report := svc.RunCycle(WithBackupSetHolds(context.Background(), holds))
+	if len(report.Sets) != 1 {
+		t.Fatalf("this cycle reported %d backup sets, want exactly 1", len(report.Sets))
+	}
+	set := report.Sets[0]
+
+	if !errors.Is(set.Err, ErrBackupSetHeldForEditing) {
+		t.Fatalf("precondition: Err = %v, want ErrBackupSetHeldForEditing; the rest of this test is about what a STOPPED pass reports", set.Err)
+	}
+	if set.Progress.Walked == 0 {
+		t.Fatalf("precondition: Progress.Walked = 0, so the barren arithmetic never applies here and this test would prove nothing")
+	}
+	if set.Progress.Durable != 0 {
+		t.Fatalf("precondition: Progress.Durable = %d, want 0; the hold lands before the copy, so nothing can have become durable", set.Progress.Durable)
+	}
+	if !set.Progress.NothingGotThrough() {
+		t.Fatalf("precondition: the raw arithmetic says something got through (%d walked, %d durable), so the guard under test is never reached", set.Progress.Walked, set.Progress.Durable)
+	}
+
+	v := set.Verdict()
+	if v.Systemic {
+		t.Errorf("Verdict().Systemic = true for a pass an operator stopped; `backup-manager run` exits 1 on that and the activity feed calls an ordinary edit a backup that failed")
+	}
+	if !v.Stopped {
+		t.Errorf("Verdict().Stopped = false; a consumer that cannot see the pass was stopped on purpose has to guess from an absent error, which is also what a pass that simply finished looks like")
+	}
+	if v.NothingGotThrough() {
+		t.Errorf("Verdict().NothingGotThrough() = true for a set stopped mid-transfer by an edit hold; it walked %d and got %d through because it was told to stop, and reporting that as a backup that did not happen is the false alarm this whole path exists to remove", v.Progress.Walked, v.Progress.Durable)
+	}
+}
