@@ -40,7 +40,7 @@ var _ transport.Transport = (*Adapter)(nil)
 // is one this adapter does not know how to translate to an rclone hash.Type
 // at all, or one the backend behind src cannot compute for this object.
 //
-// It exists so errors.go's Classify can recognize this case by identity
+// It exists so errors.go's classify can recognize this case by identity
 // (errors.Is) instead of matching this same package's own error strings a
 // second time. Matching a dependency's wording is unavoidable in a couple of
 // documented spots in errors.go because no typed value exists to reach for
@@ -410,7 +410,7 @@ func (a *Adapter) RemoteHash(ctx context.Context, src transport.Source, remotePa
 		// and a failure to run it is the same fact the guard above reports:
 		// this account cannot compute this hash.
 		//
-		// Joining the sentinel keeps that fact classifiable. Classify is
+		// Joining the sentinel keeps that fact classifiable. classify is
 		// sentinel-based on purpose (see its doc), and without this a
 		// shell-less account's refusal would land in Permanent, which is
 		// the label for "we do not know what this was". The message keeps

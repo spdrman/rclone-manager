@@ -9,7 +9,7 @@
 // rclone upgrade is allowed to reword, restructure or entirely replace any
 // error message it produces, on any release, without that being a breaking
 // change for this codebase, as long as this file is the only place that
-// would need to change in response. Classify is that seam.
+// would need to change in response. classify is that seam.
 //
 // Wherever rclone (or a library it embeds) exposes a typed error or an
 // exported sentinel value, this file matches on that, by identity, not by
@@ -69,7 +69,7 @@ import (
 // value.
 const integrityFailurePrefix = "corrupted on transfer"
 
-// Classify translates err, as returned by this package's Adapter, into the
+// classify translates err, as returned by this package's Adapter, into the
 // manager-owned transport.Category lifecycle code is allowed to switch on.
 // It never returns an error and never fails: a case it does not recognize
 // classifies as transport.Permanent, on purpose, because treating an
@@ -77,16 +77,24 @@ const integrityFailurePrefix = "corrupted on transfer"
 // safe-to-ignore (transport.UnsupportedCapability) would be the actual
 // failure-safety violation, not classifying it as narrowly as possible.
 //
-// Classify is idempotent: calling it on an error that already carries a
+// classify is idempotent: calling it on an error that already carries a
 // *transport.Error (for example, one WrapCtx already produced) returns that
 // same Category rather than reclassifying, so wrapping twice by accident
 // cannot change the answer.
 //
-// Classify judges the error and nothing else, so it can never return
+// classify judges the error and nothing else, so it can never return
 // Cancelled for a deadline: it has no way to know whose deadline expired.
 // ClassifyCtx is the entry point that does, and every call inside this
 // package goes through it.
-func Classify(err error) transport.Category {
+//
+// It is unexported for exactly that reason. On a caller's own expired
+// deadline it answers Transient, which is FR-22 pointed the wrong way: a
+// stop the operator asked for would be reported as a network hiccup and
+// retried. Nothing outside this package ever needed it, and an exported
+// spelling that is wrong on one input is an invitation to reach for it,
+// which is the same trap the context-free Wrap was before issue #388
+// deleted it. TestNoExportedContextFreeClassifier keeps it shut.
+func classify(err error) transport.Category {
 	if err == nil {
 		return transport.Unclassified
 	}
@@ -195,7 +203,7 @@ func Classify(err error) transport.Category {
 	return transport.Permanent
 }
 
-// ClassifyCtx is Classify with the caller's own context in hand, and it is
+// ClassifyCtx is classify with the caller's own context in hand, and it is
 // what everything inside this package uses. Prefer it anywhere a context is
 // available, because the context is the only thing that can tell a deadline
 // the caller set apart from a deadline rclone set for itself.
@@ -243,7 +251,7 @@ func ClassifyCtx(ctx context.Context, err error) transport.Category {
 	if ctx != nil && ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
 		return transport.Cancelled
 	}
-	return Classify(err)
+	return classify(err)
 }
 
 // WrapCtx classifies err with ClassifyCtx and packages it as a

@@ -5,9 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,15 +36,15 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestClassify_Nil(t *testing.T) {
-	if got := Classify(nil); got != transport.Unclassified {
-		t.Fatalf("Classify(nil) = %v, want Unclassified", got)
+	if got := classify(nil); got != transport.Unclassified {
+		t.Fatalf("classify(nil) = %v, want Unclassified", got)
 	}
 }
 
 func TestClassify_IsIdempotentOnAnAlreadyWrappedError(t *testing.T) {
 	wrapped := transport.NewError(transport.PermissionDenied, "stat", errors.New("boom"))
-	if got := Classify(wrapped); got != transport.PermissionDenied {
-		t.Fatalf("Classify(already-wrapped) = %v, want the category it already carried (PermissionDenied)", got)
+	if got := classify(wrapped); got != transport.PermissionDenied {
+		t.Fatalf("classify(already-wrapped) = %v, want the category it already carried (PermissionDenied)", got)
 	}
 }
 
@@ -67,8 +72,8 @@ func TestClassify_NotFound_RealLocalError(t *testing.T) {
 			if err == nil {
 				t.Fatalf("%s succeeded against a missing object", name)
 			}
-			if got := Classify(err); got != transport.NotFound {
-				t.Fatalf("Classify(%v) = %v, want NotFound", err, got)
+			if got := classify(err); got != transport.NotFound {
+				t.Fatalf("classify(%v) = %v, want NotFound", err, got)
 			}
 		})
 	}
@@ -100,8 +105,8 @@ func TestClassify_PermissionDenied_RealLocalError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RemoteHash succeeded reading a chmod 000 file")
 	}
-	if got := Classify(err); got != transport.PermissionDenied {
-		t.Fatalf("Classify(%v) = %v, want PermissionDenied", err, got)
+	if got := classify(err); got != transport.PermissionDenied {
+		t.Fatalf("classify(%v) = %v, want PermissionDenied", err, got)
 	}
 }
 
@@ -125,8 +130,8 @@ func TestClassify_Cancelled_RealContextError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("CopyToLocal succeeded against an already-cancelled context")
 	}
-	if got := Classify(err); got != transport.Cancelled {
-		t.Fatalf("Classify(%v) = %v, want Cancelled", err, got)
+	if got := classify(err); got != transport.Cancelled {
+		t.Fatalf("classify(%v) = %v, want Cancelled", err, got)
 	}
 }
 
@@ -135,7 +140,7 @@ func TestClassify_Cancelled_RealContextError(t *testing.T) {
 // nothing is listening on. The dial failure this produces is genuine
 // OS/network behaviour, not anything rclone or this adapter manufactures,
 // and it is exactly the shape of error rclone's own fs/fserrors.ShouldRetry
-// exists to recognize, which is what Classify defers to for Transient.
+// exists to recognize, which is what classify defers to for Transient.
 func TestClassify_Transient_RealConnectionRefused(t *testing.T) {
 	dir := t.TempDir()
 	keyPath, _ := generateClientSSHKeyPair(t) // needs to parse, never needs to authenticate
@@ -160,8 +165,8 @@ func TestClassify_Transient_RealConnectionRefused(t *testing.T) {
 	if err == nil {
 		t.Fatalf("List succeeded against a port nothing is listening on")
 	}
-	if got := Classify(err); got != transport.Transient {
-		t.Fatalf("Classify(%v) = %v, want Transient", err, got)
+	if got := classify(err); got != transport.Transient {
+		t.Fatalf("classify(%v) = %v, want Transient", err, got)
 	}
 }
 
@@ -498,14 +503,14 @@ func callerDeadlineFiresMidCopy(t *testing.T) (context.Context, []error) {
 // ---------------------------------------------------------------------------
 
 func TestClassify_Conflict_RealRcloneSentinel(t *testing.T) {
-	if got := Classify(rclonefs.ErrorDirExists); got != transport.Conflict {
-		t.Fatalf("Classify(fs.ErrorDirExists) = %v, want Conflict", got)
+	if got := classify(rclonefs.ErrorDirExists); got != transport.Conflict {
+		t.Fatalf("classify(fs.ErrorDirExists) = %v, want Conflict", got)
 	}
 	// Also through a wrapping layer, the way it would actually arrive
 	// through this adapter's own fmt.Errorf("...: %w", err) wrapping.
 	wrapped := fmt.Errorf("copy %q: %w", "some/path", rclonefs.ErrorDirExists)
-	if got := Classify(wrapped); got != transport.Conflict {
-		t.Fatalf("Classify(wrapped fs.ErrorDirExists) = %v, want Conflict", got)
+	if got := classify(wrapped); got != transport.Conflict {
+		t.Fatalf("classify(wrapped fs.ErrorDirExists) = %v, want Conflict", got)
 	}
 }
 
@@ -518,8 +523,8 @@ func TestClassify_IntegrityFailure_RealRcloneWording(t *testing.T) {
 	hashesDiffer := fmt.Errorf("corrupted on transfer: %v hashes differ src(%s) %q vs dst(%s) %q", "sha256", "srcFs", "aaa", "dstFs", "bbb")
 
 	for _, err := range []error{sizeDiffer, hashesDiffer} {
-		if got := Classify(err); got != transport.IntegrityFailure {
-			t.Fatalf("Classify(%v) = %v, want IntegrityFailure", err, got)
+		if got := classify(err); got != transport.IntegrityFailure {
+			t.Fatalf("classify(%v) = %v, want IntegrityFailure", err, got)
 		}
 	}
 }
@@ -532,7 +537,7 @@ func TestClassify_IntegrityFailure_RealRcloneWording(t *testing.T) {
 // (buildSFTPFixtureImage, startFixtureContainer, generateClientSSHKeyPair,
 // writeKnownHosts, freeTCPPort, requireDocker), rather than a second copy of
 // them: same package, same fixture, a different set of assertions layered on
-// top (Classify's category, not just the raw rclone error text).
+// top (classify's category, not just the raw rclone error text).
 // ---------------------------------------------------------------------------
 
 // dockerExecMust runs `docker exec containerID args...` and fails the test if
@@ -623,8 +628,8 @@ func TestClassify_Docker(t *testing.T) {
 		if err == nil {
 			t.Fatal("List with an unauthorized client key should have been refused, it succeeded")
 		}
-		if got := Classify(err); got != transport.Authentication {
-			t.Fatalf("Classify(%v) = %v, want Authentication", err, got)
+		if got := classify(err); got != transport.Authentication {
+			t.Fatalf("classify(%v) = %v, want Authentication", err, got)
 		}
 	})
 
@@ -635,8 +640,8 @@ func TestClassify_Docker(t *testing.T) {
 		if err == nil {
 			t.Fatal("CopyToLocal against a chmod 000 remote file should have been refused, it succeeded")
 		}
-		if got := Classify(err); got != transport.PermissionDenied {
-			t.Fatalf("Classify(%v) = %v, want PermissionDenied", err, got)
+		if got := classify(err); got != transport.PermissionDenied {
+			t.Fatalf("classify(%v) = %v, want PermissionDenied", err, got)
 		}
 	})
 
@@ -654,8 +659,8 @@ func TestClassify_Docker(t *testing.T) {
 		if err == nil {
 			t.Fatalf("RemoteHash succeeded against a shell-less account (got %q); capability was supposed to be absent, not silently downgraded", got)
 		}
-		if cat := Classify(err); cat != transport.UnsupportedCapability {
-			t.Fatalf("Classify(%v) = %v, want UnsupportedCapability", err, cat)
+		if cat := classify(err); cat != transport.UnsupportedCapability {
+			t.Fatalf("classify(%v) = %v, want UnsupportedCapability", err, cat)
 		}
 	})
 
@@ -664,8 +669,8 @@ func TestClassify_Docker(t *testing.T) {
 		if err == nil {
 			t.Fatal("Stat succeeded against a missing remote object")
 		}
-		if got := Classify(err); got != transport.NotFound {
-			t.Fatalf("Classify(%v) = %v, want NotFound", err, got)
+		if got := classify(err); got != transport.NotFound {
+			t.Fatalf("classify(%v) = %v, want NotFound", err, got)
 		}
 	})
 
@@ -687,8 +692,8 @@ func TestClassify_Docker(t *testing.T) {
 		if err == nil {
 			t.Fatal("List against a host with no known_hosts entry should have been refused, it succeeded")
 		}
-		if got := Classify(err); got != transport.HostVerification {
-			t.Fatalf("Classify(%v) = %v, want HostVerification", err, got)
+		if got := classify(err); got != transport.HostVerification {
+			t.Fatalf("classify(%v) = %v, want HostVerification", err, got)
 		}
 	})
 
@@ -704,8 +709,8 @@ func TestClassify_Docker(t *testing.T) {
 		if err == nil {
 			t.Fatal("List against a changed host key should have been refused, it succeeded")
 		}
-		if got := Classify(err); got != transport.HostVerification {
-			t.Fatalf("Classify(%v) = %v, want HostVerification", err, got)
+		if got := classify(err); got != transport.HostVerification {
+			t.Fatalf("classify(%v) = %v, want HostVerification", err, got)
 		}
 
 		// #388's precedence question, settled against this exact real
@@ -721,4 +726,173 @@ func TestClassify_Docker(t *testing.T) {
 			t.Fatalf("ClassifyCtx(done ctx, changed host key) = %v, want HostVerification: a cancellation racing a refusal does not make the refusal less true", got)
 		}
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Structural guard: no exported, context-free classifier.
+// ---------------------------------------------------------------------------
+
+// TestNoExportedContextFreeClassifier is the reason issue #388 cannot come
+// back through the front door.
+//
+// #388 was a connect timeout rclone imposed on itself being reported as
+// transport.Cancelled, which reads everywhere as "the operator decided" and
+// which retry.DefaultIsTransient will not retry. The fix was to stop deciding
+// that from the error alone, because the error cannot say whose deadline
+// expired, and to decide it from the caller's context instead. Two spellings
+// could still get it wrong: the old context-free Wrap, which that fix deleted
+// outright rather than keeping as an alias, and classify, which that fix left
+// exported. Both were the same trap. A caller reaching for either gets an
+// answer built without the one input that makes it correct, and gets it
+// silently, because a Category is just an int and a wrong one looks exactly
+// like a right one.
+//
+// So the rule this pins is a shape, not a name: anything this package exports
+// that hands back a transport.Category has to take a context.Context. Pinning
+// the shape rather than the name is the whole point, since renaming classify
+// to ClassifyError or CategoryFor would defeat a name check while
+// reintroducing the identical bug.
+//
+// It reads the package's own source rather than using reflection because an
+// unexported function is invisible to reflect, and because the counts below
+// are what stop this passing on a technicality.
+func TestNoExportedContextFreeClassifier(t *testing.T) {
+	const (
+		transportPath = "github.com/spdrman/rclone-manager/core/internal/transport"
+		contextPath   = "context"
+	)
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("reading this package's directory: %v", err)
+	}
+
+	scanned, returningCategory, exportedChecked := 0, 0, 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		scanned++
+
+		parsed, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+
+		transportName := importedAsInThisPackage(parsed, transportPath)
+		if transportName == "" {
+			continue
+		}
+		contextName := importedAsInThisPackage(parsed, contextPath)
+
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || !returnsCategory(fn, transportName) {
+				continue
+			}
+			returningCategory++
+
+			if !fn.Name.IsExported() || !receiverIsReachable(fn) {
+				continue
+			}
+			exportedChecked++
+
+			if contextName == "" || !takesContext(fn, contextName) {
+				t.Errorf("%s exports %s, which returns a transport.Category without taking a context.Context. "+
+					"A classifier that judges the error alone cannot tell a deadline the caller set from one rclone set for itself, "+
+					"and answering either way is issue #388 in one direction or the other. "+
+					"Take a context like ClassifyCtx does, or keep the function unexported like classify is",
+					name, fn.Name.Name)
+			}
+		}
+	}
+
+	// Three positive controls, because every failure mode of this gate is a
+	// silent zero. No files means the walk is pointed somewhere wrong; no
+	// matches means returnsCategory stopped recognising the shape it exists
+	// to recognise; no exported matches means the branch that actually
+	// enforces anything never executed, which is the state this gate would
+	// sit in forever if ClassifyCtx were ever unexported too.
+	if scanned == 0 {
+		t.Fatalf("found no non-test Go files in this package, so this gate would pass vacuously")
+	}
+	if returningCategory == 0 {
+		t.Fatalf("no function in this package returns transport.Category any more, so this gate no longer recognises the shape it exists to police; fix returnsCategory or delete the gate")
+	}
+	if exportedChecked == 0 {
+		t.Fatalf("nothing this package exports returns a transport.Category any more, so the enforcing branch never ran; ClassifyCtx was the live control, and if it is gone this gate needs pointing somewhere real")
+	}
+}
+
+// importedAsInThisPackage reports the identifier file uses for importPath, or
+// "" if file does not import it. It handles a renamed import, because a guard
+// that only recognises the default name is a guard one alias defeats.
+func importedAsInThisPackage(file *ast.File, importPath string) string {
+	for _, spec := range file.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || path != importPath {
+			continue
+		}
+		if spec.Name != nil {
+			return spec.Name.Name
+		}
+		return importPath[strings.LastIndex(importPath, "/")+1:]
+	}
+	return ""
+}
+
+// returnsCategory reports whether fn hands back a transport.Category in any
+// result position, named or not, alone or alongside other values.
+func returnsCategory(fn *ast.FuncDecl, transportName string) bool {
+	if fn.Type.Results == nil {
+		return false
+	}
+	for _, result := range fn.Type.Results.List {
+		if isSelector(result.Type, transportName, "Category") {
+			return true
+		}
+	}
+	return false
+}
+
+// takesContext reports whether fn accepts a context.Context in any parameter
+// position.
+func takesContext(fn *ast.FuncDecl, contextName string) bool {
+	if fn.Type.Params == nil {
+		return false
+	}
+	for _, param := range fn.Type.Params.List {
+		if isSelector(param.Type, contextName, "Context") {
+			return true
+		}
+	}
+	return false
+}
+
+// receiverIsReachable reports whether an exported method on fn's receiver can
+// actually be called from outside this package, which it cannot if the
+// receiver type is unexported. Plain functions are always reachable.
+func receiverIsReachable(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return true
+	}
+	expr := fn.Recv.List[0].Type
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	if index, ok := expr.(*ast.IndexExpr); ok { // a generic receiver, Recv[T]
+		expr = index.X
+	}
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.IsExported()
+}
+
+func isSelector(expr ast.Expr, pkg, name string) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != name {
+		return false
+	}
+	ident, ok := sel.X.(*ast.Ident)
+	return ok && ident.Name == pkg
 }

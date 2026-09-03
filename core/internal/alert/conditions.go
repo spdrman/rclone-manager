@@ -152,7 +152,7 @@ func StorageConditions(scope string, a capacity.Assessment) []Condition {
 
 // HostKeyConditions returns §71's changed-host-key condition for scope,
 // exactly when category is internal/transport's HostVerification: the
-// classification internal/transport/rclone's Classify already assigns to
+// classification internal/transport/rclone's ClassifyCtx already assigns to
 // a golang.org/x/crypto/ssh/knownhosts key mismatch, which is the same
 // failure that made the connection refuse in the first place.
 //
