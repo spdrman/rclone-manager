@@ -7,6 +7,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // cmdArtifacts is `backup-manager artifacts`.
@@ -153,6 +154,74 @@ func printArtifactDetail(d app.ArtifactDetail) {
 		fmt.Printf("reason:              %s\n", d.FailureReason)
 		fmt.Printf("reason_at:           %s\n", d.FailureReasonAt.Format(layout))
 	}
+
+	printArtifactCopies(d.Copies, layout)
+}
+
+// printArtifactCopies prints one block per durable copy, with the access
+// state FR-34 defines.
+//
+// # Why a terminal operator gets this at all
+//
+// FR-34 says the CLI mirrors the same vocabulary as the UI, so that a
+// person on a terminal and a person in a browser read the same truth about
+// the same artifact. The truth that matters here is the one an archive
+// class introduces: a copy can be durable, intact, and completely out of
+// reach for the next several hours, and an operator who learns that during
+// a restore rather than before one has learned it too late.
+//
+// It prints nothing at all when the artifact has one ordinary local copy
+// and nothing else, which is every artifact in every deployment that has
+// not configured a storage medium. That is FR-35's compatibility promise
+// kept literally: an additive column that renders only when there is
+// something additive to say.
+func printArtifactCopies(copies []app.ArtifactCopy, layout string) {
+	if !worthPrinting(copies) {
+		return
+	}
+	for _, c := range copies {
+		fmt.Printf("copy:                %s\n", c.Medium)
+		fmt.Printf("  location:          %s\n", c.Location)
+		fmt.Printf("  status:            %s\n", c.Status)
+		fmt.Printf("  access:            %s\n", c.Access)
+		if c.StorageClass != "" {
+			fmt.Printf("  storage_class:     %s\n", c.StorageClass)
+		}
+		if c.VerificationClass != "" {
+			fmt.Printf("  verified_as:       %s\n", c.VerificationClass)
+		} else {
+			fmt.Printf("  verified_as:       nothing has verified this copy\n")
+		}
+		if c.VerifiedAt != nil {
+			fmt.Printf("  verified_at:       %s\n", c.VerifiedAt.Format(layout))
+		}
+		if c.RetrievalBilled {
+			fmt.Printf("  retrieval:         the provider bills to read this copy back; this product holds no price list and will not guess an amount\n")
+		}
+		if c.Detail != "" {
+			fmt.Printf("  note:              %s\n", c.Detail)
+		}
+	}
+}
+
+// worthPrinting reports whether these copies say anything the lines above
+// have not already said.
+//
+// One ACTIVE local copy is what local_path already printed, so repeating
+// it as a block would be noise on every artifact of every deployment that
+// never configured a medium. Anything else is worth a block: a copy
+// somewhere other than local disk, a local copy that is no longer ACTIVE,
+// or more than one copy at once, which is what an artifact mid-move looks
+// like.
+func worthPrinting(copies []app.ArtifactCopy) bool {
+	if len(copies) == 0 {
+		return false
+	}
+	if len(copies) > 1 {
+		return true
+	}
+	only := copies[0]
+	return only.Medium != state.MediumLocal || only.Status != state.PlacementActive
 }
 
 // validationString renders state.Record.ValidationPassed as the same

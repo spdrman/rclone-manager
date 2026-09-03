@@ -294,6 +294,17 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 // to failed anyway). Anything else keeps Progress nil, which the client
 // renders as "no reading available" rather than as zero.
 func (b *BackupService) withLiveProgress(op Operation) Operation {
+	if op.Action == ActionRestorePlacement {
+		// A restore never has progress and never will (EPIC E, FR-34):
+		// S3 reports a restore as running or finished and nothing else,
+		// so there is no percentage to attach, no byte count to attach,
+		// and no finishing time to attach. This refusal is here rather
+		// than left implicit in "nothing registers a reading for it",
+		// because that implicit version is one careless registry write
+		// away from a UI drawing a progress bar over a number nobody
+		// measured.
+		return op
+	}
 	if op.Status != state.OperationRunning {
 		return op
 	}

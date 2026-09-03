@@ -1,0 +1,156 @@
+package app
+
+import (
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+)
+
+// ArtifactCopy is one durable copy of one artifact, as an operator asking
+// "where is my backup and can I have it" reads it (EPIC E, FR-34).
+//
+// It is a placement row plus the two things the row cannot know on its
+// own: what storage class the medium holding it writes with, which lives
+// in configuration, and what that means for getting the bytes back, which
+// lives in internal/archive.
+//
+// # What is not here
+//
+// No price, no percentage, no estimate of when anything will finish.
+// FR-34 is direct about why: this product has no price list and S3 reports
+// a restore as running or finished and nothing else, so any of those three
+// would be invented. RetrievalBilled says a bill exists, which is a fact
+// this product does hold, and Detail says in words what the operator is
+// looking at.
+type ArtifactCopy struct {
+	// Medium is state.MediumLocal or a configured medium id.
+	Medium string
+
+	// Location is an absolute path for the local copy and an object key
+	// for a copy on a medium.
+	Location string
+
+	// Status is the placement's own status: ACTIVE, DELETE_PENDING or
+	// GONE.
+	Status string
+
+	// VerificationClass is the strongest class of verification this copy
+	// has ACHIEVED, empty when nothing has verified it, and never the
+	// strongest class configured (FR-31).
+	VerificationClass string
+
+	// VerifiedAt is when that class was last achieved, or nil.
+	VerifiedAt *time.Time
+
+	// SizeBytes is what this copy measures, or nil when nobody recorded
+	// it.
+	SizeBytes *int64
+
+	// StorageClass is the class the medium writes with, empty for the
+	// local copy.
+	StorageClass string
+
+	// Access is what can be done with this copy right now, from
+	// archive.Access.
+	Access archive.State
+
+	// RetrievalBilled is whether the provider charges to read this copy
+	// back. No amount, ever; see this struct's own doc.
+	RetrievalBilled bool
+
+	// Detail is the plain-words sentence explaining Access, empty for a
+	// copy that needs no explaining.
+	Detail string
+}
+
+// Retrievable reports whether this copy's bytes can be read right now.
+func (c ArtifactCopy) Retrievable() bool { return c.Access.Retrievable() }
+
+// artifactCopies turns a record's placements into the operator-facing view
+// above.
+//
+// # It asks no medium anything, and that is the point
+//
+// FR-34's rule is that a read never initiates a restore as a side effect,
+// and this is a read: `backup-manager artifacts <id>` prints what the
+// journal and the configuration say, over no network at all. So every
+// copy is derived with archive.Observation's zero value, which means "I
+// have not looked", and an archived copy therefore reads as
+// requires_restore rather than as anything more encouraging.
+//
+// That is not a limitation being papered over, it is the honest answer.
+// Being on an archive class IS the artifact's state until somebody does
+// something about it, and the state that needs a network round trip to
+// establish is the temporary one, a restore having been asked for. The
+// restore operation is what establishes that, and it says so from the
+// provider's own answer rather than from here.
+func (s *Service) artifactCopies(rec state.Record, now time.Time) []ArtifactCopy {
+	if len(rec.Placements) == 0 {
+		return nil
+	}
+	out := make([]ArtifactCopy, 0, len(rec.Placements))
+	for _, p := range rec.Placements {
+		out = append(out, s.artifactCopy(p, now))
+	}
+	return out
+}
+
+func (s *Service) artifactCopy(p state.Placement, now time.Time) ArtifactCopy {
+	c := ArtifactCopy{
+		Medium:            p.Medium,
+		Location:          p.Location,
+		Status:            p.Status,
+		VerificationClass: p.VerificationClass,
+		VerifiedAt:        p.VerifiedAt,
+		SizeBytes:         p.Size,
+	}
+
+	class, known := s.storageClassOf(p.Medium)
+	c.StorageClass = class
+
+	if !known {
+		// The journal names a medium this configuration no longer
+		// declares. Nothing here can say what class it wrote with, and
+		// nothing here can reach it either, which is exactly what
+		// unreachable means: a fact about the endpoint, deliberately not
+		// a claim that the copy is gone.
+		c.Access = archive.Unreachable
+		c.Detail = "this copy is on a storage medium this configuration no longer declares, so nothing here can reach it or say what class it is on; the copy itself may well still be there"
+		return c
+	}
+
+	access, err := archive.Access(p.Medium, class, archive.Observation{}, now)
+	if err != nil {
+		c.Access = archive.Unreachable
+		c.Detail = "this copy is on a storage class this build does not recognise, so nothing here will claim its bytes can be read"
+		return c
+	}
+	c.Access = access
+	c.Detail = archive.Describe(access, class, nil)
+	if b, err := archive.Of(class); err == nil {
+		c.RetrievalBilled = b.RetrievalBilled
+	}
+	return c
+}
+
+// storageClassOf resolves a placement's medium id to the storage class
+// that medium writes with, and reports whether the configuration declares
+// that medium at all.
+//
+// The local medium is declared by every deployment implicitly and has no
+// storage class, so it answers ("", true): known, and classless.
+func (s *Service) storageClassOf(medium string) (string, bool) {
+	if medium == state.MediumLocal {
+		return "", true
+	}
+	if s.Config == nil {
+		return "", false
+	}
+	for _, m := range s.Config.StorageMediums {
+		if m.ID == medium {
+			return m.EffectiveStorageClass(), true
+		}
+	}
+	return "", false
+}
