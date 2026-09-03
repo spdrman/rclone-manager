@@ -151,6 +151,19 @@ func Start(t *testing.T) *Fixture {
 		t.Fatalf("miniofixture: creating the bucket: %v\n%s", err, errOut)
 	}
 
+	// The `file` source reaches rclone through the AWS credential CHAIN,
+	// and an ambient AWS_* variable on the machine running the gate would
+	// outrank the file this fixture is about to write. The adapter now
+	// refuses that outright (see mediumcreds.go's
+	// refuseAmbientAWSCredentialEnvironment), which is the right
+	// behaviour and would also make this suite's result depend on whoever
+	// happens to have AWS_PROFILE exported. So the fixture clears them
+	// for the duration of the test, which is what makes the file source
+	// testable here at all.
+	for _, name := range ambientAWSEnvVars {
+		t.Setenv(name, "")
+	}
+
 	f.CredentialsFile = filepath.Join(t.TempDir(), "minio.creds")
 	contents := "[default]\naws_access_key_id = " + f.AccessKeyID + "\naws_secret_access_key = " + f.SecretAccessKey + "\n"
 	if err := os.WriteFile(f.CredentialsFile, []byte(contents), 0o600); err != nil {
@@ -256,4 +269,29 @@ func randomHex(t *testing.T, n int) string {
 		t.Fatalf("miniofixture: generating a fixture credential: %v", err)
 	}
 	return hex.EncodeToString(buf)
+}
+
+// ambientAWSEnvVars mirrors internal/transport/rclone's own list. It is
+// duplicated rather than exported from there because exporting it would
+// put a refusal's implementation detail on a production package's surface
+// for a test fixture's convenience, and because the two lists serving the
+// same purpose from opposite sides is exactly what
+// TestTheFileSourceRefusesAnAmbientAWSEnvironment would notice if they
+// drifted: a variable added there and missed here makes this suite refuse
+// on a machine that has it set, loudly, which is the failure that gets
+// fixed rather than the one that gets ignored.
+var ambientAWSEnvVars = []string{
+	"AWS_ACCESS_KEY_ID",
+	"AWS_ACCESS_KEY",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SECRET_KEY",
+	"AWS_SESSION_TOKEN",
+	"AWS_PROFILE",
+	"AWS_DEFAULT_PROFILE",
+	"AWS_SHARED_CREDENTIALS_FILE",
+	"AWS_CONFIG_FILE",
+	"AWS_WEB_IDENTITY_TOKEN_FILE",
+	"AWS_ROLE_ARN",
+	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
 }

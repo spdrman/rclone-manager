@@ -8,10 +8,21 @@
 //
 //   - `file` is preferred, and it is preferred harder here than it is for
 //     an SSH key. rclone opens the file itself (the s3 backend's own
-//     env_auth + shared_credentials_file options), so the secret never
-//     enters this process's memory at all, and a secret this process never
-//     holds is a secret it cannot log, cannot leak through a %+v, and
-//     cannot leave behind in a heap dump.
+//     env_auth + shared_credentials_file options), so the CREDENTIAL never
+//     enters this process's memory, and a secret this process never holds
+//     is a secret it cannot log, cannot leak through a %+v, and cannot
+//     leave behind in a heap dump.
+//
+//     That statement used to say "the file's bytes never enter this
+//     process", which stopped being true when the profile check landed,
+//     so it is narrowed rather than left standing.
+//     checkCredentialsFileHasADefaultProfile opens the file to read its
+//     profile HEADERS, because a file the AWS credential chain cannot
+//     resolve does not fail, it stalls on instance metadata until the
+//     operation times out. That function's doc states exactly what its
+//     scan reads, what it retains, and what it does not claim about
+//     erasing it. Nothing else in this package opens a credentials file.
+//
 //   - `env` and `command` cannot have that property, by construction, so
 //     everything downstream of the moment the bytes exist is made as
 //     narrow as keysource.go makes it: validated by SHAPE before anything
@@ -42,7 +53,10 @@
 package rclone
 
 import (
+	"bufio"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -73,6 +87,39 @@ type resolvedCredentials struct {
 	sessionToken    obs.Secret
 	hasSessionToken bool
 }
+
+// The four renderings below exist because obs.Secret does NOT protect a
+// value in an UNEXPORTED field, and every field above is unexported.
+//
+// fmt cannot take an interface out of an unexported struct field
+// (reflect.Value.CanInterface is false for one), so it never asks whether
+// the field implements Formatter and prints the wrapped string instead.
+// Measured on this exact type, before these methods existed:
+//
+//	fmt.Sprintf("%+v", resolvedCredentials{...})
+//	  => {accessKeyID:{v:AKIAPROBEKEY} secretAccessKey:{v:probesecretvalue} ...}
+//
+// That is FR-33's "never in a log line, in whole or in part" defeated by a
+// reflex %+v in a debug statement nobody would look twice at in review, so
+// redaction is reasserted here rather than left to the wrapper that cannot
+// reach it. obs.Secret's own doc now records the limitation, and
+// obs.TestSecretInAnUnexportedFieldStillLeaks pins it.
+func (c resolvedCredentials) String() string   { return "[REDACTED]" }
+func (c resolvedCredentials) GoString() string { return "[REDACTED]" }
+
+// Format takes precedence over String for every fmt verb, including %+v
+// and %#v, which are the two that actually reach for a struct's fields.
+func (c resolvedCredentials) Format(f fmt.State, _ rune) {
+	_, _ = io.WriteString(f, "[REDACTED]")
+}
+
+// MarshalJSON covers encoding/json, including the path slog's JSON handler
+// takes for a value it does not otherwise recognise.
+func (c resolvedCredentials) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }
+
+// LogValue is log/slog's own hook, consulted before it asks a Formatter or
+// a Stringer anything.
+func (c resolvedCredentials) LogValue() slog.Value { return slog.StringValue("[REDACTED]") }
 
 // mediumAuthOptions returns the rclone s3 options that authenticate medium,
 // resolving whichever of the three credential sources it names.
@@ -113,12 +160,29 @@ func mediumAuthOptions(medium transport.Medium) (configmap.Simple, error) {
 		if err := checkCredentialsFileCustody(medium.ID, creds.File); err != nil {
 			return nil, err
 		}
-		// The preferred path, and the whole reason it is preferred: this
-		// adapter never opens the file. rclone's s3 backend passes
+		// env_auth=true is the AWS credential CHAIN, not just this file,
+		// and two of its other links can silently outrank the file: an
+		// ambient AWS_* variable, and the instance-metadata fallback a
+		// file with no [default] profile falls through to. Both are
+		// refused here, before rclone is handed anything. See each
+		// function's doc for the measurement behind it.
+		if err := refuseAmbientAWSCredentialEnvironment(medium.ID); err != nil {
+			return nil, err
+		}
+		if err := checkCredentialsFileHasADefaultProfile(medium.ID, creds.File); err != nil {
+			return nil, err
+		}
+		// The preferred path. rclone's s3 backend passes
 		// shared_credentials_file to the AWS SDK's own shared-config
 		// loader, which is only consulted when env_auth is set and no
 		// static key is configured (backend/s3/s3.go), so both options
 		// are needed and neither is optional.
+		//
+		// This adapter never PARSES the file and never handles a value
+		// out of it: the profile check above scans its headers and
+		// nothing else, and rclone opens it itself for the credentials.
+		// See checkCredentialsFileHasADefaultProfile for exactly what
+		// that scan reads and what it does not claim.
 		cfg.Set("env_auth", "true")
 		cfg.Set("shared_credentials_file", creds.File)
 		return cfg, nil
@@ -196,6 +260,203 @@ func checkCredentialsFileCustody(mediumID, path string) error {
 			mediumID, path, dir, mode.Perm(), dir))
 	}
 	return nil
+}
+
+// ambientAWSCredentialEnvVars are the environment variables that can take
+// this process's S3 authentication away from the configured medium.
+//
+// # Why this list exists at all
+//
+// The `file` source is the preferred one because rclone opens the file
+// itself and the secret never enters this process. The only way to make
+// rclone open one is env_auth=true, and env_auth=true sends it to the AWS
+// SDK's LoadDefaultConfig (backend/s3/s3.go:1514-1525). That is a CHAIN,
+// and the configured file is not the first link in it. An AWS_ACCESS_KEY_ID
+// sitting in this process's environment wins over the file silently, and
+// the backup then runs as an account nobody chose, writing artifacts
+// somewhere nobody will look for them.
+//
+// It is ssh-agent's failure mode in different clothes, so it gets
+// ssh-agent's answer: refuse, name what to unset, and let a person decide.
+// Each entry is here with a reason, and the subtle one is worth reading:
+//
+//   - AWS_ACCESS_KEY_ID / AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY /
+//     AWS_SECRET_KEY, AWS_SESSION_TOKEN: the SDK's environment provider
+//     sits AHEAD of the shared-config provider, so these simply win.
+//   - AWS_PROFILE / AWS_DEFAULT_PROFILE: selects which profile is read out
+//     of the file, and this adapter has no profile setting to state the
+//     one it meant.
+//   - AWS_SHARED_CREDENTIALS_FILE: the subtle one, and the reason this
+//     list is not just "the two key variables". rclone's
+//     shared_credentials_file option is passed through
+//     awsconfig.WithSharedConfigFiles, which sets the SDK's *config* file
+//     list (config@v1.32.30 load_options.go:475). AWS_SHARED_CREDENTIALS_FILE
+//     populates a SEPARATE *credentials* file list, and
+//     LoadSharedConfigProfile merges the credentials sections OVER the
+//     config sections (shared_config.go:694), so for the same profile the
+//     credentials file wins. rclone's option name says "credentials" and
+//     the SDK reads it as "config"; that mismatch is invisible from here,
+//     and it is why the whole list gets refused rather than the obvious
+//     two.
+//   - AWS_CONFIG_FILE: WithSharedConfigFiles is expected to override this,
+//     but "expected to" is not the standard this file holds itself to for
+//     a variable that selects where credentials are read from.
+//   - AWS_WEB_IDENTITY_TOKEN_FILE / AWS_ROLE_ARN,
+//     AWS_CONTAINER_CREDENTIALS_RELATIVE_URI /
+//     AWS_CONTAINER_CREDENTIALS_FULL_URI: further links in the same chain,
+//     each of which can authenticate as somebody else entirely.
+//
+// It applies to the `file` source ONLY. env and command set a static key,
+// and rclone consults the SDK's chain only when there is none
+// (s3.go:1514's `opt.AccessKeyID == "" && opt.SecretAccessKey == ""`), so
+// for those two the ambient environment is already unreachable.
+var ambientAWSCredentialEnvVars = []string{
+	"AWS_ACCESS_KEY_ID",
+	"AWS_ACCESS_KEY",
+	"AWS_SECRET_ACCESS_KEY",
+	"AWS_SECRET_KEY",
+	"AWS_SESSION_TOKEN",
+	"AWS_PROFILE",
+	"AWS_DEFAULT_PROFILE",
+	"AWS_SHARED_CREDENTIALS_FILE",
+	"AWS_CONFIG_FILE",
+	"AWS_WEB_IDENTITY_TOKEN_FILE",
+	"AWS_ROLE_ARN",
+	"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+	"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+}
+
+// refuseAmbientAWSCredentialEnvironment refuses when this process's own
+// environment carries anything that could outrank the configured
+// credentials file.
+//
+// Set-but-empty counts as unset, which is how the SDK treats it: an empty
+// AWS_ACCESS_KEY_ID does not authenticate anything, and refusing one would
+// refuse a perfectly ordinary way of clearing a variable in a unit file.
+//
+// The variable NAMES are reported, because a name is the whole content of
+// the fix. No value ever is: one of these holds a secret key, and this
+// refusal must not be the thing that prints it.
+func refuseAmbientAWSCredentialEnvironment(mediumID string) error {
+	var present []string
+	for _, name := range ambientAWSCredentialEnvVars {
+		if os.Getenv(name) != "" {
+			present = append(present, name)
+		}
+	}
+	if len(present) == 0 {
+		return nil
+	}
+	return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		"medium %q uses credentials.file, which rclone reads through the AWS credential CHAIN, and this process's environment "+
+			"carries %v, which the chain consults BEFORE the configured file. The backup would run as whichever account those name. "+
+			"Unset them for this process, or switch the medium to credentials.env or credentials.command, which set a static key "+
+			"the chain is never asked about",
+		mediumID, present))
+}
+
+// checkCredentialsFileHasADefaultProfile refuses a credentials file that
+// carries no profile named exactly `default`.
+//
+// # Why this exists, and it is not a style rule
+//
+// A file whose only profile is `[cold-storage]` does not FAIL. It HANGS.
+// The SDK's chain finds no profile it was asked for, keeps walking, and
+// the last link is EC2 instance metadata; on a host that is not an EC2
+// instance that is a connection to the link-local 169.254.169.254 which
+// nothing answers, so the operation stalls for as long as the caller
+// allows. Timed against a real MinIO, with a 12-second deadline:
+//
+//	default.creds     took=7ms       err=<nil>
+//	named.creds       took=12.002s   err=... context deadline exceeded
+//	profiled.creds    took=12s       err=... context deadline exceeded
+//
+// It would have been an hour against an hour. A deployment experiences
+// that as "backups got slow", not as a typo in a profile name, which is
+// the protection-dies-quietly failure this product exists to prevent.
+// There is no rclone option and no SDK option reachable from here that
+// shortens it: the SDK's own switch is the AWS_EC2_METADATA_DISABLED
+// environment variable, and a library may not mutate its process's
+// environment.
+//
+// # What this reads, and what it does not
+//
+// This is the ONE place this process opens a credentials file, so the
+// property that makes `file` the preferred source deserves restating
+// exactly rather than being quietly weakened.
+//
+// It reads the file's LINES to find its profile HEADERS. It keeps only the
+// header names and compares them against one literal. It never parses a
+// setting, never wraps a value, never returns one, and never hands one to
+// rclone, which still opens the file itself for the actual credentials.
+// TestCredentialsFileProfileCheckReadsNoValues plants a file full of
+// settings and proves none of their names or values reaches the refusal.
+//
+// What it does NOT claim, in keysource.go's own words about the same
+// problem: the bytes are not reliably erased. The scanner's initial buffer
+// is zeroed here and a credentials file's lines are far shorter than it,
+// so in practice that is the buffer the data passed through, but
+// bufio.Scanner allocates a larger one if a line outgrows it and
+// Scanner.Text returns a freshly allocated string per line that Go gives
+// no supported way to overwrite. The honest statement is: a key's bytes
+// pass through memory this function owns, for one scan of one small file,
+// best-effort overwritten. That is strictly less exposure than env and
+// command accept for their whole operation, and it buys a medium that
+// fails instead of hanging.
+//
+// # Why `default` specifically, and not "any single profile"
+//
+// Because there is no profile field in transport.MediumCredentials to
+// select with, and rclone passes the configured path through
+// WithSharedConfigFiles, so the SDK looks for whichever profile it was
+// told to use, which with nothing set is `default`. The env and command
+// sources accept a single profile under any name because THIS package
+// parses those itself and can take the one profile there is; the file
+// source's selection happens inside the SDK, where this package has no
+// say.
+func checkCredentialsFileHasADefaultProfile(mediumID, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+			"medium %q: credentials.file %q could not be read: %w", mediumID, path, err))
+	}
+	defer f.Close()
+
+	buf := make([]byte, 0, 4096)
+	defer zeroBytes(buf[:cap(buf)])
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(buf, maxResolvedCredentialsSize)
+
+	var profiles []string
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "[") || !strings.HasSuffix(line, "]") {
+			// Not a header. Nothing about this line is looked at, kept or
+			// reported.
+			continue
+		}
+		name := strings.TrimSpace(line[1 : len(line)-1])
+		if name == "default" {
+			return nil
+		}
+		profiles = append(profiles, name)
+	}
+	if err := scanner.Err(); err != nil {
+		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+			"medium %q: credentials.file %q could not be read as text", mediumID, path))
+	}
+	// The profile NAMES are reported, because a name is not a secret and is
+	// the whole content of the fix. No value ever is.
+	if len(profiles) == 0 {
+		return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+			"medium %q: credentials.file %q has no [profile] header at all, so it must carry a [default] one: "+
+				"there is no profile setting to select any other with", mediumID, path))
+	}
+	return transport.NewError(transport.Configuration, "medium_credentials", fmt.Errorf(
+		"medium %q: credentials.file %q declares %v but no [default] profile. Rename one to [default]: there is no profile "+
+			"setting to select another with, and a file the AWS credential chain cannot resolve does not fail, it falls "+
+			"through to EC2 instance metadata and stalls until the operation times out",
+		mediumID, path, profiles))
 }
 
 // resolveCredentialsFromEnv reads name from the environment and validates
