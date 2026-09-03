@@ -67,14 +67,29 @@ func helperCommand(mode string) []string {
 }
 
 func TestResolveCredentialsFromEachSource(t *testing.T) {
-	t.Run("file is never opened by this process", func(t *testing.T) {
+	t.Run("file is passed through, never parsed", func(t *testing.T) {
 		// The file source's whole property is that this adapter does not
-		// read it, so what is asserted here is the OPTIONS it produces,
-		// not any parsed content: env_auth on, the path passed through,
-		// and no static key set anywhere.
+		// read the CREDENTIALS out of it, so what is asserted here is the
+		// OPTIONS it produces: env_auth on, the path passed through, and
+		// no static key set anywhere.
+		//
+		// This subtest used to be called "file is never opened by this
+		// process", and used a file with no profile header at all as the
+		// proof. Neither is true any more: the profile check opens the
+		// file to read its HEADERS, because a file the AWS credential
+		// chain cannot resolve stalls on instance metadata rather than
+		// failing. So the file gets the [default] header that check
+		// demands, and everything UNDER the header is deliberate nonsense
+		// that nothing here may read, which makes this a stronger proof
+		// than the old one rather than a weaker one: a file whose values
+		// are garbage still passes through untouched.
+		for _, name := range ambientAWSCredentialEnvVars {
+			t.Setenv(name, "")
+		}
 		dir := t.TempDir()
 		path := filepath.Join(dir, "offsite.creds")
-		if err := os.WriteFile(path, []byte("this is deliberately not credentials text"), 0o600); err != nil {
+		contents := "[default]\naws_access_key_id = " + canary + "-NEVER-PARSED\nthis line is deliberately not a setting\n"
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatalf("writing the credentials file: %v", err)
 		}
 
@@ -95,6 +110,14 @@ func TestResolveCredentialsFromEachSource(t *testing.T) {
 		for _, option := range []string{"access_key_id", "secret_access_key", "session_token"} {
 			if got, ok := cfg.Get(option); ok {
 				t.Errorf("the file source set %s = %q; setting a static key here would defeat env_auth and would mean this process read the file", option, got)
+			}
+		}
+		// Nothing from inside the file reaches the options, under any
+		// key. The loop above names the three that could hold a
+		// credential; this catches the one nobody predicted.
+		for key, value := range cfg {
+			if strings.Contains(value, canary) {
+				t.Errorf("option %s carries content from inside the credentials file: this process is meant to hand rclone a PATH", key)
 			}
 		}
 	})

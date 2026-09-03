@@ -311,13 +311,6 @@ func (a *Adapter) absenceOrMissingBucket(ctx context.Context, f fs.Fs, medium tr
 	return Wrap(op, absence)
 }
 
-// isAbsence reports whether err is rclone's way of saying "there is
-// nothing here", in either of the two shapes its s3 backend produces for a
-// 404. Both are checked because catching only one is a silent half-fix.
-func isAbsence(err error) bool {
-	return errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound)
-}
-
 // toObjectInfo carries exactly what FR-32 allows a medium to tell this
 // product: a key, a size, an upload time that is never a producer
 // timestamp, and a storage class where the backend reports one. No ETag,
@@ -345,13 +338,14 @@ func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key s
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		if isAbsence(err) {
+		wrapped := Wrap("stat_object", err)
+		if isNotFound(wrapped) {
 			// "this artifact is not on the medium" and "this medium's
 			// bucket does not exist" must not reach a caller as the same
 			// answer. See confirmBucket.
 			return transport.ObjectInfo{}, a.absenceOrMissingBucket(ctx, f, medium, "stat_object", err)
 		}
-		return transport.ObjectInfo{}, Wrap("stat_object", err)
+		return transport.ObjectInfo{}, wrapped
 	}
 	return toObjectInfo(ctx, o), nil
 }
@@ -409,13 +403,12 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
-		if isAbsence(err) {
-			reported := a.absenceOrMissingBucket(ctx, f, medium, "open_object", err)
-			shutdownFs(ctx, f)
-			return nil, reported
+		wrapped := Wrap("open_object", err)
+		if isNotFound(wrapped) {
+			wrapped = a.absenceOrMissingBucket(ctx, f, medium, "open_object", err)
 		}
 		shutdownFs(ctx, f)
-		return nil, Wrap("open_object", err)
+		return nil, wrapped
 	}
 	rc, err := o.Open(ctx)
 	if err != nil {
@@ -563,9 +556,13 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 }
 
 // isNotFound reports whether err carries this project's own NotFound
-// classification. It reads the manager-owned category rather than the
-// underlying rclone sentinel on purpose: which sentinel a backend produces
-// for an absent object is exactly the detail errors.go exists to absorb.
+// classification. Every method here asks it, rather than testing rclone's
+// own fs.ErrorObjectNotFound and fs.ErrorDirNotFound directly, for two
+// reasons: which sentinel a backend produces for an absent object is
+// exactly the detail errors.go exists to absorb, and the category is the
+// BROADER question. An S3 NoSuchKey that arrives as an API code without a
+// sentinel is still an absence, and an absence that skipped the
+// confirmBucket check would be the same bug in a new shape.
 func isNotFound(err error) bool {
 	category, ok := transport.CategoryOf(err)
 	return ok && category == transport.NotFound
