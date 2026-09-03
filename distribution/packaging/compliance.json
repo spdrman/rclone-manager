@@ -90,12 +90,14 @@
       "NOTICE and docs/compliance/source-offer.md do that, naming each module at",
       "its exact version with its own address, and the gate reads both and fails",
       "if either stops. NOTICE also travels with what this project distributes:",
-      "the runtime image carries it at /licenses/NOTICE beside /licenses/LICENSE,",
-      "and TestTheImageCarriesTheLicenceAndTheNotice reads the runtime stage and",
-      "fails if either COPY goes. Until it did, the image copied the binaries and",
-      "the frontend bundle and nothing else, a gap that predates this decision",
-      "and cost Apache-2.0 §4(d) the same way; the rest of it, the inventory",
-      "inside the image and a per-target rule, is #407's.",
+      "the runtime image carries it at /licenses/NOTICE, beside /licenses/LICENSE",
+      "and the inventory both of them point at. TestTheImageCarriesTheLicenceMaterials",
+      "reads the runtime stage and fails if a COPY goes, and",
+      "TestTheBuiltImageCarriesTheLicenceMaterials in apps/generic/tests/dockercli",
+      "copies the files back out of a built image and compares them to the tree,",
+      "which is the half that proves delivery rather than intent. Until #407 the",
+      "image copied the binaries and the frontend bundle and nothing else, a gap",
+      "that predates this decision and cost Apache-2.0 §4(d) the same way.",
       "",
       "acceptedNonPermissive is a third category rather than two more entries on",
       "permissiveIds, and that is not bookkeeping. permissiveIds says what a",
@@ -268,8 +270,55 @@
       "",
       "Every target additionally ships the canonical multi-architecture OCI image.",
       "That is recorded once, in container/release-manifest.json, not repeated per",
-      "target here."
+      "target here. Which is also why every target below records a licenceDelivery:",
+      "the sentence above is the whole reason the image can be one target's answer",
+      "for the licence, and it was a note about checksums that nothing read."
     ],
+
+    "licenceDelivery": {
+      "note": [
+        "How a recipient of each target receives LICENSE, NOTICE and the",
+        "third-party inventory, recorded per target rather than inferred from the",
+        "note above. #407 asked for the decision rather than the inference, and",
+        "the inference would have been wrong for one of them.",
+        "",
+        "\"image\" means the canonical OCI image carries them and this target ships",
+        "no copy of its own. Right for every target that is metadata pulling the",
+        "same image: a catalog entry, a template, a compose profile, a store",
+        "manifest. A second copy beside a compose file would be another file to",
+        "keep in step and no recipient would read it, because what they run is the",
+        "image. It is only an answer while the image really carries them, so",
+        "declaring it makes container/Dockerfile's runtime stage the thing that has",
+        "to prove it, and LicenceDeliveryComplaints reads one against the other.",
+        "",
+        "\"package-payload\" is for a target whose package installs the binaries and",
+        "never pulls the image, which is the .spk and only the .spk. Its licences",
+        "cannot come from /licenses in an image nobody downloaded, so it says so,",
+        "and because this repository does not build it the obligation is written",
+        "into its unbuiltReason where a reader of the provenance bundle meets it.",
+        "",
+        "imagePaths is where in the image each file lands. It is a declaration",
+        "checked against the runtime stage in both directions, and it is what",
+        "apps/generic/tests/dockercli reads before copying /licenses back out of a",
+        "real built image. Deriving it from the Dockerfile there instead would have",
+        "made that test agree with the Dockerfile by construction.",
+        "",
+        "labels are what `docker inspect` answers. Distroless has no shell, so a",
+        "recipient cannot look around inside the image; the OCI licences",
+        "annotation names the licence and the path label says where the text is,",
+        "which is the half an id on its own leaves out."
+      ],
+      "imagePaths": {
+        "LICENSE": "/licenses/LICENSE",
+        "NOTICE": "/licenses/NOTICE",
+        "provenance/third-party-licenses.json": "/licenses/third-party-licenses.json"
+      },
+      "labels": {
+        "org.opencontainers.image.licenses": "Apache-2.0",
+        "com.iasbuilt.backupmanager.licenses.path": "/licenses"
+      }
+    },
+
     "targets": {
       "generic": {
         "artifacts": [
@@ -277,7 +326,8 @@
           "container/.env.example",
           "container/Dockerfile"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "truenas": {
         "artifacts": [
@@ -287,28 +337,32 @@
           "apps/truenas/catalog/templates/docker-compose.yaml",
           "apps/truenas/compose/backup-manager.yaml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "unraid": {
         "artifacts": [
           "apps/unraid/template/backup-manager-ui.xml",
           "apps/unraid/template/backup-manager.xml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "openmediavault": {
         "artifacts": [
           "apps/openmediavault/compose/backup-manager.env",
           "apps/openmediavault/compose/backup-manager.yml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "proxmox": {
         "artifacts": [
           "apps/proxmox/compose/backup-manager.env",
           "apps/proxmox/compose/backup-manager.yml"
         ],
-        "unbuiltReason": ""
+        "unbuiltReason": "",
+        "licenceDelivery": "image"
       },
       "portainer": {
     "artifacts": [
@@ -317,33 +371,39 @@
      "apps/portainer/templates.json",
      "apps/portainer/logo.svg"
     ],
-    "unbuiltReason": ""
+    "unbuiltReason": "",
+    "licenceDelivery": "image"
    },
    "dockge": {
     "artifacts": [],
-    "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice"
+    "unbuiltReason": "this target ships no artifact of its own on purpose: Dockge imports container/compose.yaml itself, whose digests the generic target above already records, and a second copy here would hash a file nobody distributes twice",
+    "licenceDelivery": "image"
    },
    "casaos": {
     "artifacts": [
      "apps/casaos/compose/backup-manager.yml",
      "apps/casaos/icon.svg"
     ],
-    "unbuiltReason": ""
+    "unbuiltReason": "",
+    "licenceDelivery": "image"
    },
    "zimaos": {
     "artifacts": [
      "apps/zimaos/compose/backup-manager.yml",
      "apps/zimaos/icon.svg"
     ],
-    "unbuiltReason": ""
+    "unbuiltReason": "",
+    "licenceDelivery": "image"
    },
    "synology": {
         "artifacts": [],
-        "unbuiltReason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json"
+        "unbuiltReason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json, and it owns getting LICENSE, NOTICE and provenance/third-party-licenses.json into the package too: the .spk installs the binaries natively and never pulls the canonical image, so the image's /licenses reaches nobody who installed this way",
+        "licenceDelivery": "package-payload"
       },
       "ugos": {
         "artifacts": [],
-        "unbuiltReason": "the shipped artifact is a .upk, packed by ugcli against a known canonical image digest; that build is EPIC D's #83 and its App Center submission is #178, neither of which happens in this repository's gate"
+        "unbuiltReason": "the shipped artifact is a .upk, packed by ugcli against a known canonical image digest; that build is EPIC D's #83 and its App Center submission is #178, neither of which happens in this repository's gate",
+        "licenceDelivery": "image"
       }
     }
   },

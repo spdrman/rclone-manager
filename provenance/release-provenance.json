@@ -56,7 +56,7 @@
   },
   "checksums": {
     "path": "provenance/checksums.txt",
-    "sha256": "1fcda1debd9e947e6b910140acc896411a1e413d787152bf876cecd83423d44b",
+    "sha256": "41434fd3dd204fc5e8444c7e65e051e93e9da2803627f58d1fe36094d3191416",
     "format": "sha256sum"
   },
   "artifacts": [
@@ -163,7 +163,7 @@
     {
       "target": "generic",
       "path": "container/Dockerfile",
-      "sha256": "038a06550669f21df3a4d927b2cc7a84a79b5912d8ea8a5c799747ff2f26ba2b"
+      "sha256": "3770ef6ab3fa93b66b329d9f7c95265e6c5e22867cf40a7eec225d0a7abe869b"
     },
     {
       "target": "generic",
@@ -178,7 +178,7 @@
     },
     {
       "target": "synology",
-      "reason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json"
+      "reason": "the shipped artifact is a .spk, assembled by apps/synology/cmd/spkctl at release time rather than checked in; #85 owns building it and re-deriving each embedded binary's SHA-256 out of the finished package against container/release-manifest.json, and it owns getting LICENSE, NOTICE and provenance/third-party-licenses.json into the package too: the .spk installs the binaries natively and never pulls the canonical image, so the image's /licenses reaches nobody who installed this way"
     },
     {
       "target": "ugos",
