@@ -213,19 +213,31 @@ type Submitted struct {
 //
 // Everything that can refuse, refuses before the row is written, so a
 // refused request leaves nothing behind at all.
+//
+// # The crash point, named
+//
+// There is exactly one, between marking the row running and the provider
+// accepting the request, and the row is moved to running BEFORE the ask
+// rather than after it on purpose. A crash there leaves a row saying a
+// restore might be running, which is the true state of somebody's
+// knowledge at that instant: the request may have been accepted and the
+// answer lost. The alternative ordering would leave a row saying nothing
+// was started, about a restore that may well have been, which is the
+// version that gets billed invisibly. Derive resolves it by asking the
+// provider, and concludes nothing from silence.
 func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 	behaviour, err := r.validate(req)
 	if err != nil {
 		return Submitted{}, err
+	}
+	if r.store == nil {
+		return Submitted{}, fmt.Errorf("%w: this deployment has no way to reach a storage medium", ErrInvalidRequest)
 	}
 
 	// Ask the provider whether it is already restoring this object before
 	// writing anything. A second restore of an object already being
 	// restored is billed again on some providers and buys nothing on any
 	// of them.
-	if r.store == nil {
-		return Submitted{}, fmt.Errorf("%w: this deployment has no way to reach a storage medium", ErrInvalidRequest)
-	}
 	current, err := r.store.RestoreStatus(ctx, req.Medium, req.Copy.Placement.Location)
 	if err != nil {
 		return Submitted{}, fmt.Errorf("archive: asking %q about %q before restoring it: %w",
