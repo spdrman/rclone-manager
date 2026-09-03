@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "00601e396d842141a7d46e5dbe83f7b8561b462f864e47848b888b36db5970b6";
+export const CONTRACT_SHA256 = "edc864e73e738c3d402be6f9fe19cbcbb4d4eafd38b809eebb9b9d1f15ef050e";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -47,6 +47,7 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+  "MEDIUM_DISCLOSURE_REQUIRED",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -106,6 +107,7 @@ export const API_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+  "MEDIUM_DISCLOSURE_REQUIRED",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -120,7 +122,7 @@ export const API_ERROR_CLASSES = {
   "not-found": ["BACKUP_SET_NOT_FOUND", "OPERATION_NOT_FOUND", "RETENTION_PLAN_NOT_FOUND", "ARTIFACT_NOT_FOUND"],
   "throttling": ["RATE_LIMITED"],
   "unavailable": ["NOT_CONFIGURED"],
-  "validation": ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND", "HOST_KEY_PROBE_FAILED"],
+  "validation": ["INVALID_REQUEST", "SSH_KEY_NOT_FOUND", "HOST_KEY_PROBE_FAILED", "MEDIUM_DISCLOSURE_REQUIRED"],
 } as const satisfies Record<string, readonly ApiErrorCode[]>;
 
 /** The platform-capability set GET /system/capabilities reports, as wire
@@ -817,7 +819,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "SettingsResponse",
     successStatus: 200,
     errorCodes: {
-      400: ["INVALID_REQUEST"],
+      400: ["INVALID_REQUEST", "MEDIUM_DISCLOSURE_REQUIRED"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       500: ["INTERNAL"],
@@ -1015,6 +1017,7 @@ export interface WireArtifact {
   id: string;
   local_path: string;
   name: string;
+  placements: WirePlacement[];
   quarantine_irrecoverable: boolean;
   quarantine_reason?: string;
   quarantined: boolean;
@@ -1269,6 +1272,19 @@ export interface WireCredentialsRequest {
   username: string;
 }
 
+/** What a finished run cycle actually got done, read off the
+ *  operation's own recorded summary. A cycle "completed" when it ran
+ *  to the end, which is a narrower statement than anyone reading it
+ *  assumes: an artifact's own quarantine is a business outcome and
+ *  not an operation failure, so a cycle that backed nothing up
+ *  finishes looking exactly like one that backed everything up. These
+ *  counts are what tell the two apart. */
+export interface WireCycleOutcome {
+  artifacts_through: number;
+  artifacts_walked: number;
+  backup_sets_processed: number;
+}
+
 /** The nested error body every operation outside /auth returns. code
  *  is stable and machine-readable; message is human-readable and MAY
  *  change without notice. */
@@ -1409,6 +1425,7 @@ export interface WireOperation {
   backup_set_id?: string;
   config_revision?: string;
   created_at?: string;
+  cycle?: WireCycleOutcome;
   error?: string;
   finished_at?: string;
   operation_id: string;
@@ -1448,6 +1465,27 @@ export interface WireOperationProgress {
   observed_at: string;
   sequence: number;
   stage: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
+}
+
+/** One DURABLE copy of one backup, and where it actually is (EPIC E,
+ *  FR-29). A placement exists because the journal recorded a finished
+ *  copy, so the ABSENCE of a placement is the absence of a copy: a
+ *  transfer still in flight has no placement at all, and neither does
+ *  a copy this deployment has released. That is deliberate, and it is
+ *  what lets a surface tell "there is no copy here" apart from "there
+ *  is a copy here nobody can confirm", which is what the access and
+ *  verification_class fields are for. Nothing here is a price, a bill
+ *  or an estimate of how long a restore will take; see access. */
+export interface WirePlacement {
+  access: "immediate" | "requires_restore" | "restoring" | "unreachable";
+  location: string;
+  medium: string;
+  medium_type: "local" | "s3";
+  size_bytes?: number;
+  status: "ACTIVE" | "DELETE_PENDING";
+  storage_class?: string;
+  verification_class?: "content" | "attested" | "existence";
+  verified_at?: string;
 }
 
 /** One backup set's OWN retention policy, exactly as its
@@ -1589,6 +1627,7 @@ export interface WireSetReadOnlyRequest {
  *  effect plus the rules they were validated against. */
 export interface WireSettingsResponse {
   capacity: WireCapacitySettings;
+  mediums: WireStorageMediumSummary[];
   retention: WireRetentionSettings;
   schema: WireSettingsSchema;
 }
@@ -1596,6 +1635,33 @@ export interface WireSettingsResponse {
 /** The schema half of the settings response. */
 export interface WireSettingsSchema {
   retention: WireRetentionSchema;
+  storage: WireStorageSchema;
+}
+
+/** One configured storage medium, as the settings surface reports it:
+ *  what it is called, what kind of place it is, which bucket and
+ *  region, and which storage class artifacts are written with. There
+ *  is deliberately no field here for key material of any kind, and
+ *  there never will be (FR-33). A credential reaches this product
+ *  only as a reference to a file, an environment variable or a
+ *  command, and none of those three has a spelling on this boundary
+ *  at all. */
+export interface WireStorageMediumSummary {
+  bucket: string;
+  id: string;
+  reads_require_restore: boolean;
+  region?: string;
+  storage_class: string;
+  type: "s3";
+}
+
+/** The closed value sets and the consent text a storage-medium
+ *  mapping is written against, served rather than transcribed into a
+ *  frontend. */
+export interface WireStorageSchema {
+  medium_disclosure: string;
+  retrieval_disclosure: string;
+  verification_classes: WireVerificationClassInfo[];
 }
 
 /** One backup set's capacity assessment. */
@@ -1692,6 +1758,7 @@ export interface WireUpdateRetentionSettings {
 /** PATCH /settings. An enumerated request type, never a configuration
  *  passthrough. */
 export interface WireUpdateSettingsRequest {
+  acknowledge_medium_disclosure?: boolean;
   capacity?: WireUpdateCapacitySettings;
   retention?: WireUpdateRetentionSettings;
 }
@@ -1702,6 +1769,18 @@ export interface WireUpdateSettingsRequest {
 export interface WireValidator {
   id: string;
   summary: string;
+}
+
+/** One rung of the verification ladder (FR-31), with what it proves
+ *  and what achieving it takes, in the engine's own words. Served
+ *  rather than transcribed into a frontend, for the reason the
+ *  retention schema is served: a surface holding its own copy of what
+ *  "existence" proves eventually says something the engine does not. */
+export interface WireVerificationClassInfo {
+  class: "content" | "attested" | "existence";
+  cost: string;
+  costs_egress: boolean;
+  proves: string;
 }
 
 /** GET /system/version. Nothing here names an implementation: no
