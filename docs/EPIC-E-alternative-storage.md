@@ -110,7 +110,7 @@ Required corrections, all adopted:
 
 - the S3 medium is rclone's own `s3` backend registered inside `core/internal/transport/rclone`, the one package allowed to import rclone; no AWS SDK anywhere in the tree, enforced by the existing backend-set test and the ui/shared provider-import check (FR-28);
 - this specification IS the FR-4 architecture decision, recorded with the same measurement obligations the crypt precedent set (binary size delta measured and recorded in the landing PR) (FR-28);
-- migration 0004 backfills a `local` placement for every existing artifact inside the same migration transaction, and an older binary meeting the new schema version fails closed exactly as today (FR-29, FR-35);
+- migration 0007 backfills a `local` placement for every existing artifact with a durable local copy, inside the same migration transaction, and an older binary meeting the new schema version fails closed exactly as today (FR-29, FR-35);
 - backwards compatibility is a phase exit gate written as a checkable claim with a planted violation (FR-35, Phase 2 exit gate).
 
 ### Consensus position: APPROVE AFTER REVISION
@@ -244,12 +244,24 @@ type MediumStore interface {
 
 An artifact's location becomes part of its durable record, in a new table rather than new columns on the artifact row, because one artifact can have several copies during a move and zero local copies after one.
 
-Migration `0004_placements.sql` SHALL create:
+Migration `0007_placements.sql` SHALL create (this document said `0004` when it was written, and three migrations landed between then and E1.4: the rule is section 2's "the next free `core/migrations/NNNN_*.sql`", and `loadMigrations` refuses two files claiming one version):
 
 - `placements`: one row per durable copy. Artifact FK, medium id (`local` or a configured id), location (an absolute path for local, a key for s3), size, hash, hash algorithm, verification class achieved (FR-31), verified-at, status (`ACTIVE`, `DELETE_PENDING`, `GONE`), created/updated timestamps.
 - `placement_moves`: one row per migration, the FR-30 journal. Artifact FK, source placement, destination medium, destination key, phase, bytes, error, timestamps.
 
-The same migration SHALL backfill one `ACTIVE` `local` placement for every existing artifact row, derived from its `local_path`, `local_hash` and `local_hash_alg`, inside the migration transaction, so no code path ever observes an artifact with no placement. Existing behavior (schema-version fail-closed on downgrade, forward-migration tests, TDD invariant 6) applies unchanged.
+The same migration SHALL backfill one `ACTIVE` `local` placement for every existing artifact row that has a DURABLE local copy, derived from its `local_path`, `local_hash` and `local_hash_alg`, inside the migration transaction, so no code path ever observes an artifact with durable bytes and no placement.
+
+"Durable" is load-bearing and was under-specified here: `local_path` names the `.partial` being written at `TRANSFERRING` and only names the finished artifact from `COMMITTED` onward, so backfilling every row would put a placement in this table claiming a committed copy exists where only a half-written file does. An artifact before its transfer therefore has zero placements, which is correct rather than a gap: it has zero copies. Existing behavior (schema-version fail-closed on downgrade, forward-migration tests, TDD invariant 6) applies unchanged.
+
+**`QUARANTINED` is a lineage, not a state.** Every other state in the durable set answers "is `local_path` finished?" on its own. `QUARANTINED` does not: `internal/lifecycle`'s transition table admits it from five places, and two of them (`VERIFYING`, `FAILED`) are before the commit rename, so those artifacts sit in `QUARANTINED` with `local_path` still naming a `.partial`. A predicate reading the state alone would hand an `ACTIVE` placement to exactly the half-written file the durable-only rule exists to keep out. So a `QUARANTINED` artifact SHALL be backfilled only when the edge that most recently carried *it* into quarantine came from a durable state, read from the append-only transition log, which is the same per-artifact resolution `reinstatementTargetForArtifact` already does and for the same reason. No lineage recorded means no row: absent evidence falls to the conservative side, like every other guess in this migration. `QUARANTINED_LOST` needs none of this, its sole entry being `COMPLETE`.
+
+**Why the predicate guesses in this direction, and how to reverse it.** Issue #236 says "backfills one `ACTIVE` `local` placement for every existing artifact row", and this migration deliberately does not: it takes only the durable states. That departure was made on the shape of the two possible mistakes, not on a reading of the words, and it is recorded here so nobody has to reconstruct it.
+
+If the durable-only predicate is wrong, an in-flight `.partial` has no placement row. FR-30's move engine cannot then confirm a durable copy for that artifact, and its standing invariant already tells it what to do with a copy it cannot confirm: preserve the source. The cost is a source that is not reclaimed until the next cycle looks again.
+
+If the every-row predicate is wrong, a `.partial` carries an `ACTIVE` placement that reads as a durable copy. The move engine is then entitled to delete the source against a half-written file, and the artifact is gone. That is data loss, and no later pass recovers it.
+
+The two mistakes are not the same size, so there is only one safe direction to guess in. **The consequence for FR-30 is normative, not a nicety: an artifact with no ACTIVE placement is "no copy confirmed", never "no copy needed", and the move engine SHALL decline to delete a source it cannot confirm rather than treat a missing row as permission.** If the owner prefers the issue's literal wording, the reversal is the `WHERE` clause in `0007_placements.sql` plus `TestMigration0007BackfillsEveryDurableArtifactAndNothingElse`, which checks the predicate in both directions and so fails on either change.
 
 `state.Record` gains its placements; `LocalPath` keeps meaning what it means today (the ingestion landing path) and stays valid while a local placement is ACTIVE. Code that asks "can I read this artifact locally" SHALL ask the placements, not assume `LocalPath` readable, and the compiler-assisted sweep of those call sites (lifecycle verify, revalidate, prune, recovery manifest, health) is part of this FR's scope.
 
@@ -290,6 +302,7 @@ Rules:
 
 - A move reaches `VERIFIED` only at `content` class by default: download and re-hash against the journal's recorded hash, at the last moment the local truth still exists. A medium may opt into `attested` via `upload_verification: attested`, and the config documentation SHALL name the trust assumption in plain words: an endpoint that lies about checksums can then cause the local copy to be deleted against a bad upload. `existence` is never sufficient to delete a source.
 - Where the endpoint or the embedded rclone version cannot produce a full-object checksum attestation, `attested` SHALL fail with an explicit capability result, never silently degrade to something weaker: FR-13's "explicit capability result rather than silently weakening configured verification" applies verbatim.
+- **Measured, against rclone v1.75.0: no s3 medium can reach `attested` at all.** `backend/s3`'s `Fs.Hashes()` returns exactly `hash.MD5` and `Object.Hash` refuses every other algorithm, so a full-object SHA-256 attestation is not obtainable through this build. It was proven against a real MinIO endpoint, not inferred from the source. The digest an S3 endpoint offers for free is the ETag, which stops being a whole-object MD5 the moment an upload is multipart, and comparing it to a recorded SHA-256 is the exact thing FR-32 forbids. `MediumStore.ObjectChecksum` therefore speaks SHA-256 and nothing else, so there is no way to ask this boundary for an ETag by accident. The consequences are binding on the move engine (FR-30, #238): a medium configured `upload_verification: attested` cannot be served on this rclone and SHALL be refused loudly at the point the move is planned, never quietly served as `existence` or as an unverified pass. Re-measure this when rclone is upgraded; the assertion lives in the MinIO integration suite so an upgrade that changes it fails the gate.
 - Periodic revalidation (`core/internal/revalidate`) becomes placement-aware. Local placements keep today's behavior. Medium placements are `existence`-checked by default on the revalidation interval; `attested` and `content` re-verification of a medium placement are operator-initiated operations, because anything that costs egress must never happen silently. A revalidation pass that could only achieve `existence` SHALL be recorded and reported as `existence`, never as the artifact having been "revalidated" in today's sense; the checked-vs-passed distinction `revalidate` already draws (a pass that verified nothing must not reset the due-ness clock as if it had) extends to classes.
 - An artifact on an archive storage class (`GLACIER`, `DEEP_ARCHIVE`) is `existence`-checkable only, until an explicit restore (FR-34) makes stronger classes possible. The status surfaces say exactly that.
 - FR-19 last-known-good eligibility is unchanged in form (managed-complete, validation passed), and the protection continues to refuse deletion regardless of medium. The health surface reports the protected artifact's verification class and its age, so "protected by a copy nobody has content-verified in a year" is visible instead of implied.
@@ -328,9 +341,9 @@ A colder storage class can take hours to restore and costs money to read. The pr
 ## FR-35, Compatibility
 
 - A configuration with no `storage_mediums` key and no `medium` key on any tier SHALL behave byte for byte as today: identical validation outcomes, identical retention verdicts (the existing golden tests run unmodified against the migrated schema and pass unmodified), identical API responses except for additive fields, identical CLI output except for additive columns that render only when a non-local placement exists.
-- Migration 0004's backfill SHALL leave every existing deployment reading as "every artifact has one ACTIVE local placement", with no behavioral difference observable through any surface.
+- Migration 0007's backfill SHALL leave every existing deployment reading as "every artifact with a durable local copy has one ACTIVE local placement naming it", with no behavioral difference observable through any surface. An artifact still in flight has no placement, which is what it already means: no durable copy yet.
 - A wizard or settings save SHALL NOT inject `storage_mediums: []` or `medium: ""` into a config that never configured them (the `omitempty` round-trip rule, same trap `tiers` already documented and avoided).
-- An older binary opening a database at schema version 4 fails closed with the existing unsupported-downgrade behavior; nothing here weakens it.
+- An older binary opening a database at schema version 7 fails closed with the existing unsupported-downgrade behavior; nothing here weakens it.
 - This FR is a Phase 2 exit gate line, not an aspiration, and its planted violation is defined there.
 
 # 4. TDD Contract
@@ -348,6 +361,7 @@ EPIC B's section 4B contract applies to every child issue here unchanged: SPECIF
 | Inline secret refusal (FR-33) | A config with a literal `secret_access_key:`; `Load` must refuse it as an unknown field |
 | Prune identity re-check on mediums (FR-30) | A fixture that swaps the object behind a key before prune; the delete must be refused |
 | Compatibility (FR-35) | A migration variant that rewrites `retention_tier` during backfill; the golden retention suite must fail it |
+| Backfill records only durable copies (FR-29) | A migration variant that backfills every artifact row; the both-directions backfill test must fail it, because a `.partial` with an ACTIVE placement is what lets a move delete a source against an incomplete copy |
 | Verification honesty (FR-31) | A revalidation run forced to `existence` class; the surface must not report it as content verification, and a test asserts the class string |
 
 # 5. Phases
@@ -361,7 +375,7 @@ Phase 1 builds every load-bearing wall: schema, transport, state, verification. 
 - E1.1 The specification (this document), adversarially reviewed and landed
 - E1.2 Config schema and validation for storage mediums, tier placement and credential references (FR-27, FR-33 schema half, FR-35 round-trip rule)
 - E1.3 `MediumStore` boundary, rclone `s3` backend registration, credential resolution, error classification, MinIO contract fixture (FR-28, FR-33 runtime half)
-- E1.4 Placement records: migration 0004 with backfill, `state.Record` surface, recovery manifest and sidecar extension (FR-29, FR-32 rebuild half)
+- E1.4 Placement records: migration 0007 with backfill, `state.Record` surface, recovery manifest and sidecar extension (FR-29, FR-32 rebuild half)
 - E1.5 The verification ladder and placement-aware revalidation (FR-31, FR-32 invariants)
 
 ### Phase 1 entry gate
@@ -378,7 +392,7 @@ Checkable claims, not intentions:
 - [ ] The rclone backend set test passes with exactly `local`, `sftp`, `s3` required and `crypt` accepted; the binary-size delta is measured and recorded in the landing PR.
 - [ ] The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture in integration, including upload, stat, checksum attestation where supported, read-back, delete, and the explicit capability refusal where attestation is unsupported.
 - [ ] The credential canary test passes for all three sources, and its planted violation (verbatim config logging) demonstrably fails it.
-- [ ] Migration 0004 backfills a local placement for every pre-existing artifact row; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
+- [ ] Migration 0007 backfills a local placement for every pre-existing artifact row in a durable state and for no other, checked in both directions; the golden retention tests and the full existing suite pass unmodified against the migrated schema.
 - [ ] Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve, proven by the class-string assertion test.
 - [ ] Nothing in this phase can delete an artifact copy anywhere: the destructive-safety suite diff shows no new deletion path.
 
@@ -418,4 +432,4 @@ Checkable claims, not intentions:
 
 # 7. Compatibility and migration summary
 
-An existing deployment upgrades in place: migration 0004 backfills local placements transactionally; a medium-free config keeps producing identical decisions and identical surfaces; the settings round-trip injects nothing; downgrade fails closed on schema version exactly as today. Adoption is opt-in per tier, gated by an explicit disclosure, and reversible in config (remapping a tier back to `local` plans moves back; the move engine is direction-agnostic, though the egress cost of coming home is the operator's, stated in the disclosure).
+An existing deployment upgrades in place: migration 0007 backfills local placements for durable copies transactionally; a medium-free config keeps producing identical decisions and identical surfaces; the settings round-trip injects nothing; downgrade fails closed on schema version exactly as today. Adoption is opt-in per tier, gated by an explicit disclosure, and reversible in config (remapping a tier back to `local` plans moves back; the move engine is direction-agnostic, though the egress cost of coming home is the operator's, stated in the disclosure).

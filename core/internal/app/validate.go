@@ -175,12 +175,17 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	var reasons []string
 	out := checkOutcome{Passed: true}
 
-	if rec.LocalPath == "" {
+	// Asked of the artifact's ACTIVE local placement (EPIC E, FR-29)
+	// rather than of rec.LocalPath directly; in Phase 1 they are the same
+	// value, and the difference is what happens once an artifact's only
+	// copy can live on a storage medium.
+	localPath, hasLocal := rec.ReadableLocalPath()
+	if !hasLocal {
 		return checkOutcome{Checked: true, Reason: "no local final path is recorded in the journal"}, nil
 	}
-	info, statErr := os.Stat(rec.LocalPath)
+	info, statErr := os.Stat(localPath)
 	if statErr != nil {
-		return checkOutcome{Checked: true, Reason: fmt.Sprintf("local final file %s: %v", rec.LocalPath, statErr)}, nil
+		return checkOutcome{Checked: true, Reason: fmt.Sprintf("local final file %s: %v", localPath, statErr)}, nil
 	}
 	out.Checked = true
 
@@ -188,15 +193,15 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 		if !strings.EqualFold(rec.LocalHashAlg, string(transport.SHA256)) {
 			return checkOutcome{Checked: true, Reason: fmt.Sprintf("cannot verify local identity: unsupported recorded hash algorithm %q", rec.LocalHashAlg)}, nil
 		}
-		sum, hashErr := sha256File(rec.LocalPath)
+		sum, hashErr := sha256File(localPath)
 		if hashErr != nil {
-			return checkOutcome{Checked: true, Reason: fmt.Sprintf("hashing %s: %v", rec.LocalPath, hashErr)}, nil
+			return checkOutcome{Checked: true, Reason: fmt.Sprintf("hashing %s: %v", localPath, hashErr)}, nil
 		}
 		if !strings.EqualFold(sum, rec.LocalHash) {
 			out.Passed = false
 			reasons = append(reasons, fmt.Sprintf(
 				"local final file %s now hashes to %s, but the %s hash recorded at verification was %s",
-				rec.LocalPath, sum, rec.LocalHashAlg, rec.LocalHash))
+				localPath, sum, rec.LocalHashAlg, rec.LocalHash))
 		} else {
 			out.HashMatched = true
 			reasons = append(reasons, "recomputed hash still matches the hash recorded at verification")
@@ -206,7 +211,7 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	}
 
 	if cmd != nil {
-		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, rec.LocalPath)
+		result, hookErr := lifecycle.RunRestoreCheck(ctx, *cmd, localPath)
 		if hookErr != nil {
 			return checkOutcome{Checked: out.Checked}, fmt.Errorf("restore-test hook: %w", hookErr)
 		}
