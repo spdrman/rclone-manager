@@ -197,6 +197,17 @@ func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidati
 	}
 
 	detail := strings.Join(details, "; ")
+	// A pass that another copy carried has to say which copies it did not
+	// hear from, or an operator reads a green tick and never learns that
+	// one of their two buckets went quiet. The pass itself stands: a copy
+	// is there and was asked. What it must not do is imply that every copy
+	// was.
+	if didNotAnswer != nil {
+		detail += "; " + didNotAnswer.Error() + ", so that copy was not checked"
+	}
+	if notConfigured != "" {
+		detail += fmt.Sprintf("; the copy on storage medium %q was not checked, because that medium is not in the configuration", notConfigured)
+	}
 	if cfg.Command != nil {
 		detail += "; the restore-test hook did not run, because opening this artifact means downloading it and FR-31 makes anything that costs egress operator-initiated"
 	}

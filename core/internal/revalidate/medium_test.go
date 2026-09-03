@@ -756,3 +756,73 @@ func TestACopyThatCouldNotBeAskedIsNotEvidenceOfLoss(t *testing.T) {
 		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing could decide about", before.UpdatedAt, after.UpdatedAt)
 	}
 }
+
+// TestAPassSaysWhichCopiesItDidNotHearFrom is the reporting half of
+// placement-scoped quarantine. One copy answered and passed, so the
+// artifact is fine and the pass is real. The other bucket went quiet, and
+// a green tick that does not mention it lets an operator believe both
+// copies were checked.
+func TestAPassSaysWhichCopiesItDidNotHearFrom(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy answered, one bucket went quiet")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{
+		size:     int64(len(content)),
+		statErrs: map[string]error{"archive_s3": transport.NewError(transport.Transient, "stat_object", errors.New("connection reset"))},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("an artifact with one copy that answered and passed did not pass: %+v", f)
+	}
+	if !strings.Contains(f.Reason, "archive_s3") {
+		t.Errorf("the pass does not name the copy it never heard from: %q", f.Reason)
+	}
+	if !strings.Contains(f.Reason, "not checked") {
+		t.Errorf("the pass does not say that copy went unchecked: %q", f.Reason)
+	}
+}
+
+// TestAPassSaysWhichCopiesTheConfigurationCannotReach is the same rule for
+// the other way a copy goes unasked.
+func TestAPassSaysWhichCopiesTheConfigurationCannotReach(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy answered, one medium is not configured")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{size: int64(len(content))}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("an artifact with a configured copy that passed did not pass: %+v", f)
+	}
+	if !strings.Contains(f.Reason, "archive_s3") || !strings.Contains(f.Reason, "not in the configuration") {
+		t.Errorf("the pass does not name the copy the configuration cannot reach: %q", f.Reason)
+	}
+	if store.stats != 1 {
+		t.Errorf("the pass statted %d placements, want 1: a medium that is not configured cannot be asked", store.stats)
+	}
+}
