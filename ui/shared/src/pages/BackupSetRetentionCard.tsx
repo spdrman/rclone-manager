@@ -230,6 +230,38 @@ function RetentionPanel({
 
       <PolicyChain policy={r.effective} />
 
+      {/* FR-19's protection, stated plainly rather than left in the
+          calendar line under the chain.
+
+          It is the one clause in a retention policy that is a promise
+          about a deletion rather than a description of a schedule, and it
+          survived this card's rewrite only because the browser suite
+          asked for it back: the detail page carried this banner before
+          #333 replaced its Retention section, and dropping it made the
+          strongest thing this page says about deletion the quietest.
+
+          The value is the RESOLVED one this set is actually retained
+          under, which is a better source than what stood here before:
+          that read a hardcoded client-side fixture. PolicyChain still
+          carries the same fact in its calendar line, because it renders
+          the deployment's policy too and an operator about to clear an
+          override has to be able to see whether going back turns
+          protection off. A banner there would be a banner about a policy
+          that is not in force. */}
+      {r.effective.protectLastKnownGood ? (
+        <div className="banner banner--ok" style={{ fontSize: "var(--text-sm)" }}>
+          <span aria-hidden="true" style={{ color: "var(--ok)" }}>{"\u2713"}</span>
+          <span>Newest known-good backup is protected from deletion</span>
+        </div>
+      ) : (
+        <div className="banner banner--warn" style={{ fontSize: "var(--text-sm)" }}>
+          <span aria-hidden="true" style={{ color: "var(--warn)" }}>{"\u26a0"}</span>
+          <span>
+            Newest known-good backup is NOT protected from deletion under this policy
+          </span>
+        </div>
+      )}
+
       {r.isOverride ? (
         <details>
           <summary style={{ cursor: "pointer", color: "var(--text-2)" }}>

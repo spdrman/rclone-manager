@@ -57,6 +57,38 @@ describe("a backup set's retention policy, on its own page", () => {
     ).toBeTruthy();
   });
 
+  /**
+   * FR-19's protection is the one clause in a retention policy that is a
+   * promise about a deletion rather than a description of a schedule, and
+   * this page carried it as a banner before #333 replaced its Retention
+   * section. The rewrite dropped it, and the browser suite caught that,
+   * which means nothing in this file was watching. Now something is.
+   *
+   * Both branches are driven from the same page. A card that rendered the
+   * reassuring sentence unconditionally would pass the first half and
+   * tell an operator with protection turned off exactly the wrong thing.
+   */
+  it("states plainly whether the newest known-good backup is protected", async () => {
+    const api = createMockApi();
+    renderDetail("production", "postgres-primary", api);
+
+    await screen.findByText(/Newest known-good backup is protected from deletion/);
+    expect(screen.queryByText(/is NOT protected from deletion/)).toBeNull();
+  });
+
+  it("says so when the policy in force does not protect the newest known-good backup", async () => {
+    const api = createMockApi();
+    const real = api.getBackupSetRetention.bind(api);
+    api.getBackupSetRetention = async (source: string, set: string) => {
+      const r = await real(source, set);
+      return { ...r, effective: { ...r.effective, protectLastKnownGood: false } };
+    };
+    renderDetail("production", "postgres-primary", api);
+
+    await screen.findByText(/Newest known-good backup is NOT protected from deletion/);
+    expect(screen.queryByText(/is protected from deletion$/)).toBeNull();
+  });
+
   it("shows an overriding set the deployment's chain beside its own, which is what clearing would go back to", async () => {
     renderDetail("media", "weekly-archive", createMockApi());
 
