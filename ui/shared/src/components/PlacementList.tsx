@@ -95,7 +95,7 @@ export function PlacementList({
   const needsRestore = placements.some((p) => p.access === "requires_restore" || p.access === "restoring");
 
   return (
-    <section className="card">
+    <section className="card" aria-label="Copies">
       <div className="card__header">
         <h2 className="eyebrow">Copies</h2>
         <span style={{ fontSize: "var(--text-sm)", color: "var(--text-3)" }}>

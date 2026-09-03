@@ -100,19 +100,19 @@ describe("where a backup's copies are", () => {
     });
     renderDetail(a);
 
-    const copies = await screen.findByRole("region", { name: "Copies" }).catch(() => null);
-    // The card is a plain <section>; find it by its heading instead.
-    expect(copies ?? (await screen.findByText("Copies"))).toBeTruthy();
-    expect(await screen.findByText("No confirmed copy yet")).toBeTruthy();
+    const copies = await screen.findByRole("region", { name: "Copies" });
+    expect(within(copies).getByText("No confirmed copy yet")).toBeTruthy();
 
     // The precondition. Without it, "no copy row for the partial path" is
     // satisfied by a page that never had a partial path to misreport.
     expect(screen.getAllByText(a.localPath).length).toBeGreaterThan(0);
 
-    // And the partial path is not presented as a copy: it appears exactly
-    // once, in the artifact card, and never inside the copies section.
-    expect(screen.queryByText("Readable now")).toBeNull();
-    expect(screen.queryByText("Content verified")).toBeNull();
+    // And the partial path is not inside the copies section at all, which
+    // is the assertion that actually matters: it is on the page, labelled
+    // as the ingestion path, and it is not presented as storage.
+    expect(within(copies).queryByText(a.localPath)).toBeNull();
+    expect(within(copies).queryByText("Readable now")).toBeNull();
+    expect(within(copies).queryByText("Content verified")).toBeNull();
   });
 
   it("says a copy nobody can reach cannot be confirmed, and does not call it readable", async () => {
