@@ -17,6 +17,16 @@ import "testing"
 // it corrupts a recorded checksum and watches Open refuse. This guard is the
 // other half, the one that stops the file drifting in the first place.
 //
+// This table is the FAST half of that: it needs nothing but the tree, so it
+// runs anywhere and fails in a second. It is not the whole guard, and it
+// cannot be, because it lives in the working tree next to the files it
+// describes, so an edit to a migration and an edit to a row here are the same
+// size of act. migrationanchor_test.go is the half that closes that: it reads
+// the bytes this repository actually published out of git, which nothing in
+// the working tree can move. Neither half is redundant. This one catches the
+// mistake immediately and readably; that one is the reason correcting this
+// table is not a way past it.
+//
 // That is not hypothetical. Issue #396 was a real upgrade failure, and one of
 // its acceptance criteria asked for exactly this: correct the false "foreign
 // keys are not enabled on this connection" comments in 0002 and 0006. Doing
@@ -38,10 +48,17 @@ var shippedMigrationChecksums = map[int]string{
 	7: "f9ed92b4c9412c41cae7e596f6cce2291f55743e0b0e784fd3a9952511c5d0ff",
 }
 
-const driftConsequence = "a deployment that already applied this version compares the recorded " +
+// driftConsequence deliberately does not print the file's new checksum. That
+// string is the one thing somebody hitting this red should not be handed:
+// pasting it into the table above turns a caught mistake into a shipped one,
+// and it is exactly how this guard was defeated in review. Put the file back,
+// or write a new migration.
+const driftConsequence = "A deployment that already applied this version compares the recorded " +
 	"checksum against this file, finds they differ, and refuses to open its journal with " +
 	"ErrSchemaDrift. Correcting a comment is not free here. If the file says something that is " +
-	"no longer true, say so in migrate.go or in a new migration, and leave this one alone."
+	"no longer true, say so in migrate.go or in a new migration, and leave this one alone. " +
+	"Updating the row instead is not a fix: migrationanchor_test.go compares the same file " +
+	"against the bytes origin/release published, and that one does not read this table at all."
 
 func TestShippedMigrationsAreImmutable(t *testing.T) {
 	known, err := loadMigrations()
@@ -68,14 +85,20 @@ func TestShippedMigrationsAreImmutable(t *testing.T) {
 		want, ok := shippedMigrationChecksums[m.version]
 		if !ok {
 			t.Errorf("migration %s is in the tree with no row in shippedMigrationChecksums.\n"+
-				"Add:\n\t%d: %q,\n"+
+				"Add a row for version %d, with the checksum this prints:\n"+
+				"\tshasum -a 256 core/migrations/%s      # sha256sum on Linux\n"+
 				"and understand what you are adding: once a release carrying this file has been "+
-				"applied anywhere, the file can never change again.", m.filename, m.version, m.checksum)
+				"applied anywhere, the file can never change again.\n"+
+				"The value is not printed here on purpose. Going and getting it is the point: it is "+
+				"the difference between recording a new migration and pasting your way past a red.",
+				m.filename, m.version, m.filename)
 			continue
 		}
 		if m.checksum != want {
-			t.Errorf("migration %s has changed.\n  recorded: %s\n  on disk:  %s\n%s",
-				m.filename, want, m.checksum, driftConsequence)
+			t.Errorf("migration %s has changed. The row for version %d records %s and this file no "+
+				"longer hashes to it.\n\nSee what changed:\n"+
+				"\tgit diff origin/release -- core/migrations/%s\n\n%s",
+				m.filename, m.version, want, m.filename, driftConsequence)
 		}
 	}
 
