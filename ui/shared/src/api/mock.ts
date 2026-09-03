@@ -12,6 +12,7 @@ import type {
   ManagerStorage,
   RetentionOverride,
   RetentionSettings,
+  RetentionTierSetting,
   SSHKeyImportResult,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
@@ -53,10 +54,12 @@ const TB = 1024 ** 4;
  * failure #362 was written to stop, and it is invisible against a fixture
  * where the two agree.
  *
- * The monthly tier names a storage medium, which nothing in this UI edits
- * yet. It is here because a chain write REPLACES the whole chain, so it
- * is the fixture that would catch an editor which dropped the field on
- * the way back out.
+ * The monthly tier names a storage medium, the same one defaultSettings'
+ * chain names, so the per-set page and the Settings page agree about
+ * where monthly backups go. It is here because a chain write REPLACES the
+ * whole chain, so it is the fixture that would catch an editor which
+ * dropped the field on the way back out, and because a set that inherits
+ * it must NOT be asked to consent to it again.
  */
 const deploymentRetention: RetentionSettings = {
   timezone: "Europe/Berlin",
@@ -65,7 +68,7 @@ const deploymentRetention: RetentionSettings = {
   tiers: [
     { name: "daily", granularity: "day", keep: 7 },
     { name: "weekly", granularity: "week", keep: 13, windowUnit: "month" },
-    { name: "monthly", granularity: "month", keep: 12, medium: "cold" }
+    { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
   ]
 };
 
@@ -84,7 +87,7 @@ const SET_RETENTION_OVERRIDES: ReadonlyArray<readonly [string, RetentionOverride
     {
       tiers: [
         { name: "weekly", granularity: "week", keep: 8 },
-        { name: "monthly", granularity: "month", keep: 24, medium: "cold" }
+        { name: "monthly", granularity: "month", keep: 24, medium: "offsite_cold" }
       ]
     }
   ],
@@ -526,6 +529,36 @@ const VERSION: VersionInfo = {
  *  is a test-order dependency nothing in the file would explain. */
 function withRetentionAttribution(overrides: Map<string, RetentionOverride>, sets: BackupSet[]): BackupSet[] {
   return sets.map((s) => ({ ...s, retentionIsOverride: overrides.has(s.id) }));
+}
+
+/**
+ * core/service's consent gate (FR-27), as the dev server enforces it: the
+ * tier-to-medium mappings `submitted` would ADD to the chain `inForce`,
+ * matched per tier by name. A mapping the chain already has is not asked
+ * about again; a tier that is new or that moves to a different medium is.
+ * The refusal carries the same words the real backend's does, because a
+ * form that renders the message has then shown the operator the right
+ * thing by construction.
+ */
+function mediumDisclosureRefusal(
+  submitted: RetentionTierSetting[],
+  inForce: RetentionTierSetting[],
+  acknowledged: boolean
+): BackupManagerError | null {
+  const introduced = submitted.filter((t) => {
+    if (!t.medium) return false;
+    const was = inForce.find((b) => b.name === t.name);
+    return !was || (was.medium ?? "") !== t.medium;
+  });
+  if (introduced.length === 0 || acknowledged) return null;
+  const storage = defaultSettings().schema.storage;
+  return new BackupManagerError({
+    code: "MEDIUM_DISCLOSURE_REQUIRED",
+    message:
+      "This write sends " + introduced.map((t) => t.name + " -> " + t.medium).join(", ") + ". " +
+      storage.mediumDisclosure + " " + storage.retrievalDisclosure,
+    correlationId: "cid_mockdisclosure"
+  });
 }
 
 function mockBackupSetRetention(
@@ -1138,7 +1171,23 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             correlationId: "cid_mockchain"
           })
         );
-      retentionOverrides.set(source + "/" + set, policy);
+      // FR-27's consent gate, against the chain deciding for THIS set,
+      // exactly as core/service.SetBackupSetRetention decides it. This is
+      // the second refusal a form can produce by itself, and it is
+      // modelled for the same reason the empty chain is: a fixture that
+      // accepted an unacknowledged mapping would let a UI ship a save
+      // the real backend refuses.
+      const refusal = mediumDisclosureRefusal(
+        policy.tiers ?? [],
+        mockBackupSetRetention(retentionOverrides, source, set).effective.tiers,
+        policy.acknowledgeMediumDisclosure === true
+      );
+      if (refusal) return Promise.reject(refusal);
+      // The consent is not part of the policy, so it is not stored: the
+      // real backend never writes it to the file and never serves it back.
+      const { acknowledgeMediumDisclosure: _consent, ...stored } = policy;
+      void _consent;
+      retentionOverrides.set(source + "/" + set, stored);
       return delay(mockBackupSetRetention(retentionOverrides, source, set));
     },
     clearBackupSetRetention: (source, set) => {
@@ -1218,6 +1267,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           settings.retention.protectLastKnownGood = r.protectLastKnownGood;
         }
         if (r.tiers !== undefined) {
+          const refusal = mediumDisclosureRefusal(r.tiers, settings.retention.tiers, req.acknowledgeMediumDisclosure === true);
+          if (refusal) return Promise.reject(refusal);
           if (r.tiers.length === 0)
             // The literal refusal core/service returns for this
             // (settings.go): an emptied chain is not "keep nothing", it

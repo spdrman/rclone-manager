@@ -472,7 +472,11 @@ function wireRetentionOverride(o: RetentionOverride): WireRetentionOverride {
     // rather than disabling it), and collapsing them here would turn a
     // refusal into a silent no-op.
     tiers: o.tiers ? o.tiers.map(wireTier) : undefined,
-    protect_last_known_good: o.protectLastKnownGood
+    protect_last_known_good: o.protectLastKnownGood,
+    // Sent only when it is true, for the reason wireUpdateSettings gives:
+    // a consent, not a setting, and a literal false on every save would
+    // read as an operator repeatedly declining something nobody asked.
+    acknowledge_medium_disclosure: o.acknowledgeMediumDisclosure ? true : undefined
   };
 }
 

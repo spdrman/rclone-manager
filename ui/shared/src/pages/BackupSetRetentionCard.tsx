@@ -8,7 +8,9 @@ import type {
   RetentionOverride,
   RetentionSchema,
   RetentionSettings,
-  RetentionTierSetting
+  RetentionTierSetting,
+  StorageMedium,
+  StorageSchema
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
 import { ConfirmationDialog } from "@shared/components/ConfirmationDialog";
@@ -18,6 +20,8 @@ import { isNotConfigured } from "@shared/api/failure";
 import {
   chainKey,
   granularityLabel,
+  introducedMediumMappings,
+  MediumDisclosure,
   tierErrors,
   toDraft,
   toTierSetting,
@@ -72,6 +76,20 @@ import type { TierDraft } from "./retentionChain";
  * exactly the chain this form was rendering. The Save button is disabled
  * until something actually changes, so nothing is rewritten by opening
  * the editor and closing it.
+ *
+ * # A set's own chain can send backups off this machine too (#240)
+ *
+ * An override is a whole chain, and the config layer lets it name a
+ * storage medium per tier exactly as the deployment's policy can. So the
+ * editor below carries the same medium picker the Settings page has
+ * (retentionChain's TierRow, rendered only when the deployment declares a
+ * medium), and the same consent in front of the first save that sends one
+ * of THIS set's tiers off local disk. What counts as "first" is decided
+ * against the chain currently deciding for this set: a set inheriting a
+ * policy that already sends monthly to a medium is not asked about
+ * monthly again, and a set that sends daily somewhere new is. The server
+ * refuses an unacknowledged mapping either way; the panel and the
+ * disabled Save are the courtesy in front of that gate.
  */
 export function BackupSetRetentionCard({
   source,
@@ -132,6 +150,8 @@ export function BackupSetRetentionCard({
       key={retention.data.backupSetId + ":" + String(retention.data.isOverride) + ":" + chainKey(retention.data.effective.tiers)}
       loaded={retention.data}
       schema={settings.data.schema.retention}
+      mediums={settings.data.mediums}
+      storage={settings.data.schema.storage}
       source={source}
       set={set}
       readOnly={readOnly}
@@ -143,6 +163,8 @@ export function BackupSetRetentionCard({
 function RetentionPanel({
   loaded,
   schema,
+  mediums,
+  storage,
   source,
   set,
   readOnly,
@@ -150,6 +172,8 @@ function RetentionPanel({
 }: {
   loaded: BackupSetRetention;
   schema: RetentionSchema;
+  mediums: StorageMedium[];
+  storage: StorageSchema;
   source: string;
   set: string;
   readOnly: boolean;
@@ -202,6 +226,8 @@ function RetentionPanel({
         key={chainKey(r.effective.tiers) + ":" + String(r.isOverride)}
         current={r}
         schema={schema}
+        mediums={mediums}
+        storage={storage}
         busy={busy}
         error={error}
         onCancel={() => {
@@ -381,12 +407,18 @@ function PolicyChain({ policy }: { policy: RetentionSettings }) {
 function tierSentence(t: RetentionTierSetting): string {
   const unit = t.windowUnit && t.windowUnit !== t.granularity ? t.windowUnit : t.granularity;
   const plural = t.keep === 1 ? "" : "s";
+  // Where the tier's backups live is part of what the policy says, not a
+  // detail of it: the first tier that selects an artifact names the
+  // medium it lives on, so a chain rendered without it describes a policy
+  // that keeps the right number of backups in the wrong place. Local is
+  // spelled by saying nothing, which is how the file spells it too.
+  const where = t.medium ? ", on " + t.medium : "";
   if (t.granularity === "days" && t.periodDays)
-    return "keeps " + t.keep + " × " + t.periodDays + "-day period" + plural;
+    return "keeps " + t.keep + " × " + t.periodDays + "-day period" + plural + where;
   const window = "keeps " + t.keep + " " + granularityLabel(unit).toLowerCase() + plural;
-  return unit === t.granularity
+  return (unit === t.granularity
     ? window
-    : window + " of " + granularityLabel(t.granularity).toLowerCase() + " buckets";
+    : window + " of " + granularityLabel(t.granularity).toLowerCase() + " buckets") + where;
 }
 
 /**
@@ -402,6 +434,8 @@ function tierSentence(t: RetentionTierSetting): string {
 function RetentionOverrideEditor({
   current,
   schema,
+  mediums,
+  storage,
   busy,
   error,
   onCancel,
@@ -409,6 +443,10 @@ function RetentionOverrideEditor({
 }: {
   current: BackupSetRetention;
   schema: RetentionSchema;
+  /** Every storage medium the deployment declares; empty means the
+   *  picker is not rendered at all (FR-35). */
+  mediums: StorageMedium[];
+  storage: StorageSchema;
   busy: boolean;
   error: ApiError | null;
   onCancel(): void;
@@ -430,6 +468,17 @@ function RetentionOverrideEditor({
   const [timezone, setTimezone] = useState(current.effective.timezone);
   const [weekStartsOn, setWeekStartsOn] = useState(current.effective.weekStartsOn);
   const [protect, setProtect] = useState(current.effective.protectLastKnownGood);
+  // FR-27's acknowledgment, reset by any edit that changes which mappings
+  // are new, so a tick given for one destination cannot be spent on
+  // another (RetentionPolicyCard does the same).
+  const [acknowledged, setAcknowledged] = useState(false);
+
+  // Which tiers this save would NEWLY send off local disk, relative to
+  // the chain deciding for this set right now. Matched by name, which is
+  // the rule core/service.SetBackupSetRetention applies, so the panel
+  // appears for exactly the writes the server would otherwise refuse.
+  const introduced = introducedMediumMappings(tiers.map(toTierSetting), current.effective.tiers);
+  const needsDisclosure = introduced.length > 0;
 
   const namePattern = new RegExp(schema.tierNamePattern);
   const errors = tiers.map((t, i) => tierErrors(t, i, tiers, schema, namePattern));
@@ -450,12 +499,14 @@ function RetentionOverrideEditor({
         protect !== current.effective.protectLastKnownGood));
 
   function submit() {
+    if (needsDisclosure && !acknowledged) return;
     const policy: RetentionOverride = { tiers: tiers.map(toTierSetting) };
     if (!inheritCalendar) {
       policy.timezone = timezone;
       policy.weekStartsOn = weekStartsOn;
       policy.protectLastKnownGood = protect;
     }
+    if (needsDisclosure) policy.acknowledgeMediumDisclosure = true;
     onSave(policy);
   }
 
@@ -530,7 +581,7 @@ function RetentionOverrideEditor({
             index={i}
             tier={t}
             schema={schema}
-            mediums={[]}
+            mediums={mediums}
             errors={errors[i]}
             readOnly={busy}
             // There is no way to spell "keep nothing" in this schema at
@@ -539,7 +590,12 @@ function RetentionOverrideEditor({
             // tier cannot be removed. The server refuses an emptied chain
             // too, so this is a second line rather than the only one.
             canRemove={tiers.length > 1}
-            onChange={(patch) => setTiers((cur) => cur.map((x, n) => (n === i ? { ...x, ...patch } : x)))}
+            onChange={(patch) => {
+              // An edit to a tier's medium or name can change WHICH
+              // mappings are new, so the tick was for something else.
+              if (patch.medium !== undefined || patch.name !== undefined) setAcknowledged(false);
+              setTiers((cur) => cur.map((x, n) => (n === i ? { ...x, ...patch } : x)));
+            }}
             onRemove={() => setTiers((cur) => cur.filter((_, n) => n !== i))}
           />
         ))}
@@ -560,6 +616,17 @@ function RetentionOverrideEditor({
         </div>
       </div>
 
+      {needsDisclosure ? (
+        <MediumDisclosure
+          introduced={introduced}
+          mediums={mediums}
+          storage={storage}
+          acknowledged={acknowledged}
+          disabled={busy}
+          onChange={setAcknowledged}
+        />
+      ) : null}
+
       {error ? (
         <div className="banner banner--danger" style={{ fontSize: "var(--text-sm)" }} role="alert">
           <span>{error.message}</span>
@@ -567,7 +634,11 @@ function RetentionOverrideEditor({
       ) : null}
 
       <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn btn--primary" disabled={busy || invalid || !dirty} onClick={submit}>
+        <button
+          className="btn btn--primary"
+          disabled={busy || invalid || !dirty || (needsDisclosure && !acknowledged)}
+          onClick={submit}
+        >
           {busy ? "Saving…" : "Save this set's policy"}
         </button>
         <button className="btn" disabled={busy} onClick={onCancel}>

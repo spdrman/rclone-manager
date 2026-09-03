@@ -421,6 +421,14 @@ export interface RetentionOverride {
   monthlyMonths?: number;
   tiers?: RetentionTierSetting[];
   protectLastKnownGood?: boolean;
+  /** The operator's acknowledgment of `schema.storage.mediumDisclosure`,
+   *  on this write for the reason UpdateSettingsRequest carries it: a
+   *  set's own chain can send a tier's backups off local disk exactly as
+   *  the deployment's policy can, and the backend refuses the first such
+   *  mapping with MEDIUM_DISCLOSURE_REQUIRED without it. A consent, not
+   *  part of the policy: the backend never serves it back, and this UI
+   *  sends it only on a save that introduces a mapping. */
+  acknowledgeMediumDisclosure?: boolean;
 }
 
 /**
