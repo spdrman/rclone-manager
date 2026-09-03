@@ -298,6 +298,25 @@ with open(p, "w") as f:
 PY
 expect_cell_fails "a new required field on a request every existing client already sends" "$d" "09-api-request-requirements"
 
+d=$(mutant contract-adds-a-required-query-parameter)
+# The parameter-shaped version of the same blind spot: additive-only sees
+# a new line and waves it through, and every caller that was not already
+# sending it starts getting a 400.
+python3 - "$d/api/v1/openapi.json" <<'PYEOF'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p))
+op = doc["paths"]["/activity"]["get"]
+op.setdefault("parameters", []).append(
+    {"name": "medium", "in": "query", "required": True, "schema": {"type": "string"}}
+)
+with open(p, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PYEOF
+expect_cell_fails "a new required query parameter on an operation clients already call" "$d" \
+  "09-api-request-requirements"
+
 echo
 echo "==> the numbers FR-34 refuses to invent"
 

@@ -67,6 +67,21 @@ type cliCase struct {
 // FR-27 wants to grow a medium block on), the refusals, and the usage text
 // (which grows a line for every new subcommand). `retention` is not here;
 // it is its own cell below, for the clock reason in this package's doc.
+//
+// What is left out, said out loud rather than quietly missing, because a
+// surface nobody mentions is indistinguishable from one nobody thought of:
+//
+//   - `status` prints live free space. Two runs a second apart on the same
+//     machine disagree, so it cannot be a golden line, and normalizing the
+//     number away would leave a cell certifying the word "bytes".
+//   - `run`, `daemon`, `fetch` and `reconcile` drive a real cycle against a
+//     real remote and change state. They are the crash matrix's subject and
+//     the CLI smoke slice's, not this cell's.
+//   - `validate`, `quarantine` and `catalog rebuild` mutate the journal or
+//     need an artifact in a condition this fixture does not stage.
+//
+// Of those, only `status` is a read surface EPIC E will touch, and it is
+// the one gap in this cell worth knowing about.
 func captureCLI(ctx context.Context, bin, cfgPath, root string) (Cell, error) {
 	cases := []cliCase{
 		{"version", []string{"version"}},

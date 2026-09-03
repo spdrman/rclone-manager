@@ -149,6 +149,27 @@ func requestRequirements(doc map[string]any, schemas map[string]any) []string {
 			lines = append(lines, fmt.Sprintf("request schema %s requires %s", name, prop))
 		}
 	}
+
+	// Required parameters belong here for the identical reason the request
+	// bodies do. A parameter that becomes required takes an existing line
+	// off the additive-only cell and is caught there; a NEW required
+	// parameter only ADDS a line, so additive-only waves it through, and it
+	// breaks every caller that was not already sending it just as surely.
+	for _, p := range sortedAnyKeys(paths) {
+		item := mapOf(paths[p])
+		for _, method := range sortedAnyKeys(item) {
+			op := mapOf(item[method])
+			for _, param := range anySlice(op["parameters"]) {
+				pm := mapOf(param)
+				if r, ok := pm["required"].(bool); !ok || !r {
+					continue
+				}
+				lines = append(lines, fmt.Sprintf("operation %s %s requires parameter %v (in %v)",
+					strings.ToUpper(method), p, pm["name"], pm["in"]))
+			}
+		}
+	}
+
 	sort.Strings(lines)
 	return lines
 }
