@@ -530,6 +530,7 @@ function RetentionOverrideEditor({
             index={i}
             tier={t}
             schema={schema}
+            mediums={[]}
             errors={errors[i]}
             readOnly={busy}
             // There is no way to spell "keep nothing" in this schema at

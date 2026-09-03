@@ -60,7 +60,17 @@ function settingsFixture(capacity: Partial<CapacitySettings> = {}): AppSettings 
   return {
     retention: retentionFixture(),
     capacity: capacityFixture(capacity),
+    mediums: [],
     schema: {
+      storage: {
+        verificationClasses: [
+          { className: "content", proves: "the bytes hash to what was recorded", cost: "a full download", costsEgress: true },
+          { className: "attested", proves: "the provider's checksum matches", cost: "one metadata call", costsEgress: false },
+          { className: "existence", proves: "an object exists at the recorded size", cost: "one HEAD request", costsEgress: false }
+        ],
+        mediumDisclosure: "I delete the copy on this machine after a verified upload.",
+        retrievalDisclosure: "Reading a copy back is billed by your provider."
+      },
       retention: {
         granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
         windowUnits: ["day", "week", "month", "quarter", "half_year", "year"],

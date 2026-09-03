@@ -33,6 +33,7 @@ import type {
   WireListStorageStatusResponse,
   WireManagerStorage,
   WireOperation,
+  WirePlacement,
   WireRetentionOverride,
   WireRetentionPlan,
   WireRetentionSettings,
@@ -64,6 +65,7 @@ import type {
 } from "./contracts";
 import type {
   BackupArtifact,
+  BackupPlacement,
   BackupSet,
   CompletionMethod,
   QuarantineReason,
@@ -538,7 +540,27 @@ function fromWireSettingsResponse(body: WireSettingsResponse): AppSettings {
       protectLastKnownGood: body.retention.protect_last_known_good
     },
     capacity: fromWireCapacitySettings(body.capacity),
+    mediums: (body.mediums ?? []).map((m) => ({
+      id: m.id,
+      type: m.type,
+      bucket: m.bucket,
+      region: m.region,
+      storageClass: m.storage_class,
+      readsRequireRestore: m.reads_require_restore
+    })),
     schema: {
+      storage: {
+        // `class` is a reserved word in the wire shape's own spelling, so
+        // it becomes className here; nothing else is renamed.
+        verificationClasses: (body.schema.storage.verification_classes ?? []).map((c) => ({
+          className: c.class,
+          proves: c.proves,
+          cost: c.cost,
+          costsEgress: c.costs_egress
+        })),
+        mediumDisclosure: body.schema.storage.medium_disclosure,
+        retrievalDisclosure: body.schema.storage.retrieval_disclosure
+      },
       retention: {
         granularities: body.schema.retention.granularities,
         windowUnits: body.schema.retention.window_units,
@@ -614,6 +636,13 @@ function wireUpdateSettings(req: UpdateSettingsRequest) {
     if (c.criticalFreeBytes !== undefined) capacity.critical_free_bytes = c.criticalFreeBytes;
     if (c.safetyMarginBytes !== undefined) capacity.safety_margin_bytes = c.safetyMarginBytes;
     body.capacity = capacity;
+  }
+
+  // Sent only when it is true. It is a consent, not a setting, and a
+  // literal `false` on every write would read as an operator repeatedly
+  // declining something nobody asked them.
+  if (req.acknowledgeMediumDisclosure) {
+    body.acknowledge_medium_disclosure = true;
   }
 
   return body;
@@ -813,6 +842,7 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
     // does not carry.
     retentionClasses: retentionClassesFor(a.retention_tier),
     remoteSourceRemovedAt: stampOrNull(a.remote_source_removed_at),
+    placements: (a.placements ?? []).map(fromWirePlacement),
     quarantine: a.quarantined
       ? {
           reason: quarantineReasonFor(a),
@@ -821,6 +851,31 @@ function fromWireArtifact(a: WireArtifact): BackupArtifact {
           remoteSourceRetained: true
         }
       : null
+  };
+}
+
+/**
+ * Maps one durable copy.
+ *
+ * Every absence on the wire stays an absence here. `verification_class` is
+ * omitted for a copy NOTHING has verified, and it becomes null rather than
+ * being helpfully defaulted to the weakest rung: "existence" is a claim
+ * that an object was seen at the recorded size, and for a copy nobody has
+ * looked at, that claim is false. `size_bytes` is omitted when nobody
+ * recorded a size and becomes null rather than 0, because a backup can
+ * genuinely be zero bytes.
+ */
+function fromWirePlacement(p: WirePlacement): BackupPlacement {
+  return {
+    medium: p.medium,
+    mediumType: p.medium_type,
+    location: p.location,
+    sizeBytes: p.size_bytes ?? null,
+    storageClass: p.storage_class ?? "",
+    verificationClass: p.verification_class ?? null,
+    verifiedAt: stampOrNull(p.verified_at),
+    access: p.access,
+    status: p.status
   };
 }
 
@@ -939,7 +994,19 @@ function fromWireOperation(op: WireOperation): Operation {
     // durable local copy is committed and verified. It is not a
     // read-only pass, so this is false rather than a comforting default.
     nonDestructive: false,
-    startedAt: op.started_at ?? op.created_at ?? ""
+    startedAt: op.started_at ?? op.created_at ?? "",
+    // Absent for anything that is not a finished run cycle, and null
+    // rather than a pair of zeroes: "walked nothing, got nothing through"
+    // is the loudest thing this object can say, and saying it about a
+    // cycle that is merely still running would send an operator hunting a
+    // failure that has not happened.
+    cycle: op.cycle
+      ? {
+          backupSetsProcessed: op.cycle.backup_sets_processed,
+          artifactsWalked: op.cycle.artifacts_walked,
+          artifactsThrough: op.cycle.artifacts_through
+        }
+      : null
   };
 }
 

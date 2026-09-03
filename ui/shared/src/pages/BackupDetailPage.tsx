@@ -5,6 +5,7 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { StatusBadge } from "@shared/components/StatusBadge";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
 import { LifecycleTimeline } from "@shared/components/LifecycleTimeline";
+import { PlacementList } from "@shared/components/PlacementList";
 import { ErrorState } from "@shared/components/EmptyState";
 import { bytes, stamp } from "@shared/utilities/format";
 
@@ -22,6 +23,15 @@ export function BackupDetailPage() {
   // fields render under a different artifact's URL while the new fetch was
   // in flight.
   const artifact = useAsync(() => api.getArtifact(artifactId), [api, artifactId]);
+  // The verification ladder and the retrieval disclosure, in the backend's
+  // own words (GET /settings). Fetched here rather than transcribed into
+  // PlacementList, because those sentences are what an operator reads
+  // while deciding whether a backup is safe, and a paraphrase kept in a
+  // frontend is a paraphrase that eventually says something the engine
+  // does not. It is deliberately NOT gated on: if it fails, the copies
+  // still render and the explanatory sentences are simply absent, which
+  // is a worse page and not a wrong one.
+  const settings = useAsync(() => api.getSettings(), [api]);
 
   if (artifact.error) return <ErrorState {...artifact.error} onRetry={artifact.reload} />;
   // Both checks matter: `data` is null only before the first successful
@@ -66,7 +76,10 @@ export function BackupDetailPage() {
             <Row label="Artifact ID" value={a.id} mono />
             <Row label="Backup set" value={a.setName} />
             <Row label="Remote original" value={a.remoteOriginalPath} mono />
-            <Row label="Local path" value={a.localPath} mono />
+            {/* The ingestion landing path, labelled as what it is. It is not
+                evidence that a readable file is sitting there, and the Copies
+                card below is what answers "where are the bytes". */}
+            <Row label="Ingestion path" value={a.localPath} mono />
             <Row label="Producer timestamp" value={stamp(a.producedAt)} mono />
             <Row label="Received timestamp" value={stamp(a.receivedAt)} mono />
             <Row label="Size" value={bytes(a.sizeBytes) + " \u00b7 " + a.sizeBytes + " B"} mono />
@@ -91,6 +104,10 @@ export function BackupDetailPage() {
             an independent file operation.
           </p>
         </section>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <PlacementList placements={a.placements} storage={settings.data?.schema.storage} />
       </div>
     </>
   );

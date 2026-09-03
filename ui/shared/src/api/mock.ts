@@ -223,7 +223,26 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly", "protected"],
-    remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
+    // Two copies, and deliberately not two matching ones: the local copy
+    // has been read back and hashed, the copy on the medium has only been
+    // seen to exist. That difference is what the Copies card is for.
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
+        sizeBytes: 15246903296, storageClass: "",
+        verificationClass: "content", verifiedAt: "2026-08-28T02:00:59+02:00",
+        access: "immediate", status: "ACTIVE"
+      },
+      {
+        medium: "offsite_s3", mediumType: "s3",
+        location: "rclone-manager/production/postgres-primary/postgres-prod-20260828.dump.zst",
+        sizeBytes: 15246903296, storageClass: "STANDARD_IA",
+        verificationClass: "existence", verifiedAt: "2026-08-28T06:00:02+02:00",
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -235,7 +254,19 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "b81c0d5f4a29e7136c8b0f2d97a4e5106d3b7c8290fa41e6b52d7c3a9018ef42",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly"],
-    remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null,
+    // The archive case: the bytes are there and cannot be read without a
+    // restore, and nothing has ever verified them, so there is no class
+    // and no verified-at. Both absences are real answers.
+    placements: [
+      {
+        medium: "offsite_cold", mediumType: "s3",
+        location: "rclone-manager/production/billing-mysql/billing-20260827.sql.gz",
+        sizeBytes: 3650722201, storageClass: "DEEP_ARCHIVE",
+        verificationClass: null, verifiedAt: null,
+        access: "requires_restore", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
@@ -254,7 +285,16 @@ const ARTIFACTS: BackupArtifact[] = [
         "sha256 mismatch: local file hashes to c19f3ba7..., remote reports 91a4d02e...",
       detectedAt: "2026-08-26T04:14:10+02:00",
       remoteSourceRetained: true
-    }
+    },
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
+        sizeBytes: 44040192, storageClass: "",
+        verificationClass: null, verifiedAt: null,
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -271,7 +311,20 @@ const ARTIFACTS: BackupArtifact[] = [
       detail: "application validator rejected the artifact: restore-test hook failed: could not decompress",
       detectedAt: "2026-08-24T02:19:02+02:00",
       remoteSourceRetained: true
-    }
+    },
+    // The case this whole feature exists for: the journal says a copy was
+    // made, and this deployment no longer declares the medium, so nothing
+    // can confirm it. mediumType is empty because the configuration no
+    // longer describes what kind of place that was.
+    placements: [
+      {
+        medium: "decommissioned_s3", mediumType: "",
+        location: "rclone-manager/production/billing-mysql/billing-20260824.sql.gz",
+        sizeBytes: 3543348838, storageClass: "",
+        verificationClass: "existence", verifiedAt: "2026-07-14T02:20:00+02:00",
+        access: "unreachable", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
@@ -283,7 +336,11 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "0a7c2e91b8d54f36ac1b9f0d27e4a5163d8b7c0f92a41e6b53d7c2a90187ef43",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["weekly"],
-    remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null,
+    // No copies at all. This one is still arriving, and the partial file
+    // on disk is not a copy, so the dev server can show the empty state
+    // the same way a real backend produces it.
+    placements: []
   }
 ];
 
@@ -310,13 +367,25 @@ const OPERATIONS: Operation[] = [
       bytesTotal: 15246903296,
       bytesPerSecond: 123731968
     },
-    nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00"
+    nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00",
+    // Still running, so there is nothing to report yet. Null, not zeroes.
+    cycle: null
   },
   {
     id: "op_recon_1", setId: "media/weekly-archive", setName: "Media archive",
     kind: "reconciliation", label: "Reconciling catalog against storage",
     status: "running", progress: null,
-    nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00"
+    nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00",
+    cycle: null
+  },
+  // A finished cycle that walked backups and got none of them through.
+  // This is what issue #361 looked like from the outside, and what the
+  // dashboard now has to be able to show.
+  {
+    id: "op_cycle_1", setId: "", setName: "All backup sets",
+    kind: "transfer", label: "run cycle", status: "completed", progress: null,
+    nonDestructive: false, startedAt: "2026-08-29T01:00:00+02:00",
+    cycle: { backupSetsProcessed: 4, artifactsWalked: 12, artifactsThrough: 0 }
   }
 ];
 
@@ -661,12 +730,63 @@ function defaultSettings(): AppSettings {
       tiers: [
         { name: "daily", granularity: "day", keep: 7 },
         { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
-        { name: "monthly", granularity: "month", keep: 12 }
+        { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
       ],
       protectLastKnownGood: true
     },
     capacity: defaultCapacitySettings(),
+    // Two mediums, one of them an archive class, so the dev server shows
+    // both halves of the picker: a place that serves on demand and a place
+    // that cannot be read at all without a restore.
+    mediums: [
+      {
+        id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
+        storageClass: "STANDARD_IA", readsRequireRestore: false
+      },
+      {
+        id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
+        storageClass: "DEEP_ARCHIVE", readsRequireRestore: true
+      }
+    ],
     schema: {
+      // The words come from core/internal/placement in a real deployment.
+      // They are reproduced here because this is a mock of the SERVER, and
+      // a mock that served different words would hide exactly the drift
+      // the real surface is built to prevent.
+      storage: {
+        verificationClasses: [
+          {
+            className: "content",
+            proves: "the bytes on the medium hash to the hash this product recorded when it ingested the artifact",
+            cost: "a full download of the object: time plus egress, and for an archive storage class a restore first",
+            costsEgress: true
+          },
+          {
+            className: "attested",
+            proves: "the provider's stored full-object checksum equals the recorded hash",
+            cost: "one metadata call, no egress, trusting the endpoint's own checksum",
+            costsEgress: false
+          },
+          {
+            className: "existence",
+            proves: "an object exists at the recorded key, at the recorded size",
+            cost: "one HEAD request, which says nothing about the bytes",
+            costsEgress: false
+          }
+        ],
+        mediumDisclosure:
+          "Backups that only this tier keeps will live only on that storage medium. " +
+          "After a backup uploads and I verify it, I delete the copy on this machine. " +
+          "That deletion is what the setting is for, and once this is saved it happens " +
+          "automatically whenever retention runs, with no further prompt. " +
+          "A medium on an archive storage class cannot be read on demand at all: getting a " +
+          "backup back means asking for a restore and waiting hours, and the provider " +
+          "reports no progress while it waits.",
+        retrievalDisclosure:
+          "Reading a copy back off a storage medium is billed by your provider. " +
+          "I hold no price list and no knowledge of your rates, so I report the bytes and the " +
+          "storage class and stop there rather than showing you a number I made up."
+      },
       retention: {
         granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
         windowUnits: ["day", "week", "month", "quarter", "half_year", "year"],

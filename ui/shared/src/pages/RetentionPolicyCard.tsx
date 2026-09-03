@@ -6,6 +6,8 @@ import type {
   AppSettings,
   RetentionSchema,
   RetentionSettings,
+  StorageMedium,
+  StorageSchema,
   UpdateRetentionSettings
 } from "@shared/api/contracts";
 import { useAsync } from "@shared/hooks/useAsync";
@@ -18,6 +20,8 @@ import { WarningBanner } from "@shared/components/WarningBanner";
 import {
   chainKey,
   defaultChain,
+  introducedMediumMappings,
+  MediumDisclosure,
   settingsKey,
   tierErrors,
   toDraft,
@@ -67,6 +71,19 @@ import type { TierDraft } from "./retentionChain";
  * "Restore default chain" is the positive affordance for the operator who
  * wanted the default back. The backend refuses an explicitly emptied
  * chain too, so this is a second line, not the only one.
+ *
+ * # Where a tier's backups live, and the consent in front of it (#240)
+ *
+ * Each tier row carries a storage-medium picker when the configuration
+ * declares a medium (retentionChain's TierRow), and none at all when it
+ * declares none, which is FR-35's compatibility case: a deployment that
+ * never heard of storage mediums gets exactly the form it had. The first
+ * save that sends a tier's backups off this machine is FR-27's consent
+ * moment. The server refuses that write without an acknowledgment and
+ * its refusal carries the disclosure text, so the panel this card shows
+ * (MediumDisclosure, shared with the per-set editor) renders the
+ * backend's own words, and disabling Save until the box is ticked is a
+ * courtesy in front of a gate that holds either way.
  */
 export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
   const api = useApi();
@@ -101,6 +118,8 @@ export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
             key={settingsKey(settings.data.retention)}
             loaded={settings.data.retention}
             schema={settings.data.schema.retention}
+            mediums={settings.data.mediums}
+            storage={settings.data.schema.storage}
             readOnly={readOnly}
           />
         ) : (
@@ -120,10 +139,18 @@ export function RetentionPolicyCard({ readOnly }: { readOnly: boolean }) {
 function RetentionPolicyEditor({
   loaded,
   schema,
+  mediums,
+  storage,
   readOnly
 }: {
   loaded: RetentionSettings;
   schema: RetentionSchema;
+  /** Every storage medium the configuration declares. EMPTY is the
+   *  ordinary case and the compatibility one: with no medium configured
+   *  there is nowhere else for a tier's backups to go, so the picker is
+   *  not rendered at all and the form is exactly the form it was. */
+  mediums: StorageMedium[];
+  storage: StorageSchema;
   readOnly: boolean;
 }) {
   const api = useApi();
@@ -138,6 +165,10 @@ function RetentionPolicyEditor({
   const [protect, setProtect] = useState(loaded.protectLastKnownGood);
   const [tiers, setTiers] = useState<TierDraft[]>(() => loaded.tiers.map(toDraft));
 
+  // The operator's acknowledgment of the storage-medium disclosure
+  // (FR-27). It is reset by any edit that changes which mappings are new,
+  // so a tick given for one mapping cannot be spent on a different one.
+  const [acknowledged, setAcknowledged] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<ApiError | null>(null);
@@ -162,8 +193,25 @@ function RetentionPolicyEditor({
   // front of the write, not a notice after it.
   const disablingProtection = baseline.protectLastKnownGood && !protect;
 
+  // Which tiers this save would newly send off local disk (FR-27's
+  // consent). Per tier, and matched by NAME against what the server says
+  // is currently in effect, which is the same rule core/service applies:
+  // a configuration that already sends monthly to a medium has consented
+  // to monthly leaving, and to nothing else.
+  //
+  // This decides what the form SHOWS. It does not decide whether the
+  // write is allowed: the server refuses an unacknowledged write with
+  // MEDIUM_DISCLOSURE_REQUIRED whatever this computes, which is what
+  // makes the disabled button below a courtesy rather than the gate.
+  const introduced = chainEdited ? introducedMediumMappings(tiers.map(toTierSetting), baseline.tiers) : [];
+  const needsDisclosure = introduced.length > 0;
+
   function update(i: number, patch: Partial<TierDraft>) {
     setSaved(false);
+    // Any edit to the chain can change WHICH mappings are new, so a tick
+    // given a moment ago was given for a different set of consequences.
+    // Clearing it is the safe direction and costs one click.
+    if (patch.medium !== undefined || patch.name !== undefined) setAcknowledged(false);
     setTiers((current) => current.map((t, n) => (n === i ? { ...t, ...patch } : t)));
   }
 
@@ -182,7 +230,9 @@ function RetentionPolicyEditor({
     setSaveError(null);
     setSaved(false);
     api
-      .updateSettings({ retention })
+      .updateSettings(
+        needsDisclosure ? { retention, acknowledgeMediumDisclosure: true } : { retention }
+      )
       .then((next) => {
         // Re-baseline against what the server says is now running, not
         // against the draft: defaults it resolved and values it
@@ -193,6 +243,7 @@ function RetentionPolicyEditor({
         setWeekStartsOn(next.retention.weekStartsOn);
         setProtect(next.retention.protectLastKnownGood);
         setTiers(next.retention.tiers.map(toDraft));
+        setAcknowledged(false);
         setSaved(true);
       })
       .catch((e: unknown) => {
@@ -211,6 +262,7 @@ function RetentionPolicyEditor({
 
   function onSave() {
     if (readOnly || invalid || !dirty || busy) return;
+    if (needsDisclosure && !acknowledged) return;
     if (disablingProtection) {
       setConfirming(true);
       return;
@@ -269,6 +321,7 @@ function RetentionPolicyEditor({
             index={i}
             tier={t}
             schema={schema}
+            mediums={mediums}
             errors={errors[i]}
             readOnly={readOnly}
             canRemove={tiers.length > 1}
@@ -353,6 +406,20 @@ function RetentionPolicyEditor({
         </WarningBanner>
       ) : null}
 
+      {needsDisclosure ? (
+        <MediumDisclosure
+          introduced={introduced}
+          mediums={mediums}
+          storage={storage}
+          acknowledged={acknowledged}
+          disabled={readOnly}
+          onChange={(next) => {
+            setSaved(false);
+            setAcknowledged(next);
+          }}
+        />
+      ) : null}
+
       {saveError ? (
         <ErrorState
           message={saveError.message}
@@ -376,7 +443,7 @@ function RetentionPolicyEditor({
           className="btn btn--primary"
           type="button"
           style={{ height: 40 }}
-          disabled={readOnly || invalid || !dirty || busy}
+          disabled={readOnly || invalid || !dirty || busy || (needsDisclosure && !acknowledged)}
           onClick={onSave}
         >
           {busy ? "Saving…" : "Save retention policy"}

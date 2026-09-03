@@ -1,4 +1,5 @@
 import type { RetentionSettings } from "@shared/api/contracts";
+import type { WirePlacement } from "@shared/api/generated/contract";
 
 export type HealthState = "healthy" | "degraded" | "stale" | "failing";
 
@@ -142,6 +143,73 @@ export interface BackupSet {
   fingerprintTrustedAt: string | null;
 }
 
+/**
+ * Whether one copy of a backup can be READ right now
+ * (core/internal/placement.Access, FR-34), narrowed from the generated
+ * wire union so this UI cannot invent a fifth value or misspell one of
+ * the four.
+ *
+ * "unreachable" is the value this whole feature exists for: it means this
+ * deployment cannot currently get to the place the copy is in, so it can
+ * neither confirm the copy nor deny it. It is NOT "the copy is gone", and
+ * a surface that renders the two the same way has told an operator
+ * something false about the only thing they will care about.
+ */
+export type PlacementAccess = WirePlacement["access"];
+
+/**
+ * Which rung of the verification ladder a copy has ACHIEVED (FR-31),
+ * or `null` when NOTHING has verified it.
+ *
+ * Null is the load-bearing value. The wire omits the field entirely for an
+ * unverified copy, and this type keeps that distinguishable rather than
+ * defaulting it to the weakest rung: "existence" is a claim that an object
+ * was seen at the recorded size, and for a copy nobody has looked at, that
+ * claim is simply untrue.
+ */
+export type VerificationClass = NonNullable<WirePlacement["verification_class"]>;
+
+/**
+ * One DURABLE copy of one backup, and where it actually is (FR-29).
+ *
+ * A value of this type exists because the backend recorded a finished
+ * copy. An artifact with no copies has an EMPTY array, which is an
+ * ordinary answer for one still transferring: the partial file on disk is
+ * not a copy and deliberately has no entry here. So a surface reads the
+ * three cases apart rather than collapsing them:
+ *
+ *   - `placements` empty            -> there is no copy anywhere yet
+ *   - `access === "unreachable"`    -> there is a copy nobody can confirm
+ *   - `verificationClass === null`  -> there is a copy nobody has checked
+ */
+export interface BackupPlacement {
+  /** "local", or the id of a configured storage medium. */
+  medium: string;
+  /** What kind of place holds it, or "" when the configuration no longer
+   *  describes the medium at all. Served rather than derived from
+   *  `medium === "local"`, so this UI holds no copy of a reserved id. */
+  mediumType: string;
+  /** An absolute path for a local copy, an object key for a medium copy.
+   *  Never a credential and never a signed URL. */
+  location: string;
+  /** What this copy measures, or null when nobody recorded it. Null is
+   *  not zero: a backup can genuinely be empty. */
+  sizeBytes: number | null;
+  /** The medium's storage class, or "" for a local copy. */
+  storageClass: string;
+  /** The strongest class ACHIEVED, or null when nothing has verified this
+   *  copy. See VerificationClass. */
+  verificationClass: VerificationClass | null;
+  /** When that class was last achieved, or null. Null exactly when
+   *  verificationClass is. */
+  verifiedAt: string | null;
+  access: PlacementAccess;
+  /** "ACTIVE", or "DELETE_PENDING" for a copy whose removal is recorded
+   *  and may not have happened yet. A copy the backend knows is gone is
+   *  not served at all, so there is no third value to render. */
+  status: WirePlacement["status"];
+}
+
 export interface BackupArtifact {
   id: string;
   setId: string;
@@ -165,6 +233,11 @@ export interface BackupArtifact {
   /** Remote deletion is a lifecycle FACT, never a user action. */
   remoteSourceRemovedAt: string | null;
   quarantine: QuarantineRecord | null;
+  /** Every durable copy this backup currently has. Empty means there is
+   *  no copy anywhere yet; see BackupPlacement. `localPath` above is the
+   *  path ingestion landed on and is not evidence that a readable file is
+   *  sitting there. */
+  placements: BackupPlacement[];
 }
 
 export type QuarantineReason =
