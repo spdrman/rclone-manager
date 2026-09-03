@@ -1336,9 +1336,9 @@ lives here instead; nothing in the design depended on the location.
 
 Apache License 2.0. The full text is in [`LICENSE`](LICENSE).
 
-95 of the 97 third-party components that reach a shipped artifact are
-permissive (MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, CC0-1.0). The other
-two, `go-cleanhttp` and `go-retryablehttp`, are MPL-2.0 and arrive under
+Every third-party component that reaches a shipped artifact is permissive
+(MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, CC0-1.0) except two:
+`go-cleanhttp` and `go-retryablehttp` are MPL-2.0 and arrive under
 rclone's `s3` backend, which cannot be registered without them. MPL-2.0 is
 file-level weak copyleft and §3.3 permits this Larger Work to ship under
 Apache-2.0, so the choice stands, and the §3.2 obligation it carries is
