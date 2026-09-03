@@ -110,7 +110,7 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 	// is a disagreement between two things this function just computed
 	// together, and a preview that dropped the moves and kept the
 	// verdicts would look like a backup set with nothing to move.
-	homePlan, err := retention.PlanHomeMoves(bs.Retention.EffectiveTiers(), verdicts, retention.ActiveMediumFromRecords(records))
+	homePlan, err := retention.PlanHomeMoves(bs.Retention.EffectiveTiers(), verdicts, ActiveMediumFromRecords(records))
 	if err != nil {
 		return RetentionSetReport{}, fmt.Errorf("app: retention: %s: %w", set, err)
 	}

@@ -8,7 +8,6 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -198,7 +197,7 @@ func TestActiveMediumFromRecords_TwoActivePlacementsCannotBeConfirmed(t *testing
 	settled := records[1]
 	settled.Placements = []state.Placement{{Medium: state.MediumLocal, Status: state.PlacementActive}}
 
-	lookup := retention.ActiveMediumFromRecords([]state.Record{mid, settled})
+	lookup := ActiveMediumFromRecords([]state.Record{mid, settled})
 
 	if _, known := lookup(mid.Artifact); known {
 		t.Error("an artifact with two ACTIVE placements reported a confirmed location; a move is already in flight and there are two answers")
@@ -220,7 +219,7 @@ func TestActiveMediumFromRecords_ANonActivePlacementIsNotALocation(t *testing.T)
 	for _, status := range []string{state.PlacementDeletePending, state.PlacementGone} {
 		rec := records[0]
 		rec.Placements = []state.Placement{{Medium: state.MediumLocal, Status: status}}
-		lookup := retention.ActiveMediumFromRecords([]state.Record{rec})
+		lookup := ActiveMediumFromRecords([]state.Record{rec})
 		if m, known := lookup(rec.Artifact); known {
 			t.Errorf("a %s placement reported the artifact as located on %q", status, m)
 		}
