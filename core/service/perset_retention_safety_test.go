@@ -451,7 +451,7 @@ func TestBackupSetRetentionWrites_ASetThatInheritsGainsNoRetentionKey(t *testing
 	// Indentation is what tells the two retention keys apart: the
 	// deployment's own block sits at column zero and any per-set one is
 	// indented under a backup set. The precondition below is what stops
-	// this loop from being a check that could never fire -- if the
+	// this loop from being a check that could never fire. If the
 	// deployment's own key were not found at column zero, the scan is
 	// looking at something other than what it thinks it is.
 	sawDeploymentKey := false
