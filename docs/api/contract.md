@@ -407,6 +407,19 @@ nothing, and honouring it would rewrite the operator's configuration file and
 move `config_revision`, invalidating every outstanding retention preview, for a
 request with no content in it.
 
+**The same gate stands in front of a backup set's own chain.** `PUT
+/backup-sets/{source}/{set}/retention` takes the same field on
+`RetentionOverride` and refuses with the same code, because an override is a
+whole chain and can name a medium per tier exactly as the deployment's policy
+can (the config layer resolves per-set medium references for precisely this
+reason). A gate on the settings write alone would be a gate one `PUT` walks
+around. What counts as "first" there is decided against the chain currently
+deciding for THAT set: a set inheriting a policy that already sends `monthly`
+to a medium is not asked about `monthly` again, and a set whose override sends
+`daily` somewhere new is. The field is request-only in practice: it is never
+written to the file and never appears on the `override` half of a response,
+so a client that round-trips what it was served cannot re-consent by accident.
+
 ## Recorded decision: the two shapes `POST /system/first-run` declares
 
 Issue #176 adds the first-run setup pair, `GET` and `POST /system/first-run`.
