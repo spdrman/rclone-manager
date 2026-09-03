@@ -54,28 +54,28 @@ func captureUpgrade(ctx context.Context, workDir string) (Cell, Cell, error) {
 		return Cell{}, Cell{}, err
 	}
 
-	// Artifact rows only, and NOT state_transitions, which is not an
-	// oversight and not a convenience.
+	// Artifact rows AND their transition history, which is what a real
+	// deployment's journal actually holds.
 	//
-	// Copying the transition history too is the more faithful upgrade, and
-	// it does not currently work: migrations 0002 and 0006 recreate the
-	// artifacts table with DROP TABLE, both carry a comment asserting
-	// "foreign keys are not enabled on this connection", and state.Open
-	// sets PRAGMA foreign_keys = ON before it runs the migrations at all.
+	// This used to copy artifacts only, and the comment here explained at
+	// length why the faithful version could not run: migrations 0002 and 0006
+	// recreate the artifacts table with DROP TABLE, state.Open enabled
+	// PRAGMA foreign_keys before running migrations at all, and
 	// state_transitions.artifact_id references artifacts(id), so the drop
-	// trips FK enforcement the moment any transition row exists, which for
-	// a real deployment is always. Proven against a journal written by an
-	// actual pre-0006 build of this product and then opened by this one:
-	// "state: apply migration 6 (remote_retained): constraint failed:
-	// FOREIGN KEY constraint failed (787)". Filed as #396; it is a
-	// defect in the migration runner, not in this gate, and it is why
-	// docs/conformance/epic-e-matrix.md records this cell's transition
-	// half as BLOCKED rather than quietly leaving it out.
+	// tripped foreign key enforcement the moment any transition row existed.
+	// For a real deployment that is always. It was filed as #396 and fixed in
+	// #381: migrate now suspends foreign key enforcement around the run and
+	// re-checks with PRAGMA foreign_key_check inside each migration's own
+	// transaction, which is strictly stronger than what was there before.
 	//
-	// What the artifacts-only copy still buys, which is the whole reason
-	// this cell exists, is a populated artifacts table under every
-	// migration from 0002 onward, including whichever one lands next.
-	for _, table := range []string{"artifacts"} {
+	// So the cell can be what it wanted to be, and copying the transitions is
+	// not decoration. Drop the suspension from migrate and this cell is what
+	// goes red, with the exact error the issue reported:
+	// "state: apply migration 2 (quarantined_lost): constraint failed:
+	// FOREIGN KEY constraint failed (787)". That is the only place in the
+	// tree where the whole path, an old populated journal opened by this
+	// binary through state.Open, is exercised end to end.
+	for _, table := range []string{"artifacts", "state_transitions"} {
 		copied, err := copyRows(ctx, newDB, oldDB, table)
 		if err != nil {
 			return Cell{}, Cell{}, fmt.Errorf("populating the old-schema database's %s: %w", table, err)
