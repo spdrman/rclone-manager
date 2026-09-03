@@ -27,6 +27,21 @@ type RetentionSetReport struct {
 	// output.
 	RetentionIsOverride bool
 
+	// HomePlan is where these artifacts BELONG, as opposed to whether
+	// they are kept (EPIC E FR-27, issue #239). The chain's first
+	// selecting tier names each kept artifact's home medium, and this
+	// reports the ones that are not on it, plus the ones whose current
+	// placement could not be confirmed.
+	//
+	// It travels on the same report as the verdicts because it is derived
+	// from them: a second pass would decide against a chain that a hot
+	// reload could have replaced in between, and the moves would then
+	// describe a policy that did not produce the verdicts beside them.
+	//
+	// Nothing executes it here. Planning and moving are separate on
+	// purpose, and the mover is #238's.
+	HomePlan retention.HomePlan
+
 	// Retention is the fully-resolved policy these verdicts were decided
 	// under, whichever of the two it came from. RetentionIsOverride says
 	// WHETHER the set decides for itself; this says WHAT it decided with,
@@ -88,11 +103,24 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 	if err != nil {
 		return RetentionSetReport{}, fmt.Errorf("app: retention: %s: %w", set, err)
 	}
+	// FR-27's home-medium pass, over the verdicts that were just decided
+	// and the placements the same records carry. Refusing here rather
+	// than reporting a partial plan is deliberate: HomeMedium only ever
+	// fails on a verdict naming a tier the chain does not contain, which
+	// is a disagreement between two things this function just computed
+	// together, and a preview that dropped the moves and kept the
+	// verdicts would look like a backup set with nothing to move.
+	homePlan, err := retention.PlanHomeMoves(bs.Retention.EffectiveTiers(), verdicts, retention.ActiveMediumFromRecords(records))
+	if err != nil {
+		return RetentionSetReport{}, fmt.Errorf("app: retention: %s: %w", set, err)
+	}
+
 	s.recordRetentionRun(set)
 	return RetentionSetReport{
 		Set:                 set,
 		Verdicts:            verdicts,
 		LastKnownGood:       lkg,
+		HomePlan:            homePlan,
 		RetentionIsOverride: bs.RetentionIsOverride(),
 		Retention:           bs.Retention,
 	}, nil
