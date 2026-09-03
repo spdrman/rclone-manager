@@ -232,6 +232,21 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 COPY --from=build /out/backup-manager /backup-manager
 COPY --from=build-web /out/backup-manager-web /backup-manager-web
 
+# The licence and the notices, at a fixed path a recipient can find
+# without a shell (distroless has none): `docker cp <ctr>:/licenses .`
+# or `docker export | tar -x licenses/`. Apache-2.0 §4(d) says a
+# redistributed copy carries NOTICE, and NOTICE is where the MPL-2.0
+# §3.2 source offer for go-cleanhttp and go-retryablehttp lives, so an
+# image without these reached nobody with either. Both come from the
+# build context, not from a builder stage, so they are the checked-in
+# files at the commit this image was built from, and .dockerignore has to
+# keep letting them through (it excludes *.md and provenance/, which
+# these are not). distribution/packaging's
+# TestTheImageCarriesTheLicenceAndTheNotice reads this stage and fails
+# the build if either line goes.
+COPY LICENSE /licenses/LICENSE
+COPY NOTICE /licenses/NOTICE
+
 # The per-provider UI bundles (issue #180). Read-only content, served by
 # `serve-ui --ui-root /ui/bundles`, which resolves <root>/<profile>. Each
 # converted distribution adapter sets UI_ROOT to this path and selects its
