@@ -160,7 +160,7 @@ func (b *BackupService) runScheduledCycle(ctx context.Context) {
 	// and honours edit holds, exactly like an API-submitted one. Before
 	// this, a scheduled tick installed no observer at all, so a transfer
 	// the scheduler was running was invisible to every reader in this
-	// process -- and the scheduler is precisely what runs unattended,
+	// process, and the scheduler is precisely what runs unattended,
 	// which makes it the cycle an operator is most likely to be about to
 	// interrupt.
 	b.cycleWatch.begin()

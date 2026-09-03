@@ -13,8 +13,8 @@
 //     (model.NewArtifactID), and discovery matches a candidate against the
 //     journal by that name relative to the set's own root. Repoint the
 //     root at a different dataset that happens to use the same file names
-//     -- which is what a second NAS, a second database dump directory or a
-//     restored-from-backup share looks like -- and every one of those
+//     (which is what a second NAS, a second database dump directory or a
+//     restored-from-backup share looks like) and every one of those
 //     candidates comes back AlreadyKnown. The cycle reports "already
 //     known: 40", the health surface stays green, and not one byte of the
 //     new dataset is ever fetched. A backup that has silently stopped
@@ -50,7 +50,7 @@
 // old value in front of them.
 //
 // So: this manager cannot tell "the same data at a new address" from "a
-// different dataset" -- nothing can, from the outside -- and it says so,
+// different dataset", and nothing can from the outside, so it says so,
 // names what is on record, and asks. Acknowledging is one flag, and the
 // answer is recorded in the request rather than in a mode the next caller
 // inherits.
