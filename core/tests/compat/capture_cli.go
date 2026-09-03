@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -21,15 +23,34 @@ import (
 // exit status. An in-process call would also have had to live in package
 // main, where every other lane is editing.
 func buildCLI(coreRoot, outDir string) (string, error) {
-	bin := filepath.Join(outDir, "backup-manager")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
-	cmd.Dir = coreRoot
-	cmd.Env = append(os.Environ(), "GOWORK=off")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("building backup-manager: %w\n%s", err, out)
-	}
-	return bin, nil
+	buildOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "compat-backup-manager")
+		if err != nil {
+			builtErr = err
+			return
+		}
+		bin := filepath.Join(dir, "backup-manager")
+		cmd := exec.Command("go", "build", "-o", bin, "./cmd/backup-manager")
+		cmd.Dir = coreRoot
+		cmd.Env = append(os.Environ(), "GOWORK=off")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			builtErr = fmt.Errorf("building backup-manager: %w\n%s", err, out)
+			return
+		}
+		builtBin = bin
+	})
+	return builtBin, builtErr
 }
+
+// Built once per test binary. Two tests in this package each run a full
+// capture, and building the same unchanged tree twice is thirteen seconds
+// of nothing. outDir is therefore no longer used and stays in the
+// signature only so a future caller that needs its own copy can say so.
+var (
+	buildOnce sync.Once
+	builtBin  string
+	builtErr  error
+)
 
 // cliCase is one invocation to pin.
 type cliCase struct {
@@ -192,6 +213,24 @@ func runCLI(ctx context.Context, bin string, args []string, root string) ([]stri
 	return lines, nil
 }
 
+// normalizeGoVersion is the second and last normalization this package
+// does, and unlike the first it is not about tidiness.
+//
+// `backup-manager version` prints the Go runtime it was built with, and
+// that is the machine's fact, not the product's. Pinning it into a
+// checked-in corpus would make this gate red for every developer on a
+// different patch release of Go and green only for whoever captured it,
+// which is not a strict gate, it is a broken one. The rclone version on
+// the line above it is deliberately NOT normalized: that one is pinned in
+// go.mod, FR-2 has a whole procedure for changing it, and a corpus that
+// noticed the change is doing its job.
+//
+// An exact replacement of runtime.Version(), not a pattern, for the same
+// reason normalizeRoot is: a pattern that drifts can hide something.
+func normalizeGoVersion(s string) string {
+	return strings.ReplaceAll(s, runtime.Version(), "<GOVERSION>")
+}
+
 func redactArgs(args []string, root string) []string {
 	out := make([]string, 0, len(args))
 	for _, a := range args {
@@ -205,7 +244,7 @@ func redactArgs(args []string, root string) []string {
 // what an operator sees, and a gate that trims it would not notice a
 // widened column.
 func splitStream(s, root string) []string {
-	s = normalizeRoot(s, root)
+	s = normalizeRoot(normalizeGoVersion(s), root)
 	if s == "" {
 		return nil
 	}

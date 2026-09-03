@@ -107,7 +107,7 @@
         "$ backup-manager version -\u003e exit 0",
         "  out| backup-manager dev",
         "  out| rclone v1.75.0",
-        "  out| go go1.27.0",
+        "  out| go \u003cGOVERSION\u003e",
         "  out| commit none",
         "$ backup-manager  -\u003e exit 2",
         "  err| usage: backup-manager \u003ccommand\u003e [flags]",
