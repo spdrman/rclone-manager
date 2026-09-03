@@ -37,6 +37,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # TestShippedMigrationsMatchWhatWasPublished (#396) anchors every
+          # shipped migration to the bytes origin/release published, because
+          # a checksum table living beside the files it describes can be
+          # edited in step with them and the whole suite still goes green. A
+          # default single-commit shallow clone carries no remote branches
+          # and no tags, so origin/release is not there to ask, and that test
+          # refuses rather than passing on a check it could not run. Full
+          # history is what gives it something to anchor to.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
