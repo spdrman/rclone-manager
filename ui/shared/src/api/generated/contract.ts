@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "4026e0baee4df2c6f328cf3812665ac44515ed1d8298062c7cf738a23761c83f";
+export const CONTRACT_SHA256 = "77d2fd3212c7e9bfa37232401464fcc4deb8576a7df63956bb625a59fe83b925";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -532,7 +532,7 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
     responseSchema: "BackupSetRetention",
     successStatus: 200,
     errorCodes: {
-      400: ["INVALID_REQUEST"],
+      400: ["INVALID_REQUEST", "MEDIUM_DISCLOSURE_REQUIRED"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH"],
       404: ["BACKUP_SET_NOT_FOUND"],
@@ -1500,6 +1500,7 @@ export interface WirePlacement {
  *  override that names no timezone is reckoned in the deployment's,
  *  not in UTC. */
 export interface WireRetentionOverride {
+  acknowledge_medium_disclosure?: boolean;
   daily_days?: number;
   monthly_months?: number;
   protect_last_known_good?: boolean;

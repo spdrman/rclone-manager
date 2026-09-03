@@ -65,6 +65,8 @@ func cmdBackupSetRetention(args []string) int {
 	monthlyMonths := fs.Int("monthly-months", 0, "set: monthly_months")
 	protect := fs.Bool("protect-last-known-good", true,
 		"set: this policy's own FR-19 protection; omitted inherits the deployment's, and an explicit =false is a materially more dangerous configuration")
+	acknowledge := fs.Bool("acknowledge-medium-disclosure", false,
+		"set: acknowledge the storage-medium disclosure, which a policy needs the first time it sends one of this set's tiers to a non-local medium; without it that write is refused, and the refusal is the disclosure")
 
 	operands, err := parseFlagsAroundOperands(fs, args)
 	if err != nil {
@@ -96,6 +98,12 @@ func cmdBackupSetRetention(args []string) int {
 				"put those values in the file instead",
 			strings.Join(without(named, "policy-file"), ", --"))
 	}
+	// The acknowledgment consents to a write. On a command line that
+	// writes nothing it acknowledges nothing, and silently accepting it
+	// would teach an operator that the flag did something.
+	if *acknowledge && len(named) == 0 {
+		return usageError("backup-set retention: --acknowledge-medium-disclosure acknowledges a policy write, and this command line writes no policy; pass it alongside --policy-file or the policy flags")
+	}
 
 	ctx := context.Background()
 	svc, cleanup, err := openBackupService(ctx, *cfgPath)
@@ -119,6 +127,11 @@ func cmdBackupSetRetention(args []string) int {
 		if code != 0 {
 			return code
 		}
+		// A consent, not a policy field, so it rides beside the policy
+		// rather than inside the file: a policy file that could carry its
+		// own acknowledgment would be a file that consents on the
+		// operator's behalf every time it is applied.
+		override.AcknowledgeMediumDisclosure = *acknowledge
 		logStartup(ctx, logger(), app.BuildVersionInfo(version, commit))
 		got, err := svc.SetBackupSetRetention(ctx, id, override)
 		if err != nil {

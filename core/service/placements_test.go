@@ -663,3 +663,154 @@ func errorsIsMediumDisclosure(err error) bool {
 	}
 	return false
 }
+
+// ---------------------------------------- the same gate, per backup set ----
+//
+// An override is a whole chain in its own right (config.Retention.Tiers'
+// own doc, and validateMediumReferences walks per-set chains for exactly
+// this reason), so it can send a tier's artifacts off local disk as surely
+// as the deployment's policy can. FR-27 says "any tier of a
+// backup-affecting chain", and a gate that stood in front of
+// UpdateSettings alone would be a gate one PUT walks around.
+
+// perSetMediumOverride is an override that keeps the mapping this set
+// already inherits (monthly -> offsite_s3) and adds one it does not
+// (daily -> offsite_s3).
+func perSetMediumOverride() RetentionOverride {
+	return RetentionOverride{Tiers: []RetentionTier{
+		{Name: "daily", Granularity: "day", Keep: 7, Medium: "offsite_s3"},
+		{Name: "monthly", Granularity: "month", Keep: 12, Medium: "offsite_s3"},
+	}}
+}
+
+// TestSetBackupSetRetention_RefusesAFirstMappingWithoutTheAcknowledgment is
+// the deny half on the per-set write. The refusal names the tier that is
+// newly leaving and NOT the one the set already inherits: re-litigating a
+// mapping the deployment consented to is how a product teaches an operator
+// to tick the box without reading it.
+func TestSetBackupSetRetention_RefusesAFirstMappingWithoutTheAcknowledgment(t *testing.T) {
+	svc, configPath := openWithRetention(t, mediumsRetentionBlock)
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	_, err = svc.SetBackupSetRetention(context.Background(), "production/postgres-primary", perSetMediumOverride())
+	if err == nil {
+		t.Fatal("SetBackupSetRetention accepted a first tier-to-medium mapping with no acknowledgment")
+	}
+	if !errorsIsMediumDisclosure(err) {
+		t.Fatalf("error = %v, want ErrMediumDisclosureRequired; a caller has to tell this from a malformed policy", err)
+	}
+	if !strings.Contains(err.Error(), "delete") {
+		t.Errorf("the refusal does not name the deletion consequence:\n%v", err)
+	}
+	if !strings.Contains(err.Error(), "daily -> offsite_s3") {
+		t.Errorf("the refusal does not say which tier is about to leave:\n%v", err)
+	}
+	if strings.Contains(err.Error(), "monthly") {
+		t.Errorf("the refusal re-litigates a mapping this set already inherits from the deployment:\n%v", err)
+	}
+
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Errorf("a refused per-set write changed the operator's configuration file:\n%s", after)
+	}
+	got, err := svc.BackupSetRetention(context.Background(), "production/postgres-primary")
+	if err != nil {
+		t.Fatalf("BackupSetRetention: %v", err)
+	}
+	if got.IsOverride {
+		t.Error("a refused write left the set overriding")
+	}
+}
+
+// TestSetBackupSetRetention_AcceptsTheSameWriteWithTheAcknowledgment is
+// the allow half, against a medium the file declares, so the gate is
+// proven to let a real per-set write through and to land the mapping
+// under the set rather than on the deployment's chain.
+func TestSetBackupSetRetention_AcceptsTheSameWriteWithTheAcknowledgment(t *testing.T) {
+	svc, configPath := openWithRetention(t, mediumsRetentionBlock)
+
+	o := perSetMediumOverride()
+	o.AcknowledgeMediumDisclosure = true
+	got, err := svc.SetBackupSetRetention(context.Background(), "production/postgres-primary", o)
+	if err != nil {
+		t.Fatalf("SetBackupSetRetention with the acknowledgment: %v", err)
+	}
+	if !got.IsOverride || len(got.Effective.Tiers) != 2 || got.Effective.Tiers[0].Medium != "offsite_s3" {
+		t.Fatalf("the acknowledged write did not take: %+v", got.Effective.Tiers)
+	}
+	// The deployment's own daily tier is still local: the consent was
+	// for this set's artifacts, and the write was to this set's block.
+	if got.Deployment.Tiers[0].Medium != "" {
+		t.Errorf("a per-set write moved the deployment's daily tier: %+v", got.Deployment.Tiers[0])
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Count(string(raw), "medium: offsite_s3") != 3 {
+		t.Errorf("want the deployment's monthly plus the override's two mappings in the file, got:\n%s", raw)
+	}
+	if strings.Contains(string(raw), "acknowledge") {
+		t.Errorf("the acknowledgment is a consent, not a setting, and it reached the file:\n%s", raw)
+	}
+}
+
+// TestSetBackupSetRetention_DoesNotAskForAMappingTheSetAlreadyInherits is
+// the half that keeps the per-set gate from becoming noise. A set that
+// inherits a chain sending monthly to offsite_s3 is already sending its
+// monthly artifacts there; an override that keeps that mapping and changes
+// a number is not a decision about where backups live.
+func TestSetBackupSetRetention_DoesNotAskForAMappingTheSetAlreadyInherits(t *testing.T) {
+	svc, _ := openWithRetention(t, mediumsRetentionBlock)
+
+	got, err := svc.SetBackupSetRetention(context.Background(), "production/postgres-primary", RetentionOverride{Tiers: []RetentionTier{
+		{Name: "daily", Granularity: "day", Keep: 9},
+		{Name: "monthly", Granularity: "month", Keep: 24, Medium: "offsite_s3"},
+	}})
+	if err != nil {
+		t.Fatalf("SetBackupSetRetention on an inherited mapping: %v", err)
+	}
+	if !got.IsOverride || got.Effective.Tiers[1].Keep != 24 || got.Effective.Tiers[1].Medium != "offsite_s3" {
+		t.Errorf("the edit did not take: %+v", got.Effective.Tiers)
+	}
+}
+
+// TestSetBackupSetRetention_AsksAgainstTheSetsOwnChainOnceItHasOne pins
+// which chain the gate compares against. Once a set overrides, what it is
+// consenting FROM is its own chain, not the deployment's: a second write
+// that sends weekly somewhere asks about weekly, and only weekly, even
+// though weekly is not a tier the deployment's chain has at all.
+func TestSetBackupSetRetention_AsksAgainstTheSetsOwnChainOnceItHasOne(t *testing.T) {
+	svc, _ := openWithRetention(t, mediumsRetentionBlock)
+
+	first := perSetMediumOverride()
+	first.AcknowledgeMediumDisclosure = true
+	if _, err := svc.SetBackupSetRetention(context.Background(), "production/postgres-primary", first); err != nil {
+		t.Fatalf("the first, acknowledged write: %v", err)
+	}
+
+	second := RetentionOverride{Tiers: []RetentionTier{
+		{Name: "daily", Granularity: "day", Keep: 7, Medium: "offsite_s3"},
+		{Name: "weekly", Granularity: "week", Keep: 4, Medium: "offsite_s3"},
+		{Name: "monthly", Granularity: "month", Keep: 12, Medium: "offsite_s3"},
+	}}
+	_, err := svc.SetBackupSetRetention(context.Background(), "production/postgres-primary", second)
+	if err == nil {
+		t.Fatal("a second tier going off local disk was accepted without an acknowledgment")
+	}
+	if !errorsIsMediumDisclosure(err) {
+		t.Fatalf("error = %v, want ErrMediumDisclosureRequired", err)
+	}
+	if !strings.Contains(err.Error(), "weekly -> offsite_s3") {
+		t.Errorf("the refusal does not name the tier newly leaving:\n%v", err)
+	}
+	if strings.Contains(err.Error(), "daily") || strings.Contains(err.Error(), "monthly") {
+		t.Errorf("the refusal re-litigates mappings the set's own chain already has:\n%v", err)
+	}
+}

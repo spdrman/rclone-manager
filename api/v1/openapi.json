@@ -2306,6 +2306,11 @@
             "type": "boolean",
             "description": "Absent inherits the deployment's FR-19 posture.",
             "x-go-pointer": true
+          },
+          "acknowledge_medium_disclosure": {
+            "type": "boolean",
+            "description": "The operator's acknowledgment of the storage-medium disclosure (SettingsSchema.storage.medium_disclosure), on this write for the reason UpdateSettingsRequest carries it: an override is a whole chain and can send a tier's artifacts to a non-local medium exactly as the deployment's policy can. Required on, and only on, a write that maps a tier to a medium the chain currently deciding for this set does not already map it to; without it that write is refused with MEDIUM_DISCLOSURE_REQUIRED. It is a consent and not part of the policy: never written to the file, and never present on the override half of a response.",
+            "x-go-omitempty": true
           }
         },
         "required": []
@@ -6341,7 +6346,7 @@
             }
           },
           "400": {
-            "description": "Refused: INVALID_REQUEST. Includes a policy that names only part of a chain, an empty policy, and every refusal the same policy written into the configuration file would get.",
+            "description": "Refused: INVALID_REQUEST. Includes a policy that names only part of a chain, an empty policy, and every refusal the same policy written into the configuration file would get. MEDIUM_DISCLOSURE_REQUIRED is the storage-medium consent gate, the same one updateSettings enforces: a policy that first sends one of this set's tiers to a non-local medium is refused until it carries acknowledge_medium_disclosure, and the refusal message is the disclosure itself.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6350,7 +6355,8 @@
               }
             },
             "x-error-codes": [
-              "INVALID_REQUEST"
+              "INVALID_REQUEST",
+              "MEDIUM_DISCLOSURE_REQUIRED"
             ]
           },
           "401": {

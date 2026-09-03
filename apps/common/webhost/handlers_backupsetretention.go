@@ -109,6 +109,16 @@ type retentionOverrideBody struct {
 	Tiers []retentionTierBody `json:"tiers,omitempty"`
 
 	ProtectLastKnownGood *bool `json:"protect_last_known_good"`
+
+	// AcknowledgeMediumDisclosure is FR-27's consent, on this write for
+	// the reason service.RetentionOverride gives: an override can send a
+	// tier's artifacts off local disk exactly as the deployment's policy
+	// can, so the gate stands here too. Request-only in practice: it is a
+	// consent and not a setting, so the response's `override` half never
+	// carries it (toRetentionOverrideBody leaves it false, and omitempty
+	// drops it). Absent and false mean the same thing, which is why it is
+	// not a pointer like the field above it.
+	AcknowledgeMediumDisclosure bool `json:"acknowledge_medium_disclosure,omitempty"`
 }
 
 func toBackupSetRetentionResponse(r service.BackupSetRetention) backupSetRetentionResponse {
@@ -165,6 +175,7 @@ func (b retentionOverrideBody) toService() service.RetentionOverride {
 		protect := *b.ProtectLastKnownGood
 		o.ProtectLastKnownGood = &protect
 	}
+	o.AcknowledgeMediumDisclosure = b.AcknowledgeMediumDisclosure
 	return o
 }
 
@@ -238,6 +249,14 @@ func writeBackupSetRetentionError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, service.ErrBackupSetNotFound):
 		writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND", "no such backup set")
+	case errors.Is(err, service.ErrMediumDisclosureRequired):
+		// The same code, at the same status, for the same reason as the
+		// settings route (writeSettingsError): this is not a field to
+		// fix, it is a paragraph to put in front of a human, and the
+		// message is that paragraph. Safe to echo for the same reason
+		// too: core/service's own words plus tier names and medium ids
+		// the caller itself submitted.
+		writeError(w, http.StatusBadRequest, "MEDIUM_DISCLOSURE_REQUIRED", err.Error())
 	case errors.Is(err, service.ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 	case errors.Is(err, service.ErrConfigNotFileBacked):

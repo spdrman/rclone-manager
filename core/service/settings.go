@@ -451,7 +451,10 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	// rather than against this process's loaded copy: consent is about
 	// what the operator's configuration is being changed FROM, and a
 	// change made out of band since this service started is part of that.
-	introduced := newTierMediumMappings(cfg.Retention, req)
+	var introduced []tierMedium
+	if req.Retention != nil {
+		introduced = newTierMediumMappings(cfg.Retention.EffectiveTiers(), req.Retention.Tiers)
+	}
 	if len(introduced) > 0 && !req.AcknowledgeMediumDisclosure {
 		return Settings{}, mediumDisclosureRefusal(introduced)
 	}

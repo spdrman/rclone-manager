@@ -321,8 +321,15 @@ type tierMedium struct {
 	Medium string
 }
 
-// newTierMediumMappings reports the tier-to-medium mappings req would ADD
-// to current: the ones the operator is consenting to, and nothing else.
+// newTierMediumMappings reports the tier-to-medium mappings submitted
+// would ADD to the chain currently in force: the ones the operator is
+// consenting to, and nothing else.
+//
+// It is shared by the two writes that can introduce one, the deployment's
+// policy (UpdateSettings) and one backup set's own (SetBackupSetRetention),
+// because an override is a whole chain in its own right and can name a
+// medium exactly as the global policy can. A gate that only stood in front
+// of the settings write would be a gate one PUT walks around.
 //
 // # Why per tier rather than per medium
 //
@@ -344,22 +351,22 @@ type tierMedium struct {
 // is config.Validate's question, asked over the whole config a few lines
 // later; a dangling medium refused there is refused for the same reason
 // the same file hand-edited would be.
-func newTierMediumMappings(current config.Retention, req UpdateSettingsRequest) []tierMedium {
+func newTierMediumMappings(inForce []config.RetentionTier, submitted []RetentionTier) []tierMedium {
 	// Only a submitted chain can introduce a mapping. A write that leaves
 	// the chain alone leaves every mapping exactly as the file has it,
 	// including a mapping an operator put there by hand, which this gate
 	// has no business re-litigating.
-	if req.Retention == nil || len(req.Retention.Tiers) == 0 {
+	if len(submitted) == 0 {
 		return nil
 	}
 
-	before := make(map[string]string, len(current.EffectiveTiers()))
-	for _, t := range current.EffectiveTiers() {
+	before := make(map[string]string, len(inForce))
+	for _, t := range inForce {
 		before[t.Name] = t.EffectiveMedium()
 	}
 
 	var introduced []tierMedium
-	for _, t := range req.Retention.Tiers {
+	for _, t := range submitted {
 		medium := t.Medium
 		if medium == "" || medium == config.MediumLocal {
 			continue

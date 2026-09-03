@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "4026e0baee4df2c6f328cf3812665ac44515ed1d8298062c7cf738a23761c83f"
+const ContractSHA256 = "77d2fd3212c7e9bfa37232401464fcc4deb8576a7df63956bb625a59fe83b925"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -415,7 +415,7 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "RetentionOverride", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeMediumDisclosureRequired},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
@@ -1204,13 +1204,14 @@ type Placement struct {
 // override that names no timezone is reckoned in the deployment's,
 // not in UTC.
 type RetentionOverride struct {
-	DailyDays            int             `json:"daily_days,omitempty"`
-	MonthlyMonths        int             `json:"monthly_months,omitempty"`
-	ProtectLastKnownGood *bool           `json:"protect_last_known_good"`
-	Tiers                []RetentionTier `json:"tiers,omitempty"`
-	Timezone             string          `json:"timezone,omitempty"`
-	WeekStartsOn         string          `json:"week_starts_on,omitempty"`
-	WeeklyMonths         int             `json:"weekly_months,omitempty"`
+	AcknowledgeMediumDisclosure bool            `json:"acknowledge_medium_disclosure,omitempty"`
+	DailyDays                   int             `json:"daily_days,omitempty"`
+	MonthlyMonths               int             `json:"monthly_months,omitempty"`
+	ProtectLastKnownGood        *bool           `json:"protect_last_known_good"`
+	Tiers                       []RetentionTier `json:"tiers,omitempty"`
+	Timezone                    string          `json:"timezone,omitempty"`
+	WeekStartsOn                string          `json:"week_starts_on,omitempty"`
+	WeeklyMonths                int             `json:"weekly_months,omitempty"`
 }
 
 // RetentionPlan is A server-computed retention plan. The client may only apply one by

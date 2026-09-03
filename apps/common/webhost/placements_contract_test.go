@@ -626,3 +626,69 @@ func TestGetSettings_ServesTheMediumsAndTheLadderButNoCredential(t *testing.T) {
 		}
 	}
 }
+
+// --------------------------------------- the gate on the per-set route ----
+
+// TestSetBackupSetRetention_TheDisclosureRefusalIsItsOwnTypedCode is
+// TestUpdateSettings_TheDisclosureRefusalIsItsOwnTypedCode for the other
+// write that can send a tier's artifacts off local disk. Same code, same
+// status, same reason, and declared for THIS operation in the contract.
+func TestSetBackupSetRetention_TheDisclosureRefusalIsItsOwnTypedCode(t *testing.T) {
+	backend := newSyncFakeBackend()
+	backend.errOnSetRetention = fmt.Errorf("%w. This write sends daily -> offsite_s3. After a backup uploads and I verify it, I delete the copy on this machine.",
+		service.ErrMediumDisclosureRequired)
+	router := retentionRouterWith(t, backend)
+
+	rec := doRetention(t, router, http.MethodPut,
+		`{"tiers":[{"name":"daily","granularity":"day","keep":7,"medium":"offsite_s3"}]}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body: %s", rec.Code, rec.Body.String())
+	}
+	if code := errorCodeOf(t, rec); code != "MEDIUM_DISCLOSURE_REQUIRED" {
+		t.Fatalf("code = %q, want MEDIUM_DISCLOSURE_REQUIRED. INVALID_REQUEST would tell a client to highlight a field, when what it has to do is show a paragraph.", code)
+	}
+	if !strings.Contains(rec.Body.String(), "delete the copy on this machine") {
+		t.Errorf("the refusal does not carry the disclosure:\n%s", rec.Body.String())
+	}
+
+	declared := contractEndpoints()["setBackupSetRetention"].ErrorCodes[http.StatusBadRequest]
+	for _, c := range declared {
+		if string(c) == "MEDIUM_DISCLOSURE_REQUIRED" {
+			return
+		}
+	}
+	t.Errorf("api/v1/openapi.json does not declare MEDIUM_DISCLOSURE_REQUIRED for setBackupSetRetention at 400 (it declares %v)", declared)
+}
+
+// TestSetBackupSetRetention_TheAcknowledgmentCrossesTheSeamAndNeverComesBack
+// is the other half, and the half after that: the tick has to reach
+// core/service or the gate is unopenable, and it must not come back out on
+// the override half of the response, because it is a consent and not a
+// policy, and a client that round-trips what it was served would otherwise
+// re-consent on every save.
+func TestSetBackupSetRetention_TheAcknowledgmentCrossesTheSeamAndNeverComesBack(t *testing.T) {
+	backend := newSyncFakeBackend()
+	router := retentionRouterWith(t, backend)
+
+	rec := doRetention(t, router, http.MethodPut,
+		`{"tiers":[{"name":"daily","granularity":"day","keep":7,"medium":"offsite_s3"}],"acknowledge_medium_disclosure":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	if backend.lastSetRetention == nil || !backend.lastSetRetention.override.AcknowledgeMediumDisclosure {
+		t.Fatal("the acknowledgment did not reach core/service, so the per-set gate can never be opened")
+	}
+	if tiers := backend.lastSetRetention.override.Tiers; len(tiers) != 1 || tiers[0].Medium != "offsite_s3" {
+		t.Errorf("the tier's medium did not cross the seam: %+v", tiers)
+	}
+
+	for _, method := range []string{http.MethodPut, http.MethodGet} {
+		body := rec.Body.String()
+		if method == http.MethodGet {
+			body = doRetention(t, router, http.MethodGet, "").Body.String()
+		}
+		if strings.Contains(body, "acknowledge_medium_disclosure") {
+			t.Errorf("the %s response carries the acknowledgment back out as if it were part of the policy:\n%s", method, body)
+		}
+	}
+}
