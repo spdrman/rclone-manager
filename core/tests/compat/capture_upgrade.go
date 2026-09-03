@@ -166,7 +166,13 @@ func applyMigrationsUpTo(ctx context.Context, path string, upTo int) (int, error
 	if applied == 0 {
 		return 0, fmt.Errorf("no migration at or below version %d, so no old schema was built", upTo)
 	}
-	if len(files) <= applied {
+	remaining := 0
+	for _, m := range files {
+		if m.version > upTo {
+			remaining++
+		}
+	}
+	if remaining == 0 {
 		return 0, fmt.Errorf("every migration this binary carries is at or below version %d, so nothing would run against the populated database and this cell would certify nothing", upTo)
 	}
 	return applied, nil
