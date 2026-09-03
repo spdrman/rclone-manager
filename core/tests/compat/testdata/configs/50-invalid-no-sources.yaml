@@ -1,0 +1,8 @@
+# A refusal. Which refusals a config gets, and the words they come in,
+# are part of the observable surface an operator upgrades into.
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources: []
