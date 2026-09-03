@@ -192,10 +192,10 @@ func TestClassify_Transient_RealConnectionRefused(t *testing.T) {
 // categories, with the odds depending on how busy the machine is.
 // ---------------------------------------------------------------------------
 
-// blackholedHost is TEST-NET-1 (RFC 5737), reserved for documentation and
-// routed nowhere. It has to blackhole rather than refuse: a closed port
-// refuses instantly, which is a different error on a different code path and
-// would never reach a connect timeout at all.
+// The address row 1 dials is TEST-NET-1 (RFC 5737), reserved for
+// documentation and routed nowhere, because it has to blackhole rather than
+// refuse: a closed port refuses instantly, which is a different error on a
+// different code path and never reaches a connect timeout at all.
 const (
 	blackholedHost = "192.0.2.1"
 	blackholedPort = 9000
@@ -248,7 +248,7 @@ func TestClassify_ConnectTimeoutRcloneImposedIsTransient(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, errs := tc.run(t)
 			if len(errs) == 0 {
-				t.Fatalf("the operation produced no error, so there is nothing to classify")
+				t.Fatal("the operation produced no error, so there is nothing to classify")
 			}
 			for i, err := range errs {
 				if err == nil {
