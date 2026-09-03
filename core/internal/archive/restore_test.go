@@ -178,7 +178,7 @@ func TestTheWindowBoundsAreAcceptedAtBothEnds(t *testing.T) {
 // started rather than a running restore nothing here knows about.
 func TestTheRowExistsBeforeAnythingIsAskedOfTheProvider(t *testing.T) {
 	store := &fakeMedium{}
-	r, j := newTestRestorer(t, store)
+	_, j := newTestRestorer(t, store)
 
 	// Only the FIRST call is recorded. That detail is load-bearing: a
 	// Submit that asked the provider first and then wrote the row would
@@ -199,7 +199,7 @@ func TestTheRowExistsBeforeAnythingIsAskedOfTheProvider(t *testing.T) {
 			rowAtInitiate, lookupErr = j.GetOperation(context.Background(), "op_restore_1")
 		},
 	}
-	r = NewRestorer(j, observing, func() time.Time { return testNow }, func() string { return "op_restore_1" })
+	r := NewRestorer(j, observing, func() time.Time { return testNow }, func() string { return "op_restore_1" })
 
 	if _, err := r.Submit(context.Background(), restoreRequest()); err != nil {
 		t.Fatalf("Submit: %v", err)

@@ -62,6 +62,23 @@ type ArtifactCopy struct {
 	// Detail is the plain-words sentence explaining Access, empty for a
 	// copy that needs no explaining.
 	Detail string
+
+	// CheckableAs is the strongest verification class that can be
+	// attempted against this copy right now, and empty when none can.
+	//
+	// FR-31 ends its archive rule with "the status surfaces say exactly
+	// that", and this is the field that does it. An archived copy is
+	// existence-checkable and nothing more until a restore, and an
+	// operator reading a status page is exactly the person who needs to
+	// know that the strongest thing anybody could do to reassure
+	// themselves about this backup today is confirm an object of the
+	// right size is at that key.
+	//
+	// It is what could be attempted, never what has been achieved.
+	// VerificationClass above is the achieved one, and the two being
+	// different fields is the whole point: they disagree all the time,
+	// and each of them is true.
+	CheckableAs string
 }
 
 // Retrievable reports whether this copy's bytes can be read right now.
@@ -128,6 +145,7 @@ func (s *Service) artifactCopy(p state.Placement, now time.Time) ArtifactCopy {
 	}
 	c.Access = access
 	c.Detail = archive.Describe(access, class, nil)
+	c.CheckableAs = string(archive.Ceiling(access))
 	if b, err := archive.Of(class); err == nil {
 		c.RetrievalBilled = b.RetrievalBilled
 	}

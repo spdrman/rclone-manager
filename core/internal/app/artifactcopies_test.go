@@ -6,6 +6,7 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -76,6 +77,20 @@ func TestAnArchivedCopyReadsAsRequiresRestoreOnTheDetailSurface(t *testing.T) {
 	if cold.Detail == "" {
 		t.Error("the DEEP_ARCHIVE copy says nothing about why it cannot be read")
 	}
+
+	// FR-31's archive rule ends with "the status surfaces say exactly
+	// that", and this is the line that does it: the strongest thing
+	// anybody can do to reassure themselves about this copy today is
+	// confirm an object of the right size is at that key.
+	if cold.CheckableAs != string(placement.Existence) {
+		t.Errorf("the DEEP_ARCHIVE copy is checkable as %q, want %q", cold.CheckableAs, placement.Existence)
+	}
+	if local.CheckableAs != string(placement.Content) {
+		t.Errorf("the local copy is checkable as %q, want %q", local.CheckableAs, placement.Content)
+	}
+	if cold.CheckableAs == cold.VerificationClass {
+		t.Error("this test is not showing anything: what a copy was verified as and what it can be checked as have to be able to differ")
+	}
 }
 
 // TestACopyOnAnUnwarmClassStillReadsAsImmediate covers the classes an
@@ -121,6 +136,9 @@ func TestACopyOnAMediumTheConfigurationDroppedIsUnreachableAndNotGone(t *testing
 	}
 	if copies[0].Status != state.PlacementActive {
 		t.Errorf("status = %q; nothing here may downgrade the journal's own record of the copy", copies[0].Status)
+	}
+	if copies[0].CheckableAs != "" {
+		t.Errorf("checkable as %q; nothing can be checked against a medium nothing can reach", copies[0].CheckableAs)
 	}
 }
 

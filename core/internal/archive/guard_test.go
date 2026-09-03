@@ -195,3 +195,29 @@ func TestAnArchiveClassCannotBeRevalidatedIntoASurpriseBill(t *testing.T) {
 		}
 	}
 }
+
+// TestAnArchivedObjectThatIsActuallyMissingIsAFailedCheckNotARefusal keeps
+// the third fact apart from the other two.
+//
+// "This copy is archived" and "this medium did not answer" are both facts
+// about reachability, and neither says anything about the artifact. "There
+// is no object at that key" is a fact about the artifact, and it has to
+// arrive as a failed existence Result so that quarantine can act on it,
+// not as a capability refusal that would leave the journal believing in a
+// copy that is not there.
+func TestAnArchivedObjectThatIsActuallyMissingIsAFailedCheckNotARefusal(t *testing.T) {
+	store := &fakeMedium{statErr: errNotFound}
+	p := mediumPlacement("cold-store", "prefix/src/set/artifact", 12, hashOf([]byte("body")), "")
+
+	result, err := Verify(context.Background(), store, glacierMedium(), p, placement.Existence,
+		Observation{Probe: Answered}, testNow)
+	if err != nil {
+		t.Fatalf("Verify(existence) against a missing object: err = %v, want a failed result instead", err)
+	}
+	if result.Passed {
+		t.Fatal("Verify(existence) passed for an object the medium does not hold")
+	}
+	if result.Class != placement.Existence {
+		t.Fatalf("class = %q, want %q; a failed attempt still carries the class it ran", result.Class, placement.Existence)
+	}
+}

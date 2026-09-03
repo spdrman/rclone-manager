@@ -195,6 +195,11 @@ func printArtifactCopies(copies []app.ArtifactCopy, layout string) {
 		if c.VerifiedAt != nil {
 			fmt.Printf("  verified_at:       %s\n", c.VerifiedAt.Format(layout))
 		}
+		if c.CheckableAs != "" {
+			fmt.Printf("  checkable_as:      %s\n", c.CheckableAs)
+		} else {
+			fmt.Printf("  checkable_as:      nothing, while this copy's medium is not answering\n")
+		}
 		if c.RetrievalBilled {
 			fmt.Printf("  retrieval:         the provider bills to read this copy back; this product holds no price list and will not guess an amount\n")
 		}

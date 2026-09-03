@@ -28,6 +28,7 @@ func archivedCopyView() app.ArtifactCopy {
 		VerificationClass: state.VerificationContent,
 		StorageClass:      "DEEP_ARCHIVE",
 		Access:            archive.RequiresRestore,
+		CheckableAs:       "existence",
 		RetrievalBilled:   true,
 		Detail:            archive.Describe(archive.RequiresRestore, "DEEP_ARCHIVE", nil),
 	}
@@ -70,6 +71,7 @@ func TestAnArchivedCopyTellsATerminalOperatorItCannotBeRead(t *testing.T) {
 		"access:            requires_restore",
 		"storage_class:     DEEP_ARCHIVE",
 		"verified_as:       content",
+		"checkable_as:      existence",
 		"the provider bills to read this copy back",
 	} {
 		if !strings.Contains(out, want) {

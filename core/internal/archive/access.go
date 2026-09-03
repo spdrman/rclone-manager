@@ -195,12 +195,6 @@ func Access(medium, class string, obs Observation, now time.Time) (State, error)
 	return RequiresRestore, nil
 }
 
-// AccessOf is Access for a placement row, which is how every caller
-// outside this package's own tests reaches it.
-func AccessOf(p state.Placement, class string, obs Observation, now time.Time) (State, error) {
-	return Access(p.Medium, class, obs, now)
-}
-
 // Describe is the plain-words sentence a surface prints beside an access
 // state, or the empty string for a copy that needs no explaining.
 //
