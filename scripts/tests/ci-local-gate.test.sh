@@ -257,6 +257,14 @@ make_full_tree() {
     printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/api/$api.sh"
   done
 
+  # EPIC E's FR-35 compatibility mutation self-test (#242), stubbed for the
+  # third time for the third identical reason. The real one copies the tree
+  # sixteen times and builds core/ in each copy; this fixture measures which
+  # steps the gate chooses to run, not what they do, and a missing path here
+  # exits 127 under `set -e` and takes every case below it with it.
+  mkdir -p "$tree/scripts/compat"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/compat/selftest.sh"
+
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
   # measures which steps the gate chooses to run, not what those steps do,

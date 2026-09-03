@@ -1314,6 +1314,8 @@ lives here instead; nothing in the design depended on the location.
 - [`docs/rclone-upgrade.md`](docs/rclone-upgrade.md) – the pinned-version upgrade procedure and its CI gate
 - [`docs/ssh-setup.md`](docs/ssh-setup.md) – the dedicated key, the restricted SFTP account, host-key verification
 - [`docs/recovery.md`](docs/recovery.md) – recovery and the restore procedure, in full
+- [`docs/storage-mediums.md`](docs/storage-mediums.md) – configuring an S3 medium per retention tier, what the disclosure commits you to, what each verification class proves and costs, and what an archive class means for the day you need the file back
+- [`docs/conformance/epic-e-matrix.md`](docs/conformance/epic-e-matrix.md) – which of EPIC E's gate lines are checked by something that has been watched to fail, which are checked by nothing, and which issue owns each gap
 - [`docs/phase-1-gate.md`](docs/phase-1-gate.md) – the embedding proof-of-concept verdict and what it did and didn't prove
 - [`apps/synology/README.md`](apps/synology/README.md) – the Synology DSM `.spk`: supported architectures/models, how to build and verify one, and what is still uncertified
 - [`apps/truenas/README.md`](apps/truenas/README.md) – the TrueNAS custom app and catalog entry

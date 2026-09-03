@@ -408,6 +408,17 @@ if [ "$FAST" != "1" ]; then
   gate_step "architecture rules can actually fail (mutation self-test)"
   bash scripts/architecture/selftest.sh
 
+  # EPIC E's FR-35 compatibility gate, shown to fire (#242). core/tests/compat
+  # is a wall of "nothing about a medium-free deployment moved" assertions,
+  # and every one of them is the shape this repository keeps finding passing
+  # for the wrong reason. This runs each cell against a real planted
+  # violation in a copy of the tree, including the two the EPIC E spec's own
+  # section 4 table names by hand. It costs a few minutes because every
+  # mutant builds core/ and backup-manager and runs a real capture; that is
+  # the price of the corpus meaning anything.
+  gate_step "the FR-35 compatibility cells can actually fail (mutation self-test, #242)"
+  bash scripts/compat/selftest.sh
+
   gate_step "repository-structure dependency rules (§7.1), by actual deletion"
   bash scripts/architecture/check-core-dependency-rule.sh
   bash scripts/architecture/verify-core-without-apps.sh

@@ -1,0 +1,28 @@
+# Both retention spellings at once. FR-18 refuses rather than picking one,
+# and EPIC E must not turn that into a precedence rule by accident.
+poll_interval: 15m
+
+state:
+  database: /var/lib/backup-manager/state.db
+
+sources:
+  - id: production
+    backup_sets:
+      - id: postgres-primary
+        remote:
+          type: local
+        remote_path: /srv/exports/postgres
+        local_path: /backups/production/postgres
+        completion:
+          strategy: stable
+          stable_for: 10m
+        stale_after: 30h
+
+retention:
+  timezone: UTC
+  week_starts_on: monday
+  daily_days: 7
+  tiers:
+    - name: daily
+      granularity: day
+      keep: 7
