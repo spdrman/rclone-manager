@@ -77,6 +77,16 @@ const (
 
 1. Definitions`
 
+	// The spelling HashiCorp's LICENSE files use, comma and lower-case v.
+	// go-cleanhttp and go-retryablehttp both ship it, both arrived under
+	// rclone's s3 backend in #235, and both classified as NOASSERTION
+	// until the table learned this second phrase.
+	mplHashiCorpText = `Copyright (c) 2015 HashiCorp, Inc.
+
+Mozilla Public License, version 2.0
+
+1. Definitions`
+
 	apacheText = `                                 Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -144,6 +154,7 @@ func TestClassifyLicense(t *testing.T) {
 		{"AGPL-3.0", agpl3Text, "AGPL-3.0-only", true},
 		{"LGPL-2.1", lgpl21Text, "LGPL-2.1-only", true},
 		{"MPL-2.0", mplText, "MPL-2.0", true},
+		{"MPL-2.0 as HashiCorp spells it", mplHashiCorpText, "MPL-2.0", true},
 		{"Apache-2.0", apacheText, "Apache-2.0", false},
 		{"MIT", mitText, "MIT", false},
 		{"BSD-3-Clause", bsd3Text, "BSD-3-Clause", false},
