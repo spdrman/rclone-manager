@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
@@ -106,6 +107,7 @@ func activeMediumPlacements(rec state.Record) []state.Placement {
 // back a green pass has been told less than they asked for, and a check
 // that quietly stops running is how a safety feature becomes decorative.
 // So the pass names the tier that did not run.
+//
 // A failing check is a verdict about ONE placement, and quarantine is a
 // verdict about the artifact. FR-31 keeps them apart: the artifact enters
 // QUARANTINED only when no other ACTIVE verified placement remains. So a
@@ -116,7 +118,7 @@ func activeMediumPlacements(rec state.Record) []state.Placement {
 func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidation, ps []state.Placement) (checked, passed bool, class placement.Class, reason string, err error) {
 	if deps.Store == nil || deps.Mediums == nil {
 		return false, true, "", fmt.Sprintf(
-			"this artifact's only durable copy is on storage medium %q, and this deployment has no way to reach one, so nothing was checked", ps[0].Medium), nil
+			"this artifact's durable copies are on storage mediums (%s), and this deployment has no way to reach one, so nothing was checked", mediumIDs(ps)), nil
 	}
 
 	const automatic = placement.Existence
@@ -192,7 +194,7 @@ func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidati
 			// configuration fact rather than a backup nobody could check,
 			// and an unchecked finding rather than an error.
 			return false, true, "", fmt.Sprintf(
-				"this artifact's only durable copy is on storage medium %q, which is not in the configuration, so nothing was checked", notConfigured), nil
+				"this artifact's durable copies are on storage mediums (%s), and none of them is in the configuration, so nothing was checked", mediumIDs(ps)), nil
 		}
 	}
 
@@ -212,6 +214,19 @@ func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidati
 		detail += "; the restore-test hook did not run, because opening this artifact means downloading it and FR-31 makes anything that costs egress operator-initiated"
 	}
 	return true, anyPassed, automatic, detail, nil
+}
+
+// mediumIDs names the mediums a set of placements sits on, for the two
+// messages an operator reads when nothing could be checked at all. It
+// names every one of them rather than the first, because "your backup is
+// on a medium I cannot reach" is a sentence somebody has to act on and the
+// medium's id is the only part of it that says where to look.
+func mediumIDs(ps []state.Placement) string {
+	ids := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ids = append(ids, strconv.Quote(p.Medium))
+	}
+	return strings.Join(ids, ", ")
 }
 
 // checkLocalCopy is exactly the check this package always did, against the
