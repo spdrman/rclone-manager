@@ -66,6 +66,20 @@ message. The one assertion a regeneration cannot silence is
 `TestUpgradingAndInstallingFreshAgreeWithEachOther`, which compares two captures
 from the same run rather than a capture against a file.
 
+## What has landed since this file was written
+
+#236 (E1.4, placement records) merged, bringing `core/migrations/0007_placements.sql`
+with it. The FR-35 gate ran against it unchanged and stayed green: the schema cell
+picked up `placements`, `placement_moves` and three indexes as additions, and every
+cell compared line for line was byte identical, including the two that migrate an
+existing populated journal. So the placements backfill makes no observable
+difference to a medium-free deployment, which is the half of #236's fourth
+acceptance criterion that lives here.
+
+The spec still calls that migration `0004_placements.sql`, and `0004` has been
+`backup_set_halts` since before EPIC E started. Only the prose is stale; the code
+uses `0007`.
+
 ## Phase 1 exit gate
 
 | # | Outcome | Certifies | Where | Falsification |
@@ -75,7 +89,7 @@ from the same run rather than a capture against a file.
 | P1.3 | BLOCKED (#235) | The rclone backend set is exactly `local`, `sftp`, `s3` required and `crypt` accepted, and the binary-size delta is recorded in the landing PR. | `core/internal/transport/rclone/backends.go` and its set test, once #235 lands | Registering a fourth backend without updating the set test. |
 | P1.4 | BLOCKED (#235) | The MediumStore contract suite passes against the local backend in-tree and against a MinIO fixture, including the explicit capability refusal where attestation is unsupported. | `core/internal/transport/contract`, once #235 lands | An `attested` request silently degrading to `existence` instead of returning a capability result. |
 | P1.5 | BLOCKED (#235) | The credential canary passes for file, env and command sources, and its planted violation fails it. | #235's canary test | A build that logs the resolved medium config verbatim. |
-| P1.6 | PARTIAL (#236) | Migration 0004 backfills a local placement for every pre-existing artifact row, and the golden retention tests and the full existing suite pass unmodified against the migrated schema. | Cells `10-upgraded-artifact-rows` and `11-upgraded-retention-verdicts`, plus `TestUpgradingAndInstallingFreshAgreeWithEachOther`, in `core/tests/compat` | The mechanism is live and caught: a planted `0007` migration that rewrites `retention_tier` during backfill turns cell 10 red, and one that rewrites `discovered_at` turns cell 11 red. What is BLOCKED is the placement half: there is no placements table to check the backfill of until #236 lands, and one further half is blocked outright by #396, see U1 below. |
+| P1.6 | PASS | Migration 0007 backfills a local placement for every pre-existing artifact row, and the golden retention tests and the full existing suite pass unmodified against the migrated schema. | `core/internal/state/placements_test.go` and `core/internal/state/placementcrash_test.go` for the backfill itself (#236, merged); cells `10-upgraded-artifact-rows` and `11-upgraded-retention-verdicts` plus `TestUpgradingAndInstallingFreshAgreeWithEachOther` in `core/tests/compat` for the "unmodified" half | The spec's own, and it fires: a planted migration that rewrites `retention_tier` during backfill turns cell 10 red, and one that rewrites `discovered_at` turns cell 11 red, both automated in `scripts/compat/selftest.sh` and both run against a tree that now carries the real `0007_placements.sql`. The upgrade this cell runs still copies artifact rows without their transition history, which is #396, see U1. |
 | P1.7 | BLOCKED (#237) | Revalidation reports `existence` class for a medium placement and never a stronger class it did not achieve. | #237's class-string assertion | A revalidation pass forced to `existence` reporting itself as content verification. |
 | P1.8 | BLOCKED (#235, #236, #237) | Nothing in phase 1 can delete an artifact copy anywhere; the destructive-safety suite diff shows no new deletion path. | `core/internal/app/destructive_b34_test.go`, once the phase 1 code exists to diff against | A `DeleteObject` call reachable from a phase 1 code path. Deliberately not attempted here as an inventory of every `os.Remove` in `core/`: most of them are temp-file cleanup, the list churns on every refactor across ten active lanes, and a cell people learn to regenerate is the thing this matrix exists to avoid. |
 

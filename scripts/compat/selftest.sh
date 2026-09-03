@@ -100,6 +100,26 @@ expect_gate_passes() {
   fi
 }
 
+# plant_migration <dir> <body>
+#
+# Writes <body> as the NEXT migration in <dir>, whichever number that is.
+#
+# These controls used to hardcode 0007, which worked right up until 0007
+# was taken: EPIC E's placements migration landed on main and every
+# migration-shaped control started failing for "migrations 0007_placements
+# and 0007_compat_selftest both claim version 7" instead of for the
+# violation it planted. The gate still went red, which is why
+# expect_cell_fails insists on the output naming the cell rather than
+# accepting any red at all, and that insistence is the only reason this
+# was caught instead of read as five passes.
+plant_migration() {
+  local dir=$1 body=$2 next
+  next=$(( $(ls "$dir"/core/migrations/[0-9]*.sql \
+             | sed 's|.*/||; s|_.*||; s|^0*||' \
+             | sort -n | tail -1) + 1 ))
+  printf '%s\n' "$body" > "$dir/core/migrations/$(printf '%04d' "$next")_compat_selftest_planted_violation.sql"
+}
+
 echo "==> negative control: the FR-35 gate is clean on the real tree"
 expect_gate_passes "core/tests/compat on an unmutated tree" "$root"
 
@@ -112,19 +132,16 @@ d=$(mutant backfill-rewrites-retention-tier)
 # next migration in sequence, which is exactly where the placements
 # migration will land, so this is the mistake in the place it would
 # actually be made.
-cat > "$d/core/migrations/0007_compat_selftest_planted_violation.sql" <<'SQL'
--- PLANTED VIOLATION (scripts/compat/selftest.sh). A backfill that helps
+plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). A backfill that helps
 -- itself to a column it does not own.
-UPDATE artifacts SET retention_tier = '';
-SQL
+UPDATE artifacts SET retention_tier = '\'''\'';'
 expect_cell_fails "a backfill that rewrites retention_tier" "$d" "10-upgraded-artifact-rows"
 
 d=$(mutant backfill-rewrites-discovered-at)
 # The same shape aimed at the field FR-32 protects: an artifact's
 # retention bucketing must be invariant under anything a migration or a
 # move does to it, so rewriting discovery time has to move the verdicts.
-cat > "$d/core/migrations/0007_compat_selftest_planted_violation.sql" <<'SQL'
--- PLANTED VIOLATION (scripts/compat/selftest.sh). Discovery time is
+plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). Discovery time is
 -- journal truth (FR-32); nothing may re-derive it from anywhere else.
 --
 -- The value moves the artifact into a different calendar month on
@@ -133,29 +150,24 @@ cat > "$d/core/migrations/0007_compat_selftest_planted_violation.sql" <<'SQL'
 -- the first draft shifted the timestamp by one minute, the verdicts did
 -- not move, and the control failed for being too gentle rather than the
 -- gate failing for being too weak.
-UPDATE artifacts SET discovered_at = '2026-08-29T09:00:00Z' WHERE artifact_name = 'monthly-only.dump';
-SQL
+UPDATE artifacts SET discovered_at = '\''2026-08-29T09:00:00Z'\'' WHERE artifact_name = '\''monthly-only.dump'\'';'
 expect_cell_fails "a backfill that rewrites the journal's discovery timestamp" "$d" "11-upgraded-retention-verdicts"
 
 echo
 echo "==> the schema an upgrade inherits"
 
 d=$(mutant migration-drops-an-index)
-cat > "$d/core/migrations/0007_compat_selftest_planted_violation.sql" <<'SQL'
--- PLANTED VIOLATION (scripts/compat/selftest.sh). An upgrade may add to
+plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). An upgrade may add to
 -- the schema; it may not take away from it.
-DROP INDEX idx_artifacts_state;
-SQL
+DROP INDEX idx_artifacts_state;'
 expect_cell_fails "a migration that drops an index an upgrade inherits" "$d" "03-migrated-schema"
 
 d=$(mutant migration-adds-a-column-to-artifacts)
 # FR-29 decided placements live in a new table "rather than new columns on
 # the artifact row". This is that decision being quietly reversed.
-cat > "$d/core/migrations/0007_compat_selftest_planted_violation.sql" <<'SQL'
--- PLANTED VIOLATION (scripts/compat/selftest.sh). FR-29 put placements in
+plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). FR-29 put placements in
 -- their own table on purpose.
-ALTER TABLE artifacts ADD COLUMN placement_medium TEXT NOT NULL DEFAULT 'local';
-SQL
+ALTER TABLE artifacts ADD COLUMN placement_medium TEXT NOT NULL DEFAULT '\''local'\'';'
 expect_cell_fails "a placement column bolted onto the artifact row" "$d" "02-artifact-rows-after-migration"
 
 echo
@@ -367,12 +379,10 @@ echo
 echo "==> the invariant a regenerated corpus cannot silence"
 
 d=$(mutant backfill-rewrites-retention-tier-and-corpus-regenerated)
-cat > "$d/core/migrations/0007_compat_selftest_planted_violation.sql" <<'SQL'
--- PLANTED VIOLATION (scripts/compat/selftest.sh). The same backfill as
+plant_migration "$d" '-- PLANTED VIOLATION (scripts/compat/selftest.sh). The same backfill as
 -- above, with the corpus obligingly re-captured around it, which is what
 -- somebody in a hurry does to a red golden file.
-UPDATE artifacts SET retention_tier = '';
-SQL
+UPDATE artifacts SET retention_tier = '\'''\'';'
 (cd "$d/core" && COMPAT_UPDATE=1 GOWORK=off go test -count=1 -run TestMediumFreeSurfacesAreUnchanged ./tests/compat/ >/dev/null 2>&1) || true
 expect_cell_fails "the same backfill, with the corpus regenerated to accept it" "$d" \
   "differs between a fresh install and an in-place upgrade"
