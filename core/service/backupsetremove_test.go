@@ -672,6 +672,58 @@ func TestRemoveBackupSet_ADuplicateThatWinsTheLockLeavesTheHoldStanding(t *testi
 	}
 }
 
+// TestRemoveBackupSet_AHandRestoredSetIsNotHeldForever is the case the
+// README invites and the hold registry did not consider.
+//
+// config.yaml is hand-edited throughout the documentation, and every
+// write path re-reads it from disk for exactly that reason. So a removed
+// set can come back by a route other than CreateBackupSet: the operator
+// changes their mind and restores the file, and the next unrelated
+// write through the product (toggling another set here) hot-reloads a
+// configuration that names it again. A registry that dropped the
+// removal hold only on CreateBackupSet left that set configured, enabled,
+// and held until the process restarted, which is a backup silently not
+// happening with nothing anywhere saying why. The invariant is "a set
+// the configuration names is never removal-held", and every reload has
+// to make it true.
+func TestRemoveBackupSet_AHandRestoredSetIsNotHeldForever(t *testing.T) {
+	svc, configPath, _, _ := openRemovalFixtureService(t)
+	ctx := context.Background()
+
+	original, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if err := svc.RemoveBackupSet(ctx, "production/alpha"); err != nil {
+		t.Fatalf("RemoveBackupSet: %v", err)
+	}
+	if !svc.holds.Held("production/alpha") {
+		t.Fatal("production/alpha is not held right after removal, so there is nothing here to reconcile")
+	}
+
+	// The operator restores the file by hand, then touches something
+	// unrelated through the product.
+	if err := os.WriteFile(configPath, original, 0o644); err != nil {
+		t.Fatalf("restoring config.yaml: %v", err)
+	}
+	if _, err := svc.SetBackupSetEnabled(ctx, "production/beta", true); err != nil {
+		t.Fatalf("SetBackupSetEnabled(production/beta): %v", err)
+	}
+
+	// The control: the reload really did bring alpha back.
+	if _, err := svc.GetBackupSet(ctx, "production/alpha"); err != nil {
+		t.Fatalf("GetBackupSet(production/alpha) after the hand restore: %v; the reload did not pick the set up, so the hold assertion below would be about a set that is not configured", err)
+	}
+
+	if svc.holds.Held("production/alpha") {
+		t.Error("production/alpha is configured again and still removal-held; it would never back up until a restart, and nothing would say why")
+	}
+	if got := setsInReport(cycleReportFrom(svc.state.Load().inner, svc.holds)); !containsSetID(got, "production/alpha") {
+		t.Errorf("a cycle after the restore covered %v, want production/alpha in it", got)
+	}
+}
+
 // TestRemoveBackupSet_RecordsWhatItRemovedAndWhatItKept covers the audit
 // trail on a destructive control. A removal that left no trace of having
 // happened turns a support conversation six weeks later into

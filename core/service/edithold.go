@@ -60,6 +60,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
 // editHoldLease is how long one hold lasts without being renewed. Short,
@@ -139,11 +140,13 @@ type editHolds struct {
 	// read-only, deleting from the operator's source machine, all after
 	// they removed it and watched the dialog close.
 	//
-	// It is cleared by exactly one thing, CreateBackupSet re-creating the
-	// same source/name, so a set brought back gets a clean start. A
-	// process restart clears it too, and correctly: by then the
-	// configuration on disk no longer names the set, so nothing will
-	// reach it anyway.
+	// It is cleared by exactly one thing: a reload of a configuration
+	// that names the id again (adoptConfig, which every write path ends
+	// in), so a set brought back gets a clean start whether it came back
+	// through CreateBackupSet or through a hand edit of config.yaml that
+	// the next write picked up. A process restart clears it too, and
+	// correctly: by then the configuration on disk no longer names the
+	// set, so nothing will reach it anyway.
 	removed map[string]bool
 	// changed is closed and replaced whenever a hold is PLACED, which is
 	// how a cycle already inside that set learns to stop. Releases
@@ -260,6 +263,22 @@ func (h *editHolds) forgetRemoved(setID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.removed, setID)
+}
+
+// forgetRemovedNamedIn drops the removal hold of every backup set cfg
+// names. adoptConfig calls it on every hot reload, which is what keeps
+// "a set the configuration names is never removal-held" true by whatever
+// route the set came back: CreateBackupSet, or a hand-restored config.yaml
+// that an unrelated write re-read. A set cfg does not name keeps its
+// hold, which is the removal's own case.
+func (h *editHolds) forgetRemovedNamedIn(cfg *config.Config) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, src := range cfg.Sources {
+		for _, bs := range src.BackupSets {
+			delete(h.removed, src.Name+"/"+bs.Name)
+		}
+	}
 }
 
 // state reports whether setID is held for EDITING and until when.
