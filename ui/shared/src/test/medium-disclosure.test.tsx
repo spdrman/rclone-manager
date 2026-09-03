@@ -165,7 +165,13 @@ describe("mapping a retention tier to a storage medium", () => {
     // words, so the two cannot come apart.
     expect(await screen.findByText(STORAGE.mediumDisclosure)).toBeTruthy();
     expect(screen.getByText(STORAGE.retrievalDisclosure)).toBeTruthy();
-    expect(screen.getByText(/Saving this sends monthly off this machine/i)).toBeTruthy();
+    expect(screen.getByText(/Saving this sends backups off this machine/i)).toBeTruthy();
+    // Which tier, and to which place: a count would send an operator off
+    // to work out which one this is about.
+    const listed = within(screen.getByRole("group", { name: "Storage medium disclosure" }))
+      .getByRole("listitem");
+    expect(listed.textContent).toContain("monthly");
+    expect(listed.textContent).toContain("offsite_s3");
 
     // And no figure comes with it. The backend has no price list, so
     // nothing here may render one.
@@ -240,7 +246,15 @@ describe("mapping a retention tier to a storage medium", () => {
       target: { value: "offsite_cold" }
     });
 
-    expect(await screen.findByText(/Saving this sends daily off this machine/i)).toBeTruthy();
+    await screen.findByText(/Saving this sends backups off this machine/i);
+    // Only the tier that is NEWLY leaving is listed: the file already
+    // sends monthly to offsite_s3, and re-litigating a mapping an
+    // operator already agreed to trains them to tick without reading.
+    const listed = within(screen.getByRole("group", { name: "Storage medium disclosure" }))
+      .getAllByRole("listitem");
+    expect(listed).toHaveLength(1);
+    expect(listed[0].textContent).toContain("daily");
+    expect(listed[0].textContent).not.toContain("monthly");
     // offsite_cold is an archive class, and the panel says so on top of
     // the deletion consequence. Scoped to the panel: the same fact is also
     // in the picker's field help, and asserting on the page as a whole

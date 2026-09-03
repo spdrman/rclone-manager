@@ -433,7 +433,10 @@ export function introducedMediumMappings(
  * for the reason TierRow is: the sentence an operator reads before their
  * backups leave this machine must be the same sentence on both surfaces.
  *
- * The paragraphs are the backend's own words, served
+ * Every tier is named, by name and by destination, never as a count. "2
+ * tiers" would send an operator off to work out which two, and the whole
+ * point of this panel is that they know what they are agreeing to before
+ * they agree to it. The paragraphs are the backend's own words, served
  * alongside the settings: the server refuses an unacknowledged write with
  * this same text, so what the form shows and what the server enforces
  * cannot come apart.
@@ -463,11 +466,17 @@ export function MediumDisclosure({
       aria-label="Storage medium disclosure"
       style={{ flexDirection: "column", gap: 10 }}
     >
-      <div style={{ fontWeight: 600 }}>
-        {introduced.length === 1
-          ? "Saving this sends " + introduced[0].name + " off this machine."
-          : "Saving this sends " + introduced.length + " tiers off this machine."}
-      </div>
+      <div style={{ fontWeight: 600 }}>Saving this sends backups off this machine.</div>
+      <ul style={{ margin: 0, paddingLeft: 20, fontSize: "var(--text-sm)" }}>
+        {introduced.map((t) => (
+          <li key={t.name}>
+            <span className="mono">{t.name}</span>
+            {" keeps its backups on "}
+            <span className="mono">{t.medium}</span>
+            {" from now on."}
+          </li>
+        ))}
+      </ul>
       <p style={{ margin: 0, fontSize: "var(--text-sm)", maxWidth: "78ch" }}>
         {storage.mediumDisclosure}
       </p>
