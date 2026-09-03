@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +34,17 @@ import (
 // decoration, and losing it silently is the failure this fixture exists
 // to catch.
 func writeRemovalFixtureConfig(t *testing.T) (configPath string, localA, localB string) {
+	t.Helper()
+	return writeRemovalFixtureConfigWithPosture(t, true)
+}
+
+// writeRemovalFixtureConfigWithPosture is writeRemovalFixtureConfig with
+// the source's read_only declaration under the caller's control. The
+// safety cases below need it OFF: FR-15 delete-from-source is the hazard
+// the removal hold exists to prevent, and a read-only source never
+// deletes, so a probe against the default fixture could not tell "the
+// hold stopped the cycle" from "the cycle had nothing to delete anyway".
+func writeRemovalFixtureConfigWithPosture(t *testing.T, readOnly bool) (configPath string, localA, localB string) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -64,13 +77,17 @@ func writeRemovalFixtureConfig(t *testing.T) (configPath string, localA, localB 
 			"        stale_after: 24h\n"
 	}
 
+	posture := ""
+	if readOnly {
+		posture = "    read_only: true\n"
+	}
 	configPath = filepath.Join(dir, "config.yaml")
 	content := "poll_interval: 15m\n" +
 		"state:\n" +
 		"  database: " + filepath.Join(dir, "state.db") + "\n" +
 		"sources:\n" +
 		"  - id: production\n" +
-		"    read_only: true\n" +
+		posture +
 		"    backup_sets:\n" +
 		set("alpha", remoteA, localA) +
 		set("beta", remoteB, localB) +
@@ -86,7 +103,14 @@ func writeRemovalFixtureConfig(t *testing.T) (configPath string, localA, localB 
 // single-set fixture.
 func openRemovalFixtureService(t *testing.T) (*BackupService, string, string, string) {
 	t.Helper()
-	configPath, localA, localB := writeRemovalFixtureConfig(t)
+	return openRemovalFixtureServiceWithPosture(t, true)
+}
+
+// openRemovalFixtureServiceWithPosture is openRemovalFixtureService over
+// writeRemovalFixtureConfigWithPosture.
+func openRemovalFixtureServiceWithPosture(t *testing.T, readOnly bool) (*BackupService, string, string, string) {
+	t.Helper()
+	configPath, localA, localB := writeRemovalFixtureConfigWithPosture(t, readOnly)
 	svc, cleanup, err := Open(context.Background(), configPath)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -458,6 +482,193 @@ func TestRemoveBackupSet_SecondRemovalIsRefusedRatherThanReportedAsSuccess(t *te
 	}
 	if !svc.holds.Held("production/alpha") {
 		t.Error("the second, refused removal released the hold the first one took")
+	}
+}
+
+// removeTwiceAtOnce runs two RemoveBackupSet calls for the same id from two
+// goroutines released on one signal, and sorts the outcomes: how many
+// removed the set, how many were told it was already gone, and anything
+// else, which is a failure of the probe rather than of the code.
+func removeTwiceAtOnce(t *testing.T, svc *BackupService, id string, release func()) (removed, gone int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	start := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			errs[i] = svc.RemoveBackupSet(context.Background(), id)
+		}(i)
+	}
+	close(start)
+	if release != nil {
+		release()
+	}
+	wg.Wait()
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			removed++
+		case errors.Is(err, ErrBackupSetNotFound):
+			gone++
+		default:
+			t.Fatalf("RemoveBackupSet(%s) under a duplicate: %v, want nil or ErrBackupSetNotFound", id, err)
+		}
+	}
+	return removed, gone
+}
+
+// TestRemoveBackupSet_ADuplicateRemovalInFlightDoesNotDropTheHold is the
+// two-caller case none of the tests above consider, and it is the one
+// that was wrong.
+//
+// Two removals of the same set overlap whenever two tabs, two operators,
+// or a client retrying a slow response reach the route together. Exactly
+// one of them removes the set; the other is told it is already gone,
+// which is right. What must not happen is the loser's cleanup taking the
+// winner's hold with it: a removal's hold is the ONLY thing a cycle
+// already running against the pre-removal snapshot can see, and a set
+// that is gone from the configuration with no hold on it is a set that
+// cycle will process, and for a source that is not read-only, delete
+// from.
+//
+// No test-side synchronisation at all: two goroutines, one start signal,
+// the way two clients would arrive. Repeated, because a race that is
+// drawn on the rare side once proves nothing; before the fix this lost
+// the hold on every one of these trials.
+func TestRemoveBackupSet_ADuplicateRemovalInFlightDoesNotDropTheHold(t *testing.T) {
+	const trials = 25
+	lost := 0
+	overlapped := 0
+	for i := 0; i < trials; i++ {
+		svc, _, _, _ := openRemovalFixtureService(t)
+		removed, gone := removeTwiceAtOnce(t, svc, "production/alpha", nil)
+		if removed != 1 || gone != 1 {
+			t.Fatalf("trial %d: %d removed and %d refused, want exactly one of each", i, removed, gone)
+		}
+		overlapped++
+		if !svc.holds.Held("production/alpha") {
+			lost++
+		}
+	}
+	if overlapped == 0 {
+		t.Fatal("no trial produced one removal and one refusal, so nothing here was exercised")
+	}
+	if lost > 0 {
+		t.Errorf("the hold on production/alpha was lost in %d of %d concurrent duplicate removals; "+
+			"the set is gone from the configuration and a cycle in flight would process it from the old snapshot", lost, trials)
+	}
+}
+
+// TestRemoveBackupSet_ADuplicateRemovalCannotHandTheSetBackToACycle is the
+// consequence of the case above, driven all the way to the disk.
+//
+// The interleaving is forced rather than hoped for: the test holds
+// configMu so both callers get past the atomic-state check (which still
+// names the set) before either can reach the file, and then lets them go.
+// The source is NOT read-only, so if the hold is gone the cycle run from
+// the pre-removal snapshot really does delete alpha.dump from the
+// operator's source machine, which is the one outcome this whole
+// operation is built to prevent.
+func TestRemoveBackupSet_ADuplicateRemovalCannotHandTheSetBackToACycle(t *testing.T) {
+	svc, configPath, _, _ := openRemovalFixtureServiceWithPosture(t, false)
+	sourceFile := filepath.Join(filepath.Dir(configPath), "remote-alpha", "alpha.dump")
+	if _, err := os.Stat(sourceFile); err != nil {
+		t.Fatalf("the fixture's source file is missing before anything ran: %v", err)
+	}
+
+	// The snapshot a cycle in flight would be holding: it still names
+	// both sets, and always will.
+	inFlight := svc.state.Load().inner
+
+	svc.configMu.Lock()
+	removed, gone := removeTwiceAtOnce(t, svc, "production/alpha", func() {
+		// Both goroutines are past requireBackupSet and queued on the
+		// mutex well inside this; the check they run first is one atomic
+		// load and a walk over two sets. If a machine is so starved that
+		// one of them has not started yet, the outcome below is still
+		// one removal and one refusal, only with the refusal answered
+		// off the atomic state instead of the file, and the assertions
+		// on the hold and the source file hold either way.
+		time.Sleep(100 * time.Millisecond)
+		svc.configMu.Unlock()
+	})
+	if removed != 1 || gone != 1 {
+		t.Fatalf("%d removed and %d refused, want exactly one of each", removed, gone)
+	}
+	if !svc.holds.Held("production/alpha") {
+		t.Errorf("production/alpha is not held after a removal raced a duplicate; the loser's cleanup dropped the winner's hold")
+	}
+
+	report := cycleReportFrom(inFlight, svc.holds)
+	if got := setsInReport(report); containsSetID(got, "production/alpha") {
+		t.Errorf("a cycle on the pre-removal snapshot covered %v after production/alpha was removed", got)
+	}
+	if _, err := os.Stat(sourceFile); err != nil {
+		t.Errorf("%s is gone from the operator's source after production/alpha was removed: %v", sourceFile, err)
+	}
+}
+
+// TestRemoveBackupSet_ADuplicateThatWinsTheLockLeavesTheHoldStanding is
+// the ordering the first two cases cannot force, and the one that told
+// the two candidate fixes apart.
+//
+// A fix that let the first caller remember "I placed the hold" and give
+// it back only then still failed here: the first caller can lose the
+// lock to the second, which then removes the set, and the first caller
+// refuses and, being the one that placed the hold, releases it. Go's
+// mutex lets a goroutine already running on another P take a lock ahead
+// of a waiter that was just woken, which is what this test arranges: the
+// first caller is parked on configMu, the second is spinning, and the
+// unlocking goroutine keeps its P busy for a moment so the woken waiter
+// cannot run before the spinner reaches the lock. Which caller wins is
+// logged, not required, because the assertion has to hold either way.
+func TestRemoveBackupSet_ADuplicateThatWinsTheLockLeavesTheHoldStanding(t *testing.T) {
+	const trials = 40
+	secondWon, lost := 0, 0
+	for i := 0; i < trials; i++ {
+		svc, _, _, _ := openRemovalFixtureService(t)
+		ctx := context.Background()
+		var wg sync.WaitGroup
+		var errFirst, errSecond error
+		var release atomic.Bool
+
+		svc.configMu.Lock()
+		wg.Add(1)
+		go func() { defer wg.Done(); errFirst = svc.RemoveBackupSet(ctx, "production/alpha") }()
+		time.Sleep(2 * time.Millisecond) // the first caller is parked on configMu
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for !release.Load() {
+			}
+			errSecond = svc.RemoveBackupSet(ctx, "production/alpha")
+		}()
+		time.Sleep(time.Millisecond) // the second caller is spinning on another P
+		svc.configMu.Unlock()
+		release.Store(true)
+		busyUntil := time.Now().Add(200 * time.Microsecond)
+		for time.Now().Before(busyUntil) {
+		}
+		wg.Wait()
+
+		switch {
+		case errFirst == nil && errors.Is(errSecond, ErrBackupSetNotFound):
+		case errSecond == nil && errors.Is(errFirst, ErrBackupSetNotFound):
+			secondWon++
+		default:
+			t.Fatalf("trial %d: first=%v second=%v, want one nil and one ErrBackupSetNotFound", i, errFirst, errSecond)
+		}
+		if !svc.holds.Held("production/alpha") {
+			lost++
+		}
+	}
+	t.Logf("the second caller won the lock in %d of %d trials", secondWon, trials)
+	if lost > 0 {
+		t.Errorf("the hold on production/alpha was lost in %d of %d trials; "+
+			"whichever call removes the set, its hold has to survive the other one's refusal", lost, trials)
 	}
 }
 

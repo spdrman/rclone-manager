@@ -235,11 +235,14 @@ func (h *editHolds) release(setID string) {
 // cycle already inside that set: the watcher wakes, re-reads Held, and
 // cancels that set's own context.
 //
-// Called BEFORE the configuration is re-read and rewritten, never after.
-// The write swaps this service's *app.Service, and a cycle already
-// running kept the pointer and the config snapshot it started with, so
-// nothing about the write reaches it. The hold is the only thing that
-// does.
+// Called BEFORE the configuration is rewritten and the service swapped,
+// never after, and under configMu. The write swaps this service's
+// *app.Service, and a cycle already running kept the pointer and the
+// config snapshot it started with, so nothing about the write reaches
+// it. The hold is the only thing that does. Under the lock, because two
+// removals of the same set can overlap, and a hold taken outside it was
+// one the losing call could not tell from its own and gave back; see
+// RemoveBackupSet's own doc.
 func (h *editHolds) holdRemoved(setID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -248,11 +251,11 @@ func (h *editHolds) holdRemoved(setID string) {
 	h.changed = make(chan struct{})
 }
 
-// forgetRemoved drops setID's removal hold. Two callers: CreateBackupSet,
-// when a set with this id is configured again, and RemoveBackupSet
-// itself, when it refuses after having already taken the hold. Forgetting
-// one that was never taken is not an error, for the same reason release
-// beside it says so.
+// forgetRemoved drops setID's removal hold. Called by RemoveBackupSet
+// when it fails after having taken the hold, under the same lock it took
+// it under, so the hold it drops is its own. Forgetting one that was
+// never taken is not an error, for the same reason release beside it
+// says so.
 func (h *editHolds) forgetRemoved(setID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

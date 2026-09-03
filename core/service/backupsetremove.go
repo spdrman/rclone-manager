@@ -67,16 +67,40 @@
 // before the write so the only step after it cannot fail, then one atomic
 // state.Store.
 //
-// The step that is new is the hold, and it comes first. Rewriting the
-// file and swapping this service's *app.Service does not reach a cycle
-// that is already running: runScheduledCycle reads state.Load().inner
-// once (scheduler.go) and that cycle keeps the pointer and the
-// configuration snapshot it started with for its whole run. So a removal
-// that only wrote the file would leave the current cycle discovering,
-// transferring and, for a set that is not read-only, DELETING FROM THE
-// OPERATOR'S SOURCE MACHINE for a set they just removed. Taking the hold
-// before the load stops the pass where it stands and blocks the next one,
-// and a removal's hold does not expire (edithold.go).
+// The step that is new is the hold. Rewriting the file and swapping this
+// service's *app.Service does not reach a cycle that is already running:
+// runScheduledCycle reads state.Load().inner once (scheduler.go) and that
+// cycle keeps the pointer and the configuration snapshot it started with
+// for its whole run. So a removal that only wrote the file would leave
+// the current cycle discovering, transferring and, for a set that is not
+// read-only, DELETING FROM THE OPERATOR'S SOURCE MACHINE for a set they
+// just removed. The hold stops the pass where it stands and blocks the
+// next one, and a removal's hold does not expire (edithold.go).
+//
+// # Where the hold is taken, and why it is under the lock
+//
+// It is taken inside configMu, once the file on disk has been read and
+// the set found in it, and before anything is written. Not before the
+// lock, which is where it first lived. The property that matters is
+// "before the write and the swap", because those are the only two events
+// in this method, and reading the file is neither; a hold taken a few
+// milliseconds earlier stops nothing a hold taken here does not.
+//
+// What taking it earlier DID do is break under two overlapping removals
+// of the same set, which is two tabs, two operators, or one client
+// retrying a slow response. Both got past the cheap atomic-state check,
+// both took the hold (the second call a no-op), one won the lock and
+// removed the set, and the other found it gone, refused, and gave the
+// hold back on the way out. The registry cannot tell whose hold that was,
+// and the set was left gone from the configuration with nothing stopping
+// a cycle in flight from processing it. Making the release conditional on
+// "this call placed it" does not close that either: the placer can lose
+// the lock to the second caller, which is then the one that removes the
+// set, and the placer refuses and releases it. Under the lock, a caller
+// that finds the set gone never took a hold and never gives one back, and
+// a caller that took one holds the lock for every step that could make it
+// give it back. There is no ordering left in which a hold is released by
+// anyone but the call that placed it, for a set that is still there.
 //
 // What a stopped pass can leave behind is worth knowing: an interrupted
 // transfer leaves a .partial file and a journal row short of a terminal
@@ -126,19 +150,6 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 		return err
 	}
 
-	// Before the lock, before the load. See this file's own doc: this is
-	// the only thing in this method that a cycle already in flight can
-	// observe.
-	b.holds.holdRemoved(id)
-	removed := false
-	defer func() {
-		// Every route out of here that did NOT remove the set gives the
-		// hold back, so a refusal never leaves a configured set paused.
-		if !removed {
-			b.holds.forgetRemoved(id)
-		}
-	}()
-
 	b.configMu.Lock()
 	defer b.configMu.Unlock()
 
@@ -167,10 +178,33 @@ func (b *BackupService) RemoveBackupSet(ctx context.Context, id string) error {
 			found = true
 			break
 		}
+		if found {
+			break
+		}
 	}
 	if !found {
+		// Gone from the file. Either a duplicate of this call got here
+		// first, in which case its hold stands and must not be touched,
+		// or the set was never there. Either way nothing was taken, so
+		// nothing is given back.
 		return wrapNotFound(id)
 	}
+
+	// The set is on disk and this call is the one taking it out. The hold
+	// goes in HERE: under the lock, after the read, before the write. See
+	// this file's own doc for why it moved off the front of the method,
+	// and edithold.go for why it never expires.
+	b.holds.holdRemoved(id)
+	removed := false
+	defer func() {
+		// Every route out of here that took the hold and did NOT remove
+		// the set gives it back, so a failed write never leaves a
+		// configured set paused. The lock is still held when this runs,
+		// so the hold being given back is this call's own.
+		if !removed {
+			b.holds.forgetRemoved(id)
+		}
+	}()
 
 	// Encoded before Validate, which resolves defaults in place; see
 	// SetBackupSetEnabled's own comment for the full reasoning and for
