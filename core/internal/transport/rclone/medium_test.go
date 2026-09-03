@@ -126,6 +126,24 @@ func TestClassifyS3APIErrors(t *testing.T) {
 		{"SlowDown", transport.Transient},
 		{"ServiceUnavailable", transport.Transient},
 		{"InternalError", transport.Transient},
+		// A wrong REGION arrives as one of these, and not one of them
+		// reads anything like "your region is wrong", which is exactly
+		// why they are worth classifying instead of leaving at Permanent.
+		{"PermanentRedirect", transport.Configuration},
+		{"AuthorizationHeaderMalformed", transport.Configuration},
+		{"IllegalLocationConstraintException", transport.Configuration},
+		// The bytes arrived and did not match what was declared. This is
+		// the one family where a retry is actively wrong: it would send
+		// the same corrupt payload again.
+		{"BadDigest", transport.IntegrityFailure},
+		{"XAmzContentSHA256Mismatch", transport.IntegrityFailure},
+		// An object in an archive class that has to be restored first
+		// (FR-34). Nothing is wrong and no retry changes it, which is
+		// what #241 will turn into an explicit restore.
+		{"InvalidObjectState", transport.UnsupportedCapability},
+		// A multipart upload id that expired or was aborted: the same
+		// fact about a different handle.
+		{"NoSuchUpload", transport.NotFound},
 	} {
 		t.Run(tc.code, func(t *testing.T) {
 			// Wrapped, not bare, because that is how it arrives: rclone

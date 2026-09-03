@@ -268,20 +268,34 @@ func apiErrorCode(err error) (string, bool) {
 var s3Categories = map[string]transport.Category{
 	// The request cannot succeed until a person edits the configuration.
 	// The bucket is named in config, and it is not there.
-	"NoSuchBucket":      transport.Configuration,
-	"InvalidBucketName": transport.Configuration,
+	//
+	// PermanentRedirect, AuthorizationHeaderMalformed and the two
+	// location-constraint codes are all what a wrong REGION looks like
+	// from the outside, and none of them reads anything like "your region
+	// is wrong", which is exactly why they are worth naming here.
+	"NoSuchBucket":                       transport.Configuration,
+	"InvalidBucketName":                  transport.Configuration,
+	"PermanentRedirect":                  transport.Configuration,
+	"AuthorizationHeaderMalformed":       transport.Configuration,
+	"IllegalLocationConstraintException": transport.Configuration,
+	"InvalidLocationConstraint":          transport.Configuration,
 
 	// The caller is not who the endpoint will accept, or is not allowed to
 	// do this. S3 has no pre-session handshake, so a wrong key and a
 	// too-narrow policy are the same first-request failure; they share a
 	// category because there is no earlier moment at which they could have
 	// been told apart.
-	"AccessDenied":          transport.Authentication,
-	"InvalidAccessKeyId":    transport.Authentication,
-	"SignatureDoesNotMatch": transport.Authentication,
-	"ExpiredToken":          transport.Authentication,
-	"InvalidToken":          transport.Authentication,
-	"TokenRefreshRequired":  transport.Authentication,
+	"AccessDenied":                transport.Authentication,
+	"InvalidAccessKeyId":          transport.Authentication,
+	"SignatureDoesNotMatch":       transport.Authentication,
+	"ExpiredToken":                transport.Authentication,
+	"InvalidToken":                transport.Authentication,
+	"TokenRefreshRequired":        transport.Authentication,
+	"InvalidSecurity":             transport.Authentication,
+	"AuthFailure":                 transport.Authentication,
+	"UnrecognizedClientException": transport.Authentication,
+	"MissingAuthenticationToken":  transport.Authentication,
+	"AccountProblem":              transport.Authentication,
 	// Forbidden and Unauthorized are not S3 codes at all, they are what
 	// the SDK synthesizes from the HTTP status when the response has no
 	// body to read a code out of. A HEAD is exactly that response, and a
@@ -295,18 +309,49 @@ var s3Categories = map[string]transport.Category{
 
 	// The object is not there. NotFound is what a HEAD returns; NoSuchKey
 	// is what a GET returns; both mean the same thing to this product.
-	"NoSuchKey": transport.NotFound,
-	"NotFound":  transport.NotFound,
+	// NoSuchUpload is a multipart upload id that has expired or been
+	// aborted, which is the same fact about a different handle.
+	"NoSuchKey":    transport.NotFound,
+	"NotFound":     transport.NotFound,
+	"NoSuchUpload": transport.NotFound,
 
 	// Throttling and the service's own 5xx family: the request may well
 	// succeed if it is made again, which is the whole meaning of
 	// Transient and the only category FR-22 lets retry.Do act on.
-	"SlowDown":             transport.Transient,
-	"Throttling":           transport.Transient,
-	"ThrottlingException":  transport.Transient,
-	"TooManyRequests":      transport.Transient,
-	"RequestLimitExceeded": transport.Transient,
-	"RequestTimeout":       transport.Transient,
-	"InternalError":        transport.Transient,
-	"ServiceUnavailable":   transport.Transient,
+	"SlowDown":                               transport.Transient,
+	"Throttling":                             transport.Transient,
+	"ThrottlingException":                    transport.Transient,
+	"RequestThrottled":                       transport.Transient,
+	"RequestThrottledException":              transport.Transient,
+	"TooManyRequests":                        transport.Transient,
+	"TooManyRequestsException":               transport.Transient,
+	"RequestLimitExceeded":                   transport.Transient,
+	"ProvisionedThroughputExceededException": transport.Transient,
+	"RequestTimeout":                         transport.Transient,
+	"RequestTimeoutException":                transport.Transient,
+	"InternalError":                          transport.Transient,
+	"InternalFailure":                        transport.Transient,
+	"ServiceUnavailable":                     transport.Transient,
+
+	// The bytes arrived and did not match what was declared. This is the
+	// one family where a retry is actively wrong: it would re-send the
+	// same corrupt payload, and FR-22 already forbids it by keeping
+	// IntegrityFailure out of Retryable.
+	"BadDigest":                 transport.IntegrityFailure,
+	"InvalidDigest":             transport.IntegrityFailure,
+	"XAmzContentSHA256Mismatch": transport.IntegrityFailure,
+
+	// InvalidObjectState is an object in an archive class that has to be
+	// restored before it can be read (FR-34). Nothing is wrong and no
+	// retry changes it, so UnsupportedCapability is the honest label until
+	// #241 lands the explicit restore that gives it a better one.
+	"InvalidObjectState": transport.UnsupportedCapability,
+	"NotImplemented":     transport.UnsupportedCapability,
+
+	// Somebody else got there first. This adapter never creates a bucket
+	// (see medium.go's package comment), so these two can only arrive from
+	// an endpoint doing something on its own, and Conflict is the category
+	// that says "a person decides".
+	"BucketAlreadyExists":     transport.Conflict,
+	"BucketAlreadyOwnedByYou": transport.Conflict,
 }
