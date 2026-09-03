@@ -117,6 +117,17 @@ type Artifact struct {
 	// RetentionTier is the tier that most recently selected this artifact
 	// for retention, or empty.
 	RetentionTier string
+
+	// Placements is every durable copy this artifact currently has, one
+	// entry per place (EPIC E, FR-29).
+	//
+	// Empty means this artifact has no durable copy anywhere yet, which is
+	// an ordinary answer for one still transferring and never a copy this
+	// read model failed to describe. LocalPath above keeps meaning what it
+	// always meant, the path ingestion landed on, and is NOT evidence that
+	// a readable file is sitting there: a caller asking where the bytes
+	// are asks this field. See placements.go.
+	Placements []Placement
 }
 
 // ArtifactFilter narrows ListArtifacts. An empty BackupSetID matches every
@@ -169,6 +180,8 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 		appFilter.Source, appFilter.Set = source, set
 	}
 
+	mediums := indexMediums(st.inner.Config)
+
 	records, err := st.inner.ListArtifacts(ctx, appFilter)
 	if err != nil {
 		// internal/app refuses a filter naming nothing (#187). Translated
@@ -185,7 +198,7 @@ func (b *BackupService) ListArtifacts(ctx context.Context, filter ArtifactFilter
 
 	out := make([]Artifact, 0, len(records))
 	for _, rec := range records {
-		a := toServiceArtifact(rec)
+		a := toServiceArtifact(rec, mediums)
 		if a.Quarantined {
 			if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
 				return nil, err
@@ -213,7 +226,7 @@ func (b *BackupService) GetArtifact(ctx context.Context, id string) (Artifact, e
 		}
 		return Artifact{}, fmt.Errorf("service: loading artifact %s: %w", id, err)
 	}
-	a := toServiceArtifact(rec)
+	a := toServiceArtifact(rec, indexMediums(b.state.Load().inner.Config))
 	if a.Quarantined {
 		if err := b.attachQuarantineReason(ctx, &a, rec); err != nil {
 			return Artifact{}, err
@@ -422,7 +435,12 @@ func splitBackupSetID(id string) (source, set string, ok bool) {
 	return source, set, true
 }
 
-func toServiceArtifact(rec state.Record) Artifact {
+// toServiceArtifact projects one journal record onto the boundary shape.
+//
+// mediums is the running configuration's view of the places placements
+// name, which the journal cannot supply: whether this deployment can still
+// REACH a medium is a fact about config.yaml (see placements.go).
+func toServiceArtifact(rec state.Record, mediums mediumIndex) Artifact {
 	a := Artifact{
 		ID:                rec.Artifact.String(),
 		BackupSetID:       rec.Artifact.Set.String(),
@@ -438,6 +456,7 @@ func toServiceArtifact(rec state.Record) Artifact {
 		ChecksumAlgorithm: rec.LocalHashAlg,
 		ValidationDetail:  rec.ValidationDetail,
 		RetentionTier:     rec.RetentionTier,
+		Placements:        toServicePlacements(rec.Placements, mediums),
 	}
 
 	if rec.Remote.Size != nil {
