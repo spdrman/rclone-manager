@@ -1237,6 +1237,7 @@ core/internal/
   metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
   model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   obs/           structured event logging
+  placement/     the verification ladder: what each class of check proves about a durable copy, and what it costs
   quarantine/    the operator-facing view of what is quarantined and why
   recovery/      the non-secret sidecar manifest written beside every committed artifact
   reconcile/     startup reconciliation against the journal, filesystem and remote
