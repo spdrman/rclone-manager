@@ -306,6 +306,13 @@ func writeArtifactActionError(w http.ResponseWriter, err error, fallback string)
 	case errors.Is(err, service.ErrArtifactNotQuarantined):
 		writeError(w, http.StatusConflict, "ARTIFACT_NOT_QUARANTINED",
 			"this backup is not quarantined")
+	case errors.Is(err, service.ErrBackupSetNotFound):
+		// Issue #391. The backup exists; the set that owned it does not,
+		// any more. The same code every other surface answers for a
+		// removed set, so a client already knows what it means, and the
+		// remedy is the one the removal itself named.
+		writeError(w, http.StatusNotFound, "BACKUP_SET_NOT_FOUND",
+			"this backup's set is no longer configured; create a backup set with the same source and name to act on it again")
 	case errors.Is(err, service.ErrReinstatementRefused):
 		// The one refusal whose text an operator genuinely needs: it says
 		// which evidence was missing, and repairing that is the whole

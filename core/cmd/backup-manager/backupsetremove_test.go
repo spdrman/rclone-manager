@@ -135,3 +135,35 @@ func TestRun_BackupSetRemove_RefusesEveryOtherVerbsFlags(t *testing.T) {
 		t.Fatalf("the same removal with no extra flag = %d, want 0; the refusals above prove nothing without this", code)
 	}
 }
+
+// TestRun_BackupSetRemove_ArtifactsStillListsWhatStayed pins the sentence
+// the verb prints: the backups "stay listed by `backup-manager
+// artifacts`". The unfiltered list has to ASK for a removed set's rows
+// (internal/app widens only when asked, because the quarantine read is
+// the same call and must not), so a terminal that forgot to ask would
+// print that sentence and contradict it on the very next command.
+func TestRun_BackupSetRemove_ArtifactsStillListsWhatStayed(t *testing.T) {
+	configPath := writeTestConfig(t)
+	if got := run([]string{"run", "--config", configPath}); got != 0 {
+		t.Fatalf("run(run) = %d, want 0; without a cycle there is nothing on record to survive the removal", got)
+	}
+	before := captureStdout(t, func() { _ = run([]string{"artifacts", "--config", configPath}) })
+	if !strings.Contains(before, "production/postgres-primary/backup.dump") {
+		t.Fatalf("the cycle left no artifact on record, so nothing below would be evidence:\n%s", before)
+	}
+
+	_ = captureStdout(t, func() {
+		if code := run([]string{"backup-set", "--config", configPath, "remove", "production/postgres-primary"}); code != 0 {
+			t.Fatalf("run(backup-set remove) = %d, want 0", code)
+		}
+	})
+
+	after := captureStdout(t, func() {
+		if code := run([]string{"artifacts", "--config", configPath}); code != 0 {
+			t.Errorf("run(artifacts) after the removal = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(after, "production/postgres-primary/backup.dump") {
+		t.Errorf("`artifacts` no longer lists the removed set's backup, which the removal just promised it would:\n%s", after)
+	}
+}

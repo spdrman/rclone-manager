@@ -777,6 +777,61 @@ func TestContract_EveryRefusalTheseRoutesReturnIsDeclaredForThatOperation(t *tes
 			wantStatus: http.StatusConflict,
 			wantCode:   "ARTIFACT_NOT_QUARANTINED",
 		},
+		// Issue #391. A backup set's configuration can be removed while
+		// its journal rows stay, so every quarantine action can now be
+		// asked about an artifact whose set the configuration no longer
+		// has. Each has to answer with a code declared for it, because
+		// an unclassified refusal here was a 500 on two of them and a
+		// silent success on the third.
+		{
+			name:      "revalidating a backup whose set is no longer configured",
+			operation: "revalidateArtifact",
+			method:    http.MethodPost,
+			target:    "/api/v1/quarantine/src/set-1/backup.dump/revalidate",
+			csrf:      true,
+			arrange: func(b *syncFakeBackend) {
+				b.errOnRevalidate = fmt.Errorf("%w: src/set-1", service.ErrBackupSetNotFound)
+			},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "BACKUP_SET_NOT_FOUND",
+		},
+		{
+			name:      "retrying a backup whose set is no longer configured",
+			operation: "retryArtifactIngestion",
+			method:    http.MethodPost,
+			target:    "/api/v1/quarantine/src/set-1/backup.dump/retry",
+			csrf:      true,
+			arrange: func(b *syncFakeBackend) {
+				b.errOnRetry = fmt.Errorf("%w: src/set-1", service.ErrBackupSetNotFound)
+			},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "BACKUP_SET_NOT_FOUND",
+		},
+		{
+			name:      "reinstating a backup whose set is no longer configured",
+			operation: "reinstateArtifact",
+			method:    http.MethodPost,
+			target:    "/api/v1/quarantine/src/set-1/backup.dump/reinstate",
+			csrf:      true,
+			arrange: func(b *syncFakeBackend) {
+				b.errOnReinstate = fmt.Errorf("%w: src/set-1", service.ErrBackupSetNotFound)
+			},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "BACKUP_SET_NOT_FOUND",
+		},
+		// Issue #391's own operation, which shipped without a row here.
+		{
+			name:      "removing a backup set this deployment does not configure",
+			operation: "removeBackupSet",
+			method:    http.MethodDelete,
+			target:    "/api/v1/backup-sets/src/gone",
+			csrf:      true,
+			arrange: func(b *syncFakeBackend) {
+				b.errOnRemove = fmt.Errorf("%w: src/gone", service.ErrBackupSetNotFound)
+			},
+			wantStatus: http.StatusNotFound,
+			wantCode:   "BACKUP_SET_NOT_FOUND",
+		},
 	}
 
 	for _, tc := range cases {

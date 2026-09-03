@@ -27,6 +27,16 @@ var ErrNotQuarantined = errors.New("app: artifact is not quarantined")
 // does serve it, by keeping the local copy rather than re-fetching.
 var ErrQuarantineIrrecoverable = errors.New("app: quarantined artifact has no remaining source to re-ingest")
 
+// unconfiguredSet is the refusal all three actions below share for an
+// artifact whose backup set the configuration no longer names (issue
+// #391): the same *NotFoundError ListArtifacts returns for a filter over
+// such a set, so the layers above turn it into the same named 404
+// rather than a 500. The row itself still exists, which is why this is
+// not state.ErrArtifactNotFound.
+func unconfiguredSet(set model.BackupSetID) error {
+	return &NotFoundError{Kind: "backup set", Name: set.String()}
+}
+
 // RevalidateQuarantined re-runs the durable-local-copy checks against one
 // QUARANTINED or QUARANTINED_LOST artifact and reports the verdict,
 // writing nothing.
@@ -63,7 +73,7 @@ func (s *Service) RevalidateQuarantined(ctx context.Context, id model.ArtifactID
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
 	if !ok {
-		return ValidateResult{}, fmt.Errorf("app: revalidate: %s has no configured backup set", id.Set)
+		return ValidateResult{}, fmt.Errorf("app: revalidate: %w", unconfiguredSet(id.Set))
 	}
 
 	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)
@@ -105,6 +115,17 @@ func (s *Service) RetryQuarantinedIngestion(ctx context.Context, id model.Artifa
 		return fmt.Errorf("%w: %s", ErrQuarantineIrrecoverable, id)
 	default:
 		return fmt.Errorf("%w: %s is %s", ErrNotQuarantined, id, rec.State)
+	}
+
+	// The set has to be configured, and this is the one action of the
+	// three that did not check (issue #391). A retry hands the row back
+	// to the ordinary pipeline, and the pipeline walks configured sets:
+	// a row sent to DISCOVERED under a set the configuration no longer
+	// has is one no cycle will ever pick up, no longer quarantined so
+	// off that screen, and unreachable by every recovery path. It is
+	// refused before the write, like the other two.
+	if _, _, ok := s.backupSetConfigFor(id.Set); !ok {
+		return fmt.Errorf("app: retry ingestion: %w", unconfiguredSet(id.Set))
 	}
 
 	_, err = lifecycle.Advance(ctx, s.lifecycleDeps(), state.Transition{
@@ -198,7 +219,7 @@ func (s *Service) ReinstateQuarantined(ctx context.Context, id model.ArtifactID,
 
 	_, bs, ok := s.backupSetConfigFor(id.Set)
 	if !ok {
-		return ReinstateResult{}, fmt.Errorf("app: reinstate: %s has no configured backup set", id.Set)
+		return ReinstateResult{}, fmt.Errorf("app: reinstate: %w", unconfiguredSet(id.Set))
 	}
 
 	checks, err := s.runValidationChecks(ctx, rec, bs.Validation)

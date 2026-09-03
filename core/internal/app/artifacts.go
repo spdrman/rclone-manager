@@ -24,6 +24,15 @@ import (
 type ArtifactFilter struct {
 	Source string
 	Set    string
+
+	// IncludeUnconfigured widens an UNFILTERED list to the artifacts of
+	// backup sets the journal knows and the configuration no longer does
+	// (issue #391). It is opt-in, and it is honoured only when Source and
+	// Set are both empty; a filter that names something has been through
+	// resolve, which refuses an id the configuration does not have, and
+	// that refusal stays. See ListArtifacts for which caller asks for
+	// this and which deliberately does not.
+	IncludeUnconfigured bool
 }
 
 // resolve reports whether this filter names anything in sources, and
@@ -89,21 +98,31 @@ func (f ArtifactFilter) matches(sourceName, setName string) bool {
 //
 // # Backup sets that are no longer configured
 //
-// An UNFILTERED list also carries the artifacts of backup sets the
-// journal knows about and the configuration no longer does (issue #391).
-// Before removal existed those two sets of ids were always the same, so
-// walking the configuration was a complete answer; it is not any more,
-// and the difference is exactly what removal is required to preserve.
-// The confirmation an operator accepts says the retained backups "stay on
-// NAS storage and remain listed under Backups", and the backups list is
-// this call with no filter, so a config-only walk would have made those
-// backups vanish from the one screen that was promised they would not.
+// An UNFILTERED list that asks for it (IncludeUnconfigured) also carries
+// the artifacts of backup sets the journal knows about and the
+// configuration no longer does (issue #391). Before removal existed those
+// two sets of ids were always the same, so walking the configuration was
+// a complete answer; it is not any more, and the difference is exactly
+// what removal is required to preserve. The confirmation an operator
+// accepts says the retained backups "stay on NAS storage and remain
+// listed under Backups", and the backups list is this call with no
+// filter, so a config-only walk would have made those backups vanish
+// from the one screen that was promised they would not.
 //
-// This is the ONE read that widens. Health (FR-24), capacity (FR-21) and
-// retention still walk the configuration alone, and correctly: a removed
-// set has no freshness to assess, no forecast to make and no policy to
-// apply. What it has is files on a disk and rows that describe them, and
-// those are what this returns.
+// The widening is opt-in because this call feeds two screens, not one.
+// The backups list (core/service.ListArtifacts with no filter, the
+// `artifacts` command with none) asks for it. The quarantine list is
+// the same read with a filter on top, and it deliberately does NOT ask:
+// that screen carries three write actions, every one of which needs the
+// artifact's backup set to be configured (the checks run under the set's
+// validation policy, and a retry hands the row back to a pipeline that
+// only walks configured sets), so a quarantined row under a removed set
+// would be a row with three buttons none of which can do anything good.
+// It stays on the backups list, marked quarantined, and comes back to
+// the quarantine screen the moment the set is configured again. Health
+// (FR-24), capacity (FR-21) and retention walk the configuration alone
+// and always will: a removed set has no freshness to assess, no forecast
+// to make and no policy to apply.
 //
 // # An unconfigured filter is refused, not answered with nothing
 //
@@ -149,13 +168,13 @@ func (s *Service) ListArtifacts(ctx context.Context, filter ArtifactFilter) ([]s
 	// removed anything gets a byte-identical answer to the one it got
 	// before.
 	//
-	// Only for a filter that names nothing. A filter naming a specific
-	// source or set has already been through resolve above, which refuses
-	// an id the configuration does not have (issue #187), and that
-	// refusal stays: "no such backup set" and "this backup set has no
-	// artifacts" must not collapse into one answer just because removal
-	// now exists.
-	if filter.Source == "" && filter.Set == "" {
+	// Only for a filter that names nothing AND asked for it. A filter
+	// naming a specific source or set has already been through resolve
+	// above, which refuses an id the configuration does not have (issue
+	// #187), and that refusal stays: "no such backup set" and "this
+	// backup set has no artifacts" must not collapse into one answer
+	// just because removal now exists.
+	if filter.Source == "" && filter.Set == "" && filter.IncludeUnconfigured {
 		known, err := s.Journal.ListBackupSetIDs(ctx)
 		if err != nil {
 			return out, fmt.Errorf("app: artifacts: listing the backup sets on record: %w", err)

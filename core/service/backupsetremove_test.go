@@ -724,6 +724,126 @@ func TestRemoveBackupSet_AHandRestoredSetIsNotHeldForever(t *testing.T) {
 	}
 }
 
+// quarantineAlphaThroughReconcile drives the fixture to the state the
+// quarantine screen exists for: one committed artifact under
+// production/alpha whose local copy has since been tampered with, which
+// the next cycle's FR-17 reconcile quarantines. It returns that
+// artifact's id, and refuses to return at all if nothing was quarantined,
+// because every assertion built on it would otherwise be about an empty
+// list.
+func quarantineAlphaThroughReconcile(t *testing.T, svc *BackupService, localA string) string {
+	t.Helper()
+	ctx := context.Background()
+	if got := setsInReport(cycleReportFrom(svc.state.Load().inner, svc.holds)); !containsSetID(got, "production/alpha") {
+		t.Fatalf("the seeding cycle covered %v, want production/alpha", got)
+	}
+	if err := os.WriteFile(filepath.Join(localA, "alpha.dump"), []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("tampering with alpha's local copy: %v", err)
+	}
+	_ = cycleReportFrom(svc.state.Load().inner, svc.holds)
+
+	quarantined, err := svc.ListArtifacts(ctx, ArtifactFilter{QuarantinedOnly: true})
+	if err != nil {
+		t.Fatalf("ListArtifacts(QuarantinedOnly): %v", err)
+	}
+	for _, a := range quarantined {
+		if a.BackupSetID == "production/alpha" {
+			return a.ID
+		}
+	}
+	t.Fatalf("reconcile quarantined nothing under production/alpha; the quarantine list is %+v", quarantined)
+	return ""
+}
+
+// TestRemoveBackupSet_TheQuarantineListStopsAtTheConfiguration is the
+// second read surface, the one the artifact list's own doc forgot it
+// was feeding.
+//
+// The quarantine screen is built from the same read as the backups list
+// with a filter on top, and it carries three write actions. Every one of
+// them needs the artifact's backup set to be configured (the checks run
+// under the set's validation policy, and a retry hands the row back to a
+// pipeline that only walks configured sets), so a quarantined artifact
+// under a removed set is a row with three buttons none of which can do
+// anything good. It comes off that screen. It does NOT come off the
+// backups list, which is the promise the confirmation makes, and it is
+// still marked quarantined there, so nothing about it is hidden.
+func TestRemoveBackupSet_TheQuarantineListStopsAtTheConfiguration(t *testing.T) {
+	svc, _, localA, _ := openRemovalFixtureService(t)
+	ctx := context.Background()
+	id := quarantineAlphaThroughReconcile(t, svc, localA)
+
+	if err := svc.RemoveBackupSet(ctx, "production/alpha"); err != nil {
+		t.Fatalf("RemoveBackupSet: %v", err)
+	}
+
+	quarantined, err := svc.ListArtifacts(ctx, ArtifactFilter{QuarantinedOnly: true})
+	if err != nil {
+		t.Fatalf("ListArtifacts(QuarantinedOnly) after removal: %v", err)
+	}
+	for _, a := range quarantined {
+		if a.ID == id {
+			t.Errorf("the quarantine list still carries %s after its set was removed; every action that screen offers needs a configured set behind the row", id)
+		}
+	}
+
+	// The control, and the other half of the promise: the row is still
+	// on the backups list, and still says what it is.
+	all, err := svc.ListArtifacts(ctx, ArtifactFilter{})
+	if err != nil {
+		t.Fatalf("ListArtifacts after removal: %v", err)
+	}
+	listed := false
+	for _, a := range all {
+		if a.ID != id {
+			continue
+		}
+		listed = true
+		if !a.Quarantined {
+			t.Errorf("%s is on the backups list after removal but no longer marked quarantined (state %s)", id, a.State)
+		}
+	}
+	if !listed {
+		t.Errorf("%s vanished from the unfiltered backups list after removal; the dialog promises it stays listed", id)
+	}
+}
+
+// TestRemoveBackupSet_TheQuarantineActionsRefuseARemovedSetByName covers
+// the three actions the screen above no longer offers but the API and
+// the CLI still reach by id. Two of them used to fail with an error
+// nothing classified, which the API turned into a 500. The third used to
+// SUCCEED: it moved the row from QUARANTINED to DISCOVERED, where no
+// cycle will ever walk it because no configured set owns it, and off the
+// quarantine screen because it is no longer quarantined. One click made
+// a bad local copy unreachable by every recovery path this product has.
+func TestRemoveBackupSet_TheQuarantineActionsRefuseARemovedSetByName(t *testing.T) {
+	svc, _, localA, _ := openRemovalFixtureService(t)
+	ctx := context.Background()
+	id := quarantineAlphaThroughReconcile(t, svc, localA)
+
+	if err := svc.RemoveBackupSet(ctx, "production/alpha"); err != nil {
+		t.Fatalf("RemoveBackupSet: %v", err)
+	}
+
+	if _, err := svc.RevalidateArtifact(ctx, id); !errors.Is(err, ErrBackupSetNotFound) {
+		t.Errorf("RevalidateArtifact(%s) after removal: err = %v, want ErrBackupSetNotFound", id, err)
+	}
+	if _, err := svc.ReinstateArtifact(ctx, id, "after removal"); !errors.Is(err, ErrBackupSetNotFound) {
+		t.Errorf("ReinstateArtifact(%s) after removal: err = %v, want ErrBackupSetNotFound", id, err)
+	}
+	if err := svc.RetryArtifactIngestion(ctx, id); !errors.Is(err, ErrBackupSetNotFound) {
+		t.Errorf("RetryArtifactIngestion(%s) after removal: err = %v, want ErrBackupSetNotFound", id, err)
+	}
+
+	after, err := svc.GetArtifact(ctx, id)
+	if err != nil {
+		t.Fatalf("GetArtifact(%s): %v", id, err)
+	}
+	if !after.Quarantined {
+		t.Errorf("%s is %s after the refused retry, want it still quarantined; a row moved to DISCOVERED under a set no cycle walks is unreachable by every recovery path", id, after.State)
+	}
+}
+
 // TestRemoveBackupSet_RecordsWhatItRemovedAndWhatItKept covers the audit
 // trail on a destructive control. A removal that left no trace of having
 // happened turns a support conversation six weeks later into

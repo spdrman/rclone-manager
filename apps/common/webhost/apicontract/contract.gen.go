@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "ea21c2c6029cf877087ae5b841d934080750cbf8f7f75abd4511efd68b297d40"
+const ContractSHA256 = "00601e396d842141a7d46e5dbe83f7b8561b462f864e47848b888b36db5970b6"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -535,7 +535,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			404: {ErrorCodeArtifactNotFound},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
 			409: {ErrorCodeArtifactNotQuarantined, ErrorCodeReinstatementRefused},
 			500: {ErrorCodeInternal},
 		},
@@ -547,7 +547,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			404: {ErrorCodeArtifactNotFound},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
 			409: {ErrorCodeArtifactNotQuarantined, ErrorCodeArtifactIrrecoverable},
 			500: {ErrorCodeInternal},
 		},
@@ -559,7 +559,7 @@ var Endpoints = []Endpoint{
 		ErrorCodes: map[int][]ErrorCode{
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
-			404: {ErrorCodeArtifactNotFound},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeBackupSetNotFound},
 			409: {ErrorCodeArtifactNotQuarantined},
 			500: {ErrorCodeInternal},
 		},

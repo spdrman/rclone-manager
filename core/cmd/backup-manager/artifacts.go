@@ -63,7 +63,12 @@ func cmdArtifacts(args []string) int {
 		return 0
 	}
 
-	records, err := svc.ListArtifacts(ctx, app.ArtifactFilter{Source: *sourceFlag, Set: *setFlag})
+	// The unfiltered list is the terminal's Backups page, and it carries
+	// the artifacts of sets whose configuration has since been removed
+	// (issue #391), which is what `backup-set remove` tells the operator
+	// this command will still list. The app layer honours the flag only
+	// for a filter naming nothing.
+	records, err := svc.ListArtifacts(ctx, app.ArtifactFilter{Source: *sourceFlag, Set: *setFlag, IncludeUnconfigured: true})
 	if err != nil {
 		return fail(err)
 	}
