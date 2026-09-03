@@ -163,6 +163,13 @@ func TestMediumKeyRefusesWhatItCannotAddress(t *testing.T) {
 		{"a prefix with an empty segment", "a//b", model.ArtifactID{Set: good, Name: "a.dump"}},
 		{"a prefix that traverses", "a/../b", model.ArtifactID{Set: good, Name: "a.dump"}},
 		{"a prefix with a leading slash", "/a", model.ArtifactID{Set: good, Name: "a.dump"}},
+		// Leading and trailing whitespace is LEGAL in an S3 key and
+		// invisible in every listing that would show it, so " pg" and
+		// "pg" become two objects that read as one. A restore picking the
+		// wrong one is not something anybody diagnoses from a listing.
+		{"an artifact name with trailing whitespace", "", model.ArtifactID{Set: good, Name: "a.dump "}},
+		{"an artifact name with leading whitespace", "", model.ArtifactID{Set: good, Name: " a.dump"}},
+		{"a prefix segment with trailing whitespace", "backups ", model.ArtifactID{Set: good, Name: "a.dump"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := transport.MediumKey(tc.prefix, tc.artifact)

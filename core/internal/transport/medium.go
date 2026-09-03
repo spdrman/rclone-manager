@@ -210,8 +210,42 @@ type MediumStore interface {
 	// with its own retry and multipart handling, and a reader would put
 	// this process in the middle of every byte for no gain.
 	//
-	// Re-running an upload that was interrupted must target the same key
-	// and converge, which is what makes MediumKey's layout deterministic.
+	// # It CONVERGES on an occupied key, it does not refuse one
+	//
+	// This is the one obligation on this interface that could
+	// defensibly have gone the other way, so it is stated rather than
+	// left to an implementation to pick. artifactstore.Store.Put refuses
+	// an occupied path, and the argument for doing the same here is real:
+	// overwriting an artifact's only remaining copy is not recoverable.
+	//
+	// It goes the other way because of what a MOVE is. A move interrupted
+	// between "the upload started" and "the journal recorded that it
+	// finished" leaves the engine unable to tell whether the object is
+	// there, whole, or half-written, and the recovery it wants is to run
+	// the upload again. Under a refusal that restart is a Conflict the
+	// engine has to resolve by statting, comparing and possibly DELETING
+	// from the medium before retrying, which is a delete on a recovery
+	// path: precisely the code FR-3 split copy, verify and delete apart to
+	// avoid having.
+	//
+	// What makes converging safe is the other two rules on this
+	// interface. The key is deterministic and derived from the artifact
+	// (see MediumKey), so the only thing that can be sitting at it is an
+	// earlier attempt at the SAME artifact, never a stranger; and FR-31's
+	// verification runs after the upload and before anything deletes a
+	// local copy, so a converged upload is still proved before it is
+	// trusted. Two artifacts that would collide on one key collide on
+	// their basename inside one backup set, which internal/discovery
+	// already refuses by name, upstream of here.
+	//
+	// The contract suite pins this: two uploads to one key leave exactly
+	// one object holding the second upload's bytes
+	// (contract.RunMedium's upload_converges_on_the_same_key).
+	//
+	// What it does NOT make safe is two genuinely CONCURRENT uploads to
+	// one key, which need a conditional put rclone v1.75 does not expose.
+	// The move engine's single-writer journal is what excludes those, and
+	// that exclusion lives there rather than here.
 	UploadFromLocal(ctx context.Context, medium Medium, localPath, key string, opts UploadOptions) (UploadResult, error)
 
 	// OpenObject reads the object's bytes back, for read-back
@@ -226,6 +260,38 @@ type MediumStore interface {
 	// error and NEVER a weaker answer wearing this method's name (FR-13,
 	// restated by FR-31). Silently degrading here is how a local copy gets
 	// deleted against an upload nobody checked.
+	//
+	// # On rclone v1.75.0 an s3 medium can never answer this
+	//
+	// Read this before building on FR-31's `attested` class, because it
+	// does not exist on the only medium type there is.
+	//
+	// backend/s3's Fs.Hashes() returns exactly hash.Set(hash.MD5)
+	// (s3.go:3294) and Object.Hash refuses every other algorithm outright
+	// (s3.go:4036). The MD5 it does serve comes from setMD5FromEtag, so
+	// the value IS the ETag, and FR-32 says an ETag is never a content
+	// hash. rclone's own X-Amz-Meta-Md5chksum is no better: it is metadata
+	// rclone WROTE, so believing it proves this product's earlier upload
+	// said something, not that the stored bytes are those bytes.
+	//
+	// So ObjectChecksum against an s3 medium is an UnsupportedCapability
+	// refusal, every time, on this rclone. That is FR-13 working rather
+	// than a gap, and it has consequences the phase-2 lanes have to build
+	// on rather than discover:
+	//
+	//   - The move engine (#238) must FAIL LOUDLY when a medium is
+	//     configured with upload_verification: attested. It must not fall
+	//     back to `content` or `existence`, because a surface that reports
+	//     a weaker class than the one configured is the exact lie FR-31's
+	//     ladder exists to prevent.
+	//   - Retention (#239) and the archive classes (#241) must not assume
+	//     an attestation is available for an s3 placement.
+	//   - The capability is queried LIVE, not hard-coded, so a future
+	//     rclone that surfaces x-amz-checksum-sha256 makes this start
+	//     working with no edit to the adapter. What has to change
+	//     deliberately at that point is the fixture's AttestsSHA256, and
+	//     core/tests/miniointegration's TestMinioAttestationIsRefused is
+	//     what will notice.
 	ObjectChecksum(ctx context.Context, medium Medium, key string, alg HashAlgorithm) (ChecksumAttestation, error)
 
 	// DeleteObject removes exactly the object at key.
@@ -299,6 +365,13 @@ func validKeySegment(s string) error {
 		return errSeparatorInKeySegment
 	case strings.ContainsAny(s, "\\\x00\n\r"):
 		return errUnprintableKeySegment
+	case strings.TrimSpace(s) != s:
+		// Leading and trailing whitespace is legal in an S3 key and
+		// invisible in every listing that would show it, so " pg" and
+		// "pg" are two different objects that read as one. A restore
+		// picking the wrong one of those is not a failure anybody
+		// diagnoses from a listing.
+		return errPaddedKeySegment
 	}
 	return nil
 }
@@ -313,6 +386,7 @@ var (
 	errTraversingKeySegment  = mediumKeyError(`a key segment is "." or "..", and a restore derives a local path from this key`)
 	errSeparatorInKeySegment = mediumKeyError("a key segment carries a \"/\", so it would silently become two segments")
 	errUnprintableKeySegment = mediumKeyError("a key segment carries a backslash, a NUL or a newline")
+	errPaddedKeySegment      = mediumKeyError("a key segment has leading or trailing whitespace, which is legal in S3 and invisible in every listing that would show it")
 )
 
 // mediumKeyError is a tiny named error type, rather than errors.New, so

@@ -27,17 +27,26 @@ import (
 //
 // Measured the way the crypt precedent was measured, on a linux/arm64,
 // CGO_ENABLED=0 build of core/cmd/backup-manager, with this one blank
-// import as the only difference between the two builds:
+// import as the only difference between the two builds, and with the
+// flags container/Dockerfile actually ships (-trimpath -buildvcs=false
+// -ldflags "-s -w"):
 //
-//	without backend/s3   29,653,436 bytes
-//	with backend/s3      42,737,150 bytes
-//	delta                13,083,714 bytes, 12.5 MiB, +44.1%
+//	without backend/s3   20,185,248 bytes   19.25 MiB
+//	with backend/s3      29,622,432 bytes   28.25 MiB
+//	delta                 9,437,184 bytes    9.00 MiB, +46.8%
 //
-// That is a big number, twenty-seven times crypt's ~470KB, and it is worth
-// saying plainly rather than burying: registering s3 pulls in the AWS SDK
-// for Go v2 (its S3 service client, signer, and the smithy runtime under
-// it), which is most of the delta. It buys the only non-local storage
-// medium this product has.
+// The flags are part of the measurement, not a footnote. An earlier
+// version of this comment recorded 12.5 MiB against a ~42 MiB binary,
+// which is what the same two builds weigh UNSTRIPPED. That number is not
+// wrong about anything except what this product ships, and a size figure
+// nobody can reproduce from the Dockerfile is a size figure nobody will
+// re-take. So the command is written down with the result.
+//
+// It is still a big number, nineteen times crypt's ~470KB, and it is
+// worth saying plainly rather than burying: registering s3 pulls in the
+// AWS SDK for Go v2 (its S3 service client, signer, and the smithy
+// runtime under it), which is most of the delta. It buys the only
+// non-local storage medium this product has.
 //
 // The alternative was not "a smaller build", it was an AWS SDK dependency
 // of this repository's own, which costs the same binary space, adds a
