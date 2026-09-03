@@ -151,7 +151,7 @@ func TestClassifyS3APIErrors(t *testing.T) {
 			// only worked on a top-level error would work in this test
 			// and nowhere else.
 			err := errors.Join(errors.New("operation error S3: HeadObject"), s3APIError{code: tc.code})
-			if got := rclone.Classify(err); got != tc.want {
+			if got := rclone.ClassifyCtx(context.Background(), err); got != tc.want {
 				t.Errorf("Classify(%s) = %s, want %s", tc.code, got, tc.want)
 			}
 		})
@@ -165,7 +165,7 @@ func TestClassifyS3APIErrors(t *testing.T) {
 // succeed) and never at NotFound (which would let a caller treat a
 // mystery as an absence).
 func TestClassifyLeavesAnUnknownS3CodeAlone(t *testing.T) {
-	got := rclone.Classify(s3APIError{code: "SomeCodeInventedNextYear"})
+	got := rclone.ClassifyCtx(context.Background(), s3APIError{code: "SomeCodeInventedNextYear"})
 	if got != transport.Permanent {
 		t.Errorf("Classify(an unlisted S3 code) = %s, want %s", got, transport.Permanent)
 	}
@@ -177,12 +177,12 @@ func TestClassifyLeavesAnUnknownS3CodeAlone(t *testing.T) {
 // a blip a configuration error would stop a retry that would have worked.
 func TestClassifyTreatsAnUnresolvableEndpointAsConfiguration(t *testing.T) {
 	nxdomain := &net.DNSError{Err: "no such host", Name: "s3.example.invalid", IsNotFound: true}
-	if got := rclone.Classify(nxdomain); got != transport.Configuration {
+	if got := rclone.ClassifyCtx(context.Background(), nxdomain); got != transport.Configuration {
 		t.Errorf("Classify(NXDOMAIN) = %s, want %s", got, transport.Configuration)
 	}
 
 	timeout := &net.DNSError{Err: "i/o timeout", Name: "s3.example.com", IsTimeout: true}
-	if got := rclone.Classify(timeout); got == transport.Configuration {
+	if got := rclone.ClassifyCtx(context.Background(), timeout); got == transport.Configuration {
 		t.Error("Classify(a DNS timeout) = configuration; a lookup that timed out may well succeed on the next attempt")
 	}
 }
