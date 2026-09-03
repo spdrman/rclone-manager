@@ -9,5 +9,23 @@
 # is itself gated. Pinning the product build over there means a release
 # cannot silently change what those suites certify. Each is one line, in one
 # file, reviewable on its own.
+#
+# Deliberately held at 9dfd6e3 while rclone-manager-tests' main sits at 778891a.
+#
+# The next commit over there, 0f89776 ("Prove Suite B can see where a backup's
+# copies are"), is eighteen browser cases written for #240, which puts an
+# artifact's placements on screen. #240 has not landed here, so moving the pin
+# past it turns 17 Suite B specs red against a product that was never supposed
+# to satisfy them yet. I did exactly that once and the gate caught it, which is
+# the pin doing its job rather than a problem with it.
+#
+# That is the arrangement working as designed: specs are allowed to land over
+# there ahead of the feature, and this line is what stops them being enforced
+# until the feature arrives. The bump belongs to #240's own pull request, which
+# should move it to 778891a or later, NOT to 0f89776, so it picks up the
+# equivalence matrix work from #376 at the same time.
+#
+# Nothing is lost by holding it. #376's fix is entirely in suites/equivalence,
+# and this gate runs Suite A's smoke slice and Suite B, never Suite C.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
 TESTS_REPO_SHA=9dfd6e311c4b04852a63708db7e4daf567a9eb3f
