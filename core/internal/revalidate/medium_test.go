@@ -535,3 +535,224 @@ func TestAConfiguredRestoreTestSaysItDidNotRunOnAMedium(t *testing.T) {
 		t.Errorf("no recorded transition says the restore test did not run; the log holds %+v", activity)
 	}
 }
+
+// namedMediums is a Mediums holding a set of ids, for the two-medium cases
+// where the one-entry fixedMediums cannot say which of them is configured.
+type namedMediums map[string]bool
+
+func (m namedMediums) MediumFor(id string) (transport.Medium, bool) {
+	if !m[id] {
+		return transport.Medium{}, false
+	}
+	return transport.Medium{ID: id, Type: transport.MediumTypeS3, Bucket: "nas-backups"}, true
+}
+
+// perMediumStore answers differently per medium, which is what a test about
+// one copy being gone and another being fine needs.
+type perMediumStore struct {
+	statErrs map[string]error
+	size     int64
+
+	stats  int
+	opens  int
+	digest int
+}
+
+func (s *perMediumStore) StatObject(_ context.Context, m transport.Medium, key string) (transport.ObjectInfo, error) {
+	s.stats++
+	if err := s.statErrs[m.ID]; err != nil {
+		return transport.ObjectInfo{}, err
+	}
+	return transport.ObjectInfo{Key: key, Size: s.size}, nil
+}
+
+func (s *perMediumStore) OpenObject(_ context.Context, _ transport.Medium, _ string) (io.ReadCloser, error) {
+	s.opens++
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (s *perMediumStore) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, _ transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+	s.digest++
+	return transport.ChecksumAttestation{}, transport.NewError(transport.UnsupportedCapability, "object_checksum", errors.New("this backend exposes md5 and nothing else"))
+}
+
+// addSecondMedium puts a second ACTIVE medium placement on an artifact that
+// already has one, which is the state a tier-to-tier move leaves behind
+// while the first copy has not been retired yet.
+func addSecondMedium(t *testing.T, j *state.Journal, artifact model.ArtifactID, mediumID string, content []byte, at time.Time) {
+	t.Helper()
+	size := int64(len(content))
+	if _, err := j.RecordTransition(context.Background(), state.Transition{
+		Artifact: artifact, Key: artifact.String() + ":on-" + mediumID, From: "COMPLETE", To: "COMPLETE", OccurredAt: at,
+		Placement: &state.PlacementUpdate{
+			Medium: mediumID, Location: "rclone-manager/production/postgres-primary/" + artifact.Name,
+			Size: &size, Hash: sha256Hex(content), HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("recording the placement on %s: %v", mediumID, err)
+	}
+}
+
+// twoMediumArtifact drives an artifact to COMPLETE with its local copy
+// retired and ACTIVE placements on two mediums.
+func twoMediumArtifact(t *testing.T, j *state.Journal, content []byte, at time.Time) model.ArtifactID {
+	t.Helper()
+	artifact := artifactNamed(t, "two-mediums.dump")
+	completeArtifact(t, j, artifact, content, at)
+	moveToMedium(t, j, artifact, "offsite_s3", content, at)
+	addSecondMedium(t, j, artifact, "archive_s3", content, at)
+
+	rec, err := j.Get(context.Background(), artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	active := 0
+	for _, p := range rec.Placements {
+		if !p.IsLocal() && p.Status == state.PlacementActive {
+			active++
+		}
+	}
+	if active != 2 {
+		t.Fatalf("the fixture has %d ACTIVE medium placements, want 2: %+v", active, rec.Placements)
+	}
+	return artifact
+}
+
+// TestOneGoodCopyIsNotAQuarantine is FR-31's placement-scoped quarantine:
+// a failing check is a verdict about ONE placement, and the ARTIFACT is
+// quarantined only when no other ACTIVE verified placement remains.
+//
+// Without the rule, whichever medium sorted first decided the artifact's
+// fate, so a copy going missing off one of two buckets would quarantine a
+// backup that is sitting intact in the other one.
+func TestOneGoodCopyIsNotAQuarantine(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("bytes in two buckets, one of which lost them")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	// "archive_s3" sorts before "offsite_s3", so the gone copy is also the
+	// one a first-wins implementation would have looked at.
+	store := &perMediumStore{
+		size:     int64(len(content)),
+		statErrs: map[string]error{"archive_s3": transport.NewError(transport.NotFound, "stat_object", errors.New("object not found"))},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	f := report.Findings[0]
+	if !f.Checked || !f.Passed {
+		t.Fatalf("an artifact with an intact second copy did not pass: %+v", f)
+	}
+	if f.Class != placement.Existence {
+		t.Errorf("Class = %q, want %q", f.Class, placement.Existence)
+	}
+	if store.stats != 2 {
+		t.Errorf("the pass statted %d placements, want 2: a verdict about the artifact has to have asked every ACTIVE copy", store.stats)
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != "COMPLETE" {
+		t.Errorf("state = %q, want COMPLETE: one copy going missing is a verdict about that placement, not about the artifact", rec.State)
+	}
+}
+
+// TestEveryCopyGoneIsAQuarantine is the other side of the same rule. When
+// no ACTIVE verified placement remains, the artifact routes exactly where a
+// failed local recheck routes it.
+func TestEveryCopyGoneIsAQuarantine(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("bytes that are in neither bucket any more")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	gone := transport.NewError(transport.NotFound, "stat_object", errors.New("object not found"))
+	store := &perMediumStore{
+		size:     int64(len(content)),
+		statErrs: map[string]error{"archive_s3": gone, "offsite_s3": gone},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %+v, errors = %+v, want exactly one finding", report.Findings, report.Errors)
+	}
+	if f := report.Findings[0]; !f.Checked || f.Passed {
+		t.Fatalf("an artifact whose every copy is gone was not reported as a failed check: %+v", f)
+	}
+
+	rec, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.State != "QUARANTINED_LOST" {
+		t.Errorf("state = %q, want QUARANTINED_LOST", rec.State)
+	}
+}
+
+// TestACopyThatCouldNotBeAskedIsNotEvidenceOfLoss is the safety direction,
+// and it is the one that would lose an operator's trust rather than their
+// data. One copy is confirmed gone and the other bucket did not answer.
+// "No verified copy remains" is not something that pass knows, so it must
+// not quarantine.
+func TestACopyThatCouldNotBeAskedIsNotEvidenceOfLoss(t *testing.T) {
+	ctx := context.Background()
+	j := openJournal(t)
+	content := []byte("one copy gone, one bucket silent")
+	long := time.Now().UTC().Add(-90 * 24 * time.Hour)
+	artifact := twoMediumArtifact(t, j, content, long)
+
+	store := &perMediumStore{
+		size: int64(len(content)),
+		statErrs: map[string]error{
+			"archive_s3": transport.NewError(transport.NotFound, "stat_object", errors.New("object not found")),
+			"offsite_s3": transport.NewError(transport.Transient, "stat_object", errors.New("connection reset")),
+		},
+	}
+	deps := Deps{Journal: j, Store: store, Mediums: namedMediums{"offsite_s3": true, "archive_s3": true}}
+	cfg := config.Revalidation{Interval: config.Duration(24 * time.Hour), MaxPerCycle: 10, Hash: true}
+
+	before, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get before: %v", err)
+	}
+
+	report, err := Run(ctx, deps, artifact.Set, cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(report.Errors) != 1 {
+		t.Fatalf("Errors = %+v, findings = %+v, want exactly one error", report.Errors, report.Findings)
+	}
+	if len(report.Findings) != 0 {
+		t.Errorf("Findings = %+v, want none", report.Findings)
+	}
+
+	after, err := j.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after: %v", err)
+	}
+	if after.State != before.State {
+		t.Errorf("state moved from %q to %q on the strength of a bucket that did not answer", before.State, after.State)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("the due-ness clock moved from %s to %s for an artifact nothing could decide about", before.UpdatedAt, after.UpdatedAt)
+	}
+}

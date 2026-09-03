@@ -57,31 +57,40 @@ import (
 // operator hook, not a corrupt artifact.
 func runChecks(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (checked, passed bool, class placement.Class, reason string, err error) {
 	if _, local := rec.LocalPlacement(); !local {
-		if medium, ok := activeMediumPlacement(rec); ok {
-			return checkMediumPlacement(ctx, deps, cfg, medium)
+		if mediums := activeMediumPlacements(rec); len(mediums) > 0 {
+			return checkMediumPlacements(ctx, deps, cfg, mediums)
 		}
 	}
 	return checkLocalCopy(ctx, deps, cfg, rec)
 }
 
-// activeMediumPlacement returns the artifact's ACTIVE placement on a
-// storage medium, if it has one.
+// activeMediumPlacements returns every ACTIVE placement the artifact has
+// on a storage medium.
 //
 // It is only consulted when there is no active LOCAL placement, which is
 // the ordering FR-31 asks for: local placements keep today's behaviour
 // exactly, and an artifact mid-move that still has its local copy is
 // checked the way it was checked yesterday.
-func activeMediumPlacement(rec state.Record) (state.Placement, bool) {
+//
+// It returns all of them rather than the first because "the first one" is
+// an assumption rather than a decision, and FR-31 makes the decision
+// explicitly: an artifact enters QUARANTINED only when no other ACTIVE
+// verified placement remains. Nothing in Phase 1 can put an artifact on
+// two mediums at once, so today this is always a slice of one; the point
+// is that the day something can, the answer is already the right one
+// instead of whichever medium sorted first.
+func activeMediumPlacements(rec state.Record) []state.Placement {
+	var out []state.Placement
 	for _, p := range rec.Placements {
 		if !p.IsLocal() && p.Status == state.PlacementActive {
-			return p, true
+			out = append(out, p)
 		}
 	}
-	return state.Placement{}, false
+	return out
 }
 
-// checkMediumPlacement runs the automatic ceiling, placement.Existence,
-// against a copy on a storage medium.
+// checkMediumPlacements runs the automatic ceiling, placement.Existence,
+// against every ACTIVE copy the artifact has on a storage medium.
 //
 // The class is not configurable here and that is deliberate. cfg.Hash asks
 // for a content check, and honouring it against a medium would download
@@ -97,15 +106,17 @@ func activeMediumPlacement(rec state.Record) (state.Placement, bool) {
 // back a green pass has been told less than they asked for, and a check
 // that quietly stops running is how a safety feature becomes decorative.
 // So the pass names the tier that did not run.
-func checkMediumPlacement(ctx context.Context, deps Deps, cfg config.Revalidation, p state.Placement) (checked, passed bool, class placement.Class, reason string, err error) {
+// A failing check is a verdict about ONE placement, and quarantine is a
+// verdict about the artifact. FR-31 keeps them apart: the artifact enters
+// QUARANTINED only when no other ACTIVE verified placement remains. So a
+// pass here needs one placement to pass, and a failure needs every one of
+// them to have been asked AND to have failed. A placement that could not
+// be asked leaves the question open, which is an error rather than a
+// verdict: an unreachable bucket is not evidence that a backup is gone.
+func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidation, ps []state.Placement) (checked, passed bool, class placement.Class, reason string, err error) {
 	if deps.Store == nil || deps.Mediums == nil {
 		return false, true, "", fmt.Sprintf(
-			"this artifact's only durable copy is on storage medium %q, and this deployment has no way to reach one, so nothing was checked", p.Medium), nil
-	}
-	medium, ok := deps.Mediums.MediumFor(p.Medium)
-	if !ok {
-		return false, true, "", fmt.Sprintf(
-			"this artifact's only durable copy is on storage medium %q, which is not in the configuration, so nothing was checked", p.Medium), nil
+			"this artifact's only durable copy is on storage medium %q, and this deployment has no way to reach one, so nothing was checked", ps[0].Medium), nil
 	}
 
 	const automatic = placement.Existence
@@ -118,33 +129,78 @@ func checkMediumPlacement(ctx context.Context, deps Deps, cfg config.Revalidatio
 			"revalidate: the automatic class %s costs egress, and FR-31 makes anything that costs egress operator-initiated", automatic)
 	}
 
-	result, verifyErr := placement.Verify(ctx, deps.Store, medium, p, automatic, deps.now())
-	if verifyErr != nil {
-		if isCancelled(verifyErr) {
-			return false, false, "", "", verifyErr
+	var (
+		details       []string
+		anyPassed     bool
+		didNotAnswer  error
+		notConfigured string
+	)
+	for _, p := range ps {
+		medium, ok := deps.Mediums.MediumFor(p.Medium)
+		if !ok {
+			if notConfigured == "" {
+				notConfigured = p.Medium
+			}
+			continue
 		}
-		// A class that could not be attempted is not a verdict about the
-		// artifact, and it is not a configuration fact either: the medium
-		// was there to ask and did not answer. So it is routed the way
-		// this package already routes a restore-test hook that fails to
-		// start, as a per-artifact ERROR rather than as an unchecked
-		// finding.
-		//
-		// The distinction is worth the extra branch. An unchecked finding
-		// says "nothing here was configured to check", which an operator
-		// reads past; an error says "this backup could not be checked and
-		// somebody should find out why", which is the true statement when
-		// a bucket does not answer. Either way the journal is untouched
-		// and the due-ness clock does not move, so the artifact stays
-		// selectable next cycle rather than looking freshly verified.
-		return false, false, "", "", fmt.Errorf("medium %q: %w", p.Medium, verifyErr)
+
+		result, verifyErr := placement.Verify(ctx, deps.Store, medium, p, automatic, deps.now())
+		if verifyErr != nil {
+			if isCancelled(verifyErr) {
+				return false, false, "", "", verifyErr
+			}
+			// A class that could not be attempted is not a verdict about
+			// the artifact, and it is not a configuration fact either: the
+			// medium was there to ask and did not answer. So it is routed
+			// the way this package already routes a restore-test hook that
+			// fails to start, as a per-artifact ERROR rather than as an
+			// unchecked finding.
+			//
+			// The distinction is worth the extra branch. An unchecked
+			// finding says "nothing here was configured to check", which an
+			// operator reads past; an error says "this backup could not be
+			// checked and somebody should find out why", which is the true
+			// statement when a bucket does not answer. Either way the
+			// journal is untouched and the due-ness clock does not move, so
+			// the artifact stays selectable next cycle rather than looking
+			// freshly verified.
+			if didNotAnswer == nil {
+				didNotAnswer = fmt.Errorf("medium %q: %w", p.Medium, verifyErr)
+			}
+			continue
+		}
+		details = append(details, result.Detail)
+		if result.Passed {
+			anyPassed = true
+		}
 	}
 
-	detail := result.Detail
+	// One good copy is enough to say the artifact is still there, and
+	// saying so does not depend on the placements that could not be asked.
+	// Everything below is the case where none passed, where the two ways a
+	// placement can go unasked matter, because each of them leaves "no
+	// verified copy remains" unproven and quarantine is what that would
+	// otherwise mean.
+	if !anyPassed {
+		switch {
+		case didNotAnswer != nil:
+			// A medium that was there to ask and did not answer: an error,
+			// because somebody should find out why.
+			return false, false, "", "", didNotAnswer
+		case notConfigured != "":
+			// A medium this deployment was never configured to reach: a
+			// configuration fact rather than a backup nobody could check,
+			// and an unchecked finding rather than an error.
+			return false, true, "", fmt.Sprintf(
+				"this artifact's only durable copy is on storage medium %q, which is not in the configuration, so nothing was checked", notConfigured), nil
+		}
+	}
+
+	detail := strings.Join(details, "; ")
 	if cfg.Command != nil {
 		detail += "; the restore-test hook did not run, because opening this artifact means downloading it and FR-31 makes anything that costs egress operator-initiated"
 	}
-	return true, result.Passed, result.Class, detail, nil
+	return true, anyPassed, automatic, detail, nil
 }
 
 // checkLocalCopy is exactly the check this package always did, against the
