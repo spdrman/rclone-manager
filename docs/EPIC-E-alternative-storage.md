@@ -236,6 +236,12 @@ type MediumStore interface {
 }
 ```
 
+  Two of these landed differently, and this paragraph is the correction rather than a note about it (E2.4, #241).
+
+  `RestoreStatus` returns a **pointer**, `(*RestoreState, error)`. A value could not express "the medium reports no restore status for this object at all", which is what S3 answers both for an object nobody ever asked about and for one whose restored window has been reaped; a zero value would have read as "a finished restore with no expiry", which is a different and more encouraging fact. What nil must never also mean is "there is no such object", so a key the medium does not hold is a NotFound-classified error instead.
+
+  `InitiateRestore` carries an obligation the sketch does not: it acts on **exactly one object**. rclone's own `restore` backend command is addressed by a remote, enumerates everything beneath it and restores every archived object it walks, so an implementation that hands it a bucket-rooted `Fs` restores the bucket, at a per-object retrieval charge the provider accepts before anything here can intervene and that nothing afterwards can cancel. An implementation that cannot confine its backend command to one object refuses rather than approximates.
+
   Exact signatures may change. The FR-3 rules carry over verbatim: lifecycle and retention code depend on this interface, rclone types never leak past the adapter, destructive operations are explicit, and there is **no generic `Move()`**: a migration is `UploadFromLocal` plus verification plus a separate local delete, composed by the move engine (FR-30), never a transport primitive.
 - Error classification extends `transport.Category` mapping for the S3 backend: throttling and 5xx are Transient, `NoSuchBucket` and endpoint resolution failures are Configuration, `AccessDenied` and signature failures are Auth, `NoSuchKey` is NotFound. The existing contract-test shape (`core/internal/transport/contract`) gains a MediumStore suite, run against the local backend in-tree and against a MinIO fixture in integration.
 - The key layout inside a medium is deterministic and mirrors FR-7's backup-set isolation: `<prefix>/<source>/<set>/<artifact-name>`, plus `<prefix>/<source>/<set>/.manifest/<artifact-name>.json` for the recovery sidecar (FR-29). No timestamps, no random components, so re-running an interrupted upload targets the same key idempotently.
