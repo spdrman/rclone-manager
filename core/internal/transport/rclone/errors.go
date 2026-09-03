@@ -217,6 +217,16 @@ func Classify(err error) transport.Category {
 // given is done. Everything else is classified on the error alone, which puts
 // a connect timeout where it belongs, in Transient.
 //
+// A done context wins over whatever the error was, and that is a choice worth
+// naming, because it costs something. An operation that failed for a reason
+// worth knowing (a changed host key, say) and only then found its context
+// expired classifies as Cancelled, so app/halt.go never records the refusal.
+// The alternative costs more: FR-22 and transfer.go's own doc both say a
+// cancellation must never turn into a verdict about the artifact, and
+// recordConnectionOutcomes already has a third outcome for exactly this, "this
+// pass never got far enough to say either way". A pass that was stopped is
+// that, and the next one asks again.
+//
 // A nil ctx is treated as a caller that never asked for anything, the same as
 // context.Background().
 func ClassifyCtx(ctx context.Context, err error) transport.Category {
