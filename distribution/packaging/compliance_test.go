@@ -1399,4 +1399,38 @@ func TestTheProseCarriesNoCountNobodyChecks(t *testing.T) {
 	for i, line := range strings.Split(string(data), "\n") {
 		refuse(offer.RepoPath, i+1, line)
 	}
+	// And the README's licence section, which repeated the same figure
+	// for the same reader. Only that section: the README is long and
+	// counts things that are not the dependency set.
+	readme, err := os.ReadFile(Path("README.md"))
+	if err != nil {
+		t.Fatalf("cannot read README.md: %v", err)
+	}
+	section, start := readmeSection(string(readme), "## Licence")
+	if section == "" || !strings.Contains(section, "MPL-2.0") {
+		t.Fatal("README.md has no \"## Licence\" section naming MPL-2.0, so the sweep below read nothing")
+	}
+	for i, line := range strings.Split(section, "\n") {
+		refuse("README.md", start+i, line)
+	}
+}
+
+// readmeSection returns the body of one "## " section and the 1-based
+// line its heading is on, or "" and 0 when the heading is absent.
+func readmeSection(readme, heading string) (string, int) {
+	lines := strings.Split(readme, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != heading {
+			continue
+		}
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			if strings.HasPrefix(lines[j], "## ") {
+				end = j
+				break
+			}
+		}
+		return strings.Join(lines[i:end], "\n"), i + 1
+	}
+	return "", 0
 }
