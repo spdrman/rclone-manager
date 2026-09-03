@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -220,14 +221,81 @@ func (s *schedulingLagSampler) stop() time.Duration {
 	return <-s.stopped
 }
 
+// The numbers testdata/fixtures/slowpkg is calibrated around, at package
+// scope so TestSlowpkgCalibration_TheControlCanStillFire can read them.
+//
+// slowpkgFirstStall and slowpkgSecondStall are duplicated as constants of
+// the same name in that fixture's own slow_test.go (it is a separate
+// module under testdata/, so it cannot be imported from here); keep the
+// two in sync by hand.
+const (
+	// slowpkgFirstStall is TestA's sleep, which is the pace the run
+	// measures itself by before TestB stalls.
+	slowpkgFirstStall = 1 * time.Second
+	// slowpkgSecondStall is TestB's sleep: longer than the floor below,
+	// so a fixed window fails it, and well inside stepFactor times the
+	// gap TestA just measured, so a derived one absorbs it.
+	slowpkgSecondStall = 6 * time.Second
+	// slowpkgBaseFloor is the lower bound on the no-progress floor these
+	// tests run under. The floor they actually use is derived from this
+	// host's own `go test` startup and can be larger; see the test.
+	slowpkgBaseFloor = 3 * time.Second
+	slowpkgPoll      = 50 * time.Millisecond
+)
+
+// controlOutcome is what the negative control in
+// TestRun_DoesNotFailASlowButProgressingRun concluded.
+//
+// It is a value rather than a t.Fatalf on the spot because of issue #401:
+// a control that cannot separate "the derivation stopped being
+// load-bearing" from "the host was busy" is a control nobody can read.
+// Returning the verdict means both branches can be exercised directly
+// (TestJudgeNegativeControl_TellsAHostFailureFromARealOne) rather than
+// only on a machine that happens to be loaded at the time.
+type controlOutcome int
+
+const (
+	// controlProved: the watchdog tripped on the planted stall, naming
+	// TestB. The derivation is load-bearing and the positive subtest
+	// means something.
+	controlProved controlOutcome = iota
+	// controlNotProved: the run had to trip and did not. The derivation
+	// is not doing the work the positive subtest credits it with.
+	controlNotProved
+	// controlCannotMeasure: the host, not the fixture, decided what
+	// happened, so this run says nothing either way and reporting a
+	// verdict from it would be reporting on the machine.
+	controlCannotMeasure
+)
+
+func (o controlOutcome) String() string {
+	switch o {
+	case controlProved:
+		return "proved"
+	case controlNotProved:
+		return "not proved"
+	default:
+		return "could not measure"
+	}
+}
+
+// judgeNegativeControl reads what running slowpkg with the derivation
+// switched off (stepFactor 1) produced, and says which of the outcomes
+// above happened, with the numbers behind it.
+func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration) (controlOutcome, string) {
+	if res.Trip == nil {
+		return controlNotProved, fmt.Sprintf(
+			"with the derivation off, the %s stall in TestB was still absorbed against a %s floor, so the passing subtest above proves nothing about the derivation itself",
+			slowpkgSecondStall, floor.Round(time.Millisecond))
+	}
+	if len(res.Trip.running) != 1 || res.Trip.running[0] != "TestB" {
+		return controlNotProved, fmt.Sprintf("trip.running = %v, want exactly [TestB]: %v", res.Trip.running, res.Trip)
+	}
+	return controlProved, fmt.Sprintf("with the derivation off, the identical run failed: %v", res.Trip)
+}
+
 func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
-	// Mirrors testdata/fixtures/slowpkg/slow_test.go's own constants;
-	// see that file's doc comment for why they cannot be imported here.
-	const (
-		floor       = 3 * time.Second
-		firstStall  = 1 * time.Second
-		secondStall = 6 * time.Second
-	)
+	floor := slowpkgBaseFloor
 	dir := filepath.Join("testdata", "fixtures", "slowpkg")
 
 	t.Run("derived window absorbs it", func(t *testing.T) {
@@ -237,7 +305,7 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 			Dir:    dir,
 			Args:   []string{"-v", "-count=1", "./..."},
 			Bounds: tightBounds(floor, defaultBounds.stepFactor),
-			Poll:   50 * time.Millisecond,
+			Poll:   slowpkgPoll,
 			Stdout: &stdout,
 			Stderr: &stderr,
 		})
@@ -254,10 +322,11 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 		if !strings.Contains(stdout.String(), "--- PASS: TestA") || !strings.Contains(stdout.String(), "--- PASS: TestB") {
 			t.Fatalf("reconstructed output does not show both tests passing:\n%s", stdout.String())
 		}
-		if elapsed < firstStall+secondStall {
-			t.Fatalf("Run returned in %s, faster than the two real sleeps (%s) sum to; the fixture did not really run", elapsed, firstStall+secondStall)
+		if elapsed < slowpkgFirstStall+slowpkgSecondStall {
+			t.Fatalf("Run returned in %s, faster than the two real sleeps (%s) sum to; the fixture did not really run", elapsed, slowpkgFirstStall+slowpkgSecondStall)
 		}
-		t.Logf("a run whose slowest gap was %s (TestB, twice the %s floor) finished in %s and was not failed", secondStall, floor, elapsed.Round(time.Millisecond))
+		t.Logf("a run whose slowest gap was %s (TestB) finished in %s against a %s floor and was not failed",
+			slowpkgSecondStall, elapsed.Round(time.Millisecond), floor.Round(time.Millisecond))
 	})
 
 	t.Run("without the derivation the same run fails", func(t *testing.T) {
@@ -270,21 +339,154 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 			Dir:    dir,
 			Args:   []string{"-v", "-count=1", "./..."},
 			Bounds: tightBounds(floor, 1),
-			Poll:   50 * time.Millisecond,
+			Poll:   slowpkgPoll,
 			Stdout: &stdout,
 			Stderr: &stderr,
 		})
 		if err != nil {
 			t.Fatalf("Run returned an error: %v\nstderr=%s", err, stderr.String())
 		}
-		if res.Trip == nil {
-			t.Fatalf("with the derivation off, the %s stall in TestB was still absorbed, so the passing subtest above proves nothing about the derivation itself\nstdout=%s", secondStall, stdout.String())
+		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, 0)
+		switch outcome {
+		case controlProved:
+			t.Log(why)
+		default:
+			t.Fatalf("%s\nstdout=%s", why, stdout.String())
 		}
-		if len(res.Trip.running) != 1 || res.Trip.running[0] != "TestB" {
-			t.Fatalf("trip.running = %v, want exactly [TestB]: %v", res.Trip.running, res.Trip)
-		}
-		t.Logf("with the derivation off, the identical run failed: %v", res.Trip)
 	})
+}
+
+// TestJudgeNegativeControl_TellsAHostFailureFromARealOne is the contract
+// issue #401 asks for, stated over the verdict function rather than over a
+// real run, because the runs that matter are the ones this machine cannot
+// be asked to produce on demand.
+//
+// The negative control has to reach the same verdict on a loaded host as
+// on a quiet one, or say outright that it could not measure, and the two
+// have to be distinguishable in the output. There are four ways the run
+// can come back and only one of them is the control doing its job:
+//
+//   - it tripped naming TestB: proved, the planted stall is what closed
+//     the window.
+//   - it tripped with no event observed at all: it caught `go test` still
+//     loading packages and linking, which is this host's startup and not
+//     anything the fixture did.
+//   - it tripped naming some other test: it caught a gap this host
+//     produced before TestB's stall.
+//   - it did not trip, but this host's own slowest gap was longer than
+//     the planted stall, so with the derivation off the window was
+//     already wider than the stall before the stall began.
+//
+// The last three are the same sentence to a reader of the old assertion
+// ("want exactly [TestB]"), and that is precisely the complaint in #401.
+func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
+	const floor = 4 * time.Second
+	tests := []struct {
+		name     string
+		res      Result
+		want     controlOutcome
+		mentions []string
+	}{
+		{
+			name: "the planted stall is what tripped it",
+			res: Result{Trip: &trip{
+				kind: "no-progress", events: 7, running: []string{"TestB"},
+				lastEvent: "output TestB (=== RUN   TestB)", sinceLast: floor + 40*time.Millisecond,
+				window: floor, slowestStep: slowpkgFirstStall,
+			}},
+			want:     controlProved,
+			mentions: []string{"TestB"},
+		},
+		{
+			name: "it tripped on go test's own startup, before any test ran",
+			res: Result{Trip: &trip{
+				kind: "no-progress", events: 0, running: nil,
+				lastEvent: "process start", sinceLast: floor + 3*time.Millisecond, window: floor,
+			}},
+			want:     controlCannotMeasure,
+			mentions: []string{"process start", "no event"},
+		},
+		{
+			name: "it tripped on a gap this host produced before TestB",
+			res: Result{Trip: &trip{
+				kind: "no-progress", events: 3, running: []string{"TestA"},
+				lastEvent: "output TestA (=== RUN   TestA)", sinceLast: floor + 9*time.Millisecond,
+				window: floor, slowestStep: 700 * time.Millisecond,
+			}},
+			want:     controlCannotMeasure,
+			mentions: []string{"TestA"},
+		},
+		{
+			name: "no trip, and nothing this host did beat the planted stall",
+			res: Result{
+				Events: 12, SlowestStep: slowpkgSecondStall + 3*time.Millisecond,
+				SlowestLabel: "output TestB (=== RUN   TestB) -> output TestB (--- PASS: TestB (6.0",
+				Window:       slowpkgSecondStall + 3*time.Millisecond,
+			},
+			want:     controlNotProved,
+			mentions: []string{"6.003s"},
+		},
+		{
+			name: "no trip, because this host's own slowest gap outran the stall",
+			res: Result{
+				Events: 12, SlowestStep: 9 * time.Second,
+				SlowestLabel: "output TestA (=== RUN   TestA) -> output TestA (--- PASS: TestA (1.0",
+				Window:       9 * time.Second,
+			},
+			want:     controlCannotMeasure,
+			mentions: []string{"9s", "TestA"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, why := judgeNegativeControl(tc.res, floor, slowpkgPoll, 20*time.Millisecond)
+			if got != tc.want {
+				t.Fatalf("outcome = %v, want %v; the control said: %s", got, tc.want, why)
+			}
+			for _, want := range tc.mentions {
+				if !strings.Contains(why, want) {
+					t.Errorf("the verdict does not mention %q, so a reader cannot tell this outcome from the others:\n%s", want, why)
+				}
+			}
+		})
+	}
+}
+
+// TestSlowpkgCalibration_TheControlCanStillFire guards the fixture's four
+// numbers rather than any behaviour, because the way the negative control
+// above stops working is not a broken assertion. It is a calibration that
+// drifts until the control can no longer fire, and a control that never
+// fires looks exactly like one that always passes. That is the same guard
+// TestKeyCommandTimeoutBudget_CanStillFail keeps over its own three
+// constants, for the same reason (#394), and it matters more here because
+// the fix for #401 gives this test a skip path.
+func TestSlowpkgCalibration_TheControlCanStillFire(t *testing.T) {
+	// With the derivation ON the window is stepFactor times the slowest
+	// recent gap, and the slowest gap before TestB stalls is TestA's own.
+	// If that product does not clear TestB's stall, the positive subtest
+	// fails against a perfectly correct watchdog.
+	if absorbs := time.Duration(float64(slowpkgFirstStall) * defaultBounds.stepFactor); absorbs <= slowpkgSecondStall {
+		t.Errorf("TestA's %s stall derives a %s window at stepFactor %v, which does not clear TestB's %s stall, so the derived window cannot absorb it and the positive subtest fails on a correct watchdog",
+			slowpkgFirstStall, absorbs, defaultBounds.stepFactor, slowpkgSecondStall)
+	}
+
+	// With the derivation OFF the window is the floor, and the floor is
+	// at least slowpkgBaseFloor. TestB's stall has to clear it, with a
+	// poll interval to spare so the tick that notices actually lands,
+	// otherwise the control never trips on any host and the two subtests
+	// stop being opposites.
+	if slowpkgSecondStall <= slowpkgBaseFloor+slowpkgPoll {
+		t.Errorf("TestB's %s stall does not clear the %s floor plus one %s poll interval, so with the derivation off the window still absorbs it and the negative control cannot fire at all",
+			slowpkgSecondStall, slowpkgBaseFloor, slowpkgPoll)
+	}
+
+	// And TestA's own stall has to stay UNDER the floor. If it does not,
+	// the negative control trips during TestA instead, which is a trip
+	// that says nothing about the derivation.
+	if slowpkgFirstStall >= slowpkgBaseFloor {
+		t.Errorf("TestA's %s stall is at or past the %s floor, so with the derivation off the control trips on TestA before TestB ever stalls",
+			slowpkgFirstStall, slowpkgBaseFloor)
+	}
 }
 
 func TestRun_RefusesATimeoutOrJsonFlagFromTheCaller(t *testing.T) {
