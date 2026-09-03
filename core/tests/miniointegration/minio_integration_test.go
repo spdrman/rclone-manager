@@ -184,3 +184,112 @@ func TestMinioNeverCreatesABucket(t *testing.T) {
 		t.Fatal("the probe cannot see the bucket the fixture definitely created, so its verdict about the other one means nothing")
 	}
 }
+
+// TestMinioNeverReportsAMissingBucketAsAMissingObject is confirmBucket's
+// proof against the endpoint the bug was found on.
+//
+// rclone's s3 backend turns a 404 into fs.ErrorObjectNotFound or
+// fs.ErrorDirNotFound before the adapter sees it and discards the S3 code
+// that is the only thing separating NoSuchKey from NoSuchBucket. Measured
+// here before the fix, against this same MinIO: DeleteObject against a
+// mistyped bucket returned nil, ListObjects returned an empty listing and
+// no error, and StatObject and OpenObject reported NotFound. Every one of
+// those is a data-integrity failure under FR-30's prune or a catalog
+// rebuild.
+//
+// The in-tree run of the same assertions (internal/transport/rclone's
+// TestAMissingContainerIsNeverReportedAsAMissingObject, against rclone's
+// local backend) proves the disambiguation on every gate. This one proves
+// the theory it rests on: that an existing bucket answers a listing
+// however empty it is, and only a missing one 404s.
+func TestMinioNeverReportsAMissingBucketAsAMissingObject(t *testing.T) {
+	fixture := miniofixture.Start(t)
+	adapter := rclone.New()
+	ctx := context.Background()
+
+	absent := fixture.MediumForBucket("a-bucket-nobody-created")
+	const key = "production/pg/nothing-was-ever-written-here.dump"
+
+	assertNotAnAbsence := func(t *testing.T, op string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s against a bucket that does not exist succeeded", op)
+		}
+		category, ok := transport.CategoryOf(err)
+		if !ok || category != transport.Configuration {
+			t.Errorf("%s classified as %v (recognised=%v), want %s. A reconciler reads %s as the medium having LOST the "+
+				"artifact. The error was: %v", op, category, ok, transport.Configuration, transport.NotFound, err)
+		}
+	}
+
+	t.Run("StatObject", func(t *testing.T) {
+		_, err := adapter.StatObject(ctx, absent, key)
+		assertNotAnAbsence(t, "StatObject", err)
+	})
+
+	t.Run("OpenObject", func(t *testing.T) {
+		rc, err := adapter.OpenObject(ctx, absent, key)
+		if rc != nil {
+			_ = rc.Close()
+		}
+		assertNotAnAbsence(t, "OpenObject", err)
+	})
+
+	t.Run("DeleteObject", func(t *testing.T) {
+		err := adapter.DeleteObject(ctx, absent, key)
+		if err == nil {
+			t.Fatal("DeleteObject against a bucket that does not exist reported SUCCESS. Under FR-30's medium-aware prune " +
+				"that marks every placement on the medium GONE for artifacts nobody deleted")
+		}
+		assertNotAnAbsence(t, "DeleteObject", err)
+	})
+
+	t.Run("ListObjects", func(t *testing.T) {
+		objects, err := adapter.ListObjects(ctx, absent, "")
+		if err == nil {
+			t.Fatalf("ListObjects against a bucket that does not exist returned %d objects and no error; a catalog rebuild "+
+				"reading that concludes the medium holds nothing", len(objects))
+		}
+		assertNotAnAbsence(t, "ListObjects", err)
+	})
+
+	// The controls, and they are the half that matters: confirmBucket
+	// decides bucket-absent by listing the bucket ROOT, on the theory that
+	// an existing bucket answers a listing however empty it is. If that
+	// theory were wrong this fix would turn the FIRST operation against a
+	// brand new medium into "your bucket does not exist", which is worse
+	// than the bug it fixed and would only ever show up on a fresh
+	// deployment. So the fixture creates a bucket it deliberately never
+	// writes to, and asks a real endpoint.
+	t.Run("an empty bucket is not a missing bucket", func(t *testing.T) {
+		empty := fixture.NewBucket(t)
+
+		objects, err := adapter.ListObjects(ctx, empty, "")
+		if err != nil {
+			t.Fatalf("ListObjects against an existing but empty bucket failed: %v", err)
+		}
+		if len(objects) != 0 {
+			t.Fatalf("a bucket nothing was written to listed %d objects", len(objects))
+		}
+
+		if _, err := adapter.StatObject(ctx, empty, key); err == nil {
+			t.Fatal("StatObject found an object in a bucket nothing was written to")
+		} else if category, _ := transport.CategoryOf(err); category != transport.NotFound {
+			t.Errorf("StatObject in an EMPTY bucket classified as %s, want %s: the bucket-absent check has swallowed a "+
+				"genuine absence, which is the opposite mistake and just as bad. The error was: %v", category, transport.NotFound, err)
+		}
+
+		if err := adapter.DeleteObject(ctx, empty, key); err != nil {
+			t.Errorf("DeleteObject of an absent key in an EXISTING empty bucket failed: %v", err)
+		}
+
+		local := filepath.Join(t.TempDir(), "artifact.dump")
+		if err := os.WriteFile(local, []byte("the first bytes this bucket ever held"), 0o600); err != nil {
+			t.Fatalf("writing the source file: %v", err)
+		}
+		if _, err := adapter.UploadFromLocal(ctx, empty, local, key, transport.UploadOptions{}); err != nil {
+			t.Fatalf("the first upload into a brand new bucket failed: %v. That is the deployment-day failure this control "+
+				"exists to catch", err)
+		}
+	})
+}

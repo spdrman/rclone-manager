@@ -113,6 +113,53 @@ func mediumContext(ctx context.Context) context.Context {
 	return bounded
 }
 
+// s3Options is the COMPLETE set of rclone s3 options this adapter will
+// ever produce, and it is an allowlist rather than a pass-through, exactly
+// as sftpConfig is for a Source.
+//
+// The point is what is NOT here. rclone's s3 backend takes something over
+// a hundred options, and a config surface that forwarded them would make
+// assume-role, the SSE-C family, download_url, presigned requests, v2
+// signing, versioned views and ACL headers all reachable from a config
+// file, each of them a way to change WHERE a backup goes or WHO writes it
+// that no reviewer of this repository would ever see.
+// TestS3OptionsAreExactlyThisAllowlist pins the producible key set, so
+// widening it is a test failure rather than a review miss.
+func s3Options(medium transport.Medium) (configmap.Simple, error) {
+	cfg := configmap.Simple{}
+
+	auth, err := mediumAuthOptions(medium)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range auth {
+		cfg.Set(k, v)
+	}
+
+	// "AWS" only when no endpoint was given. rclone uses the provider to
+	// decide addressing style and a handful of quirks, and "Other" is its
+	// own name for "an S3 API this list does not enumerate", which is what
+	// an endpoint override means. There is deliberately no provider field
+	// for an operator to set: picking "Minio" or "Ceph" out of an endpoint
+	// URL would be guessing, and if a real provider quirk ever demands a
+	// specific name that is a config change with its own issue.
+	if medium.Endpoint == "" {
+		cfg.Set("provider", "AWS")
+	} else {
+		cfg.Set("provider", "Other")
+		cfg.Set("endpoint", medium.Endpoint)
+	}
+	if medium.Region != "" {
+		cfg.Set("region", medium.Region)
+	}
+	if medium.StorageClass != "" {
+		cfg.Set("storage_class", medium.StorageClass)
+	}
+	// See this file's package comment: never provision, never guess.
+	cfg.Set("no_check_bucket", "true")
+	return cfg, nil
+}
+
 func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs, error) {
 	if medium.ID == "" {
 		return nil, transport.NewError(transport.Configuration, "medium_fs", errors.New("medium has no id"))
@@ -127,31 +174,11 @@ func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs,
 	switch medium.Type {
 	case transport.MediumTypeS3:
 		backend = "s3"
-		auth, err := mediumAuthOptions(medium)
+		s3cfg, err := s3Options(medium)
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range auth {
-			cfg.Set(k, v)
-		}
-		// "AWS" only when no endpoint was given. rclone uses the provider
-		// to decide addressing style and a handful of quirks, and "Other"
-		// is its own name for "an S3 API this list does not enumerate",
-		// which is what an endpoint override means.
-		if medium.Endpoint == "" {
-			cfg.Set("provider", "AWS")
-		} else {
-			cfg.Set("provider", "Other")
-			cfg.Set("endpoint", medium.Endpoint)
-		}
-		if medium.Region != "" {
-			cfg.Set("region", medium.Region)
-		}
-		if medium.StorageClass != "" {
-			cfg.Set("storage_class", medium.StorageClass)
-		}
-		// See this file's package comment: never provision, never guess.
-		cfg.Set("no_check_bucket", "true")
+		cfg = s3cfg
 	case transport.MediumTypeLocalDir:
 		backend = "local"
 	default:
@@ -183,6 +210,98 @@ func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs,
 	return f, nil
 }
 
+// errBucketAbsent is what confirmBucket reports when the medium's bucket
+// is not there at all. It is a Configuration failure rather than a
+// NotFound one (FR-28), and it is a sentinel so this file states the fact
+// once and a test can recognise which rule fired.
+var errBucketAbsent = errors.New("the medium's bucket does not exist")
+
+// confirmBucket answers the question rclone's error translation throws
+// away: is this KEY absent, or is the whole BUCKET absent?
+//
+// # Why it is needed at all
+//
+// rclone's s3 backend turns a 404 into its own filesystem-shaped sentinels
+// before this adapter ever sees it (a 404 from HeadObject becomes
+// fs.ErrorObjectNotFound at backend/s3/s3.go, and a 404 from ListObjectsV2
+// becomes fs.ErrorDirNotFound at s3.go:2521), and in doing so it discards
+// the S3 error code, which is the only thing separating NoSuchKey from
+// NoSuchBucket. Same status, completely different problems: one is a fact
+// about a single artifact, the other is a typo somebody has to go and fix.
+//
+// Measured against a real MinIO, before this existed, on the code that is
+// now in this file:
+//
+//   - DeleteObject against a bucket that does not exist returned nil. The
+//     delete reported SUCCESS, because NewObject said not-found and
+//     DeleteObject correctly treats an already-absent object as success.
+//     Under FR-30's medium-aware prune that marks every placement on the
+//     medium GONE for artifacts nobody deleted.
+//   - ListObjects against one returned an empty listing and no error, so a
+//     catalog rebuild concludes the medium holds nothing.
+//   - StatObject and OpenObject reported NotFound, which a reconciler reads
+//     as the medium having lost the artifact.
+//
+// # Why a listing is a sound probe
+//
+// Because the two cases ARE separable at the listing layer even though
+// they are not at the object layer. A ListObjectsV2 against an existing
+// bucket answers 200 with no contents however empty it is, and only a
+// missing bucket makes it 404, which is the single case rclone's list path
+// turns into ErrorDirNotFound (s3.go:2521). The one other route to that
+// sentinel, the directory-marker HEAD at s3.go:2632, is behind
+// f.opt.DirectoryMarkers, which this adapter never sets.
+//
+// It probes the bucket ROOT, never the medium's prefix, and that is
+// load-bearing rather than incidental: a prefix nothing has been written
+// under yet is exactly the state of a brand new medium, and probing it
+// would turn the first operation against a correctly configured medium
+// into "your bucket does not exist".
+//
+// # What it costs
+//
+// One extra listing, only on the path that was ABOUT to report not-found,
+// so never on a successful stat, read, list or delete. UploadFromLocal
+// does not call it: an upload's own failure carries the real NoSuchBucket
+// code intact, and probing there would put a round trip on the hot path to
+// answer a question the endpoint already answered.
+func (a *Adapter) confirmBucket(ctx context.Context, f fs.Fs, medium transport.Medium) error {
+	if _, err := f.List(ctx, ""); err != nil {
+		if errors.Is(err, fs.ErrorDirNotFound) {
+			return transport.NewError(transport.Configuration, "confirm_bucket", fmt.Errorf(
+				"%w: medium %q names bucket %q and the endpoint does not have it",
+				errBucketAbsent, medium.ID, medium.Bucket))
+		}
+		// The probe itself failed for some other reason (unreachable,
+		// unauthorized). That is a better answer than the not-found the
+		// caller was about to give, so it is the one that is returned.
+		return Wrap("confirm_bucket", err)
+	}
+	return nil
+}
+
+// absenceOrMissingBucket is what every method that is about to report
+// "there is nothing at this key" calls first.
+//
+// It returns the error the caller should report: either the bucket-absent
+// verdict, or the original not-found once the bucket has been confirmed to
+// exist. Keeping it in one function rather than inline at four call sites
+// is deliberate: getting this at three of the four is a silent half-fix,
+// and the one that was missed would be the one that reports success.
+func (a *Adapter) absenceOrMissingBucket(ctx context.Context, f fs.Fs, medium transport.Medium, op string, absence error) error {
+	if err := a.confirmBucket(ctx, f, medium); err != nil {
+		return err
+	}
+	return Wrap(op, absence)
+}
+
+// isAbsence reports whether err is rclone's way of saying "there is
+// nothing here", in either of the two shapes its s3 backend produces for a
+// 404. Both are checked because catching only one is a silent half-fix.
+func isAbsence(err error) bool {
+	return errors.Is(err, fs.ErrorObjectNotFound) || errors.Is(err, fs.ErrorDirNotFound)
+}
+
 // toObjectInfo carries exactly what FR-32 allows a medium to tell this
 // product: a key, a size, an upload time that is never a producer
 // timestamp, and a storage class where the backend reports one. No ETag,
@@ -210,6 +329,12 @@ func (a *Adapter) StatObject(ctx context.Context, medium transport.Medium, key s
 	defer shutdownFs(ctx, f)
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
+		if isAbsence(err) {
+			// "this artifact is not on the medium" and "this medium's
+			// bucket does not exist" must not reach a caller as the same
+			// answer. See confirmBucket.
+			return transport.ObjectInfo{}, a.absenceOrMissingBucket(ctx, f, medium, "stat_object", err)
+		}
 		return transport.ObjectInfo{}, Wrap("stat_object", err)
 	}
 	return toObjectInfo(ctx, o), nil
@@ -268,6 +393,11 @@ func (a *Adapter) OpenObject(ctx context.Context, medium transport.Medium, key s
 	}
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
+		if isAbsence(err) {
+			reported := a.absenceOrMissingBucket(ctx, f, medium, "open_object", err)
+			shutdownFs(ctx, f)
+			return nil, reported
+		}
 		shutdownFs(ctx, f)
 		return nil, Wrap("open_object", err)
 	}
@@ -363,6 +493,13 @@ func (a *Adapter) DeleteObject(ctx context.Context, medium transport.Medium, key
 	o, err := f.NewObject(ctx, key)
 	if err != nil {
 		if wrapped := Wrap("delete_object", err); isNotFound(wrapped) {
+			// An already-absent object is success, but only once the
+			// bucket it would have been in is known to exist. Without
+			// that check a delete against a mistyped bucket reported
+			// success and the prune marked the placement GONE.
+			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+				return berr
+			}
 			return nil
 		}
 		return Wrap("delete_object", err)
@@ -387,6 +524,12 @@ func (a *Adapter) ListObjects(ctx context.Context, medium transport.Medium, pref
 	objs, _, err := walk.GetAll(ctx, f, prefix, true, -1)
 	if err != nil {
 		if wrapped := Wrap("list_objects", err); isNotFound(wrapped) {
+			// A prefix holding nothing is an empty listing, but a bucket
+			// that is not there must never be reported as one: a catalog
+			// rebuild reading that concludes the medium holds nothing.
+			if berr := a.confirmBucket(ctx, f, medium); berr != nil {
+				return nil, berr
+			}
 			return nil, nil
 		}
 		return nil, Wrap("list_objects", err)
