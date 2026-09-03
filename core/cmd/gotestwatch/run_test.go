@@ -17,13 +17,88 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
+
+// gateIncomplete is scripts/lib/ci-local-gate.sh's GATE_INCOMPLETE: the
+// status that script reserves for a run which performed less than it was
+// asked to, distinct from 0 for "performed everything" and from whatever
+// an actual failure returns. The same number here on purpose, because
+// this is the same problem one level down, and that script's own comment
+// states it better than I can: "a skip that is indistinguishable from a
+// pass in both the exit code and the final line is the same class of bug
+// as a test that asserts nothing: green because it could not look".
+const gateIncomplete = 3
+
+// skipLedger records every check in this package that was asked for and
+// did not run, so the run cannot end the same colour as one that ran
+// everything.
+//
+// The negative control in TestRun_DoesNotFailASlowButProgressingRun can
+// decide that this host cannot be measured, and saying so is the right
+// answer (#401). But t.Skip leaves `go test` printing ok and exiting 0,
+// so a control that has quietly stopped controlling looks exactly like a
+// working one to anyone reading a green run, which is the failure this
+// whole file exists to prevent, one level up. Nothing counted those
+// skips; this does.
+//
+// Deliberately not gated on CI or CI_LOCAL. The run people actually stare
+// at while editing this file is the local one, so an env-gated version
+// would keep the defect in exactly the place it does the most damage, and
+// would be a second thing to get wrong. scripts/ci-local.sh does not gate
+// its own ledger either.
+type skipLedger struct {
+	mu    sync.Mutex
+	notes []string
+}
+
+// note records one check that did not run. Reach it through
+// skipCannotMeasure rather than calling it directly, so a skip and its
+// ledger entry cannot drift apart.
+func (l *skipLedger) note(what string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.notes = append(l.notes, what)
+}
+
+// verdict turns the ledger into this run's last line and its exit status,
+// given the status m.Run() produced.
+//
+// Three outcomes, three statuses, the same three scripts/ci-local.sh
+// uses, so a wrapper never has to parse prose: the status m.Run() gave
+// for a run that performed everything, gateIncomplete for one that
+// skipped something, and an actual failure's status ahead of both,
+// because a failure is the more urgent news and INCOMPLETE would bury it.
+func (l *skipLedger) verdict(code int, w io.Writer) int {
+	// Not written yet. This is today's behaviour, stated as code so the
+	// test below is red against it: a skip changes neither the last line
+	// nor the exit status, which is the finding.
+	return code
+}
+
+// controlSkips is this package's ledger. See skipLedger.
+var controlSkips skipLedger
+
+func TestMain(m *testing.M) {
+	os.Exit(controlSkips.verdict(m.Run(), os.Stderr))
+}
+
+// skipCannotMeasure records a check that could not run, then skips it.
+// Nothing in this file should call t.Skip directly: the ledger is the
+// only reason a skipped control is not the same colour as a passing one.
+func skipCannotMeasure(t *testing.T, format string, args ...any) {
+	t.Helper()
+	why := fmt.Sprintf(format, args...)
+	controlSkips.note(t.Name() + ": " + why)
+	t.Skip("could not measure: " + why)
+}
 
 // tightBounds keeps the tests below to seconds. Every ratio matches
 // defaultBounds; only the floors are shrunk, because what these tests
@@ -266,6 +341,18 @@ const (
 	// happened, so this run says nothing either way and reporting a
 	// verdict from it would be reporting on the machine.
 	controlCannotMeasure
+	// controlBroken: gotestwatch's own account of the run contradicts the
+	// output that same run replayed, so what failed is gotestwatch, not
+	// the host and not the derivation.
+	//
+	// It fails, like controlNotProved, and it is a separate outcome from
+	// it because the two send a reader to different places: one says the
+	// derived window stopped being load-bearing, the other says the
+	// tracker cannot be believed about anything, including about whether
+	// the control could run. This is the bucket the safety review of #406
+	// found two real defects hiding in, counted as "could not measure",
+	// which is a skip.
+	controlBroken
 )
 
 func (o controlOutcome) String() string {
@@ -274,9 +361,49 @@ func (o controlOutcome) String() string {
 		return "proved"
 	case controlNotProved:
 		return "not proved"
-	default:
+	case controlCannotMeasure:
 		return "could not measure"
+	case controlBroken:
+		return "gotestwatch contradicted its own output"
+	default:
+		return fmt.Sprintf("controlOutcome(%d)", int(o))
 	}
+}
+
+// controlWitness is everything the negative control knows that did NOT
+// come from the tracker.
+//
+// That distinction is the whole finding. Every number judgeNegativeControl
+// reads off Result — the event count, the running-test names, the slowest
+// gap — is produced by the tracker, which is the subsystem this control
+// exists to test. So a broken tracker got to decide whether the tracker
+// was working, and it decided in its own favour: the safety review of
+// #406 put broken event counting and broken running-test attribution into
+// the "could not measure" bucket, which skips, rather than into the one
+// that fails.
+//
+// These three facts have a different provenance. Two of them are the
+// bytes `go test` itself printed, copied off its stdout pipe and replayed
+// by Run, so they say what the child really did whatever the tracker made
+// of it. The third is this test's own wall clock. Between them they can
+// contradict the tracker's story, and a contradicted tracker is a defect,
+// not a busy machine.
+type controlWitness struct {
+	// sawOutput: `go test` had already replayed at least one byte of its
+	// own output by the instant the watchdog decided, so it was past
+	// loading packages, linking and starting the binary. observeLine
+	// calls tr.observe BEFORE it writes those bytes, so a tracker that
+	// then reports zero events observed is contradicting itself.
+	sawOutput bool
+	// testBInFlight: "=== RUN   TestB" had been replayed and
+	// "--- PASS: TestB" had not, so TestB had started and not finished.
+	// go test -json emits the "run" action before that first line and the
+	// "pass" action after the last one, so a tracker that then reports
+	// anything other than [TestB] running is contradicting itself too.
+	testBInFlight bool
+	// elapsed is how long Run took by this test's own clock, which is the
+	// only measurement here the tracker had no hand in.
+	elapsed time.Duration
 }
 
 // judgeNegativeControl reads what running slowpkg with the derivation
@@ -286,7 +413,8 @@ func (o controlOutcome) String() string {
 // floor is the no-progress floor that run was given, poll its watchdog
 // interval, and hostSlop the worst overshoot a sampler goroutine measured
 // on this host asking for that same interval while the run was going.
-func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration) (controlOutcome, string) {
+func judgeNegativeControl(res Result, floor, poll, hostSlop time.Duration, w controlWitness) (controlOutcome, string) {
+	_ = w
 	if res.Trip == nil {
 		// With the derivation off the window can never grow past the
 		// slowest gap already measured, so the only way TestB's stall
@@ -431,7 +559,7 @@ func TestRun_DoesNotFailASlowButProgressingRun(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run returned an error: %v\nstderr=%s", err, stderr.String())
 		}
-		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, worstLag)
+		outcome, why := judgeNegativeControl(res, floor, slowpkgPoll, worstLag, controlWitness{})
 		switch outcome {
 		case controlProved:
 			t.Log(why)
@@ -471,6 +599,7 @@ func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
 	tests := []struct {
 		name     string
 		res      Result
+		witness  controlWitness
 		want     controlOutcome
 		mentions []string
 	}{
@@ -481,6 +610,7 @@ func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
 				lastEvent: "output TestB (=== RUN   TestB)", sinceLast: floor + 40*time.Millisecond,
 				window: floor, slowestStep: slowpkgFirstStall,
 			}},
+			witness:  controlWitness{sawOutput: true, testBInFlight: true, elapsed: 5 * time.Second},
 			want:     controlProved,
 			mentions: []string{"TestB"},
 		},
@@ -490,8 +620,25 @@ func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
 				kind: "no-progress", events: 0, running: nil,
 				lastEvent: "process start", sinceLast: floor + 3*time.Millisecond, window: floor,
 			}},
+			witness:  controlWitness{elapsed: floor + 20*time.Millisecond},
 			want:     controlCannotMeasure,
 			mentions: []string{"process start", "no event"},
+		},
+		{
+			// The same zero event count as the case above, and the
+			// opposite verdict, because `go test` had already printed
+			// something by the time the watchdog decided. observeLine
+			// counts the event before it writes those bytes, so a run
+			// that replayed output and reported no events is gotestwatch
+			// contradicting itself, not a host too slow to start.
+			name: "it counted no events, but the fixture's output was already on the wire",
+			res: Result{Trip: &trip{
+				kind: "no-progress", events: 0, running: nil,
+				lastEvent: "process start", sinceLast: floor + 3*time.Millisecond, window: floor,
+			}},
+			witness:  controlWitness{sawOutput: true, elapsed: floor + 20*time.Millisecond},
+			want:     controlBroken,
+			mentions: []string{"0 events observed", "not counting what it printed"},
 		},
 		{
 			name: "it tripped on a gap this host produced before TestB",
@@ -500,8 +647,34 @@ func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
 				lastEvent: "output TestA (=== RUN   TestA)", sinceLast: floor + 9*time.Millisecond,
 				window: floor, slowestStep: 700 * time.Millisecond,
 			}},
+			witness:  controlWitness{sawOutput: true, elapsed: floor + 1200*time.Millisecond},
 			want:     controlCannotMeasure,
 			mentions: []string{"TestA"},
+		},
+		{
+			// Same shape as the case above and the opposite verdict, for
+			// the same reason: TestB had started and had not finished, so
+			// whatever the tracker named, TestB was the test in flight.
+			name: "it named no test at all while TestB was in flight",
+			res: Result{Trip: &trip{
+				kind: "no-progress", events: 7, running: nil,
+				lastEvent: "output TestB (=== RUN   TestB)", sinceLast: floor + 40*time.Millisecond,
+				window: floor, slowestStep: slowpkgFirstStall,
+			}},
+			witness:  controlWitness{sawOutput: true, testBInFlight: true, elapsed: 5 * time.Second},
+			want:     controlBroken,
+			mentions: []string{"TestB had started and not finished", "attribution"},
+		},
+		{
+			name: "it named TestA while TestB was in flight",
+			res: Result{Trip: &trip{
+				kind: "no-progress", events: 7, running: []string{"TestA"},
+				lastEvent: "output TestB (=== RUN   TestB)", sinceLast: floor + 40*time.Millisecond,
+				window: floor, slowestStep: slowpkgFirstStall,
+			}},
+			witness:  controlWitness{sawOutput: true, testBInFlight: true, elapsed: 5 * time.Second},
+			want:     controlBroken,
+			mentions: []string{"TestB had started and not finished", "attribution"},
 		},
 		{
 			name: "no trip, and nothing this host did beat the planted stall",
@@ -510,6 +683,7 @@ func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
 				SlowestLabel: "output TestB (=== RUN   TestB) -> output TestB (--- PASS: TestB (6.0",
 				Window:       slowpkgSecondStall + 3*time.Millisecond,
 			},
+			witness:  controlWitness{sawOutput: true, elapsed: 7300 * time.Millisecond},
 			want:     controlNotProved,
 			mentions: []string{"6.003s"},
 		},
@@ -520,13 +694,32 @@ func TestJudgeNegativeControl_TellsAHostFailureFromARealOne(t *testing.T) {
 				SlowestLabel: "output TestA (=== RUN   TestA) -> output TestA (--- PASS: TestA (1.0",
 				Window:       9 * time.Second,
 			},
+			// A 9s gap and TestB's own 6s stall are separate intervals of
+			// the same timeline, so a run that really produced both took
+			// at least 15s. This one took 16s, so the story holds.
+			witness:  controlWitness{sawOutput: true, elapsed: 16 * time.Second},
 			want:     controlCannotMeasure,
 			mentions: []string{"9s", "TestA"},
+		},
+		{
+			// The same claimed 9s gap, and the opposite verdict, because
+			// the run finished in 7.3s and two disjoint gaps of 9s and 6s
+			// do not fit inside 7.3s. The claim is the tracker's; the
+			// clock is not.
+			name: "no trip, and the slowest gap it claims does not fit in the time the run took",
+			res: Result{
+				Events: 12, SlowestStep: 9 * time.Second,
+				SlowestLabel: "output TestA (=== RUN   TestA) -> output TestA (--- PASS: TestA (1.0",
+				Window:       9 * time.Second,
+			},
+			witness:  controlWitness{sawOutput: true, elapsed: 7300 * time.Millisecond},
+			want:     controlBroken,
+			mentions: []string{"misreporting itself", "7.3s"},
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, why := judgeNegativeControl(tc.res, floor, slowpkgPoll, 20*time.Millisecond)
+			got, why := judgeNegativeControl(tc.res, floor, slowpkgPoll, 20*time.Millisecond, tc.witness)
 			if got != tc.want {
 				t.Fatalf("outcome = %v, want %v; the control said: %s", got, tc.want, why)
 			}
@@ -573,6 +766,70 @@ func TestSlowpkgCalibration_TheControlCanStillFire(t *testing.T) {
 	if slowpkgFirstStall >= slowpkgBaseFloor {
 		t.Errorf("TestA's %s stall is at or past the %s floor, so with the derivation off the control trips on TestA before TestB ever stalls",
 			slowpkgFirstStall, slowpkgBaseFloor)
+	}
+}
+
+// TestSkipLedger_ASkipIsNeverTheSameColourAsAPass is the second half of
+// the safety review's finding against #406, and the half that matters
+// more. Narrowing the skip stops real defects landing in it; this stops a
+// skip that IS legitimate from being read as a pass.
+//
+// The vocabulary is scripts/lib/ci-local-gate.sh's, not a new one: ok is
+// the status the run already had, INCOMPLETE is gateIncomplete, and an
+// actual failure outranks both.
+func TestSkipLedger_ASkipIsNeverTheSameColourAsAPass(t *testing.T) {
+	tests := []struct {
+		name     string
+		notes    []string
+		code     int
+		want     int
+		mentions []string
+		absent   []string
+	}{
+		{
+			name:   "everything ran, so the run keeps its own verdict and says nothing extra",
+			code:   0,
+			want:   0,
+			absent: []string{"INCOMPLETE"},
+		},
+		{
+			name:     "a skip is not a pass",
+			notes:    []string{"the negative control: this host's 2s startup left no floor under the stall"},
+			code:     0,
+			want:     gateIncomplete,
+			mentions: []string{"INCOMPLETE", "no floor under the stall", "not evidence"},
+		},
+		{
+			name:     "a real failure outranks INCOMPLETE, and the skip is still named",
+			notes:    []string{"the negative control: this host's 2s startup left no floor under the stall"},
+			code:     1,
+			want:     1,
+			mentions: []string{"INCOMPLETE", "no floor under the stall"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var l skipLedger
+			for _, n := range tc.notes {
+				l.note(n)
+			}
+			var out bytes.Buffer
+			got := l.verdict(tc.code, &out)
+			if got != tc.want {
+				t.Fatalf("verdict(%d) = %d, want %d; %d skipped check(s) were recorded and the run reported %d, so a reader of the exit status cannot tell this from a run that performed everything\nsaid: %s",
+					tc.code, got, tc.want, len(tc.notes), got, out.String())
+			}
+			for _, want := range tc.mentions {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("the verdict does not mention %q, so the skip is invisible to anyone reading the run:\n%s", want, out.String())
+				}
+			}
+			for _, unwanted := range tc.absent {
+				if strings.Contains(out.String(), unwanted) {
+					t.Errorf("the verdict says %q on a run that skipped nothing:\n%s", unwanted, out.String())
+				}
+			}
+		})
 	}
 }
 
