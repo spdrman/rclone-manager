@@ -229,3 +229,49 @@ func TestSecretThroughLoggerEndToEnd(t *testing.T) {
 
 	assertNeverLeaked(t, "obs.Logger end-to-end", buf.String())
 }
+
+// unexportedSecretHolder and ExportedSecretHolder are the two halves of
+// the measurement in Secret's own doc: the same wrapped value in an
+// unexported field and in an exported one.
+type unexportedSecretHolder struct{ s Secret }
+
+// ExportedSecretHolder is the control. It is exported for no reason other
+// than that its FIELD has to be, which is the whole point being measured.
+type ExportedSecretHolder struct{ S Secret }
+
+// TestSecretInAnUnexportedFieldStillLeaks pins a limitation, not a
+// behaviour anyone wants.
+//
+// fmt cannot take an interface out of an unexported struct field
+// (reflect.Value.CanInterface is false for one), so it never asks whether
+// the value implements Formatter and prints the wrapped string instead.
+// Secret's doc used to claim it covered every rendering path the standard
+// library offers; it does not, and this test is what keeps that correction
+// true.
+//
+// If a future Go stops leaking here this test will fail. That is a good
+// failure: DELETE THIS TEST, and delete the "one rendering path this does
+// NOT cover" section from Secret's doc with it. Do not weaken the
+// assertion to keep it passing, because everything that reasserts
+// redaction on top of this (internal/transport/rclone's
+// resolvedCredentials, keyEncryptionSecretCacheEntry) exists only because
+// of it.
+func TestSecretInAnUnexportedFieldStillLeaks(t *testing.T) {
+	const raw = "hunter2"
+
+	leaked := fmt.Sprintf("%+v", unexportedSecretHolder{s: NewSecret(raw)})
+	if !strings.Contains(leaked, raw) {
+		t.Fatalf("an unexported Secret field no longer leaks through %%+v (got %q). "+
+			"Go has closed the hole: delete this test and the limitation section in Secret's doc, "+
+			"rather than weakening this assertion", leaked)
+	}
+
+	// The control, which is what makes the assertion above a measurement
+	// of the FIELD's exportedness rather than of Secret being broken
+	// outright.
+	redactedRendering := fmt.Sprintf("%+v", ExportedSecretHolder{S: NewSecret(raw)})
+	if strings.Contains(redactedRendering, raw) {
+		t.Fatalf("an EXPORTED Secret field leaked through %%+v (got %q); Secret's Formatter is not working at all, "+
+			"which makes the unexported-field result above meaningless", redactedRendering)
+	}
+}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
-	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
 // This file is FR-27's home-medium rule, and it is the ONE derivation of
@@ -193,49 +192,4 @@ func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, activeMe
 		plan.Moves = append(plan.Moves, HomeMove{Artifact: v.Artifact, From: current, To: home})
 	}
 	return plan, nil
-}
-
-// ActiveMediumFromRecords builds PlanHomeMoves' placement lookup from a
-// backup set's journal records (EPIC E FR-29's placement rows, #236).
-//
-// A placement row means a DURABLE copy, so the reading is:
-//
-//   - exactly one ACTIVE placement: that is where the artifact is, and
-//     the planner may compare it against the home the chain names;
-//   - none: this manager cannot confirm where the artifact is. An
-//     artifact still transferring deliberately has no row, and a
-//     hand-built Record has none either, so absence is never evidence of
-//     absence;
-//   - more than one: a move is already in flight (FR-30's copy phase
-//     leaves the source and the destination both ACTIVE until the source
-//     delete lands), and "where is this" has two answers. Planning a
-//     second move on top of one already running is exactly the race
-//     FR-30's journal exists to make unrepresentable.
-//
-// A DELETE_PENDING or GONE row is not a location either. It records a
-// copy on its way out or already gone, and reading one as a location
-// would plan a move FROM somewhere this manager is in the middle of
-// emptying.
-//
-// Two of those readings are "cannot confirm", and both take the same
-// branch in the planner: report it, move nothing, leave the artifact
-// where it is.
-func ActiveMediumFromRecords(records []state.Record) func(model.ArtifactID) (string, bool) {
-	byArtifact := make(map[model.ArtifactID][]string, len(records))
-	for _, rec := range records {
-		var active []string
-		for _, p := range rec.Placements {
-			if p.Status == state.PlacementActive {
-				active = append(active, p.Medium)
-			}
-		}
-		byArtifact[rec.Artifact] = active
-	}
-	return func(id model.ArtifactID) (string, bool) {
-		active, ok := byArtifact[id]
-		if !ok || len(active) != 1 {
-			return "", false
-		}
-		return active[0], true
-	}
 }

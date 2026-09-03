@@ -118,6 +118,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -396,6 +397,20 @@ type keyEncryptionSecretCacheEntry struct {
 	secret obs.Secret
 	ok     bool
 	err    error
+}
+
+// Format reasserts redaction, because obs.Secret cannot reach a value in
+// an UNEXPORTED field: fmt has no way to take an interface out of one
+// (reflect.Value.CanInterface is false), so it never asks whether the
+// field implements Formatter and prints the wrapped string instead. This
+// is the same hole closed on resolvedCredentials in mediumcreds.go, and
+// obs.Secret's own doc now records it with the measurement.
+//
+// It is a Formatter rather than a Stringer because Formatter is the one
+// fmt consults first and the one that covers %+v and %#v, which are
+// exactly the verbs that reach for a struct's fields.
+func (e keyEncryptionSecretCacheEntry) Format(f fmt.State, _ rune) {
+	_, _ = io.WriteString(f, "[REDACTED]")
 }
 
 // keyEncryptionSourceIdentity returns a string that uniquely identifies

@@ -1237,6 +1237,7 @@ core/internal/
   metrics/       a health report rendered as Prometheus text (built, exposed nowhere)
   model/         shared identity types: ArtifactID, BackupSetID, RemoteIdentity, CompareIdentity
   obs/           structured event logging
+  placement/     the verification ladder: what each class of check proves about a durable copy, and what it costs
   quarantine/    the operator-facing view of what is quarantined and why
   recovery/      the non-secret sidecar manifest written beside every committed artifact
   reconcile/     startup reconciliation against the journal, filesystem and remote
@@ -1336,11 +1337,21 @@ lives here instead; nothing in the design depended on the location.
 
 Apache License 2.0. The full text is in [`LICENSE`](LICENSE).
 
-Every third-party component that reaches a shipped artifact is permissive (MIT,
-BSD-2-Clause, BSD-3-Clause, Apache-2.0, CC0-1.0), which is what made that choice
-available. It is checked rather than remembered: the inventory is re-derived
-from the live module graph and the frontend lockfile on every gate run, and a
-copyleft component fails the build.
+Every third-party component that reaches a shipped artifact is permissive
+(MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, CC0-1.0) except two:
+`go-cleanhttp` and `go-retryablehttp` are MPL-2.0 and arrive under
+rclone's `s3` backend, which cannot be registered without them. MPL-2.0 is
+file-level weak copyleft and §3.3 permits this Larger Work to ship under
+Apache-2.0, so the choice stands, and the §3.2 obligation it carries is
+recorded in `compliance.json` and discharged in `NOTICE` and
+[`docs/compliance/source-offer.md`](docs/compliance/source-offer.md), which
+name both modules at their exact versions and give the immutable address their
+source is served from.
+
+All of that is checked rather than remembered: the inventory is re-derived from
+the live module graph and the frontend lockfile on every gate run, a licence
+that is neither permissive nor accepted fails the build, and so does an
+accepted licence whose offer those two files stop carrying.
 
 - [`NOTICE`](NOTICE) – the attribution file Apache-2.0 §4(d) refers to, grouped by licence
 - [`provenance/third-party-licenses.json`](provenance/third-party-licenses.json) – the machine-readable inventory, with the SHA-256 of each component's licence text

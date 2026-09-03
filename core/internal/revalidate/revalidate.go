@@ -55,6 +55,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -71,14 +72,41 @@ type Journal interface {
 	ListByBackupSet(ctx context.Context, set model.BackupSetID) ([]state.Record, error)
 }
 
-// Deps is what Run is handed. Unlike internal/reconcile.Deps and
-// lifecycle.Deps, there is deliberately no Transport field here:
-// revalidation only ever re-checks the durable local copy already on
-// disk, never the remote (which, for a COMPLETE artifact, is already
-// confirmed gone; see the package doc), so nothing in this package ever
-// needs one.
+// Mediums resolves a placement's medium id into the descriptor a
+// MediumStore needs, out of whatever configuration the caller holds.
+//
+// It is an interface rather than a map because this package must not
+// import internal/config: config is where medium truth lives, and a
+// package that read it directly would be a second place deciding what a
+// medium is. A caller that has no mediums configured supplies nothing,
+// and this package then has nothing to check a medium placement with,
+// which it reports honestly rather than papering over.
+type Mediums interface {
+	MediumFor(id string) (transport.Medium, bool)
+}
+
+// Deps is what Run is handed.
+//
+// There is still no Transport here, and the reason has not changed:
+// revalidation never re-checks a remote SOURCE, which for a COMPLETE
+// artifact is already confirmed gone. What EPIC E adds is the other
+// direction, a DESTINATION an artifact's durable copy may now live on, and
+// that arrives as a MediumStore plus a way to resolve a medium id.
+//
+// Both are optional, and both being absent is the ordinary case for every
+// deployment that configures no medium: with no store, a medium placement
+// is reported as not checked rather than as passed, which is exactly the
+// checked-versus-passed distinction this package already draws.
 type Deps struct {
 	Journal Journal
+
+	// Store reaches storage mediums. Nil means this deployment cannot
+	// reach one, which is true of every deployment that configures none.
+	Store placement.Store
+
+	// Mediums resolves a placement's medium id. Nil has the same effect
+	// as a nil Store.
+	Mediums Mediums
 
 	// Now is injectable so a test can control both what a recorded
 	// transition's OccurredAt is stamped with and, transitively through
@@ -117,6 +145,20 @@ type Finding struct {
 	// Reason is a short, human-readable explanation, suitable for a log
 	// line or an audit trail.
 	Reason string
+
+	// Class is the verification class this pass actually ACHIEVED, never
+	// the strongest one configured (EPIC E, FR-31). It is empty when
+	// Checked is false.
+	//
+	// It exists because "revalidated" stopped being one thing. An
+	// artifact whose durable copy is a local file is re-read and
+	// re-hashed, which is placement.Content. An artifact whose durable
+	// copy is on a storage medium is HEADed, which is
+	// placement.Existence, proves nothing about the bytes, and must never
+	// be reported to an operator as the artifact having been revalidated
+	// in the sense the local check means. Carrying the class is what lets
+	// every surface downstream say which one happened.
+	Class placement.Class
 }
 
 // ArtifactError is a per-artifact problem that stopped Run from reaching a
@@ -208,7 +250,7 @@ func Run(ctx context.Context, deps Deps, set model.BackupSetID, cfg config.Reval
 func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (Finding, error) {
 	cur := lifecycle.State(rec.State)
 
-	checked, passed, reason, err := runChecks(ctx, cfg, rec)
+	checked, passed, class, reason, err := runChecks(ctx, deps, cfg, rec)
 	if err != nil {
 		return Finding{}, err
 	}
@@ -222,11 +264,17 @@ func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec 
 			Key:      revalidateKey(rec.Artifact, "pass", cur, cur, rec.UpdatedAt),
 			From:     string(cur),
 			To:       string(cur),
-			Detail:   "Phase 4: scheduled revalidation passed: " + reason,
+			// The class is named in the audit trail, not just in the
+			// returned Finding, because the journal is what an operator
+			// reads six months later when they want to know when this
+			// artifact was last actually looked at. "Revalidation passed"
+			// on its own would let an existence check masquerade there as
+			// the content check the same words used to mean.
+			Detail: fmt.Sprintf("Phase 4: scheduled revalidation passed at %s class: %s", class, reason),
 		}); err != nil {
 			return Finding{}, fmt.Errorf("recording a passed revalidation for %s: %w", rec.Artifact, err)
 		}
-		return Finding{Artifact: rec.Artifact, From: cur, To: cur, Checked: true, Passed: true, Reason: reason}, nil
+		return Finding{Artifact: rec.Artifact, From: cur, To: cur, Checked: true, Passed: true, Reason: reason, Class: class}, nil
 	}
 
 	// A failed recheck: route through the exact same edges reconcile.go
@@ -247,12 +295,12 @@ func checkArtifact(ctx context.Context, deps Deps, cfg config.Revalidation, rec 
 		Key:      revalidateKey(rec.Artifact, "fail", cur, to, rec.UpdatedAt),
 		From:     string(cur),
 		To:       string(to),
-		Detail:   "Phase 4: scheduled revalidation found the durable local copy invalid: " + reason,
+		Detail:   fmt.Sprintf("Phase 4: scheduled revalidation at %s class found the artifact's durable copy invalid: %s", class, reason),
 	})
 	if err != nil {
 		return Finding{}, fmt.Errorf("quarantining %s after a failed revalidation: %w", rec.Artifact, err)
 	}
-	return Finding{Artifact: rec.Artifact, From: cur, To: lifecycle.State(out.Record.State), Checked: true, Passed: false, Reason: reason}, nil
+	return Finding{Artifact: rec.Artifact, From: cur, To: lifecycle.State(out.Record.State), Checked: true, Passed: false, Reason: reason, Class: class}, nil
 }
 
 // revalidateKey mirrors internal/reconcile's own reconcileKey exactly: an

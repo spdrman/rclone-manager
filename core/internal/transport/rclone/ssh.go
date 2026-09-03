@@ -511,27 +511,51 @@ func checkKeyFileMode(sourceID, configuredPath string, info os.FileInfo) error {
 // positive this project has no reason to accept for a bit POSIX itself
 // already uses to neutralize the risk.
 func checkKeyDirChainMode(sourceID, configuredPath, keyFilePath string) error {
-	dir, err := filepath.Abs(filepath.Dir(keyFilePath))
+	dir, mode, err := firstWritableAncestor(keyFilePath)
 	if err != nil {
-		return fmt.Errorf("source %q: resolving the directory containing key_file %q: %w", sourceID, configuredPath, err)
+		return fmt.Errorf("source %q: checking the directories containing key_file %q: %w", sourceID, configuredPath, err)
+	}
+	if dir == "" {
+		return nil
+	}
+	return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
+		"source %q: key_file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
+			"directory lets any local actor delete or replace the key regardless of the key file's own mode; "+
+			"correct it (chmod go-w %s) or move the key",
+		sourceID, configuredPath, dir, mode.Perm(), dir,
+	))
+}
+
+// firstWritableAncestor walks from path's own directory to the filesystem
+// root and reports the first ancestor any account other than its owner can
+// write to, or "" when none of them is. It is the mechanism behind
+// checkKeyDirChainMode above and behind mediumcreds.go's identical check
+// on a credentials file: the RULE is shared, so it is written once, while
+// each caller keeps its own wording and its own FR-22 category.
+//
+// The sticky-bit exception is checkKeyDirChainMode's own, and it lives
+// here with the walk it qualifies: a directory carrying os.ModeSticky
+// (1777, /tmp on every mainstream Unix) is not refused for being
+// group- or world-writable, because POSIX restricts unlink and rename
+// inside a sticky directory to the entry's owner, the directory's owner or
+// root, which is exactly the attack this walk exists to close.
+func firstWritableAncestor(path string) (dir string, mode os.FileMode, err error) {
+	dir, err = filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return "", 0, fmt.Errorf("resolving the directory containing %q: %w", path, err)
 	}
 	for {
-		info, err := os.Stat(dir)
-		if err != nil {
-			return fmt.Errorf("source %q: checking permissions on %q, a directory containing key_file %q: %w", sourceID, dir, configuredPath, err)
+		info, statErr := os.Stat(dir)
+		if statErr != nil {
+			return "", 0, fmt.Errorf("checking permissions on %q: %w", dir, statErr)
 		}
-		mode := info.Mode()
-		if mode.Perm()&0o022 != 0 && mode&os.ModeSticky == 0 {
-			return transport.NewError(transport.KeyPermissions, "ssh_key_permissions", fmt.Errorf(
-				"source %q: key_file %q has a containing directory %q with permissions %04o: a group- or world-writable "+
-					"directory lets any local actor delete or replace the key regardless of the key file's own mode; "+
-					"correct it (chmod go-w %s) or move the key",
-				sourceID, configuredPath, dir, mode.Perm(), dir,
-			))
+		m := info.Mode()
+		if m.Perm()&0o022 != 0 && m&os.ModeSticky == 0 {
+			return dir, m, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return nil
+			return "", 0, nil
 		}
 		dir = parent
 	}

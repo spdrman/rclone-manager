@@ -94,7 +94,74 @@ rather than maintained by hand.
 
 This file is the NOTICE file Apache-2.0 section 4(d) refers to. Redistributing
 this work, or a derivative of it, means carrying this file with it.
+`
 
+// noticeObligationHeader introduces the part of NOTICE that is an offer
+// rather than an attribution.
+//
+// It comes before the component listing on purpose. Attribution is a
+// courtesy a reader can skim; this is the section a recipient has rights
+// under, and burying it after several hundred lines of module names is
+// how a discharge becomes technically present and practically absent.
+const noticeObligationHeader = `
+Source for the components that are not permissively licensed
+------------------------------------------------------------
+
+Most of this product's dependencies are permissively licensed and carry no
+obligation beyond the attribution below. The components in this section are
+not, and this is where the terms say a recipient's rights live. Each one is
+listed at the exact version that was compiled, with the address its complete
+source is served from. Nothing here is modified or vendored by this project,
+so that address serves the same source that went into the binaries, and the
+inventory's licenceSha256 for each component is the SHA-256 of the licence
+text inside it.
+`
+
+// noticeObligationSection renders the offer, or returns nothing when no
+// component in the inventory needs one.
+//
+// It is derived from compliance.json and the inventory rather than
+// written out, so a third encumbered module arriving cannot leave the
+// offer describing two. LicenceObligationComplaints checks this file
+// afterwards for exactly the strings this writes, which is what makes
+// the pair a check and not a convention. It is a check on this renderer
+// and not a second proof of the data, though: both read the same
+// register, and TestComplianceArtifactsMatchThisTree keeps the checked-in
+// NOTICE byte-identical to this render, so that arm can only fail when
+// this function stops emitting a string a recipient needs. The
+// hand-written source-offer.md is the artifact that can disagree.
+func noticeObligationSection(c Compliance, inv Inventory) string {
+	var b strings.Builder
+	for _, a := range c.License.AcceptedNonPermissive {
+		var affected []Component
+		for _, comp := range inv.Components {
+			if a.Covers(comp.LicenseID) {
+				affected = append(affected, comp)
+			}
+		}
+		if len(affected) == 0 {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString(noticeObligationHeader)
+		}
+		fmt.Fprintf(&b, "\n%s\n", a.SPDXID)
+		fmt.Fprintf(&b, "  Scope:      %s\n", a.Scope)
+		fmt.Fprintf(&b, "  Obligation: %s\n", a.Obligation)
+		fmt.Fprintf(&b, "  Licence:    %s\n", a.LicenceTextURL)
+		fmt.Fprintf(&b, "  Components (%d), and where to get each one's source:\n", len(affected))
+		SortComponents(affected)
+		for _, comp := range affected {
+			fmt.Fprintf(&b, "    %s %s@%s\n", comp.Ecosystem, comp.Name, comp.Version)
+			fmt.Fprintf(&b, "      linked into: %s\n", strings.Join(comp.LinkedInto, ", "))
+			fmt.Fprintf(&b, "      source:      %s\n", a.SourceURLFor(comp))
+		}
+	}
+	return b.String()
+}
+
+// noticeComponentsHeader introduces the attribution listing.
+const noticeComponentsHeader = `
 Components by licence
 ---------------------
 `
@@ -103,6 +170,8 @@ Components by licence
 func buildNotice(c Compliance, inv Inventory) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, noticeHeader, c.Project.DisplayName, c.Project.Copyright, c.License.Inventory)
+	b.WriteString(noticeObligationSection(c, inv))
+	b.WriteString(noticeComponentsHeader)
 
 	byLicence := map[string][]string{}
 	for _, comp := range inv.Components {
