@@ -65,7 +65,7 @@ func TestCommit_WritesRecoveryManifestMatchingJournalRecord(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
 	content := []byte("durable backup content")
 	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -129,7 +129,7 @@ func TestCommit_ManifestFileNeverContainsForbiddenMarkers(t *testing.T) {
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
 	content := []byte("payload unrelated to any credential")
 	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -179,7 +179,7 @@ func TestCommit_RetryAfterManifestLoss_RewritesManifestOnConvergedRetry(t *testi
 	artifact := mustID(t)
 
 	dir := t.TempDir()
-	partial := partialPath(dir, artifact)
+	partial := mustPartialPath(t, dir, artifact)
 	content := []byte("evidence of a prior successful commit")
 	if err := os.WriteFile(partial, content, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)

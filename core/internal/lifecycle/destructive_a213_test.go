@@ -147,8 +147,8 @@ func TestCommit_DanglingSymlinkAtFinalName_NeverFollowedNeverClobbered(t *testin
 	artifact := mustID(t)
 	localDir := t.TempDir()
 
-	final := finalPath(localDir, artifact)
-	partial := partialPath(localDir, artifact)
+	final := mustFinalPath(t, localDir, artifact)
+	partial := mustPartialPath(t, localDir, artifact)
 
 	danglingTarget := filepath.Join(localDir, "this-path-must-never-be-created")
 	if err := os.Symlink(danglingTarget, final); err != nil {

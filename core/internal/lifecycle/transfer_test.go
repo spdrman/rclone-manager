@@ -634,6 +634,30 @@ func TestTransferRejectsMissingRequiredParams(t *testing.T) {
 	}
 }
 
+// mustFinalPath and mustPartialPath are the test-side spelling of the two
+// helpers issue #390's conversion gave an error return. Every call in this
+// package's tests supplies a real temp directory and a real artifact id, so
+// an error here is a broken test rather than a case worth exercising; the
+// case that DOES exercise the refusal is named, and it calls the helpers
+// directly.
+func mustFinalPath(t *testing.T, dir string, artifact model.ArtifactID) string {
+	t.Helper()
+	p, err := finalPath(dir, artifact)
+	if err != nil {
+		t.Fatalf("finalPath(%q, %s): %v", dir, artifact, err)
+	}
+	return p
+}
+
+func mustPartialPath(t *testing.T, dir string, artifact model.ArtifactID) string {
+	t.Helper()
+	p, err := partialPath(dir, artifact)
+	if err != nil {
+		t.Fatalf("partialPath(%q, %s): %v", dir, artifact, err)
+	}
+	return p
+}
+
 // TestFinalPathRefusesAnUnrootedStore is the behaviour issue #334 deferred
 // and issue #390 lands. Before the conversion, finalPath("", artifact)
 // returned the artifact's bare name: a path relative to whatever directory

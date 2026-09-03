@@ -290,7 +290,10 @@ func (s *Service) rebuildOne(ctx context.Context, localDir string, artifact mode
 		return CatalogRebuildFinding{Artifact: artifact, Action: CatalogRebuildReconstructed, Notes: notes}, nil
 	}
 
-	final := lifecycle.FinalArtifactPath(localDir, artifact)
+	final, err := lifecycle.FinalArtifactPath(localDir, artifact)
+	if err != nil {
+		return CatalogRebuildFinding{}, fmt.Errorf("resolving where %s belongs under %q: %w", artifact, localDir, err)
+	}
 	remoteSize := m.SizeBytes
 	remote := state.RemoteIdentity{Size: &remoteSize, ModTime: m.ProducerTimestamp}
 

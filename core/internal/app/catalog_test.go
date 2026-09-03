@@ -135,7 +135,7 @@ func TestRebuildCatalog_ReconstructsFromSidecarManifestsAfterJournalLoss(t *test
 	if after.RemotePath != before.RemotePath {
 		t.Errorf("RemotePath = %q, want %q", after.RemotePath, before.RemotePath)
 	}
-	wantLocal := lifecycle.FinalArtifactPath(localDir, artifact)
+	wantLocal := mustFinalArtifactPath(t, localDir, artifact)
 	if after.LocalPath != wantLocal {
 		t.Errorf("LocalPath = %q, want %q", after.LocalPath, wantLocal)
 	}
@@ -320,7 +320,7 @@ func TestRebuildCatalog_NeverTouchesLocalOrRemoteFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewArtifactID: %v", err)
 	}
-	final := lifecycle.FinalArtifactPath(localDir, artifact)
+	final := mustFinalArtifactPath(t, localDir, artifact)
 	beforeContent, err := os.ReadFile(final)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
@@ -421,7 +421,7 @@ func TestRebuildCatalog_ThenReconcile_RemoteAbsentInvalidLocal_RoutesToQuarantin
 	// Now the boundary condition the integration bullet asks for: the
 	// remote copy is gone, and the local durable copy is invalid.
 	delete(tr.objects, "backup.dump")
-	final := lifecycle.FinalArtifactPath(localDir, artifact)
+	final := mustFinalArtifactPath(t, localDir, artifact)
 	if err := os.WriteFile(final, []byte("corrupted after rebuild"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -458,4 +458,16 @@ func TestRebuildCatalog_UnknownBackupSet_ReportsNotFound(t *testing.T) {
 	if _, err := svc.RebuildCatalog(context.Background(), unknown, true); err == nil {
 		t.Fatal("RebuildCatalog with an unconfigured backup set: want an error, got nil")
 	}
+}
+
+// mustFinalArtifactPath is the test-side spelling of the error return
+// lifecycle.FinalArtifactPath grew with issue #390's conversion. Every call
+// here supplies a real directory, so an error is a broken test.
+func mustFinalArtifactPath(t *testing.T, localDir string, artifact model.ArtifactID) string {
+	t.Helper()
+	p, err := lifecycle.FinalArtifactPath(localDir, artifact)
+	if err != nil {
+		t.Fatalf("lifecycle.FinalArtifactPath(%q, %s): %v", localDir, artifact, err)
+	}
+	return p
 }

@@ -75,7 +75,10 @@ func TestLocalLocatorIsTheLiteralPathEveryDeploymentAlreadyHas(t *testing.T) {
 		if got := artifactstore.LocalLocator(tc.dir, artifact); got != tc.want {
 			t.Errorf("LocalLocator(%q, %q) = %q, want %q", tc.dir, tc.name, got, tc.want)
 		}
-		if got := lifecycle.FinalArtifactPath(tc.dir, artifact); got != tc.want {
+		got, err := lifecycle.FinalArtifactPath(tc.dir, artifact)
+		if err != nil {
+			t.Errorf("lifecycle.FinalArtifactPath(%q, %q): %v", tc.dir, tc.name, err)
+		} else if got != tc.want {
 			t.Errorf("lifecycle.FinalArtifactPath(%q, %q) = %q, want %q", tc.dir, tc.name, got, tc.want)
 		}
 	}

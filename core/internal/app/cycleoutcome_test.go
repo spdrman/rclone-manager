@@ -287,7 +287,7 @@ func TestRunCycle_ARefusedRemoteCleanupIsNotABarrenCycle(t *testing.T) {
 	if st := lifecycle.State(rec.State); st == lifecycle.Complete {
 		t.Fatalf("precondition: journal state = %q; this test needs the remote cleanup to have been refused, leaving the artifact short of COMPLETE", st)
 	}
-	if _, err := os.Stat(lifecycle.FinalArtifactPath(localDir, artifact)); err != nil {
+	if _, err := os.Stat(mustFinalArtifactPath(t, localDir, artifact)); err != nil {
 		t.Fatalf("precondition: the artifact's durable local copy should exist, since only the remote cleanup was refused: %v", err)
 	}
 
