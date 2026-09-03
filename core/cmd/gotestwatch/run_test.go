@@ -83,12 +83,12 @@ func (l *skipLedger) verdict(code int, w io.Writer) int {
 	if len(l.notes) == 0 {
 		return code
 	}
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "==> gotestwatch self-test: INCOMPLETE (exit %d). Any PASS above means no test failed. It does not mean the watchdog's negative control ran. These checks did not:\n", gateIncomplete)
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintf(w, "==> gotestwatch self-test: INCOMPLETE (exit %d). Any PASS above means no test failed. It does not mean the watchdog's negative control ran. These checks did not:\n", gateIncomplete)
 	for _, n := range l.notes {
-		fmt.Fprintln(w, "        - "+n)
+		_, _ = fmt.Fprintln(w, "        - "+n)
 	}
-	fmt.Fprintln(w, "==> This run is not evidence that the negative control still fires. Re-run it on a host quiet enough to measure.")
+	_, _ = fmt.Fprintln(w, "==> This run is not evidence that the negative control still fires. Re-run it on a host quiet enough to measure.")
 	if code != 0 {
 		return code
 	}
