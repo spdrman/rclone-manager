@@ -3156,6 +3156,55 @@ class TestAnUpgradeKeepsTheCredentialsTheInstallAlreadyUses(unittest.TestCase):
         self.assertIn("AAAApinned", known.read_text(),
                       "an empty known_hosts is correct before any source exists and wrong after one")
 
+    def test_a_bare_upgrade_run_generates_nothing_over_an_installed_key(self):
+        """The failure driven through cmd_install, which is what an
+        operator actually types.
+
+        Every other case in this class calls adopt_installed_credentials
+        by name, so against the code as it was they die on that name not
+        existing rather than on the deployment being re-pointed, and a
+        test that can only fail with AttributeError says nothing about
+        behaviour. This one names nothing that did not already exist.
+        cmd_install is driven until Preflight, which is one step past the
+        function that creates the keypair, and then the assertions are
+        about what is on disk and which paths this run ended up holding.
+
+        Preflight is where it stops because check_all is the first thing
+        in cmd_install that needs a Docker daemon. Everything the failure
+        is made of happens before it.
+        """
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        prefix, key, known, _env = self._installed(tmp)
+
+        class ReachedPreflight(Exception):
+            pass
+
+        def stop_here(_self):
+            raise ReachedPreflight()
+
+        was = installer.Preflight.check_all
+        installer.Preflight.check_all = stop_here
+        self.addCleanup(setattr, installer.Preflight, "check_all", was)
+
+        again = self._rerun(prefix)
+        self.assertNotEqual(str(again.ssh_key), str(key),
+                            "the computed default is where this run starts; that is the setup")
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(ReachedPreflight):
+                installer.cmd_install(again)
+
+        self.assertFalse((prefix / "secrets" / "id_ed25519").exists(),
+                         "a keypair generated here is one no source has ever authorised, and the "
+                         "install goes on to report success while every backup fails to authenticate")
+        self.assertFalse((prefix / "secrets" / "known_hosts").exists(),
+                         "and an empty known_hosts beside it throws away every pinned host key")
+        self.assertEqual(str(again.ssh_key), str(key),
+                         "the run has to be holding the key the deployment authenticates with")
+        self.assertEqual(str(again.known_hosts), str(known))
+        self.assertEqual(key.read_text(), "the key every source already trusts\n",
+                         "and the one that does work must not have been written over")
+
     def test_adopting_is_announced(self):
         """Silently right is still silently. An operator reading the log of
         an upgrade is entitled to see which key the deployment kept."""
