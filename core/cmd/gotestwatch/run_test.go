@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -106,9 +107,20 @@ func TestMain(m *testing.M) {
 // only reason a skipped control is not the same colour as a passing one.
 func skipCannotMeasure(t *testing.T, format string, args ...any) {
 	t.Helper()
-	why := fmt.Sprintf(format, args...)
-	controlSkips.note(t.Name() + ": " + why)
-	t.Skip("could not measure: " + why)
+	t.Skip(noteCannotMeasure(&controlSkips, t.Name(), fmt.Sprintf(format, args...)))
+}
+
+// noteCannotMeasure records the skip in l and returns the sentence
+// skipCannotMeasure should hand t.Skip.
+//
+// Split out from it because t.Skip ends the calling goroutine, so the one
+// property worth proving here — that the ledger entry and the sentence a
+// reader sees come from the same call, and that neither can be dropped
+// without the other going with it — has no way of being observed from
+// inside a test that actually skips.
+func noteCannotMeasure(l *skipLedger, name, why string) string {
+	l.note(name + ": " + why)
+	return "could not measure: " + why
 }
 
 // tightBounds keeps the tests below to seconds. Every ratio matches
@@ -422,6 +434,17 @@ func (r *replayRecorder) upTo(at time.Time) string {
 }
 
 func (r *replayRecorder) String() string { return r.upTo(time.Now()) }
+
+// writeAt places a chunk at an exact instant, for the tests of upTo and
+// witnessRun. What those two have to get right is the cut between what
+// `go test` had replayed before the watchdog decided and what arrived
+// after it, and producing that ordering with real sleeps would turn a
+// question about arithmetic into a question about this host's scheduler.
+func (r *replayRecorder) writeAt(at time.Time, text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.chunks = append(r.chunks, replayChunk{at: at, text: text})
+}
 
 // controlWitness is everything the negative control knows that did NOT
 // come from the tracker.
@@ -959,6 +982,131 @@ func TestSkipLedger_ASkipIsNeverTheSameColourAsAPass(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestWitnessRun_ReadsOnlyWhatWasReplayedBeforeTheDecision covers the one
+// subtle thing about the independent evidence: it has a deadline.
+//
+// Run decides a trip and then kills the child, so `go test` can still get
+// bytes out between those two moments. Counting those would let a
+// perfectly correct watchdog be accused of missing output it could not
+// have seen, which is trading the review's false skip for a false
+// failure. The cut is what stops that, and it is the part of this file
+// most easily broken by accident.
+func TestWitnessRun_ReadsOnlyWhatWasReplayedBeforeTheDecision(t *testing.T) {
+	runStart := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	const tripAfter = 3 * time.Second
+	tripped := &trip{kind: "no-progress", events: 7, elapsed: tripAfter}
+	at := func(d time.Duration) time.Time { return runStart.Add(d) }
+
+	tests := []struct {
+		name          string
+		chunks        map[time.Duration]string
+		tp            *trip
+		sawOutput     bool
+		testBInFlight bool
+	}{
+		{
+			name: "go test had not printed anything by the time it decided",
+			tp:   tripped,
+		},
+		{
+			name:      "the fixture had started, but TestB had not",
+			chunks:    map[time.Duration]string{200 * time.Millisecond: "=== RUN   TestA\n"},
+			tp:        tripped,
+			sawOutput: true,
+		},
+		{
+			name: "TestB had started and not finished",
+			chunks: map[time.Duration]string{
+				200 * time.Millisecond:  "=== RUN   TestA\n",
+				1200 * time.Millisecond: "--- PASS: TestA (1.00s)\n=== RUN   TestB\n",
+			},
+			tp:            tripped,
+			sawOutput:     true,
+			testBInFlight: true,
+		},
+		{
+			name: "TestB had already finished",
+			chunks: map[time.Duration]string{
+				1200 * time.Millisecond: "=== RUN   TestB\n",
+				2200 * time.Millisecond: "--- PASS: TestB (1.00s)\n",
+			},
+			tp:        tripped,
+			sawOutput: true,
+		},
+		{
+			// The kill window. These bytes exist, but they arrived after
+			// the watchdog had already decided, so it never saw them and
+			// must not be judged on them.
+			name: "the fixture's output only arrived after the decision",
+			chunks: map[time.Duration]string{
+				tripAfter + 10*time.Millisecond: "=== RUN   TestA\n=== RUN   TestB\n",
+			},
+			tp: tripped,
+		},
+		{
+			// No trip means no decision to be before, so everything the
+			// run replayed counts.
+			name:          "the run finished without tripping at all",
+			chunks:        map[time.Duration]string{1200 * time.Millisecond: "=== RUN   TestB\n"},
+			tp:            nil,
+			sawOutput:     true,
+			testBInFlight: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := &replayRecorder{}
+			for _, d := range sortedOffsets(tc.chunks) {
+				rec.writeAt(at(d), tc.chunks[d])
+			}
+			got := witnessRun(rec, runStart, 7*time.Second, tc.tp)
+			if got.sawOutput != tc.sawOutput {
+				t.Errorf("sawOutput = %v, want %v; the control decides whether a zero event count is this host's startup or a gotestwatch that stopped counting on exactly this\nreplayed: %q", got.sawOutput, tc.sawOutput, rec.String())
+			}
+			if got.testBInFlight != tc.testBInFlight {
+				t.Errorf("testBInFlight = %v, want %v; the control decides whether a trip that did not name TestB is a gap this host produced or broken attribution on exactly this\nreplayed: %q", got.testBInFlight, tc.testBInFlight, rec.String())
+			}
+			if got.elapsed != 7*time.Second {
+				t.Errorf("elapsed = %s, want 7s; it is the only measurement in the witness this test's own clock produced", got.elapsed)
+			}
+		})
+	}
+}
+
+// sortedOffsets keeps the recorder's chunks in the order they would really
+// have arrived, since upTo relies on that and a map does not have it.
+func sortedOffsets(m map[time.Duration]string) []time.Duration {
+	out := make([]time.Duration, 0, len(m))
+	for d := range m {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// TestNoteCannotMeasure_TheLedgerEntryAndTheSkipComeFromTheSameCall is the
+// join between a skip and the ledger that makes it visible. The two tests
+// either side of it prove the ledger's verdict and the control's own
+// judgement; this proves nothing can skip without being counted.
+func TestNoteCannotMeasure_TheLedgerEntryAndTheSkipComeFromTheSameCall(t *testing.T) {
+	var l skipLedger
+	said := noteCannotMeasure(&l, "TestSomething/a_subtest", "this host's 2s startup left no floor under the stall")
+
+	if !strings.Contains(said, "could not measure") || !strings.Contains(said, "no floor under the stall") {
+		t.Errorf("the sentence handed to t.Skip does not say what could not be measured: %q", said)
+	}
+	var out bytes.Buffer
+	if got := l.verdict(0, &out); got != gateIncomplete {
+		t.Fatalf("after one skip the ledger's verdict is %d, want %d: the skip was announced to the reader and not recorded, which is the whole finding\nsaid: %s", got, gateIncomplete, out.String())
+	}
+	if !strings.Contains(out.String(), "TestSomething/a_subtest") {
+		t.Errorf("the ledger does not name the subtest that skipped, so a reader cannot tell which control did not run:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "no floor under the stall") {
+		t.Errorf("the ledger records the skip but not its reason, so it says a control did not run without saying why:\n%s", out.String())
 	}
 }
 
