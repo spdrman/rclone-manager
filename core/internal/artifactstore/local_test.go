@@ -59,6 +59,11 @@ func testArtifact(t *testing.T, name string) model.ArtifactID {
 // path against the same literals is what still ties the two ends
 // together, because now each end is pinned to the answer rather than to
 // the other end.
+//
+// It asks the STORE rather than the free function since #390, because
+// LocalLocator is gone: the conversion #334 deferred is done, and this
+// test's subject is now the answer a Local gives, which is the answer
+// every existing deployment's artifacts are actually sitting at.
 func TestLocalLocatorIsTheLiteralPathEveryDeploymentAlreadyHas(t *testing.T) {
 	cases := []struct{ dir, name, want string }{
 		{"/data/backups", "backup.dump", "/data/backups/backup.dump"},
@@ -72,18 +77,32 @@ func TestLocalLocatorIsTheLiteralPathEveryDeploymentAlreadyHas(t *testing.T) {
 
 	for _, tc := range cases {
 		artifact := testArtifact(t, tc.name)
-		if got := artifactstore.LocalLocator(tc.dir, artifact); got != tc.want {
-			t.Errorf("LocalLocator(%q, %q) = %q, want %q", tc.dir, tc.name, got, tc.want)
+		store, err := artifactstore.NewLocal(tc.dir)
+		if err != nil {
+			t.Fatalf("NewLocal(%q): %v", tc.dir, err)
 		}
-		if got := lifecycle.FinalArtifactPath(tc.dir, artifact); got != tc.want {
+		if got, err := store.Locator(artifact); err != nil {
+			t.Errorf("Locator(%q, %q): %v", tc.dir, tc.name, err)
+		} else if got != tc.want {
+			t.Errorf("Locator(%q, %q) = %q, want %q", tc.dir, tc.name, got, tc.want)
+		}
+		got, err := lifecycle.FinalArtifactPath(tc.dir, artifact)
+		if err != nil {
+			t.Errorf("lifecycle.FinalArtifactPath(%q, %q): %v", tc.dir, tc.name, err)
+		} else if got != tc.want {
 			t.Errorf("lifecycle.FinalArtifactPath(%q, %q) = %q, want %q", tc.dir, tc.name, got, tc.want)
 		}
 	}
 }
 
-// TestLocalLocatorMatchesTheRootItWasBuiltWith proves the Store method
-// and the free function cannot disagree, so a caller holding a Store and
-// a caller holding a directory string land on the same bytes.
+// TestLocalLocatorMatchesTheRootItWasBuiltWith proves a Local answers for
+// the root it was constructed with, and not for some other one.
+//
+// It used to compare the Store method against the free function
+// LocalLocator, and that comparison died with the free function in #390:
+// the two ends became one, which is the tautology this file's other test
+// already warns about. The literal is the pin now, for the same reason it
+// is the pin there.
 func TestLocalLocatorMatchesTheRootItWasBuiltWith(t *testing.T) {
 	const root = "/data/backups"
 	artifact := testArtifact(t, "backup.dump")
@@ -97,7 +116,7 @@ func TestLocalLocatorMatchesTheRootItWasBuiltWith(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Locator: %v", err)
 	}
-	if want := artifactstore.LocalLocator(root, artifact); got != want {
+	if want := "/data/backups/backup.dump"; got != want {
 		t.Errorf("Locator = %q, want %q", got, want)
 	}
 }
@@ -365,11 +384,23 @@ func TestSeamOffersNoMoveMethod(t *testing.T) {
 // that path's crash-safety obligations and must not be quietly swapped
 // for it. An absent Move takes someone writing code to defeat; a present
 // Put takes someone calling it. So lifecycle is allowed exactly one
-// symbol from this package, the shared join, and anything else is a
-// failure that names itself.
+// symbol from this package, and anything else is a failure that names
+// itself.
+//
+// That one symbol was LocalLocator, the free function taking a directory.
+// Since #390 it is NewLocal, because lifecycle now builds a store and asks
+// it, which is the conversion #334 deferred. The guard is unchanged in
+// substance: NewLocal and the Locator method it returns are pure path
+// computation that touch nothing, exactly as the free function was, and
+// Put and Remove remain unreachable from lifecycle.
+//
+// Locator itself is not in this list and does not need to be: it is a
+// method on a value, so it appears in the AST as a selector on a local
+// variable rather than on the package, and there is no way to reach it
+// without first calling something that IS in this list.
 func TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage(t *testing.T) {
 	const storePath = "github.com/spdrman/rclone-manager/core/internal/artifactstore"
-	allowed := map[string]bool{"LocalLocator": true}
+	allowed := map[string]bool{"NewLocal": true}
 
 	entries, err := os.ReadDir(lifecycleDir)
 	if err != nil {
@@ -406,7 +437,7 @@ func TestLifecycleUsesOnlyTheSharedFormulaFromThisPackage(t *testing.T) {
 				return true
 			}
 			if !allowed[sel.Sel.Name] {
-				t.Errorf("%s references artifactstore.%s; lifecycle may use only the shared join (LocalLocator). Put in particular does not reproduce FR-12's crash-safety obligations, so the commit path must keep writing its own .partial and hard-linking it", file, sel.Sel.Name)
+				t.Errorf("%s references artifactstore.%s; lifecycle may use only NewLocal (and the Locator method it returns). Put in particular does not reproduce FR-12's crash-safety obligations, so the commit path must keep writing its own .partial and hard-linking it", file, sel.Sel.Name)
 			}
 			return true
 		})

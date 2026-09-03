@@ -196,21 +196,35 @@ type PruneVerdict struct {
 
 // pruneFinalPath computes the same final local path lifecycle's own
 // unexported finalPath (transfer.go) computes for the same (LocalDir,
-// Artifact) pair: the artifact's basename, joined directly under the
-// backup set's configured local directory.
+// Artifact) pair: the artifact's basename, under the backup set's
+// configured local directory.
 //
 // It used to duplicate that join, with a comment here and another there
 // naming the two of them as the only places in the project allowed to
-// compute it. Both now delegate to internal/artifactstore, which is the
-// local store's own account of where its bytes live (issue #334), so the
-// two of them cannot drift apart.
+// compute it. Both now ASK THE STORE, which is issue #334's deferred
+// conversion: internal/artifactstore landed the Store seam with no
+// production caller so the contract could be argued before anything
+// depended on it, and its package doc named this function and lifecycle's
+// finalPath as the two that would convert. Neither composes a path out of
+// LocalPath any more, so neither can drift from the other or from the
+// store that actually owns the answer.
 //
-// The two of them, not every join of a root and an artifact name in this
-// file: pruneVerifySafeToDelete ends by joining that name onto the
-// canonicalized root EvalSymlinks handed back, which is deliberately a
-// different computation on a different input. See its own comment there.
-func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) string {
-	return artifactstore.LocalLocator(bs.LocalPath, artifact)
+// Those two, not every join of a root and an artifact name in this file:
+// pruneVerifySafeToDelete ends by joining that name onto the canonicalized
+// root EvalSymlinks handed back, which is deliberately a different
+// computation on a different input. See its own comment there.
+//
+// The error is what the conversion added. NewLocal refuses an empty root
+// rather than resolving under the process working directory, and Locator
+// refuses an artifact it cannot address. Both are refusals this function
+// could not previously make, and on a delete path a refusal is the answer
+// that costs nothing: see pruneEvaluate, which turns one into PruneRefuse.
+func pruneFinalPath(bs config.BackupSet, artifact model.ArtifactID) (string, error) {
+	store, err := artifactstore.NewLocal(bs.LocalPath)
+	if err != nil {
+		return "", fmt.Errorf("retention: prune: backup set %s: %w", bs.ID, err)
+	}
+	return store.Locator(artifact)
 }
 
 // pruneVerifySafeToDelete runs every one of FR-20's checks against one
@@ -248,7 +262,10 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 			rec.Artifact, rec.State)
 	}
 
-	expected := pruneFinalPath(bs, rec.Artifact)
+	expected, err := pruneFinalPath(bs, rec.Artifact)
+	if err != nil {
+		return "", err
+	}
 	if strings.HasSuffix(expected, prunePartialSuffix) {
 		// Unreachable given model.NewArtifactID's own basename validation
 		// (an artifact name can never contain the separators that would
@@ -330,9 +347,9 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 	// is the fully canonical, safe-to-remove path: no further resolution
 	// of the final component is needed or wanted.
 	//
-	// This is deliberately NOT artifactstore.LocalLocator, even though it
-	// has the same shape. That function answers "where does the configured
-	// root say this artifact goes"; this line answers "what is the
+	// This is deliberately NOT the store's own Locator, even though it has
+	// the same shape. That method answers "where does the configured root
+	// say this artifact goes"; this line answers "what is the
 	// resolved, symlink-free path this function just proved safe", and
 	// routing it back through the configured root would throw away the
 	// resolution the checks above exist to produce. Same shape, different
@@ -344,7 +361,26 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 // GFS/last-known-good verdict DecideKeep already produced for this
 // artifact, decide KEEP, DELETE or REFUSE.
 func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict, lkg LastKnownGoodResult) PruneVerdict {
-	path := pruneFinalPath(bs, rec.Artifact)
+	path, err := pruneFinalPath(bs, rec.Artifact)
+	if err != nil {
+		// A store that cannot say where this artifact belongs is a store
+		// this function must not guess on behalf of. REFUSE rather than
+		// KEEP, because the two are different claims: KEEP asserts a tier
+		// selected it, and this asserts nothing was decided at all. Path
+		// stays empty on purpose, so nothing downstream can act on a
+		// half-computed one.
+		//
+		// This runs before the Keep check below, so a kept artifact
+		// refuses here too. That is the ordering the claim demands: a
+		// resolution failure never comes out as KEEP, not even when a
+		// tier would have selected the artifact, because KEEP would then
+		// be reporting a tier decision about a file nothing can locate.
+		return PruneVerdict{
+			Artifact: rec.Artifact,
+			Action:   PruneRefuse,
+			Reason:   fmt.Sprintf("refusing to decide about %s: %v", rec.Artifact, err),
+		}
+	}
 
 	if keepVerdict.Keep {
 		return PruneVerdict{

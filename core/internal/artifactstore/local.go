@@ -21,7 +21,9 @@ import (
 // "the only two places in the whole project allowed to compute it". Two
 // guarded copies was the right answer while there was nowhere better to
 // put it. There is now: a store is exactly the thing that knows where its
-// own bytes go, so both delegate here and cannot drift apart.
+// own bytes go, so both ask a Local and cannot drift apart, and since
+// #390 they ask it through Locator rather than through a free function
+// taking a directory string.
 //
 // Those two, not every join in the project. retention's
 // pruneVerifySafeToDelete finishes by joining the artifact's name onto the
@@ -67,29 +69,22 @@ func NewLocal(root string) (Local, error) {
 // Kind reports KindLocal.
 func (Local) Kind() Kind { return KindLocal }
 
-// LocalLocator is Locator's formula as a plain function, for the two
-// callers that need it before they hold a Store and cannot take one
-// without a wider refactor than issue #334's seam justifies:
-// lifecycle's finalPath and retention's pruneFinalPath.
+// localLocator is Locator's formula, and nothing outside this package can
+// reach it any more.
 //
-// Its localDir parameter is a filesystem path, which hard-codes the
-// assumption the Store interface exists to remove. That is deliberate and
-// temporary. Keeping it means this change stays a refactor with no
-// behaviour in it, and those two call sites are precisely the conversion
-// the first backend has to do: resolve a Store for the backup set and ask
-// it, instead of composing a path out of LocalPath.
+// It used to be exported, as LocalLocator, for the two callers that held a
+// directory string rather than a Store: lifecycle's finalPath and
+// retention's pruneFinalPath. Its localDir parameter is a filesystem path,
+// which hard-codes exactly the assumption the Store interface exists to
+// remove, and issue #334's own doc called that deliberate and temporary:
+// keeping it was what let #334 land as a refactor with no behaviour in it,
+// and converting those two call sites was named as work still to come.
 //
-// # Preconditions
-//
-// localDir must be a non-empty absolute path, and this function does not
-// check that. The method form does, and so does NewLocal; the free
-// function trusts its callers, which are:
-//
-//   - config.Validate, which refuses a backup set whose local_path is
-//     empty or not absolute, so no configuration that got far enough to
-//     run a cycle has one.
-//   - retention's pruneVerifySafeToDelete, which refuses both again
-//     itself, immediately before any delete, rather than trusting that.
+// Issue #390 is that work, so the conversion is done and the escape hatch
+// is gone. Both call sites now build a Local and ask it, and there is no
+// longer any way for a caller to compute an artifact's location without
+// going through a store. That is the whole point of the seam, and an
+// exported free function that bypasses it is a standing invitation not to.
 //
 // artifact.Name is guaranteed a bare basename when the ArtifactID was
 // built through model.NewArtifactID, which refuses "/", "\\", "." and
@@ -98,7 +93,7 @@ func (Local) Kind() Kind { return KindLocal }
 // containment from the resolved path immediately before it deletes
 // anything rather than trusting this join. See that package's
 // pruneVerifySafeToDelete.
-func LocalLocator(localDir string, artifact model.ArtifactID) string {
+func localLocator(localDir string, artifact model.ArtifactID) string {
 	return filepath.Join(localDir, artifact.Name)
 }
 
@@ -111,7 +106,7 @@ func (l Local) Locator(artifact model.ArtifactID) (string, error) {
 	if l.root == "" {
 		return "", fmt.Errorf("artifactstore: this local store has no root, so it cannot say where %s belongs; build it with NewLocal", artifact)
 	}
-	return LocalLocator(l.root, artifact), nil
+	return localLocator(l.root, artifact), nil
 }
 
 // Stat reports the file's size and modification time, or ErrNotPresent.

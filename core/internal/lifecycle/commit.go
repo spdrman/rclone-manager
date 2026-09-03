@@ -182,8 +182,14 @@ func Commit(ctx context.Context, d Deps, in CommitInput) (state.Outcome, error) 
 		return state.Outcome{}, err
 	}
 
-	partial := partialPath(in.LocalDir, in.Artifact)
-	final := finalPath(in.LocalDir, in.Artifact)
+	partial, err := partialPath(in.LocalDir, in.Artifact)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: resolving the .partial source: %w", in.Artifact, err)
+	}
+	final, err := finalPath(in.LocalDir, in.Artifact)
+	if err != nil {
+		return state.Outcome{}, fmt.Errorf("lifecycle: commit %s: resolving where it belongs: %w", in.Artifact, err)
+	}
 
 	committing, err := Advance(ctx, d, state.Transition{
 		Artifact: in.Artifact,
