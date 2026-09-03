@@ -192,6 +192,32 @@ func TestClassifyLicense_RefusesRatherThanGuesses(t *testing.T) {
 	}
 }
 
+// TestClassifyLicense_AMentionOfMozillaIsNotTheMPL is the control for the
+// widened MPL table. The table has two positive rows for that licence,
+// one per spelling, and until this existed nothing showed that the
+// second row is still an exact phrase: a row loosened to "Mozilla Public
+// License" plus "2.0" would read every one of these as MPL-2.0, and a
+// permissive dependency classified as copyleft is a wrong answer in the
+// other direction.
+func TestClassifyLicense_AMentionOfMozillaIsNotTheMPL(t *testing.T) {
+	for _, text := range []string{
+		"This file is part of the Mozilla test suite.\n",
+		"Compatible with the Mozilla Public License (any 2.0 release) and with Apache.\n",
+		"Mozilla Public License\nversion 2.0 compatible, but this file is MIT-like in spirit.\n",
+	} {
+		if got := ClassifyLicense(text); got != "" {
+			t.Errorf("ClassifyLicense(%q) = %q, want the empty string; a file that mentions Mozilla is not under the MPL, and a classifier that guesses is worse than one that gives up", text, got)
+		}
+	}
+	// The two exact spellings still read as MPL, or the control above is
+	// a table that matches nothing.
+	for _, text := range []string{mplText, mplHashiCorpText} {
+		if got := ClassifyLicense(text); got != "MPL-2.0" {
+			t.Fatalf("ClassifyLicense read %q from an MPL-2.0 text, so the rows this test guards are not there", got)
+		}
+	}
+}
+
 // TestClassifyLicense_GNUFamilyIsAskedFirst pins the one ordering
 // property the table above depends on but does not isolate.
 //

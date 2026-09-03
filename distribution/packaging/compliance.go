@@ -550,8 +550,22 @@ func LinkComplaints(c Compliance, read ReadFileFunc) []string {
 // It is pure, and it judges the DECLARATION of an acceptance rather than
 // its discharge, because whether the NOTICE a recipient receives
 // actually carries the offer is a question about the tree and not about
-// compliance.json. LicenceObligationComplaints is that half, and the
-// real-inventory test runs both.
+// compliance.json. LicenceObligationComplaints is that half.
+//
+// The acceptance is per release, and this half enforces that itself: an
+// entry names the exact releases it covers, so a brand-new module under
+// an accepted licence, or a recorded module at a version nobody read, is
+// refused here with no filesystem in the way. Measured both ways: with
+// the acceptance keyed on the id alone, vault-client-go@v0.4.3 and
+// go-retryablehttp bumped to v0.7.9 got zero complaints from this
+// function; with the release list they get one each.
+//
+// Never call this on its own to decide whether a graph is acceptable,
+// even so. What it cannot see is whether the artifacts carry the offer:
+// bump a recorded module, update the release list to match, and this
+// function is green while docs/compliance/source-offer.md still offers
+// the old version to a recipient. LicenceComplaints runs both halves and
+// is the entry point.
 func LicensePolicyComplaints(c Compliance, inv Inventory) []string {
 	var out []string
 	if len(inv.Components) == 0 {
@@ -629,7 +643,25 @@ func (c Compliance) whyNotPermitted(spdxID string) string {
 // is under is refused, because a standing acceptance for a licence the
 // graph does not contain is a permission granted in advance, which is
 // the one thing this category must never become.
+//
+// Never call this on its own either. It reads the artifacts for the
+// components the inventory carries under an ACCEPTED licence, so a
+// component under a licence nobody accepted is not its question, and a
+// graph with a GPL module in it produces nothing here. LicenceComplaints
+// runs both halves and is the entry point.
+//
+// One thing the artifact list is not: two independent proofs. NOTICE is
+// rendered by buildNotice from the same register this function reads,
+// and TestComplianceArtifactsMatchThisTree keeps the checked-in file
+// byte-identical to that render, so on a data change the NOTICE arm
+// cannot fail. It still earns its place, because it catches a renderer
+// change that stops emitting one of the strings a recipient needs. The
+// hand-written source-offer.md is the arm that can disagree with the
+// register.
 func LicenceObligationComplaints(c Compliance, inv Inventory, read ReadFileFunc) []string {
+	if read == nil {
+		return []string{"no reader was supplied to the obligation check, so no artifact was read and nothing was checked; an unread artifact is not a discharged obligation"}
+	}
 	var out []string
 	for _, a := range c.License.AcceptedNonPermissive {
 		if why := a.incompleteBecause(); why != "" {
@@ -690,4 +722,26 @@ func LicenceObligationComplaints(c Compliance, inv Inventory, read ReadFileFunc)
 		}
 	}
 	return out
+}
+
+// LicenceComplaints says every way the third-party inventory invalidates
+// the project's licence choice, and it is the only function here that
+// answers that question on its own.
+//
+// It is two halves because they need different inputs, and neither is
+// closed alone. LicensePolicyComplaints is pure and judges what the
+// inventory says against what compliance.json declares: a licence nobody
+// accepted, an acceptance that records too little, a module or a version
+// the acceptance does not name. What it cannot see is the tree, so an
+// offer that still names last release's version passes it. Measured: a
+// recorded module bumped with the release list updated in step gets zero
+// complaints from it while the written offer is four complaints stale.
+// LicenceObligationComplaints reads the artifacts and refuses exactly
+// that, but it never looks at a component under a licence that is not
+// accepted, so a graph with a GPL module in it gets zero complaints from
+// it, measured too. So the pair is the gate, and a caller that runs one
+// half has a hole the width of the other.
+func LicenceComplaints(c Compliance, inv Inventory, read ReadFileFunc) []string {
+	out := LicensePolicyComplaints(c, inv)
+	return append(out, LicenceObligationComplaints(c, inv, read)...)
 }

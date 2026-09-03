@@ -124,7 +124,12 @@ text inside it.
 // written out, so a third encumbered module arriving cannot leave the
 // offer describing two. LicenceObligationComplaints checks this file
 // afterwards for exactly the strings this writes, which is what makes
-// the pair a check and not a convention.
+// the pair a check and not a convention. It is a check on this renderer
+// and not a second proof of the data, though: both read the same
+// register, and TestComplianceArtifactsMatchThisTree keeps the checked-in
+// NOTICE byte-identical to this render, so that arm can only fail when
+// this function stops emitting a string a recipient needs. The
+// hand-written source-offer.md is the artifact that can disagree.
 func noticeObligationSection(c Compliance, inv Inventory) string {
 	var b strings.Builder
 	for _, a := range c.License.AcceptedNonPermissive {

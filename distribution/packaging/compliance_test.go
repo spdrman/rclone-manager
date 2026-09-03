@@ -406,7 +406,11 @@ func TestTheLicencePolicyJudgesTheNPMHalfAsItIsDerived(t *testing.T) {
 	}
 }
 
-// TestLicensePolicyAgainstTheRealInventory is the thin caller.
+// TestLicensePolicyAgainstTheRealInventory is the thin caller, and it
+// goes through LicenceComplaints rather than through the two halves by
+// hand, because the pairing is the gate. It used to call both halves
+// itself, which was closed, and it was the only place that did; nothing
+// stopped the next caller running one half and calling that a pass.
 func TestLicensePolicyAgainstTheRealInventory(t *testing.T) {
 	data, err := os.ReadFile(Path(InventoryPath))
 	if err != nil {
@@ -420,17 +424,152 @@ func TestLicensePolicyAgainstTheRealInventory(t *testing.T) {
 		t.Errorf("%s declares schema %q and this code reads %q", InventoryPath, inv.Schema, InventorySchema)
 	}
 	c := MustLoadCompliance()
-	for _, complaint := range LicensePolicyComplaints(c, inv) {
+	// Both halves. The pure one judges whether every licence is
+	// permissive or accepted with its obligation declared; the one that
+	// reads NOTICE and the source offer asks whether they carry that
+	// offer for each component at its exact version. An accepted licence
+	// whose artifacts stop naming the module, the version or the address
+	// is the failure mode that would otherwise look exactly like a pass.
+	for _, complaint := range LicenceComplaints(c, inv, RepoReader()) {
 		t.Error(complaint)
 	}
-	// The second half. LicensePolicyComplaints can only judge whether
-	// an acceptance is declared properly; this is the one that reads
-	// NOTICE and the source offer and asks whether they carry it. An
-	// accepted licence whose artifacts stop naming the module, the
-	// version or the address is the failure mode that would otherwise
-	// look exactly like a pass.
-	for _, complaint := range LicenceObligationComplaints(c, inv, RepoReader()) {
-		t.Error(complaint)
+}
+
+// liveInventory reads the inventory this tree ships, for the tests that
+// plant one thing into it.
+func liveInventory(t *testing.T) Inventory {
+	t.Helper()
+	data, err := os.ReadFile(Path(InventoryPath))
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", InventoryPath, err)
+	}
+	inv, err := ParseInventory(data)
+	if err != nil {
+		t.Fatalf("cannot parse %s: %v", InventoryPath, err)
+	}
+	if len(inv.Components) == 0 {
+		t.Fatalf("%s lists no components, so planting one into it measures nothing", InventoryPath)
+	}
+	return inv
+}
+
+// assertEveryDischargingArtifactComplains checks that a refusal came
+// from every artifact the acceptance names, not from one of them. The
+// obligation check reads each one; a test that accepted a complaint from
+// NOTICE alone would stay green after the source offer stopped being
+// read.
+func assertEveryDischargingArtifactComplains(t *testing.T, c Compliance, complaints []string) {
+	t.Helper()
+	joined := strings.Join(complaints, "\n")
+	for _, a := range c.License.AcceptedNonPermissive {
+		for _, rel := range a.DischargedBy {
+			if !strings.Contains(joined, rel+" never") {
+				t.Errorf("no complaint comes from %s, so that artifact was not read against the planted component:\n%s", rel, joined)
+			}
+		}
+	}
+}
+
+// TestAnUnrecordedMPLModuleIsStillRefused is the falsification for the
+// combined gate. Whatever admits go-cleanhttp and go-retryablehttp has to
+// admit those two and not the licence they carry, or the category is a
+// wider allowlist with extra steps.
+//
+// It goes through LicenceComplaints on purpose, because the entry point
+// is what the gate calls, and it asks that the refusal come from every
+// artifact the acceptance names as well as from the policy. The pure
+// half refuses this module on its own too, and
+// TestTheAcceptanceIsPerReleaseAndNotPerLicence is where that is pinned
+// over a fixture; this test is the same question asked of the real
+// files.
+func TestAnUnrecordedMPLModuleIsStillRefused(t *testing.T) {
+	c := MustLoadCompliance()
+	inv := liveInventory(t)
+	if got := LicenceComplaints(c, inv, RepoReader()); len(got) != 0 {
+		t.Fatalf("the real inventory already complains, so nothing below measures the planted module: %v", got)
+	}
+	inv.Components = append(inv.Components, Component{
+		Name:        "github.com/hashicorp/vault-client-go",
+		Version:     "v0.4.3",
+		Ecosystem:   EcosystemGo,
+		LicenseID:   "MPL-2.0",
+		LicenseFile: "LICENSE",
+		LinkedInto:  []string{"backup-manager"},
+	})
+	got := LicenceComplaints(c, inv, RepoReader())
+	if len(got) == 0 {
+		t.Fatal("an MPL-2.0 module nobody has recorded passes the gate, so accepting the licence once accepted every module that will ever arrive under it")
+	}
+	for _, complaint := range got {
+		if !strings.Contains(complaint, "github.com/hashicorp/vault-client-go@v0.4.3") {
+			t.Errorf("a complaint about something other than the planted module, so the refusal is not specific to it: %q", complaint)
+		}
+	}
+	assertEveryDischargingArtifactComplains(t, c, got)
+}
+
+// TestADriftedVersionOfARecordedModuleIsStillRefused is the second
+// falsification, and the one that decides whether the acceptance is
+// about a release somebody read or about a licence id.
+//
+// v0.7.9 is a different upload with a different licence file and notices
+// nobody has looked at, so it has to be refused as firmly as a module
+// from a different project. Both halves can tell the versions apart, for
+// different reasons: the release list names v0.7.8, and so does the
+// offer. Both have to, because the day the list is bumped and the offer
+// is not, the artifact check is the only one still saying no.
+func TestADriftedVersionOfARecordedModuleIsStillRefused(t *testing.T) {
+	c := MustLoadCompliance()
+	inv := liveInventory(t)
+	const module = "github.com/hashicorp/go-retryablehttp"
+	bumped := 0
+	for i := range inv.Components {
+		if inv.Components[i].Name == module {
+			inv.Components[i].Version = "v0.7.9"
+			bumped++
+		}
+	}
+	if bumped != 1 {
+		t.Fatalf("%s appears %d times in the real inventory, want once; the bump below drifted nothing", module, bumped)
+	}
+	got := LicenceComplaints(c, inv, RepoReader())
+	if len(got) == 0 {
+		t.Fatal("a recorded module at a version nobody read passes the gate, so the acceptance is per licence and not per release")
+	}
+	// Every complaint is about this module, and the bump is refused in
+	// both directions: the graph holds v0.7.9, which nothing accepts, and
+	// the acceptance still names v0.7.8, which the graph no longer links.
+	// The second is the one that makes somebody re-read the offer rather
+	// than only append to the list.
+	joined := strings.Join(got, "\n")
+	for _, complaint := range got {
+		if !strings.Contains(complaint, module+"@v0.7.") {
+			t.Errorf("a complaint about something other than the bumped module: %q", complaint)
+		}
+	}
+	if !strings.Contains(joined, module+"@v0.7.9") {
+		t.Errorf("no complaint names the version the graph now holds:\n%s", joined)
+	}
+	if !strings.Contains(joined, module+"@v0.7.8 and the inventory has no such release") {
+		t.Errorf("no complaint says the accepted release is no longer in the graph:\n%s", joined)
+	}
+	assertEveryDischargingArtifactComplains(t, c, got)
+}
+
+// TestAMissingReaderIsAComplaintAndNotACrash. Everything else in this
+// package answers a bad input with a complaint that names it, and this
+// was the one call that answered with a nil pointer dereference.
+func TestAMissingReaderIsAComplaintAndNotACrash(t *testing.T) {
+	c, inv := acceptedFixture()
+	got := LicenceObligationComplaints(c, inv, nil)
+	if len(got) != 1 || !strings.Contains(got[0], "no reader was supplied") {
+		t.Fatalf("a nil reader produced %v, want exactly one complaint saying nothing was checked", got)
+	}
+	// And through the entry point, where the pure half finds nothing
+	// wrong and the complaint has to be what stops it reading as a pass.
+	got = LicenceComplaints(c, inv, nil)
+	if len(got) != 1 || !strings.Contains(got[0], "no reader was supplied") {
+		t.Fatalf("LicenceComplaints with a nil reader produced %v, want the one complaint from the obligation half", got)
 	}
 }
 
@@ -881,7 +1020,12 @@ func TestTheModuleProxyPathEscapeIsApplied(t *testing.T) {
 func TestTheShippedAcceptanceIsCoherent(t *testing.T) {
 	c := MustLoadCompliance()
 	if len(c.License.AcceptedNonPermissive) == 0 {
-		t.Skip("compliance.json accepts no non-permissive licence, so there is no declaration to check")
+		// A failure and not a skip. Three other tests refuse an emptied
+		// register, so nothing goes uncovered either way, but a skip here
+		// is a green line in the run for a file that has lost the one
+		// declaration this test exists to read, and an empty reading is a
+		// refusal everywhere else in this package.
+		t.Fatal("compliance.json accepts no non-permissive licence, so there is no declaration to check; an empty register is a refusal here, not a reason to skip")
 	}
 	seen := map[string]bool{}
 	for _, a := range c.License.AcceptedNonPermissive {
@@ -986,11 +1130,6 @@ func TestAGenuineCopyleftLicenceIsRefusedAgainstTheRealFile(t *testing.T) {
 	})
 }
 
-// arithmeticInProse catches a component count written into prose.
-// "54 modules" is how compliance.json came to assert a number nobody
-// checked. The pattern is #402's other lane's, and so is the rule.
-var arithmeticInProse = regexp.MustCompile(`\b\d+\s+(modules|packages|components|dependencies)\b`)
-
 // TestTheLicenceRationaleDescribesTodaysGraph is the check #402 was
 // missing.
 //
@@ -1025,25 +1164,10 @@ func TestTheLicenceRationaleDescribesTodaysGraph(t *testing.T) {
 		}
 	}
 
-	// No arithmetic in prose. I first wrote this the other way, with
-	// the counts re-derived here and the rationale required to state
-	// them, and #402's other lane was right that it is the wrong
-	// trade: a count in the rationale is a second copy of a fact
-	// third-party-licenses.json owns, and the second copy is the one
-	// nobody regenerates. Requiring it also puts a prose edit in the
-	// path of every unrelated dependency bump, which buys no safety at
-	// all, because what the licence choice rests on is WHICH licences
-	// are in the graph and not how many components carry them.
-	//
-	// compliance.json's own header already says nothing in it is
-	// hand-maintained arithmetic, and the rationale was the one place
-	// that was not true.
-	for i, line := range c.License.Rationale {
-		if m := arithmeticInProse.FindString(line); m != "" {
-			t.Errorf("license.rationale line %d says %q; that count belongs to %s, which is re-derived from the module graph on every run, and a copy of it here can only go stale", i, m, c.License.Inventory)
-		}
-	}
-
+	// No count is re-derived here, because there is no count to
+	// re-derive: TestTheProseCarriesNoCountNobodyChecks is what keeps it
+	// that way. What the rationale has to get right is the non-permissive
+	// set, by name and version, and that is checked below.
 	if len(nonPermissive) == 0 {
 		return
 	}
@@ -1055,13 +1179,14 @@ func TestTheLicenceRationaleDescribesTodaysGraph(t *testing.T) {
 	// Collapsed across lines before matching, because the rationale is
 	// stored as wrapped strings and this sentence straddled two of
 	// them: a search over the array as written would miss it and pass
-	// for a reason that has nothing to do with the text. That is #402's
-	// other lane's catch, and my first version had exactly that hole.
+	// for a reason that has nothing to do with the text. An earlier
+	// version of this test had exactly that hole.
 	//
 	// The claim is one sentence and the match is that sentence, not
 	// "copyleft" anywhere near a negation. A rationale that explains
 	// why the old sentence was wrong has to be able to quote the
-	// problem, and my first version refused its own explanation.
+	// problem, and an earlier version of this test refused its own
+	// explanation.
 	collapsed := strings.Join(strings.Fields(rationale), " ")
 	for _, claim := range []string{
 		"Nothing in the graph is copyleft",
@@ -1090,17 +1215,20 @@ func TestTheLicenceRationaleDescribesTodaysGraph(t *testing.T) {
 }
 
 // TestTheAcceptanceIsPerReleaseAndNotPerLicence is the sharpest
-// falsification of the whole category, and it is #402's other lane's
-// idea rather than mine.
+// falsification of the whole category, and it drives the pure half
+// alone on purpose.
 //
-// My first cut admitted any component carrying an accepted id and left
-// the per-release question to LicenceObligationComplaints, which reads
-// the tree. That works, and I proved it works, but it puts the answer
-// behind a filesystem and it makes the pure function say yes to a
-// licence when the thing it was asked about is a release. The other
-// lane's framing is better: whatever admits go-cleanhttp@v0.5.2 has to
+// The first cut of the category admitted any component carrying an
+// accepted id and left the per-release question to
+// LicenceObligationComplaints, which reads the tree. That works, and it
+// was proved to work, but it puts the answer behind a filesystem and it
+// makes the pure function say yes to a licence when the thing it was
+// asked about is a release. Whatever admits go-cleanhttp@v0.5.2 has to
 // admit THAT, and not the licence it happens to carry, or accepting
-// MPL-2.0 once has quietly accepted every future module under it.
+// MPL-2.0 once has quietly accepted every future module under it. So the
+// release list is in the declaration and this half refuses on it, and
+// LicenceComplaints is still the entry point, because a stale offer is
+// the case this half cannot see.
 //
 // A version bump is the case that makes it concrete. v0.7.9 is a
 // different upload: different licence bytes, notices nobody has read,
@@ -1169,7 +1297,11 @@ func TestTheAcceptanceIsPerReleaseAndNotPerLicence(t *testing.T) {
 func TestTheShippedAcceptanceNamesTheReleasesTheInventoryActuallyHas(t *testing.T) {
 	c := MustLoadCompliance()
 	if len(c.License.AcceptedNonPermissive) == 0 {
-		t.Skip("compliance.json accepts no non-permissive licence")
+		// A failure and not a skip, for the same reason
+		// TestTheShippedAcceptanceIsCoherent fails: a skip is a green line
+		// in the run for a file that has lost the declaration this test
+		// exists to read against the inventory.
+		t.Fatal("compliance.json accepts no non-permissive licence, so there is no release list to check against the inventory; an empty register is a refusal here, not a reason to skip")
 	}
 	data, err := os.ReadFile(Path(InventoryPath))
 	if err != nil {
@@ -1198,5 +1330,73 @@ func TestTheShippedAcceptanceNamesTheReleasesTheInventoryActuallyHas(t *testing.
 		if found == 0 {
 			t.Errorf("compliance.json accepts %s and no component in the inventory is under it", a.SPDXID)
 		}
+	}
+}
+
+// hardCodedCount matches a tally of the dependency set written into
+// prose: "54 modules", "95 of the 97 components", "88 Go modules", "9
+// production npm packages", "96 of them". It leaves measured figures
+// alone ("17 go-retryablehttp symbols", "SHA-256 of the") because those
+// are pinned to a version the same prose has to name, so they cannot go
+// stale on their own.
+var hardCodedCount = regexp.MustCompile(`(?:^|[\s(])(\d+) (?:of (?:the|them)\b|(?:[A-Za-z-]+ ){0,2}(?:modules?|packages?|components?|dependencies)\b)`)
+
+// TestTheProseCarriesNoCountNobodyChecks is the other way of answering
+// the stale-count problem. compliance.json's own header says nothing in
+// it is hand-maintained arithmetic, and the rationale was the one place
+// that was not true: it said 54 modules for a long time after the graph
+// stopped holding 54, and then said 97 components with one of its three
+// figures checked and two not. Deriving all three in a test would have
+// kept them true and made every dependency bump a prose edit. The tally
+// belongs to the inventory, which is regenerated from the graph on every
+// run, so the prose describes how the set is derived and carries no
+// number for it.
+func TestTheProseCarriesNoCountNobodyChecks(t *testing.T) {
+	// The pattern first, in both directions, or the sweep below is a
+	// regexp that happens not to match anything.
+	for _, s := range []string{
+		"54 modules", "95 of the 97 components", "across 88 Go modules",
+		"and 9 production npm packages in", "component, 96 of them across", "(97 components)",
+	} {
+		if !hardCodedCount.MatchString(s) {
+			t.Errorf("hardCodedCount does not match %q, which is exactly the kind of sentence it exists to refuse", s)
+		}
+	}
+	for _, s := range []string{
+		"finds 17 go-retryablehttp symbols and 1 go-cleanhttp symbol",
+		"the SHA-256 of the licence text", "§3.2 is discharged", "the two binaries", "Version 2.0",
+	} {
+		if hardCodedCount.MatchString(s) {
+			t.Errorf("hardCodedCount matches %q, which is a measured figure and not a tally of the set", s)
+		}
+	}
+
+	c := MustLoadCompliance()
+	refuse := func(where string, i int, line string) {
+		if m := hardCodedCount.FindString(line); m != "" {
+			t.Errorf("%s line %d says %q; the tally belongs to %s, which is regenerated from the module graph on every run, and a copy of it in prose is a claim that goes stale silently",
+				where, i, strings.TrimSpace(m), c.License.Inventory)
+		}
+	}
+	for i, line := range c.License.Rationale {
+		refuse("license.rationale", i, line)
+	}
+	for _, a := range c.License.AcceptedNonPermissive {
+		for i, line := range a.Rationale {
+			refuse("acceptedNonPermissive["+a.SPDXID+"].rationale", i, line)
+		}
+	}
+	// And the written offer, which carried the same figure in the same
+	// way and for the same reason.
+	offer, ok := c.Link("source-offer")
+	if !ok || offer.RepoPath == "" {
+		t.Fatal("compliance.json declares no source-offer link with a repository path, so the written offer was not swept")
+	}
+	data, err := os.ReadFile(Path(offer.RepoPath))
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", offer.RepoPath, err)
+	}
+	for i, line := range strings.Split(string(data), "\n") {
+		refuse(offer.RepoPath, i+1, line)
 	}
 }
