@@ -213,19 +213,23 @@ func Classify(err error) transport.Category {
 // everywhere as "the operator decided", and retry.DefaultIsTransient will not
 // retry it.
 //
-// Cancelled therefore means exactly one thing here: the context this call was
-// given is done. Everything else is classified on the error alone, which puts
-// a connect timeout where it belongs, in Transient.
+// So the context is a tiebreaker for an error that cannot say whose deadline
+// expired, not an override for one that already says something definite. An
+// expired deadline in the error plus a done context means the caller's
+// deadline, and that is Cancelled. The same error with a live context means
+// rclone's, and that is Transient. An error that says something else entirely,
+// a changed host key for instance, keeps saying it whatever the context is
+// doing, because a cancellation racing a refusal does not make the refusal
+// less true and app/halt.go needs to record it.
 //
-// A done context wins over whatever the error was, and that is a choice worth
-// naming, because it costs something. An operation that failed for a reason
-// worth knowing (a changed host key, say) and only then found its context
-// expired classifies as Cancelled, so app/halt.go never records the refusal.
-// The alternative costs more: FR-22 and transfer.go's own doc both say a
-// cancellation must never turn into a verdict about the artifact, and
-// recordConnectionOutcomes already has a third outcome for exactly this, "this
-// pass never got far enough to say either way". A pass that was stopped is
-// that, and the next one asks again.
+// The wider rule, "a done context outranks whatever the error was", was
+// considered and rejected (the panel is on issue #388). It would have bought a
+// little more of FR-22's "a cancellation must never become a verdict" than
+// this repository has today, and paid for it by silently losing a host-key or
+// authentication refusal to any caller working under a deadline. This
+// function's job is to say what the error was; deciding what a stopped caller
+// means is already the consumer's, in retry.Do, transfer.go's post-copy ctx
+// check, and verify.go's isCancellation.
 //
 // A nil ctx is treated as a caller that never asked for anything, the same as
 // context.Background().
@@ -236,7 +240,7 @@ func ClassifyCtx(ctx context.Context, err error) transport.Category {
 	if category, ok := transport.CategoryOf(err); ok {
 		return category
 	}
-	if ctx != nil && ctx.Err() != nil {
+	if ctx != nil && ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
 		return transport.Cancelled
 	}
 	return Classify(err)

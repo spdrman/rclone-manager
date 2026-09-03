@@ -262,6 +262,65 @@ func TestClassify_ConnectTimeoutRcloneImposedIsTransient(t *testing.T) {
 	}
 }
 
+// TestClassifyCtx_ADoneContextDoesNotOverrideADefiniteError pins the
+// precedence #388 forced a decision about, Docker-free and in every
+// direction at once.
+//
+// ClassifyCtx consults the caller's context because an expired deadline in
+// an error cannot say whose deadline it was. That is the only thing the
+// context is for. An error that already says something definite keeps
+// saying it, however done the context is, because the alternative loses a
+// host-key or authentication refusal to any caller that works under a
+// deadline, and app/halt.go is the one place that turns those into
+// something an operator reads.
+//
+// The values here are real: two rclone sentinels, rclone's own
+// corrupted-on-transfer wording (see integrityFailurePrefix), and this
+// package's own ErrUnsupportedHash. The changed-host-key case gets the same
+// assertion against a live fixture in
+// TestSFTPClassificationAgainstRealFixture.
+func TestClassifyCtx_ADoneContextDoesNotOverrideADefiniteError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want transport.Category
+	}{
+		{
+			name: "this package's own unsupported-hash sentinel",
+			err:  fmt.Errorf("%w: backend %q cannot compute %s", ErrUnsupportedHash, "sftp", transport.SHA256),
+			want: transport.UnsupportedCapability,
+		},
+		{
+			name: "rclone's own object-not-found sentinel",
+			err:  fmt.Errorf("stat %q: %w", "missing.dump", rclonefs.ErrorObjectNotFound),
+			want: transport.NotFound,
+		},
+		{
+			name: "rclone's own corrupted-on-transfer wording",
+			err:  fmt.Errorf("corrupted on transfer: sizes differ src(%s) %d vs dst(%s) %d", "srcFs", 10, "dstFs", 5),
+			want: transport.IntegrityFailure,
+		},
+		{
+			name: "a deadline the error carries and cannot attribute, which is what the context is for",
+			err:  fmt.Errorf("copy_to_local: %w", context.DeadlineExceeded),
+			want: transport.Cancelled,
+		},
+		{
+			name: "an explicit cancellation, which needs no context to read",
+			err:  fmt.Errorf("copy_to_local: %w", context.Canceled),
+			want: transport.Cancelled,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClassifyCtx(alreadyCancelledContext(), tc.err); got != tc.want {
+				t.Fatalf("ClassifyCtx(done ctx, %v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 // rcloneImposedConnectTimeout drives the real sftp backend, through this
 // adapter exactly as production code does, at an address that blackholes,
 // with --contimeout set and a caller context that has no deadline and is
@@ -647,6 +706,19 @@ func TestClassify_Docker(t *testing.T) {
 		}
 		if got := Classify(err); got != transport.HostVerification {
 			t.Fatalf("Classify(%v) = %v, want HostVerification", err, got)
+		}
+
+		// #388's precedence question, settled against this exact real
+		// error rather than a described one. A caller working under a
+		// deadline can have its context expire while a handshake is still
+		// in flight (rclone's sftp dial takes ssh.ClientConfig.Timeout and
+		// ignores the caller's context entirely, so that window is the
+		// whole handshake, not a scheduling race), and the refusal still
+		// arrives afterwards. It is still a refusal. If a done context
+		// outranked it, app/halt.go would never record HALT_HOST_KEY_CHANGED
+		// for the one condition an operator most needs to be told about.
+		if got := ClassifyCtx(alreadyCancelledContext(), err); got != transport.HostVerification {
+			t.Fatalf("ClassifyCtx(done ctx, changed host key) = %v, want HostVerification: a cancellation racing a refusal does not make the refusal less true", got)
 		}
 	})
 }
