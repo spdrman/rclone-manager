@@ -28,6 +28,44 @@ const maxSubmitOperationBodyBytes = 1 << 20 // 1 MiB
 type submitOperationRequest struct {
 	Action         string `json:"action"`
 	ConfigRevision string `json:"config_revision"`
+
+	// Restore carries the restore_placement action's own parameters, and
+	// is nil for every other action.
+	//
+	// A nested object rather than four more flat fields, and refused
+	// outright when the action is not a restore: a body carrying restore
+	// parameters for a run_cycle is a request that has confused two
+	// operations, and a server that quietly ignores the extra fields
+	// teaches a client that they are optional.
+	Restore *restoreOperationRequest `json:"restore,omitempty"`
+}
+
+// restoreOperationRequest is POST /api/v1/operations' body when the action
+// is restore_placement.
+type restoreOperationRequest struct {
+	ArtifactID   string `json:"artifact_id"`
+	Medium       string `json:"medium"`
+	WindowDays   int    `json:"window_days"`
+	Acknowledged bool   `json:"acknowledged"`
+}
+
+// operationRestoreResponse is a restore operation's own wire block,
+// present only on a restore and simply absent otherwise, exactly like
+// operationProgressResponse.
+//
+// There is nowhere in here to put a percentage, a finishing time or a
+// price, and that is the shape rather than an omission; see
+// core/service.OperationRestore for the argument.
+type operationRestoreResponse struct {
+	ArtifactID    string `json:"artifact_id,omitempty"`
+	Medium        string `json:"medium,omitempty"`
+	StorageClass  string `json:"storage_class,omitempty"`
+	WindowDays    int    `json:"window_days,omitempty"`
+	Access        string `json:"access,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	RestoredUntil string `json:"restored_until,omitempty"`
+	Wait          string `json:"wait,omitempty"`
+	Billing       string `json:"billing,omitempty"`
 }
 
 // operationResponse is the wire shape of one operation, used both for the
@@ -55,6 +93,10 @@ type operationResponse struct {
 	// this is a nested object that disappears rather than a set of
 	// flat fields that would each have to carry some sentinel.
 	Progress *operationProgressResponse `json:"progress,omitempty"`
+
+	// Restore is present only on a restore_placement operation, for the
+	// same reason and in the same shape.
+	Restore *operationRestoreResponse `json:"restore,omitempty"`
 }
 
 // operationProgressResponse is the wire shape of one live progress
@@ -99,6 +141,20 @@ func toOperationResponse(op service.Operation) operationResponse {
 	}
 	if !op.FinishedAt.IsZero() {
 		resp.FinishedAt = op.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if op.Restore != nil {
+		r := op.Restore
+		resp.Restore = &operationRestoreResponse{
+			ArtifactID:    r.Artifact,
+			Medium:        r.Medium,
+			StorageClass:  r.Class,
+			WindowDays:    r.WindowDays,
+			Access:        r.Access,
+			Detail:        r.Detail,
+			Wait:          r.Wait,
+			Billing:       r.Billing,
+			RestoredUntil: formatTimePtr(r.RestoredUntil),
+		}
 	}
 	if op.Progress != nil {
 		p := op.Progress
@@ -149,9 +205,25 @@ func (h *handlers) submitOperation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "malformed JSON body")
 		return
 	}
-	if body.Action != service.ActionRunCycle {
+	switch body.Action {
+	case service.ActionRunCycle:
+		if body.Restore != nil {
+			// A run_cycle carrying restore parameters is a request that
+			// has confused two operations. Ignoring the extra object
+			// would teach the client that it is decorative, and the same
+			// client will later send a restore and be surprised that
+			// nothing was restored.
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+				fmt.Sprintf("a %q submission carried restore parameters, which it has no use for", service.ActionRunCycle))
+			return
+		}
+	case service.ActionRestorePlacement:
+		h.submitRestore(w, r, idempotencyKey, body)
+		return
+	default:
 		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
-			fmt.Sprintf("unsupported action %q; only %q is supported in this release", body.Action, service.ActionRunCycle))
+			fmt.Sprintf("unsupported action %q; this release supports %q and %q",
+				body.Action, service.ActionRunCycle, service.ActionRestorePlacement))
 		return
 	}
 
@@ -251,4 +323,95 @@ func (h *handlers) listOperations(w http.ResponseWriter, r *http.Request) {
 		resp.Operations = append(resp.Operations, toOperationResponse(op))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// formatTimePtr renders an optional instant as RFC3339Nano, or "" when the
+// provider reported none.
+//
+// A separate helper from formatTime because the two absences are different
+// facts. formatTime's zero time means "this event has not happened yet";
+// a nil here means "the provider never told us", which FR-34 says must not
+// be filled in with anything invented.
+func formatTimePtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format(time.RFC3339Nano)
+}
+
+// submitRestore is POST /api/v1/operations with a restore_placement
+// action: make one archived copy readable again (EPIC E, FR-34).
+//
+// # Why it is on the same route, behind the same gate
+//
+// The issue that asks for this names the submitOperation family, and it is
+// the right family: this is a durable, idempotency-keyed, configuration-
+// revision-checked operation whose row outlives the request, which is
+// exactly what that route was built for. Putting it on a route of its own
+// would give this deployment two answers to "how is a long-running job
+// started", and one of them would drift.
+//
+// It carries requireDestructiveGate for a reason worth stating, because a
+// restore destroys nothing. The gate in this codebase stands in front of
+// operations an operator cannot undo, and a restore is one: the provider
+// accepts it, bills for it, and there is no call that cancels it. That is
+// closer to a deletion in consequence than it is to a read, and the gate
+// is the control an operator already has for exactly that.
+func (h *handlers) submitRestore(w http.ResponseWriter, r *http.Request, idempotencyKey string, body submitOperationRequest) {
+	if body.Restore == nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			fmt.Sprintf("a %q submission has to say which copy to restore", service.ActionRestorePlacement))
+		return
+	}
+
+	sub, err := h.backend.SubmitRestorePlacement(r.Context(), service.RestorePlacementRequest{
+		IdempotencyKey: idempotencyKey,
+		Actor:          actorFromContext(r.Context()),
+		ConfigRevision: body.ConfigRevision,
+		ArtifactID:     body.Restore.ArtifactID,
+		Medium:         body.Restore.Medium,
+		WindowDays:     body.Restore.WindowDays,
+		Acknowledged:   body.Restore.Acknowledged,
+	})
+	if err != nil {
+		writeRestoreError(w, err, h.backend.ConfigRevision())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, toOperationResponse(sub.Operation))
+}
+
+// writeRestoreError maps a restore's refusals onto their declared statuses.
+//
+// Every one of them is a state an operator reaches by clicking a button on
+// a screen that has moved on, so every one is a typed refusal rather than a
+// 500. The messages that ARE echoed are core/service's and
+// core/internal/archive's own prose, which is the rule
+// service.ErrInvalidRequest's doc sets out: never an unclassified error,
+// which could carry endpoint or SQLite text.
+func writeRestoreError(w http.ResponseWriter, err error, revision string) {
+	switch {
+	case errors.Is(err, service.ErrConfigRevisionStale):
+		writeConfigRevisionStale(w, err.Error(), revision)
+	case errors.Is(err, service.ErrIdempotencyKeyConflict):
+		writeError(w, http.StatusConflict, "IDEMPOTENCY_KEY_CONFLICT", err.Error())
+	case errors.Is(err, service.ErrRestoreUnavailable):
+		// 503 rather than 409: nothing about the request would make this
+		// work, so a client that retries the same body verbatim once the
+		// deployment has a medium configured is doing the right thing.
+		writeError(w, http.StatusServiceUnavailable, "RESTORE_UNAVAILABLE", err.Error())
+	case errors.Is(err, service.ErrArtifactNotFound):
+		writeError(w, http.StatusNotFound, "ARTIFACT_NOT_FOUND", "no such backup")
+	case errors.Is(err, service.ErrCopyNotFound):
+		// Its own code, not folded into ARTIFACT_NOT_FOUND: "check the
+		// backup's id" and "that backup is not on that medium" send an
+		// operator in opposite directions, and the second is what a
+		// screen that has not been reloaded since a move produces.
+		writeError(w, http.StatusNotFound, "COPY_NOT_FOUND", err.Error())
+	case errors.Is(err, service.ErrRestoreRefused):
+		writeError(w, http.StatusConflict, "RESTORE_REFUSED", err.Error())
+	case errors.Is(err, service.ErrInvalidRequest):
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "INTERNAL", "failed to submit the restore")
+	}
 }

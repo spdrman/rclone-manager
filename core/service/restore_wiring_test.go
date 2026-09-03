@@ -163,8 +163,14 @@ func TestARestoreStatusIsReDerivedFromTheProviderNotFromTheRow(t *testing.T) {
 	if running.Status == state.OperationCompleted {
 		t.Fatal("the restore reported itself finished while the provider still said it was running")
 	}
-	if running.Access != string(archive.Restoring) {
-		t.Errorf("access = %q, want %q", running.Access, archive.Restoring)
+	if running.Restore == nil {
+		t.Fatal("a restore operation came back with no restore block at all")
+	}
+	if running.Restore.Access != string(archive.Restoring) {
+		t.Errorf("access = %q, want %q", running.Restore.Access, archive.Restoring)
+	}
+	if running.Restore.Medium != "cold-store" || running.Restore.Class != config.StorageClassDeepArchive {
+		t.Errorf("the restore block names %q/%q, want cold-store/%s", running.Restore.Medium, running.Restore.Class, config.StorageClassDeepArchive)
 	}
 
 	// The provider finishes it. Nothing in this process is told.
@@ -179,14 +185,26 @@ func TestARestoreStatusIsReDerivedFromTheProviderNotFromTheRow(t *testing.T) {
 		t.Fatalf("status = %q, want %q; nothing in this process executes a restore, so a read is the only thing that can ever finish the row",
 			done.Status, state.OperationCompleted)
 	}
-	if done.Access != string(archive.Immediate) {
-		t.Errorf("access = %q, want %q", done.Access, archive.Immediate)
+	if done.Restore == nil {
+		t.Fatal("a finished restore came back with no restore block at all")
 	}
-	if done.RestoredUntil == nil {
+	if done.Restore.Access != string(archive.Immediate) {
+		t.Errorf("access = %q, want %q", done.Restore.Access, archive.Immediate)
+	}
+	if done.Restore.RestoredUntil == nil {
 		t.Fatal("the provider reported an expiry date and the surface dropped it")
 	}
-	if !done.RestoredUntil.Equal(expiry) {
-		t.Errorf("restored until %v, want %v", done.RestoredUntil, expiry)
+	if !done.Restore.RestoredUntil.Equal(expiry) {
+		t.Errorf("restored until %v, want %v", done.Restore.RestoredUntil, expiry)
+	}
+	// The class's own figures survive a read that never saw the
+	// submission, because they come from the class table rather than from
+	// the request. That is what makes a restarted process able to answer.
+	if done.Restore.Wait == "" {
+		t.Error("a restore read back after the fact says nothing about how long that class takes")
+	}
+	if done.Restore.Billing == "" {
+		t.Error("a restore read back after the fact says nothing about being billed")
 	}
 	if done.Progress != nil {
 		t.Error("a finished restore carried a progress reading")
@@ -288,15 +306,32 @@ func serviceWithArchivedCopy(t *testing.T, store *recordingRestoreStore) (*Backu
 	t.Helper()
 
 	cfg := testConfig()
-	cfg.StorageMediums = []config.StorageMedium{{
-		ID:           "cold-store",
-		Type:         config.StorageMediumTypeS3,
-		Region:       "us-east-1",
-		Bucket:       "backups",
-		Prefix:       "prefix",
-		StorageClass: config.StorageClassDeepArchive,
-		Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
-	}}
+	// Two mediums, and the second one is not decoration. Without it, a
+	// request naming a medium the artifact is not on would be refused by
+	// the CONFIGURATION lookup rather than by the placement lookup, and
+	// the test asserting that refusal would pass with the placement check
+	// deleted. This was watched happening: the mutation that replaced
+	// "no copy on that medium" with "take the first copy you find" stayed
+	// green until warm-store was declared.
+	cfg.StorageMediums = []config.StorageMedium{
+		{
+			ID:           "cold-store",
+			Type:         config.StorageMediumTypeS3,
+			Region:       "us-east-1",
+			Bucket:       "backups",
+			Prefix:       "prefix",
+			StorageClass: config.StorageClassDeepArchive,
+			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+		},
+		{
+			ID:           "warm-store",
+			Type:         config.StorageMediumTypeS3,
+			Region:       "us-east-1",
+			Bucket:       "warm-backups",
+			StorageClass: config.StorageClassStandard,
+			Credentials:  config.MediumCredentials{File: "/var/lib/backup-manager/s3.creds"},
+		},
+	}
 
 	journal := openTestJournal(t)
 	b := New(cfg, journal, &restoreCapableTransport{store: store}, nil)

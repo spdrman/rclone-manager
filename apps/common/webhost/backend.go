@@ -38,6 +38,14 @@ type BackupServiceClient interface {
 	// re-implementing.
 	SubmitRunCycle(ctx context.Context, req service.RunCycleRequest) (service.Operation, error)
 
+	// SubmitRestorePlacement persists and starts a restore of one archived
+	// copy (EPIC E, FR-34). Unlike SubmitRunCycle, nothing about the work
+	// it starts happens in this process: the provider carries on
+	// restoring across a restart, which is why its row is exempt from the
+	// startup sweep and why its status is re-derived on every read. See
+	// core/service.BackupService.SubmitRestorePlacement.
+	SubmitRestorePlacement(ctx context.Context, req service.RestorePlacementRequest) (service.RestoreSubmission, error)
+
 	// GetOperation returns the current state of a previously submitted
 	// operation, for authenticated polling (docs/EPIC-B-multi-nas.md
 	// §15.7).

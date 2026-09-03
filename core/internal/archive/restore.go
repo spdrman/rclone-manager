@@ -282,7 +282,7 @@ func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 			Created:     false,
 			WindowDays:  req.WindowDays,
 			Wait:        behaviour.RestoreWait,
-			Billing:     billingStatement(behaviour),
+			Billing:     BillingStatement(behaviour),
 		}, nil
 	}
 
@@ -302,7 +302,7 @@ func (r *Restorer) Submit(ctx context.Context, req Request) (Submitted, error) {
 		Created:     true,
 		WindowDays:  req.WindowDays,
 		Wait:        behaviour.RestoreWait,
-		Billing:     billingStatement(behaviour),
+		Billing:     BillingStatement(behaviour),
 	}, nil
 }
 
@@ -340,7 +340,7 @@ func (r *Restorer) validate(req Request) (Behaviour, error) {
 	return behaviour, nil
 }
 
-// billingStatement is the whole truth this product holds about what a
+// BillingStatement is the whole truth this product holds about what a
 // restore costs, which is that it costs something.
 //
 // FR-34 forbids a figure, and forbids it for a good reason rather than out
@@ -348,7 +348,7 @@ func (r *Restorer) validate(req Request) (Behaviour, error) {
 // and no idea what the operator negotiated, so any number it printed would
 // be invented, and an invented number is worse than none because people
 // budget against it.
-func billingStatement(b Behaviour) string {
+func BillingStatement(b Behaviour) string {
 	if !b.RetrievalBilled {
 		return ""
 	}

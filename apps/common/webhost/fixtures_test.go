@@ -115,6 +115,13 @@ type syncFakeBackend struct {
 	errOnSubmit    error
 	nextID         int
 
+	// errOnRestore is SubmitRestorePlacement's equivalent of
+	// errOnSubmit, and lastRestore is the request it was last handed, so
+	// a handler test can prove which fields actually crossed the boundary
+	// rather than only that a 202 came back.
+	errOnRestore error
+	lastRestore  service.RestorePlacementRequest
+
 	// plans holds every plan PreviewRetention has issued and
 	// ApplyRetentionPlan has not yet consumed, mirroring core/service's
 	// own single-use plan store closely enough for handlers_retention_test.go
@@ -292,6 +299,57 @@ func (f *syncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycle
 	}
 	f.ops[op.ID] = op
 	return op, nil
+}
+
+// SubmitRestorePlacement mirrors the real service's refusal ORDER, not
+// just its refusals.
+//
+// That order is the part a handler test can actually get wrong: the real
+// one checks the configuration revision before it looks anything up,
+// because a caller on a stale screen may be naming a medium id that now
+// points at a different bucket. A fake that checked the artifact first
+// would let a handler that dropped config_revision on the floor pass.
+func (f *syncFakeBackend) SubmitRestorePlacement(_ context.Context, req service.RestorePlacementRequest) (service.RestoreSubmission, error) {
+	if f.errOnRestore != nil {
+		return service.RestoreSubmission{}, f.errOnRestore
+	}
+	if req.ConfigRevision != f.ConfigRevision() {
+		return service.RestoreSubmission{}, fmt.Errorf("%w: request names %q", service.ErrConfigRevisionStale, req.ConfigRevision)
+	}
+	if !req.Acknowledged {
+		return service.RestoreSubmission{}, fmt.Errorf("%w: this request did not say so", service.ErrRestoreRefused)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lastRestore = req
+	f.nextID++
+	op := service.Operation{
+		ID:             "op_test_restore_" + strconv.Itoa(f.nextID),
+		IdempotencyKey: req.IdempotencyKey,
+		Actor:          req.Actor,
+		ConfigRevision: req.ConfigRevision,
+		Action:         service.ActionRestorePlacement,
+		Status:         "running",
+		CreatedAt:      time.Now().UTC(),
+		Restore: &service.OperationRestore{
+			Artifact:   req.ArtifactID,
+			Medium:     req.Medium,
+			Class:      "DEEP_ARCHIVE",
+			WindowDays: req.WindowDays,
+			Access:     "restoring",
+			Detail:     "a restore of this copy is running; the provider reports whether a restore is finished and nothing else",
+			Wait:       "AWS publishes a standard restore from DEEP_ARCHIVE as taking up to twelve hours",
+			Billing:    "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list",
+		},
+	}
+	f.ops[op.ID] = op
+	return service.RestoreSubmission{
+		Operation:  op,
+		Created:    true,
+		WindowDays: req.WindowDays,
+		Wait:       op.Restore.Wait,
+		Billing:    op.Restore.Billing,
+	}, nil
 }
 
 func (f *syncFakeBackend) GetOperation(_ context.Context, id string) (service.Operation, error) {
@@ -655,6 +713,15 @@ func newAsyncFakeBackend() *asyncFakeBackend {
 func (f *asyncFakeBackend) ConfigRevision() string { return "rev-1" }
 
 func (f *asyncFakeBackend) Ready() bool { return true }
+
+// SubmitRestorePlacement is not what this fake is for: it exists to drive
+// the asynchronous run_cycle path. A restore submitted through it is
+// refused as unavailable, which is the honest answer for a backend with no
+// medium boundary, rather than a canned success that would let a test
+// believe something was restored.
+func (f *asyncFakeBackend) SubmitRestorePlacement(context.Context, service.RestorePlacementRequest) (service.RestoreSubmission, error) {
+	return service.RestoreSubmission{}, service.ErrRestoreUnavailable
+}
 
 func (f *asyncFakeBackend) SubmitRunCycle(_ context.Context, req service.RunCycleRequest) (service.Operation, error) {
 	f.mu.Lock()

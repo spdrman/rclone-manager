@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "00601e396d842141a7d46e5dbe83f7b8561b462f864e47848b888b36db5970b6";
+export const CONTRACT_SHA256 = "113da9823468845a198aa54e9c8069e74ef6138d7d5af48e8835e0c4ab712d39";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -47,6 +47,9 @@ export const WIRE_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+  "RESTORE_REFUSED",
+  "RESTORE_UNAVAILABLE",
+  "COPY_NOT_FOUND",
 ] as const;
 
 /** This UI's own presentation vocabulary. No endpoint emits these;
@@ -106,6 +109,9 @@ export const API_ERROR_CODES = [
   "ARTIFACT_IRRECOVERABLE",
   "REINSTATEMENT_REFUSED",
   "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+  "RESTORE_REFUSED",
+  "RESTORE_UNAVAILABLE",
+  "COPY_NOT_FOUND",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -685,9 +691,10 @@ export const API_OPERATIONS: readonly ContractOperation[] = [
       400: ["INVALID_REQUEST"],
       401: ["UNAUTHENTICATED"],
       403: ["CSRF_TOKEN_MISSING", "CSRF_TOKEN_MISMATCH", "DESTRUCTIVE_OPERATIONS_DISABLED"],
-      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING"],
+      404: ["ARTIFACT_NOT_FOUND", "COPY_NOT_FOUND"],
+      409: ["CONFIG_REVISION_STALE", "IDEMPOTENCY_KEY_CONFLICT", "OPERATION_ALREADY_RUNNING", "RESTORE_REFUSED"],
       500: ["INTERNAL"],
-      503: ["NOT_CONFIGURED"],
+      503: ["RESTORE_UNAVAILABLE"],
     }
   },
   {
@@ -1413,6 +1420,7 @@ export interface WireOperation {
   finished_at?: string;
   operation_id: string;
   progress?: WireOperationProgress;
+  restore?: WireOperationRestore;
   result?: string;
   started_at?: string;
   status: string;
@@ -1448,6 +1456,37 @@ export interface WireOperationProgress {
   observed_at: string;
   sequence: number;
   stage: "discovering" | "transferring" | "verifying" | "committing" | "cleaning-remote";
+}
+
+/** A restore operation's own facts: what was asked for, which never
+ *  changes, and where it has actually got to, which is re-derived
+ *  from the storage provider on every read rather than remembered.
+ *  Absent on every other action. There is no percentage field, no
+ *  completion-time field and no cost field: S3 reports a restore as
+ *  running or finished and nothing else, and this product holds no
+ *  price list, so any of the three would be invented. */
+export interface WireOperationRestore {
+  access?: string;
+  artifact_id?: string;
+  billing?: string;
+  detail?: string;
+  medium?: string;
+  restored_until?: string;
+  storage_class?: string;
+  wait?: string;
+  window_days?: number;
+}
+
+/** The restore_placement action's own parameters. Present only when
+ *  action is restore_placement, and refused when it is not: a body
+ *  carrying restore parameters for a run_cycle is a request that has
+ *  confused two operations, and answering it cheerfully is how the
+ *  expensive version of the same mistake gets made later. */
+export interface WireRestoreOperationRequest {
+  acknowledged: boolean;
+  artifact_id: string;
+  medium: string;
+  window_days: number;
 }
 
 /** One backup set's OWN retention policy, exactly as its
@@ -1613,10 +1652,13 @@ export interface WireStorageStatus {
 }
 
 /** POST /operations. The idempotency key is a header, not a body
- *  field: it is a property of the retry, not of the operation. */
+ *  field: it is a property of the retry, not of the operation. action
+ *  selects which of the parameter objects below is read;
+ *  restore_placement reads restore, and run_cycle reads none. */
 export interface WireSubmitOperationRequest {
   action: string;
   config_revision: string;
+  restore?: WireRestoreOperationRequest;
 }
 
 /** POST /backup-sets/test-connection. A reachability and

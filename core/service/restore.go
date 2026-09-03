@@ -202,6 +202,12 @@ func (b *BackupService) SubmitRestorePlacement(ctx context.Context, req RestoreP
 	if err != nil {
 		return RestoreSubmission{}, err
 	}
+	if op.Restore == nil {
+		op.Restore = &OperationRestore{}
+	}
+	op.Restore.Wait = submitted.Wait
+	op.Restore.Billing = submitted.Billing
+	op.Restore.WindowDays = submitted.WindowDays
 	return RestoreSubmission{
 		Operation:  op,
 		Created:    submitted.Created,
@@ -320,17 +326,47 @@ func (b *BackupService) deriveRestore(ctx context.Context, op Operation) Operati
 	}
 	status, err := restorer.Derive(ctx, op.ID, medium)
 	if err != nil {
+		// The provider did not answer, or the row is not readable as a
+		// restore. Either way the row stands, and what IS known about it
+		// (which backup, which medium, what was asked for) is still worth
+		// serving: a surface with no restore block at all reads as "this
+		// is not a restore", which is a worse answer than "this is a
+		// restore and nobody could reach the medium just now".
+		op.Restore = restoreFactsOf(params, "", "")
 		return op
 	}
 	op.Status = status.Recorded
-	op.Access = string(status.Access)
-	op.Detail = status.Detail
+	op.Restore = restoreFactsOf(status.Parameters, string(status.Access), status.Detail)
 	if status.Restore != nil && status.Restore.ExpiresAt != nil {
 		expiry := *status.Restore.ExpiresAt
-		op.RestoredUntil = &expiry
+		op.Restore.RestoredUntil = &expiry
 	}
 	if status.Recorded == state.OperationCompleted && op.Result == "" {
 		op.Result = status.Detail
 	}
 	return op
+}
+
+// restoreFactsOf assembles the restore block from the row's own parameters
+// plus whatever the provider just said.
+//
+// Wait and Billing come from the class table rather than from the
+// submission, so they survive a restart: a process that has just come up
+// and is asked about a restore it never submitted still says how long that
+// class takes and that it is billed, because both are properties of the
+// class rather than of the request.
+func restoreFactsOf(params archive.Parameters, access, detail string) *OperationRestore {
+	out := &OperationRestore{
+		Artifact:   params.Artifact,
+		Medium:     params.Medium,
+		Class:      params.StorageClass,
+		WindowDays: params.WindowDays,
+		Access:     access,
+		Detail:     detail,
+	}
+	if b, err := archive.Of(params.StorageClass); err == nil {
+		out.Wait = b.RestoreWait
+		out.Billing = archive.BillingStatement(b)
+	}
+	return out
 }

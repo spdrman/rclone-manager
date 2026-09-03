@@ -136,32 +136,15 @@ type Operation struct {
 	Result string
 	Error  string
 
-	// Access is the access state of the copy a restore operation is
-	// about, re-derived from the provider at read time (EPIC E, FR-34),
-	// and empty for every other action.
+	// Restore is everything that is true only of a restore operation, and
+	// nil for every other action.
 	//
-	// It is on the operation rather than only on the artifact because
-	// this is the one operation whose real state cannot be read off its
-	// own row: nothing in this process executes a restore, so the row
-	// records what was asked for and this field is where it actually got
-	// to. See BackupService.deriveRestore.
-	Access string
-
-	// Detail is the plain-words sentence a surface prints beside Access.
-	// It never carries a percentage, a completion time or a price, for
-	// the reason internal/archive.Describe gives: S3 reports a restore as
-	// running or finished and nothing else, and this product holds no
-	// price list.
-	Detail string
-
-	// RestoredUntil is when the provider says the restored copy stops
-	// being readable, or nil when it reports none.
-	//
-	// A pointer rather than a zero time because "the provider told me
-	// this window ends on Tuesday" and "the provider told me nothing" are
-	// different facts, and FR-34 says the expiry is shown WHEN S3 reports
-	// it and nothing is invented in its place until then.
-	RestoredUntil *time.Time
+	// A nested object that is simply ABSENT rather than a handful of flat
+	// fields nobody else fills in, for the reason Progress's own doc gives
+	// about the same choice: absent and empty are different answers, and a
+	// client must be able to tell them apart without deciding what an
+	// empty string means about somebody's backup.
+	Restore *OperationRestore
 
 	// Progress is the live, ephemeral reading for an operation executing
 	// in THIS process right now, and nil for every other operation:
@@ -174,6 +157,54 @@ type Operation struct {
 	// OperationProgress (progress.go) for why this is never persisted
 	// alongside the durable fields above it.
 	Progress *OperationProgress
+}
+
+// OperationRestore is a restore operation's own facts: what was asked for,
+// which never changes, and where it has actually got to, which is
+// re-derived from the provider on every read (EPIC E, FR-34).
+//
+// # What is not in here, and cannot be added
+//
+// No percentage, no completion time, no price. S3 reports a restore as
+// running or finished and nothing else, so a field for a percentage would
+// be a field somebody eventually fills with a guess; and this deployment
+// holds no price list, no region rates and no idea what the operator
+// negotiated, so an amount would be invented, and people budget against
+// invented numbers.
+type OperationRestore struct {
+	// Artifact is the backup this restore is about, as "source/set/name".
+	Artifact string
+
+	// Medium is the id of the medium holding the copy being restored, and
+	// Class is the storage class that medium writes with.
+	Medium string
+	Class  string
+
+	// WindowDays is how long the restored copy was asked to stay
+	// readable.
+	WindowDays int
+
+	// Access is what can be done with the copy right now, from the
+	// provider's own answer: immediate, requires_restore, restoring, or
+	// unreachable. Empty when the provider could not be asked at all.
+	Access string
+
+	// Detail is the plain-words sentence a surface prints beside Access.
+	Detail string
+
+	// RestoredUntil is when the provider says the restored copy stops
+	// being readable, or nil when it reports none. FR-34: shown when S3
+	// reports it, and nothing invented in its place until then.
+	RestoredUntil *time.Time
+
+	// Wait is the storage class's OWN published restore time, in plain
+	// words. A documented property of the class, never an estimate for
+	// this particular restore.
+	Wait string
+
+	// Billing is the plain statement that a bill exists, with no amount.
+	// Empty for a class the provider does not charge retrieval on.
+	Billing string
 }
 
 // SubmitRunCycle persists a new run_cycle operation and starts executing it
