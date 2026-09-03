@@ -103,6 +103,15 @@ type fakeTransport struct {
 	// (issue #284's own reproduction: a hardened SFTP account that
 	// cannot compute a hash) through an otherwise-successful transfer.
 	remoteHashErr error
+
+	// afterCopyToLocal, when non-nil, runs at the end of a successful
+	// CopyToLocal with the .partial path it just wrote. It exists so a
+	// test can change the local directory between lifecycle.Transfer's
+	// final-name collision guard (which runs before anything else, every
+	// time -- transfer.go) and lifecycle.Commit's own rename, which is the
+	// only window in which a cycle can be made to fail its commit rather
+	// than its transfer. See TestRunCycle_ResumesAnArtifactLeftAtCommitting.
+	afterCopyToLocal func(localPartialPath string)
 }
 
 func newFakeTransport() *fakeTransport {
@@ -164,6 +173,9 @@ func (f *fakeTransport) CopyToLocal(ctx context.Context, source transport.Source
 	}
 	if err := os.WriteFile(localPartialPath, obj.data, 0o644); err != nil {
 		return transport.TransferResult{}, err
+	}
+	if f.afterCopyToLocal != nil {
+		f.afterCopyToLocal(localPartialPath)
 	}
 	return transport.TransferResult{BytesTransferred: int64(len(obj.data))}, nil
 }

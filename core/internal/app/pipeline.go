@@ -235,7 +235,28 @@ func (s *Service) processArtifact(ctx context.Context, source transport.Source, 
 		rec = out.Record
 	}
 
-	if lifecycle.State(rec.State) == lifecycle.Verified {
+	// COMMITTING as well as VERIFIED, and that is issue #372. Every other
+	// in-progress state is already an entry point here: the transfer step
+	// above is reached from TRANSFERRING as well as DISCOVERED, and the
+	// verify step from VERIFYING. COMMITTING was the one that was not, so
+	// an artifact whose process died between lifecycle.Commit's
+	// VERIFIED -> COMMITTING journal write and the COMMITTED one that
+	// closes it was never handed back to the function that knows how to
+	// finish it. lifecycle.Commit has handled being called again in that
+	// state since it was written, with a comment saying so; nothing called
+	// it. Reconciliation deliberately leaves these rows alone and says it
+	// is letting normal processing resume from wherever the journal says
+	// (reconcile.go), which is exactly right and exactly what did not
+	// happen. So the row sat at COMMITTING, every cycle, forever, with its
+	// bytes in a .partial file that may well have been renamed into place
+	// already.
+	//
+	// attemptKey is what makes this safe rather than a guess: the key
+	// lifecycle.Commit gets here is the same one the dead process used, so
+	// the first Advance replays instead of re-applying and Commit takes
+	// its own documented resume branch. See attemptKey's doc for why
+	// RetryCount is the right attempt boundary.
+	if st := lifecycle.State(rec.State); st == lifecycle.Verified || st == lifecycle.Committing {
 		if ctx.Err() != nil {
 			return
 		}
@@ -446,9 +467,15 @@ func durable(st lifecycle.State) bool {
 // issue #361 asks "did any of it land". It is deliberately narrower than
 // "not terminal", in both directions:
 //
-//   - COMMITTING is left out because processArtifact cannot act on it.
-//     Counting a row this cycle has no move for as work it failed to do
-//     would report a stall the cycle could never clear on its own.
+//   - COMMITTING is in, since issue #372. It used to be left out on the
+//     grounds that processArtifact could not act on it, so counting it
+//     would report a stall the cycle had no move for. processArtifact
+//     acts on it now, which turns that reasoning around completely: a
+//     COMMITTING row is work this cycle tried and did not land, exactly
+//     like a TRANSFERRED one, and leaving it out would mean a set whose
+//     commits keep failing reports a clean cycle every time. That is the
+//     invisibility issue #372 is about, one layer up from the resume
+//     itself.
 //   - COMMITTED and REMOTE_DELETE_PENDING are left out because by then
 //     the bytes are durably on local disk and the backup has already
 //     succeeded. What is left is the remote cleanup, and FR-16's
@@ -460,7 +487,7 @@ func durable(st lifecycle.State) bool {
 func acquiring(st lifecycle.State) bool {
 	switch st {
 	case lifecycle.Discovered, lifecycle.Transferring, lifecycle.Transferred,
-		lifecycle.Verifying, lifecycle.Verified:
+		lifecycle.Verifying, lifecycle.Verified, lifecycle.Committing:
 		return true
 	}
 	return false
