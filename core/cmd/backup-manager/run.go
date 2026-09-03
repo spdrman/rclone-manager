@@ -38,6 +38,11 @@ func cmdRun(args []string) int {
 
 	verdicts := make([]app.CycleVerdict, 0, len(report.Sets))
 	for _, s := range report.Sets {
+		// s.Verdict() carries SystemicFailure rather than a bare
+		// Err != nil, so a pass stopped by an edit hold (issue #350) is
+		// not an exit 1. A hold cannot be placed in this process today
+		// (nothing serves an API here), but the exit code is a contract
+		// and it reads the same report `daemon` does.
 		verdicts = append(verdicts, s.Verdict())
 	}
 	return cycleExit(os.Stderr, verdicts...)

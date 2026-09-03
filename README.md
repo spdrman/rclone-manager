@@ -49,7 +49,7 @@ the way its predecessor did.
 | `check` | validate config and the state database, then exit |
 | `status` | report process and backup-set health (FR-24), exiting non-zero unless every set is HEALTHY |
 | `sources` | list configured sources and backup sets |
-| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356) |
+| `backup-set` | `backup-set create <source/backup-set>` creates one, through the same service layer `POST /api/v1/backup-sets` uses, and writes this deployment's first configuration when there is none yet (issue #356). `backup-set patch <source/backup-set> [flags]` changes one in place, and only the flags you pass are changed (issue #350) |
 | `artifacts` | list journal artifacts, optionally filtered by `--source` and `--backup-set` |
 | `fetch` | run one backup set's cycle on demand |
 | `retention` | preview GFS and last-known-good retention decisions, with per-run policy overrides |
@@ -166,12 +166,12 @@ and unreachable got their own CLI commands in the same change (`quarantine` and 
 both documented in their own sections above); one gap turned out to need real new product
 work and is out of scope here (see the bottom of this section).
 
-**Creating a backup set is `backup-set create`, and editing one is still a config-file
-edit.** This paragraph used to say a create verb was unnecessary rather than missing, and
-that a hand-edited `config.yaml` plus `check` was the CLI's answer to `POST /backup-sets`.
-Issue #356 is what changed that reading: proving a fresh install can actually pull a backup
-means saying what to back up over SSH with no browser anywhere, and "edit a YAML file by
-hand" is the absence of a command written as though it were a feature.
+**Creating a backup set is `backup-set create`, and changing one is `backup-set patch`.**
+This paragraph used to say a create verb was unnecessary rather than missing, and that a
+hand-edited `config.yaml` plus `check` was the CLI's answer to `POST /backup-sets`. Issue
+#356 is what changed that reading: proving a fresh install can actually pull a backup means
+saying what to back up over SSH with no browser anywhere, and "edit a YAML file by hand" is
+the absence of a command written as though it were a feature.
 
 ```bash
 backup-manager backup-set create production/postgres \
@@ -189,8 +189,10 @@ the fingerprint before trusting it, which is what the wizard's Verify-server ste
 `--known-hosts-line` is the alternative when the key is already known and trust on first use
 is not wanted.
 
-Hand-editing still works, and is still the answer for editing an existing set until #350
-lands `backup-set patch`:
+Writing `config.yaml` by hand still works and is still worth knowing
+(`core/internal/config`'s own doc comments are the fullest explanation of the schema in this
+tree, and `core/internal/config/testdata/full.yaml` is a worked, if terse, example).
+However the file got written, the same loop checks it:
 
 ```bash
 backup-manager check --config ./config.yaml      # validates the file and the state database
@@ -201,6 +203,53 @@ backup-manager fetch --config ./config.yaml --source S --backup-set B --dry-run
 
 That is a create-and-verify loop with no browser in it: `validate` and `check` exist
 specifically so a hand-edited file does not have to be trusted blind.
+
+Changing a set that already exists is a different question, and until issue #350 the answer
+was the same file edit, which meant opening an editor on the NAS itself. `backup-set patch`
+is what replaces that:
+
+```bash
+backup-manager backup-set --config ./config.yaml patch production/postgres-primary \
+  --remote-path /var/backups/postgresql --include "*.dump,*.tar.zst"
+```
+
+Only the flags you pass are changed; anything you leave out is left exactly as it is, which
+is the same sparse contract `PATCH /api/v1/backup-sets/{source}/{set}` carries and the same
+one the Web UI's per-box Save rests on. Both surfaces call the same service method, so they
+cannot drift. The change is validated against the same `config.Validate` a hand-edited file
+goes through at boot and written through the same atomic replace.
+
+One thing to be plain about, because it is the same for `settings patch` and is easy to
+assume otherwise: the hot reload is in-process. A change made through the API takes effect
+immediately in the engine that served it, because that engine is also the thing running the
+schedule. A change made by a separate `backup-manager backup-set patch` invocation writes
+`config.yaml` and reloads that invocation's own view of it, and a `daemon` already running
+in another process keeps using the configuration it loaded at start until it is restarted.
+There is no config watcher and no SIGHUP reload in this build.
+
+A set's name and source are deliberately not patchable: they key every journal row, artifact
+id and recovery manifest the set has ever produced, so renaming one is a migration rather
+than an edit.
+
+Three fields that *are* patchable ask first, once the set has artifacts on record:
+`--host`, `--remote-path` and `--local-path`. Together they are what "the data this set is
+about" means, and the artifacts already on record stay with the set rather than moving with
+them:
+
+- A remote root pointed at a **different** dataset whose file names match ones already on
+  record makes every candidate come back already-known. The cycle reports success, health
+  stays green, and nothing is fetched. That is a backup that has silently stopped happening.
+- Artifacts stored under the **old** `local_path` stop matching what retention computes for
+  them, so retention refuses them rather than pruning them from then on, and `catalog
+  rebuild` stops seeing them.
+
+Neither destroys anything, and pointing the field back restores both, which is why this is
+an acknowledgement rather than a refusal: an operator whose NAS got a new address, or whose
+volume moved, has a real change to make. Add `--acknowledge-repoint` (or
+`"acknowledge_repoint": true` on the API, or **Save anyway** in the Web UI) once the message
+has been read. If the new location holds a *different* dataset, make it a separate backup
+set instead. `--port` and `--user` are not in that list: neither changes which directory on
+which machine holds the data.
 
 **First-run setup is the identical answer, not a separate case.** `POST /system/first-run`
 exists because the Web UI has no config file to read yet and needs an in-browser wizard to

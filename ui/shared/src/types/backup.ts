@@ -56,6 +56,17 @@ export interface BackupSet {
   includePatterns: string[];
   excludePatterns: string[];
   completionMethod: CompletionMethod;
+  /**
+   * The window `stable-size` waits for before it treats a file as
+   * finished, in seconds, and 0 for every other completion method.
+   *
+   * It is here (issue #350) because the inline editor offers the
+   * completion method, and offering that method without its window would
+   * be offering a Save that can only fail: core refuses a backup set
+   * whose strategy is "stable" and whose window is zero, exactly as it
+   * refuses one at creation.
+   */
+  stableForSeconds: number;
   destination: string;
   retention: RetentionPolicy;
   validations: ValidationKind[];
