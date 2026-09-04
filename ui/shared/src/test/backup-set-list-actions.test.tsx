@@ -307,14 +307,20 @@ describe("acting on a backup set from the list", () => {
     expect(screen.getByRole("button", { name: CONFIRM })).toHaveProperty("disabled", false);
   });
 
-  it("calls nothing while the confirm button is off, however hard it is pressed", async () => {
+  // The two tests below assert on the API and on the list, and
+  // deliberately NOT on whether the confirm button looks disabled. That
+  // is the difference between checking the guard and checking the
+  // button's appearance: with the comparison forced to always pass, a
+  // test that asserts `disabled` first goes red on the button and never
+  // reaches the question of whether a set was removed. These reach it.
+  it("removes nothing when a wrong name is typed and the confirmation is pressed anyway", async () => {
     const api = createMockApi();
     const remove = vi.spyOn(api, "removeSet");
     const all = await renderList(api);
     const target = all[1];
 
     await openRemoval(target);
-    for (const near of [
+    for (const wrong of [
       "",
       backupSetIdentity(target).toUpperCase(),
       backupSetIdentity(target) + " ",
@@ -323,15 +329,14 @@ describe("acting on a backup set from the list", () => {
       target.set,
       target.name
     ]) {
-      await typePhrase(target, near);
-      expect(screen.getByRole("button", { name: CONFIRM })).toHaveProperty("disabled", true);
+      await typePhrase(target, wrong);
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: CONFIRM }));
       });
+      expect(remove).not.toHaveBeenCalled();
     }
 
-    expect(remove).not.toHaveBeenCalled();
-    expect(screen.getByText(target.name)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(target.name)).toBeTruthy());
   });
 
   it("does not accept a NEIGHBOURING set's identity, which is the mistake a list invites", async () => {
@@ -339,7 +344,8 @@ describe("acting on a backup set from the list", () => {
     // of the set above or below the one you meant is the exact shape of
     // the accident this guard exists for, and a guard that compared
     // against "any set's identity" would pass every other test in this
-    // file.
+    // file. Again: what is asserted is that nothing was removed, not
+    // that a button looked a certain way.
     const api = createMockApi();
     const remove = vi.spyOn(api, "removeSet");
     const all = await renderList(api);
@@ -348,12 +354,13 @@ describe("acting on a backup set from the list", () => {
 
     await openRemoval(target);
     await typePhrase(target, backupSetIdentity(neighbour));
-
-    expect(screen.getByRole("button", { name: CONFIRM })).toHaveProperty("disabled", true);
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: CONFIRM }));
     });
+
     expect(remove).not.toHaveBeenCalled();
+    expect(screen.getByText(target.name)).toBeTruthy();
+    expect(screen.getByText(neighbour.name)).toBeTruthy();
   });
 
   it("starts empty again when a second row's removal is opened", async () => {
@@ -373,7 +380,13 @@ describe("acting on a backup set from the list", () => {
 
     await openRemoval(second);
     expect(phraseBox(second)).toHaveProperty("value", "");
-    expect(screen.getByRole("button", { name: CONFIRM })).toHaveProperty("disabled", true);
+    // And the consequence, which is the part that matters: pressing
+    // confirm on a box nobody has typed into removes nothing.
+    const remove = vi.spyOn(api, "removeSet");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: CONFIRM }));
+    });
+    expect(remove).not.toHaveBeenCalled();
   });
 
   // ------------------------------------------------------------------

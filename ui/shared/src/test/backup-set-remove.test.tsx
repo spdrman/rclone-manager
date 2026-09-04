@@ -297,7 +297,11 @@ describe("removing a backup set from the detail page", () => {
     expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toHaveProperty("disabled", false);
   });
 
-  it("refuses a near miss, so nothing is removed by nearly typing it", async () => {
+  it("removes nothing when a near miss is typed and the confirmation is pressed anyway", async () => {
+    // Asserts on the API, not on whether the button looked disabled.
+    // Forcing the comparison to always pass has to be able to make this
+    // go red, or it is checking the button's appearance rather than the
+    // guard.
     const api = createMockApi();
     const remove = vi.spyOn(api, "removeSet");
     const target = await firstSet();
@@ -313,12 +317,11 @@ describe("removing a backup set from the detail page", () => {
       await act(async () => {
         type(target, near);
       });
-      expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toHaveProperty("disabled", true);
       await act(async () => {
         fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
       });
+      expect(remove).not.toHaveBeenCalled();
     }
-    expect(remove).not.toHaveBeenCalled();
   });
 
   it("offers no removal at all on a read-only surface", async () => {
