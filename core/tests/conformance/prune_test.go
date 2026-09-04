@@ -1,9 +1,12 @@
 package conformance_test
 
 import (
+	"context"
 	"os"
+	"sync"
 	"testing"
 
+	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/model"
 	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -57,7 +60,11 @@ func TestPruneRefusesAnArtifactWhoseOnlyCopyIsOnAMedium(t *testing.T) {
 	far := scenarioNow.AddDate(2, 0, 0)
 	records := w.records()
 
-	verdicts, err := retention.PruneDecide(far, w.cfg.Retention, w.backupSet(), records)
+	// app.ActiveMediumFromRecords is the locator the product's own prune
+	// pass uses (internal/app/prune.go), and it is the one this scenario
+	// needs: the artifact under test lives on a medium, and AllLocal would
+	// answer the question wrongly for exactly that case.
+	verdicts, err := retention.PruneDecide(far, w.cfg.Retention, w.backupSet(), records, app.ActiveMediumFromRecords(records))
 	if err != nil {
 		t.Fatalf("the prune pass failed: %v", err)
 	}
@@ -100,7 +107,15 @@ func TestPruneRefusesAnArtifactWhoseOnlyCopyIsOnAMedium(t *testing.T) {
 	// And applying it has to leave the medium copy alone. A DECIDE that
 	// refuses and an APPLY that deletes anyway is exactly the gap between
 	// a dry run and the real thing that FR-20 exists to close.
-	applied, err := retention.PruneApply(far, w.cfg.Retention, w.backupSet(), records)
+	//
+	// The medium pruner this is handed deletes nothing and records that it
+	// was asked, which is a stronger check than the object still being
+	// there afterwards: an apply that decided to delete and then failed to
+	// reach the endpoint would leave the object in place too, and that is
+	// not the same outcome at all.
+	pruner := &recordingMediumPruner{}
+	applied, err := retention.PruneApply(w.ctx, far, w.cfg.Retention, w.backupSet(), records,
+		app.ActiveMediumFromRecords(records), pruner)
 	if err != nil {
 		t.Fatalf("applying the prune pass failed: %v", err)
 	}
@@ -108,6 +123,9 @@ func TestPruneRefusesAnArtifactWhoseOnlyCopyIsOnAMedium(t *testing.T) {
 		if v.Artifact == summer.id && v.Action == retention.PruneDelete {
 			t.Errorf("PruneApply deleted %s, whose only copy is on %q: %s", v.Artifact.Name, mediumOffsite, v.Reason)
 		}
+	}
+	if asked := pruner.calls(); len(asked) != 0 {
+		t.Errorf("PruneApply asked to delete %v from a medium; the only medium-resident artifact in this scenario is the one it must refuse", asked)
 	}
 	if _, err := adapter().StatObject(w.ctx, w.offsite, objectKeyOf(t, w, summer.id)); err != nil {
 		t.Fatalf("THE OBJECT ON THE MEDIUM IS GONE after a prune pass: %v", err)
@@ -133,4 +151,30 @@ func objectKeyOf(t *testing.T, w *world, id model.ArtifactID) string {
 		t.Fatalf("%s has no ACTIVE placement on %q: %s", id.Name, mediumOffsite, describe(rec))
 	}
 	return p.Location
+}
+
+// recordingMediumPruner is the medium half of PruneApply, and it deletes
+// nothing.
+//
+// It is not a stub that quietly succeeds. This scenario's whole claim is
+// that prune refuses the one artifact whose only copy is on a medium, so
+// any call at all is the failure, and recording the calls says which
+// artifact it was rather than leaving the reader to work that out from an
+// object that vanished.
+type recordingMediumPruner struct {
+	mu    sync.Mutex
+	asked []string
+}
+
+func (p *recordingMediumPruner) DeleteFromMedium(_ context.Context, rec state.Record, medium string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.asked = append(p.asked, rec.Artifact.Name+" on "+medium)
+	return nil
+}
+
+func (p *recordingMediumPruner) calls() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.asked...)
 }

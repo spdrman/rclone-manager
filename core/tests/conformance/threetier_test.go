@@ -469,10 +469,23 @@ func TestTheChainsSecondHopIsMediumToMedium(t *testing.T) {
 	if !strings.Contains(o.Refused, "medium-to-medium") {
 		t.Fatalf("the engine did not refuse the hop as medium-to-medium; it said %q", o.Refused)
 	}
-	if !errors.Is(errors.New(o.Refused), placement.ErrNotEligible) &&
-		!strings.Contains(o.Refused, placement.ErrNotEligible.Error()) {
+	// This used to read errors.Is(errors.New(o.Refused), ErrNotEligible),
+	// with a strings.Contains fallback after an ||. The first half is
+	// false for every input there has ever been (errors.New on a string
+	// produces an error with no relation to the sentinel), so the
+	// fallback is what ran, and this suite was classifying a refusal by
+	// its text. Outcome now carries the error the string was rendered
+	// from, so the question can be asked properly.
+	if o.Err == nil {
+		t.Fatalf("the outcome carries no error, so a caller has only the string %q and cannot tell a policy "+
+			"refusal from a storage failure", o.Refused)
+	}
+	if !errors.Is(o.Err, placement.ErrNotEligible) {
 		t.Errorf("the refusal did not come through ErrNotEligible, so a caller cannot tell a policy refusal "+
-			"from a storage failure: %q", o.Refused)
+			"from a storage failure: %v", o.Err)
+	}
+	if !o.PolicyRefusal() {
+		t.Errorf("PolicyRefusal is false for a hop the engine declined on policy: %v", o.Err)
 	}
 	assertActiveOn(t, w, fresh.id, mediumOffsite)
 	assertBytesAreReal(t, w, fresh)

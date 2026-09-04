@@ -227,6 +227,85 @@ func TestAMoveAlreadyInFlightToAnArchiveClassStopsAtOneUpload(t *testing.T) {
 	}
 }
 
+// plantVerifying leaves a move at VERIFYING with the destination object
+// really on the medium, which is what a crash between the upload and the
+// verification leaves behind.
+func plantVerifying(t *testing.T, f *fixture) state.Move {
+	t.Helper()
+	mv := plantCopying(t, f)
+	if _, err := f.medium.UploadFromLocal(f.ctx, transport.Medium{ID: testMedium}, f.localPath(), f.key, transport.UploadOptions{}); err != nil {
+		t.Fatalf("planting the destination object: %v", err)
+	}
+	size := int64(len(f.content))
+	f.clock = f.clock.Add(time.Second)
+	mv, err := f.journal.AdvanceMove(f.ctx, state.MoveAdvance{
+		MoveID: mv.ID, From: state.MoveCopying, To: state.MoveCopied, OccurredAt: f.clock, BytesCopied: &size,
+	})
+	if err != nil {
+		t.Fatalf("planting COPYING -> COPIED: %v", err)
+	}
+	f.clock = f.clock.Add(time.Second)
+	mv, err = f.journal.AdvanceMove(f.ctx, state.MoveAdvance{
+		MoveID: mv.ID, From: state.MoveCopied, To: state.MoveVerifying, OccurredAt: f.clock,
+	})
+	if err != nil {
+		t.Fatalf("planting COPIED -> VERIFYING: %v", err)
+	}
+	return mv
+}
+
+// TestVerifyingAnArchivedDestinationSpendsNoRequest is the half of this
+// that is about the gate rather than about the plan.
+//
+// A move found at VERIFYING has already uploaded, so the plan-time and
+// copy-time refusals are both behind it and neither can help. What the
+// engine does next is the reviewer's finding: verifyCopy called Verify,
+// which downloads, so the engine paid a request to be told
+// InvalidObjectState and then treated that answer as a verification that
+// had failed, which is a thing worth retrying. VerifyWithAccess works the
+// same answer out from the storage class and the restore status, spends
+// nothing on it, and returns it as ErrClassRefused, which is not.
+//
+// So this asserts on the request count and on the phase writes, because
+// those are the two things the gate changes. The outcome (ABANDONED,
+// source intact) is the same either way, which is exactly why an outcome
+// assertion would not have caught it.
+func TestVerifyingAnArchivedDestinationSpendsNoRequest(t *testing.T) {
+	f := newFixture(t, fixtureOpts{storageClass: config.StorageClassDeepArchive})
+	f.medium.archiveRefusesReads = true
+
+	plantVerifying(t, f)
+	before := f.medium.uploadCount()
+
+	report, err := f.engine.RunCycle(f.ctx, nil)
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	f.guard.fail()
+
+	if got := f.medium.openCount(); got != 0 {
+		t.Errorf("the engine spent %d GETs on an object its own configuration says is archived; the storage class and the restore status answer this for free", got)
+	}
+	if got := f.medium.uploadCount(); got != before {
+		t.Errorf("the engine uploaded again (%d -> %d) after a refusal the next attempt could not change", before, got)
+	}
+
+	mv := f.onlyMove()
+	if placement.Phase(mv.Phase) != placement.Abandoned {
+		t.Fatalf("the move ended at %s with %q, want ABANDONED. Outcomes: %+v", mv.Phase, mv.Error, report.Outcomes)
+	}
+	// The route there is the assertion, not just the destination. Going
+	// VERIFYING -> COPYING first is the retry, and the retry is the bug.
+	writes := f.guarded.phaseWrites()
+	last := writes[len(writes)-1]
+	if last != state.MoveVerifying+"->"+state.MoveAbandoned {
+		t.Errorf("the move's phase writes were %v; a class refusal at VERIFYING goes straight to ABANDONED, and anything that passes through COPYING has decided to try again", writes)
+	}
+	if !f.localExists() {
+		t.Fatal("THE SOURCE WAS DELETED against a destination nothing could read")
+	}
+}
+
 // TestAnExpiredRestoreDuringAMoveDoesNotLoopEither is the same property on
 // the one path that can legitimately get an archive-class move as far as
 // SOURCE_DELETE_PENDING: a restore was in effect when the destination was

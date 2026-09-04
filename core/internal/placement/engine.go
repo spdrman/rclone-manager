@@ -222,7 +222,40 @@ type Outcome struct {
 	// stopped short of a terminal phase. It is empty on a move that
 	// reached DONE.
 	Refused string
+
+	// Err is the error Refused was rendered from, so a caller can ask
+	// errors.Is what KIND of refusal this was.
+	//
+	// It exists because Refused on its own cannot be asked that.
+	// ErrNotEligible is documented as "a routine, expected answer that a
+	// caller reports and carries on from, while a storage failure is
+	// not", and that distinction was unreachable: this struct carried
+	// err.Error() and dropped the error, so a policy refusal and a
+	// journal that would not open arrived at every caller as two strings.
+	// The one test that claimed to check it did
+	// errors.Is(errors.New(o.Refused), ErrNotEligible), which is false
+	// for every input including the one it targets, because errors.New on
+	// a string produces an error with no relation to the sentinel; what
+	// was actually running was a strings.Contains fallback, in a package
+	// whose own rule is never to classify by text.
+	//
+	// It is nil for a move that ABANDONED, and deliberately so. That
+	// reason is a durable journal column written by an earlier process,
+	// which is a string and was never an error; inventing one here would
+	// be exactly the errors.New(o.Refused) move that made this necessary.
+	// Refused is still the thing to print.
+	Err error
 }
+
+// PolicyRefusal reports whether this outcome is the engine declining to
+// move an artifact, as opposed to something failing.
+//
+// It is the question every caller of RunCycle actually has. A refused plan
+// is normal (an artifact with two ACTIVE copies, a medium-to-medium hop, a
+// destination whose storage class cannot support the verification its
+// medium requires), and a cycle full of them is a configuration to look
+// at, not an incident. A journal that will not open is an incident.
+func (o Outcome) PolicyRefusal() bool { return errors.Is(o.Err, ErrNotEligible) }
 
 // CycleReport is what one RunCycle did.
 type CycleReport struct {
@@ -306,6 +339,7 @@ func (e *Engine) RunCycle(ctx context.Context, plans []Plan) (CycleReport, error
 			report.Outcomes = append(report.Outcomes, Outcome{
 				Artifact: p.Artifact,
 				Refused:  err.Error(),
+				Err:      err,
 			})
 			continue
 		}
@@ -585,18 +619,21 @@ func (e *Engine) advance(ctx context.Context, mv state.Move, resumed bool) Outco
 			// TestEveryNonTerminalPhaseHasAResumeCase proves it does.
 			// Reaching it anyway is a phase nothing can move, which is the
 			// #372 shape, so it stops loudly instead of quietly.
-			out.Refused = fmt.Sprintf("placement: move %d is at phase %q, which this engine has no case for", mv.ID, mv.Phase)
+			out.Err = fmt.Errorf("placement: move %d is at phase %q, which this engine has no case for", mv.ID, mv.Phase)
+			out.Refused = out.Err.Error()
 			return out
 		}
 		if err != nil {
 			out.Refused = err.Error()
+			out.Err = err
 			return out
 		}
 		mv = next
 	}
 
 	out.Phase = Phase(mv.Phase)
-	out.Refused = fmt.Sprintf("placement: move %d took more than %d phase steps in one cycle and was left at %s", mv.ID, maxPhaseStepsPerMove, mv.Phase)
+	out.Err = fmt.Errorf("placement: move %d took more than %d phase steps in one cycle and was left at %s", mv.ID, maxPhaseStepsPerMove, mv.Phase)
+	out.Refused = out.Err.Error()
 	return out
 }
 
