@@ -704,6 +704,77 @@ func TestReadableLocalPathPrefersThePlacement(t *testing.T) {
 	})
 }
 
+// TestActiveMediumPlacementsTellsElsewhereFromNowhere is the other half
+// of ReadableLocalPath's contract. A false ReadableLocalPath is true of a
+// moved artifact and of a lost one, and this accessor is what separates
+// the two: non-empty means the durable copy is on a medium, empty means no
+// ACTIVE copy is recorded anywhere.
+//
+// The moved shape is the one that matters, and it is the shape a
+// completed move really leaves: a GONE local placement beside an ACTIVE
+// medium placement. Every caller that read that shape as "no durable
+// copy" quarantined a healthy artifact.
+func TestActiveMediumPlacementsTellsElsewhereFromNowhere(t *testing.T) {
+	onMedium := Placement{Medium: "cold_offsite", Location: "prefix/production/pg/a.dump", Status: PlacementActive, VerificationClass: VerificationContent}
+	goneLocal := Placement{Medium: MediumLocal, Location: "/backups/pg/a.dump", Status: PlacementGone}
+
+	t.Run("a completed move is elsewhere, not nowhere", func(t *testing.T) {
+		rec := Record{Placements: []Placement{onMedium, goneLocal}}
+		if _, ok := rec.ReadableLocalPath(); ok {
+			t.Fatal("ReadableLocalPath() = true for an artifact whose local placement is GONE")
+		}
+		got := rec.ActiveMediumPlacements()
+		if len(got) != 1 || got[0].Medium != "cold_offsite" {
+			t.Errorf("ActiveMediumPlacements() = %+v, want the one ACTIVE copy on cold_offsite", got)
+		}
+	})
+
+	t.Run("every copy gone is nowhere", func(t *testing.T) {
+		goneMedium := onMedium
+		goneMedium.Status = PlacementGone
+		rec := Record{Placements: []Placement{goneMedium, goneLocal}}
+		if got := rec.ActiveMediumPlacements(); len(got) != 0 {
+			t.Errorf("ActiveMediumPlacements() = %+v, want none when the medium copy is GONE too", got)
+		}
+	})
+
+	t.Run("a medium copy being discarded is not a copy", func(t *testing.T) {
+		pending := onMedium
+		pending.Status = PlacementDeletePending
+		rec := Record{Placements: []Placement{pending, goneLocal}}
+		if got := rec.ActiveMediumPlacements(); len(got) != 0 {
+			t.Errorf("ActiveMediumPlacements() = %+v, want none for a DELETE_PENDING medium placement", got)
+		}
+	})
+
+	t.Run("a local placement is never a medium one", func(t *testing.T) {
+		activeLocal := goneLocal
+		activeLocal.Status = PlacementActive
+		rec := Record{Placements: []Placement{activeLocal}}
+		if got := rec.ActiveMediumPlacements(); len(got) != 0 {
+			t.Errorf("ActiveMediumPlacements() = %+v, want none: the local copy is ReadableLocalPath's answer, not this one's", got)
+		}
+	})
+
+	t.Run("mid-move both are reported and the caller orders them", func(t *testing.T) {
+		activeLocal := goneLocal
+		activeLocal.Status = PlacementActive
+		rec := Record{Placements: []Placement{onMedium, activeLocal}}
+		if _, ok := rec.ReadableLocalPath(); !ok {
+			t.Fatal("ReadableLocalPath() = false while the local placement is still ACTIVE")
+		}
+		if got := rec.ActiveMediumPlacements(); len(got) != 1 {
+			t.Errorf("ActiveMediumPlacements() = %+v, want the medium copy reported even while the local one is still there", got)
+		}
+	})
+
+	t.Run("no placements at all is nowhere on a medium", func(t *testing.T) {
+		if got := (Record{LocalPath: "/backups/pg/a.dump"}).ActiveMediumPlacements(); len(got) != 0 {
+			t.Errorf("ActiveMediumPlacements() = %+v on a record with no placements", got)
+		}
+	})
+}
+
 // TestRecordTransitionWritesThePlacementItIsGiven is the write side. state
 // stores what it is told, exactly as it does for every other vocabulary it
 // does not own, so the caller that creates the durable copy is the caller

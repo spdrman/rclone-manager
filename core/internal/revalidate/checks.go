@@ -57,37 +57,23 @@ import (
 // possibly-perfectly-good backup over what might be a misconfigured
 // operator hook, not a corrupt artifact.
 func runChecks(ctx context.Context, deps Deps, cfg config.Revalidation, rec state.Record) (checked, passed bool, class placement.Class, reason string, err error) {
+	// The medium copies are only consulted when there is no active LOCAL
+	// placement, which is the ordering FR-31 asks for: local placements
+	// keep today's behaviour exactly, and an artifact mid-move that still
+	// has its local copy is checked the way it was checked yesterday.
+	//
+	// state.Record.ActiveMediumPlacements used to be a private loop here,
+	// and this package was the only one of FR-29's four swept callers
+	// that asked it. The other three read "no readable local path" as "no
+	// durable copy" and quarantined every moved artifact; the loop now
+	// lives beside ReadableLocalPath so every caller of the one is held
+	// to asking the other.
 	if _, local := rec.LocalPlacement(); !local {
-		if mediums := activeMediumPlacements(rec); len(mediums) > 0 {
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
 			return checkMediumPlacements(ctx, deps, cfg, mediums)
 		}
 	}
 	return checkLocalCopy(ctx, deps, cfg, rec)
-}
-
-// activeMediumPlacements returns every ACTIVE placement the artifact has
-// on a storage medium.
-//
-// It is only consulted when there is no active LOCAL placement, which is
-// the ordering FR-31 asks for: local placements keep today's behaviour
-// exactly, and an artifact mid-move that still has its local copy is
-// checked the way it was checked yesterday.
-//
-// It returns all of them rather than the first because "the first one" is
-// an assumption rather than a decision, and FR-31 makes the decision
-// explicitly: an artifact enters QUARANTINED only when no other ACTIVE
-// verified placement remains. Nothing in Phase 1 can put an artifact on
-// two mediums at once, so today this is always a slice of one; the point
-// is that the day something can, the answer is already the right one
-// instead of whichever medium sorted first.
-func activeMediumPlacements(rec state.Record) []state.Placement {
-	var out []state.Placement
-	for _, p := range rec.Placements {
-		if !p.IsLocal() && p.Status == state.PlacementActive {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // checkMediumPlacements runs the automatic ceiling, placement.Existence,
