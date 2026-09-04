@@ -28,4 +28,4 @@
 # Nothing is lost by holding it. #376's fix is entirely in suites/equivalence,
 # and this gate runs Suite A's smoke slice and Suite B, never Suite C.
 TESTS_REPO_URL=https://github.com/spdrman/rclone-manager-tests.git
-TESTS_REPO_SHA=9dfd6e311c4b04852a63708db7e4daf567a9eb3f
+TESTS_REPO_SHA=57ef7b54169b17a3d21e3759c6b6e83d8c0e9c52
