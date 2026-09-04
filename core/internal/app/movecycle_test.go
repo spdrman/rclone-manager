@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -433,5 +436,114 @@ func TestRunCycle_MovesNothingForAnArtifactWhoseLocationIsContested(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(bs.LocalPath, "recent.dump")); err != nil {
 		t.Errorf("the local copy is gone (%v); nothing should have touched it", err)
+	}
+}
+
+// --- FR-32: bucketing invariance, across a move that really happened ---
+
+// renderVerdicts is the canonical rendering the invariance test compares.
+// It covers every field of every verdict, in artifact order, plus FR-19's
+// own result, so a difference anywhere in the decision shows up as a
+// different string rather than as a comparison nobody wrote.
+func renderVerdicts(report RetentionSetReport) string {
+	sorted := append([]retention.GFSVerdict(nil), report.Verdicts...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Artifact.Name < sorted[j].Artifact.Name })
+
+	var b strings.Builder
+	for _, v := range sorted {
+		fmt.Fprintf(&b, "%s keep=%v tiers=%v\n", v.Artifact.Name, v.Keep, v.Tiers)
+		for _, line := range v.SiblingCollisionLines() {
+			fmt.Fprintf(&b, "  ! %s\n", line)
+		}
+	}
+	fmt.Fprintf(&b, "last-known-good: protected=%v artifact=%s reason=%s\n",
+		report.LastKnownGood.Protected, report.LastKnownGood.Artifact, report.LastKnownGood.Reason)
+	return b.String()
+}
+
+// TestBucketingIsInvariantUnderARealMove is FR-32's own sentence, pinned
+// against a move that actually moved bytes: "moving an artifact never
+// changes its retention verdicts, because placements come from the
+// journal and never from the destination."
+//
+// #387 landed the decidable-today form of this, one fixture decided twice,
+// with mediums and without. This is the form that needed #238's engine:
+// decide, MOVE, decide again at the same instant, and require the two
+// renderings to be byte-identical.
+//
+// # The planted violation, and where it has to be planted
+//
+// The spec names it as "rewriting the discovery timestamp from the
+// destination during a move". It cannot be planted inside
+// internal/retention, because placement.TestRetentionReadsNoMediumSupplied
+// Value fails the build if that package so much as mentions a placement or
+// a transport.ObjectInfo, and that scan has a positive control proving it
+// visits the package. What CAN still do it is a caller one layer up
+// deriving an input from a placement before handing it over, which is
+// exactly what this test catches: rewriting DiscoveredAt from the ACTIVE
+// placement's VerifiedAt in RetentionPreview is a one-line, entirely
+// legal-looking change, and it turns this test red.
+func TestBucketingIsInvariantUnderARealMove(t *testing.T) {
+	ctx := context.Background()
+	medium := newCountingMedium()
+	svc, bs, journal := movingService(t, medium, nil)
+
+	// A spread wide enough that the chain has real work to do: something
+	// inside the daily window, something only monthly selects, something
+	// nothing selects, and two in one month so a sibling collision is
+	// decided too.
+	for _, seed := range []struct {
+		name string
+		days int
+	}{
+		{"today.dump", 0},
+		{"yesterday.dump", 1},
+		{"month-old.dump", 40},
+		{"same-month.dump", 44},
+		{"ancient.dump", 800},
+	} {
+		seedMovableArtifact(t, ctx, journal, bs, seed.name, retentionTestNow.AddDate(0, 0, -seed.days))
+	}
+
+	before, err := svc.RetentionPreview(ctx, bs.ID)
+	if err != nil {
+		t.Fatalf("RetentionPreview (before): %v", err)
+	}
+	if len(before.HomePlan.Moves) == 0 {
+		t.Fatal("nothing was going to move, so this test would compare a decision against itself")
+	}
+
+	moves, err := svc.RunHomeMoves(ctx, HomeMovePlans(before.HomePlan))
+	if err != nil {
+		t.Fatalf("RunHomeMoves: %v", err)
+	}
+	if moves.Completed == 0 {
+		t.Fatalf("no move completed (%+v); the invariance below would hold trivially", moves.Outcomes)
+	}
+
+	after, err := svc.RetentionPreview(ctx, bs.ID)
+	if err != nil {
+		t.Fatalf("RetentionPreview (after): %v", err)
+	}
+
+	// The control: the move really did change where things are. Without
+	// it, a build where nothing ever moves passes this test forever.
+	movedName := before.HomePlan.Moves[0].Artifact.Name
+	rec, err := journal.Get(ctx, before.HomePlan.Moves[0].Artifact)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", movedName, err)
+	}
+	onMedium := false
+	for _, p := range rec.Placements {
+		if p.Medium == moveTestMedium && p.Status == state.PlacementActive {
+			onMedium = true
+		}
+	}
+	if !onMedium {
+		t.Fatalf("%s has no ACTIVE placement on %q after a completed move: %+v", movedName, moveTestMedium, rec.Placements)
+	}
+
+	if got, want := renderVerdicts(after), renderVerdicts(before); got != want {
+		t.Errorf("moving %s changed this backup set's retention verdicts.\nbefore:\n%s\nafter:\n%s", movedName, want, got)
 	}
 }
