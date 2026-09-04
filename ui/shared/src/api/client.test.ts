@@ -945,6 +945,73 @@ describe("httpApi requests the paths the contract declares", () => {
     expect(bodyOf(fetchMock)).toEqual({ action: "run_cycle", config_revision: "cfg_7" });
   });
 
+  it("sends every field of a restore, on the same operations route", async () => {
+    const fetchMock = mockFetchOk({
+      operation_id: "op_9",
+      status: "running",
+      action: "restore_placement",
+      restore: {
+        window_days: 14,
+        wait: "AWS publishes a standard restore from DEEP_ARCHIVE as taking up to twelve hours",
+        billing: "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list"
+      }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sub = await httpApi.restoreCopy({
+      artifactId: "nas-a/photos/2026-09-01.tar.gz",
+      medium: "cold-store",
+      windowDays: 14,
+      acknowledged: true,
+      configRevision: "cfg_7"
+    });
+
+    expect(urlOf(fetchMock)).toBe("/api/v1/operations");
+    // Field for field. A client that dropped window_days would still get
+    // a 202 back from a real server and restore somebody's backup for the
+    // default length of time instead of the one they asked for, and a
+    // client that dropped acknowledged would be refused for a reason the
+    // operator has no way to act on.
+    expect(bodyOf(fetchMock)).toEqual({
+      action: "restore_placement",
+      config_revision: "cfg_7",
+      restore: {
+        artifact_id: "nas-a/photos/2026-09-01.tar.gz",
+        medium: "cold-store",
+        window_days: 14,
+        acknowledged: true
+      }
+    });
+    expect(sub.operationId).toBe("op_9");
+    expect(sub.windowDays).toBe(14);
+    expect(sub.wait).toContain("twelve hours");
+    expect(sub.billing).toContain("no price list");
+  });
+
+  it("never reads a percentage or a finishing time out of a restore, whatever the server sends", async () => {
+    // A server that grew a progress reading for a restore would be wrong,
+    // and this client must not become the thing that renders it. There is
+    // nowhere in RestoreSubmission to put one, and this is the assertion
+    // that says so about a response that actually carries some.
+    const fetchMock = mockFetchOk({
+      operation_id: "op_9",
+      status: "running",
+      restore: { window_days: 3, wait: "hours", billing: "billed" },
+      progress: { observed_at: "2026-09-03T00:00:00Z", sequence: 1, stage: "restoring", bytes_total: 100 }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sub = await httpApi.restoreCopy({
+      artifactId: "nas-a/photos/x.tar.gz",
+      medium: "cold-store",
+      windowDays: 3,
+      acknowledged: true,
+      configRevision: "cfg_7"
+    });
+
+    expect(Object.keys(sub).sort()).toEqual(["billing", "operationId", "status", "wait", "windowDays"]);
+  });
+
   it("tests a persisted set by id alone, on the shared test-connection route", async () => {
     const fetchMock = mockFetchOk({ ok: true });
     vi.stubGlobal("fetch", fetchMock);
