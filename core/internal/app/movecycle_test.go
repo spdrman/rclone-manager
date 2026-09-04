@@ -117,6 +117,25 @@ func (m *countingMedium) ListObjects(context.Context, transport.Medium, string) 
 	panic("a move must never enumerate a medium")
 }
 
+// RestoreStatus and InitiateRestore are FR-34's archive pair (#241). The
+// medium these tests stand in for is a plain bucket with no archive tier,
+// so the honest answers are the ones transport.MediumStore's own doc asks
+// of such a medium: "no restore is in play" for an object it holds,
+// NotFound for one it does not, and a refusal to initiate anything.
+func (m *countingMedium) RestoreStatus(_ context.Context, _ transport.Medium, key string) (*transport.RestoreState, error) {
+	if !m.has(key) {
+		return nil, &transport.Error{Category: transport.NotFound, Op: "restore-status", Cause: errors.New("no such key")}
+	}
+	return nil, nil
+}
+
+func (m *countingMedium) InitiateRestore(_ context.Context, _ transport.Medium, _ string, _ int) error {
+	return &transport.Error{
+		Category: transport.UnsupportedCapability, Op: "restore",
+		Cause: errors.New("this medium has no archive tier to restore from"),
+	}
+}
+
 func (m *countingMedium) has(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -249,6 +268,91 @@ func TestRunCycle_MovesTheArtifactTheChainSaysBelongsElsewhere(t *testing.T) {
 	}
 	if medium.deletes != 0 {
 		t.Errorf("a move to %q deleted %d objects FROM it; the only copy a completed move removes is the source, and the source here is a local file", moveTestMedium, medium.deletes)
+	}
+}
+
+// TestRunCycle_LeavesAMovedArtifactCompleteOnTheNextCycle is the cycle
+// AFTER the acceptance line, which nothing in EPIC E phase 2 ever ran.
+//
+// A completed move leaves an artifact with a GONE local placement and an
+// ACTIVE, content-verified placement on the medium. The very next cycle
+// starts with FR-17 reconcile, and reconcile asks "is the local copy
+// still good" of every COMPLETE artifact. The answer for a moved artifact
+// is not "no": its bytes are on the medium, verified, and the local copy
+// is gone BECAUSE the move worked. An artifact whose only copy is on a
+// medium is exactly what #238 says is NOT the "only placement is lost"
+// case that the COMPLETE -> QUARANTINED_LOST edge exists for.
+//
+// The assertion is on the journal state after the second cycle, because
+// QUARANTINED_LOST is outside every GFS scope: an artifact that reaches
+// it is never pruned from the medium by anything, and reinstating it by
+// hand gets it re-quarantined on the cycle after that.
+func TestRunCycle_LeavesAMovedArtifactCompleteOnTheNextCycle(t *testing.T) {
+	ctx := context.Background()
+	medium := newCountingMedium()
+	svc, bs, journal := movingService(t, medium, nil)
+
+	artifact := seedMovableArtifact(t, ctx, journal, bs, "monthly-only.dump", retentionTestNow.AddDate(0, 0, -40))
+
+	first := svc.RunCycle(ctx)
+	if first.Moves.Completed != 1 {
+		t.Fatalf("first cycle: Moves = %+v, want the one planned move to have completed; nothing below means anything without a completed move", first.Moves)
+	}
+
+	// The control: the shape the second cycle is asked about is the one a
+	// completed move really leaves behind, a GONE local placement beside
+	// an ACTIVE, content-verified medium placement, on an artifact that is
+	// still COMPLETE. A fixture that only looked like that would let the
+	// assertion below pass against a reconcile that never saw a moved
+	// artifact.
+	rec, err := journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after the first cycle: %v", err)
+	}
+	if rec.State != string(lifecycle.Complete) {
+		t.Fatalf("after the first cycle %s is %s, want COMPLETE: a completed move must not change the lifecycle state", artifact, rec.State)
+	}
+	var sawGoneLocal, sawActiveMedium bool
+	for _, p := range rec.Placements {
+		switch {
+		case p.IsLocal() && p.Status == state.PlacementGone:
+			sawGoneLocal = true
+		case p.Medium == moveTestMedium && p.Status == state.PlacementActive && p.VerificationClass == state.VerificationContent:
+			sawActiveMedium = true
+		}
+	}
+	if !sawGoneLocal || !sawActiveMedium {
+		t.Fatalf("after the first cycle the placements are %+v, want a GONE local one and an ACTIVE content-verified one on %q", rec.Placements, moveTestMedium)
+	}
+
+	second := svc.RunCycle(ctx)
+
+	rec, err = journal.Get(ctx, artifact)
+	if err != nil {
+		t.Fatalf("Get after the second cycle: %v", err)
+	}
+	if rec.State != string(lifecycle.Complete) {
+		var findings []string
+		for _, set := range second.Sets {
+			for _, f := range set.Reconcile.Findings {
+				if f.Artifact == artifact {
+					findings = append(findings, fmt.Sprintf("%s -> %s: %s", f.From, f.To, f.Reason))
+				}
+			}
+		}
+		t.Fatalf("after the cycle following a completed move, %s is %s, want COMPLETE; its durable copy is on %q, verified, and the local copy is gone because the move worked\nreconcile findings for it: %s",
+			artifact, rec.State, moveTestMedium, strings.Join(findings, "\n\t"))
+	}
+
+	key, err := transport.MediumKey("rclone-manager", artifact)
+	if err != nil {
+		t.Fatalf("MediumKey: %v", err)
+	}
+	if !medium.has(key) {
+		t.Errorf("the medium no longer holds %q after the second cycle", key)
+	}
+	if medium.deletes != 0 {
+		t.Errorf("the second cycle deleted %d objects from %q; a cycle that has nothing to move deletes nothing", medium.deletes, moveTestMedium)
 	}
 }
 

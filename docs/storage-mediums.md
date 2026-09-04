@@ -23,14 +23,30 @@ than no reference at all.
 | Credentials are resolved from a file, an environment variable or a command | Not landed (#235) |
 | Artifacts are recorded as living somewhere, and the recovery manifest says where | Not landed (#236) |
 | Verification classes, and revalidation that knows about mediums | Not landed (#237) |
-| Artifacts actually MOVE between mediums when a tier says so | Not landed (#238) |
+| Artifacts actually MOVE between mediums when a tier says so | Landed, with two limits below |
 | Retention plans, previews and prune understand mediums | Not landed (#239) |
-| The API and the UI show placements, access states and the disclosure | Not landed (#240) |
-| Archive storage classes and the explicit restore operation | Not landed (#241) |
+| The API and the UI show placements, access states and the disclosure | Landed |
+| Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
 
-Until the move engine lands, a config that maps a tier to a medium is a
-declaration the manager validates and does not act on. Nothing is uploaded and
-nothing is deleted.
+Two limits are worth knowing before you write a chain, because both of them
+are the manager refusing to do something rather than doing it badly, and
+both were found by running the whole chain end to end rather than by
+reasoning about it:
+
+- **A tier whose medium names `GLACIER` or `DEEP_ARCHIVE` cannot take
+  delivery of an artifact** (#428). The manager will not delete a local copy
+  against a destination it could not read back, an archived object cannot be
+  read back, and there is no `upload_verification` mode that says "existence
+  is enough". So the move is refused and the artifact stays where it is.
+  Nothing is lost; nothing arrives either.
+- **A chain with two tiers naming two different mediums stalls at the second
+  hop** (#429). Moving an artifact from one medium to another needs a local
+  staging copy, and the engine does not do that yet, so an artifact that
+  ages from a monthly `s3` tier into an annual one stays on the monthly
+  medium. Again the refusal is explicit and nothing is deleted.
+
+A chain with ONE medium tier, which is the common case (daily local, monthly
+offsite), works end to end today.
 
 ## The configuration
 
@@ -182,6 +198,13 @@ MD5, so the product does not treat it as content in any code path.
 `GLACIER` and `DEEP_ARCHIVE` are cheap because reading them is slow and billed.
 The manager tells you what it knows and refuses to invent the rest.
 
+**Read #428 before configuring a tier on one of these.** The vocabulary below
+is real and the restore operation is real, and they apply to a copy that is
+already on an archive class. What does not work yet is getting a copy THERE
+through a tier's `medium` key, because the move would have to delete a local
+copy against a destination nothing can read back. The manager refuses that,
+loudly, and leaves the artifact where it is.
+
 Each placement carries an access state, and the vocabulary is closed:
 
 | State | Means |
@@ -230,8 +253,16 @@ responses apart from fields that are simply new, and the same CLI output. That i
 not a hope, it is a gate: `core/tests/compat` captures all of those surfaces from
 a medium-free deployment and compares them against a checked-in baseline on every
 build, and `scripts/compat/selftest.sh` proves each of those comparisons can
-actually fail. `docs/conformance/epic-e-matrix.md` is the ledger of which parts
-of the EPIC are checked that way today and which are not.
+actually fail.
+
+The other side of it, a deployment that DOES name a medium, has a gate of its
+own: `core/tests/conformance` runs the three-tier chain against a real S3
+endpoint, watches the "at least one verified copy at every instant" rule at
+every event that could break it, and `scripts/conformance/selftest.sh` proves
+that watch can fire. `docs/conformance/epic-e-matrix.md` is the ledger of
+which parts of the EPIC are checked that way today and which are not, and
+the two limits at the top of this page are in it as rows that are
+deliberately not green.
 
 A settings save will not write a `storage_mediums:` or `medium:` key into a
 config that never had one. Downgrading to an older binary after the schema has

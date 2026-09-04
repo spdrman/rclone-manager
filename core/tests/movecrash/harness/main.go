@@ -85,8 +85,12 @@ func run() error {
 	var (
 		journalPath = flag.String("journal", "", "path to the SQLite journal")
 		root        = flag.String("root", "", "the backup set's local_path")
-		bucket      = flag.String("bucket", "", "the directory standing in for the medium's bucket")
+		bucket      = flag.String("bucket", "", "the medium's bucket: a directory for a local_dir medium, a real bucket name for an s3 one")
 		mediumID    = flag.String("medium", "", "the medium id")
+		mediumType  = flag.String("medium-type", string(transport.MediumTypeLocalDir), "the medium's transport type")
+		endpoint    = flag.String("endpoint", "", "the medium's endpoint, for an s3 medium")
+		region      = flag.String("region", "", "the medium's region, for an s3 medium")
+		credentials = flag.String("credentials-file", "", "a shared-credentials file, for an s3 medium")
 		source      = flag.String("source", "", "the backup set's source name")
 		set         = flag.String("set", "", "the backup set's name")
 		artifact    = flag.String("artifact", "", "the artifact's name")
@@ -118,7 +122,19 @@ func run() error {
 		return fmt.Errorf("building the local store: %w", err)
 	}
 
-	medium := transport.Medium{ID: *mediumID, Type: transport.MediumTypeLocalDir, Bucket: *bucket}
+	// The medium is described entirely by flags so the same harness, and
+	// therefore the same crash cells, run against a directory standing in
+	// for a bucket and against a real S3 endpoint. The zero values are
+	// what a local_dir medium wants, so every existing invocation means
+	// exactly what it meant before.
+	medium := transport.Medium{
+		ID:          *mediumID,
+		Type:        transport.MediumType(*mediumType),
+		Bucket:      *bucket,
+		Endpoint:    *endpoint,
+		Region:      *region,
+		Credentials: transport.MediumCredentials{File: *credentials},
+	}
 	adapter := rclone.New()
 
 	g := &invariantGuard{journal: journal, artifact: id}
@@ -263,12 +279,7 @@ func (s *killerStore) UploadFromLocal(ctx context.Context, medium transport.Medi
 		return res, err
 	}
 	if s.corruptAfterCopy {
-		// The object really is there and really is the wrong bytes. This
-		// is the only way to reach that state through a real backend
-		// without a real hostile endpoint, and what it produces on disk is
-		// exactly what one would produce.
-		target := filepath.Join(s.bucket, filepath.FromSlash(key))
-		if werr := os.WriteFile(target, []byte("this endpoint kept something else"), 0o600); werr != nil {
+		if werr := s.corrupt(ctx, medium, key); werr != nil {
 			return res, werr
 		}
 	}
@@ -276,6 +287,37 @@ func (s *killerStore) UploadFromLocal(ctx context.Context, medium transport.Medi
 		selfDestruct("the copy to " + key + " returned, before anything was journaled")
 	}
 	return res, nil
+}
+
+// corrupt replaces what the copy just wrote with something else, which is
+// the only way to reach "the object really is there and really is the
+// wrong bytes" through a real backend without a real hostile endpoint.
+//
+// It has two implementations because the two mediums this harness runs
+// against are reached differently, and neither may go through the manager
+// in a way that would journal the substitution: a directory bucket is
+// written on disk, and a real endpoint is written through a second upload
+// to the same key, which is what an endpoint keeping the wrong bytes looks
+// like from every side the manager can see.
+func (s *killerStore) corrupt(ctx context.Context, medium transport.Medium, key string) error {
+	const wrong = "this endpoint kept something else"
+	if medium.Type == transport.MediumTypeLocalDir {
+		return os.WriteFile(filepath.Join(s.bucket, filepath.FromSlash(key)), []byte(wrong), 0o600)
+	}
+	f, err := os.CreateTemp("", "movecrash-wrong-bytes")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(f.Name()) }()
+	if _, err := f.WriteString(wrong); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	_, err = s.MediumStore.UploadFromLocal(ctx, medium, f.Name(), key, transport.UploadOptions{})
+	return err
 }
 
 func (s *killerStore) DeleteObject(ctx context.Context, medium transport.Medium, key string) error {
