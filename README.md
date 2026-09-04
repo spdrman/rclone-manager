@@ -1125,6 +1125,10 @@ matrix, the SFTP integration suite and the whole `apps/generic/tests/dockercli` 
 call `t.Skip`, `go test` still exits 0, and nothing would reach the ledger. A full run
 refuses to start without a reachable daemon.
 
+Which tests get a container at all is a rule, not a habit: `docs/architecture/test-tiers.md`
+says which tier a test belongs to (unit, integration, or a machine reached through
+`core/tests/machines`), and `core/internal/testtier` holds the tree to it.
+
 Three environment variables change what runs:
 
 | Variable | Effect |
