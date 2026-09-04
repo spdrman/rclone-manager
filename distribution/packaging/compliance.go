@@ -294,12 +294,34 @@ type ComplianceLink struct {
 type DistributionTarget struct {
 	Artifacts     []string `json:"artifacts"`
 	UnbuiltReason string   `json:"unbuiltReason"`
+	// LicenceDelivery is how a recipient of THIS target gets the
+	// licence, the notices and the third-party inventory. Empty is the
+	// same kind of refusal as an unbuilt target with no reason: the
+	// answer was "the image is shared, so probably the image", written
+	// in a note about something else and true of ten targets out of
+	// eleven. See LicenceDeliveryComplaints.
+	LicenceDelivery string `json:"licenceDelivery"`
+}
+
+// LicenceDelivery is what "the image carries them" means, in the form
+// the check can compare against container/Dockerfile.
+//
+// ImagePaths is repository path to in-image path, and it is a
+// declaration that has to agree with what the runtime stage actually
+// COPYs in both directions: a Dockerfile edited without this file is a
+// recipient told to look somewhere the file is not, and this file edited
+// without the Dockerfile is the same sentence from the other end.
+type LicenceDelivery struct {
+	Note       []string          `json:"note"`
+	ImagePaths map[string]string `json:"imagePaths"`
+	Labels     map[string]string `json:"labels"`
 }
 
 // Distribution is every shipping path.
 type Distribution struct {
-	Note    []string                      `json:"note"`
-	Targets map[string]DistributionTarget `json:"targets"`
+	Note            []string                      `json:"note"`
+	LicenceDelivery LicenceDelivery               `json:"licenceDelivery"`
+	Targets         map[string]DistributionTarget `json:"targets"`
 }
 
 // PerformanceMetric is one number the provenance bundle carries forward.

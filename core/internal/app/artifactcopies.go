@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/archive"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -145,7 +146,7 @@ func (s *Service) artifactCopy(p state.Placement, now time.Time) ArtifactCopy {
 	}
 	c.Access = access
 	c.Detail = archive.Describe(access, class, nil)
-	c.CheckableAs = string(archive.Ceiling(access))
+	c.CheckableAs = string(placement.Ceiling(access))
 	if b, err := archive.Of(class); err == nil {
 		c.RetrievalBilled = b.RetrievalBilled
 	}

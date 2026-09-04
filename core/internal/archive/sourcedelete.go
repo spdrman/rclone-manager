@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -49,9 +48,20 @@ type Copy struct {
 // of the right size being present at a key proves nothing whatever about
 // its contents, and a source deleted against it is a source deleted
 // against a file nobody has ever read.
+//
+// The two classes are spelled as internal/state spells them, which is the
+// schema's own spelling, rather than as internal/placement's ladder does.
+// That is deliberate and not a shortcut: this package sits BELOW placement
+// (placement's move engine imports this file to ask before it deletes), so
+// it cannot name the ladder, and internal/state is the one place the
+// strings are constrained. placement's ladder_test.go pins its rungs to
+// the same constants, so the three cannot drift apart.
 func (c Copy) Verified() bool {
-	class := placement.Class(c.Placement.VerificationClass)
-	return class == placement.Content || class == placement.Attested
+	switch c.Placement.VerificationClass {
+	case state.VerificationContent, state.VerificationAttested:
+		return true
+	}
+	return false
 }
 
 // CanStandIn reports whether this copy is a good enough reason to delete a
@@ -79,17 +89,18 @@ func (c Copy) CanStandIn() bool {
 // CheckSourceDelete refuses to delete src unless some OTHER copy of the
 // same artifact can stand in for it.
 //
-// This is the function #238's move engine calls before it issues a source
-// delete, and the function FR-20's prune calls before it removes a copy
-// that retention no longer selects. It is a pure decision over facts the
-// caller has already gathered, so it can be tested for the case that
-// actually loses data without staging a real move against a real bucket.
+// This is the function the move engine calls before it issues a source
+// delete (placement.Engine.guardSourceDelete, its eighth clause), and the
+// function FR-20's prune should call before it removes a copy that
+// retention no longer selects. It is a pure decision over facts the caller
+// has already gathered, so it can be tested for the case that actually
+// loses data without staging a real move against a real bucket.
 //
 // # How it composes with the move engine's own guard, and why only one way
 //
-// #238 has a source-delete guard of its own, and the two are not rivals to
-// be reconciled: this one is a precondition of that one, and the direction
-// is forced rather than chosen.
+// The engine has a source-delete guard of its own, and the two are not
+// rivals to be reconciled: this one is a precondition of that one, and the
+// direction is forced rather than chosen.
 //
 // That guard asks the journal-shaped question, which is whether a
 // destination copy exists and was verified. This one asks whether any
@@ -100,13 +111,16 @@ func (c Copy) CanStandIn() bool {
 // it stays true while the bytes go out of reach. And the composition
 // cannot run the other way round, because this package holds no journal
 // read, so it has nothing to call. The move engine has already loaded the
-// copies; passing them here costs it nothing.
+// copies, and it holds the store that can ask a medium whether a restore
+// is in effect; deriving each copy's access state and passing them here
+// costs it one status probe per archive-class copy.
 //
 // The guard that makes a mover which forgets fail the build rather than
 // pass review is TestNothingDeletesACopyWithoutAskingWhetherAnotherOneIsReadable
-// (composition_test.go). It lives on this side because the caller does not
-// exist in this tree yet, and a rule that only lives in a merged pull
-// request description is a rule the next lane never reads.
+// (composition_test.go). It requires the CALL, not merely an import of
+// this package, because placement imports this package for its
+// verification gate as well, and an import that any use satisfies would
+// stay green with this call deleted.
 //
 // # The data-loss path it closes
 //

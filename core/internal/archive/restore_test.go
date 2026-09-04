@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/config"
-	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
@@ -321,29 +320,19 @@ func TestNothingButSubmitEverInitiatesARestore(t *testing.T) {
 
 	c := archivedCopy()
 
-	// Every derivation.
+	// Every derivation. The verification gate (Ceiling, CheckClass,
+	// AutomaticClass and the gated Verify) used to be swept here too; it
+	// now lives in internal/placement (gate.go), takes a placement.Store,
+	// and placement's TestTheGateCannotInitiateARestore pins that the
+	// Store has no way to start one.
 	for _, s := range States {
 		_ = Describe(s, c.Class, &RestoreState{InProgress: true})
-		_ = Ceiling(s)
-		_ = AutomaticClass(s)
-		_ = CheckClass(s, "content")
 	}
 	for _, class := range Classes() {
 		for _, probe := range []Probe{NotAsked, Answered, DidNotAnswer} {
 			if _, err := Access("cold-store", class, Observation{Probe: probe}, testNow); err != nil {
 				t.Fatalf("Access: %v", err)
 			}
-		}
-	}
-
-	// Every verification, at every class, against an archived copy and
-	// against a restored one.
-	for _, obs := range []Observation{
-		{Probe: Answered},
-		{Probe: Answered, Restore: &RestoreState{ExpiresAt: ptrTime(testNow.Add(time.Hour))}},
-	} {
-		for _, want := range []string{"content", "attested", "existence"} {
-			_, _ = Verify(ctx, store, glacierMedium(), c.Placement, placement.Class(want), obs, testNow)
 		}
 	}
 
