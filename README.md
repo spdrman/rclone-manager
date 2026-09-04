@@ -59,6 +59,7 @@ the way its predecessor did.
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
+| `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
 
 <!-- END CLI-COMMANDS -->
@@ -1228,6 +1229,7 @@ that way by #106/B1.1 so the engine has never heard of a provider or a UI (see
 core/internal/
   alert/         at-most-once operator notifications, delivered through a platform capability
   app/           the presentation-agnostic application service every command and handler calls
+  archive/       what a storage class means for getting bytes back, and the restore that has to be asked for
   artifactstore/ where a committed artifact's bytes live, and the seam that lets that be somewhere else later
   capacity/      disk-space admission checks
   config/        YAML config schema, loading, validation (Load takes any path)

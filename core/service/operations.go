@@ -136,6 +136,16 @@ type Operation struct {
 	Result string
 	Error  string
 
+	// Restore is everything that is true only of a restore operation, and
+	// nil for every other action.
+	//
+	// A nested object that is simply ABSENT rather than a handful of flat
+	// fields nobody else fills in, for the reason Progress's own doc gives
+	// about the same choice: absent and empty are different answers, and a
+	// client must be able to tell them apart without deciding what an
+	// empty string means about somebody's backup.
+	Restore *OperationRestore
+
 	// Progress is the live, ephemeral reading for an operation executing
 	// in THIS process right now, and nil for every other operation:
 	// finished, queued, or left behind "running" by a process that died.
@@ -180,6 +190,54 @@ type CycleOutcome struct {
 	// ArtifactsThrough is how many of those ended the cycle with their
 	// bytes on durable storage.
 	ArtifactsThrough int
+}
+
+// OperationRestore is a restore operation's own facts: what was asked for,
+// which never changes, and where it has actually got to, which is
+// re-derived from the provider on every read (EPIC E, FR-34).
+//
+// # What is not in here, and cannot be added
+//
+// No percentage, no completion time, no price. S3 reports a restore as
+// running or finished and nothing else, so a field for a percentage would
+// be a field somebody eventually fills with a guess; and this deployment
+// holds no price list, no region rates and no idea what the operator
+// negotiated, so an amount would be invented, and people budget against
+// invented numbers.
+type OperationRestore struct {
+	// Artifact is the backup this restore is about, as "source/set/name".
+	Artifact string
+
+	// Medium is the id of the medium holding the copy being restored, and
+	// Class is the storage class that medium writes with.
+	Medium string
+	Class  string
+
+	// WindowDays is how long the restored copy was asked to stay
+	// readable.
+	WindowDays int
+
+	// Access is what can be done with the copy right now, from the
+	// provider's own answer: immediate, requires_restore, restoring, or
+	// unreachable. Empty when the provider could not be asked at all.
+	Access string
+
+	// Detail is the plain-words sentence a surface prints beside Access.
+	Detail string
+
+	// RestoredUntil is when the provider says the restored copy stops
+	// being readable, or nil when it reports none. FR-34: shown when S3
+	// reports it, and nothing invented in its place until then.
+	RestoredUntil *time.Time
+
+	// Wait is the storage class's OWN published restore time, in plain
+	// words. A documented property of the class, never an estimate for
+	// this particular restore.
+	Wait string
+
+	// Billing is the plain statement that a bill exists, with no amount.
+	// Empty for a class the provider does not charge retrieval on.
+	Billing string
 }
 
 // SubmitRunCycle persists a new run_cycle operation and starts executing it
@@ -313,7 +371,17 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 		}
 		return Operation{}, fmt.Errorf("service: get operation: %w", err)
 	}
-	return b.withLiveProgress(toOperation(rec)), nil
+	op := b.withLiveProgress(toOperation(rec))
+	if op.Action == ActionRestorePlacement {
+		// The one action whose real state is not in its own row. A
+		// restore runs at the provider, so this read is what asks the
+		// provider where it got to, and what moves the row to completed
+		// when it says the copy is readable. See deriveRestore, and note
+		// that it is deliberately NOT done by ListOperations: that would
+		// be one round trip per row on a page nobody is watching.
+		op = b.deriveRestore(ctx, op)
+	}
+	return op, nil
 }
 
 // withLiveProgress attaches the in-memory reading for op, if this process
@@ -327,6 +395,17 @@ func (b *BackupService) GetOperation(ctx context.Context, id string) (Operation,
 // to failed anyway). Anything else keeps Progress nil, which the client
 // renders as "no reading available" rather than as zero.
 func (b *BackupService) withLiveProgress(op Operation) Operation {
+	if op.Action == ActionRestorePlacement {
+		// A restore never has progress and never will (EPIC E, FR-34):
+		// S3 reports a restore as running or finished and nothing else,
+		// so there is no percentage to attach, no byte count to attach,
+		// and no finishing time to attach. This refusal is here rather
+		// than left implicit in "nothing registers a reading for it",
+		// because that implicit version is one careless registry write
+		// away from a UI drawing a progress bar over a number nobody
+		// measured.
+		return op
+	}
 	if op.Status != state.OperationRunning {
 		return op
 	}

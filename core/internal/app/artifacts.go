@@ -218,6 +218,13 @@ type ArtifactDetail struct {
 	// FailureReasonAt is when the transition that produced FailureReason
 	// happened. Only meaningful when FailureReason is non-empty.
 	FailureReasonAt time.Time
+
+	// Copies is one entry per durable copy of this artifact, each with
+	// the access state FR-34 defines: whether its bytes can be read right
+	// now, and what it would take if they cannot. It is nil for a record
+	// with no placements, which is what a record built by hand has and
+	// what an artifact that has not yet been transferred has.
+	Copies []ArtifactCopy
 }
 
 // GetArtifactDetail is `backup-manager artifacts <source/backup-set/name>`'s
@@ -252,7 +259,7 @@ func (s *Service) GetArtifactDetail(ctx context.Context, id model.ArtifactID) (A
 	if err != nil {
 		return ArtifactDetail{}, fmt.Errorf("app: artifact detail: %s: %w", id, err)
 	}
-	out := ArtifactDetail{Record: rec}
+	out := ArtifactDetail{Record: rec, Copies: s.artifactCopies(rec, s.now())}
 
 	switch lifecycle.State(rec.State) {
 	case lifecycle.Failed, lifecycle.Quarantined, lifecycle.QuarantinedLost:

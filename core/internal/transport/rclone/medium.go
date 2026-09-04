@@ -173,7 +173,18 @@ func s3Options(medium transport.Medium) (configmap.Simple, error) {
 	return cfg, nil
 }
 
+// mediumFs builds the Fs every method here addresses objects through:
+// rooted at the medium's BUCKET, so a key composed by transport.MediumKey
+// (prefix included) is used verbatim on the other side.
 func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs, error) {
+	return a.mediumFsAt(ctx, medium, medium.Bucket)
+}
+
+// mediumFsAt is mediumFs with the root spelled out, for the one caller
+// that cannot use the bucket root: restore-status is addressed by the Fs
+// root and does not obey filters, so asking it against a bucket-rooted Fs
+// is a full-bucket listing. See RestoreStatus.
+func (a *Adapter) mediumFsAt(ctx context.Context, medium transport.Medium, root string) (fs.Fs, error) {
 	if medium.ID == "" {
 		return nil, transport.NewError(transport.Configuration, "medium_fs", errors.New("medium has no id"))
 	}
@@ -205,7 +216,7 @@ func (a *Adapter) mediumFs(ctx context.Context, medium transport.Medium) (fs.Fs,
 			fmt.Errorf("backend %q is not registered in this binary: %w", backend, err))
 	}
 
-	f, err := info.NewFs(ctx, medium.ID, medium.Bucket, withBackendDefaults(cfg, info))
+	f, err := info.NewFs(ctx, medium.ID, root, withBackendDefaults(cfg, info))
 	if err != nil {
 		// A backend may hand back a LIVE Fs alongside an error, which is
 		// the leak "release on the way out of each operation" cannot

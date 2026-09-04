@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -204,7 +205,8 @@ func (j *Journal) GetOperation(ctx context.Context, operationID string) (Operati
 }
 
 // FailInterruptedOperations transitions every operation still at queued or
-// running to failed, recording finishedAt and reason. This is the startup
+// running to failed, recording finishedAt and reason, EXCEPT those whose
+// action appears in exceptActions. This is the startup
 // sweep core/service.Open calls once, before serving any request: a row
 // still at queued or running when a BackupService is constructed cannot
 // belong to anything this process itself has done (this journal, this
@@ -214,11 +216,34 @@ func (j *Journal) GetOperation(ctx context.Context, operationID string) (Operati
 // out of that state; a client polling GET /api/v1/operations/{id} against
 // it would see "running" forever. Returns the number of rows swept, for a
 // caller that wants to log it.
-func (j *Journal) FailInterruptedOperations(ctx context.Context, finishedAt time.Time, reason string) (int64, error) {
-	res, err := j.db.ExecContext(ctx,
-		`UPDATE operations SET status = ?, finished_at = ?, error = ? WHERE status IN (?, ?)`,
-		OperationFailed, formatTime(finishedAt), reason, OperationQueued, OperationRunning,
-	)
+//
+// # Why there is an exception list at all (EPIC E, FR-34)
+//
+// The reasoning above rests on one assumption: the work an operation
+// describes happens inside the process that submitted it, so a process
+// that died really did abandon it. That is true of run_cycle and it is
+// false of an archive restore, which runs at the storage provider over
+// hours and carries on regardless of what happens here. Sweeping such a
+// row would not be tidying up after a crash, it would be this product
+// writing down a failure that did not happen, about a job somebody else
+// is still doing, that they are still being billed for. So an action
+// whose work is external is named by the caller and left alone, and its
+// real state is re-derived by asking the provider.
+//
+// The exception is a caller-supplied list rather than a constant here on
+// purpose: internal/state does not know what actions exist, in the same
+// way it does not know what parameters mean, and it should not learn.
+func (j *Journal) FailInterruptedOperations(ctx context.Context, finishedAt time.Time, reason string, exceptActions ...string) (int64, error) {
+	query := `UPDATE operations SET status = ?, finished_at = ?, error = ? WHERE status IN (?, ?)`
+	args := []any{OperationFailed, formatTime(finishedAt), reason, OperationQueued, OperationRunning}
+	if len(exceptActions) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(exceptActions)), ", ")
+		query += ` AND action NOT IN (` + placeholders + `)`
+		for _, a := range exceptActions {
+			args = append(args, a)
+		}
+	}
+	res, err := j.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("state: fail interrupted operations: %w", err)
 	}
