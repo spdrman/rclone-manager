@@ -95,6 +95,59 @@ func HomeMedium(chain []config.RetentionTier, v GFSVerdict) (medium string, hasH
 	return "", false, nil
 }
 
+// TierMediumSelects answers FR-30's last question before a source delete:
+// does any tier whose medium is `medium` still select this artifact?
+//
+// It is the other half of the one home-medium derivation, and it lives
+// beside HomeMedium so the two cannot come to read the chain differently.
+// The two rules that make this a policy rather than a lookup are both
+// HomeMedium's own: FR-19's protection names no medium and is skipped, and
+// a verdict naming a tier this chain does not contain is refused rather
+// than read as "then nothing wants it here", which is the permissive
+// reading that ends in a delete.
+//
+// The explanation is returned only with a true answer, and it names the
+// tier and the medium in the config file's own spelling, because the one
+// place it surfaces is a preserved source an operator has to understand.
+//
+// # Why this is not simply "the home is not this medium"
+//
+// FR-30 asks about ANY selecting tier, not about the first one, and the
+// difference is real in a chain an operator wrote coarse to fine, or in
+// one that changed under a move already in flight. If monthly (s3) is
+// first and daily (local) second, an artifact both select has its home on
+// s3 and a local copy that daily still wants. Answering from the home
+// alone would say local is free to delete. So the whole list is walked,
+// and the relationship that must hold, an artifact's own home always
+// selecting it, is pinned by a test rather than assumed here.
+func TierMediumSelects(chain []config.RetentionTier, v GFSVerdict, medium string) (selected bool, why string, err error) {
+	byName := make(map[GFSTier]config.RetentionTier, len(chain))
+	for _, t := range chain {
+		byName[gfsTierName(t.Name)] = t
+	}
+
+	for _, sel := range v.Tiers {
+		if sel.By == GFSSelectedByProtection {
+			// FR-19's term, which names no window and therefore no medium.
+			// Skipped rather than answered, for HomeMedium's reason: a
+			// protected artifact also inside a real tier's window is still
+			// wanted by that tier, and short-circuiting here would lose it.
+			continue
+		}
+		t, ok := byName[sel.Tier]
+		if !ok {
+			return false, "", fmt.Errorf(
+				"retention: the verdict for %s names tier %q, which the chain (%s) does not contain; "+
+					"refusing to guess whether a copy on %q is still wanted rather than reading a name this build did not understand as a no",
+				v.Artifact, sel.Tier, tierNameList(chain), medium)
+		}
+		if t.EffectiveMedium() == medium {
+			return true, fmt.Sprintf("the %s tier selects it (%s) and its medium is %q", t.Name, sel.By, medium), nil
+		}
+	}
+	return false, "", nil
+}
+
 // tierNameList renders a chain's tier names for the refusal above, in
 // chain order, so the message says what WAS available rather than only
 // what was not.

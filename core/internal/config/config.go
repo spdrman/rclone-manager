@@ -58,6 +58,30 @@ type Config struct {
 	// gate rather than an intention.
 	StorageMediums []StorageMedium `yaml:"storage_mediums,omitempty"`
 
+	// MaxMovesPerCycle bounds how many artifacts one retention cycle
+	// relocates between mediums (EPIC E, FR-30). It sits beside
+	// StorageMediums rather than inside Retention for the same reason
+	// StorageMediums does: a bound on machinery is not a policy about
+	// which backups are kept, and moving an artifact never changes a
+	// verdict.
+	//
+	// It is a pointer so that an absent key and an explicitly written
+	// zero are different facts. Absent means "I have not thought about
+	// this", which resolves to DefaultMaxMovesPerCycle; a written zero
+	// means "do nothing", which is a thing an operator can already say by
+	// pointing no tier at a medium, and which spelled here would read as
+	// a working configuration that silently never moves anything. So the
+	// zero is refused in words, and the key is refused outright in a
+	// deployment with no medium to move to (see validateMaxMovesPerCycle).
+	//
+	// omitempty for StorageMediums' round-trip reason: core/service
+	// re-marshals the whole Config on every settings save, and a config
+	// file that never heard of mediums must not come back from one with
+	// this key injected into it, which an older binary then refuses under
+	// Load's KnownFields(true). FR-35 makes that a gate rather than an
+	// intention.
+	MaxMovesPerCycle *int `yaml:"max_moves_per_cycle,omitempty"`
+
 	Alerts        Alerts        `yaml:"alerts"`
 	Capacity      Capacity      `yaml:"capacity,omitempty"`
 	KeyEncryption KeyEncryption `yaml:"key_encryption,omitempty"`
@@ -1221,6 +1245,24 @@ func (r Retention) EffectiveTiers() []RetentionTier {
 // nothing of the sort), so the agreement is pinned by a test instead.
 const MediumLocal = "local"
 
+// DefaultMaxMovesPerCycle is what Config.MaxMovesPerCycle resolves to in
+// a deployment that declares a medium and says nothing about the bound.
+//
+// It is small on purpose. One move copies a whole artifact to a medium and
+// then, under the default upload_verification, downloads it again to
+// re-hash it, so a cycle's worth of moves is bounded egress and bounded
+// wall-clock rather than a number that only matters in the abstract. A
+// backlog drains over consecutive cycles, which is the same shape
+// revalidation's max_per_cycle already has and the same reason it has it:
+// a backlog that all became due at once must not turn into one unbounded
+// sweep.
+//
+// Four rather than one so a small chain reaches steady state in a
+// reasonable number of cycles, and rather than a large number because the
+// cost of a low bound is latency and the cost of a high one is a cycle
+// that will not finish.
+const DefaultMaxMovesPerCycle = 4
+
 // StorageMediumTypeS3 is the one medium type this schema accepts.
 //
 // The set is closed and grows only by a future FR, because a new backend
@@ -1382,6 +1424,33 @@ type StorageMedium struct {
 	// Credentials names where this medium's credentials come from. Exactly
 	// one of its three sources must be set.
 	Credentials MediumCredentials `yaml:"credentials"`
+}
+
+// EffectiveMaxMovesPerCycle is the per-cycle move bound this deployment
+// actually runs under: the number it wrote, or DefaultMaxMovesPerCycle
+// when it declared a medium and wrote none, or zero when it declared no
+// medium at all.
+//
+// Zero is load-bearing rather than a placeholder. placement.Engine.
+// RunCycle treats a non-positive bound as "do nothing at all", the same
+// fail-safe direction revalidate.SelectDue takes for the same field, so a
+// medium-free deployment gets a move engine that never plans anything
+// without the cycle needing a second "are mediums configured" test of its
+// own. That is what keeps FR-35's zero-behavioural-diff claim structural
+// here instead of conditional.
+//
+// An accessor rather than a value Validate fills in, for the reason
+// EffectiveStorageClass's own doc gives: a default written back into the
+// struct is a default frozen into the operator's file by the next settings
+// save.
+func (c *Config) EffectiveMaxMovesPerCycle() int {
+	if len(c.StorageMediums) == 0 {
+		return 0
+	}
+	if c.MaxMovesPerCycle == nil {
+		return DefaultMaxMovesPerCycle
+	}
+	return *c.MaxMovesPerCycle
 }
 
 // EffectiveStorageClass is the storage class this medium writes with:
