@@ -8,6 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/discovery"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/reconcile"
 )
 
@@ -94,6 +95,28 @@ type CycleReport struct {
 	StartedAt time.Time
 	Duration  time.Duration
 	Sets      []BackupSetCycleResult
+
+	// Moves is what FR-30's move engine did with the homes this cycle's
+	// retention passes worked out (EPIC E FR-27/FR-30, issue #239). It is
+	// one report for the whole cycle rather than one per backup set,
+	// because max_moves_per_cycle is a deployment-wide bound and the
+	// engine resumes every non-terminal move in the journal, which is not
+	// a per-set list either. See movecycle.go.
+	//
+	// The zero value is what a deployment with no storage medium gets,
+	// which is every deployment before this EPIC.
+	Moves placement.CycleReport
+
+	// MovesErr is set when this deployment DECLARES a storage medium and
+	// the move pass could not run at all: no way to reach a medium, or a
+	// journal that cannot record a move.
+	//
+	// It is its own field rather than folded into a set's Err because it
+	// belongs to no set: it is a deployment-level misconfiguration, and
+	// attributing it to whichever backup set happened to be first would
+	// send an operator to edit the wrong thing. It never fails the cycle's
+	// backup work, which has already happened by the time it is set.
+	MovesErr error
 }
 
 // RunCycle is FR-1's "one processing cycle": the single piece of business
@@ -186,6 +209,30 @@ sourcesLoop:
 				continue
 			}
 			report.Sets = append(report.Sets, s.processBackupSet(ctx, src, bs))
+		}
+	}
+
+	// FR-30's moves, after every backup set's own pass and before anything
+	// that reads the cycle's state (issue #239). It runs here, once,
+	// rather than inside processBackupSet, because the bound it honours is
+	// a deployment-wide one and the engine resumes moves that are not this
+	// set's; see movecycle.go's own doc for both halves.
+	//
+	// It is deliberately AFTER the retention previews it is driven from:
+	// FR-30's own sentence is "after a retention pass computes each
+	// artifact's home medium, the engine plans moves", and the plans below
+	// are read off the reports those passes already produced rather than
+	// re-derived, so nothing here decides against a journal the cycle has
+	// since changed.
+	if ctx.Err() == nil {
+		var plans []placement.Plan
+		for _, set := range report.Sets {
+			plans = append(plans, homeMovePlans(set.Retention.HomePlan)...)
+		}
+		moves, err := s.runHomeMoves(ctx, plans)
+		report.Moves, report.MovesErr = moves, err
+		if err != nil {
+			s.logger().Error(ctx, "move", err)
 		}
 	}
 

@@ -1,0 +1,382 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/state"
+	"github.com/spdrman/rclone-manager/core/internal/transport"
+)
+
+// The acceptance line #238 handed to #239, recorded on both issues: the
+// move engine driven from the retention cycle, under max_moves_per_cycle,
+// under FR-27's already-given consent.
+//
+// PR #395 landed the engine as a library with three seams behind test
+// doubles and no production caller at all, and one of those seams,
+// TierGuard, treats a nil value as a refusal, so until this file existed
+// the engine physically could not delete a source. These tests are about
+// the WIRING: which plans reach the engine, where they come from, and what
+// bounds them. internal/placement's own suite already proves what the
+// engine does with a plan once it has one.
+
+// --- a medium a test can watch ---
+
+// countingMedium is transport.MediumStore, small enough to read and
+// complete enough to carry a whole move. It is deliberately not a
+// generous fake: an unknown key is a NotFound-classified transport error,
+// never a zero ObjectInfo, because a mover that cannot tell "not there"
+// from "could not ask" deletes a local copy on the strength of a network
+// failure.
+type countingMedium struct {
+	mu      sync.Mutex
+	objects map[string][]byte
+	uploads int
+	deletes int
+}
+
+func newCountingMedium() *countingMedium {
+	return &countingMedium{objects: map[string][]byte{}}
+}
+
+func (m *countingMedium) StatObject(_ context.Context, _ transport.Medium, key string) (transport.ObjectInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.objects[key]
+	if !ok {
+		return transport.ObjectInfo{}, &transport.Error{Category: transport.NotFound, Op: "stat", Cause: errors.New("no such key")}
+	}
+	return transport.ObjectInfo{Key: key, Size: int64(len(b))}, nil
+}
+
+func (m *countingMedium) UploadFromLocal(_ context.Context, _ transport.Medium, localPath, key string, _ transport.UploadOptions) (transport.UploadResult, error) {
+	b, err := os.ReadFile(localPath)
+	if err != nil {
+		return transport.UploadResult{}, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.uploads++
+	m.objects[key] = b
+	return transport.UploadResult{Key: key, BytesUploaded: int64(len(b))}, nil
+}
+
+func (m *countingMedium) OpenObject(_ context.Context, _ transport.Medium, key string) (io.ReadCloser, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.objects[key]
+	if !ok {
+		return nil, &transport.Error{Category: transport.NotFound, Op: "open", Cause: errors.New("no such key")}
+	}
+	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
+}
+
+// ObjectChecksum refuses, exactly as rclone v1.75.0's s3 backend does:
+// Fs.Hashes() returns only MD5, so no full-object SHA-256 attestation is
+// obtainable. Every medium in these tests is therefore a readback medium,
+// which is what a real s3 deployment gets.
+func (m *countingMedium) ObjectChecksum(_ context.Context, _ transport.Medium, _ string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error) {
+	return transport.ChecksumAttestation{}, &transport.Error{
+		Category: transport.UnsupportedCapability, Op: "checksum",
+		Cause: fmt.Errorf("this backend cannot attest a full-object %s", alg),
+	}
+}
+
+func (m *countingMedium) DeleteObject(_ context.Context, _ transport.Medium, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deletes++
+	delete(m.objects, key)
+	return nil
+}
+
+// ListObjects is on transport.MediumStore but deliberately NOT on
+// placement.MediumStore: a move addresses exactly the key it planned, and
+// a mover that can enumerate is a mover that can act on something it did
+// not plan. It is here only because Service.MediumStore holds the wider
+// interface, and it panics rather than returning an empty list, so a
+// change that starts enumerating during a move is loud instead of
+// plausible.
+func (m *countingMedium) ListObjects(context.Context, transport.Medium, string) ([]transport.ObjectInfo, error) {
+	panic("a move must never enumerate a medium")
+}
+
+func (m *countingMedium) has(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.objects[key]
+	return ok
+}
+
+// --- fixtures ---
+
+const moveTestMedium = "cold_offsite"
+
+// moveTestMediums is the storage_mediums block a chain naming
+// moveTestMedium needs to be a real configuration rather than a tier
+// pointing at nothing.
+func moveTestMediums() []config.StorageMedium {
+	return []config.StorageMedium{{
+		ID:     moveTestMedium,
+		Type:   config.StorageMediumTypeS3,
+		Region: "us-east-1",
+		Bucket: "nas-backups",
+		Prefix: "rclone-manager",
+	}}
+}
+
+// seedMovableArtifact writes a real local file and journals it to
+// COMPLETE with the ACTIVE local placement a real ingestion writes
+// (internal/lifecycle.Commit), so the artifact this cycle is asked to move
+// is exactly the shape a live deployment holds.
+func seedMovableArtifact(t *testing.T, ctx context.Context, journal *state.Journal, bs config.BackupSet, name string, at time.Time) model.ArtifactID {
+	t.Helper()
+	artifact, err := model.NewArtifactID(bs.ID, name)
+	if err != nil {
+		t.Fatalf("NewArtifactID(%q): %v", name, err)
+	}
+	path := filepath.Join(bs.LocalPath, name)
+	content := "the bytes of " + name
+	mustWriteFile(t, path, content)
+
+	if _, err := journal.RecordTransition(ctx, state.Transition{
+		Artifact: artifact, Key: "discover-" + name, From: "", To: string(lifecycle.Discovered),
+		OccurredAt: at, RemotePath: "/backups/" + name,
+	}); err != nil {
+		t.Fatalf("RecordTransition(discover %s): %v", name, err)
+	}
+	lp := path
+	size := int64(len(content))
+	// The hash is not decoration. internal/lifecycle.Commit records it on
+	// every local placement it writes, and the move engine refuses to
+	// start a move whose source has none, because a destination copy could
+	// never be content-verified against it. A fixture without one would be
+	// testing a shape ingestion does not produce.
+	sum := sha256.Sum256([]byte(content))
+	hash := hex.EncodeToString(sum[:])
+	if _, err := journal.RecordTransition(ctx, state.Transition{
+		Artifact: artifact, Key: "complete-" + name,
+		From: string(lifecycle.Discovered), To: string(lifecycle.Complete),
+		OccurredAt: at, LocalPath: &lp,
+		Transfer: &state.TransferResult{BytesTransferred: size, Checksummed: true},
+		Placement: &state.PlacementUpdate{
+			Medium: state.MediumLocal, Location: path, Size: &size,
+			Hash: hash, HashAlg: "sha256",
+			VerificationClass: state.VerificationContent, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("RecordTransition(complete %s): %v", name, err)
+	}
+	return artifact
+}
+
+// movingService builds the Service a move cycle runs on: a real journal, a
+// medium it can reach, a chain whose monthly tier is offsite, and the
+// clock every decision is taken at.
+func movingService(t *testing.T, medium transport.MediumStore, bound *int) (*Service, config.BackupSet, *state.Journal) {
+	t.Helper()
+	dir := t.TempDir()
+	journal := openJournal(t)
+	bs := testBackupSet(t, dir)
+	cfg := testConfig(t, testSource("production", bs))
+	cfg.Retention = chainWithOffsiteMonthly()
+	cfg.StorageMediums = moveTestMediums()
+	cfg.MaxMovesPerCycle = bound
+	resolveTestRetention(cfg)
+
+	// A real transport, because these tests drive the REAL RunCycle rather
+	// than the move pass on its own. A cycle whose reconcile step cannot
+	// reach a source stops before it ever computes a retention preview, so
+	// a nil one would make every assertion below pass or fail for a reason
+	// that has nothing to do with moves.
+	svc := New(cfg, journal, newFakeTransport(), nil)
+	svc.MediumStore = medium
+	svc.Now = fixedNow(retentionTestNow)
+	return svc, bs, journal
+}
+
+// --- the tests ---
+
+// TestRunCycle_MovesTheArtifactTheChainSaysBelongsElsewhere is the
+// acceptance line itself. Nothing here asks for a move: the retention pass
+// works out that the monthly tier is the first tier selecting this
+// artifact, the monthly tier's medium is not where the artifact is, and
+// the cycle executes that under the consent the operator already gave by
+// writing the tier.
+func TestRunCycle_MovesTheArtifactTheChainSaysBelongsElsewhere(t *testing.T) {
+	ctx := context.Background()
+	medium := newCountingMedium()
+	svc, bs, journal := movingService(t, medium, nil)
+
+	// 40 days old: past the 7-day daily window, inside the monthly one, so
+	// the first tier that selects it is monthly and its home is offsite.
+	artifact := seedMovableArtifact(t, ctx, journal, bs, "monthly-only.dump", retentionTestNow.AddDate(0, 0, -40))
+
+	report := svc.RunCycle(ctx)
+
+	if report.Moves.Planned != 1 {
+		t.Fatalf("Moves = %+v, want exactly one planned move; the chain says this artifact belongs on %q and it is on local", report.Moves, moveTestMedium)
+	}
+	if report.Moves.Completed != 1 {
+		t.Fatalf("Moves = %+v, want the planned move to have completed", report.Moves)
+	}
+
+	key, err := transport.MediumKey("rclone-manager", artifact)
+	if err != nil {
+		t.Fatalf("MediumKey: %v", err)
+	}
+	if !medium.has(key) {
+		t.Errorf("the medium holds no object at %q after a completed move", key)
+	}
+	if _, err := os.Stat(filepath.Join(bs.LocalPath, "monthly-only.dump")); !os.IsNotExist(err) {
+		t.Errorf("the local copy is still there after a completed move (Stat err = %v); a move is copy, verify, THEN delete the source", err)
+	}
+}
+
+// TestRunCycle_MovesNothingInADeploymentWithNoMedium is the fail-safe, and
+// it is the whole of FR-35's compatibility claim for this feature: a
+// deployment that declares no storage medium runs exactly as it did
+// before EPIC E.
+//
+// It asserts the consequence rather than the control: not that some flag
+// is off, but that the engine planned nothing and the local file is
+// untouched.
+func TestRunCycle_MovesNothingInADeploymentWithNoMedium(t *testing.T) {
+	ctx := context.Background()
+	medium := newCountingMedium()
+	svc, bs, journal := movingService(t, medium, nil)
+	svc.Config.StorageMediums = nil
+	// The chain still has to be one a medium-free deployment could write,
+	// so the monthly tier loses its medium too. A tier naming a medium
+	// that is not declared is a configuration config.Validate refuses.
+	svc.Config.Retention = testRetention()
+	resolveTestRetention(svc.Config)
+
+	seedMovableArtifact(t, ctx, journal, bs, "monthly-only.dump", retentionTestNow.AddDate(0, 0, -40))
+
+	report := svc.RunCycle(ctx)
+
+	if report.Moves.Planned != 0 || report.Moves.Resumed != 0 {
+		t.Errorf("Moves = %+v, want nothing at all in a deployment with no storage medium", report.Moves)
+	}
+	if medium.uploads != 0 {
+		t.Errorf("%d uploads reached a medium this deployment does not declare", medium.uploads)
+	}
+	if _, err := os.Stat(filepath.Join(bs.LocalPath, "monthly-only.dump")); err != nil {
+		t.Errorf("the local copy is gone (%v) in a deployment that moves nothing", err)
+	}
+}
+
+// TestRunCycle_HonoursMaxMovesPerCycle is FR-30's per-cycle bound, read
+// off the configuration key rather than off a struct field nothing sets.
+//
+// Three artifacts want to move and the bound is one, so exactly one moves
+// and two local files survive the cycle. The surviving count is the
+// assertion that matters: a bound that was read but not applied still
+// reports Planned == 1 if the engine happens to stop early for another
+// reason.
+func TestRunCycle_HonoursMaxMovesPerCycle(t *testing.T) {
+	ctx := context.Background()
+	medium := newCountingMedium()
+	one := 1
+	svc, bs, journal := movingService(t, medium, &one)
+
+	for _, name := range []string{"a.dump", "b.dump", "c.dump"} {
+		seedMovableArtifact(t, ctx, journal, bs, name, retentionTestNow.AddDate(0, 0, -40))
+	}
+
+	report := svc.RunCycle(ctx)
+
+	if report.Moves.Planned != 1 {
+		t.Fatalf("Moves = %+v, want exactly one planned move under max_moves_per_cycle = 1", report.Moves)
+	}
+	survivors := 0
+	for _, name := range []string{"a.dump", "b.dump", "c.dump"} {
+		if _, err := os.Stat(filepath.Join(bs.LocalPath, name)); err == nil {
+			survivors++
+		}
+	}
+	if survivors != 2 {
+		t.Errorf("%d of the three local copies survived the cycle, want 2: a bound that is read but not applied moves all three", survivors)
+	}
+	if medium.uploads != 1 {
+		t.Errorf("%d uploads reached the medium, want 1", medium.uploads)
+	}
+}
+
+// TestRunCycle_RefusesToMoveWithNoWayToReachAMedium is the other
+// fail-safe, and it is the direction that costs nothing to get right and a
+// backup to get wrong. A deployment that DECLARES a medium and has no
+// store to reach it with is misconfigured, and the answer is a refusal
+// that says so, never a quiet cycle that looks like a deployment with
+// nothing to move.
+func TestRunCycle_RefusesToMoveWithNoWayToReachAMedium(t *testing.T) {
+	ctx := context.Background()
+	svc, bs, journal := movingService(t, nil, nil)
+	svc.MediumStore = nil
+
+	seedMovableArtifact(t, ctx, journal, bs, "monthly-only.dump", retentionTestNow.AddDate(0, 0, -40))
+
+	report := svc.RunCycle(ctx)
+
+	if report.MovesErr == nil {
+		t.Fatalf("a cycle with a declared medium and no medium store reported no error; Moves = %+v", report.Moves)
+	}
+	if report.Moves.Planned != 0 {
+		t.Errorf("Moves = %+v, want nothing planned", report.Moves)
+	}
+	if _, err := os.Stat(filepath.Join(bs.LocalPath, "monthly-only.dump")); err != nil {
+		t.Errorf("the local copy is gone (%v) after a cycle that could not reach a medium at all", err)
+	}
+}
+
+// TestRunCycle_MovesNothingForAnArtifactWhoseLocationIsContested is FR-27
+// consent's other edge, at the level that executes rather than the level
+// that plans. Two ACTIVE placements is a move already in flight, so "where
+// is this" has two answers, and a second move planned on top of one
+// already running is the race FR-30's journal exists to make
+// unrepresentable.
+func TestRunCycle_MovesNothingForAnArtifactWhoseLocationIsContested(t *testing.T) {
+	ctx := context.Background()
+	medium := newCountingMedium()
+	svc, bs, journal := movingService(t, medium, nil)
+
+	artifact := seedMovableArtifact(t, ctx, journal, bs, "monthly-only.dump", retentionTestNow.AddDate(0, 0, -40))
+	size := int64(1)
+	if _, err := journal.RecordTransition(ctx, state.Transition{
+		Artifact: artifact, Key: "second-placement",
+		From: string(lifecycle.Complete), To: string(lifecycle.Complete),
+		OccurredAt: retentionTestNow,
+		Placement: &state.PlacementUpdate{
+			Medium: moveTestMedium, Location: "artifacts/monthly-only.dump", Size: &size,
+			VerificationClass: state.VerificationExistence, Status: state.PlacementActive,
+		},
+	}); err != nil {
+		t.Fatalf("RecordTransition(second placement): %v", err)
+	}
+
+	report := svc.RunCycle(ctx)
+
+	if report.Moves.Planned != 0 {
+		t.Errorf("Moves = %+v, want nothing planned for an artifact whose location cannot be confirmed", report.Moves)
+	}
+	if medium.uploads != 0 {
+		t.Errorf("%d uploads were started for an artifact with a move already in flight", medium.uploads)
+	}
+	if _, err := os.Stat(filepath.Join(bs.LocalPath, "monthly-only.dump")); err != nil {
+		t.Errorf("the local copy is gone (%v); nothing should have touched it", err)
+	}
+}

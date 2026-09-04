@@ -44,6 +44,26 @@ func TestOnlyTheMoveEngineDeletesFromAMedium(t *testing.T) {
 		// tests hold that line; this entry only records that the line
 		// moved here and nowhere else.
 		filepath.Join("internal", "placement", "engine.go"): true,
+		// FR-20's prune, once the copy being pruned is an object rather
+		// than a file (#239). It is a second deletion, and it is
+		// deliberately not a second PACKAGE: the claim this test makes is
+		// still exhaustive, and it is still "internal/placement is the
+		// only production code that removes a copy of a backup from a
+		// medium".
+		//
+		// It is here rather than folded into engine.go because it answers
+		// a different question. The engine deletes a source BECAUSE it
+		// just proved another copy exists; this deletes the last copy
+		// BECAUSE no tier wants it any more, and its proof is FR-16's
+		// identity re-check rather than a verified destination. Two
+		// different proofs is exactly why they are two files with two
+		// suites, and reclaim.go's own file comment spells out the
+		// distinction the next reader will need.
+		//
+		// internal/retention decides the deletion and cannot reach this:
+		// it holds a MediumPruner interface and never a transport type,
+		// which is FR-32 held structurally rather than by this list.
+		filepath.Join("internal", "placement", "reclaim.go"): true,
 		// The move-crash harness is test support that does not carry a
 		// _test.go suffix, for the contract suite's reason: it has to be
 		// a separate main package so the suite can kill it. It only
