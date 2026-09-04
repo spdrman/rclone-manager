@@ -1008,7 +1008,13 @@ function fromWireOperation(op: WireOperation): Operation {
       ? {
           backupSetsProcessed: op.cycle.backup_sets_processed,
           artifactsWalked: op.cycle.artifacts_walked,
-          artifactsThrough: op.cycle.artifacts_through
+          artifactsThrough: op.cycle.artifacts_through,
+          // Absent stays absent. The service omits this pair for a cycle
+          // whose recorded summary predates it, and filling in zeroes
+          // here would turn "nobody wrote it down" into "nothing moved".
+          moves: op.cycle.moves
+            ? { attempted: op.cycle.moves.attempted, landed: op.cycle.moves.landed }
+            : null
         }
       : null
   };

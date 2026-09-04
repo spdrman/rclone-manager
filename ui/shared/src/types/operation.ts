@@ -140,6 +140,45 @@ export interface CycleOutcome {
   artifactsWalked: number;
   /** How many of those ended it with their bytes on durable storage. */
   artifactsThrough: number;
+  /**
+   * What the cycle's move pass got done, or null when the recorded
+   * summary does not carry it.
+   *
+   * Null is not a pair of zeroes, and the distinction is the same one
+   * `cycle` itself draws one level up: a cycle recorded by a build that
+   * did not write these counts has not moved nothing, it has not said.
+   * A renderer that drew zeroes for it would report the worst outcome it
+   * can express about a cycle nobody measured.
+   */
+  moves: CycleMoveOutcome | null;
+}
+
+/**
+ * What a cycle's move pass got done.
+ *
+ * A retention tier with a `medium` says where those backups belong. A
+ * deployment where every move is refused, which is what one unset
+ * credential produces, completes a cycle that backed everything up and
+ * left every artifact somewhere else. Without these two numbers that
+ * cycle is indistinguishable from a perfect one on every surface.
+ *
+ * There is no reason string, and there is not going to be one: the
+ * engine's own refusal sentence is assembled out of transport errors
+ * about an endpoint, a bucket and a credential reference, so FR-33 keeps
+ * it off this boundary. It reaches an operator on a terminal and in the
+ * event stream instead.
+ */
+export interface CycleMoveOutcome {
+  /**
+   * How many artifacts the move pass took up: a move it resumed, a move
+   * it planned, or a plan it refused outright.
+   */
+  attempted: number;
+  /**
+   * How many of those reached their home medium with the source gone,
+   * which is the only outcome that is a move.
+   */
+  landed: number;
 }
 
 /**
