@@ -141,9 +141,21 @@ fi
 #
 # A SHA comparison could never have answered the bytes half anyway. The
 # release cut necessarily adds a commit on top of the build it describes,
-# and .dockerignore excludes container/, provenance/, docs/, .github/ and
-# every *.md from the build context, so that commit provably cannot
-# change the image. Only a rebuild can say whether some other commit did.
+# and .dockerignore excludes container/, docs/, .github/, every *.md and
+# all of provenance/ but one file from the build context, so that commit
+# provably cannot change the image. Only a rebuild can say whether some
+# other commit did.
+#
+# The one exception is provenance/third-party-licenses.json, which the
+# runtime stage COPYs to /licenses so an image-only recipient can reach
+# the inventory LICENSE and NOTICE point at (#407). It does not weaken
+# the sentence above: that file is derived from the Go module graph and
+# ui/shared's lockfile, and a release cut changes neither, so it comes
+# out of `go run ./cmd/provenance -write` byte-identical. The rest of
+# provenance/ stays excluded, release-provenance.json and checksums.txt
+# among them, and those two do change on a cut, which is why the
+# exception in .dockerignore names one file rather than opening the
+# directory.
 manifest_commit="$(json_string "$MANIFEST" commit)"
 head_commit="$(git rev-parse HEAD)"
 if [ -z "$manifest_commit" ]; then
