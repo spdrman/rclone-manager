@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 )
 
@@ -152,12 +153,59 @@ func cmdRetention(args []string) int {
 			}
 		}
 		fmt.Printf("  last-known-good: %s\n", r.LastKnownGood.Reason)
+		printPlacementPlan(cfg, r)
 	}
 
 	if !*dryRun {
 		fmt.Println("\nnote: local deletion (FR-20) is not implemented anywhere in this codebase yet (issue #21 is open); this is a preview only, identical to --dry-run.")
 	}
 	return 0
+}
+
+// printPlacementPlan is FR-27's half of the mandatory dry-run (EPIC E,
+// issue #239): every artifact this pass would MOVE, and where to, before
+// a cycle carries it there.
+//
+// # It prints nothing in a deployment with no storage medium
+//
+// That is a compatibility decision with a reason outside this repository.
+// This command's output is pinned by the black-box contract suite in
+// spdrman/rclone-manager-tests (suites/cli/cases/retention/), and every
+// case there is a medium-free deployment; adding a line to those means
+// moving them in lockstep with this change, across two repositories. It
+// is also the honest answer: a deployment with exactly one place to put
+// anything has nothing to say about placement, and the "could not confirm
+// where this is" line in particular would fire for every artifact whose
+// journal row predates FR-29's placement table while meaning nothing,
+// because there is nowhere else it could be.
+//
+// The same asymmetry the RetentionIsOverride line above already uses, for
+// the same reason, and with the same real limitation: absence is the only
+// signal for the common case.
+func printPlacementPlan(cfg *config.Config, r app.RetentionSetReport) {
+	if len(cfg.StorageMediums) == 0 {
+		return
+	}
+	plan := r.HomePlan
+	if len(plan.Moves) == 0 && len(plan.Unconfirmed) == 0 {
+		return
+	}
+	fmt.Println("  placement:")
+	for _, m := range plan.Moves {
+		// The same column shape as the verdict lines above, so the two
+		// read as one table rather than as a report with an appendix.
+		fmt.Printf("    %-6s %-40s %s -> %s\n", "MOVE", m.Artifact.Name, m.From, m.To)
+	}
+	for _, a := range plan.Unconfirmed {
+		// Deliberately its own line rather than a MOVE with a blank
+		// source. "I could not confirm where this is" and "this is
+		// already where it belongs" produce the same silence otherwise,
+		// and they are different facts: one of them is a move already in
+		// flight, and the other is a journal row with no placement at
+		// all. Neither is moved, and an operator acts differently on
+		// each.
+		fmt.Printf("    %-6s %-40s nothing could confirm where its durable copy is, so it stays put\n", "?", a.Name)
+	}
 }
 
 // retentionPolicySummary renders a resolved policy as one line: the chain
