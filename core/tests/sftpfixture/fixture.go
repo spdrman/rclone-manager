@@ -233,12 +233,43 @@ type Fixture struct {
 	teardownOnce sync.Once
 }
 
+// Options is how core/tests/machines places this fixture on a network
+// (issue #447). The zero value is what Start has always done: no network,
+// a port published on 127.0.0.1, the default image.
+type Options struct {
+	// Network, when set, is a docker network the container joins.
+	Network string
+	// Alias is the name the container answers to on Network.
+	Alias string
+	// InNetwork says the test process is itself a container on Network,
+	// so the server is reached by Alias on port 22 and no host port is
+	// published. Only a driver that put the process there should set it.
+	InNetwork bool
+	// Image overrides the server image. The machines package uses it for
+	// a build of the same image with iptables in it.
+	Image string
+	// RunArgs are spliced into `docker run` before the image, for a
+	// capability like --cap-add NET_ADMIN.
+	RunArgs []string
+}
+
 // Start launches a disposable SFTP server for the duration of the calling
 // test and registers cleanup. It skips (rather than fails) the test when the
 // required external tools are unavailable, since this fixture is evidence
 // for the embedding gate, not a requirement on every developer machine.
 func Start(t *testing.T) *Fixture {
 	t.Helper()
+	return StartWith(t, Options{})
+}
+
+// StartWith is Start with a placement. New tests should not call either
+// directly: core/tests/machines is the one entry point to a machine, and
+// this package is on its way into it (#450).
+func StartWith(t *testing.T, opts Options) *Fixture {
+	t.Helper()
+	if opts.InNetwork && (opts.Network == "" || opts.Alias == "") {
+		t.Fatalf("sftpfixture: Options.InNetwork needs both Network and Alias, because the server is reached by its alias on that network")
+	}
 
 	// The fixture exists, its cleanup is registered and its watchdog is
 	// running before anything can block. Every step below shells out to
@@ -248,6 +279,10 @@ func Start(t *testing.T) *Fixture {
 		Host: "127.0.0.1",
 		User: User,
 		done: make(chan struct{}),
+	}
+	if opts.InNetwork {
+		f.Host = opts.Alias
+		f.Port = 22
 	}
 	f.ctx, f.cancel = context.WithCancelCause(context.Background())
 	f.setStage("looking for docker, ssh-keygen and ssh-keyscan")
@@ -318,7 +353,11 @@ func Start(t *testing.T) *Fixture {
 	// quiet run has nothing to accidentally mix into the container ID even
 	// if some future docker version starts writing something else to
 	// stdout during "run".
-	f.ensureImage(t, serverImage)
+	image := serverImage
+	if opts.Image != "" {
+		image = opts.Image
+	}
+	f.ensureImage(t, image)
 
 	name := fmt.Sprintf("rclone-manager-gate-sftp-%d", time.Now().UnixNano())
 	f.mu.Lock()
@@ -328,17 +367,30 @@ func Start(t *testing.T) *Fixture {
 	args := []string{
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
-		"-p", "127.0.0.1::22",
-		"-v", hostKeyEd25519 + ":/etc/ssh/ssh_host_ed25519_key:ro",
-		"-v", hostKeyEd25519 + ".pub:/etc/ssh/ssh_host_ed25519_key.pub:ro",
-		"-v", hostKeyRSA + ":/etc/ssh/ssh_host_rsa_key:ro",
-		"-v", hostKeyRSA + ".pub:/etc/ssh/ssh_host_rsa_key.pub:ro",
-		"-v", authorizedDir + ":/home/" + User + "/.ssh/keys:ro",
-		"-v", uploadDir + ":/home/" + User + "/upload",
-		serverImage,
-		User + "::" + containerUID + ":" + containerUID + ":upload",
 	}
-	f.setStage("docker run " + serverImage)
+	if opts.Network != "" {
+		args = append(args, "--network", opts.Network)
+		if opts.Alias != "" {
+			args = append(args, "--network-alias", opts.Alias)
+		}
+	}
+	// A published port is how a host process reaches the server. Inside
+	// the network there is nothing to publish: the alias is the address.
+	if !opts.InNetwork {
+		args = append(args, "-p", "127.0.0.1::22")
+	}
+	args = append(args, opts.RunArgs...)
+	args = append(args,
+		"-v", hostKeyEd25519+":/etc/ssh/ssh_host_ed25519_key:ro",
+		"-v", hostKeyEd25519+".pub:/etc/ssh/ssh_host_ed25519_key.pub:ro",
+		"-v", hostKeyRSA+":/etc/ssh/ssh_host_rsa_key:ro",
+		"-v", hostKeyRSA+".pub:/etc/ssh/ssh_host_rsa_key.pub:ro",
+		"-v", authorizedDir+":/home/"+User+"/.ssh/keys:ro",
+		"-v", uploadDir+":/home/"+User+"/upload",
+		image,
+		User+"::"+containerUID+":"+containerUID+":upload",
+	)
+	f.setStage("docker run " + image)
 	containerID, err := dockerCapture(t, dockerRunTimeout, args...)
 	if err != nil {
 		t.Fatalf("sftpfixture: docker run: %v", err)
@@ -350,17 +402,19 @@ func Start(t *testing.T) *Fixture {
 	f.containerID = containerID
 	f.mu.Unlock()
 
-	f.setStage("waiting for the container to publish its ssh port")
-	f.Port = waitForPublishedPort(t, containerID)
+	if !opts.InNetwork {
+		f.setStage("waiting for the container to publish its ssh port")
+		f.Port = waitForPublishedPort(t, containerID)
+	}
 
 	f.setStage("ssh-keyscan for the container host keys")
 	f.KnownHostsFile = filepath.Join(runDir, "known_hosts")
-	keyscan(t, f.Port, f.KnownHostsFile)
+	keyscan(t, f.Host, f.Port, f.KnownHostsFile)
 
 	decoyKey := filepath.Join(runDir, "decoy_ed25519")
 	keygen(t, decoyKey)
 	f.BadKnownHostsFile = filepath.Join(runDir, "known_hosts_bad")
-	writeSubstituteKnownHosts(t, f.BadKnownHostsFile, f.Port, decoyKey+".pub")
+	writeSubstituteKnownHosts(t, f.BadKnownHostsFile, f.Host, f.Port, decoyKey+".pub")
 
 	f.setStage("waiting for sshd to accept a real session")
 	waitForSSHReady(t, f)
@@ -948,7 +1002,7 @@ func waitForPublishedPort(t *testing.T, containerID string) int {
 // backend uses) negotiates a host-key algorithm using its own preference
 // order, not whichever type is in known_hosts, so it can end up asking the
 // server for a key type that was never captured.
-func keyscan(t *testing.T, port int, outPath string) {
+func keyscan(t *testing.T, host string, port int, outPath string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	var lastOut []byte
@@ -956,7 +1010,7 @@ func keyscan(t *testing.T, port int, outPath string) {
 	for time.Now().Before(deadline) {
 		var buf bytes.Buffer
 		attempt, cancelAttempt := context.WithTimeout(context.Background(), keyscanTimeout)
-		cmd := exec.CommandContext(attempt, "ssh-keyscan", "-p", strconv.Itoa(port), "-t", "rsa,ed25519", "127.0.0.1")
+		cmd := exec.CommandContext(attempt, "ssh-keyscan", "-p", strconv.Itoa(port), "-t", "rsa,ed25519", host)
 		cmd.Stdout = &buf
 		lastErr = cmd.Run()
 		cancelAttempt()
@@ -973,7 +1027,7 @@ func keyscan(t *testing.T, port int, outPath string) {
 // writeSubstituteKnownHosts writes a known_hosts entry for host:port using a
 // key that is NOT the container's real host key, so tests can prove the
 // adapter refuses an impostor rather than only proving it accepts the truth.
-func writeSubstituteKnownHosts(t *testing.T, outPath string, port int, pubKeyPath string) {
+func writeSubstituteKnownHosts(t *testing.T, outPath string, host string, port int, pubKeyPath string) {
 	t.Helper()
 	pub, err := os.ReadFile(pubKeyPath)
 	must(t, err, "read decoy pub key")
@@ -981,7 +1035,15 @@ func writeSubstituteKnownHosts(t *testing.T, outPath string, port int, pubKeyPat
 	if len(fields) < 2 {
 		t.Fatalf("sftpfixture: unexpected pub key format: %q", pub)
 	}
-	line := fmt.Sprintf("[127.0.0.1]:%d %s %s\n", port, fields[0], fields[1])
+	// ssh-keyscan writes a bare host for port 22 and [host]:port otherwise,
+	// and known_hosts matching follows the same rule, so the decoy has to
+	// too or it would never be consulted and the negative test would pass
+	// for the wrong reason.
+	hostField := host
+	if port != 22 {
+		hostField = fmt.Sprintf("[%s]:%d", host, port)
+	}
+	line := fmt.Sprintf("%s %s %s\n", hostField, fields[0], fields[1])
 	must(t, os.WriteFile(outPath, []byte(line), 0o644), "write bad known_hosts")
 }
 

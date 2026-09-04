@@ -74,6 +74,20 @@ type Fixture struct {
 	containerID string
 }
 
+// Options is how core/tests/machines places this fixture on a network
+// (issue #447). The zero value is what Start has always done: no network,
+// a port published on 127.0.0.1.
+type Options struct {
+	// Network, when set, is a docker network the container joins.
+	Network string
+	// Alias is the name the container answers to on Network.
+	Alias string
+	// InNetwork says the test process is itself a container on Network,
+	// so the server is reached by Alias on port 9000 and no host port is
+	// published.
+	InNetwork bool
+}
+
 // Start brings up a MinIO server with one empty bucket and returns once it
 // answers its own liveness endpoint.
 //
@@ -83,6 +97,16 @@ type Fixture struct {
 // suite from the gate, which is the exact failure #160 exists to stop.
 func Start(t *testing.T) *Fixture {
 	t.Helper()
+	return StartWith(t, Options{})
+}
+
+// StartWith is Start with a placement. New tests should reach a medium
+// through core/tests/machines rather than calling this directly.
+func StartWith(t *testing.T, opts Options) *Fixture {
+	t.Helper()
+	if opts.InNetwork && (opts.Network == "" || opts.Alias == "") {
+		t.Fatalf("miniofixture: Options.InNetwork needs both Network and Alias, because the server is reached by its alias on that network")
+	}
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("miniofixture: SKIPPING (missing capability: %q not found on PATH): %v", "docker", err)
@@ -98,8 +122,15 @@ func Start(t *testing.T) *Fixture {
 	// adding one more.
 	dockerlease.Sweep()
 
-	if _, errOut, err := dockerRun(pullTimeout, "pull", "--quiet", serverImage); err != nil {
-		t.Fatalf("miniofixture: docker pull %s: %v\n%s", serverImage, err, errOut)
+	// Ask the daemon first and pull only when the image is missing, which
+	// is sftpfixture.ensureImage's shape (#243): a gate that reaches a
+	// registry on every run fails on network weather that has nothing to
+	// do with the change under test. A missing image that cannot be
+	// pulled stays a failure, never a skip.
+	if _, _, err := dockerRun(dockerExecTimeout, "image", "inspect", serverImage); err != nil {
+		if _, errOut, err := dockerRun(pullTimeout, "pull", "--quiet", serverImage); err != nil {
+			t.Fatalf("miniofixture: %s is not on this daemon and could not be pulled, so this suite cannot run here. That is a FAILURE and deliberately not a skip (#160): %v\n%s", serverImage, err, errOut)
+		}
 	}
 
 	f := &Fixture{
@@ -110,14 +141,25 @@ func Start(t *testing.T) *Fixture {
 	}
 
 	name := fmt.Sprintf("rclone-manager-gate-minio-%d", time.Now().UnixNano())
-	stdout, errOut, err := dockerRun(dockerRunTimeout,
+	args := []string{
 		"run", "-d", "--name", name,
 		dockerlease.LabelFlag, dockerlease.LabelSpec,
-		"-p", "127.0.0.1::9000",
+	}
+	if opts.Network != "" {
+		args = append(args, "--network", opts.Network)
+		if opts.Alias != "" {
+			args = append(args, "--network-alias", opts.Alias)
+		}
+	}
+	if !opts.InNetwork {
+		args = append(args, "-p", "127.0.0.1::9000")
+	}
+	args = append(args,
 		"-e", "MINIO_ROOT_USER="+f.AccessKeyID,
 		"-e", "MINIO_ROOT_PASSWORD="+f.SecretAccessKey,
 		serverImage, "server", "/data",
 	)
+	stdout, errOut, err := dockerRun(dockerRunTimeout, args...)
 	if err != nil {
 		t.Fatalf("miniofixture: docker run: %v\n%s", err, errOut)
 	}
@@ -126,18 +168,22 @@ func Start(t *testing.T) *Fixture {
 		_, _, _ = dockerRun(dockerExecTimeout, "rm", "-f", f.containerID)
 	})
 
-	port, _, err := dockerRun(dockerExecTimeout, "port", f.containerID, "9000/tcp")
-	if err != nil {
-		t.Fatalf("miniofixture: docker port: %v", err)
+	if opts.InNetwork {
+		f.Endpoint = "http://" + opts.Alias + ":9000"
+	} else {
+		port, _, err := dockerRun(dockerExecTimeout, "port", f.containerID, "9000/tcp")
+		if err != nil {
+			t.Fatalf("miniofixture: docker port: %v", err)
+		}
+		hostPort := strings.TrimSpace(port)
+		if i := strings.LastIndex(hostPort, ":"); i >= 0 {
+			hostPort = hostPort[i+1:]
+		}
+		if idx := strings.IndexAny(hostPort, " \n\r"); idx >= 0 {
+			hostPort = hostPort[:idx]
+		}
+		f.Endpoint = "http://127.0.0.1:" + hostPort
 	}
-	hostPort := strings.TrimSpace(port)
-	if i := strings.LastIndex(hostPort, ":"); i >= 0 {
-		hostPort = hostPort[i+1:]
-	}
-	if idx := strings.IndexAny(hostPort, " \n\r"); idx >= 0 {
-		hostPort = hostPort[:idx]
-	}
-	f.Endpoint = "http://127.0.0.1:" + hostPort
 
 	waitUntilLive(t, f)
 

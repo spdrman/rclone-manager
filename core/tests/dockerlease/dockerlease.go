@@ -65,7 +65,50 @@ const (
 	LabelSpec = LabelKey + "=" + LabelValue
 )
 
-var once sync.Once
+var (
+	once         sync.Once
+	networksOnce sync.Once
+)
+
+// SweepNetworks is Sweep for the networks core/tests/machines creates
+// (issue #447): labelled the same way, swept on the way in for the same
+// reason, because a killed run leaves its network behind exactly as it
+// leaves its containers. A network that still has an endpoint on it cannot
+// be removed and is left alone; the container sweep frees it for the next
+// run.
+func SweepNetworks() {
+	networksOnce.Do(func() { sweepNetworksOlderThan(time.Now().Add(-StaleAfter)) })
+}
+
+func sweepNetworksOlderThan(cutoff time.Time) {
+	out, err := run("network", "ls", "-q", "--filter", "label="+LabelKey+"="+LabelValue)
+	if err != nil {
+		return
+	}
+	ids := strings.Fields(out)
+	if len(ids) == 0 {
+		return
+	}
+	// `{{json .Created}}` rather than `{{.Created}}`: a network's Created
+	// is a time.Time on docker's side, and the bare template prints Go's
+	// own String() form, which is not what time.Parse below reads. The
+	// JSON form is RFC 3339, the same shape the container sweep parses.
+	out, _ = run(append([]string{"network", "inspect", "--format", "{{.Id}} {{json .Created}}"}, ids...)...)
+	for _, line := range strings.Split(out, "\n") {
+		id, ts, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok {
+			continue
+		}
+		created, err := time.Parse(time.RFC3339Nano, strings.Trim(ts, "\""))
+		if err != nil || !created.Before(cutoff) {
+			continue
+		}
+		// One at a time: a batch `network rm` stops at the first network
+		// that is still in use, and the stale empty ones after it would
+		// survive.
+		_, _ = run("network", "rm", id)
+	}
+}
 
 // Sweep removes labelled containers older than StaleAfter, at most once per
 // test binary however many times it is called. Call it before creating a
