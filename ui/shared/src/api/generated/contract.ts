@@ -16,7 +16,7 @@ export const API_BASE_PATH = "/api/v1";
  *  A contract edited without regenerating changes this value, so the
  *  change is visible in review as well as to
  *  scripts/api/check-contract-drift.sh. */
-export const CONTRACT_SHA256 = "a51f141e7841bad5f363e861c9e6e859c7bc4ea01f357dbe6418bec3af553699";
+export const CONTRACT_SHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9";
 
 /** Codes a server may actually put on the wire. */
 export const WIRE_ERROR_CODES = [
@@ -1279,6 +1279,21 @@ export interface WireCredentialsRequest {
   username: string;
 }
 
+/** What a finished cycle's move pass got done: how many artifacts
+ *  were due to move to the medium their retention tier names, and how
+ *  many arrived. Without these, a cycle in which every move was
+ *  refused is indistinguishable from one in which every move landed,
+ *  which is the same defect artifacts_walked and artifacts_through
+ *  exist to remove one layer down. There is no reason string here,
+ *  deliberately: the engine's own refusal sentence is built from
+ *  whatever the transport handed back, about an endpoint, a bucket
+ *  and a credential reference, so it stays on the terminal and in the
+ *  event stream and never on this boundary. */
+export interface WireCycleMoveOutcome {
+  attempted: number;
+  landed: number;
+}
+
 /** What a finished run cycle actually got done, read off the
  *  operation's own recorded summary. A cycle "completed" when it ran
  *  to the end, which is a narrower statement than anyone reading it
@@ -1290,6 +1305,7 @@ export interface WireCycleOutcome {
   artifacts_through: number;
   artifacts_walked: number;
   backup_sets_processed: number;
+  moves?: WireCycleMoveOutcome;
 }
 
 /** The nested error body every operation outside /auth returns. code
