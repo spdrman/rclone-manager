@@ -59,6 +59,7 @@ the way its predecessor did.
 | `quarantine` | act on one quarantined artifact: `revalidate`, `retry`, or `reinstate` (issue #277) |
 | `settings` | report the live retention/capacity settings, or `settings patch` to change one in place (issue #277) |
 | `backup-set` | `backup-set retention <source/set>` reports which retention policy that set is retained under and where it came from, gives the set a whole policy of its own, or `--inherit` takes that policy back off (issue #333) |
+| `restore` | `restore <source/backup-set/artifact> --medium M [--days N] --acknowledge` asks the storage provider to make one archived copy readable again (EPIC E, FR-34). `--acknowledge` is required rather than a `--force` to skip, because a restore is billed and takes hours; `--days` defaults to 7 and is bounded to 1 to 30. `artifacts <id>` lists which medium each copy is on (issue #241) |
 | `version` | report the binary, Go and embedded rclone versions |
 
 <!-- END CLI-COMMANDS -->
