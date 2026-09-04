@@ -43,7 +43,7 @@ func (b brokenJournal) Get(context.Context, model.ArtifactID) (state.Record, err
 	return state.Record{}, b.err
 }
 
-// diskGone is deliberately worded to CONTAIN ErrNotEligible's own text.
+// errDiskGone is deliberately worded to CONTAIN ErrNotEligible's own text.
 //
 // That is the control, and it is the whole reason this test can be
 // trusted. A check written as strings.Contains(refused, "not eligible to
@@ -52,7 +52,7 @@ func (b brokenJournal) Get(context.Context, model.ArtifactID) (state.Record, err
 // artifacts one at a time. Only a check on the error graph tells them
 // apart, and this string is what makes the difference observable rather
 // than a matter of opinion.
-var diskGone = fmt.Errorf(
+var errDiskGone = fmt.Errorf(
 	"state: opening the journal failed: input/output error, so nothing here can say whether this is a case of %s",
 	placement.ErrNotEligible.Error())
 
@@ -85,7 +85,7 @@ func TestACallerCanTellAPolicyRefusalFromAStorageFailure(t *testing.T) {
 
 	t.Run("storage failure", func(t *testing.T) {
 		f := newFixture(t, fixtureOpts{})
-		f.engine.Journal = brokenJournal{MoveJournal: f.guarded, err: diskGone}
+		f.engine.Journal = brokenJournal{MoveJournal: f.guarded, err: errDiskGone}
 
 		report := f.runCycle()
 		if len(report.Outcomes) != 1 {
@@ -95,7 +95,7 @@ func TestACallerCanTellAPolicyRefusalFromAStorageFailure(t *testing.T) {
 		if o.Err == nil {
 			t.Fatal("a storage failure reported no error either, so the two are still indistinguishable")
 		}
-		if !errors.Is(o.Err, diskGone) {
+		if !errors.Is(o.Err, errDiskGone) {
 			t.Errorf("the outcome does not carry the storage failure: %v", o.Err)
 		}
 		if errors.Is(o.Err, placement.ErrNotEligible) {
@@ -108,7 +108,7 @@ func TestACallerCanTellAPolicyRefusalFromAStorageFailure(t *testing.T) {
 		// The control fires here or it fires nowhere: this is the input
 		// on which the text check and the error check disagree.
 		if !strings.Contains(o.Refused, placement.ErrNotEligible.Error()) {
-			t.Fatalf("diskGone no longer contains ErrNotEligible's text, so this test has stopped being able to tell "+
+			t.Fatalf("errDiskGone no longer contains ErrNotEligible's text, so this test has stopped being able to tell "+
 				"a text check from an errors.Is check and is now proving nothing: %q", o.Refused)
 		}
 	})
