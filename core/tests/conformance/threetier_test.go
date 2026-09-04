@@ -232,22 +232,23 @@ func (g *chainTierGuard) SourceStillSelected(_ context.Context, rec state.Record
 // three points in time, and asserts at every step what the product itself
 // decided rather than what this test would like.
 //
-// Read the assertions in the order they appear. The scenario does NOT come
-// out clean, and the two places it stops are real findings about the
-// composed product rather than about this harness:
+// Read the assertions in the order they appear. All three rungs take
+// delivery here: the daily one keeps its artifact on local disk, the
+// monthly one receives one from local, and so does the annual one. That is
+// what changed when the annual tier stopped naming an archive class, and
+// it is the difference between a chain this suite can demonstrate and one
+// it can only describe.
 //
-//   - A move to a medium on an ARCHIVE storage class cannot complete. The
-//     required class is content (readback, the only default there is), an
-//     archived copy tops out at existence (placement.Ceiling), so the move
-//     abandons at verification with the source untouched. See
-//     TestAnArchiveClassTierCannotReceiveAnArtifact.
-//   - The hop from the monthly medium to the annual one is medium to
-//     medium, which the engine refuses outright. See
-//     TestTheChainsSecondHopIsMediumToMedium.
+// The scenario still does NOT come out clean, and the place it stops is a
+// real finding about the composed product rather than about this harness:
+// the hop from the monthly medium to the annual one is medium to medium,
+// which the engine refuses outright (#429). See
+// TestTheChainsSecondHopIsMediumToMedium. So an artifact can reach any
+// rung FROM LOCAL, and cannot walk from one medium rung to the next.
 //
-// Both refusals preserve the artifact, which is the property that matters
-// most, and the watcher proves the invariant held throughout. Neither is
-// a pass of the exit-gate line, and the conformance matrix says so.
+// The refusal preserves the artifact, which is the property that matters
+// most, and the watcher proves the invariant held throughout. It is not a
+// pass of the exit-gate line, and the conformance matrix says so.
 func TestTheThreeTierChainEndToEnd(t *testing.T) {
 	w := newWorld(t)
 	wa := newWatcher(t, w.journal, w.ids())
@@ -264,7 +265,7 @@ func TestTheThreeTierChainEndToEnd(t *testing.T) {
 	wantHomes := map[string]string{
 		"2026-09-03T02-00-00Z.dump": state.MediumLocal, // daily
 		"2026-07-15T02-00-00Z.dump": mediumOffsite,     // monthly
-		"2024-06-15T02-00-00Z.dump": mediumDeepFreeze,  // annual
+		"2024-06-15T02-00-00Z.dump": mediumAnnual,      // annual
 	}
 	assertHomes(t, w, p1, wantHomes, "2026-07-01T02-00-00Z.dump")
 
@@ -279,15 +280,26 @@ func TestTheThreeTierChainEndToEnd(t *testing.T) {
 	}
 	assertBytesAreReal(t, w, summer)
 
-	// The annual hop does not. This endpoint refuses the storage class the
-	// annual tier is configured for, so the copy never lands, and the
-	// source is what proves the failure was safe rather than merely loud.
+	// The annual hop works too, and it is the rung this scenario could
+	// not reach at all while the annual tier named an archive class. It
+	// goes from LOCAL, which is the direction the engine does: the
+	// artifact is older than every window but the annual one, so its home
+	// is the annual medium and its only copy has been on disk since it
+	// was ingested.
 	ancient := w.artifactNamed(t, "2024-06-15T02-00-00Z.dump")
-	assertActiveOn(t, w, ancient.id, state.MediumLocal)
-	if !w.localExists(ancient.id) {
-		t.Fatalf("%s's local copy was deleted even though its move to the archive-class medium did not complete", ancient.id.Name)
+	assertCompleted(t, p1, ancient.id)
+	assertActiveOn(t, w, ancient.id, mediumAnnual)
+	if w.localExists(ancient.id) {
+		t.Errorf("%s still has a local copy after a completed move to %q", ancient.id.Name, mediumAnnual)
 	}
 	assertBytesAreReal(t, w, ancient)
+
+	// And the two mediums really are two places. A chain whose second and
+	// third rungs resolved to the same bucket would satisfy every
+	// assertion above while proving nothing about a three-tier chain.
+	if w.offsite.Bucket == w.annual.Bucket {
+		t.Fatalf("the monthly and annual mediums are the same bucket (%q), so this run did not exercise two destinations", w.offsite.Bucket)
+	}
 
 	// --- pass two: the clock moves, and that alone plans a move --------
 
@@ -318,9 +330,9 @@ func TestTheThreeTierChainEndToEnd(t *testing.T) {
 	later := time.Date(2027, 10, 1, 9, 0, 0, 0, time.UTC)
 	p3 := runPass(t, w, later, wa)
 
-	if !plannedMove(p3, fresh.id, mediumOffsite, mediumDeepFreeze) {
+	if !plannedMove(p3, fresh.id, mediumOffsite, mediumAnnual) {
 		t.Fatalf("in %s the chain should place %s on %s; the plan was %s",
-			later.Format("2006"), fresh.id.Name, mediumDeepFreeze, describePlan(p3.plan))
+			later.Format("2006"), fresh.id.Name, mediumAnnual, describePlan(p3.plan))
 	}
 	o, ok := p3.outcomeFor(fresh.id)
 	if !ok {
@@ -364,32 +376,61 @@ func TestTheThreeTierChainEndToEnd(t *testing.T) {
 // TestAFailedCopyLeavesItsReasonOnTheMoveRow is the regression test for
 // the one defect the composed run turned up in product code.
 //
-// The composed scenario plans a move onto the archive-class medium, and
-// MinIO refuses the upload outright (see archiveboundary_test.go: it
-// answers InvalidStorageClass to a PUT carrying GLACIER). A failed copy is
-// deliberately not abandoned, because the ordinary reason a copy fails is
-// transient and the next cycle should try again. What was missing is the
-// account: the move row stayed at COPYING with an EMPTY error column, so
-// the only record of what went wrong was the cycle report, which lives in
-// memory and is gone by the time anybody looks. A move wedged for a week
-// against a permanent refusal read exactly like one that started ten
-// seconds ago.
+// A failed copy is deliberately not abandoned, because the ordinary reason
+// a copy fails is transient and the next cycle should try again. What was
+// missing is the account: the move row stayed at COPYING with an EMPTY
+// error column, so the only record of what went wrong was the cycle
+// report, which lives in memory and is gone by the time anybody looks. A
+// move wedged for a week against a permanent refusal read exactly like one
+// that started ten seconds ago.
 //
 // This cell needs a copy that really fails against a real endpoint, which
 // is why it lives here and not in internal/placement's own suite: the
 // failure it is about is one a double would have been written not to
 // produce.
+//
+// # Why the failing destination changed
+//
+// It used to be the archive-class medium. The chain planned a move onto
+// it, MinIO answered InvalidStorageClass to the PUT, and the reason landed
+// on the move row. #437 closed that route and closed it correctly: a move
+// to an archive-class destination is now refused at PLAN time, so no move
+// row is written at all and there is nothing here to read. Zero move rows
+// is the RIGHT answer, and it is worth more than this cell's old premise,
+// because abandoning still uploads once per cycle and refusing uploads
+// nothing. That claim has its own cell now
+// (TestAnArchiveClassTierIsRefusedBeforeItCostsAnything), and this one
+// needs a different way to fail.
+//
+// A bucket that does not exist is the replacement, and it is a better
+// premise than the one it replaces. It is the failure an operator actually
+// produces (a typo, or a bucket deleted underneath a running deployment),
+// it goes through the same upload call, and it rests on nothing this
+// product gates and nothing this fixture might change its mind about: no
+// endpoint invents a bucket to hold a PUT. It is also classified
+// Configuration rather than transient by the adapter's own bucket check
+// (tests/miniointegration pins that against this same server), which makes
+// it exactly the permanent, retried-for-ever failure this cell's whole
+// argument is about.
 func TestAFailedCopyLeavesItsReasonOnTheMoveRow(t *testing.T) {
-	w := newWorld(t)
+	w := newWorldWithAnnualHome(t, mediumUnreachable)
 	wa := newWatcher(t, w.journal, w.ids())
 	wa.observe("before the cycle")
 
 	p := runPass(t, w, scenarioNow, wa)
 	ancient := w.artifactNamed(t, "2024-06-15T02-00-00Z.dump")
 
-	if !plannedMove(p, ancient.id, state.MediumLocal, mediumDeepFreeze) {
-		t.Fatalf("the chain did not plan %s onto the archive-class medium at all, so this check inspected nothing: %s",
+	if !plannedMove(p, ancient.id, state.MediumLocal, mediumUnreachable) {
+		t.Fatalf("the chain did not plan %s onto the misconfigured medium at all, so this check inspected nothing: %s",
 			ancient.id.Name, describePlan(p.plan))
+	}
+
+	// The premise, checked rather than assumed. If this endpoint ever
+	// took an upload into a bucket nobody created, the move would
+	// complete and every assertion below would be about the wrong move
+	// while the cell still looked busy.
+	if o, ok := p.outcomeFor(ancient.id); ok && o.Phase == placement.Done {
+		t.Fatalf("the move into a bucket that does not exist COMPLETED, so there is no failed copy here to read about: %+v", o)
 	}
 
 	moves, err := w.journal.MovesForArtifact(w.ctx, ancient.id)
@@ -407,7 +448,7 @@ func TestAFailedCopyLeavesItsReasonOnTheMoveRow(t *testing.T) {
 		t.Fatal("the move row carries no error at all, so an operator reading the move journal " +
 			"has no account of why this move has not progressed")
 	}
-	for _, want := range []string{"copying", mediumDeepFreeze} {
+	for _, want := range []string{"copying", mediumUnreachable} {
 		if !strings.Contains(mv.Error, want) {
 			t.Errorf("the recorded reason does not mention %q, so it does not say what failed: %q", want, mv.Error)
 		}
@@ -420,6 +461,118 @@ func TestAFailedCopyLeavesItsReasonOnTheMoveRow(t *testing.T) {
 	}
 	assertActiveOn(t, w, ancient.id, state.MediumLocal)
 	assertBytesAreReal(t, w, ancient)
+	wa.report()
+}
+
+// TestAnArchiveClassTierIsRefusedBeforeItCostsAnything is what the annual
+// rung of this chain used to be, stated as its own claim instead of as a
+// hole in the middle of the composed scenario.
+//
+// The chain is the same chain, seeded the same way, with one field
+// changed: the annual tier names the medium on GLACIER. FR-27's home rule
+// then puts the oldest artifact there, the plan is real, and the engine
+// refuses it. Three things have to be true about that refusal, and they
+// are three separate claims:
+//
+//  1. It is reported. A refusal an operator never sees is a tier that
+//     silently does nothing, which is #428's actual complaint.
+//  2. It is a POLICY refusal, distinguishable by a caller from an endpoint
+//     that was down, so a health surface can tell "this configuration
+//     cannot work" from "the bucket is unreachable today".
+//  3. It costs nothing. No move row, no object on the medium, no GET. That
+//     is the whole of #437: abandoning the move instead would still upload
+//     once per cycle, and DEEP_ARCHIVE bills a 180-day minimum duration
+//     for every discarded copy.
+//
+// And it is a STANDING refusal rather than a give-up, so the second cycle
+// says the same thing and still spends nothing. An ABANDONED move row
+// would stop being reported; a configuration that cannot work should not.
+//
+// This cell is also where #442 lands. That issue would have config.Validate
+// refuse the tier-to-medium pairing at load, which is the better place for
+// it, and the day it does this world stops standing up at all: loadConfig
+// fails with a message naming exactly that, and this cell becomes an
+// assertion about the LOAD refusal rather than the engine's.
+func TestAnArchiveClassTierIsRefusedBeforeItCostsAnything(t *testing.T) {
+	w := newWorldWithAnnualHome(t, mediumDeepFreeze)
+	wa := newWatcher(t, w.journal, w.ids())
+	wa.observe("before the cycle")
+
+	ancient := w.artifactNamed(t, "2024-06-15T02-00-00Z.dump")
+
+	for cycle, at := range []time.Time{scenarioNow, scenarioNow.AddDate(0, 0, 1)} {
+		p := runPass(t, w, at, wa)
+
+		// The chain plans it, which is why this is composed rather than a
+		// hand-built plan against the engine. What needs proving is that
+		// a configuration an operator can write today produces a move,
+		// and that the move is then refused.
+		if !plannedMove(p, ancient.id, state.MediumLocal, mediumDeepFreeze) {
+			t.Fatalf("cycle %d: the chain did not plan %s onto the archive-class medium, so this check inspected nothing: %s",
+				cycle+1, ancient.id.Name, describePlan(p.plan))
+		}
+
+		o, ok := p.outcomeFor(ancient.id)
+		if !ok {
+			t.Fatalf("cycle %d: the engine reported no outcome at all for %s, so the refusal reaches nobody", cycle+1, ancient.id.Name)
+		}
+		if o.Refused == "" {
+			t.Fatalf("cycle %d: the move to an archive-class medium was not refused: %+v", cycle+1, o)
+		}
+		if p.report.Refused != 1 {
+			t.Errorf("cycle %d: the cycle report counted %d refusals, want 1: %+v", cycle+1, p.report.Refused, p.report)
+		}
+		if o.Err == nil || !errors.Is(o.Err, placement.ErrNotEligible) {
+			t.Errorf("cycle %d: the refusal did not come through ErrNotEligible, so a caller cannot tell a configuration "+
+				"that cannot work from an endpoint that is down: %v", cycle+1, o.Err)
+		}
+		if !o.PolicyRefusal() {
+			t.Errorf("cycle %d: PolicyRefusal is false for a destination the engine declined on configuration alone: %v", cycle+1, o.Err)
+		}
+		if !strings.Contains(o.Refused, config.StorageClassGlacier) {
+			t.Errorf("cycle %d: the refusal does not name the storage class it turns on, so an operator cannot act on it: %s",
+				cycle+1, o.Refused)
+		}
+		t.Logf("cycle %d refused with: %s", cycle+1, o.Refused)
+
+		// Nothing was written down, and nothing was spent. Two claims,
+		// because a move that abandons still leaves a row AND still paid
+		// for an upload, and only one of those is visible in a journal.
+		moves, err := w.journal.MovesForArtifact(w.ctx, ancient.id)
+		if err != nil {
+			t.Fatalf("reading the move journal: %v", err)
+		}
+		if len(moves) != 0 {
+			t.Errorf("cycle %d: the engine wrote %d move row(s) for a move it refused before planning: %+v", cycle+1, len(moves), moves)
+		}
+		objects, err := adapter().ListObjects(w.ctx, w.deepFreeze, "")
+		if err != nil {
+			t.Fatalf("listing the archive-class bucket: %v", err)
+		}
+		if len(objects) != 0 {
+			t.Errorf("cycle %d: the archive-class bucket holds %d object(s) after a refused move; a refusal that uploads "+
+				"first is not free, and an archive class bills a minimum duration for every discarded copy", cycle+1, len(objects))
+		}
+
+		// The artifact is exactly where it started.
+		assertActiveOn(t, w, ancient.id, state.MediumLocal)
+		if !w.localExists(ancient.id) {
+			t.Fatalf("cycle %d: THE LOCAL COPY WAS DELETED for a move that never happened", cycle+1)
+		}
+		assertBytesAreReal(t, w, ancient)
+	}
+
+	// The control for the whole cell. A run in which the engine refused
+	// EVERY move would satisfy every assertion above, so the rung that is
+	// supposed to work in this same world has to have worked: the monthly
+	// artifact is on the ordinary medium, moved by the same chain, in the
+	// same cycles.
+	summer := w.artifactNamed(t, "2026-07-15T02-00-00Z.dump")
+	assertActiveOn(t, w, summer.id, mediumOffsite)
+	if w.localExists(summer.id) {
+		t.Errorf("%s never left local disk, so this world refused everything and its archive refusal says nothing "+
+			"about archive classes in particular", summer.id.Name)
+	}
 	wa.report()
 }
 
@@ -457,7 +610,7 @@ func TestTheChainsSecondHopIsMediumToMedium(t *testing.T) {
 	if err != nil {
 		t.Fatalf("asking the home rule where %s belongs: %v", fresh.id.Name, err)
 	}
-	if !hasHome || home != mediumDeepFreeze {
+	if !hasHome || home != mediumAnnual {
 		t.Fatalf("FR-27's home rule puts %s on (%q, hasHome=%t), so this check is not looking at a medium-to-medium hop",
 			fresh.id.Name, home, hasHome)
 	}
@@ -469,10 +622,23 @@ func TestTheChainsSecondHopIsMediumToMedium(t *testing.T) {
 	if !strings.Contains(o.Refused, "medium-to-medium") {
 		t.Fatalf("the engine did not refuse the hop as medium-to-medium; it said %q", o.Refused)
 	}
-	if !errors.Is(errors.New(o.Refused), placement.ErrNotEligible) &&
-		!strings.Contains(o.Refused, placement.ErrNotEligible.Error()) {
+	// This used to read errors.Is(errors.New(o.Refused), ErrNotEligible),
+	// with a strings.Contains fallback after an ||. The first half is
+	// false for every input there has ever been (errors.New on a string
+	// produces an error with no relation to the sentinel), so the
+	// fallback is what ran, and this suite was classifying a refusal by
+	// its text. Outcome now carries the error the string was rendered
+	// from, so the question can be asked properly.
+	if o.Err == nil {
+		t.Fatalf("the outcome carries no error, so a caller has only the string %q and cannot tell a policy "+
+			"refusal from a storage failure", o.Refused)
+	}
+	if !errors.Is(o.Err, placement.ErrNotEligible) {
 		t.Errorf("the refusal did not come through ErrNotEligible, so a caller cannot tell a policy refusal "+
-			"from a storage failure: %q", o.Refused)
+			"from a storage failure: %v", o.Err)
+	}
+	if !o.PolicyRefusal() {
+		t.Errorf("PolicyRefusal is false for a hop the engine declined on policy: %v", o.Err)
 	}
 	assertActiveOn(t, w, fresh.id, mediumOffsite)
 	assertBytesAreReal(t, w, fresh)

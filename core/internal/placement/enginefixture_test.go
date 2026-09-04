@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/model"
@@ -88,6 +89,19 @@ type fakeMedium struct {
 	// has asked to restore, which is what S3 says about most objects.
 	restore *transport.RestoreState
 
+	// archiveRefusesReads makes OpenObject behave the way a real S3
+	// endpoint behaves for an object on an archive class: it answers
+	// InvalidObjectState until a restore is in effect, and it charges for
+	// the request either way.
+	//
+	// It is opt-in rather than the default because the tests in
+	// archivedelete_test.go deliberately build a world in which every
+	// fact except the storage class is correct, and they need the fake to
+	// serve the bytes. Those tests are about the eighth guard clause;
+	// this flag is for the tests that are about what a GET of an archived
+	// object actually does.
+	archiveRefusesReads bool
+
 	uploadErr  error
 	statErr    error
 	openErr    error
@@ -138,12 +152,22 @@ func (f *fakeMedium) UploadFromLocal(_ context.Context, _ transport.Medium, loca
 	return transport.UploadResult{Key: key, BytesUploaded: int64(len(b))}, nil
 }
 
-func (f *fakeMedium) OpenObject(_ context.Context, _ transport.Medium, key string) (io.ReadCloser, error) {
+func (f *fakeMedium) OpenObject(_ context.Context, medium transport.Medium, key string) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opens++
 	if f.openErr != nil {
 		return nil, f.openErr
+	}
+	if f.archiveRefusesReads && archive.IsArchive(medium.StorageClass) && !f.restoreIsLive() {
+		// The request was made and it is billable. What comes back is the
+		// provider's own refusal, which internal/transport/rclone maps to
+		// UnsupportedCapability; see the InvalidObjectState row in its
+		// error table.
+		return nil, &transport.Error{
+			Category: transport.UnsupportedCapability, Op: "open",
+			Cause: fmt.Errorf("InvalidObjectState: the operation is not valid for the object's storage class %s", medium.StorageClass),
+		}
 	}
 	b, ok := f.objects[key]
 	if !ok {
@@ -191,6 +215,34 @@ func (f *fakeMedium) RestoreStatus(_ context.Context, _ transport.Medium, _ stri
 		return nil, f.restoreErr
 	}
 	return f.restore, nil
+}
+
+// restoreIsLive reports whether a restore of this object has finished and
+// has not expired. It reads the same two fields archive.Access reads, and
+// the caller already holds the lock.
+func (f *fakeMedium) restoreIsLive() bool {
+	if f.restore == nil || f.restore.InProgress {
+		return false
+	}
+	return f.restore.ExpiresAt != nil && f.restore.ExpiresAt.After(testNow2)
+}
+
+func (f *fakeMedium) uploadCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.uploads
+}
+
+func (f *fakeMedium) deleteCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deletes
+}
+
+func (f *fakeMedium) openCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opens
 }
 
 func (f *fakeMedium) restoreStatusCount() int {

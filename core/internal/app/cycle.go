@@ -243,6 +243,13 @@ sourcesLoop:
 	// to whatever is shipping these logs either way.
 	s.reportBarrenSets(ctx, report)
 
+	// FR-30's half of the same verdict (cycleoutcome.go). It is a separate
+	// call under a separate op rather than a branch inside the one above,
+	// because a cycle that backed nothing up and a cycle that moved
+	// nothing are different problems an operator fixes in different
+	// places; see reportBarrenMoves.
+	s.reportBarrenMoves(ctx, report)
+
 	// What this cycle learned about which backup sets can be connected to
 	// at all, written down before the alert pass so the health report the
 	// alert pass then builds already carries it (issue #245). Like

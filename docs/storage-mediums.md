@@ -24,7 +24,7 @@ than no reference at all.
 | Artifacts are recorded as living somewhere, and the recovery manifest says where | Not landed (#236) |
 | Verification classes, and revalidation that knows about mediums | Not landed (#237) |
 | Artifacts actually MOVE between mediums when a tier says so | Landed, with two limits below |
-| Retention plans, previews and prune understand mediums | Not landed (#239) |
+| Retention plans, previews and prune understand mediums | Landed, except across the HTTP boundary: the API does not yet carry the preview's moves or the medium each deletion happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
 
@@ -47,6 +47,14 @@ reasoning about it:
 
 A chain with ONE medium tier, which is the common case (daily local, monthly
 offsite), works end to end today.
+
+Both refusals, and every other reason a move does not happen, are now visible
+without reading logs. A cycle in which artifacts were due to move and none
+arrived says so on the `Last run cycle` panel, in the operation record the
+activity feed reads, in the FR-23 event stream under `op=move`, and in
+`backup-manager run`'s exit status, which becomes 1 with the engine's own reason
+on stderr. A deployment that declares no storage medium attempts no moves, so
+none of that can fire for it.
 
 ## The configuration
 
@@ -156,7 +164,7 @@ re-read for free.
 
 | Class | What it proves | What it costs |
 | --- | --- | --- |
-| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | A full download: time, plus egress. On an archive class, a restore first. |
+| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | Two full downloads per move: time, plus egress, twice. See below. On an archive class, a restore first. |
 | `attested` | The provider's stored full-object checksum equals the recorded SHA-256 | One metadata call, no egress. Trusts the endpoint to implement S3 checksum semantics honestly. |
 | `existence` | The object exists with the recorded size | One HEAD request |
 
@@ -165,6 +173,15 @@ The rules that matter:
 - A move reaches VERIFIED at `content` class by default. The local copy is
   downloaded back and re-hashed at the last moment the local truth still exists,
   and only then is the source deleted.
+- **A move at `content` class downloads the object twice, and you are billed for
+  both.** Once to reach VERIFIED, and once again immediately before the source
+  delete, from scratch, without writing the second result anywhere. That is not
+  an accident and it is not a retry: the second read is what makes a move
+  interrupted by a crash and a move that has just this second been verified take
+  the same code path, so there is no separate resume path to get wrong. It does
+  mean that budgeting one artifact's worth of egress per move is budgeting half
+  of it. `attested` would avoid the download entirely and does not work on `s3`
+  in this build; see below.
 - `existence` is never sufficient to delete a source. Not ever, not with any
   setting.
 - Periodic revalidation checks medium placements at `existence` class only.
@@ -174,6 +191,17 @@ The rules that matter:
   the artifact having been "revalidated" in the sense a local artifact is.
 - An artifact on `GLACIER` or `DEEP_ARCHIVE` is `existence`-checkable only, until
   an explicit restore makes anything stronger possible.
+- **A tier whose medium writes an archive class cannot take delivery of an
+  artifact, and the move is refused before anything is uploaded.** Both settings
+  `upload_verification` accepts need the object read back, a freshly written
+  object on `GLACIER` or `DEEP_ARCHIVE` cannot be read until somebody asks for a
+  restore, and nothing asks to restore an object that did not exist a second
+  ago. So the answer is knowable from the configuration alone and the manager
+  gives it for free, in the cycle report, every cycle, rather than uploading and
+  discarding a copy to find out. That matters because `DEEP_ARCHIVE` has a
+  180-day minimum billable duration: a copy deleted the second after it lands is
+  still charged for six months. Issue #428 tracks what the eventual answer
+  should be.
 
 ### `upload_verification: attested` and rclone's s3 backend
 
@@ -181,13 +209,18 @@ The rules that matter:
 worth saying plainly: an endpoint that lies about checksums can cause your local
 copy to be deleted against a bad upload.
 
-It also does not work on `s3` in this build, and it will say so rather than
-quietly do something weaker. rclone v1.75.0's s3 backend reports exactly one hash
-capability, MD5 (`backend/s3.Fs.Hashes()` returns `hash.Set(hash.MD5)`), so it
-cannot produce a full-object SHA-256 attestation at all. Configuring
-`upload_verification: attested` on an `s3` medium is therefore an explicit
-capability failure, not a silent fall back to `existence`, and not a silent
-fall forward to a download you did not budget for.
+It also does not work on `s3` in this build, and **the config is now refused at
+load rather than at the move**. rclone v1.75.0's s3 backend reports exactly one
+hash capability, MD5 (`backend/s3.Fs.Hashes()` returns `hash.Set(hash.MD5)`), so
+it cannot produce a full-object SHA-256 attestation at all. There is nothing an
+s3 medium could ever do to satisfy the class.
+
+Until recently `backup-manager check` accepted `upload_verification: attested`
+and the refusal arrived from the move engine instead: after the upload, at the
+verification step, on every cycle, forever, in a log line. `Validate` now names
+the reason and names `readback` as the way out, and `check` fails. Nothing about
+that is a fall back to `existence`, and nothing about it is a silent fall
+forward to a download you did not budget for.
 
 An ETag is not a checksum and is never compared to one here. Multipart uploads
 and server-side encryption both make an ETag something other than the object's

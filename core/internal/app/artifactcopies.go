@@ -32,8 +32,15 @@ type ArtifactCopy struct {
 	// for a copy on a medium.
 	Location string
 
-	// Status is the placement's own status: ACTIVE, DELETE_PENDING or
-	// GONE.
+	// Status is "ACTIVE" or "DELETE_PENDING". A placement the journal
+	// knows is GONE never becomes one of these at all; see
+	// artifactCopies.
+	//
+	// DELETE_PENDING is here and GONE is not, and the line between them
+	// is the whole rule: a DELETE_PENDING copy is one this manager has
+	// written down that it intends to delete and has not deleted yet, so
+	// the bytes are there and every other field on this struct is true
+	// about them. A GONE copy is one that is not there.
 	Status string
 
 	// VerificationClass is the strongest class of verification this copy
@@ -103,12 +110,43 @@ func (c ArtifactCopy) Retrievable() bool { return c.Access.Retrievable() }
 // establish is the temporary one, a restore having been asked for. The
 // restore operation is what establishes that, and it says so from the
 // provider's own answer rather than from here.
+// # A GONE placement is not a copy, and is dropped here
+//
+// state.PlacementGone means "the copy is no longer there and the journal
+// knows it", which is what a completed move leaves behind on the source
+// and what a prune leaves behind on the medium. The row is kept in the
+// journal forever, deliberately: a deleted copy is recorded, never
+// removed, so reconciliation and the recovery manifest can still account
+// for it. None of that makes it a copy.
+//
+// Serving one here would put it in front of an operator wearing this
+// struct's shape, and this struct's shape is a copy: a location, an
+// access state, what verified it, what could still be checked against it,
+// whether reading it is billed. Every one of those is derived from the
+// row's own recorded hash and class, which a GONE row still carries, so
+// they all compute cleanly and all describe a file that is not there.
+// `backup-manager artifacts` prints them one under the other, so the
+// output says GONE once and contradicts itself five times.
+//
+// core/service drops GONE rows at the API boundary for exactly this
+// reason and states it in one line: a row for it would read as a copy in
+// every layout anyone would write for one. FR-34 requires the CLI and the
+// UI to read the same truth about the same artifact, so the drop belongs
+// to the view rather than to either renderer, and a second renderer of
+// ArtifactCopy inherits it instead of rediscovering it.
+//
+// What is left is absence of a copy as absence of a row, which is the same
+// thing an artifact that never had one reports, and it is what makes an
+// empty list mean exactly one thing.
 func (s *Service) artifactCopies(rec state.Record, now time.Time) []ArtifactCopy {
 	if len(rec.Placements) == 0 {
 		return nil
 	}
 	out := make([]ArtifactCopy, 0, len(rec.Placements))
 	for _, p := range rec.Placements {
+		if p.Status == state.PlacementGone {
+			continue
+		}
 		out = append(out, s.artifactCopy(p, now))
 	}
 	return out

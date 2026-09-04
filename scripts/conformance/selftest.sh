@@ -68,6 +68,35 @@ conformance_gate() {
   (cd core && GOWORK=off go test -count=1 -timeout 30m -run "$pattern" ./tests/conformance/)
 }
 
+# unit_gate runs one non-composed package, for the two halves of a claim
+# that do not live in tests/conformance. It is here rather than in a
+# separate script because the matrix row it serves is one row: a claim
+# checked in two places needs both falsifications in one place, or the
+# second one quietly stops being run.
+unit_gate() {
+  local pkg=$1 pattern=${2:-.}
+  (cd core && GOWORK=off go test -count=1 -run "$pattern" "$pkg")
+}
+
+# expect_unit_check_fails <label> <dir> <expected substring> <package> <run pattern>
+expect_unit_check_fails() {
+  local label=$1 dir=$2 needle=$3 pkg=$4 pattern=$5
+  if (cd "$dir" && unit_gate "$pkg" "$pattern") >"$tmp/out" 2>&1; then
+    echo "SELFTEST FAIL: $label. $pkg PASSED against a planted violation." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  elif ! grep -qF "$needle" "$tmp/out"; then
+    echo "SELFTEST FAIL: $label. The package failed, but never named the promise that was broken." >&2
+    echo "    expected its output to mention: $needle" >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  else
+    echo "  ok (caught): $label"
+    echo "      -> $(grep -m1 -F "$needle" "$tmp/out" | sed 's/^[[:space:]]*//' | cut -c1-400)"
+    pass=$((pass + 1))
+  fi
+}
+
 # expect_check_fails <label> <dir> <expected substring> [run pattern]
 expect_check_fails() {
   local label=$1 dir=$2 needle=$3 pattern=${4:-.}
@@ -216,6 +245,30 @@ expect_check_fails "the medium-to-medium refusal removed" "$d" \
   "did not refuse the hop as medium-to-medium" \
   'TestTheChainsSecondHopIsMediumToMedium'
 
+# The other end of the same ordering: the source delete is durably
+# intended, and then it actually happens. A move that records the intent
+# and leaves the file behind reads as a completed move everywhere except
+# on the disk, and every artifact quietly costs two copies for ever.
+d=$(mutant source-copy-never-removed)
+swap "$d/core/internal/placement/engine.go" \
+  '	if t.localPath != "" {
+		if e.Local == nil {
+			return fmt.Errorf("no local store is configured")
+		}
+		return e.Local.Remove(ctx, t.localPath)
+	}' \
+  '	if t.localPath != "" {
+		if e.Local == nil {
+			return fmt.Errorf("no local store is configured")
+		}
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh): the journal
+		// says the source is gone; the file stays.
+		return nil
+	}'
+expect_check_fails "a completed move that never removes the source copy" "$d" \
+  'still has a local copy after a completed move to "annual_s3"' \
+  'TestTheThreeTierChainEndToEnd'
+
 # A copy that fails leaves its reason on the move row. Without it the row
 # reads COPYING with an empty error for as long as the failure lasts, and
 # the only account of what went wrong lives in a cycle report that is gone.
@@ -233,33 +286,104 @@ expect_check_fails "a failed copy that records no reason on the move row" "$d" \
   'TestAFailedCopyLeavesItsReasonOnTheMoveRow'
 
 echo
-echo "==> prune meeting an artifact the chain has moved"
+echo "==> prune meeting an artifact the chain has moved (P2.4, V6)"
 
-# While #239's medium-aware prune is unbuilt, prune must REFUSE an artifact
-# whose only copy is on a medium rather than reading the missing local file
-# as work already done. The composed scenario is the only place that
-# produces such an artifact by actually moving one.
-d=$(mutant prune-reads-a-missing-file-as-already-deleted)
+# #239's medium-aware prune is in this tree, so what these mutations break
+# is no longer "refuse until it is built". It is the shape of the delete:
+# the decision is retention's, taken without ever reading the medium
+# (FR-32), and the evidence is placement's, taken at the moment of the
+# delete (FR-16). The composed scenario is the only place either half runs
+# against an object a real move really put on a real bucket.
+
+# An artifact whose copy is on a medium sent down FR-20's local path
+# instead. That is wrong in the most expensive way available: the local
+# file is not there any more, so the verdict is about a path nothing owns
+# while the object survives unreferenced.
+d=$(mutant prune-takes-the-local-path-for-a-medium-copy)
 swap "$d/core/internal/retention/prune.go" \
-  '	info, err := os.Lstat(expected)
-	if err != nil {
-		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
+  '	if loc.OnMedium() {
+		return pruneEvaluateOnMedium(rec, keepVerdict, lkg, loc.Medium)
 	}' \
-  '	info, err := os.Lstat(expected)
-	if err != nil {
-		// PLANTED VIOLATION (scripts/conformance/selftest.sh): a file that
-		// is not there is one less thing to delete, so call it done.
-		if os.IsNotExist(err) {
-			return expected, nil
-		}
-		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+	if false {
+		return pruneEvaluateOnMedium(rec, keepVerdict, lkg, loc.Medium)
 	}'
-expect_check_fails "prune reading a missing local file as a completed delete" "$d" \
-  "the only safe answer is a refusal" \
-  'TestPruneRefusesAnArtifactWhoseOnlyCopyIsOnAMedium'
+expect_check_fails "an artifact on a medium sent down FR-20's local path" "$d" \
+  "is REFUSE, want DELETE" \
+  'TestPruneRemovesAnArtifactsOnlyCopyFromAMedium'
+
+# A DELETE reported without anything being asked to make it. The verdict
+# reads exactly the same and the object is still there, which is the
+# failure mode a dry run cannot show and only the apply can.
+d=$(mutant prune-apply-never-asks-the-pruner)
+swap "$d/core/internal/retention/prune.go" \
+  '			if err := medium.DeleteFromMedium(ctx, rec, verdicts[i].Medium); err != nil {
+				verdicts[i].Action = PruneRefuse
+				verdicts[i].Reason = fmt.Sprintf("nothing was removed from %q: %v", verdicts[i].Medium, err)
+			}
+			continue' \
+  '			// PLANTED VIOLATION (scripts/conformance/selftest.sh): report the
+			// delete without making it.
+			_ = medium
+			_ = rec
+			continue'
+expect_check_fails "a medium delete reported but never made" "$d" \
+  "PruneApply asked the medium pruner for []" \
+  'TestPruneRemovesAnArtifactsOnlyCopyFromAMedium'
+
+# V6's own planted violation, from the matrix: something else is at the key
+# by the time prune applies. FR-16 says compare before deleting, and this
+# is the comparison being run and then ignored.
+d=$(mutant fr16-recheck-result-ignored)
+swap "$d/core/internal/placement/reclaim.go" \
+  '	if !existence.Passed {
+		return refuse("%s", existence.Detail)
+	}' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): an object that
+	// is there is an object worth deleting.
+	_ = existence'
+expect_check_fails "the FR-16 identity re-check run and its answer ignored" "$d" \
+  "and prune's verdict is DELETE, not REFUSE" \
+  'TestPruneRefusesAnObjectThatIsNoLongerTheOneTheJournalRecorded'
+
+# The other half of the same row: FR-30 asks that the mandatory dry-run
+# NAME the medium for every proposed deletion, and that surface is the
+# CLI's, not the composed suite's. "DELETE 40 artifacts" reads very
+# differently when half of them are objects in a bucket, and an operator
+# confirming a plan is confirming this text.
+d=$(mutant dry-run-does-not-name-the-medium)
+swap "$d/core/cmd/backup-manager/retention.go" \
+  '	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
+		return " medium=" + loc.Medium' \
+  '	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+		return ""'
+expect_unit_check_fails "a dry-run that does not say where a deletion would happen" "$d" \
+  "does not say where its deletion would happen" \
+  ./cmd/backup-manager/ 'TestRun_RetentionNamesWhereADeletionWouldHappen'
 
 echo
 echo "==> the archive gate"
+
+# A move to an archive-class destination is refused at PLAN time, before a
+# move row exists and before a byte is uploaded. Take that away and the
+# engine finds out one step later: it plans, it abandons, and the retention
+# pass plans a fresh one next cycle because the artifact still is not where
+# the chain says it belongs. The move rows accumulate, and on a class with
+# a minimum billable duration so does the bill.
+d=$(mutant archive-refusal-not-at-plan-time)
+swap "$d/core/internal/placement/engine.go" \
+  '	if err := e.destinationCanBeVerified(destination); err != nil {
+		return state.Placement{}, fmt.Errorf(
+			"%w: %s cannot be moved to %q: %w", ErrNotEligible, rec.Artifact, destination, err)
+	}
+	return src, nil' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): plan the move
+	// and find out the expensive way.
+	return src, nil'
+expect_check_fails "an archive-class destination refused after planning instead of before" "$d" \
+  "for a move it refused before planning" \
+  'TestAnArchiveClassTierIsRefusedBeforeItCostsAnything'
 
 # An archived copy tops out at existence, because reading one fails. Let it
 # claim content and the composed scenario's whole argument about why the
@@ -298,15 +422,34 @@ echo "==> the crash matrix's convergence"
 # on the fresh path and the restart path alike. Trust the upload instead
 # and the two hostile-endpoint cells stop protecting anything: the local
 # copy goes and what survives is whatever the endpoint felt like keeping.
+#
+# It takes BOTH return paths, and that is not tidiness. #437 split
+# verifyCopy in two, an ungated Verify and a gated VerifyWithAccess, and a
+# mutation that took only one of them would leave the other still reading
+# the bytes back, which is a mutation that proves nothing. The anchor this
+# used to carry was the pre-split one, and it stopped matching: the swap
+# refused to plant, which is exactly what it is for.
+#
+# The three `_ =` lines are load-bearing too. Without them the mutant does
+# not compile, and a mutant that does not compile fails the suite for a
+# reason that has nothing to do with the promise.
 d=$(mutant destination-trusted-instead-of-verified)
 swap "$d/core/internal/placement/engine.go" \
-  '	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+  '	if !gated {
+		res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+		return res, want, err
+	}
+	// observe spends a restore-status call only for a class that needs
+	// one, so a STANDARD destination costs exactly what it cost before.
+	obs := e.observe(ctx, medium, mv.DestinationKey, medium.StorageClass)
+	res, err := VerifyWithAccess(ctx, e.Store, medium, candidate, want, obs, e.now())
 	return res, want, err' \
-  '	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
-	// PLANTED VIOLATION (scripts/conformance/selftest.sh): trust the
-	// upload rather than reading it back.
-	_ = res
-	return Result{Passed: true, Class: want, Detail: "planted"}, want, err'
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): trust the
+	// upload rather than reading it back, on both paths.
+	_ = gated
+	_ = medium
+	_ = candidate
+	return Result{Passed: true, Class: want, Detail: "planted"}, want, nil'
 expect_check_fails "a destination trusted instead of verified" "$d" \
   "does not hold the artifact's bytes" \
   'TestTheCrashMatrixAgainstARealS3Endpoint'

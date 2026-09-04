@@ -379,7 +379,7 @@ describe("what the last run cycle got done", () => {
   // backed everything up.
   it("says so when a cycle walked backups and got none of them through", async () => {
     await renderDashboard([
-      operation({ cycle: { backupSetsProcessed: 3, artifactsWalked: 12, artifactsThrough: 0 } })
+      operation({ cycle: { backupSetsProcessed: 3, artifactsWalked: 12, artifactsThrough: 0, moves: null } })
     ]);
 
     const panel = screen.getByRole("region", { name: "Last run cycle" });
@@ -393,7 +393,7 @@ describe("what the last run cycle got done", () => {
 
   it("says so when every backup got through", async () => {
     await renderDashboard([
-      operation({ cycle: { backupSetsProcessed: 3, artifactsWalked: 12, artifactsThrough: 12 } })
+      operation({ cycle: { backupSetsProcessed: 3, artifactsWalked: 12, artifactsThrough: 12, moves: null } })
     ]);
 
     const panel = screen.getByRole("region", { name: "Last run cycle" });

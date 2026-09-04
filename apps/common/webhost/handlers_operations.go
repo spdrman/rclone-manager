@@ -122,6 +122,32 @@ type cycleOutcomeResponse struct {
 	BackupSetsProcessed int `json:"backup_sets_processed"`
 	ArtifactsWalked     int `json:"artifacts_walked"`
 	ArtifactsThrough    int `json:"artifacts_through"`
+
+	// Moves is FR-30's half of the same question, and it is absent
+	// rather than a pair of zeroes when the recorded summary does not
+	// carry it: a run cycle recorded by a build that did not write these
+	// has not moved nothing, it has not said. It is a nested object that
+	// disappears for the reason Progress is: two flat fields would each
+	// have to carry a sentinel that meant "not recorded".
+	Moves *cycleMoveOutcomeResponse `json:"moves,omitempty"`
+}
+
+// cycleMoveOutcomeResponse is what a finished cycle's FR-30 move pass got
+// done, on the wire.
+//
+// A deployment where every single move is refused, which is what a
+// credential that is not set or a bucket that is not there produces, ran
+// a cycle that completed, backed everything up, and left every artifact
+// somewhere other than where its retention tier says it belongs. Without
+// these two numbers that cycle is byte-identical here to one where every
+// move landed.
+//
+// There is no reason field, and there cannot be one. The engine's own
+// refusal sentence is the useful thing to read and it is assembled from
+// whatever the transport handed back; FR-33 keeps it off this boundary.
+type cycleMoveOutcomeResponse struct {
+	Attempted int `json:"attempted"`
+	Landed    int `json:"landed"`
 }
 
 // operationProgressResponse is the wire shape of one live progress
@@ -172,6 +198,9 @@ func toOperationResponse(op service.Operation) operationResponse {
 			BackupSetsProcessed: op.Cycle.BackupSetsProcessed,
 			ArtifactsWalked:     op.Cycle.ArtifactsWalked,
 			ArtifactsThrough:    op.Cycle.ArtifactsThrough,
+		}
+		if m := op.Cycle.Moves; m != nil {
+			resp.Cycle.Moves = &cycleMoveOutcomeResponse{Attempted: m.Attempted, Landed: m.Landed}
 		}
 	}
 	if op.Restore != nil {

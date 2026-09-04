@@ -306,16 +306,35 @@ function LastCycleOutcome({ outcome }: { outcome: CycleOutcome }) {
   // a problem.
   const barren = outcome.artifactsWalked > 0 && outcome.artifactsThrough === 0;
   const short = !barren && outcome.artifactsThrough < outcome.artifactsWalked;
+
+  // FR-30's half. A move pass is only worth a word when there was
+  // something to move: a deployment that declares no storage medium
+  // records a real zero here, every cycle, and a permanent "0 of 0 moved"
+  // row on its dashboard would be a new thing to explain that says
+  // nothing. A null pair is a cycle recorded before these counts existed
+  // and is not a cycle that moved nothing, so it is silent too.
+  const moves = outcome.moves && outcome.moves.attempted > 0 ? outcome.moves : null;
+  const barrenMoves = moves !== null && moves.landed === 0;
+  const shortMoves = moves !== null && !barrenMoves && moves.landed < moves.attempted;
+
   return (
     <section
       className="card"
       aria-label="Last run cycle"
-      style={barren ? { borderColor: "var(--warn)" } : undefined}
+      style={barren || barrenMoves ? { borderColor: "var(--warn)" } : undefined}
     >
-      <div className="card__header" style={barren ? { borderBottomColor: "var(--warn)" } : undefined}>
+      <div
+        className="card__header"
+        style={barren || barrenMoves ? { borderBottomColor: "var(--warn)" } : undefined}
+      >
         <h2 className="eyebrow">Last run cycle</h2>
         {barren ? (
           <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing got through</StatusBadge>
+        ) : barrenMoves ? (
+          // A cycle can back everything up perfectly and put none of it
+          // where the chain says it belongs, and this is the badge for
+          // exactly that: the backups happened, the moves did not.
+          <StatusBadge tone="warn" glyph={"\u25b2"}>Nothing moved</StatusBadge>
         ) : short ? (
           <StatusBadge tone="warn" glyph={"\u25b2"}>Some did not get through</StatusBadge>
         ) : (
@@ -357,6 +376,23 @@ function LastCycleOutcome({ outcome }: { outcome: CycleOutcome }) {
                 outcome.artifactsThrough + " of them ended it with their bytes on durable storage."
               : "Every backup this cycle had a reason to touch ended it with its bytes on durable storage."}
         </p>
+        {moves !== null && (
+          <p
+            style={{
+              margin: 0, fontSize: "var(--text-sm)", maxWidth: "72ch",
+              color: barrenMoves || shortMoves ? "var(--warn)" : "var(--text-2)"
+            }}
+          >
+            {barrenMoves
+              ? moves.attempted + " backups were due to move to the medium their retention tier names, and none arrived. " +
+                "They are still on the medium they were on, and nothing was deleted."
+              : shortMoves
+                ? moves.attempted + " backups were due to move to the medium their retention tier names, and " +
+                  moves.landed + " of them arrived."
+                : moves.attempted + " backups were due to move to the medium their retention tier names, and all " +
+                  moves.landed + " arrived."}
+          </p>
+        )}
       </div>
     </section>
   );

@@ -13,9 +13,23 @@
 // tiers, each naming a medium, deciding for itself which artifacts belong
 // where, over real time, against a real endpoint. This package does that.
 // It builds the three-tier chain FR-27 and the phase 2 exit gate name
-// (daily on local, monthly on `s3`, annual on an `s3` cold class), seeds a
+// (daily on local, monthly on `s3`, annual on a second `s3`), seeds a
 // backup set with artifacts spread over two years, and then advances the
 // clock and lets the product's own arithmetic decide what has to move.
+//
+// The gate line says the annual rung is an `s3` COLD class, and this
+// scenario's is not. That is a deliberate correction rather than a
+// convenience, and it is the honest reading of what the composed run
+// found: a retention tier on an archive class can never take delivery of
+// an artifact (#428), and since #437 the engine refuses the move at plan
+// time for free instead of paying for it every cycle. A scenario whose
+// third rung was archive could therefore never demonstrate a third rung at
+// all, which is most of what the gate line is asking for. So the chain
+// keeps three tiers and three destinations, the archive pairing gets its
+// own cell that asserts the refusal (see
+// TestAnArchiveClassTierIsRefusedBeforeItCostsAnything), and the matrix
+// says plainly that "annual on a cold class, end to end" is not something
+// this suite can claim.
 //
 // # What is real here, and what is not
 //
@@ -34,12 +48,14 @@
 //     it calls is the product's; the loop around them is this file's.
 //     See threetier_test.go's own comment for exactly which call is
 //     standing in for which.
-//   - MinIO cannot emulate an archive class. It accepts the storage-class
-//     header and stores an ordinary object, and it implements no Glacier
-//     restore. archiveboundary_test.go establishes both of those as facts
-//     about the fixture, checked on every run rather than asserted in
-//     prose, so the day either stops being true this suite says so instead
-//     of quietly starting to certify something it never covered.
+//   - MinIO cannot emulate an archive class. It refuses the storage-class
+//     header outright, and it implements no Glacier restore.
+//     archiveboundary_test.go establishes both of those as facts about the
+//     fixture, checked on every run rather than asserted in prose, so the
+//     day either stops being true this suite says so instead of quietly
+//     starting to certify something it never covered. That is a second,
+//     independent reason the annual rung cannot be a cold class here, and
+//     it would still bite even if the product refused nothing.
 //
 // # The invariant watcher is continuous
 //
@@ -98,10 +114,47 @@ const (
 	// mediumOffsite is the monthly tier's home: an ordinary S3 bucket.
 	mediumOffsite = "offsite_s3"
 
-	// mediumDeepFreeze is the annual tier's home, configured for a cold
-	// class. What that class does and does not mean against this fixture
-	// is archiveboundary_test.go's subject.
+	// mediumAnnual is the annual tier's home, and it is an ordinary S3
+	// bucket too.
+	//
+	// It used to be the cold-class medium below, and that is the single
+	// biggest thing this scenario had wrong. A retention tier on an
+	// archive class can never take delivery of an artifact (#428), and
+	// since #437 the engine refuses that move at plan time rather than
+	// paying for it every cycle, so a chain whose third rung was archive
+	// could never show the third rung working at all. The chain the phase
+	// 2 exit gate names has three tiers and this suite has to be able to
+	// put an artifact on each of them. What an archive class does instead
+	// is its own cell, with its own config, rather than a hole in the
+	// middle of the main scenario: see
+	// TestAnArchiveClassTierIsRefusedBeforeItCostsAnything.
+	mediumAnnual = "annual_s3"
+
+	// mediumDeepFreeze is a medium on a cold class that NO tier names in
+	// the default scenario.
+	//
+	// It is still declared, deliberately. #442 draws its line at the
+	// tier-to-medium PAIRING and not at the declaration, because a
+	// declared archive-class medium holding objects an operator restores
+	// by hand is exactly what #241 is for. So the default config carries
+	// one and nothing delivers to it, which is the shape that has to keep
+	// validating. The archive cell builds a world whose annual tier does
+	// name it, which is the pairing that cannot work.
 	mediumDeepFreeze = "deep_freeze_s3"
+
+	// mediumUnreachable points at a bucket that does not exist on the
+	// fixture's server, so a copy to it fails at the endpoint rather than
+	// at any gate this product owns. That is what
+	// TestAFailedCopyLeavesItsReasonOnTheMoveRow needs: a real upload
+	// that really fails, against a real S3 API, for a reason no double
+	// would have been written to produce.
+	mediumUnreachable = "misconfigured_s3"
+
+	// absentBucket is the bucket mediumUnreachable names, and nothing in
+	// this package ever creates it. The adapter never creates a bucket
+	// either (miniofixture makes them by hand for exactly that reason),
+	// so a PUT into this one is answered by the server.
+	absentBucket = "this-bucket-was-never-created"
 
 	tierDaily   = "daily"
 	tierMonthly = "monthly"
@@ -133,10 +186,21 @@ type world struct {
 	journal *state.Journal
 	cfg     *config.Config
 
-	// offsite and deepFreeze are the two configured mediums, at the
-	// transport boundary, exactly as internal/app would build them.
-	offsite    transport.Medium
-	deepFreeze transport.Medium
+	// offsite, annual, deepFreeze and unreachable are the configured
+	// mediums at the transport boundary, exactly as internal/app would
+	// build them.
+	offsite     transport.Medium
+	annual      transport.Medium
+	deepFreeze  transport.Medium
+	unreachable transport.Medium
+
+	// annualHome is the medium id the annual tier names in this world's
+	// config, and it is the one thing the three world variants differ
+	// by. Everything else, the cast, the dates, the chain shape and the
+	// two working mediums, is identical between them, so a cell about an
+	// archive destination and a cell about the ordinary chain are
+	// comparable.
+	annualHome string
 
 	// artifacts is every artifact this scenario seeded, oldest first,
 	// with the bytes each one holds.
@@ -162,9 +226,24 @@ type seeded struct {
 // answer.
 func newWorld(t *testing.T) *world {
 	t.Helper()
+	return newWorldWithAnnualHome(t, mediumAnnual)
+}
+
+// newWorldWithAnnualHome is newWorld with the annual tier pointed
+// somewhere else, which is the only axis this suite varies.
+//
+// Two cells need a third rung that does not work, for two different
+// reasons, and both reasons are worth a scenario rather than a unit
+// fixture: an archive-class destination the engine refuses before it
+// costs anything, and a destination the endpoint itself rejects. Varying
+// one field of the same config is what keeps them comparable with the
+// working chain instead of being three unrelated setups.
+func newWorldWithAnnualHome(t *testing.T, annualHome string) *world {
+	t.Helper()
 
 	fixture := miniofixture.Start(t)
 	offsiteBucket := fixture.NewBucket(t).Bucket
+	annualBucket := fixture.NewBucket(t).Bucket
 	deepBucket := fixture.NewBucket(t).Bucket
 
 	dir := t.TempDir()
@@ -174,15 +253,18 @@ func newWorld(t *testing.T) *world {
 	}
 
 	w := &world{
-		t:       t,
-		ctx:     context.Background(),
-		fixture: fixture,
-		dir:     dir,
-		root:    root,
+		t:          t,
+		ctx:        context.Background(),
+		fixture:    fixture,
+		dir:        dir,
+		root:       root,
+		annualHome: annualHome,
 	}
-	w.cfg = w.loadConfig(offsiteBucket, deepBucket)
+	w.cfg = w.loadConfig(offsiteBucket, annualBucket, deepBucket)
 	w.offsite = w.mediumFromConfig(mediumOffsite)
+	w.annual = w.mediumFromConfig(mediumAnnual)
 	w.deepFreeze = w.mediumFromConfig(mediumDeepFreeze)
+	w.unreachable = w.mediumFromConfig(mediumUnreachable)
 	w.journal = w.openJournal()
 	w.seedArtifacts()
 	return w
@@ -194,12 +276,18 @@ func newWorld(t *testing.T) *world {
 //
 // A file rather than a struct literal, and LoadAndValidate rather than a
 // hand-built Config, because this scenario's premise is that an operator
-// can WRITE daily-local, monthly-s3, annual-cold and have it start. A
-// chain this product refuses at load is not a scenario, it is a fiction,
-// and the refusal has to show up here rather than in the middle of a move.
-// Building the struct in Go would skip exactly the check that says the
-// premise is real.
-func (w *world) loadConfig(offsiteBucket, deepBucket string) *config.Config {
+// can WRITE the chain and have it start. A chain this product refuses at
+// load is not a scenario, it is a fiction, and the refusal has to show up
+// here rather than in the middle of a move. Building the struct in Go
+// would skip exactly the check that says the premise is real.
+//
+// Four mediums are declared and three tiers name two of them. The two that
+// no tier names in the default world are there on purpose: a declared
+// archive-class medium that nothing delivers to is a configuration #442
+// says must keep validating (an operator restoring pre-existing objects by
+// hand is #241's whole subject), and the fourth is a misconfigured bucket
+// one cell points the annual tier at to make a copy really fail.
+func (w *world) loadConfig(offsiteBucket, annualBucket, deepBucket string) *config.Config {
 	w.t.Helper()
 
 	yaml := fmt.Sprintf(`poll_interval: 15m
@@ -233,7 +321,21 @@ storage_mediums:
     region: %[6]s
     endpoint: %[7]s
     bucket: %[11]s
-    storage_class: %[12]s
+    credentials:
+      file: %[9]s
+  - id: %[12]s
+    type: s3
+    region: %[6]s
+    endpoint: %[7]s
+    bucket: %[13]s
+    storage_class: %[14]s
+    credentials:
+      file: %[9]s
+  - id: %[15]s
+    type: s3
+    region: %[6]s
+    endpoint: %[7]s
+    bucket: %[16]s
     credentials:
       file: %[9]s
 
@@ -241,22 +343,24 @@ retention:
   timezone: UTC
   week_starts_on: monday
   tiers:
-    - name: %[13]s
+    - name: %[17]s
       granularity: day
       keep: 7
-    - name: %[14]s
+    - name: %[18]s
       granularity: month
       keep: 12
       medium: %[5]s
-    - name: %[15]s
+    - name: %[19]s
       granularity: year
       keep: 5
-      medium: %[10]s
+      medium: %[20]s
 `,
 		w.dir, scenarioSource, scenarioSet, w.root,
 		mediumOffsite, w.fixture.Region, w.fixture.Endpoint, offsiteBucket, w.fixture.CredentialsFile,
+		mediumAnnual, annualBucket,
 		mediumDeepFreeze, deepBucket, config.StorageClassGlacier,
-		tierDaily, tierMonthly, tierAnnual)
+		mediumUnreachable, absentBucket,
+		tierDaily, tierMonthly, tierAnnual, w.annualHome)
 
 	path := filepath.Join(w.dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
@@ -264,7 +368,11 @@ retention:
 	}
 	cfg, err := config.LoadAndValidate(path)
 	if err != nil {
-		w.t.Fatalf("the three-tier chain the phase 2 exit gate names does not load: %v", err)
+		w.t.Fatalf("the three-tier chain this scenario is built on does not load with the annual tier on %q: %v\n\n"+
+			"If that tier names an archive-class medium, this is #442 arriving: the config layer now refuses the "+
+			"tier-to-medium pairing, which is a better place for the refusal than the engine. The cell to move is "+
+			"TestAnArchiveClassTierIsRefusedBeforeItCostsAnything, which should then assert THIS refusal instead of "+
+			"the engine's plan-time one.", w.annualHome, err)
 	}
 	return cfg
 }
@@ -318,7 +426,7 @@ func (w *world) openJournal() *state.Journal {
 //	fresh    2026-09-03  daily selects it            -> home local
 //	summer   2026-07-15  monthly's July bucket       -> home offsite
 //	stale    2026-07-01  older sibling in July       -> nothing selects it
-//	ancient  2024-06-15  annual's 2024 bucket        -> home deep freeze
+//	ancient  2024-06-15  annual's 2024 bucket        -> home annual
 //
 // stale is deliberately in the cast. An artifact no tier selects has no
 // home, and FR-27 says such an artifact stays exactly where it is rather
@@ -434,8 +542,12 @@ func (w *world) mediumByID(id string) (transport.Medium, bool) {
 	switch id {
 	case mediumOffsite:
 		return w.offsite, true
+	case mediumAnnual:
+		return w.annual, true
 	case mediumDeepFreeze:
 		return w.deepFreeze, true
+	case mediumUnreachable:
+		return w.unreachable, true
 	}
 	return transport.Medium{}, false
 }

@@ -2536,6 +2536,27 @@
           "retrieval_disclosure"
         ]
       },
+      "CycleMoveOutcome": {
+        "type": "object",
+        "description": "What a finished cycle's move pass got done: how many artifacts were due to move to the medium their retention tier names, and how many arrived. Without these, a cycle in which every move was refused is indistinguishable from one in which every move landed, which is the same defect artifacts_walked and artifacts_through exist to remove one layer down. There is no reason string here, deliberately: the engine's own refusal sentence is built from whatever the transport handed back, about an endpoint, a bucket and a credential reference, so it stays on the terminal and in the event stream and never on this boundary.",
+        "additionalProperties": false,
+        "properties": {
+          "attempted": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many artifacts the move pass took up: a move it resumed, a move it planned, or a plan it refused outright."
+          },
+          "landed": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of those reached their home medium with the source gone, which is the only outcome that is a move."
+          }
+        },
+        "required": [
+          "attempted",
+          "landed"
+        ]
+      },
       "CycleOutcome": {
         "type": "object",
         "description": "What a finished run cycle actually got done, read off the operation's own recorded summary. A cycle \"completed\" when it ran to the end, which is a narrower statement than anyone reading it assumes: an artifact's own quarantine is a business outcome and not an operation failure, so a cycle that backed nothing up finishes looking exactly like one that backed everything up. These counts are what tell the two apart.",
@@ -2554,6 +2575,12 @@
             "type": "integer",
             "format": "int32",
             "description": "How many of those ended the cycle with their bytes on durable storage."
+          },
+          "moves": {
+            "$ref": "#/components/schemas/CycleMoveOutcome",
+            "description": "What this cycle's move pass got done, absent when the recorded summary does not carry it. Absent is not a pair of zeroes: a cycle recorded by a build that did not write these has not moved nothing, it has not said. A deployment that declares no storage medium records a real pair of zeroes, which reads as nothing to do.",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
           }
         },
         "required": [
