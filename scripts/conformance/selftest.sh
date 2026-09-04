@@ -422,15 +422,34 @@ echo "==> the crash matrix's convergence"
 # on the fresh path and the restart path alike. Trust the upload instead
 # and the two hostile-endpoint cells stop protecting anything: the local
 # copy goes and what survives is whatever the endpoint felt like keeping.
+#
+# It takes BOTH return paths, and that is not tidiness. #437 split
+# verifyCopy in two, an ungated Verify and a gated VerifyWithAccess, and a
+# mutation that took only one of them would leave the other still reading
+# the bytes back, which is a mutation that proves nothing. The anchor this
+# used to carry was the pre-split one, and it stopped matching: the swap
+# refused to plant, which is exactly what it is for.
+#
+# The three `_ =` lines are load-bearing too. Without them the mutant does
+# not compile, and a mutant that does not compile fails the suite for a
+# reason that has nothing to do with the promise.
 d=$(mutant destination-trusted-instead-of-verified)
 swap "$d/core/internal/placement/engine.go" \
-  '	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+  '	if !gated {
+		res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+		return res, want, err
+	}
+	// observe spends a restore-status call only for a class that needs
+	// one, so a STANDARD destination costs exactly what it cost before.
+	obs := e.observe(ctx, medium, mv.DestinationKey, medium.StorageClass)
+	res, err := VerifyWithAccess(ctx, e.Store, medium, candidate, want, obs, e.now())
 	return res, want, err' \
-  '	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
-	// PLANTED VIOLATION (scripts/conformance/selftest.sh): trust the
-	// upload rather than reading it back.
-	_ = res
-	return Result{Passed: true, Class: want, Detail: "planted"}, want, err'
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): trust the
+	// upload rather than reading it back, on both paths.
+	_ = gated
+	_ = medium
+	_ = candidate
+	return Result{Passed: true, Class: want, Detail: "planted"}, want, nil'
 expect_check_fails "a destination trusted instead of verified" "$d" \
   "does not hold the artifact's bytes" \
   'TestTheCrashMatrixAgainstARealS3Endpoint'
