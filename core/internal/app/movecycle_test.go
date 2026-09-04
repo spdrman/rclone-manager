@@ -117,6 +117,21 @@ func (m *countingMedium) ListObjects(context.Context, transport.Medium, string) 
 	panic("a move must never enumerate a medium")
 }
 
+// RestoreStatus and InitiateRestore are on transport.MediumStore because
+// #241's explicit restore operation needs them, and they are here only
+// because Service.MediumStore holds that whole interface. Both panic for
+// ListObjects' reason: FR-34's rule is that a read never initiates a
+// restore as a side effect, and a move never asks about one either, so a
+// change that starts doing either during a move should be loud rather
+// than plausible.
+func (m *countingMedium) RestoreStatus(context.Context, transport.Medium, string) (*transport.RestoreState, error) {
+	panic("a move must never ask a medium about a restore")
+}
+
+func (m *countingMedium) InitiateRestore(context.Context, transport.Medium, string, int) error {
+	panic("a move must never initiate a restore")
+}
+
 func (m *countingMedium) has(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
