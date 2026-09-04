@@ -193,7 +193,7 @@ func capturePruneVerdicts(ctx context.Context, dbPath, root string, bs config.Ba
 		return Cell{}, err
 	}
 
-	verdicts, err := retention.PruneDecide(fixedNow, bs.Retention, bs, records)
+	verdicts, err := retention.PruneDecide(fixedNow, bs.Retention, bs, records, retention.AllLocal)
 	if err != nil {
 		return Cell{}, err
 	}
