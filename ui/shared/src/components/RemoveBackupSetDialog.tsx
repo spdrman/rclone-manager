@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
@@ -69,6 +69,15 @@ export function RemoveBackupSetDialog({
   onRemoved(): void;
 }) {
   const api = useApi();
+  // A ref as well as the `removing` state, because they answer different
+  // questions. The state turns the confirm button off and changes its
+  // label, which is what an operator sees; the ref refuses a second call
+  // from a second click that was dispatched before that re-render
+  // happened, which React's batching makes an ordinary double-click
+  // rather than a rare race. Removal is the one action here where the
+  // second request's honest answer is a 404 for a set the operator did
+  // nothing wrong to lose.
+  const inFlight = useRef(false);
   const [removing, setRemoving] = useState(false);
   // A refusal is shown inside the dialog and the dialog stays open, so
   // the operator is never looking at a screen that implies the set went
@@ -101,6 +110,8 @@ export function RemoveBackupSetDialog({
       }
       onCancel={onCancel}
       onConfirm={() => {
+        if (inFlight.current) return;
+        inFlight.current = true;
         setRemoving(true);
         setError(null);
         void api
@@ -124,7 +135,10 @@ export function RemoveBackupSetDialog({
                 .message
             );
           })
-          .finally(() => setRemoving(false));
+          .finally(() => {
+            inFlight.current = false;
+            setRemoving(false);
+          });
       }}
     >
       <p style={{ margin: 0 }}>
