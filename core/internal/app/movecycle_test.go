@@ -246,14 +246,37 @@ func TestRunCycle_MovesTheArtifactTheChainSaysBelongsElsewhere(t *testing.T) {
 	}
 }
 
-// TestRunCycle_MovesNothingInADeploymentWithNoMedium is the fail-safe, and
-// it is the whole of FR-35's compatibility claim for this feature: a
-// deployment that declares no storage medium runs exactly as it did
-// before EPIC E.
+// TestMoveEngine_IsNotBuiltAtAllWithNoMediumDeclared is the fail-safe,
+// stated where it is decidable.
 //
-// It asserts the consequence rather than the control: not that some flag
-// is off, but that the engine planned nothing and the local file is
-// untouched.
+// A deployment that declares no storage medium has nowhere to move
+// anything to, so there is no engine, and that is not a refusal: it is the
+// ordinary state of every deployment written before EPIC E. It is checked
+// here rather than only through RunCycle because a medium-free deployment
+// also plans no moves, so the cycle-level outcome is identical whether an
+// engine was built or not, and a test that could not tell those apart
+// would pass against a build that constructed one on every cycle.
+func TestMoveEngine_IsNotBuiltAtAllWithNoMediumDeclared(t *testing.T) {
+	svc, _, _ := movingService(t, newCountingMedium(), nil)
+	svc.Config.StorageMediums = nil
+
+	engine, err := svc.moveEngine()
+	if err != nil {
+		t.Fatalf("moveEngine = %v; a deployment with no medium is not misconfigured, it simply has nothing to move", err)
+	}
+	if engine != nil {
+		t.Errorf("moveEngine built an engine (%+v) for a deployment that declares no storage medium", engine)
+	}
+}
+
+// TestRunCycle_MovesNothingInADeploymentWithNoMedium is FR-35's
+// compatibility claim for this feature, end to end: a deployment that
+// declares no storage medium runs exactly as it did before EPIC E.
+//
+// It is a regression control rather than a discriminating test, and the
+// test above is the discriminating half. What this one is here to catch is
+// the shape a unit test cannot: some later change making the cycle touch a
+// local file, or reach a medium, on a configuration that names neither.
 func TestRunCycle_MovesNothingInADeploymentWithNoMedium(t *testing.T) {
 	ctx := context.Background()
 	medium := newCountingMedium()
@@ -269,8 +292,11 @@ func TestRunCycle_MovesNothingInADeploymentWithNoMedium(t *testing.T) {
 
 	report := svc.RunCycle(ctx)
 
-	if report.Moves.Planned != 0 || report.Moves.Resumed != 0 {
+	if report.Moves.Planned != 0 || report.Moves.Resumed != 0 || len(report.Moves.Outcomes) != 0 {
 		t.Errorf("Moves = %+v, want nothing at all in a deployment with no storage medium", report.Moves)
+	}
+	if report.MovesErr != nil {
+		t.Errorf("MovesErr = %v; a deployment with no medium is not misconfigured", report.MovesErr)
 	}
 	if medium.uploads != 0 {
 		t.Errorf("%d uploads reached a medium this deployment does not declare", medium.uploads)
@@ -288,14 +314,33 @@ func TestRunCycle_MovesNothingInADeploymentWithNoMedium(t *testing.T) {
 // assertion that matters: a bound that was read but not applied still
 // reports Planned == 1 if the engine happens to stop early for another
 // reason.
+//
+// The three ages are in three different MONTHS, and that is load bearing
+// rather than tidy. Three artifacts inside one month are one monthly
+// bucket, so GFS keeps exactly one of them and the other two are selected
+// by nothing at all: no home, no move, and a test that would report one
+// planned move whatever the bound said. The first draft of this test did
+// exactly that, and a mutation replacing the configured bound with the
+// built-in default stayed green.
 func TestRunCycle_HonoursMaxMovesPerCycle(t *testing.T) {
 	ctx := context.Background()
 	medium := newCountingMedium()
 	one := 1
 	svc, bs, journal := movingService(t, medium, &one)
 
-	for _, name := range []string{"a.dump", "b.dump", "c.dump"} {
-		seedMovableArtifact(t, ctx, journal, bs, name, retentionTestNow.AddDate(0, 0, -40))
+	names := []string{"a.dump", "b.dump", "c.dump"}
+	for i, name := range names {
+		seedMovableArtifact(t, ctx, journal, bs, name, retentionTestNow.AddDate(0, -(i+1), -10))
+	}
+
+	// The control: without three artifacts the monthly tier actually
+	// selects, the bound below is being asserted against a plan of one.
+	preview, err := svc.RetentionPreview(ctx, bs.ID)
+	if err != nil {
+		t.Fatalf("RetentionPreview: %v", err)
+	}
+	if len(preview.HomePlan.Moves) != 3 {
+		t.Fatalf("the retention pass plans %+v, want all three artifacts moving; a bound cannot be tested against a plan smaller than it", preview.HomePlan.Moves)
 	}
 
 	report := svc.RunCycle(ctx)
@@ -304,7 +349,7 @@ func TestRunCycle_HonoursMaxMovesPerCycle(t *testing.T) {
 		t.Fatalf("Moves = %+v, want exactly one planned move under max_moves_per_cycle = 1", report.Moves)
 	}
 	survivors := 0
-	for _, name := range []string{"a.dump", "b.dump", "c.dump"} {
+	for _, name := range names {
 		if _, err := os.Stat(filepath.Join(bs.LocalPath, name)); err == nil {
 			survivors++
 		}
@@ -349,19 +394,29 @@ func TestRunCycle_RefusesToMoveWithNoWayToReachAMedium(t *testing.T) {
 // is this" has two answers, and a second move planned on top of one
 // already running is the race FR-30's journal exists to make
 // unrepresentable.
+//
+// The artifact is RECENT, so its home is the daily tier's local medium
+// while its second placement is offsite. That is deliberate and it is what
+// makes the test discriminate. The first draft used a month-old artifact,
+// whose home is offsite, and placements come back ordered by medium, so
+// "cold_offsite" is the first of the two: a build that took the first
+// ACTIVE placement instead of refusing would have read the artifact as
+// already at home and planned nothing, and the test would have passed
+// against exactly the bug it exists to catch. With the home at local, the
+// same wrong build plans a move.
 func TestRunCycle_MovesNothingForAnArtifactWhoseLocationIsContested(t *testing.T) {
 	ctx := context.Background()
 	medium := newCountingMedium()
 	svc, bs, journal := movingService(t, medium, nil)
 
-	artifact := seedMovableArtifact(t, ctx, journal, bs, "monthly-only.dump", retentionTestNow.AddDate(0, 0, -40))
+	artifact := seedMovableArtifact(t, ctx, journal, bs, "recent.dump", retentionTestNow.AddDate(0, 0, -1))
 	size := int64(1)
 	if _, err := journal.RecordTransition(ctx, state.Transition{
 		Artifact: artifact, Key: "second-placement",
 		From: string(lifecycle.Complete), To: string(lifecycle.Complete),
 		OccurredAt: retentionTestNow,
 		Placement: &state.PlacementUpdate{
-			Medium: moveTestMedium, Location: "artifacts/monthly-only.dump", Size: &size,
+			Medium: moveTestMedium, Location: "artifacts/recent.dump", Size: &size,
 			VerificationClass: state.VerificationExistence, Status: state.PlacementActive,
 		},
 	}); err != nil {
@@ -370,13 +425,13 @@ func TestRunCycle_MovesNothingForAnArtifactWhoseLocationIsContested(t *testing.T
 
 	report := svc.RunCycle(ctx)
 
-	if report.Moves.Planned != 0 {
+	if report.Moves.Planned != 0 || len(report.Moves.Outcomes) != 0 {
 		t.Errorf("Moves = %+v, want nothing planned for an artifact whose location cannot be confirmed", report.Moves)
 	}
 	if medium.uploads != 0 {
 		t.Errorf("%d uploads were started for an artifact with a move already in flight", medium.uploads)
 	}
-	if _, err := os.Stat(filepath.Join(bs.LocalPath, "monthly-only.dump")); err != nil {
+	if _, err := os.Stat(filepath.Join(bs.LocalPath, "recent.dump")); err != nil {
 		t.Errorf("the local copy is gone (%v); nothing should have touched it", err)
 	}
 }
