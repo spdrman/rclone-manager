@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -17,10 +16,6 @@ import (
 
 func glacierMedium() transport.Medium {
 	return transport.Medium{ID: "cold-store", Type: transport.MediumTypeS3, Bucket: "b", StorageClass: config.StorageClassGlacier}
-}
-
-func standardMedium() transport.Medium {
-	return transport.Medium{ID: "warm-store", Type: transport.MediumTypeS3, Bucket: "b", StorageClass: config.StorageClassStandard}
 }
 
 // fakeMedium is one object on one pretend medium, plus a call counter for
@@ -74,10 +69,6 @@ func (f *fakeMedium) counts() (stats, opens, checksums, restoreStatuses, initiat
 // medium about the object's bytes or metadata. Restore status is excluded
 // deliberately: asking whether a restore is running is how an access state
 // is derived honestly, and it is not the expensive thing.
-func (f *fakeMedium) spentARequestOnTheObject() bool {
-	stats, opens, checksums, _, _ := f.counts()
-	return stats+opens+checksums > 0
-}
 
 func (f *fakeMedium) StatObject(_ context.Context, _ transport.Medium, _ string) (transport.ObjectInfo, error) {
 	f.mu.Lock()
@@ -165,8 +156,3 @@ func localPlacement(path string, size int64, hash string) state.Placement {
 	p := mediumPlacement(state.MediumLocal, path, size, hash, state.VerificationContent)
 	return p
 }
-
-// errNotFound is what a medium returns for a key it does not hold,
-// classified the way an adapter classifies it so internal/placement's own
-// NotFound branch is exercised rather than bypassed.
-var errNotFound = transport.NewError(transport.NotFound, "stat", fmt.Errorf("no such key"))
