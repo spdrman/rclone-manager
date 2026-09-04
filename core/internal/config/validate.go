@@ -97,6 +97,7 @@ func (c *Config) Validate() error {
 	}
 
 	declaredMediums := v.validateStorageMediums(c.StorageMediums)
+	v.validateMaxMovesPerCycle(c.MaxMovesPerCycle, len(c.StorageMediums))
 	v.validateRetention(&c.Retention)
 
 	// --- Phase 2: inheritance ---
@@ -1244,6 +1245,32 @@ func (v *validator) validateRetentionTiers(r *Retention) {
 		case !validRetentionGranularities[t.WindowUnit]:
 			v.addf("%s: window_unit %q is not one of: %s", path, t.WindowUnit, retentionGranularityList)
 		}
+	}
+}
+
+// validateMaxMovesPerCycle checks FR-30's per-cycle move bound.
+//
+// The shape is validateRevalidation's, deliberately: a key that is only
+// meaningful when something else is configured is refused when that
+// something is absent, rather than accepted and quietly ignored. An
+// ignored key reads to the operator who wrote it as a setting that took
+// effect.
+//
+// The one difference from revalidation is that this key HAS a defensible
+// default (DefaultMaxMovesPerCycle) where a revalidation cadence does not,
+// so an absent key is fine here and a zero is not: nobody writes a bound
+// of zero meaning "default", and the way to move nothing is to point no
+// tier at a medium.
+func (v *validator) validateMaxMovesPerCycle(bound *int, declaredMediums int) {
+	if bound == nil {
+		return
+	}
+	if declaredMediums == 0 {
+		v.addf("max_moves_per_cycle: there are no storage_mediums declared, so there is nowhere to move an artifact to and this bound would do nothing; remove it, or declare the medium a retention tier names")
+		return
+	}
+	if *bound <= 0 {
+		v.addf("max_moves_per_cycle: must be a positive integer, and %d is not; to move nothing, point no retention tier at a medium rather than bounding the engine to zero", *bound)
 	}
 }
 

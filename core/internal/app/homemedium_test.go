@@ -8,6 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -199,13 +200,14 @@ func TestActiveMediumFromRecords_TwoActivePlacementsCannotBeConfirmed(t *testing
 
 	lookup := ActiveMediumFromRecords([]state.Record{mid, settled})
 
-	if _, known := lookup(mid.Artifact); known {
-		t.Error("an artifact with two ACTIVE placements reported a confirmed location; a move is already in flight and there are two answers")
+	if got := lookup(mid.Artifact); got.Status != retention.LocationContested {
+		t.Errorf("an artifact with two ACTIVE placements reported %+v, want CONTESTED: a move is already in flight and there are two answers, "+
+			"which is a different fact from a journal that simply says nothing", got)
 	}
 	// The control: without it this would pass against a lookup that never
 	// confirms anything.
-	if m, known := lookup(settled.Artifact); !known || m != state.MediumLocal {
-		t.Errorf("an artifact with one ACTIVE placement reported (%q, %v), want (%q, true)", m, known, state.MediumLocal)
+	if got := lookup(settled.Artifact); got.Status != retention.LocationConfirmed || got.Medium != state.MediumLocal {
+		t.Errorf("an artifact with one ACTIVE placement reported %+v, want a confirmed %q", got, state.MediumLocal)
 	}
 }
 
@@ -220,8 +222,12 @@ func TestActiveMediumFromRecords_ANonActivePlacementIsNotALocation(t *testing.T)
 		rec := records[0]
 		rec.Placements = []state.Placement{{Medium: state.MediumLocal, Status: status}}
 		lookup := ActiveMediumFromRecords([]state.Record{rec})
-		if m, known := lookup(rec.Artifact); known {
-			t.Errorf("a %s placement reported the artifact as located on %q", status, m)
+		got := lookup(rec.Artifact)
+		if got.Status == retention.LocationConfirmed {
+			t.Errorf("a %s placement reported the artifact as located on %q", status, got.Medium)
+		}
+		if got.Status != retention.LocationUnrecorded {
+			t.Errorf("a %s placement reported %+v; the row is not ACTIVE, so it falls out of the count and what is left is a journal saying nothing", status, got)
 		}
 	}
 }
@@ -262,5 +268,59 @@ func newCompleteRecord(t *testing.T, set model.BackupSetID, name string, at time
 		State:        string(lifecycle.Complete),
 		DiscoveredAt: at,
 		UpdatedAt:    at,
+	}
+}
+
+// TestRetentionPreview_ReportsWhereEachArtifactIs is the other half of
+// FR-30's "the dry-run explains per-artifact WHERE the deletion would
+// happen". The verdict cannot carry that, because FR-32 forbids
+// internal/retention seeing a placement at all, so it travels beside the
+// verdict and this is where it is filled in.
+//
+// The three statuses are all asserted, because they are three different
+// things to tell an operator and collapsing any two of them is how a
+// deletion gets reported as happening somewhere it would not.
+func TestRetentionPreview_ReportsWhereEachArtifactIs(t *testing.T) {
+	ctx := context.Background()
+	records := gfsRecordsForHomeTest(t)
+	records[0].Placements = []state.Placement{{Medium: state.MediumLocal, Status: state.PlacementActive}}
+	records[1].Placements = []state.Placement{{Medium: "cold_offsite", Status: state.PlacementActive}}
+	records[2].Placements = []state.Placement{
+		{Medium: state.MediumLocal, Status: state.PlacementActive},
+		{Medium: "cold_offsite", Status: state.PlacementActive},
+	}
+
+	bs := testBackupSet(t, t.TempDir())
+	cfg := testConfig(t, testSource("production", bs))
+	cfg.Retention = chainWithOffsiteMonthly()
+	resolveTestRetention(cfg)
+
+	svc := New(cfg, recordsJournal{records: records}, nil, nil)
+	svc.Now = fixedNow(retentionTestNow)
+
+	report, err := svc.RetentionPreview(ctx, bs.ID)
+	if err != nil {
+		t.Fatalf("RetentionPreview: %v", err)
+	}
+
+	for _, want := range []struct {
+		name string
+		loc  retention.Location
+	}{
+		{"recent.dump", retention.Location{Medium: state.MediumLocal, Status: retention.LocationConfirmed}},
+		{"monthly-only.dump", retention.Location{Medium: "cold_offsite", Status: retention.LocationConfirmed}},
+		{"too-old.dump", retention.Location{Status: retention.LocationContested}},
+	} {
+		id, err := model.NewArtifactID(bs.ID, want.name)
+		if err != nil {
+			t.Fatalf("NewArtifactID(%q): %v", want.name, err)
+		}
+		if got := report.Locations[id]; got != want.loc {
+			t.Errorf("Locations[%s] = %+v, want %+v", want.name, got, want.loc)
+		}
+	}
+	if len(report.Locations) != len(report.Verdicts) {
+		t.Errorf("Locations has %d entries for %d verdicts; every artifact a verdict is about has a location, even when that location is 'I could not confirm one'",
+			len(report.Locations), len(report.Verdicts))
 	}
 }

@@ -468,3 +468,66 @@ func importedAs(file *ast.File, importPath string) string {
 	}
 	return ""
 }
+
+// TestLocal_ARootlessStoreStillAddressesAbsolutePathsAndRefusesToInventOne
+// pins the contract the move engine's deployment-scoped Local depends on
+// (internal/app.moveEngine, issue #239).
+//
+// An engine that spans backup sets has no single local root, and it does
+// not need one: every path it hands this store came out of the journal or
+// out of the DESTINATION backup set's own store, so the four data methods
+// are addressed absolutely and the root is not consulted. What it must
+// never do is compute a path itself, and a rootless store makes that
+// impossible by refusing Locator rather than joining onto "".
+//
+// Both halves are asserted because only together do they say anything: a
+// store that refused everything would satisfy the second, and a store that
+// silently joined onto "" would satisfy the first while writing artifacts
+// relative to whatever directory the daemon started in.
+func TestLocal_ARootlessStoreStillAddressesAbsolutePathsAndRefusesToInventOne(t *testing.T) {
+	ctx := context.Background()
+	var store artifactstore.Local
+	path := filepath.Join(t.TempDir(), "absolute.dump")
+
+	if err := store.Put(ctx, path, bytes.NewReader([]byte("bytes"))); err != nil {
+		t.Fatalf("Put through a rootless store: %v", err)
+	}
+	st, err := store.Stat(ctx, path)
+	if err != nil {
+		t.Fatalf("Stat through a rootless store: %v", err)
+	}
+	if st.Size == nil || *st.Size != 5 {
+		t.Errorf("Stat reported %+v, want 5 bytes", st)
+	}
+	rc, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open through a rootless store: %v", err)
+	}
+	got, err := io.ReadAll(rc)
+	_ = rc.Close()
+	if err != nil {
+		t.Fatalf("reading: %v", err)
+	}
+	if string(got) != "bytes" {
+		t.Errorf("read %q, want %q", got, "bytes")
+	}
+	if err := store.Remove(ctx, path); err != nil {
+		t.Errorf("Remove through a rootless store: %v", err)
+	}
+
+	set, err := model.NewBackupSetID("production", "postgres-primary")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	artifact, err := model.NewArtifactID(set, "a.dump")
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	locator, err := store.Locator(artifact)
+	if err == nil {
+		t.Fatalf("a rootless store answered Locator with %q; joining onto an empty root is a path relative to the daemon's working directory", locator)
+	}
+	if !strings.Contains(err.Error(), "root") {
+		t.Errorf("err = %q, which does not tell the caller what is missing", err)
+	}
+}
