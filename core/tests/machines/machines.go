@@ -311,7 +311,7 @@ func createNetwork(t *testing.T) string {
 
 var (
 	imageOnce sync.Once
-	imageTag  string
+	imageRef  string
 	imageErr  error
 )
 
@@ -326,7 +326,7 @@ func ensureSourceImage(t *testing.T) string {
 		sum := sha256.Sum256([]byte(sourceDockerfile))
 		tag := "rclone-manager-machines-source:" + hex.EncodeToString(sum[:6])
 		if _, _, err := dockerRun(dockerExecTimeout, "image", "inspect", tag); err == nil {
-			imageTag = tag
+			imageRef = tag
 			return
 		}
 		_, errOut, err := dockerRunStdin(dockerBuildTimeout, sourceDockerfile, "build", "-q", "-t", tag, "-")
@@ -334,12 +334,12 @@ func ensureSourceImage(t *testing.T) string {
 			imageErr = fmt.Errorf("building the source machine image %s: %w\n%s", tag, err, errOut)
 			return
 		}
-		imageTag = tag
+		imageRef = tag
 	})
 	if imageErr != nil {
 		t.Fatalf("machines: %v\nThat is a FAILURE and deliberately not a skip: skipping would take the whole machine tier out of the gate while the gate went on reporting ok (#160).", imageErr)
 	}
-	return imageTag
+	return imageRef
 }
 
 // --- docker ---------------------------------------------------------------
