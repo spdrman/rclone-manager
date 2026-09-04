@@ -116,6 +116,20 @@ func noAction(artifact model.ArtifactID, st lifecycle.State, reason string) Find
 	return Finding{Artifact: artifact, From: st, To: st, Reason: reason}
 }
 
+// leftOnMedium is the Finding for an artifact whose durable copy is on a
+// storage medium rather than on local disk: no action, in every state,
+// with the reason saying where the copy is.
+//
+// It is one function rather than a noAction call in each handler so that
+// the four handlers cannot drift on what this shape means. Reconcile has
+// no MediumStore in its Deps and no business acquiring one: FR-17's pass
+// runs against every artifact on every cycle, and a HEAD per artifact per
+// cycle is a bill internal/revalidate already pays on a schedule the
+// operator chose.
+func leftOnMedium(rec state.Record, st lifecycle.State, local localValidity) Finding {
+	return noAction(rec.Artifact, st, local.Reason)
+}
+
 // reconcileRemoteRetained handles the REMOTE_RETAINED row (issue #315):
 // re-check the durable local copy the same way reconcileCommitted does for
 // COMMITTED, and quarantine it if it has gone bad.
@@ -134,9 +148,12 @@ func noAction(artifact model.ArtifactID, st lifecycle.State, reason string) Find
 // quarantine.go's quarantineOrigins).
 func reconcileRemoteRetained(ctx context.Context, deps Deps, rec state.Record) (Finding, error) {
 	local := checkLocalFinal(rec)
-	if local.Valid {
+	switch local.Verdict {
+	case localValid:
 		return noAction(rec.Artifact, lifecycle.RemoteRetained,
 			"local final copy verified valid; the remote source remains retained by policy and was never examined"), nil
+	case localOnMedium:
+		return leftOnMedium(rec, lifecycle.RemoteRetained, local), nil
 	}
 
 	out, err := lifecycle.Advance(ctx, deps.lifecycleDeps(), state.Transition{
@@ -169,9 +186,12 @@ func reconcileRemoteRetained(ctx context.Context, deps Deps, rec state.Record) (
 // finds when it eventually runs.
 func reconcileCommitted(ctx context.Context, deps Deps, rec state.Record) (Finding, error) {
 	local := checkLocalFinal(rec)
-	if local.Valid {
+	switch local.Verdict {
+	case localValid:
 		return noAction(rec.Artifact, lifecycle.Committed,
 			"local final copy verified valid; remote still untouched, proceeding toward eventual delete"), nil
+	case localOnMedium:
+		return leftOnMedium(rec, lifecycle.Committed, local), nil
 	}
 
 	out, err := lifecycle.Advance(ctx, deps.lifecycleDeps(), state.Transition{
@@ -199,13 +219,23 @@ func reconcileCommitted(ctx context.Context, deps Deps, rec state.Record) (Findi
 // row.
 func reconcileDeletePending(ctx context.Context, deps Deps, source transport.Source, rec state.Record) (Finding, error) {
 	local := checkLocalFinal(rec)
+	if local.Verdict == localOnMedium {
+		// Before the Stat, on purpose. FR-30 makes only COMPLETE artifacts
+		// move-eligible, so a REMOTE_DELETE_PENDING artifact whose copy is
+		// on a medium is a shape nothing in this codebase produces; if one
+		// ever turns up, the answer is still to leave it alone rather than
+		// to reason about its remote against a local copy that is not
+		// there. The delete step's own gate (lifecycle.DeleteRemote,
+		// verifyLocalFinal) refuses the same shape for the same reason.
+		return leftOnMedium(rec, lifecycle.RemoteDeletePending, local), nil
+	}
 
 	art, remoteExists, statErr := statRemote(ctx, deps.Transport, source, rec.RemotePath)
 	if statErr != nil {
 		return Finding{}, fmt.Errorf("checking the remote object for %s: %w", rec.Artifact, statErr)
 	}
 
-	if !local.Valid {
+	if local.Verdict != localValid {
 		if !remoteExists {
 			return reconcileToLost(ctx, deps, rec, local.Reason)
 		}
@@ -270,9 +300,16 @@ func reconcileDeletePending(ctx context.Context, deps Deps, source transport.Sou
 // validity.
 func reconcileComplete(ctx context.Context, deps Deps, rec state.Record) (Finding, error) {
 	local := checkLocalFinal(rec)
-	if local.Valid {
+	switch local.Verdict {
+	case localValid:
 		return noAction(rec.Artifact, lifecycle.Complete,
 			"remote already confirmed gone and the local copy verified valid; nothing to reconcile"), nil
+	case localOnMedium:
+		// The shape every completed move leaves behind, on the one state
+		// FR-30 lets move. COMPLETE -> QUARANTINED_LOST is for "the
+		// artifact's only placement is lost" (#238), and an ACTIVE copy on
+		// a medium is the opposite of that.
+		return leftOnMedium(rec, lifecycle.Complete, local), nil
 	}
 
 	out, err := lifecycle.Advance(ctx, deps.lifecycleDeps(), state.Transition{

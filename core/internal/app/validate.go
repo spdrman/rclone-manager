@@ -181,6 +181,36 @@ func (s *Service) runValidationChecks(ctx context.Context, rec state.Record, val
 	// copy can live on a storage medium.
 	localPath, hasLocal := rec.ReadableLocalPath()
 	if !hasLocal {
+		// An artifact whose durable copy is on a storage medium has no
+		// local copy for this command to check, and that is a fact about
+		// where the copy is rather than a verdict about the artifact. It
+		// gets the same treatment as an unresolved validator above: a
+		// refusal that leaves the artifact exactly as it was. The
+		// alternative, a failed verdict, routed a COMPLETE artifact into
+		// QUARANTINED_LOST the first time an operator ran `validate`
+		// against a moved one, over a copy that was there and verified.
+		//
+		// Checking the medium copy from here is real work this command
+		// does not do yet: an existence check is free and a content check
+		// costs egress, and FR-31 makes the latter operator-initiated,
+		// which `validate` is. Until it does, the refusal says where the
+		// copy is and what does check it.
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			ids := make([]string, 0, len(mediums))
+			for _, p := range mediums {
+				class := p.VerificationClass
+				if class == "" {
+					class = "unverified"
+				}
+				ids = append(ids, fmt.Sprintf("%q (%s)", p.Medium, class))
+			}
+			return checkOutcome{}, fmt.Errorf(
+				"%s has no local copy to check: its durable copy is on storage medium %s; validate checks the local copy only, and the copy on the medium is existence-checked by scheduled revalidation (FR-31), so the artifact is left as it is",
+				rec.Artifact, strings.Join(ids, ", "))
+		}
+		if len(rec.Placements) > 0 {
+			return checkOutcome{Checked: true, Reason: "no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING"}, nil
+		}
 		return checkOutcome{Checked: true, Reason: "no local final path is recorded in the journal"}, nil
 	}
 	info, statErr := os.Stat(localPath)

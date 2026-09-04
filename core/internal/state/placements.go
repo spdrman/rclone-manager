@@ -178,6 +178,20 @@ func (r Record) LocalPlacement() (Placement, bool) {
 // somewhere other than local, a record with no placements stops meaning
 // "local, as before" and starts meaning "nobody said", and this fallback
 // is what #239 removes.
+//
+// # A false answer has two meanings, and the caller must tell them apart
+//
+// "Not readable locally" is true of an artifact whose only copy is on a
+// storage medium, and it is also true of an artifact with no copy
+// anywhere. The first is a healthy artifact after a completed move; the
+// second is a loss. A caller that stops reading at the bool treats them
+// the same, and every one of the four swept callers did exactly that for
+// one release: the first successful move of an artifact to a medium got
+// it marked QUARANTINED_LOST on the next cycle, because reconcile read
+// "no readable local path" as "no durable copy". ActiveMediumPlacements
+// is the other half of the answer, and a caller of this function that
+// does not also ask it is refused by the sweep test
+// (localpathsweep_test.go).
 func (r Record) ReadableLocalPath() (string, bool) {
 	if p, ok := r.LocalPlacement(); ok {
 		return p.Location, p.Location != ""
@@ -185,10 +199,44 @@ func (r Record) ReadableLocalPath() (string, bool) {
 	if len(r.Placements) > 0 {
 		// The artifact has placements and none of them is an active local
 		// one, which is a positive statement rather than an absence: its
-		// bytes are somewhere this caller cannot read with an os.Open.
+		// bytes are somewhere this caller cannot read with an os.Open, or
+		// nowhere at all, and ActiveMediumPlacements says which.
 		return "", false
 	}
 	return r.LocalPath, r.LocalPath != ""
+}
+
+// ActiveMediumPlacements returns every ACTIVE copy the artifact has on a
+// storage medium, in the journal's own medium order.
+//
+// It is the question a caller asks when ReadableLocalPath said no: is the
+// durable copy somewhere else, or nowhere. An empty answer beside a false
+// ReadableLocalPath means no ACTIVE copy is recorded anywhere, which is
+// the only shape "the artifact's only placement is lost" (#238) can have.
+// A non-empty answer means the copy is on a medium, and what a caller
+// does about that is its own question: reconcile has no way to read a
+// medium and leaves the artifact alone, revalidate existence-checks it,
+// and the pre-delete gate refuses rather than delete a source against a
+// copy it cannot read.
+//
+// It is every ACTIVE medium placement rather than the first, for the
+// reason internal/revalidate gave when it kept its own copy of this
+// loop: "the first one" is an assumption, and FR-31's rule is that an
+// artifact is lost only when NO other ACTIVE verified placement remains.
+// Nothing today puts an artifact on two mediums at once, so this is a
+// slice of one; the day something can, the answer is already right.
+//
+// It does not filter on VerificationClass. Whether a copy is verified
+// well enough for a caller's purpose is that caller's decision, and the
+// class is on each returned Placement for it to read.
+func (r Record) ActiveMediumPlacements() []Placement {
+	var out []Placement
+	for _, p := range r.Placements {
+		if !p.IsLocal() && p.Status == PlacementActive {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 const placementColumns = `

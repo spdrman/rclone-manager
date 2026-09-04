@@ -615,6 +615,27 @@ func verifyLocalFinal(rec state.Record) error {
 	// check must refuse rather than misread as a missing file.
 	localPath, ok := rec.ReadableLocalPath()
 	if !ok {
+		// A refusal either way, because this gate authorises destroying
+		// the remote source and FR-15 requires the local copy to be
+		// CONFIRMED, not assumed. What differs is what the refusal says.
+		// An artifact whose copy is on a medium is not an artifact whose
+		// file went missing, and an operator reading "no local final path
+		// is recorded" would go looking for a lost file that was never
+		// lost. FR-30 makes only COMPLETE artifacts move-eligible, so this
+		// shape should not reach a delete at all; if it does, the reason
+		// has to say so rather than misread it.
+		if mediums := rec.ActiveMediumPlacements(); len(mediums) > 0 {
+			ids := make([]string, 0, len(mediums))
+			for _, p := range mediums {
+				ids = append(ids, fmt.Sprintf("%q", p.Medium))
+			}
+			return fmt.Errorf(
+				"this artifact's durable copy is on storage medium %s, not on local disk; FR-15's pre-delete check confirms the LOCAL copy and cannot read a medium, and a source is never deleted against a copy this gate cannot read (FR-30 moves only COMPLETE artifacts, so a %s artifact on a medium needs an operator to look)",
+				strings.Join(ids, ", "), rec.State)
+		}
+		if len(rec.Placements) > 0 {
+			return fmt.Errorf("no ACTIVE copy of this artifact is recorded anywhere: every placement in the journal is GONE or DELETE_PENDING")
+		}
 		return fmt.Errorf("no local final path is recorded for this artifact")
 	}
 
