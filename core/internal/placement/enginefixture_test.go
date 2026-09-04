@@ -84,13 +84,18 @@ type fakeMedium struct {
 	// can, so false is the realistic default for s3.
 	attests bool
 
-	uploadErr error
-	statErr   error
-	openErr   error
-	deleteErr error
+	// restore is what RestoreStatus reports, or nil for an object nobody
+	// has asked to restore, which is what S3 says about most objects.
+	restore *transport.RestoreState
 
-	uploads, opens, stats, deletes int
-	uploadedKeys                   []string
+	uploadErr  error
+	statErr    error
+	openErr    error
+	deleteErr  error
+	restoreErr error
+
+	uploads, opens, stats, deletes, restoreStatuses int
+	uploadedKeys                                    []string
 }
 
 func newFakeMedium() *fakeMedium {
@@ -176,6 +181,22 @@ func (f *fakeMedium) DeleteObject(_ context.Context, _ transport.Medium, key str
 	}
 	delete(f.objects, key)
 	return nil
+}
+
+func (f *fakeMedium) RestoreStatus(_ context.Context, _ transport.Medium, _ string) (*transport.RestoreState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restoreStatuses++
+	if f.restoreErr != nil {
+		return nil, f.restoreErr
+	}
+	return f.restore, nil
+}
+
+func (f *fakeMedium) restoreStatusCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restoreStatuses
 }
 
 func (f *fakeMedium) has(key string) bool {
@@ -421,6 +442,9 @@ type fixtureOpts struct {
 	content []byte
 	// artifactName overrides the artifact's name.
 	artifactName string
+	// storageClass is the class the medium writes with. Empty means the
+	// medium names none, which internal/archive reads as STANDARD.
+	storageClass string
 }
 
 func newFixture(t *testing.T, opts fixtureOpts) *fixture {
@@ -501,7 +525,7 @@ func newFixture(t *testing.T, opts fixtureOpts) *fixture {
 		Store:   &guardedMedium{fakeMedium: medium, guard: g},
 		Local:   guardedLocal{Local: local, guard: g},
 		Mediums: fixedMediums{
-			medium: transport.Medium{ID: testMedium, Type: transport.MediumTypeS3, Bucket: "nas-backups", Prefix: "rclone-manager"},
+			medium: transport.Medium{ID: testMedium, Type: transport.MediumTypeS3, Bucket: "nas-backups", Prefix: "rclone-manager", StorageClass: opts.storageClass},
 			class:  class,
 		},
 		Sets:             sets,

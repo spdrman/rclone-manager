@@ -124,11 +124,51 @@ func TestTheSourceDeleteHasExactlyOneCaller(t *testing.T) {
 		{"guardSourceDelete", "deleteSource"},
 		{"proveLocalSourceSafe", "guardSourceDelete"},
 		{"proveMediumSourceSafe", "guardSourceDelete"},
+		{"copiesOf", "guardSourceDelete"},
+		{"observe", "copiesOf"},
 	} {
 		got := callers[tc.method]
 		if len(got) != 1 || !strings.HasSuffix(got[0], ":"+tc.want) {
 			t.Errorf("e.%s is called from %v; it must be called from %s and nothing else", tc.method, got, tc.want)
 		}
+	}
+}
+
+// TestTheGuardAsksArchiveExactlyOnceAndOnlyWhereItDecides pins where the
+// one call to archive.CheckSourceDelete in this package sits.
+//
+// internal/archive's own composition guard proves the package MAKES the
+// call; this proves it makes it in guardSourceDelete, which is the only
+// function that hands deleteSource a target, and nowhere else. A second
+// call somewhere convenient would be a second place the answer could be
+// computed from different copies, and a call that moved out of the guard
+// would be a call the guard's own refusal path no longer covers.
+func TestTheGuardAsksArchiveExactlyOnceAndOnlyWhereItDecides(t *testing.T) {
+	var callers []string
+	for name, file := range packageFiles(t) {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "CheckSourceDelete" {
+					return true
+				}
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "archive" {
+					callers = append(callers, name+":"+fn.Name.Name)
+				}
+				return true
+			})
+		}
+	}
+	if len(callers) != 1 || !strings.HasSuffix(callers[0], ":guardSourceDelete") {
+		t.Fatalf("archive.CheckSourceDelete is called from %v; it must be called from guardSourceDelete and nowhere else, because that is the only function that hands the source delete a target", callers)
 	}
 }
 

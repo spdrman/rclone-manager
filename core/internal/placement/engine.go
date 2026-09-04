@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/artifactstore"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
@@ -46,6 +47,15 @@ import (
 //     refuses on anything it cannot prove. It is this file's
 //     pruneVerifySafeToDelete, and it is written the same way and for the
 //     same reason.
+//  5. The same guard ends by asking internal/archive whether a copy that
+//     SURVIVES the delete can actually be read right now
+//     (archive.CheckSourceDelete), which is a fact about the present that
+//     no journal row carries: a placement can say ACTIVE and
+//     content-verified and describe bytes that are hours away from
+//     anybody, because nothing rewrites verification_class when a bucket
+//     lifecycle rule transitions an object or a restore window expires.
+//     archive's own composition guard fails the build if this package
+//     stops making that call.
 //
 // That is redundant on purpose. internal/retention's own package doc makes
 // the argument at length: a safety check worth having is worth re-running
@@ -92,6 +102,16 @@ type MediumStore interface {
 	OpenObject(ctx context.Context, medium transport.Medium, key string) (io.ReadCloser, error)
 	ObjectChecksum(ctx context.Context, medium transport.Medium, key string, alg transport.HashAlgorithm) (transport.ChecksumAttestation, error)
 	DeleteObject(ctx context.Context, medium transport.Medium, key string) error
+
+	// RestoreStatus is what the medium says about a restore of the object
+	// at key, or nil when it reports none, which is what S3 returns for an
+	// object nobody has asked to restore. It is the one read that turns a
+	// storage class into an access state honestly: an archive-class copy
+	// is unreadable UNLESS a restore is in effect, and the journal cannot
+	// know that. It addresses exactly the key it is given, which is the
+	// property this interface exists to keep, and it initiates nothing.
+	// The engine asks it only for a copy on an archive class; see observe.
+	RestoreStatus(ctx context.Context, medium transport.Medium, key string) (*transport.RestoreState, error)
 }
 
 // LocalStore is the slice of artifactstore.Store the local end of a move
@@ -1006,6 +1026,81 @@ func (e *Engine) remove(ctx context.Context, t deleteTarget) error {
 		return fmt.Errorf("no medium store is configured")
 	}
 	return e.Store.DeleteObject(ctx, t.medium, t.key)
+}
+
+// copiesOf is every placement the journal holds for this artifact, as
+// internal/archive's delete decision sees them: the row, the storage class
+// of the medium it names, and what can be done with it RIGHT NOW.
+//
+// The third field is the whole point and the reason this cannot be a
+// projection of the record. A row says what was true when it was written;
+// whether the bytes it describes can be read today depends on the class
+// the medium writes with and on whether a restore is in effect, and the
+// second of those lives at the endpoint. So an ACTIVE copy on an archive
+// class is asked about, through observe, before it is allowed to count.
+//
+// A copy on a medium the configuration no longer declares is unreachable:
+// there is no bucket, no endpoint and no credential to reach it with, so
+// nothing here can say it is readable, and archive's decision will not let
+// it stand in for anything. That is deliberately a state and not a
+// refusal, because the copy being DELETED may be the one on the forgotten
+// medium, and its own reachability is not the question. A class the table
+// does not know IS a refusal: config validation refuses it at load, so it
+// is drift between two lists, and the copy it describes might be the one
+// that has to stand in.
+func (e *Engine) copiesOf(ctx context.Context, rec state.Record) ([]archive.Copy, error) {
+	now := e.now()
+	out := make([]archive.Copy, 0, len(rec.Placements))
+	for _, p := range rec.Placements {
+		c := archive.Copy{Placement: p}
+		var obs archive.Observation
+		if !p.IsLocal() {
+			medium, _, err := e.resolve(p.Medium)
+			if err != nil {
+				c.Access = archive.Unreachable
+				out = append(out, c)
+				continue
+			}
+			c.Class = medium.StorageClass
+			if p.Status == state.PlacementActive {
+				// Only a copy the journal still believes in can stand in
+				// for another, so only such a copy is worth a request.
+				obs = e.observe(ctx, medium, p.Location, c.Class)
+			}
+		}
+		access, err := archive.Access(p.Medium, c.Class, obs, now)
+		if err != nil {
+			return nil, fmt.Errorf("the copy on %q is on storage class %q, which this build does not recognise, so nothing here can say whether it is readable: %w", p.Medium, c.Class, err)
+		}
+		c.Access = access
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// observe asks the medium whether a restore of one copy is in effect,
+// when and only when the copy's class needs one to be readable.
+//
+// A non-archive class serves objects on demand, and archive.Access does
+// not read the restore status for one; asking anyway would add a failure
+// mode (a status endpoint that did not answer) to a copy whose
+// readability does not depend on the answer. A class the table does not
+// know is treated as archive, which is archive.IsArchive's own safe
+// direction, and archive.Access then refuses it by name.
+//
+// A store that cannot be asked, or that did not answer, is reported as
+// exactly that. Nothing here guesses: NotAsked reads as requires_restore
+// and DidNotAnswer reads as unreachable, and neither can stand in for a
+// copy that is about to be deleted.
+func (e *Engine) observe(ctx context.Context, medium transport.Medium, key, class string) archive.Observation {
+	if !archive.IsArchive(class) || e.Store == nil {
+		return archive.Observation{}
+	}
+	restore, err := e.Store.RestoreStatus(ctx, medium, key)
+	if err != nil {
+		return archive.Observation{Probe: archive.DidNotAnswer}
+	}
+	return archive.Observation{Probe: archive.Answered, Restore: restore}
 }
 
 // placementOn returns the artifact's placement on one medium, whatever its
