@@ -117,6 +117,26 @@ func (m *countingMedium) ListObjects(context.Context, transport.Medium, string) 
 	panic("a move must never enumerate a medium")
 }
 
+// RestoreStatus reports no restore, which is what S3 says about an object
+// nobody has ever asked to restore, and every medium in these tests writes
+// STANDARD so no object here needs one.
+//
+// It has to exist because #241 added the archive pair to
+// transport.MediumStore and this double was written before that. Without
+// it this whole package does not build, which is how it was found.
+func (m *countingMedium) RestoreStatus(context.Context, transport.Medium, string) (*transport.RestoreState, error) {
+	return nil, nil
+}
+
+// InitiateRestore panics, for ListObjects' reason and then some. Starting
+// a restore is the one call on this boundary that costs money per object
+// and cannot be called back, and no part of a move is allowed to make it:
+// the move engine refuses an unreadable copy, it does not pay to make one
+// readable. A change that starts restoring during a move should be loud.
+func (m *countingMedium) InitiateRestore(context.Context, transport.Medium, string, int) error {
+	panic("a move must never initiate a restore")
+}
+
 func (m *countingMedium) has(key string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

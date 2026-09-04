@@ -253,11 +253,29 @@ func TestAnExpiredRestoreDuringAMoveDoesNotLoopEither(t *testing.T) {
 	if !f.localExists() {
 		t.Fatal("THE SOURCE WAS DELETED against a destination whose restore had expired")
 	}
+	// One upload, and it is the one plantSourceDeletePending made to put
+	// the destination there. The engine adds none.
 	if got := f.medium.uploadCount(); got > 1 {
-		t.Errorf("an expired restore window cost %d uploads; one re-copy is FR-30's restart answer, more than one is a loop", got)
+		t.Errorf("an expired restore window cost %d uploads; the destination was already there and already verified", got)
 	}
+	if got := f.medium.deleteCount(); got != 0 {
+		t.Errorf("the engine deleted %d objects; the destination is a copy the journal believes in and a read that could not run is no reason to destroy it", got)
+	}
+	if !f.medium.has(f.key) {
+		t.Error("the destination copy was thrown away over a re-verification that could not run")
+	}
+
+	// Nothing moved, which is the point. The source stays at
+	// DELETE_PENDING because that is the durable intent and it is still
+	// true; a restore makes this move finish, and until then the refusal
+	// is reported every cycle.
 	src, _ := f.placement(state.MediumLocal)
-	if src.Status != state.PlacementActive {
-		t.Errorf("the source placement is %s, want ACTIVE: the move gave up and the source is the good copy", src.Status)
+	if src.Status != state.PlacementDeletePending {
+		t.Errorf("the source placement is %s, want %s: nothing about the world changed, so nothing about the journal should have",
+			src.Status, state.PlacementDeletePending)
+	}
+	mv := f.onlyMove()
+	if placement.Phase(mv.Phase) != placement.SourceDeletePending {
+		t.Errorf("the move moved to %s; a refusal that changes nothing should leave it where it was", mv.Phase)
 	}
 }

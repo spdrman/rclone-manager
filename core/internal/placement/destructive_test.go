@@ -118,18 +118,56 @@ func TestTheSourceDeleteHasExactlyOneCaller(t *testing.T) {
 
 	for _, tc := range []struct {
 		method string
-		want   string
+		want   []string
 	}{
-		{"remove", "deleteSource"},
-		{"guardSourceDelete", "deleteSource"},
-		{"proveLocalSourceSafe", "guardSourceDelete"},
-		{"proveMediumSourceSafe", "guardSourceDelete"},
-		{"copiesOf", "guardSourceDelete"},
-		{"observe", "copiesOf"},
+		{"remove", []string{"deleteSource"}},
+		{"guardSourceDelete", []string{"deleteSource"}},
+		{"proveLocalSourceSafe", []string{"guardSourceDelete"}},
+		{"proveMediumSourceSafe", []string{"guardSourceDelete"}},
+		{"copiesOf", []string{"guardSourceDelete"}},
+
+		// observe is the one entry here that is not part of the delete
+		// ordering, and it now has two callers rather than one.
+		//
+		// Everything above it destroys something or authorises destroying
+		// something, and for those "exactly one caller" IS the safety
+		// property: a second caller is a second ordering decided somewhere
+		// else. observe destroys nothing. It asks a medium whether a
+		// restore of one object is in effect, and it is listed here so
+		// that the question cannot be asked in a place that then acts on
+		// the answer without the guard.
+		//
+		// verifyCopy is the second caller and it is the archive gate's, in
+		// front of Verify: an archived copy cannot earn a class that needs
+		// reading it, and refusing before the read is what stops the
+		// engine spending a GET and then treating InvalidObjectState as a
+		// failed verification worth retrying. It reads and refuses; it
+		// deletes nothing. The list is spelled out rather than relaxed to
+		// "one or more" so that a third caller still has to be argued for
+		// here.
+		{"observe", []string{"copiesOf", "verifyCopy"}},
 	} {
 		got := callers[tc.method]
-		if len(got) != 1 || !strings.HasSuffix(got[0], ":"+tc.want) {
-			t.Errorf("e.%s is called from %v; it must be called from %s and nothing else", tc.method, got, tc.want)
+		want := map[string]bool{}
+		for _, w := range tc.want {
+			want[w] = true
+		}
+		ok := len(got) == len(tc.want)
+		for _, g := range got {
+			matched := false
+			for w := range want {
+				if strings.HasSuffix(g, ":"+w) {
+					matched = true
+					delete(want, w)
+					break
+				}
+			}
+			if !matched {
+				ok = false
+			}
+		}
+		if !ok || len(want) != 0 {
+			t.Errorf("e.%s is called from %v; it must be called from exactly %v", tc.method, got, tc.want)
 		}
 	}
 }

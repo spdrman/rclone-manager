@@ -420,7 +420,51 @@ func (e *Engine) eligibleSource(rec state.Record, destination string) (state.Pla
 			"%w: moving %s from %q to %q is medium-to-medium, which this engine does not do",
 			ErrNotEligible, rec.Artifact, src.Medium, destination)
 	}
+	if err := e.destinationCanBeVerified(destination); err != nil {
+		return state.Placement{}, fmt.Errorf(
+			"%w: %s cannot be moved to %q: %w", ErrNotEligible, rec.Artifact, destination, err)
+	}
 	return src, nil
+}
+
+// destinationCanBeVerified refuses a destination on which the copy this
+// move would create could never earn the class the medium requires.
+//
+// It is the cheapest refusal in this file and the one that saves the most
+// money. Both facts it reads are configuration: the storage class the
+// medium writes with, and the verification class its upload_verification
+// resolves to. An archive class puts a fresh object out of reach the
+// instant it lands, so a medium configured for readback on DEEP_ARCHIVE
+// describes a move that cannot finish, and it describes it before a byte
+// has moved.
+//
+// Without this the engine finds out the expensive way, and finds out
+// again every cycle: upload, fail to verify, delete, upload again, fail
+// again, delete, abandon; then the retention pass plans a fresh move
+// tomorrow because the artifact still is not where the chain says it
+// belongs, and the ABANDONED row does not stop it. Measured over four
+// cycles that is 2, 4, 6, 8 uploads and 3, 6, 9, 12 deletes, and on a
+// class with a 180-day minimum billable duration every one of those
+// discarded copies is charged for six months.
+//
+// It is a standing refusal rather than a give-up, reported in the cycle
+// report every time. #428 is open about what the eventual answer should
+// be (a third upload_verification spelling, a per-medium relaxation of
+// FR-30's invariant, or an archive class that stops being a medium at
+// all), and none of those are decided here. What is decided here is that
+// an operator who writes a configuration this build cannot honour is told
+// so for free, rather than billed for it monthly.
+func (e *Engine) destinationCanBeVerified(destination string) error {
+	if destination == config.MediumLocal {
+		// A local file is readable by opening it. There is no class and
+		// no endpoint.
+		return nil
+	}
+	medium, want, err := e.resolve(destination)
+	if err != nil {
+		return err
+	}
+	return CheckDestinationClass(medium.StorageClass, want)
 }
 
 // destinationLocator computes where the destination copy goes: FR-28's
@@ -585,6 +629,29 @@ func (e *Engine) copy(ctx context.Context, mv state.Move) (state.Move, error) {
 			"%s no longer has a placement on %q, so there is nothing to copy from", mv.Artifact, mv.SourceMedium))
 	}
 
+	// The same refusal eligibleSource makes, made again at the one point
+	// in this engine that spends money.
+	//
+	// eligibleSource covers the plan and the resume from PLANNED, and it
+	// covers them by never writing a move row at all, which is the answer
+	// that costs nothing. It cannot cover a move already at COPYING: a
+	// crash between the COPYING write and the upload, or a row planned by
+	// a build that did not have the check, or a bucket that grew a
+	// lifecycle rule after the move started. Every one of those arrives
+	// here, and here is where the upload happens, so this is where the
+	// guarantee belongs rather than upstream of it.
+	if err := e.destinationCanBeVerified(mv.DestinationMedium); err != nil {
+		// The reason the move was already carrying is kept in front of
+		// this one. An operator reading an ABANDONED row wants the
+		// sentence that describes what went wrong first, and this
+		// sentence describes why nothing was tried again.
+		why := fmt.Sprintf("%s cannot be copied to %q: %v", mv.Artifact, mv.DestinationMedium, err)
+		if mv.Error != "" {
+			why = strings.TrimSuffix(mv.Error, ".") + "; " + why
+		}
+		return e.abandon(ctx, mv, why)
+	}
+
 	var bytes int64
 	switch mv.DestinationMedium {
 	case config.MediumLocal:
@@ -707,7 +774,19 @@ func (e *Engine) verifyDestination(ctx context.Context, mv state.Move) (state.Mo
 			"%s no longer has a placement on %q, so there is no recorded hash to verify the destination against", mv.Artifact, mv.SourceMedium))
 	}
 
-	result, want, err := e.verifyCopy(ctx, mv, src)
+	result, want, err := e.verifyCopy(ctx, mv, src, true)
+	if errors.Is(err, ErrClassRefused) {
+		// A refusal no retry can change. recopyOrAbandon would delete the
+		// destination, copy it again and get the identical answer, twice,
+		// before giving up; on an archive class that is two objects billed
+		// for six months apiece to learn something the storage class
+		// already said. The destination has no placements row at this
+		// phase, so it is disposable and abandoning is the honest end:
+		// nothing was copied that anything believes in, and the source was
+		// never touched.
+		return e.abandon(ctx, mv, fmt.Sprintf(
+			"the destination copy on %q cannot be verified at %s class: %v", mv.DestinationMedium, want, err))
+	}
 	if err != nil {
 		return e.recopyOrAbandon(ctx, mv, Verifying, fmt.Sprintf(
 			"the destination copy on %q could not be verified at %s class: %v", mv.DestinationMedium, want, err))
@@ -726,7 +805,26 @@ func (e *Engine) verifyDestination(ctx context.Context, mv state.Move) (state.Mo
 
 // verifyCopy verifies whatever is at the destination against the hash the
 // journal recorded for the source, at the class the destination requires.
-func (e *Engine) verifyCopy(ctx context.Context, mv state.Move, src state.Placement) (Result, Class, error) {
+//
+// gated chooses which of the two entry points in gate.go runs, and the two
+// call sites want different ones for a reason that is about which copy is
+// disposable at that moment rather than about cost.
+//
+// verifyDestination passes true. At VERIFYING the destination has no
+// placements row yet, so it is disposable by definition, and asking the
+// archive gate first means an unreadable copy is refused without spending
+// a GET on being told InvalidObjectState. That refusal is terminal, which
+// is the whole point: it cannot be retried into a different answer.
+//
+// deleteSource passes false, and it is important that it does. The gate
+// answers the same question guardSourceDelete's eighth clause answers
+// (archive.CheckSourceDelete), one step earlier and from the same facts,
+// so a gate here would refuse every case that clause exists for and the
+// clause would become a guard nothing can reach. That is the exact shape
+// this whole change is about, and swapping one instance of it for another
+// is not a fix. deleteSource handles a capability refusal on its own
+// terms instead; see the comment there.
+func (e *Engine) verifyCopy(ctx context.Context, mv state.Move, src state.Placement, gated bool) (Result, Class, error) {
 	candidate := state.Placement{
 		Medium:   mv.DestinationMedium,
 		Location: mv.DestinationKey,
@@ -745,7 +843,14 @@ func (e *Engine) verifyCopy(ctx context.Context, mv state.Move, src state.Placem
 	if e.Store == nil {
 		return Result{}, want, fmt.Errorf("no medium store is configured")
 	}
-	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+	if !gated {
+		res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+		return res, want, err
+	}
+	// observe spends a restore-status call only for a class that needs
+	// one, so a STANDARD destination costs exactly what it cost before.
+	obs := e.observe(ctx, medium, mv.DestinationKey, medium.StorageClass)
+	res, err := VerifyWithAccess(ctx, e.Store, medium, candidate, want, obs, e.now())
 	return res, want, err
 }
 
@@ -854,8 +959,33 @@ func (e *Engine) deleteSource(ctx context.Context, mv state.Move) (state.Move, e
 		return mv, fmt.Errorf("placement: %s has no placement on %q to delete", mv.Artifact, mv.SourceMedium)
 	}
 
-	result, want, err := e.verifyCopy(ctx, mv, src)
+	result, want, err := e.verifyCopy(ctx, mv, src, false)
 	switch {
+	case errors.Is(err, ErrClassUnavailable):
+		// "I could not check it" is not "I checked and it is wrong", and
+		// at this phase the difference decides whether a good copy gets
+		// destroyed. The destination here is not the disposable one it was
+		// at VERIFYING: the VERIFIED write gave it a placements row, the
+		// journal believes in it, and FR-30's standing invariant is
+		// currently resting on it because the source is DELETE_PENDING.
+		//
+		// recopyOrAbandon would delete it and copy it again. Against a
+		// read that timed out that is merely wasteful. Against an archive
+		// class it is the loop this change exists to stop, and it throws
+		// away an object that is fine and buys another minimum billing
+		// period to arrive back in exactly this position. Against a
+		// restore window that expired mid-move it destroys the only copy
+		// the operator has already paid to have restored once.
+		//
+		// So nothing moves. The source stays DELETE_PENDING, which is the
+		// durable intent and is true, the destination stays where it is,
+		// and the reason is reported every cycle until somebody acts on
+		// it. That is the same standing refusal guardSourceDelete's own
+		// clauses produce, and it is reached the same way: by returning
+		// rather than by advancing.
+		return mv, fmt.Errorf(
+			"placement: %s's destination copy on %q could not be re-verified at %s class immediately before the source delete, and nothing has been changed: %w",
+			mv.Artifact, mv.DestinationMedium, want, err)
 	case err != nil:
 		return e.recopyOrAbandon(ctx, mv, SourceDeletePending, fmt.Sprintf(
 			"the destination copy on %q could not be re-verified at %s class immediately before the source delete: %v",

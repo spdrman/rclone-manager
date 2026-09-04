@@ -83,17 +83,76 @@ func Ceiling(s archive.State) Class {
 // store.
 func CheckClass(s archive.State, want Class) error {
 	if !want.Valid() {
-		return fmt.Errorf("%w: %q is not a verification class", ErrClassUnavailable, want)
+		return fmt.Errorf("%w: %q is not a verification class", ErrClassRefused, want)
 	}
 	ceiling := Ceiling(s)
 	if ceiling == "" {
 		return fmt.Errorf("%w: this copy's access state is %q, so no class can be attempted against it at all",
-			ErrClassUnavailable, s)
+			ErrClassRefused, s)
 	}
 	if want.Stronger(ceiling) {
 		return fmt.Errorf(
 			"%w: this copy's access state is %q, which supports %s at best (%s), and %s needs %s",
-			ErrClassUnavailable, s, ceiling, ceiling.Proves(), want, want.Cost())
+			ErrClassRefused, s, ceiling, ceiling.Proves(), want, want.Cost())
+	}
+	return nil
+}
+
+// ErrClassRefused is the half of ErrClassUnavailable that a retry cannot
+// change, and it exists because the move engine has to tell the two apart
+// before it decides what to do next.
+//
+// Both halves mean "I could not check". A read that timed out is the first
+// half: the endpoint might answer next time, so throwing the destination
+// away and copying it again is a reasonable thing to do. A copy on
+// DEEP_ARCHIVE that nobody has asked to restore is the second half: the
+// next attempt is identical to this one, and so is the thousandth, and the
+// engine's copy-verify-recopy loop turns that into an upload and a delete
+// per cycle, for ever. On a class with a minimum billable duration each of
+// those uploads is charged for months after it has been deleted, so the
+// difference between the two halves is a bill rather than a nicety.
+//
+// It wraps ErrClassUnavailable, so every existing caller that asks
+// errors.Is(err, ErrClassUnavailable) keeps the answer it had.
+var ErrClassRefused = fmt.Errorf("%w, and no retry can change that", ErrClassUnavailable)
+
+// CheckDestinationClass reports whether a copy this product is about to
+// CREATE on a medium writing with storage class class could ever be
+// verified at want, and refuses when it could not.
+//
+// It is CheckClass asked one step earlier, about an object that does not
+// exist yet, and that is why it takes a storage class rather than an
+// access state: there is exactly one access state a freshly written object
+// on an archive class can be in. Nobody has asked to restore an object
+// that was not there a second ago, so it is RequiresRestore, by
+// definition, and no request has to be spent to find that out.
+//
+// # Why this is worth having as well as the gate at verification time
+//
+// The gate in front of Verify saves the request. This saves the upload,
+// which is the part that costs real money: AWS bills DEEP_ARCHIVE for a
+// 180-day minimum whether or not the object survives the afternoon. A move
+// that uploads, discovers it cannot verify, deletes and gives up has still
+// bought six months of storage, and the cycle after it buys six more.
+//
+// The check is answerable entirely from configuration, so an operator who
+// writes an incompatible pair gets told about it in the first cycle rather
+// than in the first invoice.
+func CheckDestinationClass(class string, want Class) error {
+	b, err := archive.Of(class)
+	if err != nil {
+		// A class the table does not recognise. config.Validate refuses
+		// one at load, so this is drift between two lists rather than
+		// something an operator can write, and the safe direction for
+		// "nothing here knows what this class does to readability" is to
+		// refuse rather than to upload into it.
+		return fmt.Errorf("%w: %w", ErrClassRefused, err)
+	}
+	if !b.Archive {
+		return nil
+	}
+	if err := CheckClass(archive.RequiresRestore, want); err != nil {
+		return fmt.Errorf("%w; a copy written to %s is archived the instant it lands, and nothing has asked to restore an object that did not exist a second ago", err, class)
 	}
 	return nil
 }
