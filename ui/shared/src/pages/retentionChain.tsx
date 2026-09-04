@@ -2,7 +2,13 @@ import type { ReactNode } from "react";
 import { HelpField } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import type { FieldHelpCopy } from "@shared/components/fieldHelpCopy";
-import type { RetentionSchema, RetentionSettings, RetentionTierSetting } from "@shared/api/contracts";
+import type {
+  RetentionSchema,
+  RetentionSettings,
+  RetentionTierSetting,
+  StorageMedium,
+  StorageSchema
+} from "@shared/api/contracts";
 
 /**
  * The retention CHAIN editor, shared by the two places a chain is edited:
@@ -39,16 +45,18 @@ export interface TierDraft {
   keep: string;
   periodDays: string;
   windowUnit: string;
-  /** The storage medium this tier names (FR-27), carried through the
-   *  editor untouched.
+  /** The storage medium this tier names (FR-27), or "" for the local
+   *  backup root. Held as the id rather than an index so a medium removed
+   *  from the configuration between load and save cannot silently become
+   *  a different one.
    *
-   *  Nothing here edits it, and it is held anyway because a chain save
-   *  REPLACES the operator's whole chain: a field the draft dropped would
-   *  be deleted from their configuration file by the act of changing
-   *  something else, which is precisely what
-   *  service.RetentionTier.Medium's own doc calls a lossy boundary.
-   *  Editing daily's keep must not quietly move monthly's artifacts back
-   *  onto local disk. */
+   *  TierRow edits it when the deployment declares a medium (#240), and
+   *  it is held even when it does not, because a chain save REPLACES the
+   *  operator's whole chain: a field the draft dropped would be deleted
+   *  from their configuration file by the act of changing something
+   *  else, which is precisely what service.RetentionTier.Medium's own doc
+   *  calls a lossy boundary. Editing daily's keep must not quietly move
+   *  monthly's artifacts back onto local disk. */
   medium: string;
 }
 
@@ -105,6 +113,7 @@ export function TierRow({
   index,
   tier,
   schema,
+  mediums,
   errors,
   readOnly,
   canRemove,
@@ -114,6 +123,12 @@ export function TierRow({
   index: number;
   tier: TierDraft;
   schema: RetentionSchema;
+  /** Every storage medium the configuration declares. Empty when it
+   *  declares none, which is when the picker below is not rendered at
+   *  all (FR-35): a configuration that never heard of storage mediums
+   *  gets the row it already had, with no extra control to read past and
+   *  no new way to get its policy wrong. */
+  mediums: StorageMedium[];
   errors: TierErrors;
   readOnly: boolean;
   canRemove: boolean;
@@ -219,6 +234,33 @@ export function TierRow({
           )}
         </Field>
       )}
+
+      {/* The picker exists only where there is somewhere else to put a
+          backup. The class is part of the choice, not decoration: one of
+          these places cannot be read without a restore, and an operator
+          picking blind would find that out hours later, holding a restore
+          request they did not know they needed. */}
+      {mediums.length > 0 ? (
+        <Field label="Stored on" help={FIELD_HELP.tierMedium}>
+          {(helpId) => (
+            <select
+              className="select"
+              aria-describedby={helpId}
+              aria-label={"Storage medium for tier " + position}
+              value={tier.medium}
+              disabled={readOnly}
+              onChange={(e) => onChange({ medium: e.target.value })}
+            >
+              <option value="">Local backup root</option>
+              {mediums.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id + " (" + m.storageClass + (m.readsRequireRestore ? ", needs a restore to read" : "") + ")"}
+                </option>
+              ))}
+            </select>
+          )}
+        </Field>
+      ) : null}
 
       <div style={{ alignSelf: "end" }}>
         <button
@@ -357,4 +399,108 @@ export function chainKey(tiers: RetentionTierSetting[]): string {
 
 export function settingsKey(r: RetentionSettings): string {
   return [r.timezone, r.weekStartsOn, String(r.protectLastKnownGood), chainKey(r.tiers)].join("~");
+}
+
+/**
+ * Which tiers a chain about to be saved would NEWLY send off local disk
+ * (FR-27's consent), relative to the chain currently in effect.
+ *
+ * Per tier, and matched by NAME, which is the same rule core/service
+ * applies on the server: a chain that already sends monthly to a medium
+ * has consented to monthly's backups leaving, and to nothing else, so a
+ * tier that is new or that moves to a different medium asks again while
+ * an edit to an unrelated number does not. A product that asked every
+ * time would train an operator to tick the box without reading it, which
+ * is worse than not asking.
+ *
+ * This decides what a form SHOWS. It never decides whether the write is
+ * allowed: the server refuses an unacknowledged write with
+ * MEDIUM_DISCLOSURE_REQUIRED whatever this computes.
+ */
+export function introducedMediumMappings(
+  next: RetentionTierSetting[],
+  current: RetentionTierSetting[]
+): RetentionTierSetting[] {
+  return next.filter((t) => {
+    if (!t.medium) return false;
+    const was = current.find((b) => b.name === t.name);
+    return !was || (was.medium ?? "") !== t.medium;
+  });
+}
+
+/**
+ * The storage-medium disclosure (FR-27), shared by the two chain editors
+ * for the reason TierRow is: the sentence an operator reads before their
+ * backups leave this machine must be the same sentence on both surfaces.
+ *
+ * Every tier is named, by name and by destination, never as a count. "2
+ * tiers" would send an operator off to work out which two, and the whole
+ * point of this panel is that they know what they are agreeing to before
+ * they agree to it. The paragraphs are the backend's own words, served
+ * alongside the settings: the server refuses an unacknowledged write with
+ * this same text, so what the form shows and what the server enforces
+ * cannot come apart.
+ */
+export function MediumDisclosure({
+  introduced,
+  mediums,
+  storage,
+  acknowledged,
+  disabled,
+  onChange
+}: {
+  introduced: RetentionTierSetting[];
+  mediums: StorageMedium[];
+  storage: StorageSchema;
+  acknowledged: boolean;
+  disabled: boolean;
+  onChange(acknowledged: boolean): void;
+}) {
+  const archiveAhead = introduced.some(
+    (t) => mediums.find((m) => m.id === t.medium)?.readsRequireRestore
+  );
+  return (
+    <div
+      className="banner banner--warn"
+      role="group"
+      aria-label="Storage medium disclosure"
+      style={{ flexDirection: "column", gap: 10 }}
+    >
+      <div style={{ fontWeight: 600 }}>Saving this sends backups off this machine.</div>
+      <ul style={{ margin: 0, paddingLeft: 20, fontSize: "var(--text-sm)" }}>
+        {introduced.map((t) => (
+          <li key={t.name}>
+            <span className="mono">{t.name}</span>
+            {" keeps its backups on "}
+            <span className="mono">{t.medium}</span>
+            {" from now on."}
+          </li>
+        ))}
+      </ul>
+      <p style={{ margin: 0, fontSize: "var(--text-sm)", maxWidth: "78ch" }}>
+        {storage.mediumDisclosure}
+      </p>
+      {archiveAhead ? (
+        <p style={{ margin: 0, fontSize: "var(--text-sm)", maxWidth: "78ch" }}>
+          At least one of those mediums is on a storage class that cannot be read on demand at
+          all. A backup there has to be restored before anything can read it.
+        </p>
+      ) : null}
+      <p style={{ margin: 0, fontSize: "var(--text-sm)", maxWidth: "78ch" }}>
+        {storage.retrievalDisclosure}
+      </p>
+      <label style={{ display: "flex", gap: 10, alignItems: "flex-start", fontSize: "var(--text-base)" }}>
+        <input
+          type="checkbox"
+          checked={acknowledged}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span>
+          I understand that backups these tiers keep will be deleted from this machine after
+          they upload, and that reading them back costs money and, on an archive class, hours.
+        </span>
+      </label>
+    </div>
+  );
 }

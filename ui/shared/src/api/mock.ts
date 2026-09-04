@@ -12,6 +12,7 @@ import type {
   ManagerStorage,
   RetentionOverride,
   RetentionSettings,
+  RetentionTierSetting,
   SSHKeyImportResult,
   UpdateSettingsRequest,
   ValidatorCatalogEntry
@@ -33,11 +34,11 @@ import type {
  *  "empty" one with a configuration and no backup sets. Toggle scenarios
  *  with ?scenario= in the URL. */
 
-export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run";
+export type Scenario = "default" | "empty" | "storage-critical" | "catalog-recovery" | "version-mismatch" | "first-run" | "no-medium";
 
 export function scenarioFromLocation(): Scenario {
   const s = new URLSearchParams(window.location.search).get("scenario");
-  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run"];
+  const allowed: Scenario[] = ["default", "empty", "storage-critical", "catalog-recovery", "version-mismatch", "first-run", "no-medium"];
   return (allowed as string[]).includes(s ?? "") ? (s as Scenario) : "default";
 }
 
@@ -53,10 +54,12 @@ const TB = 1024 ** 4;
  * failure #362 was written to stop, and it is invisible against a fixture
  * where the two agree.
  *
- * The monthly tier names a storage medium, which nothing in this UI edits
- * yet. It is here because a chain write REPLACES the whole chain, so it
- * is the fixture that would catch an editor which dropped the field on
- * the way back out.
+ * The monthly tier names a storage medium, the same one defaultSettings'
+ * chain names, so the per-set page and the Settings page agree about
+ * where monthly backups go. It is here because a chain write REPLACES the
+ * whole chain, so it is the fixture that would catch an editor which
+ * dropped the field on the way back out, and because a set that inherits
+ * it must NOT be asked to consent to it again.
  */
 const deploymentRetention: RetentionSettings = {
   timezone: "Europe/Berlin",
@@ -65,7 +68,7 @@ const deploymentRetention: RetentionSettings = {
   tiers: [
     { name: "daily", granularity: "day", keep: 7 },
     { name: "weekly", granularity: "week", keep: 13, windowUnit: "month" },
-    { name: "monthly", granularity: "month", keep: 12, medium: "cold" }
+    { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
   ]
 };
 
@@ -84,7 +87,7 @@ const SET_RETENTION_OVERRIDES: ReadonlyArray<readonly [string, RetentionOverride
     {
       tiers: [
         { name: "weekly", granularity: "week", keep: 8 },
-        { name: "monthly", granularity: "month", keep: 24, medium: "cold" }
+        { name: "monthly", granularity: "month", keep: 24, medium: "offsite_cold" }
       ]
     }
   ],
@@ -223,7 +226,26 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "4f2a9c1e7b6d0835ae91cf4d2b7801e6c35a9f18d4b27e60ac139f5b8e2d7a04",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly", "protected"],
-    remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
+    // Two copies, and deliberately not two matching ones: the local copy
+    // has been read back and hashed, the copy on the medium has only been
+    // seen to exist. That difference is what the Copies card is for.
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/postgres/2026/08/postgres-prod-20260828.dump.zst",
+        sizeBytes: 15246903296, storageClass: "",
+        verificationClass: "content", verifiedAt: "2026-08-28T02:00:59+02:00",
+        access: "immediate", status: "ACTIVE"
+      },
+      {
+        medium: "offsite_s3", mediumType: "s3",
+        location: "rclone-manager/production/postgres-primary/postgres-prod-20260828.dump.zst",
+        sizeBytes: 15246903296, storageClass: "STANDARD_IA",
+        verificationClass: "existence", verifiedAt: "2026-08-28T06:00:02+02:00",
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9F2A7BC44", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -235,7 +257,19 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "b81c0d5f4a29e7136c8b0f2d97a4e5106d3b7c8290fa41e6b52d7c3a9018ef42",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["daily", "weekly"],
-    remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-27T02:00:48+02:00", quarantine: null,
+    // The archive case: the bytes are there and cannot be read without a
+    // restore, and nothing has ever verified them, so there is no class
+    // and no verified-at. Both absences are real answers.
+    placements: [
+      {
+        medium: "offsite_cold", mediumType: "s3",
+        location: "rclone-manager/production/billing-mysql/billing-20260827.sql.gz",
+        sizeBytes: 3650722201, storageClass: "DEEP_ARCHIVE",
+        verificationClass: null, verifiedAt: null,
+        access: "requires_restore", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9E8QP4R21", setId: "production/auth-config", setName: "Auth service config",
@@ -254,7 +288,16 @@ const ARTIFACTS: BackupArtifact[] = [
         "sha256 mismatch: local file hashes to c19f3ba7..., remote reports 91a4d02e...",
       detectedAt: "2026-08-26T04:14:10+02:00",
       remoteSourceRetained: true
-    }
+    },
+    placements: [
+      {
+        medium: "local", mediumType: "local",
+        location: "/data/backups/production/auth/quarantine/auth-config-20260826.tar.zst",
+        sizeBytes: 44040192, storageClass: "",
+        verificationClass: null, verifiedAt: null,
+        access: "immediate", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J9C1XY7T09", setId: "production/billing-mysql", setName: "Billing MySQL",
@@ -271,7 +314,20 @@ const ARTIFACTS: BackupArtifact[] = [
       detail: "application validator rejected the artifact: restore-test hook failed: could not decompress",
       detectedAt: "2026-08-24T02:19:02+02:00",
       remoteSourceRetained: true
-    }
+    },
+    // The case this whole feature exists for: the journal says a copy was
+    // made, and this deployment no longer declares the medium, so nothing
+    // can confirm it. mediumType is empty because the configuration no
+    // longer describes what kind of place that was.
+    placements: [
+      {
+        medium: "decommissioned_s3", mediumType: "",
+        location: "rclone-manager/production/billing-mysql/billing-20260824.sql.gz",
+        sizeBytes: 3543348838, storageClass: "",
+        verificationClass: "existence", verifiedAt: "2026-07-14T02:20:00+02:00",
+        access: "unreachable", status: "ACTIVE"
+      }
+    ]
   },
   {
     id: "art_01J98MN3V5KK", setId: "media/weekly-archive", setName: "Media archive",
@@ -283,7 +339,11 @@ const ARTIFACTS: BackupArtifact[] = [
     checksum: "0a7c2e91b8d54f36ac1b9f0d27e4a5163d8b7c0f92a41e6b53d7c2a90187ef43",
     checksumAlgorithm: "sha256", validation: "verified",
     retentionClasses: ["weekly"],
-    remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null
+    remoteSourceRemovedAt: "2026-08-25T04:43:02+02:00", quarantine: null,
+    // No copies at all. This one is still arriving, and the partial file
+    // on disk is not a copy, so the dev server can show the empty state
+    // the same way a real backend produces it.
+    placements: []
   }
 ];
 
@@ -310,13 +370,25 @@ const OPERATIONS: Operation[] = [
       bytesTotal: 15246903296,
       bytesPerSecond: 123731968
     },
-    nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00"
+    nonDestructive: false, startedAt: "2026-08-29T02:00:11+02:00",
+    // Still running, so there is nothing to report yet. Null, not zeroes.
+    cycle: null
   },
   {
     id: "op_recon_1", setId: "media/weekly-archive", setName: "Media archive",
     kind: "reconciliation", label: "Reconciling catalog against storage",
     status: "running", progress: null,
-    nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00"
+    nonDestructive: true, startedAt: "2026-08-29T05:40:00+02:00",
+    cycle: null
+  },
+  // A finished cycle that walked backups and got none of them through.
+  // This is what issue #361 looked like from the outside, and what the
+  // dashboard now has to be able to show.
+  {
+    id: "op_cycle_1", setId: "", setName: "All backup sets",
+    kind: "transfer", label: "run cycle", status: "completed", progress: null,
+    nonDestructive: false, startedAt: "2026-08-29T01:00:00+02:00",
+    cycle: { backupSetsProcessed: 4, artifactsWalked: 12, artifactsThrough: 0 }
   }
 ];
 
@@ -457,6 +529,36 @@ const VERSION: VersionInfo = {
  *  is a test-order dependency nothing in the file would explain. */
 function withRetentionAttribution(overrides: Map<string, RetentionOverride>, sets: BackupSet[]): BackupSet[] {
   return sets.map((s) => ({ ...s, retentionIsOverride: overrides.has(s.id) }));
+}
+
+/**
+ * core/service's consent gate (FR-27), as the dev server enforces it: the
+ * tier-to-medium mappings `submitted` would ADD to the chain `inForce`,
+ * matched per tier by name. A mapping the chain already has is not asked
+ * about again; a tier that is new or that moves to a different medium is.
+ * The refusal carries the same words the real backend's does, because a
+ * form that renders the message has then shown the operator the right
+ * thing by construction.
+ */
+function mediumDisclosureRefusal(
+  submitted: RetentionTierSetting[],
+  inForce: RetentionTierSetting[],
+  acknowledged: boolean
+): BackupManagerError | null {
+  const introduced = submitted.filter((t) => {
+    if (!t.medium) return false;
+    const was = inForce.find((b) => b.name === t.name);
+    return !was || (was.medium ?? "") !== t.medium;
+  });
+  if (introduced.length === 0 || acknowledged) return null;
+  const storage = defaultSettings().schema.storage;
+  return new BackupManagerError({
+    code: "MEDIUM_DISCLOSURE_REQUIRED",
+    message:
+      "This write sends " + introduced.map((t) => t.name + " -> " + t.medium).join(", ") + ". " +
+      storage.mediumDisclosure + " " + storage.retrievalDisclosure,
+    correlationId: "cid_mockdisclosure"
+  });
 }
 
 function mockBackupSetRetention(
@@ -661,12 +763,63 @@ function defaultSettings(): AppSettings {
       tiers: [
         { name: "daily", granularity: "day", keep: 7 },
         { name: "weekly", granularity: "week", keep: 3, windowUnit: "month" },
-        { name: "monthly", granularity: "month", keep: 12 }
+        { name: "monthly", granularity: "month", keep: 12, medium: "offsite_s3" }
       ],
       protectLastKnownGood: true
     },
     capacity: defaultCapacitySettings(),
+    // Two mediums, one of them an archive class, so the dev server shows
+    // both halves of the picker: a place that serves on demand and a place
+    // that cannot be read at all without a restore.
+    mediums: [
+      {
+        id: "offsite_s3", type: "s3", bucket: "nas-backups", region: "us-east-1",
+        storageClass: "STANDARD_IA", readsRequireRestore: false
+      },
+      {
+        id: "offsite_cold", type: "s3", bucket: "nas-archive", region: "us-east-1",
+        storageClass: "DEEP_ARCHIVE", readsRequireRestore: true
+      }
+    ],
     schema: {
+      // The words come from core/internal/placement in a real deployment.
+      // They are reproduced here because this is a mock of the SERVER, and
+      // a mock that served different words would hide exactly the drift
+      // the real surface is built to prevent.
+      storage: {
+        verificationClasses: [
+          {
+            className: "content",
+            proves: "the bytes on the medium hash to the hash this product recorded when it ingested the artifact",
+            requires: "a full download of the object: time plus egress, and for an archive storage class a restore first",
+            downloadsObject: true
+          },
+          {
+            className: "attested",
+            proves: "the provider's stored full-object checksum equals the recorded hash",
+            requires: "one metadata call, no egress, trusting the endpoint's own checksum",
+            downloadsObject: false
+          },
+          {
+            className: "existence",
+            proves: "an object exists at the recorded key, at the recorded size",
+            requires: "one HEAD request, which says nothing about the bytes",
+            downloadsObject: false
+          }
+        ],
+        mediumDisclosure:
+          "Backups that only this tier keeps will live only on that storage medium. " +
+          "After a backup uploads and I verify it, I delete the copy on this machine. " +
+          "That deletion is what the setting is for, and once this is saved it happens " +
+          "automatically whenever retention runs, with no further prompt. " +
+          "A medium on an archive storage class cannot be read on demand at all: getting a " +
+          "backup back means asking for a restore and waiting hours, and the provider " +
+          "reports no progress while it waits.",
+        retrievalDisclosure:
+          "Reading a copy back off a storage medium is billed by your provider. " +
+          "I hold no price list and no knowledge of your rates, so I report the bytes and the " +
+          "storage class and stop there rather than showing you a number I made up."
+      },
       retention: {
         granularities: ["day", "week", "month", "quarter", "half_year", "year", "days"],
         windowUnits: ["day", "week", "month", "quarter", "half_year", "year"],
@@ -743,6 +896,13 @@ function refusingWhileUnconfigured(api: BackupManagerApi, isConfigured: () => bo
 
 export function createMockApi(scenario: Scenario = "default"): BackupManagerApi {
   const empty = scenario === "empty";
+  // Every deployment written before storage mediums existed, which is the
+  // compatibility case FR-35 pins: no medium declared anywhere, so every
+  // backup has exactly one local copy, no tier names a medium, and the
+  // pages have no Medium column and no medium picker at all. It is a
+  // scenario rather than a variant of "empty" because the point is a
+  // FULLY populated instance that simply never heard of the feature.
+  const noMedium = scenario === "no-medium";
   // Every previewRetention call advances this backup set's "inventory" by
   // one tick and issues a plan captured against it. applyRetention only
   // ever honors the plan_id from the LATEST tick — anything older is,
@@ -756,6 +916,35 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
   // same way the real backend's hot reload makes a write visible to the
   // next read (issue #140).
   const settings = defaultSettings();
+  if (noMedium) {
+    // The FR-35 case: no medium declared, and no tier naming one. The
+    // storage SCHEMA stays, because the verification ladder is a property
+    // of the product rather than of a configuration, and a deployment with
+    // one local copy per backup still has copies whose class means
+    // something.
+    settings.mediums = [];
+    settings.retention.tiers = settings.retention.tiers.map((t) => ({ ...t, medium: undefined }));
+  }
+  // Every backup keeps exactly one local copy under that scenario: the
+  // shape migration 0007's backfill leaves every pre-EPIC-E deployment in.
+  const artifacts = noMedium
+    ? ARTIFACTS.map((a) => ({
+        ...a,
+        placements: [
+          {
+            medium: "local",
+            mediumType: "local",
+            location: a.localPath,
+            sizeBytes: a.sizeBytes,
+            storageClass: "",
+            verificationClass: "content" as const,
+            verifiedAt: a.receivedAt,
+            access: "immediate" as const,
+            status: "ACTIVE" as const
+          }
+        ]
+      }))
+    : ARTIFACTS;
   // Issue #176: a fresh app-store install has no configuration at all.
   // Mutable, because completing setup is what makes it configured — the
   // same one-way transition the real backend makes in-process.
@@ -937,12 +1126,12 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     testCandidateConnection: (): Promise<ConnectionTestOutcome> => delay({ ok: true }),
 
     listArtifacts: (setId) =>
-      delay(empty ? [] : ARTIFACTS.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
-    getArtifact: (id) => delay(ARTIFACTS.find((a) => a.id === id) ?? ARTIFACTS[0]),
+      delay(empty ? [] : artifacts.filter((a) => !a.quarantine && (!setId || a.setId === setId))),
+    getArtifact: (id) => delay(artifacts.find((a) => a.id === id) ?? artifacts[0]),
 
     listOperations: () => delay(empty ? [] : OPERATIONS),
     listActivity: () => delay(empty ? [] : ACTIVITY),
-    listQuarantine: () => delay(empty ? [] : ARTIFACTS.filter((a) => a.quarantine)),
+    listQuarantine: () => delay(empty ? [] : artifacts.filter((a) => a.quarantine)),
     revalidate: () => delay(undefined),
     retryIngestion: () => delay(undefined),
     reinstate: () =>
@@ -982,7 +1171,23 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
             correlationId: "cid_mockchain"
           })
         );
-      retentionOverrides.set(source + "/" + set, policy);
+      // FR-27's consent gate, against the chain deciding for THIS set,
+      // exactly as core/service.SetBackupSetRetention decides it. This is
+      // the second refusal a form can produce by itself, and it is
+      // modelled for the same reason the empty chain is: a fixture that
+      // accepted an unacknowledged mapping would let a UI ship a save
+      // the real backend refuses.
+      const refusal = mediumDisclosureRefusal(
+        policy.tiers ?? [],
+        mockBackupSetRetention(retentionOverrides, source, set).effective.tiers,
+        policy.acknowledgeMediumDisclosure === true
+      );
+      if (refusal) return Promise.reject(refusal);
+      // The consent is not part of the policy, so it is not stored: the
+      // real backend never writes it to the file and never serves it back.
+      const { acknowledgeMediumDisclosure: _consent, ...stored } = policy;
+      void _consent;
+      retentionOverrides.set(source + "/" + set, stored);
       return delay(mockBackupSetRetention(retentionOverrides, source, set));
     },
     clearBackupSetRetention: (source, set) => {
@@ -1062,6 +1267,8 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           settings.retention.protectLastKnownGood = r.protectLastKnownGood;
         }
         if (r.tiers !== undefined) {
+          const refusal = mediumDisclosureRefusal(r.tiers, settings.retention.tiers, req.acknowledgeMediumDisclosure === true);
+          if (refusal) return Promise.reject(refusal);
           if (r.tiers.length === 0)
             // The literal refusal core/service returns for this
             // (settings.go): an emptied chain is not "keep nothing", it

@@ -85,7 +85,8 @@
           "ARTIFACT_NOT_QUARANTINED",
           "ARTIFACT_IRRECOVERABLE",
           "REINSTATEMENT_REFUSED",
-          "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+          "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
+          "MEDIUM_DISCLOSURE_REQUIRED"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -124,7 +125,8 @@
           "ARTIFACT_NOT_QUARANTINED": "wire",
           "ARTIFACT_IRRECOVERABLE": "wire",
           "REINSTATEMENT_REFUSED": "wire",
-          "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire"
+          "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire",
+          "MEDIUM_DISCLOSURE_REQUIRED": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -140,7 +142,8 @@
           "validation": [
             "INVALID_REQUEST",
             "SSH_KEY_NOT_FOUND",
-            "HOST_KEY_PROBE_FAILED"
+            "HOST_KEY_PROBE_FAILED",
+            "MEDIUM_DISCLOSURE_REQUIRED"
           ],
           "conflict": [
             "RETENTION_PLAN_STALE",
@@ -572,6 +575,12 @@
           "result": {
             "type": "string",
             "x-go-omitempty": true
+          },
+          "cycle": {
+            "$ref": "#/components/schemas/CycleOutcome",
+            "description": "The counts a finished run cycle recorded, absent for every other operation and for one that has not finished. Absent is not a row of zeroes: a cycle that is still running has not walked nothing, it has not finished walking.",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
           },
           "error": {
             "type": "string",
@@ -1272,10 +1281,14 @@
         "properties": {
           "retention": {
             "$ref": "#/components/schemas/RetentionSchema"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/StorageSchema"
           }
         },
         "required": [
-          "retention"
+          "retention",
+          "storage"
         ]
       },
       "SettingsResponse": {
@@ -1291,11 +1304,19 @@
           },
           "capacity": {
             "$ref": "#/components/schemas/CapacitySettings"
+          },
+          "mediums": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StorageMediumSummary"
+            },
+            "description": "Every storage medium this configuration declares, in declaration order. Empty for a configuration that declares none, which is every configuration written before storage mediums existed."
           }
         },
         "required": [
           "retention",
           "capacity",
+          "mediums",
           "schema"
         ]
       },
@@ -1365,6 +1386,11 @@
           "capacity": {
             "$ref": "#/components/schemas/UpdateCapacitySettings",
             "x-go-pointer": true
+          },
+          "acknowledge_medium_disclosure": {
+            "type": "boolean",
+            "description": "The operator's acknowledgment of the storage-medium disclosure (SettingsSchema.storage.medium_disclosure). Required on, and only on, a write that FIRST sends a retention tier's artifacts to a non-local medium: without it that write is refused with MEDIUM_DISCLOSURE_REQUIRED. It is not a setting, so a request carrying nothing but this acknowledgment still names no setting to change and is refused as such.",
+            "x-go-omitempty": true
           }
         },
         "required": []
@@ -1627,6 +1653,13 @@
           "local_path": {
             "type": "string"
           },
+          "placements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Placement"
+            },
+            "description": "Every durable copy this backup currently has, one entry per place. Empty means this backup has no durable copy anywhere yet, which is a real and ordinary answer for one that has only just been discovered or is still transferring; it is never a copy the response failed to describe. local_path above keeps meaning what it always meant, the path ingestion landed on, and is not evidence that a readable file is there: ask the placements."
+          },
           "state": {
             "type": "string",
             "description": "The lifecycle state this backup is currently recorded in, e.g. \"DISCOVERED\", \"COMMITTED\", \"COMPLETE\", \"QUARANTINED\"."
@@ -1705,7 +1738,8 @@
           "size_bytes",
           "validation",
           "quarantined",
-          "quarantine_irrecoverable"
+          "quarantine_irrecoverable",
+          "placements"
         ]
       },
       "ListArtifactsResponse": {
@@ -2272,6 +2306,11 @@
             "type": "boolean",
             "description": "Absent inherits the deployment's FR-19 posture.",
             "x-go-pointer": true
+          },
+          "acknowledge_medium_disclosure": {
+            "type": "boolean",
+            "description": "The operator's acknowledgment of the storage-medium disclosure (SettingsSchema.storage.medium_disclosure), on this write for the reason UpdateSettingsRequest carries it: an override is a whole chain and can send a tier's artifacts to a non-local medium exactly as the deployment's policy can. Required on, and only on, a write that maps a tier to a medium the chain currently deciding for this set does not already map it to; without it that write is refused with MEDIUM_DISCLOSURE_REQUIRED. It is a consent and not part of the policy: never written to the file, and never present on the override half of a response.",
+            "x-go-omitempty": true
           }
         },
         "required": []
@@ -2304,6 +2343,207 @@
           "is_override",
           "effective",
           "deployment"
+        ]
+      },
+      "Placement": {
+        "type": "object",
+        "description": "One DURABLE copy of one backup, and where it actually is (EPIC E, FR-29). A placement exists because the journal recorded a finished copy, so the ABSENCE of a placement is the absence of a copy: a transfer still in flight has no placement at all, and neither does a copy this deployment has released. That is deliberate, and it is what lets a surface tell \"there is no copy here\" apart from \"there is a copy here nobody can confirm\", which is what the access and verification_class fields are for. Nothing here is a price, a bill or an estimate of how long a restore will take; see access.",
+        "additionalProperties": false,
+        "properties": {
+          "medium": {
+            "type": "string",
+            "description": "\"local\" for the backup set's own directory on this machine, or the id of a configured storage medium. \"local\" is reserved: a configured medium can never claim it."
+          },
+          "medium_type": {
+            "type": "string",
+            "enum": [
+              "local",
+              "s3"
+            ],
+            "description": "What kind of place holds this copy. Served rather than left to a client comparing the medium id against the literal \"local\", so one product decides what local means."
+          },
+          "location": {
+            "type": "string",
+            "description": "Where the copy is, in the terms of the place that holds it: an absolute path for a local copy, an object key for a medium copy. Never a credential, never a signed URL."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What this copy measures. ABSENT when nobody recorded it, which is not zero: a backup can genuinely be empty, and a client must not render the two the same way.",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
+          },
+          "storage_class": {
+            "type": "string",
+            "description": "The storage class this copy is written with, already resolved. Absent for a local copy, which has no such thing.",
+            "x-go-omitempty": true
+          },
+          "verification_class": {
+            "type": "string",
+            "enum": [
+              "content",
+              "attested",
+              "existence"
+            ],
+            "description": "The strongest verification this copy has ACHIEVED, never the strongest one configured (FR-31). ABSENT means nothing has verified this copy at all, which is a different fact from a weak pass and must never be rendered as one.",
+            "x-go-omitempty": true
+          },
+          "verified_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When verification_class was last achieved. Absent exactly when verification_class is.",
+            "x-go-omitempty": true
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "requires_restore",
+              "restoring",
+              "unreachable"
+            ],
+            "description": "Whether this copy can be read right now, from the closed vocabulary FR-34 defines, derived only from facts this product holds. \"immediate\": readable on demand. \"requires_restore\": the storage class has to be restored first, which takes hours the provider does not predict. \"restoring\": a restore has been asked for; the provider reports no percentage, so none is shown. \"unreachable\": this deployment cannot currently reach the place holding the copy, which is emphatically not the same statement as the copy being gone."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "DELETE_PENDING"
+            ],
+            "description": "ACTIVE means the copy is meant to be there. DELETE_PENDING means a delete has been decided and durably recorded and may not have happened yet, so the bytes are probably still there and are on their way out. There is no third value here: a copy the journal knows is gone is not served at all, because a row for it would read as a copy."
+          }
+        },
+        "required": [
+          "medium",
+          "medium_type",
+          "location",
+          "access",
+          "status"
+        ]
+      },
+      "StorageMediumSummary": {
+        "type": "object",
+        "description": "One configured storage medium, as the settings surface reports it: what it is called, what kind of place it is, which bucket and region, and which storage class artifacts are written with. There is deliberately no field here for key material of any kind, and there never will be (FR-33). A credential reaches this product only as a reference to a file, an environment variable or a command, and none of those three has a spelling on this boundary at all.",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "How a retention tier names this medium."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "s3"
+            ]
+          },
+          "bucket": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "storage_class": {
+            "type": "string",
+            "description": "The class objects are written with, already resolved, so a client never has to know what an unset value defaults to."
+          },
+          "reads_require_restore": {
+            "type": "boolean",
+            "description": "True when this medium's storage class cannot be read on demand: anything already here, and anything a tier sends here, needs an explicit restore taking hours before it can be read at all. Computed from the storage class by the engine rather than restated by a client, so one product decides what archive means."
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "bucket",
+          "storage_class",
+          "reads_require_restore"
+        ]
+      },
+      "VerificationClassInfo": {
+        "type": "object",
+        "description": "One rung of the verification ladder (FR-31), with what it proves and what achieving it takes, in the engine's own words. Served rather than transcribed into a frontend, for the reason the retention schema is served: a surface holding its own copy of what \"existence\" proves eventually says something the engine does not.",
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "type": "string",
+            "enum": [
+              "content",
+              "attested",
+              "existence"
+            ]
+          },
+          "proves": {
+            "type": "string",
+            "description": "What achieving this class actually establishes."
+          },
+          "requires": {
+            "type": "string",
+            "description": "What achieving this class requires, in words. Deliberately words and not a number, and deliberately not a field called cost: this product has no price list and no negotiated rates, so a figure here would be invented, and a field named for one is one release away from holding one. The contract's no-cost gate refuses that name, and this field is not an exception to it."
+          },
+          "downloads_object": {
+            "type": "boolean",
+            "description": "True when achieving this class downloads the object's bytes, which the provider bills as egress. It is the same predicate the engine refuses automatic revalidation on, not a second note kept in step by hand."
+          }
+        },
+        "required": [
+          "class",
+          "proves",
+          "requires",
+          "downloads_object"
+        ]
+      },
+      "StorageSchema": {
+        "type": "object",
+        "description": "The closed value sets and the consent text a storage-medium mapping is written against, served rather than transcribed into a frontend.",
+        "additionalProperties": false,
+        "properties": {
+          "verification_classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VerificationClassInfo"
+            },
+            "description": "The ladder, strongest first."
+          },
+          "medium_disclosure": {
+            "type": "string",
+            "description": "The consent text an operator has to be shown before the first save that sends a retention tier's artifacts to a non-local medium (FR-27). It names the deletion consequence, and the write is refused without an acknowledgment, so this is the words behind a refusal rather than a label a client could reword."
+          },
+          "retrieval_disclosure": {
+            "type": "string",
+            "description": "The plain statement about reading a copy back off a storage medium. It carries no figure, because this product cannot compute one honestly."
+          }
+        },
+        "required": [
+          "verification_classes",
+          "medium_disclosure",
+          "retrieval_disclosure"
+        ]
+      },
+      "CycleOutcome": {
+        "type": "object",
+        "description": "What a finished run cycle actually got done, read off the operation's own recorded summary. A cycle \"completed\" when it ran to the end, which is a narrower statement than anyone reading it assumes: an artifact's own quarantine is a business outcome and not an operation failure, so a cycle that backed nothing up finishes looking exactly like one that backed everything up. These counts are what tell the two apart.",
+        "additionalProperties": false,
+        "properties": {
+          "backup_sets_processed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "artifacts_walked": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many backups the cycle had a reason to touch."
+          },
+          "artifacts_through": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of those ended the cycle with their bytes on durable storage."
+          }
+        },
+        "required": [
+          "backup_sets_processed",
+          "artifacts_walked",
+          "artifacts_through"
         ]
       }
     },
@@ -3740,7 +3980,7 @@
             }
           },
           "400": {
-            "description": "Refused: INVALID_REQUEST.",
+            "description": "Refused: INVALID_REQUEST, MEDIUM_DISCLOSURE_REQUIRED. The second is the storage-medium consent gate: a write that first sends a retention tier's artifacts to a non-local medium is refused until it carries acknowledge_medium_disclosure, and the refusal message is the disclosure itself.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3749,7 +3989,8 @@
               }
             },
             "x-error-codes": [
-              "INVALID_REQUEST"
+              "INVALID_REQUEST",
+              "MEDIUM_DISCLOSURE_REQUIRED"
             ]
           },
           "401": {
@@ -6105,7 +6346,7 @@
             }
           },
           "400": {
-            "description": "Refused: INVALID_REQUEST. Includes a policy that names only part of a chain, an empty policy, and every refusal the same policy written into the configuration file would get.",
+            "description": "Refused: INVALID_REQUEST. Includes a policy that names only part of a chain, an empty policy, and every refusal the same policy written into the configuration file would get. MEDIUM_DISCLOSURE_REQUIRED is the storage-medium consent gate, the same one updateSettings enforces: a policy that first sends one of this set's tiers to a non-local medium is refused until it carries acknowledge_medium_disclosure, and the refusal message is the disclosure itself.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6114,7 +6355,8 @@
               }
             },
             "x-error-codes": [
-              "INVALID_REQUEST"
+              "INVALID_REQUEST",
+              "MEDIUM_DISCLOSURE_REQUIRED"
             ]
           },
           "401": {

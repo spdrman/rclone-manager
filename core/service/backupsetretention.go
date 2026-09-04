@@ -87,6 +87,21 @@ type RetentionOverride struct {
 	// ProtectLastKnownGood is nil to inherit the deployment's FR-19
 	// posture, which is what an omitted key means one level down too.
 	ProtectLastKnownGood *bool
+
+	// AcknowledgeMediumDisclosure is the operator's acknowledgment of
+	// StorageSchema().MediumDisclosure (EPIC E, FR-27), on this write for
+	// exactly the reason UpdateSettingsRequest carries it: an override is
+	// a whole chain and can send a tier's artifacts to a non-local medium
+	// as surely as the deployment's policy can. It is required on, and
+	// only on, a write that maps a tier to a medium the chain deciding
+	// for THIS set does not already map it to; without it that write is
+	// refused with ErrMediumDisclosureRequired and the refusal carries
+	// the disclosure.
+	//
+	// It is not part of the policy. It is never written to the file, never
+	// reported back, and namesNothing does not consult it: a body carrying
+	// nothing but the tick still names no chain.
+	AcknowledgeMediumDisclosure bool
 }
 
 // namesNothing reports an override that carries no field at all.
@@ -219,10 +234,42 @@ func (b *BackupService) SetBackupSetRetention(_ context.Context, id string, o Re
 			"To return this set to the deployment's policy, clear its override instead of sending an empty one", ErrInvalidRequest)
 	}
 
-	return b.writeBackupSetRetention(id, func(bs *config.BackupSet) {
+	return b.writeBackupSetRetention(id, func(cfg *config.Config, bs *config.BackupSet) error {
+		// The consent gate (FR-27), against the chain deciding for THIS
+		// set as the file has it right now: its own override when it has
+		// one, the deployment's policy otherwise. A set that inherits a
+		// policy sending monthly to offsite_s3 has already consented to
+		// monthly leaving, so an override that keeps that mapping does
+		// not ask again; one that sends daily somewhere does, because
+		// that is a different set of artifacts nobody agreed to.
+		introduced := newTierMediumMappings(chainDecidingFor(cfg, bs).EffectiveTiers(), o.Tiers)
+		if len(introduced) > 0 && !o.AcknowledgeMediumDisclosure {
+			return mediumDisclosureRefusal(introduced)
+		}
 		override := toConfigRetention(o)
 		bs.RetentionConfig = &override
+		return nil
 	})
+}
+
+// chainDecidingFor is the policy a backup set is retained under, read off
+// a freshly loaded (unvalidated) config the same way
+// config.resolveBackupSetRetention will read it a few lines later: the
+// set's own override when it declares one, the deployment's otherwise.
+//
+// Raw rather than resolved, deliberately. writeBackupSetRetention encodes
+// the file BEFORE it validates so that Validate's in-place defaults never
+// freeze into the operator's own override block, which means bs.Retention
+// is still zero at the point the gate runs. UpdateSettings' gate reads the
+// raw deployment chain for the same reason, and the only thing the gate
+// needs from it is which tier names which medium, which both spellings of
+// a chain answer through EffectiveTiers (the three-scalar spelling has no
+// medium field, so it answers local for every tier).
+func chainDecidingFor(cfg *config.Config, bs *config.BackupSet) config.Retention {
+	if bs.RetentionConfig != nil {
+		return *bs.RetentionConfig
+	}
+	return cfg.Retention
 }
 
 // ClearBackupSetRetention removes one backup set's own retention policy,
@@ -242,8 +289,9 @@ func (b *BackupService) SetBackupSetRetention(_ context.Context, id string, o Re
 // on the settings route, and BackupSetRetention.Deployment above, which
 // exists so a client can show exactly that).
 func (b *BackupService) ClearBackupSetRetention(_ context.Context, id string) (BackupSetRetention, error) {
-	return b.writeBackupSetRetention(id, func(bs *config.BackupSet) {
+	return b.writeBackupSetRetention(id, func(_ *config.Config, bs *config.BackupSet) error {
 		bs.RetentionConfig = nil
+		return nil
 	})
 }
 
@@ -264,7 +312,7 @@ func (b *BackupService) ClearBackupSetRetention(_ context.Context, id string) (B
 // that two other in-flight branches are editing, so the consolidation is
 // left as its own change with nothing else in it; this helper is already
 // shaped to receive them.
-func (b *BackupService) writeBackupSetRetention(id string, mutate func(*config.BackupSet)) (BackupSetRetention, error) {
+func (b *BackupService) writeBackupSetRetention(id string, mutate func(*config.Config, *config.BackupSet) error) (BackupSetRetention, error) {
 	if b.configPath == "" {
 		return BackupSetRetention{}, ErrConfigNotFileBacked
 	}
@@ -290,7 +338,12 @@ func (b *BackupService) writeBackupSetRetention(id string, mutate func(*config.B
 			if cfg.Sources[i].BackupSets[j].Name != setName {
 				continue
 			}
-			mutate(&cfg.Sources[i].BackupSets[j])
+			// A refusal from mutate is a refusal of THIS write, decided
+			// against the file as it is: nothing has been encoded or
+			// written yet, so the operator's configuration is untouched.
+			if err := mutate(cfg, &cfg.Sources[i].BackupSets[j]); err != nil {
+				return BackupSetRetention{}, err
+			}
 			found = true
 		}
 	}
