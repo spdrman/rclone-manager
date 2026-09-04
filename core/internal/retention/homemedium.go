@@ -95,6 +95,59 @@ func HomeMedium(chain []config.RetentionTier, v GFSVerdict) (medium string, hasH
 	return "", false, nil
 }
 
+// TierMediumSelects answers FR-30's last question before a source delete:
+// does any tier whose medium is `medium` still select this artifact?
+//
+// It is the other half of the one home-medium derivation, and it lives
+// beside HomeMedium so the two cannot come to read the chain differently.
+// The two rules that make this a policy rather than a lookup are both
+// HomeMedium's own: FR-19's protection names no medium and is skipped, and
+// a verdict naming a tier this chain does not contain is refused rather
+// than read as "then nothing wants it here", which is the permissive
+// reading that ends in a delete.
+//
+// The explanation is returned only with a true answer, and it names the
+// tier and the medium in the config file's own spelling, because the one
+// place it surfaces is a preserved source an operator has to understand.
+//
+// # Why this is not simply "the home is not this medium"
+//
+// FR-30 asks about ANY selecting tier, not about the first one, and the
+// difference is real in a chain an operator wrote coarse to fine, or in
+// one that changed under a move already in flight. If monthly (s3) is
+// first and daily (local) second, an artifact both select has its home on
+// s3 and a local copy that daily still wants. Answering from the home
+// alone would say local is free to delete. So the whole list is walked,
+// and the relationship that must hold, an artifact's own home always
+// selecting it, is pinned by a test rather than assumed here.
+func TierMediumSelects(chain []config.RetentionTier, v GFSVerdict, medium string) (selected bool, why string, err error) {
+	byName := make(map[GFSTier]config.RetentionTier, len(chain))
+	for _, t := range chain {
+		byName[gfsTierName(t.Name)] = t
+	}
+
+	for _, sel := range v.Tiers {
+		if sel.By == GFSSelectedByProtection {
+			// FR-19's term, which names no window and therefore no medium.
+			// Skipped rather than answered, for HomeMedium's reason: a
+			// protected artifact also inside a real tier's window is still
+			// wanted by that tier, and short-circuiting here would lose it.
+			continue
+		}
+		t, ok := byName[sel.Tier]
+		if !ok {
+			return false, "", fmt.Errorf(
+				"retention: the verdict for %s names tier %q, which the chain (%s) does not contain; "+
+					"refusing to guess whether a copy on %q is still wanted rather than reading a name this build did not understand as a no",
+				v.Artifact, sel.Tier, tierNameList(chain), medium)
+		}
+		if t.EffectiveMedium() == medium {
+			return true, fmt.Sprintf("the %s tier selects it (%s) and its medium is %q", t.Name, sel.By, medium), nil
+		}
+	}
+	return false, "", nil
+}
+
 // tierNameList renders a chain's tier names for the refusal above, in
 // chain order, so the message says what WAS available rather than only
 // what was not.
@@ -147,10 +200,10 @@ type HomePlan struct {
 // PlanHomeMoves works out which artifacts are not on the medium their
 // chain says they belong on (FR-27's home rule, issue #239).
 //
-// activeMedium answers "which medium is this artifact's durable copy on
-// right now", and its second return value is the load-bearing one. A
-// placement row means a DURABLE copy: an artifact still transferring
-// deliberately has no row, so a missing answer means "I cannot confirm
+// where answers "which medium is this artifact's durable copy on right
+// now", and the status it returns is the load-bearing part. A placement
+// row means a DURABLE copy: an artifact still transferring deliberately
+// has no row, so anything but LocationConfirmed means "I cannot confirm
 // where this is", never "it is not there".
 //
 // Those two readings are not interchangeable, and the difference is a
@@ -166,8 +219,8 @@ type HomePlan struct {
 // It plans no move for an artifact with no home either: an artifact that
 // no tier selects is on its way out, and copying bytes somewhere else
 // first is work in the service of a delete.
-func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, activeMedium func(model.ArtifactID) (string, bool)) (HomePlan, error) {
-	if activeMedium == nil {
+func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, where ArtifactLocator) (HomePlan, error) {
+	if where == nil {
 		return HomePlan{}, fmt.Errorf("retention: PlanHomeMoves needs a way to read where an artifact currently is; " +
 			"without one every artifact would look unplaced, and an unplaced artifact is one this manager must not move")
 	}
@@ -181,15 +234,22 @@ func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, activeMe
 		if !hasHome {
 			continue
 		}
-		current, known := activeMedium(v.Artifact)
-		if !known {
+		loc := where(v.Artifact)
+		// Both non-confirmed statuses land here, and here they really are
+		// the same answer, which is what makes this different from the
+		// prune's own split (see LocationUnrecorded). A move ENDS by
+		// deleting a source, so it needs a location it proved; FR-20's
+		// local delete proves its own target from the path instead.
+		// Different proofs available, different answers to the same
+		// missing row.
+		if loc.Status != LocationConfirmed {
 			plan.Unconfirmed = append(plan.Unconfirmed, v.Artifact)
 			continue
 		}
-		if current == home {
+		if loc.Medium == home {
 			continue
 		}
-		plan.Moves = append(plan.Moves, HomeMove{Artifact: v.Artifact, From: current, To: home})
+		plan.Moves = append(plan.Moves, HomeMove{Artifact: v.Artifact, From: loc.Medium, To: home})
 	}
 	return plan, nil
 }

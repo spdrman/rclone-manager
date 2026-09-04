@@ -477,9 +477,12 @@ func TestPlanHomeMoves_PlansOnlyWhatIsNotWhereItBelongs(t *testing.T) {
 		"expiring.dump":        mediumWarm,
 		"protected.dump":       config.MediumLocal,
 	}
-	plan, err := PlanHomeMoves(chain, verdicts, func(id model.ArtifactID) (string, bool) {
+	plan, err := PlanHomeMoves(chain, verdicts, func(id model.ArtifactID) Location {
 		m, ok := where[id.Name]
-		return m, ok
+		if !ok {
+			return Location{Status: LocationUnrecorded}
+		}
+		return Location{Medium: m, Status: LocationConfirmed}
 	})
 	if err != nil {
 		t.Fatalf("PlanHomeMoves: %v", err)
@@ -535,11 +538,11 @@ func TestPlanHomeMoves_NeverMovesAnArtifactItCannotLocate(t *testing.T) {
 		Tiers:    []GFSTierSelection{selection("MONTHLY", GFSSelectedByDiscovery)},
 	}
 
-	plan, err := PlanHomeMoves(chain, []GFSVerdict{unlocatable, locatable}, func(id model.ArtifactID) (string, bool) {
+	plan, err := PlanHomeMoves(chain, []GFSVerdict{unlocatable, locatable}, func(id model.ArtifactID) Location {
 		if id.Name == "settled.dump" {
-			return config.MediumLocal, true
+			return Location{Medium: config.MediumLocal, Status: LocationConfirmed}
 		}
-		return "", false
+		return Location{Status: LocationUnrecorded}
 	})
 	if err != nil {
 		t.Fatalf("PlanHomeMoves: %v", err)

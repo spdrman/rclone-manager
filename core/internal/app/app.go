@@ -208,6 +208,22 @@ type Service struct {
 	// opt-in is honoured.
 	Alerts *alert.Dispatcher
 
+	// MediumStore is EPIC E's FR-28 storage-medium boundary: how this
+	// manager reaches an object on a configured medium. Nil means no
+	// medium can be reached, which every caller treats as a refusal
+	// rather than as a reason to skip a check.
+	//
+	// New fills it in from Transport when the transport adapter is also a
+	// MediumStore, which the embedded rclone one is. That is not a
+	// coincidence to be tidied away: FR-28 says outright that the s3
+	// medium IS the embedded rclone registered inside internal/transport/
+	// rclone, behind the same FR-3 boundary, with no second SDK entering
+	// the tree. One adapter serving both is the decision, so reading it
+	// off the transport this Service was built with is what keeps a
+	// deployment from having to wire the same object twice and get it
+	// wrong once.
+	MediumStore transport.MediumStore
+
 	mu            sync.Mutex
 	lastPoll      map[model.BackupSetID]time.Time
 	lastRetention map[model.BackupSetID]time.Time
@@ -246,13 +262,23 @@ func New(cfg *config.Config, journal Journal, tr transport.Transport, logger *ob
 	if sj, ok := journal.(*state.Journal); ok {
 		sj.SetRedactor(redactor)
 	}
-	return &Service{
+	s := &Service{
 		Config:    cfg,
 		Journal:   journal,
 		Transport: tr,
 		Logger:    logger,
 		Capacity:  thresholdsFrom(cfg),
 	}
+	// FR-28's medium boundary, off the transport adapter that already
+	// carries it. See MediumStore's own doc for why the two are the same
+	// object by design rather than by accident. A transport that is not
+	// one (every test double, and the nil Transport the read-only use
+	// cases are built with) leaves this nil, which every caller reads as
+	// "no medium can be reached".
+	if ms, ok := tr.(transport.MediumStore); ok {
+		s.MediumStore = ms
+	}
+	return s
 }
 
 // sensitiveEndpoints collects the obs.Endpoint for every configured Remote

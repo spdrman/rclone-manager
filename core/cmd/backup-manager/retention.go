@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/spdrman/rclone-manager/core/internal/app"
 	"github.com/spdrman/rclone-manager/core/internal/config"
+	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
 )
 
 // cmdRetention is `backup-manager retention` / `backup-manager retention
@@ -124,40 +127,119 @@ func cmdRetention(args []string) int {
 			continue
 		}
 		for _, v := range r.Verdicts {
-			decision := "DELETE"
-			if v.Keep {
-				decision = "KEEP"
-			}
-			// Each entry of Tiers is a retention.GFSTierSelection, whose
-			// String renders the tier and the placement that selected it,
-			// so this line reads `tiers=[DAILY(discovery) MONTHLY(both)]`
-			// (issue #218). The rendering deliberately lives on that type
-			// rather than here: FR-20's own KEEP reason sentence spells a
-			// selection the same way, and two renderers would eventually
-			// spell it differently. This line is pinned by the black-box
-			// contract suite in spdrman/rclone-manager-tests
-			// (suites/cli/cases/retention/), so changing its shape means
-			// moving those cases in lockstep.
-			fmt.Printf("  %-6s %-40s tiers=%v\n", decision, v.Artifact.Name, v.Tiers)
-			// Issue #292: tiers=[] alone cannot tell an operator "no tier
-			// claimed this because it is older than every window" apart
-			// from "no tier claimed this because a sibling in the same
-			// bucket won" -- both render identically otherwise. Every
-			// GFSSiblingCollision GFSDecide recorded against this
-			// artifact prints as its own indented line right under the
-			// verdict it belongs to, so the distinction is visible before
-			// anything is deleted, which is this issue's whole ask.
-			for _, line := range v.SiblingCollisionLines() {
-				fmt.Printf("    ! %s\n", line)
-			}
+			printVerdictLine(v, r.Locations)
 		}
 		fmt.Printf("  last-known-good: %s\n", r.LastKnownGood.Reason)
+		printPlacementPlan(cfg, r)
 	}
 
 	if !*dryRun {
 		fmt.Println("\nnote: local deletion (FR-20) is not implemented anywhere in this codebase yet (issue #21 is open); this is a preview only, identical to --dry-run.")
 	}
 	return 0
+}
+
+// printVerdictLine renders one artifact's verdict.
+//
+// Each entry of Tiers is a retention.GFSTierSelection, whose String
+// renders the tier and the placement that selected it, so this line reads
+// `tiers=[DAILY(discovery) MONTHLY(both)]` (issue #218). The rendering
+// deliberately lives on that type rather than here: FR-20's own KEEP
+// reason sentence spells a selection the same way, and two renderers
+// would eventually spell it differently. This line is pinned by the
+// black-box contract suite in spdrman/rclone-manager-tests
+// (suites/cli/cases/retention/), so changing its shape means moving those
+// cases in lockstep.
+//
+// # medium=, and why it is absent rather than "local"
+//
+// FR-30 asks this dry-run to explain per-artifact WHERE a deletion would
+// happen, not only whether, and the answer is where the copy is. It is
+// appended only when that is somewhere other than the implicit local
+// medium, so an artifact on local prints exactly the line it printed
+// before this field existed, which is every artifact in every one of
+// those pinned cases. It is also the honest asymmetry: "DELETE 40
+// artifacts" needs qualifying when half of them are objects in a bucket
+// somebody else pays for, and needs nothing when they are files on this
+// machine.
+//
+// A location nothing could confirm prints `medium=?`, because a deletion
+// this manager cannot place is a different thing from one it can, and
+// both are different from one on local.
+func printVerdictLine(v retention.GFSVerdict, locations map[model.ArtifactID]retention.Location) {
+	decision := "DELETE"
+	if v.Keep {
+		decision = "KEEP"
+	}
+	fmt.Printf("  %-6s %-40s tiers=%v%s\n", decision, v.Artifact.Name, v.Tiers, mediumSuffix(locations[v.Artifact]))
+	// Issue #292: tiers=[] alone cannot tell an operator "no tier claimed
+	// this because it is older than every window" apart from "no tier
+	// claimed this because a sibling in the same bucket won" -- both
+	// render identically otherwise. Every GFSSiblingCollision GFSDecide
+	// recorded against this artifact prints as its own indented line right
+	// under the verdict it belongs to, so the distinction is visible
+	// before anything is deleted, which is that issue's whole ask.
+	for _, line := range v.SiblingCollisionLines() {
+		fmt.Printf("    ! %s\n", line)
+	}
+}
+
+// mediumSuffix is the ` medium=...` half of the line above, or nothing.
+func mediumSuffix(loc retention.Location) string {
+	switch {
+	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
+		return " medium=" + loc.Medium
+	case loc.Status == retention.LocationContested:
+		return " medium=?"
+	default:
+		return ""
+	}
+}
+
+// printPlacementPlan is FR-27's half of the mandatory dry-run (EPIC E,
+// issue #239): every artifact this pass would MOVE, and where to, before
+// a cycle carries it there.
+//
+// # It prints nothing in a deployment with no storage medium
+//
+// That is a compatibility decision with a reason outside this repository.
+// This command's output is pinned by the black-box contract suite in
+// spdrman/rclone-manager-tests (suites/cli/cases/retention/), and every
+// case there is a medium-free deployment; adding a line to those means
+// moving them in lockstep with this change, across two repositories. It
+// is also the honest answer: a deployment with exactly one place to put
+// anything has nothing to say about placement, and the "could not confirm
+// where this is" line in particular would fire for every artifact whose
+// journal row predates FR-29's placement table while meaning nothing,
+// because there is nowhere else it could be.
+//
+// The same asymmetry the RetentionIsOverride line above already uses, for
+// the same reason, and with the same real limitation: absence is the only
+// signal for the common case.
+func printPlacementPlan(cfg *config.Config, r app.RetentionSetReport) {
+	if len(cfg.StorageMediums) == 0 {
+		return
+	}
+	plan := r.HomePlan
+	if len(plan.Moves) == 0 && len(plan.Unconfirmed) == 0 {
+		return
+	}
+	fmt.Println("  placement:")
+	for _, m := range plan.Moves {
+		// The same column shape as the verdict lines above, so the two
+		// read as one table rather than as a report with an appendix.
+		fmt.Printf("    %-6s %-40s %s -> %s\n", "MOVE", m.Artifact.Name, m.From, m.To)
+	}
+	for _, a := range plan.Unconfirmed {
+		// Deliberately its own line rather than a MOVE with a blank
+		// source. "I could not confirm where this is" and "this is
+		// already where it belongs" produce the same silence otherwise,
+		// and they are different facts: one of them is a move already in
+		// flight, and the other is a journal row with no placement at
+		// all. Neither is moved, and an operator acts differently on
+		// each.
+		fmt.Printf("    %-6s %-40s nothing could confirm where its durable copy is, so it stays put\n", "?", a.Name)
+	}
 }
 
 // retentionPolicySummary renders a resolved policy as one line: the chain
