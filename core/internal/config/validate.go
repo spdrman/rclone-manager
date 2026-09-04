@@ -1351,6 +1351,7 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 		if m.UploadVerification != "" && !validUploadVerifications[m.UploadVerification] {
 			v.addf("%s: upload_verification %q is not one of: %s", path, m.UploadVerification, uploadVerificationList)
 		}
+		v.validateUploadVerificationIsAchievable(path, m)
 
 		v.validateMediumPrefix(path, m.Prefix)
 		v.validateMediumCredentials(path, m.Credentials)
@@ -1358,6 +1359,68 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 
 	return declared
 }
+
+// validateUploadVerificationIsAchievable refuses an upload_verification
+// mode the medium's own backend can never satisfy.
+//
+// # Why a schema check reaches into a backend capability
+//
+// Everything else in this function refuses a value that is malformed or
+// out of a closed set. This one refuses a value that is spelled perfectly
+// and cannot happen, and it is here rather than left to the move engine
+// because of WHERE the engine's refusal lands: at the verification step of
+// a move, after the object has already been uploaded, once per artifact
+// per cycle, in a log line, forever. `backup-manager check` says "config
+// OK" on the way in and the artifacts never arrive. That is a
+// configuration this product can validate and can never execute, which is
+// the one thing validation exists to prevent.
+//
+// # What cannot happen, and how that is known
+//
+// `attested` means the medium states its own full-object digest and this
+// product believes it without downloading the object (see the
+// UploadVerification constants). rclone v1.75.0's s3 backend reports
+// exactly one hash capability, MD5 (backend/s3's Fs.Hashes()), and the MD5
+// it serves comes from the ETag, which FR-32 says is never a content hash.
+// So no s3 medium can produce the digest the class needs, on this build,
+// and transport.MediumStore.ObjectChecksum's own doc says so at length.
+//
+// # This is a rule about the TYPE, not about s3 forever
+//
+// typesThatCanAttest is the set that decides, and it is empty on this
+// build rather than "s3 is excluded", so a second medium type whose
+// backend does serve a full-object SHA-256 becomes legal by being added to
+// it. The transport queries the capability live and will start working
+// with no adapter edit at that point (ObjectChecksum's doc), and this
+// table is what has to move deliberately alongside.
+//
+// A medium whose type this build has no backend for at all is left alone.
+// It cannot attest either, but its problem is the type, and reporting the
+// consequence beside the cause sends an operator to the wrong key: the
+// same reason validateStorageMediums does not report a malformed id twice.
+func (v *validator) validateUploadVerificationIsAchievable(path string, m *StorageMedium) {
+	if m.UploadVerification != UploadVerificationAttested {
+		return
+	}
+	if !validStorageMediumTypes[m.Type] || typesThatCanAttest[m.Type] {
+		return
+	}
+	v.addf("%s: upload_verification %q cannot be achieved on a %q medium, so every move to it would be refused "+
+		"at the verification step, after the upload, on every cycle: %q means the medium states its own full-object "+
+		"digest and this product believes it, and the embedded rclone's s3 backend reports only MD5, which is the "+
+		"object's ETag and never a content hash. Write upload_verification: %s instead, which downloads the object "+
+		"again and re-hashes it against what was uploaded, and is the default",
+		path, m.UploadVerification, m.Type, UploadVerificationAttested, UploadVerificationReadback)
+}
+
+// typesThatCanAttest names the medium types whose backend can produce the
+// full-object digest FR-31's `attested` class needs.
+//
+// It is EMPTY, and that is a measured fact rather than an unfinished
+// table: s3 is the only type this build has a backend for, and it cannot.
+// See validateUploadVerificationIsAchievable, which is its only reader and
+// carries the whole argument.
+var typesThatCanAttest = map[string]bool{}
 
 // validateMediumPrefix checks the key namespace a medium writes under.
 //
