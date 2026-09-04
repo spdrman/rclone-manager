@@ -10,6 +10,7 @@ import type { BackupSet } from "@shared/types/backup";
 import { graph, resetGraphForTests, useCausl } from "@shared/state/graph";
 import { setsNode } from "@shared/state/appNodes";
 import { backupSetPath } from "@shared/utilities/routes";
+import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 
 /**
  * Issue #391.
@@ -85,7 +86,31 @@ function renderDetailWithNodeBackedList(source: string, set: string, api: Backup
 const REMOVE_BUTTON = /^Remove set configuration/;
 const CONFIRM_BUTTON = "Remove configuration";
 
+/** The typed confirmation's box, found the way an operator finds it: by
+ *  the label that tells them what to type. */
+function phraseBox(target: BackupSet): HTMLElement {
+  return screen.getByLabelText("To confirm, type " + backupSetIdentity(target));
+}
+
+function type(target: BackupSet, text: string) {
+  fireEvent.change(phraseBox(target), { target: { value: text } });
+}
+
+/** Opens the dialog and satisfies the typed confirmation, for the tests
+ *  whose subject is what happens AFTER the confirmation. The tests whose
+ *  subject IS the confirmation do not call this. */
 async function openRemoveDialog(api: BackupManagerApi, target: BackupSet, readOnly = false) {
+  await openRemoveDialogUnconfirmed(api, target, readOnly);
+  await act(async () => {
+    type(target, backupSetIdentity(target));
+  });
+}
+
+async function openRemoveDialogUnconfirmed(
+  api: BackupManagerApi,
+  target: BackupSet,
+  readOnly = false
+) {
   renderDetailWithList(target.source, target.set, api, readOnly);
   await screen.findByText(target.name);
   await act(async () => {
@@ -192,6 +217,9 @@ describe("removing a backup set from the detail page", () => {
     });
     await screen.findByRole("button", { name: CONFIRM_BUTTON });
     await act(async () => {
+      type(target, backupSetIdentity(target));
+    });
+    await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
     });
 
@@ -247,6 +275,53 @@ describe("removing a backup set from the detail page", () => {
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Backup sets" })).toBeNull();
+  });
+
+  // Rom asked for a typed confirmation on removal, and asked for it on
+  // removal generally rather than only on the list page: one strong path
+  // and one weak path to the same destructive action is worse than
+  // either alone. The guard lives in ConfirmationDialog and the copy in
+  // RemoveBackupSetDialog, so these are the same three assertions the
+  // list-page suite makes, proved a second time through this surface's
+  // own real controls.
+  it("keeps the confirm button off until the set's full name is typed", async () => {
+    const api = createMockApi();
+    const target = await firstSet();
+
+    await openRemoveDialogUnconfirmed(api, target);
+    expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toHaveProperty("disabled", true);
+
+    await act(async () => {
+      type(target, backupSetIdentity(target));
+    });
+    expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toHaveProperty("disabled", false);
+  });
+
+  it("removes nothing when a near miss is typed and the confirmation is pressed anyway", async () => {
+    // Asserts on the API, not on whether the button looked disabled.
+    // Forcing the comparison to always pass has to be able to make this
+    // go red, or it is checking the button's appearance rather than the
+    // guard.
+    const api = createMockApi();
+    const remove = vi.spyOn(api, "removeSet");
+    const target = await firstSet();
+
+    await openRemoveDialogUnconfirmed(api, target);
+    for (const near of [
+      backupSetIdentity(target).toUpperCase(),
+      backupSetIdentity(target) + " ",
+      " " + backupSetIdentity(target),
+      target.set,
+      target.name
+    ]) {
+      await act(async () => {
+        type(target, near);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
+      });
+      expect(remove).not.toHaveBeenCalled();
+    }
   });
 
   it("offers no removal at all on a read-only surface", async () => {

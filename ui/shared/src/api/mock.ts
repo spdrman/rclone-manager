@@ -655,6 +655,21 @@ function retentionPlan(
 const delay = <T,>(value: T, ms = 180): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
+/** The refusal every by-identity backup-set operation owes when the pair
+ *  it was handed names nothing. The CONTRACT's code, BACKUP_SET_NOT_FOUND,
+ *  not the "unknown" some callers here used to invent: the removal dialog
+ *  branches on that code to tell "somebody already removed this" from
+ *  every other refusal, and a mock that could not produce it would leave
+ *  that branch untestable through the mock. */
+const notFound = <T,>(): Promise<T> =>
+  Promise.reject(
+    new BackupManagerError({
+      code: "BACKUP_SET_NOT_FOUND",
+      message: "no such backup set",
+      correlationId: "cid_mock404"
+    })
+  );
+
 /** Issue #146 (B2.7): a deterministic in-memory stand-in for the real
  *  create-backup-set/import/probe/test-connection endpoints, mirroring
  *  every other resource in this file (listSets/getSet, ...) — nothing
@@ -1047,8 +1062,26 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
           "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
       }),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
-    setEnabled: () => delay(undefined),
-    setReadOnly: () => delay(undefined),
+    // Both APPLY to the SETS fixture rather than resolving and leaving it
+    // alone, for the reason updateBackupSet's own comment below gives:
+    // a mock that answers "fine" without changing anything makes every
+    // toggle look correct in the browser suite whatever the page sent.
+    // That was cheap to ignore while the only enable/disable control sat
+    // on a page that re-read the set afterwards, and stopped being cheap
+    // when the same control landed on every row of the sets list, where
+    // "did the badge change" is the whole observable outcome.
+    setEnabled: (source: string, set: string, enabled: boolean) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return notFound();
+      found.enabled = enabled;
+      return delay(undefined);
+    },
+    setReadOnly: (source: string, set: string, readOnly: boolean) => {
+      const found = SETS.find((s) => s.source === source && s.set === set);
+      if (!found) return notFound();
+      found.readOnly = readOnly;
+      return delay(undefined);
+    },
 
     // Issue #350. The mock APPLIES the patch to its own SETS entry
     // rather than echoing the request, and applies only the keys the
@@ -1093,12 +1126,7 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
     // warns about, one layer down.
     removeSet: (source: string, set: string) => {
       const at = SETS.findIndex((s) => s.source === source && s.set === set);
-      if (at < 0)
-        return Promise.reject(
-          new BackupManagerError({
-            code: "BACKUP_SET_NOT_FOUND", message: "no such backup set", correlationId: "cid_mock404"
-          })
-        );
+      if (at < 0) return notFound();
       SETS.splice(at, 1);
       return delay(undefined);
     },
