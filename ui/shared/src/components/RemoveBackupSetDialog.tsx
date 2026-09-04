@@ -1,28 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useApi } from "@shared/api/ApiContext";
 import { ConfirmationDialog } from "./ConfirmationDialog";
 import { apiErrorOf, describeFailure } from "@shared/api/failure";
 import { bytes } from "@shared/utilities/format";
+import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 import type { BackupSet } from "@shared/types/backup";
-
-/**
- * The exact string an operator has to retype to remove this set.
- *
- * It is the set's canonical identity, `source/set`: the same two path
- * segments `removeSet` itself takes, the same pair the URL of the set's
- * own page carries, and the only name for a backup set that is unique
- * across the whole deployment. `name` is a display label, so two sets
- * under different sources are free to share one, and a phrase two rows
- * can both satisfy is not confirming which row.
- *
- * Exported so the card that offers removal can print the same string on
- * the row. Retyping something you can only read inside the dialog that is
- * asking for it proves you can copy; retyping the identity that is on the
- * row you clicked proves you are on the row you meant.
- */
-export function removalPhrase(set: Pick<BackupSet, "source" | "set">): string {
-  return set.source + "/" + set.set;
-}
 
 /**
  * Removing one backup set's configuration, with the promise that removal
@@ -48,7 +30,8 @@ export function removalPhrase(set: Pick<BackupSet, "source" | "set">): string {
  *     which set it just asked about the second reading is a removal that
  *     WORKED. Getting that wrong paints a red error under a destructive
  *     dialog for an operator whose action succeeded.
- *   - the typed confirmation. See `removalPhrase` above.
+ *   - the typed confirmation. See `backupSetIdentity`'s own doc for
+ *     what the operator is asked to retype and why it is that string.
  *
  * What is NOT here is where to go afterwards, because the two surfaces
  * genuinely differ: the detail page is showing a set that no longer
@@ -84,14 +67,7 @@ export function RemoveBackupSetDialog({
   // away when it did not.
   const [error, setError] = useState<string | null>(null);
 
-  // A dialog reopened after a failure starts clean. Without this the
-  // previous attempt's red line is already on screen before this attempt
-  // has been made.
-  useEffect(() => {
-    setError(null);
-  }, [open, set.id]);
-
-  const phrase = removalPhrase(set);
+  const phrase = backupSetIdentity(set);
 
   return (
     <ConfirmationDialog
@@ -108,7 +84,15 @@ export function RemoveBackupSetDialog({
           <span className="mono" style={{ color: "var(--text)" }}>{phrase}</span>
         </>
       }
-      onCancel={onCancel}
+      onCancel={() => {
+        // Cleared on the way out, not on the way in. A dialog reopened
+        // after a refusal would otherwise show the previous attempt's red
+        // line before this attempt has been made, and clearing it here
+        // does that while nothing is on screen rather than one render
+        // after the operator is already looking at it.
+        setError(null);
+        onCancel();
+      }}
       onConfirm={() => {
         if (inFlight.current) return;
         inFlight.current = true;

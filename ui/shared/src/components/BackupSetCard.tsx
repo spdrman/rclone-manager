@@ -1,6 +1,6 @@
 import type { BackupSet } from "@shared/types/backup";
 import { HealthBadge, HEALTH_PRESENTATION, StatusBadge } from "./StatusBadge";
-import { removalPhrase } from "./RemoveBackupSetDialog";
+import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 import { bytes, relativeAge } from "@shared/utilities/format";
 
 /**
@@ -98,7 +98,7 @@ export function BackupSetCard({
               recognition rather than a copy out of the dialog doing the
               asking. */}
           <div className="mono" style={{ marginTop: 3, fontSize: "var(--text-sm)", color: "var(--text-2)", overflowWrap: "anywhere" }}>
-            {removalPhrase(set)}
+            {backupSetIdentity(set)}
           </div>
           <div className="mono" style={{ marginTop: 2, fontSize: "var(--text-xs)", color: "var(--text-3)" }}>
             {set.host + ":" + set.port}
@@ -177,7 +177,16 @@ export function BackupSetCard({
           disabled={rowDisabled}
         >
           {set.enabled ? "Disable" : "Enable"}
-          <span className="visually-hidden">{" " + set.name}</span>
+          {/* The rest of the accessible name, off screen. Four rows means
+              four buttons reading "Disable", which is four controls an
+              assistive technology cannot tell apart and, incidentally,
+              four a test cannot address either. The visible half stays
+              short because the row is narrow, and the visible half is a
+              prefix of the whole so the spoken name still starts with
+              what is written on it. The wording is the detail page's own
+              ("Disable backup set"), so the same action reads the same
+              way wherever it is offered. */}
+          <span className="visually-hidden">{" backup set " + set.name}</span>
         </button>
         <button
           className="btn btn--sm btn--destructive"
@@ -185,7 +194,7 @@ export function BackupSetCard({
           disabled={rowDisabled}
         >
           {"Remove\u2026"}
-          <span className="visually-hidden">{" " + set.name}</span>
+          <span className="visually-hidden">{" set configuration for " + set.name}</span>
         </button>
         <div style={{ flex: 1 }} />
         {/* What is running for this set right now, and nothing more. The

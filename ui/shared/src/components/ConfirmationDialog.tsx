@@ -28,20 +28,19 @@ import type { ReactNode } from "react";
  * whatever is typed, which is what stops a second click from sending a
  * second destructive request.
  */
-export function ConfirmationDialog({
-  open,
-  eyebrow,
-  title,
-  confirmLabel,
-  cancelLabel = "Cancel",
-  destructive = false,
-  disabled = false,
-  confirmPhrase,
-  confirmPhraseLabel = "Type the name to confirm",
-  onConfirm,
-  onCancel,
-  children
-}: {
+export function ConfirmationDialog(props: ConfirmationDialogProps) {
+  // No hooks in here, which is what lets this return before rendering
+  // anything. The whole dialog lives in OpenDialog below and is MOUNTED
+  // per opening, keyed by the phrase, so the typed box starts empty on
+  // every open and on every change of phrase by construction. An effect
+  // that reset it after the fact would leave one painted frame in which
+  // a reopened dialog still holds the previous row's answer and its
+  // confirm button is already live.
+  if (!props.open) return null;
+  return <OpenDialog key={props.confirmPhrase ?? ""} {...props} />;
+}
+
+interface ConfirmationDialogProps {
   open: boolean;
   eyebrow?: string;
   title: string;
@@ -61,39 +60,38 @@ export function ConfirmationDialog({
   onConfirm(): void;
   onCancel(): void;
   children: ReactNode;
-}) {
+}
+
+function OpenDialog({
+  eyebrow,
+  title,
+  confirmLabel,
+  cancelLabel = "Cancel",
+  destructive = false,
+  disabled = false,
+  confirmPhrase,
+  confirmPhraseLabel = "Type the name to confirm",
+  onConfirm,
+  onCancel,
+  children
+}: ConfirmationDialogProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
   const [typed, setTyped] = useState("");
-
-  // Cleared on every open AND on every close, and whenever the phrase
-  // itself changes. Without this the box keeps what was typed the last
-  // time the dialog was open, so a second removal opened from a different
-  // row would arrive pre-confirmed with the PREVIOUS row's phrase still
-  // in it, and one click would remove a set nobody typed the name of.
-  // Clearing on close is the half that closes the window: the reset then
-  // happens while the dialog is not on screen, rather than one passive
-  // effect after a reopened dialog has already painted an enabled button.
-  useEffect(() => {
-    setTyped("");
-  }, [open, confirmPhrase]);
 
   const phraseSatisfied = confirmPhrase === undefined || typed === confirmPhrase;
 
   // Focus lands on the SAFE action, never the destructive one.
   useEffect(() => {
-    if (open) cancelRef.current?.focus();
-  }, [open]);
+    cancelRef.current?.focus();
+  }, []);
 
   useEffect(() => {
-    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
-
-  if (!open) return null;
+  }, [onCancel]);
 
   return (
     <div className="dialog-scrim" onClick={(e) => e.target === e.currentTarget && onCancel()}>

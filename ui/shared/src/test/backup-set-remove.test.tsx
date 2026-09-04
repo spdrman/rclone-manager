@@ -10,7 +10,7 @@ import type { BackupSet } from "@shared/types/backup";
 import { graph, resetGraphForTests, useCausl } from "@shared/state/graph";
 import { setsNode } from "@shared/state/appNodes";
 import { backupSetPath } from "@shared/utilities/routes";
-import { removalPhrase } from "@shared/components/RemoveBackupSetDialog";
+import { backupSetIdentity } from "@shared/utilities/backupSetIdentity";
 
 /**
  * Issue #391.
@@ -89,7 +89,7 @@ const CONFIRM_BUTTON = "Remove configuration";
 /** The typed confirmation's box, found the way an operator finds it: by
  *  the label that tells them what to type. */
 function phraseBox(target: BackupSet): HTMLElement {
-  return screen.getByLabelText("To confirm, type " + removalPhrase(target));
+  return screen.getByLabelText("To confirm, type " + backupSetIdentity(target));
 }
 
 function type(target: BackupSet, text: string) {
@@ -102,7 +102,7 @@ function type(target: BackupSet, text: string) {
 async function openRemoveDialog(api: BackupManagerApi, target: BackupSet, readOnly = false) {
   await openRemoveDialogUnconfirmed(api, target, readOnly);
   await act(async () => {
-    type(target, removalPhrase(target));
+    type(target, backupSetIdentity(target));
   });
 }
 
@@ -217,7 +217,7 @@ describe("removing a backup set from the detail page", () => {
     });
     await screen.findByRole("button", { name: CONFIRM_BUTTON });
     await act(async () => {
-      type(target, removalPhrase(target));
+      type(target, backupSetIdentity(target));
     });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: CONFIRM_BUTTON }));
@@ -292,7 +292,7 @@ describe("removing a backup set from the detail page", () => {
     expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toHaveProperty("disabled", true);
 
     await act(async () => {
-      type(target, removalPhrase(target));
+      type(target, backupSetIdentity(target));
     });
     expect(screen.getByRole("button", { name: CONFIRM_BUTTON })).toHaveProperty("disabled", false);
   });
@@ -304,9 +304,9 @@ describe("removing a backup set from the detail page", () => {
 
     await openRemoveDialogUnconfirmed(api, target);
     for (const near of [
-      removalPhrase(target).toUpperCase(),
-      removalPhrase(target) + " ",
-      " " + removalPhrase(target),
+      backupSetIdentity(target).toUpperCase(),
+      backupSetIdentity(target) + " ",
+      " " + backupSetIdentity(target),
       target.set,
       target.name
     ]) {

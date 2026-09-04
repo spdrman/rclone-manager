@@ -187,6 +187,14 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
 describe("declaring a backup set read-only (issue #316)", () => {
   afterEach(() => {
     resetGraphForTests();
+    // The mock's setReadOnly used to resolve and change nothing, so the
+    // first test here could flip a set read-only and the second could
+    // still go looking for "the mock's one read-only set" and find the
+    // one the literal declares. It applies the change now (mock.ts says
+    // why), which makes these two tests share state unless the fixture
+    // is put back, exactly as resetMockFixtures' own doc requires of any
+    // test that drives a mutating method.
+    resetMockFixtures();
   });
 
   it("shows 'No' for a set that is not read-only, and flips it on with a call to api.setReadOnly", async () => {
