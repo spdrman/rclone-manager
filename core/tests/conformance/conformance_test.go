@@ -357,19 +357,29 @@ func (w *world) seedArtifacts() {
 // lifecycle.Commit leaves one.
 func (w *world) seedOneOnLocal(id model.ArtifactID, content []byte, at time.Time) {
 	w.t.Helper()
+	seedOnLocal(w.t, w.ctx, w.journal, w.root, id, content, at)
+}
 
-	localPath := filepath.Join(w.root, id.Name)
+// seedOnLocal is seedOneOnLocal without a world, because the crash matrix
+// builds a leaner one of its own (no config, no second medium) and a
+// second seeding function would be a second definition of what an
+// ingested artifact looks like. The two suites disagreeing about that is
+// how one of them ends up certifying a shape the product never produces.
+func seedOnLocal(t *testing.T, ctx context.Context, j *state.Journal, root string, id model.ArtifactID, content []byte, at time.Time) {
+	t.Helper()
+
+	localPath := filepath.Join(root, id.Name)
 	if err := os.WriteFile(localPath, content, 0o600); err != nil {
-		w.t.Fatalf("writing %s to the backup set's local_path: %v", id.Name, err)
+		t.Fatalf("writing %s to the backup set's local_path: %v", id.Name, err)
 	}
 
 	size := int64(len(content))
 	hash := sha256Hex(content)
 	partial := localPath + ".partial"
 
-	if _, err := w.journal.Discover(w.ctx, id, id.String()+":discover", "backups/"+id.Name,
+	if _, err := j.Discover(ctx, id, id.String()+":discover", "backups/"+id.Name,
 		state.RemoteIdentity{Size: &size, Hash: hash, HashAlg: "sha256"}, at); err != nil {
-		w.t.Fatalf("Discover %s: %v", id.Name, err)
+		t.Fatalf("Discover %s: %v", id.Name, err)
 	}
 	verified := at
 	for _, tr := range []state.Transition{
@@ -388,8 +398,8 @@ func (w *world) seedOneOnLocal(id model.ArtifactID, content []byte, at time.Time
 		{Artifact: id, Key: id.String() + ":pending", From: "COMMITTED", To: "REMOTE_DELETE_PENDING", OccurredAt: at},
 		{Artifact: id, Key: id.String() + ":complete", From: "REMOTE_DELETE_PENDING", To: "COMPLETE", OccurredAt: at},
 	} {
-		if _, err := w.journal.RecordTransition(w.ctx, tr); err != nil {
-			w.t.Fatalf("%s -> %s: %v", id.Name, tr.To, err)
+		if _, err := j.RecordTransition(ctx, tr); err != nil {
+			t.Fatalf("%s -> %s: %v", id.Name, tr.To, err)
 		}
 	}
 }
