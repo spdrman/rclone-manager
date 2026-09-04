@@ -1025,6 +1025,21 @@ export function createMockApi(scenario: Scenario = "default"): BackupManagerApi 
       return delay(withRetentionAttribution(retentionOverrides, [found])[0]);
     },
     runCycle: () => delay(undefined),
+    // The mock ECHOES the window it was given rather than a fixed one, so
+    // a screen that dropped windowDays on the way to the client looks
+    // wrong here rather than plausible. It says the class's published
+    // figure and that a bill exists, and says neither a percentage, a
+    // finishing time nor an amount, because there is nowhere in the type
+    // to put one.
+    restoreCopy: (req) =>
+      delay({
+        operationId: "op_mock_restore_1",
+        status: "running",
+        windowDays: req.windowDays,
+        wait: "AWS publishes a standard restore from DEEP_ARCHIVE as taking up to twelve hours, and a bulk one up to forty eight; S3 reports a restore as in progress or finished and never reports a percentage or a finishing time",
+        billing:
+          "the provider bills for retrieving an object from DEEP_ARCHIVE, and this product has no price list, so it cannot and will not tell you the amount"
+      }),
     testConnection: () => delay({ ok: true, fingerprint: SETS[0].hostFingerprint }),
     setEnabled: () => delay(undefined),
     setReadOnly: () => delay(undefined),

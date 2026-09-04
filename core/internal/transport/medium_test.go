@@ -255,11 +255,17 @@ func TestMediumRendersUnderEveryVerb(t *testing.T) {
 // implementation the work of implementing it honestly or the temptation to
 // stub it, which artifactstore's own doc calls out as worse than absence.
 //
-// Restore is deliberately not here. FR-28 sketches RestoreStatus and
-// InitiateRestore on this interface; they belong to #241, which owns the
-// archive storage classes that make them mean anything, and MinIO cannot
-// exercise a Glacier restore, so landing them now would land two methods
-// with no implementation and no test behind them.
+// Restore IS here now, and it arrived the way this doc asked it to: #241
+// owns the archive storage classes that make RestoreStatus and
+// InitiateRestore mean anything, and it landed them with the rclone s3
+// implementation behind them rather than as two names.
+//
+// MinIO still cannot emulate a Glacier restore, so what stands behind them
+// is not an integration test against a real archived object. It is the
+// confinement proof (a restore visits exactly the object it names, watched
+// against a directory holding three) and the acceptance-parsing proof (a
+// per-object "Not GLACIER..." status is a failure, not a success), which
+// are the two ways this pair goes wrong expensively.
 func TestMediumStoreSurfaceIsExactlyThis(t *testing.T) {
 	typ := reflect.TypeOf((*transport.MediumStore)(nil)).Elem()
 	want := map[string]bool{
@@ -269,6 +275,8 @@ func TestMediumStoreSurfaceIsExactlyThis(t *testing.T) {
 		"ObjectChecksum":  true,
 		"DeleteObject":    true,
 		"ListObjects":     true,
+		"RestoreStatus":   true,
+		"InitiateRestore": true,
 	}
 	got := map[string]bool{}
 	for i := 0; i < typ.NumMethod(); i++ {
