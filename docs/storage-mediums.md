@@ -48,6 +48,14 @@ reasoning about it:
 A chain with ONE medium tier, which is the common case (daily local, monthly
 offsite), works end to end today.
 
+Both refusals, and every other reason a move does not happen, are now visible
+without reading logs. A cycle in which artifacts were due to move and none
+arrived says so on the `Last run cycle` panel, in the operation record the
+activity feed reads, in the FR-23 event stream under `op=move`, and in
+`backup-manager run`'s exit status, which becomes 1 with the engine's own reason
+on stderr. A deployment that declares no storage medium attempts no moves, so
+none of that can fire for it.
+
 ## The configuration
 
 Mediums are declared once at the top level, and referenced by name from the
@@ -181,13 +189,18 @@ The rules that matter:
 worth saying plainly: an endpoint that lies about checksums can cause your local
 copy to be deleted against a bad upload.
 
-It also does not work on `s3` in this build, and it will say so rather than
-quietly do something weaker. rclone v1.75.0's s3 backend reports exactly one hash
-capability, MD5 (`backend/s3.Fs.Hashes()` returns `hash.Set(hash.MD5)`), so it
-cannot produce a full-object SHA-256 attestation at all. Configuring
-`upload_verification: attested` on an `s3` medium is therefore an explicit
-capability failure, not a silent fall back to `existence`, and not a silent
-fall forward to a download you did not budget for.
+It also does not work on `s3` in this build, and **the config is now refused at
+load rather than at the move**. rclone v1.75.0's s3 backend reports exactly one
+hash capability, MD5 (`backend/s3.Fs.Hashes()` returns `hash.Set(hash.MD5)`), so
+it cannot produce a full-object SHA-256 attestation at all. There is nothing an
+s3 medium could ever do to satisfy the class.
+
+Until recently `backup-manager check` accepted `upload_verification: attested`
+and the refusal arrived from the move engine instead: after the upload, at the
+verification step, on every cycle, forever, in a log line. `Validate` now names
+the reason and names `readback` as the way out, and `check` fails. Nothing about
+that is a fall back to `existence`, and nothing about it is a silent fall
+forward to a download you did not budget for.
 
 An ETag is not a checksum and is never compared to one here. Multipart uploads
 and server-side encryption both make an ETag something other than the object's

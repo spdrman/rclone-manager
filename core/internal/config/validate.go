@@ -1380,10 +1380,18 @@ func (v *validator) validateStorageMediums(mediums []StorageMedium) map[string]b
 // `attested` means the medium states its own full-object digest and this
 // product believes it without downloading the object (see the
 // UploadVerification constants). rclone v1.75.0's s3 backend reports
-// exactly one hash capability, MD5 (backend/s3's Fs.Hashes()), and the MD5
-// it serves comes from the ETag, which FR-32 says is never a content hash.
-// So no s3 medium can produce the digest the class needs, on this build,
-// and transport.MediumStore.ObjectChecksum's own doc says so at length.
+// exactly one hash capability, MD5 (backend/s3's Fs.Hashes()), and FR-32
+// does not accept the value it serves there as a content hash at all.
+//
+// The reason it does not is spelled out in
+// transport.MediumStore.ObjectChecksum's own doc, and it is spelled out
+// THERE rather than repeated here on purpose. FR-32's first rule is that
+// nothing in this repository names what that value actually is, so there
+// is nothing to compare a hash against, and internal/placement's FR-32
+// scan (untrusted_test.go) enforces it across every production file with
+// a four-file allow list. Each of those four says the word to explain why
+// it carries none. This is not one of them, and a rewrite of this comment
+// that reaches for the obvious noun will be told so by the build.
 //
 // # This is a rule about the TYPE, not about s3 forever
 //
@@ -1407,9 +1415,9 @@ func (v *validator) validateUploadVerificationIsAchievable(path string, m *Stora
 	}
 	v.addf("%s: upload_verification %q cannot be achieved on a %q medium, so every move to it would be refused "+
 		"at the verification step, after the upload, on every cycle: %q means the medium states its own full-object "+
-		"digest and this product believes it, and the embedded rclone's s3 backend reports only MD5, which is the "+
-		"object's ETag and never a content hash. Write upload_verification: %s instead, which downloads the object "+
-		"again and re-hashes it against what was uploaded, and is the default",
+		"digest and this product believes it, and the embedded rclone's s3 backend reports one hash capability, MD5, "+
+		"whose value FR-32 does not accept as a content hash. Write upload_verification: %s instead, which downloads "+
+		"the object again and re-hashes it against what was uploaded, and is the default",
 		path, m.UploadVerification, m.Type, UploadVerificationAttested, UploadVerificationReadback)
 }
 
