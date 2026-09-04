@@ -313,7 +313,7 @@ func inspect(fset *token.FileSet, file *ast.File) ([]importSite, []execSite) {
 		if qualified == "" && !dotExec {
 			return true
 		}
-		binaryArg := -1
+		var binaryArg int
 		switch fn {
 		case "Command", "LookPath":
 			binaryArg = 0
