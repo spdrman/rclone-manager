@@ -368,3 +368,44 @@ func TestAnExpiredRestoreDuringAMoveDoesNotLoopEither(t *testing.T) {
 		t.Errorf("the move moved to %s; a refusal that changes nothing should leave it where it was", mv.Phase)
 	}
 }
+
+// TestACompletedMoveReadsTheObjectBackTwice pins a cost nothing was
+// counting.
+//
+// A move to a medium at content class downloads the whole object twice:
+// once at VERIFYING to reach VERIFIED, and once in deleteSource, from
+// scratch, immediately before the source delete. Both are full reads and
+// both are billed. On a 100 GB artifact that is 200 GB of egress for one
+// move, and the ladder's own cost column said "a full download", singular.
+//
+// The second read is deliberate and this test does not argue with it.
+// engine.go's file comment is the argument: doing the re-verification on
+// the nominal path as well as the resume path is what makes them one path,
+// and #372 is open because a state machine with a separate resume path had
+// a case nobody wrote. Removing it here would trade a real safety property
+// for a bill.
+//
+// What was missing is that the number was nobody's decision. Pinning it
+// means a change either way is deliberate: dropping to one has to explain
+// how the resume path stays the same path, and going to three has to
+// explain itself at all. docs/storage-mediums.md now says two, because an
+// operator budgeting egress from that table was budgeting half.
+func TestACompletedMoveReadsTheObjectBackTwice(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+
+	report := f.runCycle()
+	f.guard.fail()
+	if report.Completed != 1 {
+		t.Fatalf("the move did not complete, so these counts are of something else: %+v", report.Outcomes)
+	}
+
+	if got := f.medium.uploadCount(); got != 1 {
+		t.Errorf("the move uploaded %d times, want 1", got)
+	}
+	if got := f.medium.openCount(); got != 2 {
+		t.Errorf("the move read the object back %d times, want 2 (verifyDestination, then deleteSource's re-verification). "+
+			"If this is now 1, deleteSource has stopped re-verifying and the resume path is no longer the same path as the nominal one; "+
+			"if it is 3 or more, something is reading the whole object for a reason nobody has written down. "+
+			"Either way docs/storage-mediums.md quotes this number to operators budgeting egress and has to change with it", got)
+	}
+}

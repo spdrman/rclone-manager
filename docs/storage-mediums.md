@@ -156,7 +156,7 @@ re-read for free.
 
 | Class | What it proves | What it costs |
 | --- | --- | --- |
-| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | A full download: time, plus egress. On an archive class, a restore first. |
+| `content` (read-back) | The bytes on the medium hash to the SHA-256 the journal recorded | Two full downloads per move: time, plus egress, twice. See below. On an archive class, a restore first. |
 | `attested` | The provider's stored full-object checksum equals the recorded SHA-256 | One metadata call, no egress. Trusts the endpoint to implement S3 checksum semantics honestly. |
 | `existence` | The object exists with the recorded size | One HEAD request |
 
@@ -165,6 +165,15 @@ The rules that matter:
 - A move reaches VERIFIED at `content` class by default. The local copy is
   downloaded back and re-hashed at the last moment the local truth still exists,
   and only then is the source deleted.
+- **A move at `content` class downloads the object twice, and you are billed for
+  both.** Once to reach VERIFIED, and once again immediately before the source
+  delete, from scratch, without writing the second result anywhere. That is not
+  an accident and it is not a retry: the second read is what makes a move
+  interrupted by a crash and a move that has just this second been verified take
+  the same code path, so there is no separate resume path to get wrong. It does
+  mean that budgeting one artifact's worth of egress per move is budgeting half
+  of it. `attested` would avoid the download entirely and does not work on `s3`
+  in this build; see below.
 - `existence` is never sufficient to delete a source. Not ever, not with any
   setting.
 - Periodic revalidation checks medium placements at `existence` class only.
@@ -174,6 +183,17 @@ The rules that matter:
   the artifact having been "revalidated" in the sense a local artifact is.
 - An artifact on `GLACIER` or `DEEP_ARCHIVE` is `existence`-checkable only, until
   an explicit restore makes anything stronger possible.
+- **A tier whose medium writes an archive class cannot take delivery of an
+  artifact, and the move is refused before anything is uploaded.** Both settings
+  `upload_verification` accepts need the object read back, a freshly written
+  object on `GLACIER` or `DEEP_ARCHIVE` cannot be read until somebody asks for a
+  restore, and nothing asks to restore an object that did not exist a second
+  ago. So the answer is knowable from the configuration alone and the manager
+  gives it for free, in the cycle report, every cycle, rather than uploading and
+  discarding a copy to find out. That matters because `DEEP_ARCHIVE` has a
+  180-day minimum billable duration: a copy deleted the second after it lands is
+  still charged for six months. Issue #428 tracks what the eventual answer
+  should be.
 
 ### `upload_verification: attested` and rclone's s3 backend
 
