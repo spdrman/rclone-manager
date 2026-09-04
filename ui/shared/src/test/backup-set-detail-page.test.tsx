@@ -184,6 +184,48 @@ describe("editing a backup set (#97 acceptance: 'stale edits are rejected')", ()
 // Issue #316's RED case for this page: before this control existed,
 // there was no way to declare an already-persisted backup set read-only
 // (or withdraw it) anywhere in the UI — only by hand-editing config.yaml.
+describe("the overview's enabled/read-only cells", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    resetMockFixtures();
+  });
+
+  // The overview carried a cell labelled "Remote cleanup" whose value was
+  // `s.enabled`. Those are two different facts: `enabled` is
+  // config.BackupSet.Disabled inverted, which excludes a set from
+  // RunCycle and says nothing about deleting anything from the source.
+  // So a disabled set's own page announced "Remote cleanup: Disabled",
+  // which reads as a safety property the set does not have. Enable it
+  // again and it deletes from the source exactly as before.
+  it("says a disabled set is not COLLECTED, and claims nothing about remote cleanup", async () => {
+    const api = createMockApi();
+    const target = (await createMockApi().listSets())[0];
+    await api.setEnabled(target.source, target.set, false);
+
+    renderDetail(target.source, target.set, api);
+    await screen.findByText(target.name);
+
+    expect(screen.getByText("Collection")).toBeTruthy();
+    expect(screen.getByText(/Disabled/)).toBeTruthy();
+    expect(screen.queryByText("Remote cleanup")).toBeNull();
+  });
+
+  it("still reports the read-only axis separately, which is the one that decides deletion", async () => {
+    // The control. Without it, a page that dropped both cells would pass
+    // the assertion above.
+    const api = createMockApi();
+    const readOnlySet = (await createMockApi().listSets()).find((x) => x.readOnly);
+    if (!readOnlySet) throw new Error("fixture setup: no read-only set in the mock data");
+
+    renderDetail(readOnlySet.source, readOnlySet.set, api);
+    await screen.findByText(readOnlySet.name);
+
+    expect(screen.getByText("Read-only source")).toBeTruthy();
+    expect(screen.getByText(/Yes.*retained/)).toBeTruthy();
+    expect(screen.getByText("Collection")).toBeTruthy();
+  });
+});
+
 describe("declaring a backup set read-only (issue #316)", () => {
   afterEach(() => {
     resetGraphForTests();

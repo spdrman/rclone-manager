@@ -538,15 +538,33 @@ export function BackupSetDetailPage({ readOnly }: { readOnly: boolean }) {
               <Cell label="Retained" value={s.retainedCount + " \u00b7 " + bytes(s.retainedBytes)} mono />
               <Cell label="Expected cadence" value={"every " + s.expectedIntervalHours + "h"} mono />
               <Cell label="State" value={s.stateNote} />
-              <Cell label="Remote cleanup" value={s.enabled ? "Enabled after commit" : "Disabled"} />
-              {/* Issue #282/#316: a second, independent axis from "Remote
-                  cleanup" above — a disabled set still keeps its remote
-                  cleanup policy for whenever it runs again, while a
-                  read-only set never deletes the remote source at all,
-                  running or not. Retained count only when it is nonzero
-                  and read-only, the same "a permanent zero is a line an
-                  operator stops seeing" reasoning `status`'s own CLI
-                  output already follows for this exact figure. */}
+              {/* This cell was labelled "Remote cleanup" and read
+                  `s.enabled`, which are two different facts. `enabled` is
+                  config.BackupSet.Disabled inverted, and that field's own
+                  doc says what it does: it excludes the set from
+                  RunCycle. It says nothing about deleting anything from
+                  the source. So the detail page of a disabled set
+                  announced "Remote cleanup: Disabled", which reads as a
+                  safety property ("this set will not delete from my
+                  server") that the set does not have: enable it again and
+                  it deletes exactly as before. The axis that DOES decide
+                  that is `readOnly`, in the cell below, which is why the
+                  comment there calls itself "a second, independent axis"
+                  from a first axis that was never there. */}
+              <Cell
+                label="Collection"
+                value={s.enabled ? "Enabled" : "Disabled \u2014 skipped by every run"}
+              />
+              {/* Issue #282/#316: the axis that decides whether the
+                  source original is deleted after a commit, which is
+                  independent of whether the set is collected at all: a
+                  disabled set keeps its remote cleanup policy for
+                  whenever it runs again, while a read-only set never
+                  deletes the remote source, running or not. Retained
+                  count only when it is nonzero and read-only, the same "a
+                  permanent zero is a line an operator stops seeing"
+                  reasoning `status`'s own CLI output already follows for
+                  this exact figure. */}
               <Cell
                 label="Read-only source"
                 value={
