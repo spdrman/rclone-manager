@@ -247,6 +247,9 @@ func TestRunCycle_MovesTheArtifactTheChainSaysBelongsElsewhere(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bs.LocalPath, "monthly-only.dump")); !os.IsNotExist(err) {
 		t.Errorf("the local copy is still there after a completed move (Stat err = %v); a move is copy, verify, THEN delete the source", err)
 	}
+	if medium.deletes != 0 {
+		t.Errorf("a move to %q deleted %d objects FROM it; the only copy a completed move removes is the source, and the source here is a local file", moveTestMedium, medium.deletes)
+	}
 }
 
 // TestMoveEngine_IsNotBuiltAtAllWithNoMediumDeclared is the fail-safe,

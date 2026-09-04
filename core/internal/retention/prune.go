@@ -186,10 +186,12 @@ type PruneVerdict struct {
 
 	// Medium is where the copy this verdict is about lives (EPIC E FR-30,
 	// issue #239): config.MediumLocal, or the id of a configured storage
-	// medium. It is empty only for a contested location (more than one
-	// ACTIVE placement, a move in flight), where there are genuinely two
-	// answers and this verdict declines to pick one; such a verdict is
-	// never a DELETE. See localBranchMedium.
+	// medium. It is empty on exactly two verdicts, both REFUSE: a
+	// contested location (more than one ACTIVE placement, a move in
+	// flight), where there are genuinely two answers and this verdict
+	// declines to pick one, and an artifact whose final path could not be
+	// resolved at all, where nothing was established about it. A DELETE
+	// always names its medium. See localBranchMedium.
 	//
 	// FR-30 asks the mandatory dry-run to explain per-artifact WHERE a
 	// deletion would happen, not only whether, and this is that answer.
