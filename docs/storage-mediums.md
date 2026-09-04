@@ -24,7 +24,7 @@ than no reference at all.
 | Artifacts are recorded as living somewhere, and the recovery manifest says where | Not landed (#236) |
 | Verification classes, and revalidation that knows about mediums | Not landed (#237) |
 | Artifacts actually MOVE between mediums when a tier says so | Landed, with two limits below |
-| Retention plans, previews and prune understand mediums | Not landed (#239) |
+| Retention plans, previews and prune understand mediums | Landed, except across the HTTP boundary: the API does not yet carry the preview's moves or the medium each deletion happens on (#430) |
 | The API and the UI show placements, access states and the disclosure | Landed |
 | Archive storage classes and the explicit restore operation | Landed as far as the vocabulary and the operation go; a tier ON an archive class does not work, see #428 |
 

@@ -68,6 +68,35 @@ conformance_gate() {
   (cd core && GOWORK=off go test -count=1 -timeout 30m -run "$pattern" ./tests/conformance/)
 }
 
+# unit_gate runs one non-composed package, for the two halves of a claim
+# that do not live in tests/conformance. It is here rather than in a
+# separate script because the matrix row it serves is one row: a claim
+# checked in two places needs both falsifications in one place, or the
+# second one quietly stops being run.
+unit_gate() {
+  local pkg=$1 pattern=${2:-.}
+  (cd core && GOWORK=off go test -count=1 -run "$pattern" "$pkg")
+}
+
+# expect_unit_check_fails <label> <dir> <expected substring> <package> <run pattern>
+expect_unit_check_fails() {
+  local label=$1 dir=$2 needle=$3 pkg=$4 pattern=$5
+  if (cd "$dir" && unit_gate "$pkg" "$pattern") >"$tmp/out" 2>&1; then
+    echo "SELFTEST FAIL: $label. $pkg PASSED against a planted violation." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  elif ! grep -qF "$needle" "$tmp/out"; then
+    echo "SELFTEST FAIL: $label. The package failed, but never named the promise that was broken." >&2
+    echo "    expected its output to mention: $needle" >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  else
+    echo "  ok (caught): $label"
+    echo "      -> $(grep -m1 -F "$needle" "$tmp/out" | sed 's/^[[:space:]]*//' | cut -c1-400)"
+    pass=$((pass + 1))
+  fi
+}
+
 # expect_check_fails <label> <dir> <expected substring> [run pattern]
 expect_check_fails() {
   local label=$1 dir=$2 needle=$3 pattern=${4:-.}
@@ -316,6 +345,22 @@ swap "$d/core/internal/placement/reclaim.go" \
 expect_check_fails "the FR-16 identity re-check run and its answer ignored" "$d" \
   "and prune's verdict is DELETE, not REFUSE" \
   'TestPruneRefusesAnObjectThatIsNoLongerTheOneTheJournalRecorded'
+
+# The other half of the same row: FR-30 asks that the mandatory dry-run
+# NAME the medium for every proposed deletion, and that surface is the
+# CLI's, not the composed suite's. "DELETE 40 artifacts" reads very
+# differently when half of them are objects in a bucket, and an operator
+# confirming a plan is confirming this text.
+d=$(mutant dry-run-does-not-name-the-medium)
+swap "$d/core/cmd/backup-manager/retention.go" \
+  '	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
+		return " medium=" + loc.Medium' \
+  '	case loc.Status == retention.LocationConfirmed && loc.Medium != config.MediumLocal:
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+		return ""'
+expect_unit_check_fails "a dry-run that does not say where a deletion would happen" "$d" \
+  "does not say where its deletion would happen" \
+  ./cmd/backup-manager/ 'TestRun_RetentionNamesWhereADeletionWouldHappen'
 
 echo
 echo "==> the archive gate"
