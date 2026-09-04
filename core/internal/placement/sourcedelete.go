@@ -71,10 +71,23 @@ func (e *Engine) guardSourceDelete(ctx context.Context, mv state.Move, rec state
 			append([]any{mv.Artifact, mv.SourceMedium}, args...)...)
 	}
 
-	// 1. The phase. A delete is authorised by exactly one phase, and the
-	// journal is asked rather than the caller's variable.
+	// 1. The move itself, from the journal rather than from the caller's
+	// variable: the one phase that authorises a delete, and two ends that
+	// are actually two places.
+	//
+	// The second half used to sit in clause 4, as src.Medium ==
+	// mv.DestinationMedium, where it could never fire. placementOn matches
+	// on the medium, so src.Medium is mv.SourceMedium by construction and
+	// that comparison is mv.SourceMedium == mv.DestinationMedium spelled
+	// the long way round; and when those two ARE equal, dst and src are
+	// one row, which cannot be both ACTIVE and DELETE_PENDING, so clause
+	// 3b or clause 4b answered first every time. Asked here, about the
+	// move, it is reachable and it says what is actually wrong.
 	if Phase(mv.Phase) != SourceDeletePending {
 		return refuse("the move journal says phase %q, and only %s authorises a source delete", mv.Phase, SourceDeletePending)
+	}
+	if mv.SourceMedium == mv.DestinationMedium {
+		return refuse("the move records %q at both ends, so there is no second copy for anything below to be about", mv.DestinationMedium)
 	}
 
 	// 2. The artifact's own lifecycle state. FR-30 makes only COMPLETE
@@ -119,8 +132,6 @@ func (e *Engine) guardSourceDelete(ctx context.Context, mv state.Move, rec state
 			src.Status, state.PlacementDeletePending)
 	case src.Location == "":
 		return refuse("the source placement records no location")
-	case src.Medium == mv.DestinationMedium:
-		return refuse("the source and the destination are the same medium")
 	}
 
 	// 5. The two copies must actually be the same artifact. A destination
@@ -212,8 +223,10 @@ func classOrUnverified(c string) string {
 // immediately before a delete with the caller's own freshly re-read facts,
 // and the two callers do not have the same facts: prune knows a GFS
 // verdict and this one knows a move journal. What must not drift is the
-// rule, and TestTheLocalSourceProofMatchesFR20 walks both and pins them
-// together.
+// rule, and TestTheLocalSourceProofMatchesFR20 (fr20parity_test.go) is
+// what holds the two to it: one table of worlds, each breaking one of
+// FR-20's checks, run through BOTH implementations, with both required to
+// refuse and to refuse for the same reason.
 func (e *Engine) proveLocalSourceSafe(rec state.Record, src state.Placement) (string, error) {
 	refuse := func(format string, args ...any) (string, error) {
 		return "", fmt.Errorf("placement: refusing to delete %s's local source copy: "+format,
