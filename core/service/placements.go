@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -85,8 +86,10 @@ type Placement struct {
 	// time when it never has been.
 	VerifiedAt time.Time
 
-	// Access is one of placement.Accesses: whether this copy can be read
-	// right now. See core/internal/placement.Access.
+	// Access is one of archive.States: whether this copy can be read right
+	// now. See core/internal/archive.State, which is the one definition of
+	// the vocabulary, and mediumIndex.accessOf below for what this layer
+	// can honestly derive without asking a medium anything.
 	Access string
 
 	// Status is "ACTIVE" or "DELETE_PENDING". A placement the journal
@@ -209,10 +212,9 @@ func StorageSchema() StorageSchemaInfo {
 // mediumIndex is what the running configuration says about the places
 // placements name, keyed by medium id.
 //
-// It exists because a placement row alone cannot answer "can this be read"
-// (see placement.MediumFacts): whether this deployment still has a way to
-// reach a medium is a fact about config.yaml, and only this layer holds
-// both halves.
+// It exists because a placement row alone cannot answer "can this be read":
+// whether this deployment still has a way to reach a medium is a fact about
+// config.yaml, and only this layer holds both halves.
 type mediumIndex map[string]config.StorageMedium
 
 func indexMediums(cfg *config.Config) mediumIndex {
@@ -223,17 +225,43 @@ func indexMediums(cfg *config.Config) mediumIndex {
 	return out
 }
 
-// factsFor is what placement.AccessOf needs to know about one placement's
-// medium.
-func (idx mediumIndex) factsFor(p state.Placement) placement.MediumFacts {
-	if p.IsLocal() {
-		return placement.MediumFacts{Declared: true}
+// accessOf is what this layer can say about whether p can be read right
+// now, from what it HOLDS: the journal's row and the running configuration.
+// It asks no medium anything.
+//
+// FR-34's rule is that a read never initiates a restore as a side effect,
+// and this is rendered on every artifact list, so every copy is derived
+// with archive.Observation's zero value, which means "nobody has looked".
+// An archived copy therefore reads as requires_restore rather than as
+// anything more encouraging, which is its state until somebody does
+// something about it, and a cached answer about reachability would be a
+// stale answer presented as a current one.
+//
+// Two answers are decided here rather than by archive.Access, because they
+// rest on facts only this layer holds. A placement naming a medium the
+// configuration no longer declares is unreachable: there is no bucket, no
+// endpoint and no credential to reach it with, so this deployment can
+// neither confirm nor deny the copy, and that is exactly what the word
+// means (and emphatically not "the copy is gone"). A class this build's
+// table does not recognise is reported the same way, for the reason
+// internal/app's copy view gives: config validation refuses an unknown
+// class at load, so this is drift between two lists rather than something
+// an operator did, and the safe direction is the one that refuses to claim
+// the bytes can be read.
+func (idx mediumIndex) accessOf(p state.Placement) archive.State {
+	class := ""
+	if !p.IsLocal() {
+		m, declared := idx[p.Medium]
+		if !declared {
+			return archive.Unreachable
+		}
+		class = m.EffectiveStorageClass()
 	}
-	m, declared := idx[p.Medium]
-	if !declared {
-		return placement.MediumFacts{Declared: false}
+	access, err := archive.Access(p.Medium, class, archive.Observation{}, now())
+	if err != nil {
+		return archive.Unreachable
 	}
-	return placement.MediumFacts{Declared: true, StorageClass: m.EffectiveStorageClass()}
+	return access
 }
 
 // toServicePlacements projects an artifact's journal placements onto the
@@ -264,7 +292,7 @@ func toServicePlacement(p state.Placement, idx mediumIndex) Placement {
 		SizeBytes:         p.Size,
 		VerificationClass: p.VerificationClass,
 		Status:            p.Status,
-		Access:            string(placement.AccessOf(p, idx.factsFor(p))),
+		Access:            string(idx.accessOf(p)),
 	}
 	if !p.IsLocal() {
 		// A placement naming a medium the configuration no longer declares
@@ -297,7 +325,7 @@ func toStorageMediumSummaries(cfg *config.Config) []StorageMediumSummary {
 			Bucket:              m.Bucket,
 			Region:              m.Region,
 			StorageClass:        class,
-			ReadsRequireRestore: placement.StorageClassNeedsRestore(class),
+			ReadsRequireRestore: archive.IsArchive(class),
 		})
 	}
 	return out
@@ -412,20 +440,25 @@ func mediumDisclosureRefusal(introduced []tierMedium) error {
 // TypeScript union the UI narrows against, and the strings the engine
 // actually writes to the journal all come from one place, which is what
 // makes a drift test possible rather than decorative.
-// # Where the access vocabulary will come from
 //
-// #241 (E2.4) is landing core/internal/archive, which defines the same
-// four values with the same strings and derives them from more than this
-// package can see: it knows whether a restore is running and when a
-// finished one expires. When it lands, this function should return its
-// vocabulary and toServicePlacement should ask it for the state, and
-// nothing else in the API or the UI moves: the contract enum, the drift
+// # Where the access vocabulary comes from
+//
+// core/internal/archive, and nowhere else. #240 first wrote the four values
+// a second time in core/internal/placement, because it could not render an
+// access state without something deciding which class needs a restore, and
+// said in its own comment that whichever lane landed second should collapse
+// the two. This is that collapse: archive derives the state from more than
+// the read surface can see (whether a restore is running, and when a
+// finished one expires), so it is the survivor, and
+// archive.TestTheAccessVocabularyIsDefinedInExactlyOnePlace fails the build
+// on a second declaration anywhere under core/internal. Nothing above this
+// function moved when the collapse happened: the contract enum, the drift
 // test that pins it, the generated TypeScript union and every surface
-// narrowing against it all read THIS function. That is the whole reason
-// it exists rather than each layer holding its own list.
+// narrowing against it all read THIS function, which is the whole reason it
+// exists rather than each layer holding its own list.
 func AccessStates() []string {
-	out := make([]string, 0, len(placement.Accesses))
-	for _, a := range placement.Accesses {
+	out := make([]string, 0, len(archive.States))
+	for _, a := range archive.States {
 		out = append(out, string(a))
 	}
 	return out

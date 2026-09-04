@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -145,19 +146,52 @@ func (e *Engine) guardSourceDelete(ctx context.Context, mv state.Move, rec state
 		return refuse("a retention tier still selects it on %q: %s", mv.SourceMedium, why)
 	}
 
-	// 7. The medium-specific proof.
+	// 7. The medium-specific proof. It runs before the last clause because
+	// it is the one that can find the source already gone, and a delete
+	// that already happened has nothing left to protect: refusing it would
+	// leave the journal at SOURCE_DELETE_PENDING for ever, with a source
+	// row that says DELETE_PENDING about a copy that no longer exists.
+	var target deleteTarget
 	if src.Medium == config.MediumLocal {
 		path, err := e.proveLocalSourceSafe(rec, src)
 		if err != nil {
 			return deleteTarget{}, err
 		}
-		return deleteTarget{localPath: path}, nil
+		target = deleteTarget{localPath: path}
+	} else {
+		medium, key, err := e.proveMediumSourceSafe(ctx, mv, src)
+		if err != nil {
+			return deleteTarget{}, err
+		}
+		target = deleteTarget{medium: medium, key: key}
 	}
-	medium, key, err := e.proveMediumSourceSafe(ctx, mv, src)
+
+	// 8. FR-34's question, which none of the seven above can answer: once
+	// this copy is gone, can some SURVIVING copy actually be READ right
+	// now? Clause 3 proved the destination row says content-verified, and
+	// that row is true; it is also true of an object that a bucket
+	// lifecycle rule moved to DEEP_ARCHIVE last week, because nothing
+	// rewrites verification_class when that happens. internal/archive
+	// owns what a storage class does to readability, so the decision is
+	// its, over copies whose access states were derived a moment ago from
+	// the configuration and, for an archive class, from the medium's own
+	// answer about a restore. This is the call
+	// archive.TestNothingDeletesACopyWithoutAskingWhetherAnotherOneIsReadable
+	// fails the build without.
+	copies, err := e.copiesOf(ctx, rec)
 	if err != nil {
-		return deleteTarget{}, err
+		return refuse("%v", err)
 	}
-	return deleteTarget{medium: medium, key: key}, nil
+	var deleting archive.Copy
+	for _, c := range copies {
+		if c.Placement.Medium == src.Medium {
+			deleting = c
+		}
+	}
+	if err := archive.CheckSourceDelete(deleting, copies); err != nil {
+		return refuse("%w", err)
+	}
+	return target, nil
 }
 
 func classOrUnverified(c string) string {

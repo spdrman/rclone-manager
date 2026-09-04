@@ -14,10 +14,19 @@
 // it actually has.
 //
 // This package is that place. It holds one table of what each class means,
-// one closed vocabulary for what can be done with a copy right now, and
-// the two refusals that follow from them: an archived copy cannot earn a
-// verification class that requires reading it, and an archived copy that
-// nobody can read is not a reason to delete one that somebody can.
+// one closed vocabulary for what can be done with a copy right now, the
+// explicit restore operation, and the refusal that follows from them in
+// this package's own vocabulary: an archived copy that nobody can read is
+// not a reason to delete one that somebody can (sourcedelete.go).
+//
+// The other refusal those facts imply, that an archived copy cannot earn a
+// verification class that requires reading it, produces a verification
+// class rather than an access state, so it lives beside the ladder in
+// internal/placement (gate.go). That is also which way the package edge
+// runs: placement imports this package to ask what a class means and
+// whether a surviving copy is readable, and this package imports nothing
+// of placement's. The move engine is the code that deletes a copy, and it
+// has to be able to ask here before it does.
 //
 // # What it deliberately does not hold
 //
