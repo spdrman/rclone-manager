@@ -133,6 +133,9 @@ func TestTheWatcherCatchesABreachASamplerWouldMiss(t *testing.T) {
 	summer := w.artifactNamed(t, "2026-07-15T02-00-00Z.dump")
 
 	wa := newWatcher(t, w.journal, []model.ArtifactID{summer.id})
+	// This is the one cell that WANTS a breach, so the watcher collects
+	// rather than failing at the instant.
+	wa.expectBreaches = true
 	sm := newSampler(w.journal, []model.ArtifactID{summer.id})
 
 	sm.sample(t, "before the cycle")
@@ -204,6 +207,9 @@ func TestNeitherJudgementFiresOnACleanRun(t *testing.T) {
 	summer := w.artifactNamed(t, "2026-07-15T02-00-00Z.dump")
 
 	wa := newWatcher(t, w.journal, []model.ArtifactID{summer.id})
+	// This is the one cell that WANTS a breach, so the watcher collects
+	// rather than failing at the instant.
+	wa.expectBreaches = true
 	sm := newSampler(w.journal, []model.ArtifactID{summer.id})
 
 	sm.sample(t, "before the cycle")

@@ -87,6 +87,10 @@ type watcher struct {
 	// destroyed is the set of locators this run has watched being
 	// deleted and has not seen rewritten.
 	destroyed map[string]bool
+
+	// expectBreaches suppresses the immediate failure below, for the one
+	// control that plants a breach on purpose (sampler_test.go).
+	expectBreaches bool
 }
 
 func newWatcher(t *testing.T, j *state.Journal, ids []model.ArtifactID, sufficient ...placement.Class) *watcher {
@@ -150,6 +154,16 @@ func (w *watcher) observeLocked(event, pending string) string {
 			if broke == "" {
 				broke = msg
 			}
+			if !w.expectBreaches {
+				// Reported HERE, at the instant, rather than collected for
+				// the end of the scenario. A scenario's later assertions
+				// are mostly Fatalf, and a breach that surfaced only in a
+				// closing tally would be swallowed whenever the breach
+				// also derailed the move, which is most of the time. The
+				// point of watching continuously is to say when, so the
+				// message has to survive whatever happens next.
+				w.t.Errorf("FR-30's standing invariant did not hold %s", msg)
+			}
 		}
 	}
 	return broke
@@ -170,15 +184,20 @@ func (w *watcher) writtenNow(locator string) {
 	delete(w.destroyed, canonicalLocator(locator))
 }
 
-// report fails the test with every breach the watcher saw. It is called
-// once per scenario rather than at each event so a run reports all of
-// them, which is what says whether a bug is one window or a pattern.
+// report closes a scenario out.
+//
+// Every breach has already failed the test at the instant it happened, so
+// this does not repeat them. What it adds is the tally, because a run that
+// observed nothing and a run that observed everything and found nothing
+// look identical from the outside, and only one of them proves anything.
 func (w *watcher) report() {
 	w.t.Helper()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, b := range w.breaches {
-		w.t.Errorf("FR-30's standing invariant did not hold %s", b)
+	w.t.Logf("the invariant was evaluated %d times across this scenario, and broke %d times",
+		w.observations, len(w.breaches))
+	if w.observations == 0 {
+		w.t.Error("the watcher never evaluated the invariant at all, so nothing here is watched")
 	}
 }
 
