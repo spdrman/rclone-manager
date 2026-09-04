@@ -26,6 +26,7 @@ function operation(over: Partial<Operation> = {}): Operation {
     label: "run cycle",
     status: "running",
     progress: READING,
+    cycle: null,
     nonDestructive: false,
     startedAt: "2026-08-30T09:00:00Z",
     ...over

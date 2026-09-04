@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "00601e396d842141a7d46e5dbe83f7b8561b462f864e47848b888b36db5970b6"
+const ContractSHA256 = "77d2fd3212c7e9bfa37232401464fcc4deb8576a7df63956bb625a59fe83b925"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -73,6 +73,7 @@ const (
 	ErrorCodeArtifactIrrecoverable           ErrorCode = "ARTIFACT_IRRECOVERABLE"
 	ErrorCodeReinstatementRefused            ErrorCode = "REINSTATEMENT_REFUSED"
 	ErrorCodeBackupSetRepointNotAcknowledged ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
+	ErrorCodeMediumDisclosureRequired        ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -104,6 +105,7 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
+	ErrorCodeMediumDisclosureRequired,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -159,6 +161,7 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeArtifactIrrecoverable,
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
+	ErrorCodeMediumDisclosureRequired,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -171,7 +174,7 @@ var ErrorClasses = map[string][]ErrorCode{
 	"not-found":      {ErrorCodeBackupSetNotFound, ErrorCodeOperationNotFound, ErrorCodeRetentionPlanNotFound, ErrorCodeArtifactNotFound},
 	"throttling":     {ErrorCodeRateLimited},
 	"unavailable":    {ErrorCodeNotConfigured},
-	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed},
+	"validation":     {ErrorCodeInvalidRequest, ErrorCodeSSHKeyNotFound, ErrorCodeHostKeyProbeFailed, ErrorCodeMediumDisclosureRequired},
 }
 
 // Endpoint is one operation of the contract, with the requirements a
@@ -412,7 +415,7 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "RetentionOverride", ResponseSchema: "BackupSetRetention", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeMediumDisclosureRequired},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			404: {ErrorCodeBackupSetNotFound},
@@ -579,7 +582,7 @@ var Endpoints = []Endpoint{
 		Authenticated: true, CSRFRequired: true, IdempotencyKey: "none", DestructiveGate: false, Concurrency: "",
 		RequestSchema: "UpdateSettingsRequest", ResponseSchema: "SettingsResponse", SuccessStatus: 200,
 		ErrorCodes: map[int][]ErrorCode{
-			400: {ErrorCodeInvalidRequest},
+			400: {ErrorCodeInvalidRequest, ErrorCodeMediumDisclosureRequired},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch},
 			500: {ErrorCodeInternal},
@@ -709,26 +712,27 @@ type ApplyRetentionRequest struct {
 // here names an implementation: the fields describe a backup's
 // identity, freshness and trustworthiness, never how it is stored.
 type Artifact struct {
-	BackupSetID             string `json:"backup_set_id"`
-	Checksum                string `json:"checksum,omitempty"`
-	ChecksumAlgorithm       string `json:"checksum_algorithm,omitempty"`
-	DiscoveredAt            string `json:"discovered_at"`
-	ID                      string `json:"id"`
-	LocalPath               string `json:"local_path"`
-	Name                    string `json:"name"`
-	QuarantineIrrecoverable bool   `json:"quarantine_irrecoverable"`
-	QuarantineReason        string `json:"quarantine_reason,omitempty"`
-	Quarantined             bool   `json:"quarantined"`
-	RemotePath              string `json:"remote_path"`
-	RemoteSourceRemovedAt   string `json:"remote_source_removed_at,omitempty"`
-	RetentionTier           string `json:"retention_tier,omitempty"`
-	SetName                 string `json:"set_name"`
-	SizeBytes               int64  `json:"size_bytes"`
-	SourceName              string `json:"source_name"`
-	State                   string `json:"state"`
-	UpdatedAt               string `json:"updated_at"`
-	Validation              string `json:"validation"`
-	ValidationDetail        string `json:"validation_detail,omitempty"`
+	BackupSetID             string      `json:"backup_set_id"`
+	Checksum                string      `json:"checksum,omitempty"`
+	ChecksumAlgorithm       string      `json:"checksum_algorithm,omitempty"`
+	DiscoveredAt            string      `json:"discovered_at"`
+	ID                      string      `json:"id"`
+	LocalPath               string      `json:"local_path"`
+	Name                    string      `json:"name"`
+	Placements              []Placement `json:"placements"`
+	QuarantineIrrecoverable bool        `json:"quarantine_irrecoverable"`
+	QuarantineReason        string      `json:"quarantine_reason,omitempty"`
+	Quarantined             bool        `json:"quarantined"`
+	RemotePath              string      `json:"remote_path"`
+	RemoteSourceRemovedAt   string      `json:"remote_source_removed_at,omitempty"`
+	RetentionTier           string      `json:"retention_tier,omitempty"`
+	SetName                 string      `json:"set_name"`
+	SizeBytes               int64       `json:"size_bytes"`
+	SourceName              string      `json:"source_name"`
+	State                   string      `json:"state"`
+	UpdatedAt               string      `json:"updated_at"`
+	Validation              string      `json:"validation"`
+	ValidationDetail        string      `json:"validation_detail,omitempty"`
 }
 
 // ArtifactCheckResponse is the verdict of re-checking one quarantined backup. Nothing is
@@ -972,6 +976,19 @@ type CredentialsRequest struct {
 	Username string `json:"username"`
 }
 
+// CycleOutcome is what a finished run cycle actually got done, read off the
+// operation's own recorded summary. A cycle "completed" when it ran
+// to the end, which is a narrower statement than anyone reading it
+// assumes: an artifact's own quarantine is a business outcome and
+// not an operation failure, so a cycle that backed nothing up
+// finishes looking exactly like one that backed everything up. These
+// counts are what tell the two apart.
+type CycleOutcome struct {
+	ArtifactsThrough    int `json:"artifacts_through"`
+	ArtifactsWalked     int `json:"artifacts_walked"`
+	BackupSetsProcessed int `json:"backup_sets_processed"`
+}
+
 // ErrorBody is the nested error body every operation outside /auth returns. code
 // is stable and machine-readable; message is human-readable and MAY
 // change without notice.
@@ -1112,6 +1129,7 @@ type Operation struct {
 	BackupSetID    string             `json:"backup_set_id,omitempty"`
 	ConfigRevision string             `json:"config_revision,omitempty"`
 	CreatedAt      string             `json:"created_at,omitempty"`
+	Cycle          *CycleOutcome      `json:"cycle,omitempty"`
 	Error          string             `json:"error,omitempty"`
 	FinishedAt     string             `json:"finished_at,omitempty"`
 	OperationID    string             `json:"operation_id"`
@@ -1153,6 +1171,27 @@ type OperationProgress struct {
 	Stage            string `json:"stage"`
 }
 
+// Placement is one DURABLE copy of one backup, and where it actually is (EPIC E,
+// FR-29). A placement exists because the journal recorded a finished
+// copy, so the ABSENCE of a placement is the absence of a copy: a
+// transfer still in flight has no placement at all, and neither does
+// a copy this deployment has released. That is deliberate, and it is
+// what lets a surface tell "there is no copy here" apart from "there
+// is a copy here nobody can confirm", which is what the access and
+// verification_class fields are for. Nothing here is a price, a bill
+// or an estimate of how long a restore will take; see access.
+type Placement struct {
+	Access            string `json:"access"`
+	Location          string `json:"location"`
+	Medium            string `json:"medium"`
+	MediumType        string `json:"medium_type"`
+	SizeBytes         *int64 `json:"size_bytes,omitempty"`
+	Status            string `json:"status"`
+	StorageClass      string `json:"storage_class,omitempty"`
+	VerificationClass string `json:"verification_class,omitempty"`
+	VerifiedAt        string `json:"verified_at,omitempty"`
+}
+
 // RetentionOverride is one backup set's OWN retention policy, exactly as its
 // configuration file carries it: unresolved, with every omitted
 // field still omitted. An override names the WHOLE chain (a tiers
@@ -1165,13 +1204,14 @@ type OperationProgress struct {
 // override that names no timezone is reckoned in the deployment's,
 // not in UTC.
 type RetentionOverride struct {
-	DailyDays            int             `json:"daily_days,omitempty"`
-	MonthlyMonths        int             `json:"monthly_months,omitempty"`
-	ProtectLastKnownGood *bool           `json:"protect_last_known_good"`
-	Tiers                []RetentionTier `json:"tiers,omitempty"`
-	Timezone             string          `json:"timezone,omitempty"`
-	WeekStartsOn         string          `json:"week_starts_on,omitempty"`
-	WeeklyMonths         int             `json:"weekly_months,omitempty"`
+	AcknowledgeMediumDisclosure bool            `json:"acknowledge_medium_disclosure,omitempty"`
+	DailyDays                   int             `json:"daily_days,omitempty"`
+	MonthlyMonths               int             `json:"monthly_months,omitempty"`
+	ProtectLastKnownGood        *bool           `json:"protect_last_known_good"`
+	Tiers                       []RetentionTier `json:"tiers,omitempty"`
+	Timezone                    string          `json:"timezone,omitempty"`
+	WeekStartsOn                string          `json:"week_starts_on,omitempty"`
+	WeeklyMonths                int             `json:"weekly_months,omitempty"`
 }
 
 // RetentionPlan is A server-computed retention plan. The client may only apply one by
@@ -1291,14 +1331,42 @@ type SetReadOnlyRequest struct {
 // SettingsResponse is GET and PATCH /settings both return this: the settings now in
 // effect plus the rules they were validated against.
 type SettingsResponse struct {
-	Capacity  CapacitySettings  `json:"capacity"`
-	Retention RetentionSettings `json:"retention"`
-	Schema    SettingsSchema    `json:"schema"`
+	Capacity  CapacitySettings       `json:"capacity"`
+	Mediums   []StorageMediumSummary `json:"mediums"`
+	Retention RetentionSettings      `json:"retention"`
+	Schema    SettingsSchema         `json:"schema"`
 }
 
 // SettingsSchema is the schema half of the settings response.
 type SettingsSchema struct {
 	Retention RetentionSchema `json:"retention"`
+	Storage   StorageSchema   `json:"storage"`
+}
+
+// StorageMediumSummary is one configured storage medium, as the settings surface reports it:
+// what it is called, what kind of place it is, which bucket and
+// region, and which storage class artifacts are written with. There
+// is deliberately no field here for key material of any kind, and
+// there never will be (FR-33). A credential reaches this product
+// only as a reference to a file, an environment variable or a
+// command, and none of those three has a spelling on this boundary
+// at all.
+type StorageMediumSummary struct {
+	Bucket              string `json:"bucket"`
+	ID                  string `json:"id"`
+	ReadsRequireRestore bool   `json:"reads_require_restore"`
+	Region              string `json:"region,omitempty"`
+	StorageClass        string `json:"storage_class"`
+	Type                string `json:"type"`
+}
+
+// StorageSchema is the closed value sets and the consent text a storage-medium
+// mapping is written against, served rather than transcribed into a
+// frontend.
+type StorageSchema struct {
+	MediumDisclosure    string                  `json:"medium_disclosure"`
+	RetrievalDisclosure string                  `json:"retrieval_disclosure"`
+	VerificationClasses []VerificationClassInfo `json:"verification_classes"`
 }
 
 // StorageStatus is one backup set's capacity assessment.
@@ -1395,8 +1463,9 @@ type UpdateRetentionSettings struct {
 // UpdateSettingsRequest is PATCH /settings. An enumerated request type, never a configuration
 // passthrough.
 type UpdateSettingsRequest struct {
-	Capacity  *UpdateCapacitySettings  `json:"capacity"`
-	Retention *UpdateRetentionSettings `json:"retention"`
+	AcknowledgeMediumDisclosure bool                     `json:"acknowledge_medium_disclosure,omitempty"`
+	Capacity                    *UpdateCapacitySettings  `json:"capacity"`
+	Retention                   *UpdateRetentionSettings `json:"retention"`
 }
 
 // Validator is one registered application validator. An id and a sentence, and
@@ -1405,6 +1474,18 @@ type UpdateSettingsRequest struct {
 type Validator struct {
 	ID      string `json:"id"`
 	Summary string `json:"summary"`
+}
+
+// VerificationClassInfo is one rung of the verification ladder (FR-31), with what it proves
+// and what achieving it takes, in the engine's own words. Served
+// rather than transcribed into a frontend, for the reason the
+// retention schema is served: a surface holding its own copy of what
+// "existence" proves eventually says something the engine does not.
+type VerificationClassInfo struct {
+	Class           string `json:"class"`
+	DownloadsObject bool   `json:"downloads_object"`
+	Proves          string `json:"proves"`
+	Requires        string `json:"requires"`
 }
 
 // VersionResponse is GET /system/version. Nothing here names an implementation: no
@@ -1446,6 +1527,7 @@ var SchemaTypes = map[string]any{
 	"CreateBackupSetRequest":      CreateBackupSetRequest{},
 	"CreateBackupSetResponse":     CreateBackupSetResponse{},
 	"CredentialsRequest":          CredentialsRequest{},
+	"CycleOutcome":                CycleOutcome{},
 	"ErrorBody":                   ErrorBody{},
 	"ErrorResponse":               ErrorResponse{},
 	"FirstRunStatusResponse":      FirstRunStatusResponse{},
@@ -1463,6 +1545,7 @@ var SchemaTypes = map[string]any{
 	"ManagerStorage":              ManagerStorage{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
+	"Placement":                   Placement{},
 	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},
@@ -1477,6 +1560,8 @@ var SchemaTypes = map[string]any{
 	"SetReadOnlyRequest":          SetReadOnlyRequest{},
 	"SettingsResponse":            SettingsResponse{},
 	"SettingsSchema":              SettingsSchema{},
+	"StorageMediumSummary":        StorageMediumSummary{},
+	"StorageSchema":               StorageSchema{},
 	"StorageStatus":               StorageStatus{},
 	"SubmitOperationRequest":      SubmitOperationRequest{},
 	"TestConnectionRequest":       TestConnectionRequest{},
@@ -1486,5 +1571,6 @@ var SchemaTypes = map[string]any{
 	"UpdateRetentionSettings":     UpdateRetentionSettings{},
 	"UpdateSettingsRequest":       UpdateSettingsRequest{},
 	"Validator":                   Validator{},
+	"VerificationClassInfo":       VerificationClassInfo{},
 	"VersionResponse":             VersionResponse{},
 }

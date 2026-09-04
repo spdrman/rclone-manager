@@ -158,7 +158,11 @@ describe("a backup set's retention policy, on its own page", () => {
     await waitFor(() => expect(submitted).toHaveLength(1));
     const tiers = submitted[0].tiers ?? [];
     expect(tiers[2]?.keep).toBe(24);
-    expect(tiers[2]?.medium).toBe("cold");
+    expect(tiers[2]?.medium).toBe("offsite_s3");
+    // And a mapping the set already inherits is not a decision about
+    // where backups live, so no consent was asked for or sent.
+    expect(submitted[0].acknowledgeMediumDisclosure).toBeUndefined();
+    expect(screen.queryByRole("group", { name: "Storage medium disclosure" })).toBeNull();
   });
 
   it("pins the calendar only when the operator turns inheritance off", async () => {
@@ -280,5 +284,135 @@ describe("the retention preview says which policy decided it", () => {
     renderDetail("production", "postgres-primary", createMockApi());
     fireEvent.click(await screen.findByRole("button", { name: "Preview retention plan" }));
     await screen.findByText(/Decided under the deployment's retention policy/);
+  });
+});
+
+/**
+ * #240 (EPIC E, FR-27) on this card. An override is a whole chain, and the
+ * config layer lets it send a tier's backups to a storage medium exactly as
+ * the deployment's policy can, so the same picker, the same disclosure and
+ * the same server-side gate stand here. What these prove is the courtesy
+ * half (the words reach the operator, Save waits for the tick, the tick
+ * reaches the wire) and that the gate is decided against the chain in
+ * force for THIS set, not against the deployment's policy or against
+ * nothing.
+ */
+describe("mapping one backup set's tier to a storage medium", () => {
+  afterEach(() => {
+    resetGraphForTests();
+    vi.restoreAllMocks();
+  });
+
+  const tier = (n: number) => within(screen.getByRole("group", { name: "Tier " + n }));
+  const panel = () => screen.getByRole("group", { name: "Storage medium disclosure" });
+  const save = () => screen.getByRole("button", { name: "Save this set's policy" });
+
+  async function openEditor(api: BackupManagerApi, source = "production", set = "postgres-primary") {
+    renderDetail(source, set, api);
+    fireEvent.click(await screen.findByRole("button", { name: "Give this set its own policy" }));
+    await screen.findByRole("group", { name: "Tier 1" });
+  }
+
+  it("offers the same medium picker the Settings page has, naming each medium's class and which one needs a restore", async () => {
+    await openEditor(createMockApi());
+
+    const picker = tier(1).getByLabelText("Storage medium for tier 1") as HTMLSelectElement;
+    const options = Array.from(picker.options).map((o) => o.textContent);
+    expect(options).toContain("Local backup root");
+    expect(options).toContain("offsite_s3 (STANDARD_IA)");
+    expect(options).toContain("offsite_cold (DEEP_ARCHIVE, needs a restore to read)");
+    // The inherited mapping is what the picker starts on: the editor
+    // pre-fills from the chain in force, medium included.
+    expect((tier(3).getByLabelText("Storage medium for tier 3") as HTMLSelectElement).value).toBe("offsite_s3");
+  });
+
+  it("offers no medium picker at all for a deployment that never heard of storage mediums", async () => {
+    await openEditor(createMockApi("no-medium"));
+
+    expect(tier(1).queryByLabelText("Storage medium for tier 1")).toBeNull();
+    expect(screen.queryByRole("group", { name: "Storage medium disclosure" })).toBeNull();
+  });
+
+  it("shows the deletion consequence in the backend's words, keeps Save disabled until it is acknowledged, and then sends the acknowledgment", async () => {
+    const api = createMockApi();
+    const submitted: RetentionOverride[] = [];
+    vi.spyOn(api, "setBackupSetRetention").mockImplementation((source, set, policy) => {
+      submitted.push(policy);
+      return createMockApi().setBackupSetRetention(source, set, policy);
+    });
+    await openEditor(api);
+
+    fireEvent.change(tier(1).getByLabelText("Storage medium for tier 1"), { target: { value: "offsite_s3" } });
+
+    const words = panel().textContent ?? "";
+    expect(words).toMatch(/daily/);
+    expect(words).toMatch(/offsite_s3/);
+    expect(words).toMatch(/I delete the copy on this machine/);
+    expect(words).toMatch(/billed by your provider/i);
+    // No figure comes with it (rclone-manager#211).
+    expect(words).not.toMatch(/\$\s?\d/);
+    // The chain is edited and valid, and Save still waits for the tick.
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(within(panel()).getByRole("checkbox"));
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save());
+
+    await waitFor(() => expect(submitted).toHaveLength(1));
+    expect(submitted[0].acknowledgeMediumDisclosure).toBe(true);
+    expect(submitted[0].tiers?.[0]?.medium).toBe("offsite_s3");
+    // And the page re-renders from the answer: the set now overrides.
+    await screen.findByText(/Retained under this backup set's own policy/);
+  });
+
+  it("forgets an acknowledgment given for a different destination, and says when that destination cannot be read on demand", async () => {
+    await openEditor(createMockApi());
+    const picker = tier(1).getByLabelText("Storage medium for tier 1");
+
+    fireEvent.change(picker, { target: { value: "offsite_s3" } });
+    fireEvent.click(within(panel()).getByRole("checkbox"));
+    expect((save() as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.change(picker, { target: { value: "offsite_cold" } });
+    expect((save() as HTMLButtonElement).disabled).toBe(true);
+    expect((within(panel()).getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    expect(panel().textContent).toMatch(/cannot be read on demand at all/);
+    expect(panel().textContent).not.toMatch(/\b\d+\s*(hours|minutes)\b/);
+  });
+
+  it("shows the server's refusal in the server's own words when it still disagrees about consent", async () => {
+    const api = createMockApi();
+    vi.spyOn(api, "setBackupSetRetention").mockRejectedValue(
+      new BackupManagerError({
+        code: "MEDIUM_DISCLOSURE_REQUIRED",
+        message:
+          "This write sends daily -> offsite_s3. After a backup uploads and I verify it, I delete the copy on this machine.",
+        correlationId: "cid_test"
+      })
+    );
+    await openEditor(api);
+
+    fireEvent.change(tier(1).getByLabelText("Storage medium for tier 1"), { target: { value: "offsite_s3" } });
+    fireEvent.click(within(panel()).getByRole("checkbox"));
+    fireEvent.click(save());
+
+    // The refusal's own first sentence, which the disclosure panel above
+    // it does not contain, so this is the server's message being rendered
+    // and not the panel's copy of the same paragraph.
+    await screen.findByText(/This write sends daily -> offsite_s3/);
+    // Still in the editor, nothing pretended to succeed.
+    expect(screen.queryByText(/Retained under this backup set's own policy/)).toBeNull();
+  });
+
+  it("says where a tier's backups go, in the policy it renders and in the deployment's beside it", async () => {
+    renderDetail("media", "weekly-archive", createMockApi());
+
+    await screen.findByText(/Retained under this backup set's own policy/);
+    expect(screen.getByText("keeps 24 months, on offsite_cold")).toBeTruthy();
+    fireEvent.click(screen.getByText(/The deployment's policy, which this set would go back to/));
+    await screen.findByText("keeps 12 months, on offsite_s3");
+    // A local tier says nothing about where, which is how the file
+    // spells local too.
+    expect(screen.getByText("keeps 8 weeks")).toBeTruthy();
   });
 });

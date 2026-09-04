@@ -28,7 +28,16 @@ const ARTIFACT: BackupArtifact = {
     detail: "sha256 mismatch: local file hashes to deadbeef, remote reports feedface",
     detectedAt: "2026-08-28T02:06:00+02:00",
     remoteSourceRetained: true
-  }
+  },
+  placements: [
+    {
+      medium: "local", mediumType: "local",
+      location: "/data/backups/production/postgres/pg-2026-08-28.dump.zst",
+      sizeBytes: 1024, storageClass: "",
+      verificationClass: null, verifiedAt: null,
+      access: "immediate", status: "ACTIVE"
+    }
+  ]
 };
 
 function renderPage(api: BackupManagerApi, reload: () => void) {

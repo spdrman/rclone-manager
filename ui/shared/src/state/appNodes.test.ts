@@ -31,6 +31,7 @@ const OPERATION: Operation = {
     bytesDone: 42,
     bytesTotal: 100
   },
+  cycle: null,
   nonDestructive: false,
   startedAt: "2026-08-29T00:00:00+02:00"
 };

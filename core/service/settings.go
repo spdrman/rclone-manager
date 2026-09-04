@@ -165,6 +165,12 @@ type CapacitySettings struct {
 type Settings struct {
 	Retention RetentionSettings
 	Capacity  CapacitySettings
+
+	// Mediums is every storage medium this configuration declares, in
+	// declaration order, described without any credential material at all
+	// (FR-33; see StorageMediumSummary). Empty for every configuration
+	// written before EPIC E, which is the compatibility case FR-35 pins.
+	Mediums []StorageMediumSummary
 }
 
 // CapacityUpdate names the capacity fields a settings write should change.
@@ -264,6 +270,20 @@ func (u RetentionUpdate) namesNothing() bool {
 type UpdateSettingsRequest struct {
 	Retention *RetentionUpdate
 	Capacity  *CapacityUpdate
+
+	// AcknowledgeMediumDisclosure carries the operator's acknowledgment of
+	// StorageSchema().MediumDisclosure (EPIC E, FR-27).
+	//
+	// It is required on, and only on, a write that sends a retention
+	// tier's artifacts to a non-local medium the running configuration
+	// does not already send them to. Without it that write is refused with
+	// ErrMediumDisclosureRequired, and the refusal carries the disclosure
+	// itself.
+	//
+	// It is not a setting. A request carrying nothing but this
+	// acknowledgment still names no setting to change and is refused as
+	// such, which is why namesNothing does not consult it.
+	AcknowledgeMediumDisclosure bool
 }
 
 // namesNothing reports a request that asks for no change at all: no
@@ -353,6 +373,7 @@ func (b *BackupService) Settings(_ context.Context) (Settings, error) {
 	return Settings{
 		Retention: toRetentionSettings(cfg.Retention),
 		Capacity:  toCapacitySettings(cfg),
+		Mediums:   toStorageMediumSummaries(cfg),
 	}, nil
 }
 
@@ -422,6 +443,20 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	cfg, err := config.Load(b.configPath)
 	if err != nil {
 		return Settings{}, fmt.Errorf("service: re-reading configuration: %w", err)
+	}
+
+	// The consent gate (FR-27), before anything is encoded or written.
+	//
+	// It runs against the file as it actually is right now, re-read above,
+	// rather than against this process's loaded copy: consent is about
+	// what the operator's configuration is being changed FROM, and a
+	// change made out of band since this service started is part of that.
+	var introduced []tierMedium
+	if req.Retention != nil {
+		introduced = newTierMediumMappings(cfg.Retention.EffectiveTiers(), req.Retention.Tiers)
+	}
+	if len(introduced) > 0 && !req.AcknowledgeMediumDisclosure {
+		return Settings{}, mediumDisclosureRefusal(introduced)
 	}
 
 	if req.Retention != nil {
@@ -503,6 +538,7 @@ func (b *BackupService) UpdateSettings(_ context.Context, req UpdateSettingsRequ
 	return Settings{
 		Retention: toRetentionSettings(cfg.Retention),
 		Capacity:  toCapacitySettings(cfg),
+		Mediums:   toStorageMediumSummaries(cfg),
 	}, nil
 }
 

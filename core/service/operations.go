@@ -147,6 +147,39 @@ type Operation struct {
 	// OperationProgress (progress.go) for why this is never persisted
 	// alongside the durable fields above it.
 	Progress *OperationProgress
+
+	// Cycle is what a FINISHED run cycle actually got done, read back off
+	// the summary this package recorded when it completed the operation.
+	// Nil for every other action, for a run cycle that has not finished,
+	// and for one whose summary this build cannot read.
+	//
+	// Nil is not a row of zeroes, and the pointer is what keeps those
+	// apart, exactly as Progress' own doc argues. A cycle that is still
+	// running has not walked nothing; it has not finished walking. A
+	// surface that rendered nil as "0 walked, 0 through" would report the
+	// most alarming possible outcome for the most ordinary possible
+	// state.
+	Cycle *CycleOutcome
+}
+
+// CycleOutcome is issue #361's two counts, on the read side.
+//
+// #368 put them into the summary a completed run_cycle records, because
+// "completed" on that row means something much narrower than a reader
+// assumes: the cycle ran to the end. An artifact's own quarantine is a
+// business outcome rather than an operation failure, which is a decision
+// this package makes deliberately and tests, so a cycle that backed
+// nothing up finishes looking exactly like one that backed everything up.
+// Nothing rendered these counts, which left that indistinguishable
+// everywhere except a CLI exit code. This type is what a surface reads
+// them from.
+type CycleOutcome struct {
+	BackupSetsProcessed int
+	// ArtifactsWalked is how many backups the cycle had a reason to touch.
+	ArtifactsWalked int
+	// ArtifactsThrough is how many of those ended the cycle with their
+	// bytes on durable storage.
+	ArtifactsThrough int
 }
 
 // SubmitRunCycle persists a new run_cycle operation and starts executing it
@@ -477,6 +510,43 @@ func summarizeCycle(report app.CycleReport) string {
 	return string(b)
 }
 
+// parseCycleSummary reads the counts back out of a completed run cycle's
+// recorded summary.
+//
+// It reports nothing rather than zeroes when the summary is not there, is
+// not this shape, or belongs to an operation that is not a finished run
+// cycle. That distinction is the whole value of the field: an unreadable
+// summary is a fact about this row, and a cycle that got nothing through
+// is a fact about the backups, and rendering the first as the second would
+// raise an alarm about a deployment that is fine.
+//
+// A summary recorded by an older build, before #368 added the counts,
+// parses with both counts zero and no error, which would say "walked
+// nothing, got nothing through" about a cycle that may have done plenty.
+// So the two counts are read as pointers and a summary missing them is
+// reported as no outcome at all.
+func parseCycleSummary(rec state.Operation) *CycleOutcome {
+	if rec.Action != ActionRunCycle || rec.Status != state.OperationCompleted || rec.Result == "" {
+		return nil
+	}
+	var raw struct {
+		BackupSetsProcessed int  `json:"backup_sets_processed"`
+		ArtifactsWalked     *int `json:"artifacts_walked"`
+		ArtifactsThrough    *int `json:"artifacts_through"`
+	}
+	if err := json.Unmarshal([]byte(rec.Result), &raw); err != nil {
+		return nil
+	}
+	if raw.ArtifactsWalked == nil || raw.ArtifactsThrough == nil {
+		return nil
+	}
+	return &CycleOutcome{
+		BackupSetsProcessed: raw.BackupSetsProcessed,
+		ArtifactsWalked:     *raw.ArtifactsWalked,
+		ArtifactsThrough:    *raw.ArtifactsThrough,
+	}
+}
+
 func toOperation(rec state.Operation) Operation {
 	op := Operation{
 		ID:             rec.OperationID,
@@ -489,6 +559,7 @@ func toOperation(rec state.Operation) Operation {
 		CreatedAt:      rec.CreatedAt,
 		Result:         rec.Result,
 		Error:          rec.Error,
+		Cycle:          parseCycleSummary(rec),
 	}
 	if rec.StartedAt != nil {
 		op.StartedAt = *rec.StartedAt

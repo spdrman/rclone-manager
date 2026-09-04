@@ -205,6 +205,13 @@ export const FIELD_HELP = {
       "Separates how often a backup is kept from how far back keeping goes. A week tier with Keep 3 and window unit Month keeps one backup per week across three calendar months, which is roughly thirteen survivors rather than the three you would get counting in weeks. This is exactly how the default weekly tier is defined, so a chain without it cannot express the product's own default."
   },
 
+  tierMedium: {
+    what: "Where this tier's backups live: the local backup root, or a storage medium the configuration declares.",
+    example: "offsite_s3 (STANDARD_IA)",
+    effect:
+      "A backup that only this tier keeps is uploaded to that medium, verified there, and then its copy on this machine is deleted. That deletion is what the setting is for. A medium on an archive storage class cannot be read on demand at all: getting a backup back from one means asking for a restore and waiting hours, and the provider reports no progress while it waits. Reading anything back off a medium is billed by your provider, and Backup Manager holds no price list, so it will not show you a figure."
+  },
+
   protectLastKnownGood: {
     what: "FR-19's protection for the newest backup this system has actually verified and committed.",
     example: "leave it on",

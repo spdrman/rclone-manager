@@ -57,7 +57,15 @@ const committed: BackupArtifact = {
   producedAt: "2026-08-28T02:00:11+02:00", receivedAt: "2026-08-28T02:00:53+02:00",
   sizeBytes: 10, checksum: "abc", checksumAlgorithm: "sha256",
   validation: "verified", retentionClasses: ["daily"],
-  remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null
+  remoteSourceRemovedAt: "2026-08-28T02:01:01+02:00", quarantine: null,
+  placements: [
+    {
+      medium: "local", mediumType: "local", location: "/data/x.dump",
+      sizeBytes: 10, storageClass: "",
+      verificationClass: "content", verifiedAt: "2026-08-28T02:00:53+02:00",
+      access: "immediate", status: "ACTIVE"
+    }
+  ]
 };
 
 describe("lifecycle ordering", () => {

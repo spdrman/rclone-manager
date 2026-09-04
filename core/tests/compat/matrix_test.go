@@ -73,6 +73,25 @@ func TestTheMatrixDoesNotCiteSuitesThatDoNotExist(t *testing.T) {
 			continue
 		}
 		for _, m := range cited {
+			// A citation whose whole top-level directory is absent is not a
+			// matrix that has gone stale, it is this suite running inside a
+			// deliberately reduced tree. scripts/architecture's dependency
+			// proofs delete apps/ and distribution/ outright and then run
+			// core/'s tests, to show core builds without them, and a row
+			// citing evidence in apps/ has nothing to say about that.
+			//
+			// The distinction is exact rather than forgiving: if the
+			// directory IS there and the file is not, that is a stale
+			// citation and still fails. Only the wholesale absence of a
+			// layer is treated as "not this tree's question", and it is
+			// logged so a run that skipped a check says so out loud rather
+			// than passing quietly.
+			if top := topLevelDir(m[1]); top != "" {
+				if _, err := os.Stat(filepath.Join(repoRoot, top)); err != nil {
+					t.Logf("row %s cites %s and %s/ is not in this tree at all, so this is a reduced tree (the dependency-rule proof deletes whole layers) and the citation is not checked here", row.id, m[1], top)
+					continue
+				}
+			}
 			p := filepath.Join(repoRoot, m[1])
 			if _, err := os.Stat(p); err != nil {
 				missing = append(missing, row.id+" cites "+m[1])
@@ -135,4 +154,14 @@ func splitRow(line string) []string {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	return parts
+}
+
+// topLevelDir is the first path segment of a repository-relative citation,
+// or "" when the citation names a file at the root.
+func topLevelDir(rel string) string {
+	rel = filepath.ToSlash(rel)
+	if i := strings.Index(rel, "/"); i > 0 {
+		return rel[:i]
+	}
+	return ""
 }
