@@ -85,8 +85,14 @@ func writeOffsiteTestConfig(t *testing.T) string {
 // so before a cycle carries it there.
 func TestRun_RetentionNamesTheMoveItWouldMake(t *testing.T) {
 	configPath := writeOffsiteTestConfig(t)
-	if got := run([]string{"run", "--config", configPath}); got != 0 {
-		t.Fatalf("run: %d, want 0", got)
+	// Exit 1, not 0. This fixture's medium reads its credentials from an
+	// environment variable nothing sets, so the move this cycle plans is
+	// refused, and a cycle whose whole move pass got nothing through now
+	// says so in its exit status (moveExit, setup.go). What the cycle is
+	// here for is the ingestion that puts an artifact in the journal for
+	// the dry-run below to have an opinion about, and that part worked.
+	if got := run([]string{"run", "--config", configPath}); got != 1 {
+		t.Fatalf("run: %d, want 1: the move it planned cannot reach its medium", got)
 	}
 
 	out := captureStdout(t, func() {
