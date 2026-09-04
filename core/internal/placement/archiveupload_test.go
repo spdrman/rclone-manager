@@ -182,17 +182,23 @@ func plantCopying(t *testing.T, f *fixture) state.Move {
 	return mv
 }
 
-// TestAMoveAlreadyInFlightToAnArchiveClassStopsAtOneUpload covers the move
+// TestAMoveAlreadyInFlightToAnArchiveClassUploadsNothing covers the move
 // the plan-time refusal cannot see: one that was already past PLANNED when
 // the process died, or one planned by a build that did not have the
 // refusal, or one whose bucket grew a lifecycle rule after it started.
 //
-// It cannot cost nothing, because the row already exists and the engine
-// finds it at COPYING. It can cost ONE upload and then be over, and the
-// distinction is the whole issue: recopyOrAbandon's retry is right for a
-// flaky endpoint and wrong for a storage class, because the second attempt
-// is identical to the first and so is the thousandth.
-func TestAMoveAlreadyInFlightToAnArchiveClassStopsAtOneUpload(t *testing.T) {
+// The move row already exists, so nothing can un-plan it, but the engine
+// finds it at COPYING and the upload has not happened yet. So this costs
+// nothing either, and the assertion is exactly zero rather than "not many":
+// the same check that refused the plan is made again in copy, which is the
+// one function in this engine that spends money, and one upload to
+// DEEP_ARCHIVE is six months of billing for bytes deleted the same second.
+//
+// The phase writes are asserted as well as the count. A move that uploads
+// and is then refused at VERIFYING also ends ABANDONED with the source
+// intact, so the outcome alone cannot tell the two apart, and the
+// difference between them is the upload.
+func TestAMoveAlreadyInFlightToAnArchiveClassUploadsNothing(t *testing.T) {
 	f := newFixture(t, fixtureOpts{storageClass: config.StorageClassDeepArchive})
 	f.medium.archiveRefusesReads = true
 
@@ -209,8 +215,12 @@ func TestAMoveAlreadyInFlightToAnArchiveClassStopsAtOneUpload(t *testing.T) {
 		t.Fatalf("the resumed move ended at %s with %q, want ABANDONED; a class that cannot be verified is not a transient failure. Outcomes: %+v",
 			mv.Phase, mv.Error, report.Outcomes)
 	}
-	if got := f.medium.uploadCount(); got > 1 {
-		t.Errorf("the resumed move uploaded %d times before giving up; the second attempt could not have gone any differently from the first", got)
+	if got := f.medium.uploadCount(); got != 0 {
+		t.Errorf("the resumed move uploaded %d times before giving up; the check that refused the plan is knowable here too, and copy is where the money goes", got)
+	}
+	writes := f.guarded.phaseWrites()
+	if last := writes[len(writes)-1]; last != state.MoveCopying+"->"+state.MoveAbandoned {
+		t.Errorf("the move's phase writes were %v; a destination whose class cannot support its verification is refused at COPYING, before the upload", writes)
 	}
 	if !f.localExists() {
 		t.Fatal("THE SOURCE WAS DELETED against a destination nothing verified")
