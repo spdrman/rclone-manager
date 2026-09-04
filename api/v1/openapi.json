@@ -86,7 +86,10 @@
           "ARTIFACT_IRRECOVERABLE",
           "REINSTATEMENT_REFUSED",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED",
-          "MEDIUM_DISCLOSURE_REQUIRED"
+          "MEDIUM_DISCLOSURE_REQUIRED",
+          "RESTORE_REFUSED",
+          "RESTORE_UNAVAILABLE",
+          "COPY_NOT_FOUND"
         ],
         "x-code-origins": {
           "authentication-failed": "ui",
@@ -126,7 +129,10 @@
           "ARTIFACT_IRRECOVERABLE": "wire",
           "REINSTATEMENT_REFUSED": "wire",
           "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED": "wire",
-          "MEDIUM_DISCLOSURE_REQUIRED": "wire"
+          "MEDIUM_DISCLOSURE_REQUIRED": "wire",
+          "RESTORE_REFUSED": "wire",
+          "RESTORE_UNAVAILABLE": "wire",
+          "COPY_NOT_FOUND": "wire"
         },
         "x-error-classes": {
           "authentication": [
@@ -513,7 +519,7 @@
       },
       "SubmitOperationRequest": {
         "type": "object",
-        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation.",
+        "description": "POST /operations. The idempotency key is a header, not a body field: it is a property of the retry, not of the operation. action selects which of the parameter objects below is read; restore_placement reads restore, and run_cycle reads none.",
         "additionalProperties": false,
         "properties": {
           "action": {
@@ -523,6 +529,11 @@
           "config_revision": {
             "type": "string",
             "description": "Optimistic concurrency: the revision the caller believes is current. A stale value is refused with CONFIG_REVISION_STALE and nothing runs."
+          },
+          "restore": {
+            "$ref": "#/components/schemas/RestoreOperationRequest",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
           }
         },
         "required": [
@@ -590,6 +601,11 @@
             "$ref": "#/components/schemas/OperationProgress",
             "x-go-omitempty": true,
             "x-go-pointer": true
+          },
+          "restore": {
+            "$ref": "#/components/schemas/OperationRestore",
+            "x-go-omitempty": true,
+            "x-go-pointer": true
           }
         },
         "required": [
@@ -599,7 +615,7 @@
       },
       "OperationProgress": {
         "type": "object",
-        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md §52). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
+        "description": "Live progress for an operation that is running in THIS process right now (docs/EPIC-B-multi-nas.md \u00a752). It is sampled from the transfer engine while a run cycle executes and is never written to the operations table: an operation record is durable and crash-safe, and progress is neither, so persisting it would put a tick-rate write path on the one record whose durability guarantees exist to avoid exactly that, and would resurrect a dead cycle's last reading after a restart as though it were live. So this field is present only while the cycle producing it is executing here. A finished operation, and one that was running before a restart, both carry no progress object at all, which is not the same answer as zero and must not be rendered as one. Nothing here is a percentage of the whole operation: a run cycle is a pass over every enabled backup set, and the artifacts it will find are not known when it starts, so no honest denominator for the whole exists. The byte counters describe the ONE artifact being copied at observed_at; the counters beside them say where in the cycle that artifact sits.",
         "additionalProperties": false,
         "properties": {
           "observed_at": {
@@ -2545,6 +2561,84 @@
           "artifacts_walked",
           "artifacts_through"
         ]
+      },
+      "RestoreOperationRequest": {
+        "type": "object",
+        "description": "The restore_placement action's own parameters. Present only when action is restore_placement, and refused when it is not: a body carrying restore parameters for a run_cycle is a request that has confused two operations, and answering it cheerfully is how the expensive version of the same mistake gets made later.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "description": "The backup whose copy is to be restored, as source/set/name."
+          },
+          "medium": {
+            "type": "string",
+            "description": "The id of the storage medium holding the copy to restore."
+          },
+          "window_days": {
+            "type": "integer",
+            "description": "How many days the restored copy should stay readable. Bounded to 1 to 30: zero is not a shorter restore, it is one that is billed and then immediately unavailable, and a fat-fingered large number is a month of double billing."
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "description": "The operator saying, in one field, that they know a restore costs money and takes hours. Required true. It is the opposite of a force flag: the value that costs nothing is the default, so a caller that forgot to ask a human gets a refusal rather than a bill."
+          }
+        },
+        "required": [
+          "artifact_id",
+          "medium",
+          "window_days",
+          "acknowledged"
+        ]
+      },
+      "OperationRestore": {
+        "type": "object",
+        "description": "A restore operation's own facts: what was asked for, which never changes, and where it has actually got to, which is re-derived from the storage provider on every read rather than remembered. Absent on every other action. There is no percentage field, no completion-time field and no cost field: S3 reports a restore as running or finished and nothing else, and this product holds no price list, so any of the three would be invented.",
+        "additionalProperties": false,
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "medium": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "storage_class": {
+            "type": "string",
+            "x-go-omitempty": true
+          },
+          "window_days": {
+            "type": "integer",
+            "x-go-omitempty": true
+          },
+          "access": {
+            "type": "string",
+            "description": "What can be done with the copy right now: immediate, requires_restore, restoring, or unreachable. Empty when the medium could not be asked at all.",
+            "x-go-omitempty": true
+          },
+          "detail": {
+            "type": "string",
+            "description": "The plain-words sentence a surface prints beside access. Never a percentage, a finishing time or a price.",
+            "x-go-omitempty": true
+          },
+          "restored_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the provider says the restored copy stops being readable. Omitted, never zero-valued, while the provider reports none: it is shown when S3 reports it and nothing is invented in its place until then.",
+            "x-go-omitempty": true
+          },
+          "wait": {
+            "type": "string",
+            "description": "The storage class's OWN published restore time, in plain words. A documented property of the class, and never an estimate for this particular restore.",
+            "x-go-omitempty": true
+          },
+          "billing": {
+            "type": "string",
+            "description": "The statement that a bill exists, with no amount, because this deployment holds no price list and an invented number is worse than none.",
+            "x-go-omitempty": true
+          }
+        }
       }
     },
     "responses": {}
@@ -2711,7 +2805,7 @@
     "/operations": {
       "post": {
         "operationId": "submitOperation",
-        "summary": "Submit a durable operation.",
+        "summary": "Submit a durable operation: a run cycle, or a restore of one archived copy.",
         "tags": [
           "operations"
         ],
@@ -2788,8 +2882,22 @@
               "DESTRUCTIVE_OPERATIONS_DISABLED"
             ]
           },
+          "404": {
+            "description": "Refused: ARTIFACT_NOT_FOUND, COPY_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "x-error-codes": [
+              "ARTIFACT_NOT_FOUND",
+              "COPY_NOT_FOUND"
+            ]
+          },
           "409": {
-            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the other two are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
+            "description": "Refused: CONFIG_REVISION_STALE, IDEMPOTENCY_KEY_CONFLICT, OPERATION_ALREADY_RUNNING, RESTORE_REFUSED. The body is one of two shapes and the code decides which: CONFIG_REVISION_STALE carries the structured config_revision a client retries against, the others are the plain error envelope. oneOf rather than one schema with an optional config_revision, so a client reading .config_revision after a CONFIG_REVISION_STALE still gets a field the type system guarantees is there.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2807,7 +2915,8 @@
             "x-error-codes": [
               "CONFIG_REVISION_STALE",
               "IDEMPOTENCY_KEY_CONFLICT",
-              "OPERATION_ALREADY_RUNNING"
+              "OPERATION_ALREADY_RUNNING",
+              "RESTORE_REFUSED"
             ]
           },
           "500": {
@@ -2824,7 +2933,7 @@
             ]
           },
           "503": {
-            "description": "Refused: NOT_CONFIGURED. This deployment has no configuration yet and is serving the first-run setup flow instead of the application. Every operation outside that flow answers this until setup completes, so a client can send the operator to setup rather than interpret a bare 404.",
+            "description": "Refused: RESTORE_UNAVAILABLE. This deployment has no way to reach a storage medium, so no restore can be asked for. Nothing about the request would make it work; something about the deployment has to change first.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2833,7 +2942,7 @@
               }
             },
             "x-error-codes": [
-              "NOT_CONFIGURED"
+              "RESTORE_UNAVAILABLE"
             ]
           }
         },

@@ -179,6 +179,15 @@ describe("every request the shared client makes is a declared operation", () => 
       ["listSets", () => httpApi.listSets()],
       ["getSet", () => httpApi.getSet("src/set-1")],
       ["runCycle", () => httpApi.runCycle("rev-1")],
+      // The other action on the same /operations route (EPIC E, FR-34).
+      // It is listed here rather than left out because a client method
+      // nobody drives from this list is invisible to the whole file: it
+      // could call any path it liked and nothing would notice, which is
+      // the hole M5 on #194 closed.
+      ["restoreCopy", () => httpApi.restoreCopy({
+        artifactId: "src/set-1/a.tar.gz", medium: "cold-store",
+        windowDays: 3, acknowledged: true, configRevision: "rev-1"
+      })],
       ["testConnection", () => httpApi.testConnection("set-1")],
       ["setEnabled", () => httpApi.setEnabled("src", "set-1", true)],
       ["setReadOnly", () => httpApi.setReadOnly("src", "set-1", true)],

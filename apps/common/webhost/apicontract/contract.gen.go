@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "77d2fd3212c7e9bfa37232401464fcc4deb8576a7df63956bb625a59fe83b925"
+const ContractSHA256 = "a51f141e7841bad5f363e861c9e6e859c7bc4ea01f357dbe6418bec3af553699"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -74,6 +74,9 @@ const (
 	ErrorCodeReinstatementRefused            ErrorCode = "REINSTATEMENT_REFUSED"
 	ErrorCodeBackupSetRepointNotAcknowledged ErrorCode = "BACKUP_SET_REPOINT_NOT_ACKNOWLEDGED"
 	ErrorCodeMediumDisclosureRequired        ErrorCode = "MEDIUM_DISCLOSURE_REQUIRED"
+	ErrorCodeRestoreRefused                  ErrorCode = "RESTORE_REFUSED"
+	ErrorCodeRestoreUnavailable              ErrorCode = "RESTORE_UNAVAILABLE"
+	ErrorCodeCopyNotFound                    ErrorCode = "COPY_NOT_FOUND"
 )
 
 // WireErrorCodes is codes a server may put on the wire. Every one of these is emitted by real handler code, and apps/common/webhost's TestContract_EveryWireErrorCodeIsRegistered holds that both ways.
@@ -106,6 +109,9 @@ var WireErrorCodes = []ErrorCode{
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
+	ErrorCodeRestoreRefused,
+	ErrorCodeRestoreUnavailable,
+	ErrorCodeCopyNotFound,
 }
 
 // UIErrorCodes is the shared UI's own presentation vocabulary. No endpoint emits these; they are registered here so there is one registry rather than a second hand-maintained list in ui/shared.
@@ -162,6 +168,9 @@ var ErrorCodes = []ErrorCode{
 	ErrorCodeReinstatementRefused,
 	ErrorCodeBackupSetRepointNotAcknowledged,
 	ErrorCodeMediumDisclosureRequired,
+	ErrorCodeRestoreRefused,
+	ErrorCodeRestoreUnavailable,
+	ErrorCodeCopyNotFound,
 }
 
 // ErrorClasses groups codes by the refusal they represent, so a caller (or
@@ -506,9 +515,10 @@ var Endpoints = []Endpoint{
 			400: {ErrorCodeInvalidRequest},
 			401: {ErrorCodeUnauthenticated},
 			403: {ErrorCodeCSRFTokenMissing, ErrorCodeCSRFTokenMismatch, ErrorCodeDestructiveOperationsDisabled},
-			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning},
+			404: {ErrorCodeArtifactNotFound, ErrorCodeCopyNotFound},
+			409: {ErrorCodeConfigRevisionStale, ErrorCodeIdempotencyKeyConflict, ErrorCodeOperationAlreadyRunning, ErrorCodeRestoreRefused},
 			500: {ErrorCodeInternal},
-			503: {ErrorCodeNotConfigured},
+			503: {ErrorCodeRestoreUnavailable},
 		},
 	},
 	{
@@ -1134,6 +1144,7 @@ type Operation struct {
 	FinishedAt     string             `json:"finished_at,omitempty"`
 	OperationID    string             `json:"operation_id"`
 	Progress       *OperationProgress `json:"progress,omitempty"`
+	Restore        *OperationRestore  `json:"restore,omitempty"`
 	Result         string             `json:"result,omitempty"`
 	StartedAt      string             `json:"started_at,omitempty"`
 	Status         string             `json:"status"`
@@ -1171,6 +1182,25 @@ type OperationProgress struct {
 	Stage            string `json:"stage"`
 }
 
+// OperationRestore is A restore operation's own facts: what was asked for, which never
+// changes, and where it has actually got to, which is re-derived
+// from the storage provider on every read rather than remembered.
+// Absent on every other action. There is no percentage field, no
+// completion-time field and no cost field: S3 reports a restore as
+// running or finished and nothing else, and this product holds no
+// price list, so any of the three would be invented.
+type OperationRestore struct {
+	Access        string `json:"access,omitempty"`
+	ArtifactID    string `json:"artifact_id,omitempty"`
+	Billing       string `json:"billing,omitempty"`
+	Detail        string `json:"detail,omitempty"`
+	Medium        string `json:"medium,omitempty"`
+	RestoredUntil string `json:"restored_until,omitempty"`
+	StorageClass  string `json:"storage_class,omitempty"`
+	Wait          string `json:"wait,omitempty"`
+	WindowDays    int    `json:"window_days,omitempty"`
+}
+
 // Placement is one DURABLE copy of one backup, and where it actually is (EPIC E,
 // FR-29). A placement exists because the journal recorded a finished
 // copy, so the ABSENCE of a placement is the absence of a copy: a
@@ -1190,6 +1220,18 @@ type Placement struct {
 	StorageClass      string `json:"storage_class,omitempty"`
 	VerificationClass string `json:"verification_class,omitempty"`
 	VerifiedAt        string `json:"verified_at,omitempty"`
+}
+
+// RestoreOperationRequest is the restore_placement action's own parameters. Present only when
+// action is restore_placement, and refused when it is not: a body
+// carrying restore parameters for a run_cycle is a request that has
+// confused two operations, and answering it cheerfully is how the
+// expensive version of the same mistake gets made later.
+type RestoreOperationRequest struct {
+	Acknowledged bool   `json:"acknowledged"`
+	ArtifactID   string `json:"artifact_id"`
+	Medium       string `json:"medium"`
+	WindowDays   int    `json:"window_days"`
 }
 
 // RetentionOverride is one backup set's OWN retention policy, exactly as its
@@ -1384,10 +1426,13 @@ type StorageStatus struct {
 }
 
 // SubmitOperationRequest is POST /operations. The idempotency key is a header, not a body
-// field: it is a property of the retry, not of the operation.
+// field: it is a property of the retry, not of the operation. action
+// selects which of the parameter objects below is read;
+// restore_placement reads restore, and run_cycle reads none.
 type SubmitOperationRequest struct {
-	Action         string `json:"action"`
-	ConfigRevision string `json:"config_revision"`
+	Action         string                   `json:"action"`
+	ConfigRevision string                   `json:"config_revision"`
+	Restore        *RestoreOperationRequest `json:"restore,omitempty"`
 }
 
 // TestConnectionRequest is POST /backup-sets/test-connection. A reachability and
@@ -1545,7 +1590,9 @@ var SchemaTypes = map[string]any{
 	"ManagerStorage":              ManagerStorage{},
 	"Operation":                   Operation{},
 	"OperationProgress":           OperationProgress{},
+	"OperationRestore":            OperationRestore{},
 	"Placement":                   Placement{},
+	"RestoreOperationRequest":     RestoreOperationRequest{},
 	"RetentionOverride":           RetentionOverride{},
 	"RetentionPlan":               RetentionPlan{},
 	"RetentionSchema":             RetentionSchema{},

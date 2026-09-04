@@ -265,7 +265,14 @@ func New(cfg *config.Config, journal *state.Journal, tr transport.Transport, log
 	}
 	b.state.Store(&configState{inner: app.New(cfg, journal, tr, logger), revision: computeConfigRevision(cfg)})
 
-	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart"); err != nil {
+	// The sweep skips actions whose work does not happen in this process.
+	// A restore runs at the storage provider for hours and is entirely
+	// unaffected by this process restarting, so marking its row failed
+	// would be this product recording a failure that did not happen about
+	// a job somebody else is still doing and still billing for (EPIC E,
+	// FR-34). Its real state is re-derived by asking the provider; see
+	// internal/archive.Restorer.Derive.
+	if _, err := journal.FailInterruptedOperations(context.Background(), now(), "interrupted by restart", externallyExecutedActions...); err != nil {
 		logger.Error(context.Background(), "sweep-interrupted-operations", err)
 	}
 
