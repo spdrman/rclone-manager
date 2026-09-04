@@ -15,10 +15,9 @@ import (
 // internal/placement, with each copy documenting the duplication in prose
 // and neither collapsing it. This is the survivor, because the vocabulary
 // is about what an archive class does to a copy's readability, which is
-// what this package exists for. Nothing collapses on the other side in
-// this branch: internal/placement/access.go has not landed on main, so
-// there was no second copy here to delete. What keeps it that way once
-// somebody's rebase brings one is
+// what this package exists for. The second copy, internal/placement's
+// access.go, was deleted at the composition of #240 and #241, and the
+// service read surface derives from here now. What keeps it that way is
 // TestTheAccessVocabularyIsDefinedInExactlyOnePlace (composition_test.go),
 // which fails on a second declaration of any of the four strings anywhere
 // under core/internal.

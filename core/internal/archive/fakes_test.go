@@ -10,9 +10,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
+
+func glacierMedium() transport.Medium {
+	return transport.Medium{ID: "cold-store", Type: transport.MediumTypeS3, Bucket: "b", StorageClass: config.StorageClassGlacier}
+}
+
+func standardMedium() transport.Medium {
+	return transport.Medium{ID: "warm-store", Type: transport.MediumTypeS3, Bucket: "b", StorageClass: config.StorageClassStandard}
+}
 
 // fakeMedium is one object on one pretend medium, plus a call counter for
 // every method a test might want to prove was NOT reached.

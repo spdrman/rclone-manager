@@ -120,17 +120,59 @@ readable form of it is `license.acceptedNonPermissive` in
 fails if it stops naming any of these licences, versions or addresses. A third
 encumbered module arriving turns this page red until somebody writes its offer.
 
-**Where this offer currently reaches, and where it does not.** It is in this
-file and in `NOTICE`, both of which are in the source tree and both of which
-travel with the compliance materials a store reviewer is handed. Nothing this
-project distributes carries them yet: `container/Dockerfile`'s runtime stage
-copies the two binaries and the frontend bundle and not `LICENSE` or `NOTICE`,
-so somebody who has only the image has to come here for the offer. That is a
-gap in delivery rather than in the offer, it predates this section and applies
-to Apache-2.0 §4(d) just as much, and it is tracked in #407. It is recorded
-here rather than left out, for the same reason `sourceRepository.visibility`
-records that this repository is private instead of implying the source link
-resolves.
+**Where this offer reaches.** It is in this file and in `NOTICE`, and it
+travels inside the image. `container/Dockerfile`'s runtime stage copies all
+three licence materials into one directory:
+
+| in the repository | in the image |
+|---|---|
+| `LICENSE` | `/licenses/LICENSE` |
+| `NOTICE` | `/licenses/NOTICE` |
+| `provenance/third-party-licenses.json` | `/licenses/third-party-licenses.json` |
+
+So somebody whose only contact with the product is `docker pull` has the
+licence, this offer and the machine-readable inventory the other two point at,
+without needing this repository, which is private. The image also says so to
+`docker inspect`, which is the only question you can ask it without opening it:
+`org.opencontainers.image.licenses` is the licence id and
+`com.iasbuilt.backupmanager.licenses.path` is `/licenses`.
+
+The image has no shell, so read them from outside it. `docker create` needs a
+command named because this image sets no `ENTRYPOINT` and no `CMD` on purpose,
+and the container is never started, so the command never runs:
+
+```
+docker image inspect --format '{{json .Config.Labels}}' <image>
+docker create --name bm <image> /backup-manager version
+docker cp bm:/licenses .
+docker rm bm
+```
+
+That was not always true. The runtime stage used to copy the two binaries and
+the frontend bundle and nothing else, which was a gap in delivery rather than
+in the offer, and it applied to Apache-2.0 section 4(d) just as much as to the
+MPL. Two checks stand behind the table now, and they are different in kind on
+purpose. `TestTheImageCarriesTheLicenceMaterials` in `distribution/packaging`
+reads the runtime stage and refuses a `COPY` that is missing, comes out of a
+builder stage or lands somewhere relative, and it believes the Dockerfile.
+`TestTheBuiltImageCarriesTheLicenceMaterials` in
+`apps/generic/tests/dockercli` builds the image and copies `/licenses` back out
+of it with the commands above, comparing each file to the checked-in one by
+digest, and it believes nothing.
+
+**Which targets this covers.** Every distribution target records how a
+recipient of it gets these files, in `distribution.targets` in
+`distribution/packaging/compliance.json`, and a target that records nothing
+fails the packaging suite the same way an unbuilt target with no reason does.
+Every target that is metadata pulling the canonical image says `image`: a
+catalog entry, a template, a compose profile and a store manifest all deliver
+the same image, and a second copy of the licence beside a compose file would be
+a file to keep in step that no recipient would ever read. The Synology `.spk`
+is the exception, and it is why the field exists rather than a note: it
+installs the binaries natively and never pulls the image, so `/licenses` in an
+image nobody downloaded reaches nobody who installed that way. It is not built
+in this repository yet, and getting these files into the package is recorded as
+part of the work that builds it.
 
 ## What is generated
 

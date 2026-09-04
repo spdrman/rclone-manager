@@ -119,8 +119,10 @@ func plantSourceDeletePending(t *testing.T, f *fixture, a deleteAttempt) state.M
 }
 
 // runDeleteAttempt runs the engine over the planted move and asserts the
-// source survived and the refusal said why.
-func runDeleteAttempt(t *testing.T, f *fixture, a deleteAttempt) {
+// source survived and the refusal said why. It returns everything the
+// engine said about why, so a test can assert more about the wording than
+// the one phrase deleteAttempt carries.
+func runDeleteAttempt(t *testing.T, f *fixture, a deleteAttempt) string {
 	t.Helper()
 
 	before, statErr := os.Lstat(f.localPath())
@@ -160,6 +162,7 @@ func runDeleteAttempt(t *testing.T, f *fixture, a deleteAttempt) {
 	if len(refusals) == 0 && mv.Error == "" {
 		t.Error("the engine declined to delete and said nothing about why")
 	}
+	return joined
 }
 
 func TestTheGuardRefusesADestinationTheJournalNeverRecorded(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spdrman/rclone-manager/core/internal/app"
+	"github.com/spdrman/rclone-manager/core/internal/archive"
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/placement"
 	"github.com/spdrman/rclone-manager/core/internal/state"
@@ -115,10 +116,10 @@ func TestToServicePlacements_ACopyOnAMediumNobodyCanReachSaysSo(t *testing.T) {
 		t.Fatalf("got %d copies, want 1: an unreachable copy is still a recorded copy", len(a.Placements))
 	}
 	p := a.Placements[0]
-	if p.Access != string(placement.AccessUnreachable) {
-		t.Errorf("Access = %q, want %q", p.Access, placement.AccessUnreachable)
+	if p.Access != string(archive.Unreachable) {
+		t.Errorf("Access = %q, want %q", p.Access, archive.Unreachable)
 	}
-	if p.Access == string(placement.AccessImmediate) {
+	if p.Access == string(archive.Immediate) {
 		t.Error("a copy nobody can reach was reported as readable on demand; that is issue #361's defect in a different medium")
 	}
 	// The class is not invented. This deployment genuinely does not know
@@ -160,8 +161,8 @@ func TestToServicePlacements_ACopyNobodyHasCheckedCarriesNoClass(t *testing.T) {
 	}
 	// And the archive class reaches the surface, because an operator has
 	// to learn this before they need the file, not while they wait for it.
-	if p.Access != string(placement.AccessRequiresRestore) {
-		t.Errorf("Access = %q, want %q for a DEEP_ARCHIVE copy", p.Access, placement.AccessRequiresRestore)
+	if p.Access != string(archive.RequiresRestore) {
+		t.Errorf("Access = %q, want %q for a DEEP_ARCHIVE copy", p.Access, archive.RequiresRestore)
 	}
 	if p.StorageClass != config.StorageClassDeepArchive {
 		t.Errorf("StorageClass = %q, want %q", p.StorageClass, config.StorageClassDeepArchive)
@@ -191,7 +192,7 @@ func TestToServicePlacements_AnOrdinaryLocalCopyIsUnchanged(t *testing.T) {
 		SizeBytes:         int64p(0),
 		VerificationClass: state.VerificationContent,
 		VerifiedAt:        verified,
-		Access:            string(placement.AccessImmediate),
+		Access:            string(archive.Immediate),
 		Status:            state.PlacementActive,
 	}}
 	if !reflect.DeepEqual(got, want) {
