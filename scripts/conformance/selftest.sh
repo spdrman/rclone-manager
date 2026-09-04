@@ -82,7 +82,7 @@ expect_check_fails() {
     fail=$((fail + 1))
   else
     echo "  ok (caught): $label"
-    echo "      -> $(grep -m1 -F "$needle" "$tmp/out" | sed 's/^[[:space:]]*//' | cut -c1-200)"
+    echo "      -> $(grep -m1 -F "$needle" "$tmp/out" | sed 's/^[[:space:]]*//' | cut -c1-400)"
     pass=$((pass + 1))
   fi
 }

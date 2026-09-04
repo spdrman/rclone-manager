@@ -447,17 +447,6 @@ func (w *world) localExists(id model.ArtifactID) bool {
 	return err == nil
 }
 
-// keyOn is the deterministic object key an artifact takes on a medium,
-// computed the same way the engine computes it.
-func (w *world) keyOn(medium transport.Medium, id model.ArtifactID) string {
-	w.t.Helper()
-	key, err := transport.MediumKey(medium.Prefix, id)
-	if err != nil {
-		w.t.Fatalf("computing the key for %s on %s: %v", id.Name, medium.ID, err)
-	}
-	return key
-}
-
 // --- small shared helpers ---------------------------------------------
 
 func sha256Hex(b []byte) string {
