@@ -11,17 +11,21 @@ import (
 	"testing"
 )
 
-// These two guards are this lane's answer to the two integration
-// questions #241 owns, written as tests rather than as prose in a pull
-// request, because prose in a pull request does not fail.
+// These two guards are #241's answer to the two integration questions it
+// owns, written as tests rather than as prose in a pull request, because
+// prose in a pull request does not fail.
 //
-// Both are about code that is not in this tree yet. #238's move engine and
-// #240's placement surfaces are in flight in other lanes, and each of them
-// lands in exactly the place one of these guards watches. So each guard
-// runs a detector over the whole of core/internal, and each one proves its
-// detector works against a synthetic file that breaks the rule: without
-// that positive control a guard whose subject has not landed yet is
-// indistinguishable from a guard that matches nothing.
+// They were written before their subjects existed. #238's move engine and
+// #240's placement surfaces were in flight in other lanes, and each landed
+// in exactly the place one of these guards watches; both guards went red
+// at the composition, and both were right. What resolved them is recorded
+// on #241: the package edge now runs placement -> archive (archive's
+// verification gate moved to placement, where its answers are used), the
+// second copy of the vocabulary is gone, and the engine's own guard ends
+// by calling archive.CheckSourceDelete. Each guard still runs a detector
+// over the whole of core/internal, and each still proves its detector
+// against synthetic files that break the rule, because a detector nobody
+// has watched fail is indistinguishable from one that matches nothing.
 
 // accessVocabulary is FR-34's closed set, spelled as archive.State spells
 // it. It is written out here rather than read from archive.States on
@@ -40,14 +44,14 @@ var accessVocabulary = map[string]bool{
 // #241's review found the vocabulary written down twice, in
 // internal/placement and in internal/archive, with each copy documenting
 // the duplication in prose and neither collapsing it. archive is the
-// documented survivor.
+// survivor, because deriving the state needs the class table, whether a
+// restore is running and when a finished one expires, and only archive
+// holds those. internal/placement/access.go was deleted at the
+// composition and the service read surface derives from archive.
 //
-// On the base this branch actually sits on there is only one copy:
-// internal/placement/access.go has not landed on main, so there was
-// nothing to collapse when this was written. That is precisely why this
-// exists as a test. The second copy arrives with somebody else's rebase,
-// and a rule that only lives in a merged pull request description is a
-// rule the next lane never reads.
+// It stays as a test because the second copy arrived once already, with
+// somebody else's rebase, and a rule that only lives in a merged pull
+// request description is a rule the next lane never reads.
 func TestTheAccessVocabularyIsDefinedInExactlyOnePlace(t *testing.T) {
 	offenders := declaringAccessStates(t, internalPackages(t))
 	if len(offenders) > 0 {
@@ -76,24 +80,37 @@ const RequiresRestore State = "requires_restore"
 // archive.CheckSourceDelete asks whether any SURVIVING copy can actually
 // be read right now, which is a fact about the present that no journal row
 // carries: a placement can say ACTIVE and content-verified and describe
-// bytes that are hours away from anybody. #238's own guard asks the
-// journal-shaped question, and it cannot infer the archive one, because
-// nothing rewrites verification_class when a lifecycle rule transitions an
-// object or a restore window expires. The composition can only go one way,
-// too: archive has no journal read of its own, so it cannot call #238's
-// guard, while #238's can call this one with the copies it has already
-// loaded.
+// bytes that are hours away from anybody. The move engine's own guard asks
+// the journal-shaped question, and it cannot infer the archive one,
+// because nothing rewrites verification_class when a lifecycle rule
+// transitions an object or a restore window expires. The composition can
+// only go one way, too: archive has no journal read of its own, so it
+// cannot call the engine's guard, while the engine's can call this one
+// with the copies it has already loaded.
 //
-// So the rule is that #238's guard calls archive.CheckSourceDelete, and
-// this is the guard that makes a mover which forgets fail the build rather
-// than pass review. It is written here because the caller does not exist
-// yet and this lane must not edit another lane's files.
+// So the rule is that the engine's guard calls archive.CheckSourceDelete
+// (placement.Engine.guardSourceDelete, its eighth clause), and this is the
+// guard that makes a mover which forgets fail the build rather than pass
+// review.
+//
+// # It requires the call, not the import
+//
+// The first version of this detector asked whether the deleting package
+// imported internal/archive, which was the strongest thing it could ask
+// about a caller that did not exist yet. It is not strong enough now.
+// placement imports archive for its verification gate as well, so an
+// import is satisfied by code that never goes near a delete, and deleting
+// the CheckSourceDelete call would have left an import-based guard green.
+// The second planted control below is exactly that mover, and it is the
+// one the old detector waved through. placement's own destructive_test
+// pins where in the package the call sits.
 func TestNothingDeletesACopyWithoutAskingWhetherAnotherOneIsReadable(t *testing.T) {
-	offenders := deletingWithoutArchive(t, internalPackages(t))
+	offenders := deletingWithoutAsking(t, internalPackages(t))
 	if len(offenders) > 0 {
-		t.Errorf("%v remove an object from a storage medium without their package consulting internal/archive; a delete decided from the journal alone deletes the last copy anybody can read and leaves one that is provably intact and hours out of reach", offenders)
+		t.Errorf("%v remove an object from a storage medium without their package calling archive.CheckSourceDelete; a delete decided from the journal alone deletes the last copy anybody can read and leaves one that is provably intact and hours out of reach", offenders)
 	}
 
+	// The positive control: a mover that never heard of archive.
 	planted := t.TempDir()
 	write(t, filepath.Join(planted, "mover.go"), `package placement
 
@@ -107,8 +124,60 @@ func deleteSource(ctx context.Context, s store, medium, key string) error {
 	return s.DeleteObject(ctx, medium, key)
 }
 `)
-	if got := deletingWithoutArchive(t, []string{planted}); len(got) == 0 {
-		t.Error("the detector did not notice a mover that deletes an object without consulting internal/archive, so the assertion above proves nothing")
+	if got := deletingWithoutAsking(t, []string{planted}); len(got) == 0 {
+		t.Error("the detector did not notice a mover that deletes an object without asking internal/archive, so the assertion above proves nothing")
+	}
+
+	// The second positive control: a mover that imports archive, uses it
+	// for something else, and deletes without asking. An import-based
+	// detector passes this one.
+	importing := t.TempDir()
+	write(t, filepath.Join(importing, "mover.go"), `package placement
+
+import (
+	"context"
+
+	"github.com/spdrman/rclone-manager/core/internal/archive"
+)
+
+type store interface {
+	DeleteObject(ctx context.Context, medium, key string) error
+}
+
+var ceiling = archive.Immediate
+
+func deleteSource(ctx context.Context, s store, medium, key string) error {
+	return s.DeleteObject(ctx, medium, key)
+}
+`)
+	if got := deletingWithoutAsking(t, []string{importing}); len(got) == 0 {
+		t.Error("the detector waved through a mover that imports internal/archive for something else and never calls CheckSourceDelete; an import is satisfied by any use, so it proves nothing about the delete")
+	}
+
+	// The negative control: the shape that satisfies the rule, so a
+	// detector that flagged every mover could not pass as a strict one.
+	asking := t.TempDir()
+	write(t, filepath.Join(asking, "mover.go"), `package placement
+
+import (
+	"context"
+
+	arc "github.com/spdrman/rclone-manager/core/internal/archive"
+)
+
+type store interface {
+	DeleteObject(ctx context.Context, medium, key string) error
+}
+
+func deleteSource(ctx context.Context, s store, src arc.Copy, all []arc.Copy, medium, key string) error {
+	if err := arc.CheckSourceDelete(src, all); err != nil {
+		return err
+	}
+	return s.DeleteObject(ctx, medium, key)
+}
+`)
+	if got := deletingWithoutAsking(t, []string{asking}); len(got) != 0 {
+		t.Errorf("the detector flagged a mover that does ask (%v), so a green run above could be a detector that flags nothing in particular", got)
 	}
 }
 
@@ -148,13 +217,17 @@ func declaringAccessStates(t *testing.T, dirs []string) []string {
 	return out
 }
 
-// deletingWithoutArchive reports every file that calls DeleteObject
-// without its own package importing internal/archive.
+// deletingWithoutAsking reports every file that calls DeleteObject without
+// its own package calling archive.CheckSourceDelete.
 //
 // The unit is the PACKAGE rather than the file, because the guard call and
 // the delete call belong in one package but not necessarily in one file,
 // and a rule that demanded both in one file would be a rule about layout.
-func deletingWithoutArchive(t *testing.T, dirs []string) []string {
+//
+// The call is recognised through whatever name the file imports
+// internal/archive under, so renaming the import cannot hide it, and a
+// CheckSourceDelete on anything that is not that import does not count.
+func deletingWithoutAsking(t *testing.T, dirs []string) []string {
 	t.Helper()
 	deletes := map[string][]string{}
 	consults := map[string]bool{}
@@ -169,10 +242,15 @@ func deletingWithoutArchive(t *testing.T, dirs []string) []string {
 		if strings.Contains(slashed, "/internal/transport/") {
 			return
 		}
+		archiveName := ""
 		for _, imp := range file.Imports {
 			p, err := strconv.Unquote(imp.Path.Value)
-			if err == nil && strings.HasSuffix(p, "/internal/archive") {
-				consults[dir] = true
+			if err != nil || !strings.HasSuffix(p, "/internal/archive") {
+				continue
+			}
+			archiveName = "archive"
+			if imp.Name != nil {
+				archiveName = imp.Name.Name
 			}
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -181,10 +259,17 @@ func deletingWithoutArchive(t *testing.T, dirs []string) []string {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "DeleteObject" {
+			if !ok {
 				return true
 			}
-			deletes[dir] = append(deletes[dir], path)
+			switch sel.Sel.Name {
+			case "DeleteObject":
+				deletes[dir] = append(deletes[dir], path)
+			case "CheckSourceDelete":
+				if pkg, ok := sel.X.(*ast.Ident); ok && archiveName != "" && pkg.Name == archiveName {
+					consults[dir] = true
+				}
+			}
 			return true
 		})
 	})

@@ -2,6 +2,7 @@ package placement_test
 
 import (
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -132,5 +133,39 @@ func TestACopyOnAnOnDemandClassIsNotAskedAboutARestore(t *testing.T) {
 	}
 	if got := f.medium.restoreStatusCount(); got != 0 {
 		t.Errorf("the medium was asked about a restore %d times for a class that reads on demand; the answer could not change anything", got)
+	}
+}
+
+// TestASourceAlreadyGoneConvergesEvenWhenTheSurvivorIsArchived pins the
+// order of the guard's last two clauses, which is an argument made in a
+// comment and would otherwise be a comment.
+//
+// A crash between the source delete landing on disk and the DONE write
+// leaves the journal at SOURCE_DELETE_PENDING and a file that no longer
+// exists. The medium-specific proof reports that as errSourceAlreadyGone,
+// and the answer is to record DONE: the delete happened, and there is
+// nothing left to protect. If the readable-survivor clause ran FIRST, an
+// unrestored archive-class destination would refuse this move on every
+// cycle for ever, over a copy that is already gone, with a source row that
+// says DELETE_PENDING about nothing. #372's shape, one machine down.
+func TestASourceAlreadyGoneConvergesEvenWhenTheSurvivorIsArchived(t *testing.T) {
+	f := newFixture(t, fixtureOpts{storageClass: config.StorageClassDeepArchive})
+	a := deleteAttempt{afterPlant: func(t *testing.T, f *fixture) {
+		if err := os.Remove(f.localPath()); err != nil {
+			t.Fatalf("removing the source to simulate the crash: %v", err)
+		}
+	}}
+	plantSourceDeletePending(t, f, a)
+
+	report, err := f.engine.RunCycle(f.ctx, nil)
+	if err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	mv := f.onlyMove()
+	if placement.Phase(mv.Phase) != placement.Done {
+		t.Fatalf("a source that was already gone left the move at %s (%+v); the delete happened and the journal has to say so", mv.Phase, report.Outcomes)
+	}
+	if got := f.medium.restoreStatusCount(); got != 0 {
+		t.Errorf("the medium was asked about a restore %d times for a delete that had already happened", got)
 	}
 }
