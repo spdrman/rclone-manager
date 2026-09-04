@@ -505,3 +505,7 @@ func describe(rec state.Record) string {
 // is what both mediums here are configured for: neither declares
 // upload_verification, so neither has opted into the weaker rung.
 var sufficientClass = []placement.Class{placement.Content}
+
+// writeFile is os.WriteFile at the mode this repository uses for anything
+// derived from a backup artifact.
+func writeFile(path string, body []byte) error { return os.WriteFile(path, body, 0o600) }

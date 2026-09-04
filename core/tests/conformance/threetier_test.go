@@ -63,6 +63,14 @@ func (p pass) outcomeFor(id model.ArtifactID) (placement.Outcome, bool) {
 // inside it is the product's.
 func runPass(t *testing.T, w *world, now time.Time, wa *watcher) pass {
 	t.Helper()
+	return runPassThrough(t, w, now, wa, nil)
+}
+
+// runPassThrough is runPass with a decorator slipped between the watcher
+// and the real journal, which is how a cell plants a breach the engine
+// itself would never write.
+func runPassThrough(t *testing.T, w *world, now time.Time, wa *watcher, under func(placement.MoveJournal) placement.MoveJournal) pass {
+	t.Helper()
 
 	records := w.records()
 	verdicts, err := retention.GFSDecide(now, w.cfg.Retention, setID, records)
@@ -80,7 +88,7 @@ func runPass(t *testing.T, w *world, now time.Time, wa *watcher) pass {
 		plans = append(plans, placement.Plan{Artifact: m.Artifact, DestinationMedium: m.To})
 	}
 
-	engine := w.engine(wa, verdicts, now)
+	engine := w.engine(wa, verdicts, now, under)
 	report, err := engine.RunCycle(context.Background(), plans)
 	if err != nil {
 		t.Fatalf("the move cycle failed at %s: %v", now.Format(time.RFC3339), err)
@@ -90,14 +98,18 @@ func runPass(t *testing.T, w *world, now time.Time, wa *watcher) pass {
 
 // engine builds the move engine with the watcher wrapped around every
 // surface that can change the invariant.
-func (w *world) engine(wa *watcher, verdicts []retention.GFSVerdict, now time.Time) *placement.Engine {
+func (w *world) engine(wa *watcher, verdicts []retention.GFSVerdict, now time.Time, under func(placement.MoveJournal) placement.MoveJournal) *placement.Engine {
 	w.t.Helper()
 	local, err := artifactstore.NewLocal(w.root)
 	if err != nil {
 		w.t.Fatalf("building the local store: %v", err)
 	}
+	var journal placement.MoveJournal = w.journal
+	if under != nil {
+		journal = under(journal)
+	}
 	return &placement.Engine{
-		Journal: &watchedJournal{inner: w.journal, w: wa},
+		Journal: &watchedJournal{inner: journal, w: wa},
 		Store:   &watchedStore{MediumStore: adapter(), w: wa},
 		Local:   &watchedLocal{Local: local, w: wa},
 		Mediums: scenarioResolver{w: w},
@@ -266,8 +278,9 @@ func TestTheThreeTierChainEndToEnd(t *testing.T) {
 	}
 	assertBytesAreReal(t, w, summer)
 
-	// The annual hop does not, and the source is what proves the refusal
-	// was safe rather than merely loud.
+	// The annual hop does not. This endpoint refuses the storage class the
+	// annual tier is configured for, so the copy never lands, and the
+	// source is what proves the failure was safe rather than merely loud.
 	ancient := w.artifactNamed(t, "2024-06-15T02-00-00Z.dump")
 	assertActiveOn(t, w, ancient.id, state.MediumLocal)
 	if !w.localExists(ancient.id) {
@@ -347,28 +360,25 @@ func TestTheThreeTierChainEndToEnd(t *testing.T) {
 
 // --- the two findings, each as its own named check ---------------------
 
-// TestAnArchiveClassTierCannotReceiveAnArtifact states, and checks, the
-// first place the composed chain stops.
+// TestAFailedCopyLeavesItsReasonOnTheMoveRow is the regression test for
+// the one defect the composed run turned up in product code.
 //
-// Every piece is individually right. config offers exactly two
-// upload_verification modes, readback and attested, and no third that
-// spells existence. placement.Ceiling refuses anything above existence
-// against a copy that requires a restore, which is correct: reading an
-// archived object fails, and calling that a verification failure would
-// quarantine a good backup. So the required class for a move to an
-// archive-class medium is content, the achievable class is existence, and
-// the move can never reach VERIFIED.
+// The composed scenario plans a move onto the archive-class medium, and
+// MinIO refuses the upload outright (see archiveboundary_test.go: it
+// answers InvalidStorageClass to a PUT carrying GLACIER). A failed copy is
+// deliberately not abandoned, because the ordinary reason a copy fails is
+// transient and the next cycle should try again. What was missing is the
+// account: the move row stayed at COPYING with an EMPTY error column, so
+// the only record of what went wrong was the cycle report, which lives in
+// memory and is gone by the time anybody looks. A move wedged for a week
+// against a permanent refusal read exactly like one that started ten
+// seconds ago.
 //
-// Composed, that means a tier whose medium names GLACIER or DEEP_ARCHIVE
-// can never take delivery of an artifact, and the manager's own headline
-// example (daily local, monthly S3, annual colder S3) does not complete.
-//
-// This test asserts the behaviour rather than the wish, because the
-// behaviour is the safe one and changing it is a design decision, not a
-// bug fix: FR-30's standing invariant requires an ACTIVE placement at
-// content class, so an archive-class copy could not satisfy it even if the
-// move were allowed to land. Issue filed; see the PR body.
-func TestAnArchiveClassTierCannotReceiveAnArtifact(t *testing.T) {
+// This cell needs a copy that really fails against a real endpoint, which
+// is why it lives here and not in internal/placement's own suite: the
+// failure it is about is one a double would have been written not to
+// produce.
+func TestAFailedCopyLeavesItsReasonOnTheMoveRow(t *testing.T) {
 	w := newWorld(t)
 	wa := newWatcher(t, w.journal, w.ids())
 	wa.observe("before the cycle")
@@ -388,18 +398,24 @@ func TestAnArchiveClassTierCannotReceiveAnArtifact(t *testing.T) {
 	if len(moves) != 1 {
 		t.Fatalf("expected exactly one move for %s, got %d", ancient.id.Name, len(moves))
 	}
-	if got := placement.Phase(moves[0].Phase); got != placement.Abandoned {
-		t.Fatalf("the move onto the archive-class medium ended at %s, want %s (error: %q)",
-			got, placement.Abandoned, moves[0].Error)
+	mv := moves[0]
+	if got := placement.Phase(mv.Phase); got != placement.Copying {
+		t.Fatalf("the move sits at %s; this cell is about a copy that failed and stayed at %s", got, placement.Copying)
 	}
-	if !strings.Contains(moves[0].Error, "access state") {
-		t.Errorf("the move was abandoned for a reason that does not name the copy's access state, "+
-			"so this cell is not certifying the archive gate: %q", moves[0].Error)
+	if mv.Error == "" {
+		t.Fatal("the move row carries no error at all, so an operator reading the move journal " +
+			"has no account of why this move has not progressed")
 	}
+	for _, want := range []string{"copying", mediumDeepFreeze} {
+		if !strings.Contains(mv.Error, want) {
+			t.Errorf("the recorded reason does not mention %q, so it does not say what failed: %q", want, mv.Error)
+		}
+	}
+	t.Logf("the move row records: %s", mv.Error)
 
-	// The whole point of the refusal: the source is untouched.
+	// And the failure changed nothing about where the artifact is.
 	if !w.localExists(ancient.id) {
-		t.Fatal("THE LOCAL COPY WAS DELETED against a destination nothing could verify")
+		t.Fatal("THE LOCAL COPY WAS DELETED against a destination that never took the bytes")
 	}
 	assertActiveOn(t, w, ancient.id, state.MediumLocal)
 	assertBytesAreReal(t, w, ancient)

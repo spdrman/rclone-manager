@@ -240,7 +240,12 @@ func (w *watcher) eventSummary() string {
 // produced, and padding the count with them would make observationCount
 // mean less rather than more.
 type watchedJournal struct {
-	inner *state.Journal
+	// inner is a MoveJournal rather than the concrete journal so a cell
+	// can slip a decorator UNDER the watcher and have the watcher observe
+	// what that decorator actually wrote. sampler_test.go's planted
+	// breach is exactly that, and a watcher that could only sit on top of
+	// the real journal could not be shown to catch one.
+	inner placement.MoveJournal
 	w     *watcher
 }
 
