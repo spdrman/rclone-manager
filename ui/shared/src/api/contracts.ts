@@ -299,15 +299,79 @@ export interface RetentionTierSetting {
   periodDays?: number;
   keep: number;
   windowUnit?: string;
-  /** The storage medium this tier's artifacts live on (FR-27); undefined
-   *  means the local backup root.
+  /** The storage medium this tier's backups live on, by id; undefined
+   *  means the local backup root, which is what every tier of every
+   *  configuration written before storage mediums existed means.
    *
-   *  Nothing in this UI edits it yet, and it is carried anyway because a
-   *  chain write REPLACES the whole chain: a field this type drops is a
-   *  field the next save deletes from the operator's configuration file.
-   *  Editing daily's keep must not quietly move monthly's artifacts back
-   *  onto local disk. */
+   *  It is on the shape that is both READ and WRITTEN because a settings
+   *  write replaces the whole chain: a field this UI could read but not
+   *  send back is a field that editing one tier's keep would silently
+   *  delete from another tier, moving somebody's backups back onto local
+   *  disk without saying so. */
   medium?: string;
+}
+
+/**
+ * One configured storage medium, as GET /settings reports it: what it is
+ * called, what kind of place it is, which bucket and region, and which
+ * class backups are written with.
+ *
+ * There is no field for a credential and there is not going to be
+ * (FR-33): a medium's credentials reach the backend as a reference to a
+ * file, an environment variable or a command, and none of the three has a
+ * spelling on this boundary at all.
+ */
+export interface StorageMedium {
+  id: string;
+  type: string;
+  bucket: string;
+  region?: string;
+  storageClass: string;
+  /** True when this medium's class cannot be read on demand: a backup here
+   *  needs an explicit restore, taking hours, before anything can read it.
+   *  Computed by the backend, so this UI holds no list of its own of which
+   *  classes count as archive. */
+  readsRequireRestore: boolean;
+}
+
+/**
+ * One rung of the verification ladder (FR-31), with the backend's own
+ * words for what it proves and what achieving it takes.
+ *
+ * Served rather than written here for the reason RetentionSchema is
+ * served: a frontend that keeps its own copy of what "existence" proves
+ * eventually tells an operator something the engine does not, and the
+ * sentence somebody reads while deciding whether a backup is safe is the
+ * worst place in the product for a stale paraphrase.
+ */
+export interface VerificationClassInfo {
+  className: string;
+  proves: string;
+  /** What achieving this class requires, in words. Deliberately words,
+   *  and deliberately not a field called "cost": the backend has no price
+   *  list, so a number here would be invented, and a field named for one
+   *  is one release away from holding one. */
+  requires: string;
+  /** True when achieving this class downloads the object's bytes, which
+   *  the provider bills for. The same predicate the engine refuses
+   *  automatic medium revalidation on, read rather than restated. */
+  downloadsObject: boolean;
+}
+
+/** The vocabulary and the consent text a storage-medium mapping is written
+ *  against. */
+export interface StorageSchema {
+  /** The ladder, strongest first. */
+  verificationClasses: VerificationClassInfo[];
+  /** The words an operator has to be shown before the first save that
+   *  sends a tier's backups off local disk (FR-27). The backend refuses
+   *  such a write without an acknowledgment and its refusal carries this
+   *  same text, so what the form shows and what the server enforces cannot
+   *  come apart. */
+  mediumDisclosure: string;
+  /** The plain statement about reading a copy back off a medium. It
+   *  carries no figure, and never will. */
+  retrievalDisclosure: string;
 }
 
 /** The FR-18/FR-19 policy as it is actually deciding. `tiers` is always
@@ -357,6 +421,14 @@ export interface RetentionOverride {
   monthlyMonths?: number;
   tiers?: RetentionTierSetting[];
   protectLastKnownGood?: boolean;
+  /** The operator's acknowledgment of `schema.storage.mediumDisclosure`,
+   *  on this write for the reason UpdateSettingsRequest carries it: a
+   *  set's own chain can send a tier's backups off local disk exactly as
+   *  the deployment's policy can, and the backend refuses the first such
+   *  mapping with MEDIUM_DISCLOSURE_REQUIRED without it. A consent, not
+   *  part of the policy: the backend never serves it back, and this UI
+   *  sends it only on a save that introduces a mapping. */
+  acknowledgeMediumDisclosure?: boolean;
 }
 
 /**
@@ -486,7 +558,12 @@ export interface UpdateCapacitySettings {
 export interface AppSettings {
   retention: RetentionSettings;
   capacity: CapacitySettings;
-  schema: { retention: RetentionSchema };
+  /** Every storage medium the configuration declares, in declaration
+   *  order. Empty for every deployment that has configured none, which is
+   *  the case the Medium column and the medium picker both disappear
+   *  for. */
+  mediums: StorageMedium[];
+  schema: { retention: RetentionSchema; storage: StorageSchema };
 }
 
 /** A PARTIAL update: only the fields named here change, everything else
@@ -504,6 +581,15 @@ export interface UpdateRetentionSettings {
 export interface UpdateSettingsRequest {
   retention?: UpdateRetentionSettings;
   capacity?: UpdateCapacitySettings;
+  /** The operator's acknowledgment of `schema.storage.mediumDisclosure`,
+   *  required by the backend on a write that first sends a tier's backups
+   *  to a non-local medium (FR-27).
+   *
+   *  Sending it is not what makes the write safe; the backend decides
+   *  whether it is needed and refuses the write with
+   *  MEDIUM_DISCLOSURE_REQUIRED when it is missing. Disabling a Save
+   *  button is a courtesy to the operator, never the gate. */
+  acknowledgeMediumDisclosure?: boolean;
 }
 
 /** Which question a storage gauge is a fraction OF (issue #286): the

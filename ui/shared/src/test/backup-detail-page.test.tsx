@@ -111,8 +111,14 @@ describe("backup detail page reads the artifact", () => {
     renderDetail(target.id, api);
     await screen.findByText(target.filename);
 
+    // "Ingestion path" was "Local path" until issue #240. The old label
+    // read as "this is where your backup is", which the field has never
+    // meant: it is where ingestion landed, and it stays populated for an
+    // artifact still transferring (a partial file) and for one whose local
+    // copy has since been moved to a storage medium. Where the bytes
+    // actually are is the Copies card's question now.
     for (const label of [
-      "Artifact ID", "Backup set", "Remote original", "Local path",
+      "Artifact ID", "Backup set", "Remote original", "Ingestion path",
       "Producer timestamp", "Received timestamp", "Size", "Checksum",
       "Validation result", "Retention classes", "Remote source removed"
     ]) {

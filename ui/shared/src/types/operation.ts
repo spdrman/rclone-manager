@@ -110,6 +110,36 @@ export interface Operation {
   /** True for read-only passes; the UI says so explicitly. */
   nonDestructive: boolean;
   startedAt: string;
+  /**
+   * What a FINISHED run cycle actually got done, or null.
+   *
+   * Null for anything that is not a finished run cycle, and null rather
+   * than a pair of zeroes for the same reason `progress` above is null
+   * rather than 0%: a cycle that is still running has not walked nothing,
+   * it has not finished walking. "0 got through" is the loudest thing
+   * this object can say, and a renderer that produced it for an operation
+   * nobody has measured would raise an alarm about a deployment that is
+   * fine.
+   */
+  cycle: CycleOutcome | null;
+}
+
+/**
+ * The two counts that tell a barren run cycle from a good one.
+ *
+ * An operation "completed" when the cycle ran to the end, which is
+ * deliberately narrower than it reads: a backup's own quarantine is a
+ * business outcome rather than an operation failure, so a cycle that
+ * backed nothing up finishes with exactly the same status as one that
+ * backed everything up. Issue #361 was that lie told to a cron job; #368
+ * put these two numbers into the record, and this is what renders them.
+ */
+export interface CycleOutcome {
+  backupSetsProcessed: number;
+  /** How many backups the cycle had a reason to touch. */
+  artifactsWalked: number;
+  /** How many of those ended it with their bytes on durable storage. */
+  artifactsThrough: number;
 }
 
 /**
