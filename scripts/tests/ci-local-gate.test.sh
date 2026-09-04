@@ -265,6 +265,12 @@ make_full_tree() {
   mkdir -p "$tree/scripts/compat"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/compat/selftest.sh"
 
+  # And EPIC E's composed conformance mutation self-test (#242), for the
+  # same reason: the real one copies the tree nine times, builds core/ in
+  # each copy and stands up MinIO containers.
+  mkdir -p "$tree/scripts/conformance"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tree/scripts/conformance/selftest.sh"
+
   # Stubs for the release-script guard suites the gate runs, for the same
   # reason the four structure proofs above are stubbed: this fixture
   # measures which steps the gate chooses to run, not what those steps do,

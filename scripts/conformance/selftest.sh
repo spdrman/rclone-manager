@@ -178,6 +178,30 @@ expect_check_fails "the home rule taking the last selecting tier instead of the 
   'TestTheThreeTierChainEndToEnd'
 
 echo
+echo "==> the bucketing invariant across a move (P2.3, V2's composed shape)"
+
+# FR-32: nothing a medium reports may reach a retention decision. The
+# composed shape of that is a move changing where an artifact is bucketed,
+# and the value most likely to do it is the one the move itself writes,
+# which is when the destination copy was verified.
+d=$(mutant bucketing-reads-when-the-copy-was-verified)
+swap "$d/core/internal/retention/bucketkey.go" \
+  '	r := gfsDiscoveryInstant(rec)
+	discovered = gfsPlacement{date: gfsCivilDateIn(r, loc), occurred: r}' \
+  '	r := gfsDiscoveryInstant(rec)
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh): let where the
+	// bytes are decide when they were produced.
+	for _, pl := range rec.Placements {
+		if pl.Status == state.PlacementActive && pl.VerifiedAt != nil {
+			r = *pl.VerifiedAt
+		}
+	}
+	discovered = gfsPlacement{date: gfsCivilDateIn(r, loc), occurred: r}'
+expect_check_fails "bucketing derived from when a copy was verified" "$d" \
+  "changed its retention verdict" \
+  'TestAMoveDoesNotChangeARetentionVerdict'
+
+echo
 echo "==> the engine's refusals"
 
 # Medium to medium is refused because it would need a local staging copy

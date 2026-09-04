@@ -116,7 +116,7 @@ if [ "$FAST" != "1" ]; then
 fi
 
 if [ "$FAST" = "1" ]; then
-  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests and the MinIO integration tests), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
+  gate_note_skip "core/ ./tests/... (the Docker-backed crash matrix, the SFTP integration tests, the MinIO integration tests and the composed conformance scenario), the cross-compiles, the upk-proof and ui/shared production builds, the apps/common/tests cross-provider conformance suite, the browser e2e suite and CLI smoke slice from rclone-manager-tests, the repository-structure dependency rules and this gate's own self-test (CI_LOCAL_FAST=1)"
 fi
 
 gate_step "core/ go build"
@@ -145,11 +145,11 @@ else
   # derived from this run's own measured pace instead (issue #247's
   # reasoning, one layer out; see core/cmd/gotestwatch/doc.go), so there
   # is no fixed number to outgrow.
-  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration, run next)"
-  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration)$'))
+  gate_step "core/ go test ./... (excluding tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance, run next)"
+  (cd core && GOWORK=off go test $(GOWORK=off go list ./... | grep -vE '/tests/(crashmatrix|sftpintegration|miniointegration|conformance)$'))
 
-  gate_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration under gotestwatch (issue #256: no fixed go test -timeout)"
-  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/...)
+  gate_step "core/ tests/crashmatrix + tests/sftpintegration + tests/miniointegration + tests/conformance under gotestwatch (issue #256: no fixed go test -timeout)"
+  (cd core && GOWORK=off go run ./cmd/gotestwatch -count=1 ./tests/crashmatrix/... ./tests/sftpintegration/... ./tests/miniointegration/... ./tests/conformance/...)
 fi
 
 gate_step "apps/common go build, vet, test"
@@ -422,6 +422,17 @@ if [ "$FAST" != "1" ]; then
   # the price of the corpus meaning anything.
   gate_step "the FR-35 compatibility cells can actually fail (mutation self-test, #242)"
   bash scripts/compat/selftest.sh
+
+  # EPIC E's composed conformance scenario, shown to fire (#242). Same
+  # argument as the block above, applied to the other half of that issue:
+  # core/tests/conformance runs the three-tier chain against MinIO and
+  # watches FR-30's standing invariant at every event that could falsify it,
+  # and a watcher nobody has watched catch something is a watcher that
+  # certifies nothing. This plants nine violations in real product files,
+  # including the gate line's own, and each one has to turn the suite red
+  # AND name the promise it broke.
+  gate_step "the composed conformance cells can actually fail (mutation self-test, #242)"
+  bash scripts/conformance/selftest.sh
 
   gate_step "repository-structure dependency rules (§7.1), by actual deletion"
   bash scripts/architecture/check-core-dependency-rule.sh

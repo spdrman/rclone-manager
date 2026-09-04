@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -602,4 +603,86 @@ func (w *world) artifactNamed(t *testing.T, name string) seeded {
 	}
 	t.Fatalf("this scenario seeds no artifact called %q", name)
 	return seeded{}
+}
+
+// TestAMoveDoesNotChangeARetentionVerdict is the phase 2 exit gate's
+// bucketing-invariance line, composed: "moving an artifact does not change
+// its retention bucketing: verdicts before and after are bit-identical".
+//
+// core/tests/compat already holds the mechanism half of this, and holds it
+// well: a backfill that re-derives an artifact's discovery timestamp turns
+// cell 11 red. What it cannot hold is the ACROSS A MOVE half, because
+// until #238 there was no move to run. This is that half, and it is the
+// cheapest possible shape of it: the same verdicts, at the same instant,
+// with a real move over a real S3 endpoint in between.
+//
+// The comparison is bit-identical rather than "the same tiers", because
+// the interesting failures are the small ones. A move that shifted an
+// artifact's bucket by a month would still keep it, still under a tier
+// name that looks right, and would quietly change WHICH artifact each
+// bucket's representative is, which is a deletion a year later.
+func TestAMoveDoesNotChangeARetentionVerdict(t *testing.T) {
+	w := newWorld(t)
+	wa := newWatcher(t, w.journal, w.ids())
+	wa.observe("before the cycle")
+
+	before, err := retention.GFSDecide(scenarioNow, w.cfg.Retention, setID, w.records())
+	if err != nil {
+		t.Fatalf("the retention pass before the move failed: %v", err)
+	}
+	whereBefore := placementsByArtifact(w.records())
+
+	runPass(t, w, scenarioNow, wa)
+
+	// The control. A comparison of two identical worlds is not a check of
+	// anything, and this cell is worthless unless something actually moved
+	// between the two passes.
+	whereAfter := placementsByArtifact(w.records())
+	var moved int
+	for id, was := range whereBefore {
+		if whereAfter[id] != was {
+			moved++
+		}
+	}
+	if moved == 0 {
+		t.Fatal("no artifact changed medium during the cycle, so comparing the verdicts before and after " +
+			"compares one world with itself")
+	}
+	t.Logf("%d artifact(s) changed medium between the two passes", moved)
+
+	// The same clock, deliberately. Re-deciding at a later instant would
+	// be measuring the calendar, and the calendar is allowed to change a
+	// verdict; the move is not.
+	after, err := retention.GFSDecide(scenarioNow, w.cfg.Retention, setID, w.records())
+	if err != nil {
+		t.Fatalf("the retention pass after the move failed: %v", err)
+	}
+
+	if len(before) != len(after) {
+		t.Fatalf("the pass produced %d verdicts before the move and %d after", len(before), len(after))
+	}
+	for i := range before {
+		if reflect.DeepEqual(before[i], after[i]) {
+			continue
+		}
+		t.Errorf("moving %s changed its retention verdict.\n  before: %s\n   after: %s",
+			before[i].Artifact, renderVerdict(before[i]), renderVerdict(after[i]))
+	}
+	wa.report()
+}
+
+// placementsByArtifact is where each artifact's ACTIVE copy is, as one
+// string per artifact, for the control above.
+func placementsByArtifact(records []state.Record) map[model.ArtifactID]string {
+	out := make(map[model.ArtifactID]string, len(records))
+	for _, rec := range records {
+		out[rec.Artifact] = strings.Join(activeMediumOf(rec), "+")
+	}
+	return out
+}
+
+// renderVerdict spells a verdict out in full, so a failure above says what
+// changed rather than that something did.
+func renderVerdict(v retention.GFSVerdict) string {
+	return fmt.Sprintf("%+v", v)
 }
