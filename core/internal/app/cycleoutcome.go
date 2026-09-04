@@ -292,6 +292,112 @@ func (s *Service) reportEmptyCycle(ctx context.Context, report CycleReport) {
 		c.Configured, c.Disabled, c.Held))
 }
 
+// --- FR-30's moves: the same question, asked of the move pass ---------
+
+// MoveProgress is how much of what this cycle's move pass set out to do
+// actually happened, in the same two numbers and the same shape issue
+// #361 gave ingestion (CycleProgress above).
+//
+// It is deliberately the same shape rather than a second vocabulary,
+// because it is the same defect: a pass that had work in front of it,
+// got none of it through, and reported a clean cycle. FR-30's moves are
+// where an operator's `medium:` key becomes an artifact actually sitting
+// offsite, and until this existed the only production consumer of
+// placement.CycleReport was a log line that fires when the ENGINE cannot
+// be built at all. A deployment whose every move is refused builds an
+// engine perfectly well and never moves anything, forever, in silence.
+//
+// Attempted is the denominator: every artifact the move pass took up this
+// cycle, which is one Outcome each. That is a resumed move it found in
+// the journal, a plan it turned into a move, and a plan it refused before
+// a move row existed. Counting outcomes rather than adding the report's
+// own counters is what keeps the two in step: Planned + Resumed + Refused
+// double-counts a planned move that then stopped short with a reason, and
+// leaves out a move that stopped short with none.
+//
+// Landed is the numerator: how many of those reached DONE, which is the
+// only phase at which the artifact is on its home medium and the source
+// is gone. Abandoned is not in it and neither is refused, and that is the
+// point: a move that copied bytes to the destination and could not verify
+// them has done work and has not moved anything.
+type MoveProgress struct {
+	Attempted int
+	Landed    int
+
+	// Reason is the first refusal or abandonment this pass recorded,
+	// verbatim from the engine, or empty when nothing was refused.
+	//
+	// It exists because the counts alone send an operator to a log to
+	// find out what is wrong, and the sentence that says it is already
+	// in hand: "the environment variable is not set", "medium-to-medium",
+	// "the destination could not be verified at content class". Only the
+	// first, because a deployment in this state produces one per artifact
+	// per cycle and they are the same sentence.
+	//
+	// It is not carried onto the API boundary. See cycleSummary in
+	// core/service: this text is whatever the transport handed back, and
+	// FR-33 draws a hard line around what may appear in a response.
+	Reason string
+}
+
+// NothingMoved is the arithmetic, and it excludes the quiet night for
+// CycleProgress.NothingGotThrough's reason: a cycle with nothing to move
+// moves nothing, and that is every deployment whose artifacts are already
+// where the chain says they belong.
+func (p MoveProgress) NothingMoved() bool { return p.Attempted > 0 && p.Landed == 0 }
+
+// MoveProgress reads the move pass's share of this cycle off the engine's
+// own report.
+func (r CycleReport) MoveProgress() MoveProgress {
+	out := MoveProgress{Attempted: len(r.Moves.Outcomes), Landed: r.Moves.Completed}
+	for _, o := range r.Moves.Outcomes {
+		if o.Refused != "" {
+			out.Reason = o.Refused
+			break
+		}
+	}
+	return out
+}
+
+// reportBarrenMoves writes the move pass's verdict into the FR-23 event
+// stream, for the same reason reportBarrenSets writes ingestion's: `run`
+// can answer with an exit status and `daemon` cannot, and a deployment
+// whose artifacts are not going where the chain says has to be visible to
+// whatever is shipping these logs either way.
+//
+// # Why op="move" and not op="cycle"
+//
+// A log-shipping rule watching op="cycle" is watching for "this
+// deployment stopped backing things up", which is the loudest thing this
+// product says. A move pass that got nothing through is a different
+// problem with a different fix: the backups happened, they are on the
+// wrong medium, and an operator acts on it by looking at a credential or
+// a storage class rather than at a source. Reporting it under the same op
+// would fire that rule for something it does not mean, which is the
+// argument reportEmptyCycle already makes for splitting its own two
+// messages. op="move" is also what the engine's own construction failure
+// already uses, so a shipper filtering on it gets the whole story rather
+// than half.
+//
+// A deployment that declares no storage medium attempts no moves and is
+// silent here, which is FR-35's compatibility promise kept by arithmetic:
+// Attempted is zero, so NothingMoved is false, and nothing new appears in
+// the stream of any deployment written before EPIC E.
+func (s *Service) reportBarrenMoves(ctx context.Context, report CycleReport) {
+	p := report.MoveProgress()
+	if !p.NothingMoved() {
+		return
+	}
+	if p.Reason == "" {
+		s.logger().Error(ctx, "move", fmt.Errorf(
+			"this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived", p.Attempted))
+		return
+	}
+	s.logger().Error(ctx, "move", fmt.Errorf(
+		"this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s",
+		p.Attempted, p.Reason))
+}
+
 // reportBarrenSet is the one-backup-set form, so an on-demand Fetch puts
 // the same fact in the same stream a scheduled cycle does. A manual fetch
 // prints to a terminal as well, but the stream is what a log shipper
