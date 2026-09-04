@@ -17,6 +17,27 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/transport"
 )
 
+// automaticMediumClass is the strongest verification class a scheduled,
+// unattended pass will ever run against a copy on a storage medium.
+//
+// It was a const inside checkMediumPlacements and it is here so a test can
+// read it, because placement.AutomaticClass is the same rule stated a
+// second time and the two had no way of being held together. That function
+// derives the ceiling from Class.CostsEgress rather than naming a rung, so
+// that raising the automatic ceiling means changing the class whose cost is
+// consulted rather than editing a constant and finding out from a bill.
+// This IS that constant, and nothing consulted that function.
+//
+// It is not simply replaced by a call to it, because
+// placement.AutomaticClass takes an archive access state and this pass does
+// not have one: deriving it means a restore-status probe per archive-class
+// copy per cycle, which is a request this pass deliberately does not spend
+// on an answer that cannot change what it runs (a HEAD works on an
+// archived object). So the two are pinned together by a test instead, and
+// the delete-or-wire decision for AutomaticClass is filed rather than taken
+// here.
+const automaticMediumClass = placement.Existence
+
 // runChecks runs whatever cfg enables against rec's durable copy and
 // reports a combined verdict, plus the verification CLASS it achieved.
 //
@@ -121,7 +142,7 @@ func checkMediumPlacements(ctx context.Context, deps Deps, cfg config.Revalidati
 			"this artifact's durable copies are on storage mediums (%s), and this deployment has no way to reach one, so nothing was checked", mediumIDs(ps)), nil
 	}
 
-	const automatic = placement.Existence
+	const automatic = automaticMediumClass
 	if automatic.CostsEgress() {
 		// Unreachable today, and here on purpose: this is the line that
 		// has to fail if somebody ever raises the automatic ceiling, so
