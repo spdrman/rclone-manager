@@ -609,12 +609,15 @@ func (e *Engine) copy(ctx context.Context, mv state.Move) (state.Move, error) {
 		// From == To, which phases.go names as the one legal
 		// non-transition, precisely because it is how a caller records a
 		// fact without claiming progress.
-		why := fmt.Sprintf("placement: copying %s to %q: %v", mv.Artifact, mv.DestinationMedium, err)
-		noted, noteErr := e.step(ctx, mv, Copying, Copying, why)
+		// The returned error still wraps the transport's own, so a caller
+		// that wants to classify a failure can. The move row gets its
+		// rendering, because a journal column is read by a person.
+		wrapped := fmt.Errorf("placement: copying %s to %q: %w", mv.Artifact, mv.DestinationMedium, err)
+		noted, noteErr := e.step(ctx, mv, Copying, Copying, wrapped.Error())
 		if noteErr != nil {
-			return mv, fmt.Errorf("%s (and the reason could not be recorded on the move row: %v)", why, noteErr)
+			return mv, fmt.Errorf("%w (and the reason could not be recorded on the move row: %v)", wrapped, noteErr)
 		}
-		return noted, errors.New(why)
+		return noted, wrapped
 	}
 
 	advance := state.MoveAdvance{

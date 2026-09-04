@@ -686,3 +686,65 @@ func placementsByArtifact(records []state.Record) map[model.ArtifactID]string {
 func renderVerdict(v retention.GFSVerdict) string {
 	return fmt.Sprintf("%+v", v)
 }
+
+// TestTheSeededDatesAreTheDatesTheChainWillSee is the fixture's own
+// control, and it is here because a scenario whose dates are not what it
+// thinks they are is a scenario testing a different chain and passing.
+//
+// Every home this package asserts is arithmetic over these four dates
+// against a seven-day, twelve-month, five-year chain. If the seeding
+// silently recorded a different discovery instant, say by rounding to the
+// day in the local zone or by taking the moment the row was written, the
+// tiers would still select SOMETHING, the homes would still be one of
+// three mediums, and roughly half the assertions would still pass. That is
+// the shape of a check that has stopped covering what it says it does, and
+// this repository has found several.
+//
+// It also asserts the derived boundaries, not only the raw dates, because
+// the raw dates being right is only interesting relative to the windows the
+// chain resolves at scenarioNow.
+func TestTheSeededDatesAreTheDatesTheChainWillSee(t *testing.T) {
+	w := newWorld(t)
+
+	for _, a := range w.artifacts {
+		rec, err := w.journal.Get(w.ctx, a.id)
+		if err != nil {
+			t.Fatalf("reading %s: %v", a.id.Name, err)
+		}
+		if !rec.DiscoveredAt.Equal(a.discoveredAt) {
+			t.Errorf("%s was seeded for %s and the journal records %s; every home this package "+
+				"asserts is arithmetic over that date",
+				a.id.Name, a.discoveredAt.Format(time.RFC3339), rec.DiscoveredAt.Format(time.RFC3339))
+		}
+		if rec.State != "COMPLETE" {
+			t.Errorf("%s is %s, and only a managed-complete artifact gets a retention verdict at all",
+				a.id.Name, rec.State)
+		}
+	}
+
+	// And the four dates have to sit where the story says relative to the
+	// chain's own windows at scenarioNow: one inside the daily window, two
+	// inside the monthly one, one outside both.
+	daily := scenarioNow.AddDate(0, 0, -6)    // day granularity, keep 7, counting today
+	monthly := scenarioNow.AddDate(0, -11, 0) // month granularity, keep 12, counting this month
+	for _, tc := range []struct {
+		name          string
+		insideDaily   bool
+		insideMonthly bool
+	}{
+		{"2026-09-03T02-00-00Z.dump", true, true},
+		{"2026-07-15T02-00-00Z.dump", false, true},
+		{"2026-07-01T02-00-00Z.dump", false, true},
+		{"2024-06-15T02-00-00Z.dump", false, false},
+	} {
+		a := w.artifactNamed(t, tc.name)
+		if got := !a.discoveredAt.Before(daily); got != tc.insideDaily {
+			t.Errorf("%s inside the daily window: got %t, want %t (window opens %s)",
+				tc.name, got, tc.insideDaily, daily.Format("2006-01-02"))
+		}
+		if got := !a.discoveredAt.Before(monthly.AddDate(0, 0, -monthly.Day()+1)); got != tc.insideMonthly {
+			t.Errorf("%s inside the monthly window: got %t, want %t (window opens %s)",
+				tc.name, got, tc.insideMonthly, monthly.Format("2006-01"))
+		}
+	}
+}

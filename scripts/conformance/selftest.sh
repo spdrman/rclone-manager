@@ -221,13 +221,13 @@ expect_check_fails "the medium-to-medium refusal removed" "$d" \
 # the only account of what went wrong lives in a cycle report that is gone.
 d=$(mutant failed-copy-records-no-reason)
 swap "$d/core/internal/placement/engine.go" \
-  '		noted, noteErr := e.step(ctx, mv, Copying, Copying, why)
+  '		noted, noteErr := e.step(ctx, mv, Copying, Copying, wrapped.Error())
 		if noteErr != nil {
-			return mv, fmt.Errorf("%s (and the reason could not be recorded on the move row: %v)", why, noteErr)
+			return mv, fmt.Errorf("%w (and the reason could not be recorded on the move row: %v)", wrapped, noteErr)
 		}
-		return noted, errors.New(why)' \
+		return noted, wrapped' \
   '		// PLANTED VIOLATION (scripts/conformance/selftest.sh).
-		return mv, errors.New(why)'
+		return mv, wrapped'
 expect_check_fails "a failed copy that records no reason on the move row" "$d" \
   "the move row carries no error at all" \
   'TestAFailedCopyLeavesItsReasonOnTheMoveRow'
