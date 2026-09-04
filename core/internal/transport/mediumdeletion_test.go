@@ -7,23 +7,25 @@ import (
 	"testing"
 )
 
-// TestNothingInProductionDeletesFromAMedium is EPIC E's Phase 1 exit-gate
-// line held as a test rather than as a claim in a PR description:
-// "nothing in this phase can delete an artifact copy anywhere".
+// TestOnlyTheMoveEngineDeletesFromAMedium is the line EPIC E's Phase 1
+// exit gate held, moved forward by exactly one package.
 //
-// MediumStore has a DeleteObject, and the rclone adapter implements it,
-// because a boundary that cannot delete is not the boundary a move engine
-// gets built on and discovering that after the adapter exists is worse than
-// deciding it now. artifactstore's Remove landed under exactly this
-// argument and with exactly this property: it exists, and nothing in the
-// pipeline calls it.
+// Through Phase 1 this test said "nothing in this phase can delete an
+// artifact copy anywhere", and it named #238 as the change that would have
+// to edit it. This is that change, and the edit is deliberately not an
+// exemption: the claim is still an exhaustive one, it has just gone from
+// "no production file calls DeleteObject" to "exactly one does, and it is
+// the move engine".
 //
-// So this walks every non-test Go file under core/ and refuses a call to
-// DeleteObject anywhere but the two files that are allowed to name it: the
-// interface that declares it and the adapter that implements it. When #238
-// wires the move engine up, this test is the thing that has to be edited,
-// deliberately, in the change that does it.
-func TestNothingInProductionDeletesFromAMedium(t *testing.T) {
+// That is worth keeping as a whole-module scan even though
+// internal/placement carries its own, tighter structural tests
+// (TestThisPackageHasNoDeletePathOfItsOwn and
+// TestTheSourceDeleteHasExactlyOneCaller). Those two prove the engine has
+// one way out; this one proves nothing ELSE grew a second, somewhere the
+// engine's own suite would never look. A retention pass, a catalog
+// rebuild or an API handler reaching for DeleteObject directly is exactly
+// the change that should have to come here and argue for itself.
+func TestOnlyTheMoveEngineDeletesFromAMedium(t *testing.T) {
 	root := coreModuleRoot(t)
 
 	allowed := map[string]bool{
@@ -35,6 +37,19 @@ func TestNothingInProductionDeletesFromAMedium(t *testing.T) {
 		// its own fixture, which is the opposite of a production
 		// deletion path.
 		filepath.Join("internal", "transport", "contract", "medium.go"): true,
+		// The move engine (#238, FR-30). It is the one production caller
+		// there is meant to be, and it deletes in exactly two places: the
+		// source copy, behind guardSourceDelete, and the destination copy
+		// it created itself at a key it computed itself. Its own package
+		// tests hold that line; this entry only records that the line
+		// moved here and nowhere else.
+		filepath.Join("internal", "placement", "engine.go"): true,
+		// The move-crash harness is test support that does not carry a
+		// _test.go suffix, for the contract suite's reason: it has to be
+		// a separate main package so the suite can kill it. It only
+		// decorates the adapter's DeleteObject to assert the standing
+		// invariant before the call.
+		filepath.Join("tests", "movecrash", "harness", "main.go"): true,
 	}
 
 	var offenders []string
@@ -74,8 +89,23 @@ func TestNothingInProductionDeletesFromAMedium(t *testing.T) {
 	}
 	if len(offenders) > 0 {
 		t.Errorf("these production files call DeleteObject: %v.\n"+
-			"EPIC E Phase 1 adds no deletion path; a mover that deletes from a medium is #238's, "+
-			"and the change that introduces it edits this test on purpose", offenders)
+			"The move engine (internal/placement) is the one production caller EPIC E has; "+
+			"a second one is a second place the ordering that protects a backup gets decided, "+
+			"so a change that adds one has to come here and say why", offenders)
+	}
+
+	// The allow-list has to stay minimal. An entry that no longer deletes
+	// is a permission nobody is using, and a permission nobody is using is
+	// one the next file to need it inherits by accident.
+	for rel := range allowed {
+		content, readErr := os.ReadFile(filepath.Join(root, rel))
+		if readErr != nil {
+			t.Errorf("the allow-list names %s, which cannot be read: %v", rel, readErr)
+			continue
+		}
+		if !strings.Contains(string(content), "DeleteObject(") {
+			t.Errorf("the allow-list names %s, which no longer calls DeleteObject; drop it rather than leaving a permission lying around", rel)
+		}
 	}
 }
 

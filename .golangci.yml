@@ -51,6 +51,12 @@ linters:
         linters:
           - staticcheck
         text: "SA5002"
+      # The move-crash harness's selfDestruct carries the same trailing
+      # `for {}` for the same reason, and its own doc says so.
+      - path: tests/movecrash/harness/main.go
+        linters:
+          - staticcheck
+        text: "SA5002"
       # webui.go's package doc discusses the go:embed directive in prose
       # ("go:embed cannot reach outside its own package's module tree"),
       # it isn't an attempted directive with a stray space before it —
