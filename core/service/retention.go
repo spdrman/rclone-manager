@@ -103,6 +103,18 @@ type RetentionArtifactVerdict struct {
 	// PruneAction's own three values, as plain strings.
 	Action string
 
+	// Medium is WHERE the copy this verdict is about lives (EPIC E
+	// FR-30, issue #239): "local", or the id of a configured storage
+	// medium. It is empty only when nothing could confirm the location,
+	// which internal/retention always reports as a REFUSE.
+	//
+	// FR-30 asks the mandatory dry-run to explain per-artifact where a
+	// deletion would happen, not only whether, and this is that answer
+	// on the surface an operator confirms from. "Delete 40 artifacts"
+	// means something very different when half of them are objects in a
+	// bucket somebody else pays for.
+	Medium string
+
 	Reason string
 
 	// Tiers lists which GFS tier(s) (and/or "LAST_KNOWN_GOOD") kept this
@@ -134,6 +146,26 @@ type RetentionTierSelection struct {
 	SelectedBy string
 }
 
+// RetentionMove is one artifact a retention pass worked out is not on
+// the medium its chain says it belongs on: internal/retention.HomeMove,
+// as three plain strings (see service.go's package doc — nothing from
+// that package's own vocabulary crosses this boundary).
+//
+// FR-27's home rule is the whole content of it: the first tier in chain
+// order that currently selects an artifact names its home. A move is a
+// statement about placement and nothing else — planning one never adds an
+// artifact to KEEP and never removes one — which is why it travels beside
+// the verdicts rather than inside them.
+type RetentionMove struct {
+	Artifact string
+
+	// FromMedium is where the artifact's one ACTIVE placement is today,
+	// and ToMedium is the medium its home tier names. They are always
+	// different: an artifact already at home is not a move.
+	FromMedium string
+	ToMedium   string
+}
+
 // RetentionPlan is docs/EPIC-B-multi-nas.md §15.6's own preview/apply
 // response shape. PreviewRetention returns one; so does ApplyRetentionPlan
 // on success, re-expressing the exact plan that was just applied the same
@@ -150,6 +182,30 @@ type RetentionPlan struct {
 	DeleteCount       int
 	ReclaimBytes      int64
 	Verdicts          []RetentionArtifactVerdict
+
+	// Moves is every artifact this plan would relocate, in verdict order
+	// (EPIC E FR-27/FR-30, issue #239). It is empty for a deployment
+	// that declares no storage medium, which is every deployment before
+	// this EPIC.
+	//
+	// It is on the plan rather than behind a second call for the same
+	// reason Retention is: an apply is confirmed against a plan_id, and
+	// what that plan_id commits to has to be the whole of what was
+	// shown. A moves section fetched separately could be rendered beside
+	// verdicts it does not belong to.
+	Moves []RetentionMove
+
+	// UnconfirmedPlacements names every artifact whose current location
+	// could not be established, in verdict order. No move is planned for
+	// one, and that is exactly why the list exists rather than the
+	// artifact being quietly skipped: "I could not confirm where this
+	// is" and "this is already where it belongs" produce the same
+	// silence and are not the same claim.
+	//
+	// The two shapes that produce it are an artifact with no ACTIVE
+	// placement at all and one with more than one, which is a move
+	// already in flight.
+	UnconfirmedPlacements []string
 
 	// OperationID names the durable operation row (ActionRetentionApply)
 	// this apply was recorded under, pollable through the same
@@ -217,14 +273,15 @@ type retentionPlanRecord struct {
 	inventoryRevision string
 	configRevision    string
 
-	// verdictRevision fingerprints the verdict set PreviewRetention
-	// actually showed the administrator (computeVerdictRevision). This is
-	// the record's whole answer to "is what would run still what was
-	// reviewed": ApplyRetentionPlan re-derives the verdicts at apply time
+	// reviewedRevision fingerprints the whole plan PreviewRetention
+	// actually showed the administrator: the verdicts and, since EPIC E
+	// (#239), the moves section beside them (computeReviewedRevision).
+	// This is the record's whole answer to "is what would run still what
+	// was reviewed": ApplyRetentionPlan re-derives the plan at apply time
 	// and refuses unless the fingerprint still matches, so the guarantee
 	// is asserted rather than argued from the inputs it happens to have
 	// fingerprinted (this issue's own review, mandatory finding M1).
-	verdictRevision string
+	reviewedRevision string
 
 	createdAt time.Time
 	expiresAt time.Time
@@ -301,7 +358,7 @@ func (b *BackupService) newRetentionPlan(set model.BackupSetID, configRevision s
 		set:               set,
 		inventoryRevision: inventoryRevision,
 		configRevision:    configRevision,
-		verdictRevision:   computeVerdictRevision(plan.Verdicts),
+		reviewedRevision:  computeReviewedRevision(plan),
 		createdAt:         created,
 		expiresAt:         expiresAt,
 	}
@@ -352,7 +409,8 @@ func (b *BackupService) evictRetentionPlansLocked(nowT time.Time) {
 // no configuration change needed). PreviewRetention records a fingerprint
 // of all three: the inventory revision, the configuration revision, and —
 // the one that closes the gap — a fingerprint of the verdict set the
-// administrator was actually shown (computeVerdictRevision).
+// administrator was actually shown, moves included
+// (computeReviewedRevision).
 //
 // This method re-derives the verdicts through PrunePreviewAt, which
 // mutates nothing, and refuses with ErrRetentionPlanStale unless the
@@ -456,7 +514,7 @@ func (b *BackupService) ApplyRetentionPlan(ctx context.Context, req ApplyRetenti
 		return RetentionPlan{}, fmt.Errorf("service: apply retention: an internal error occurred")
 	}
 	if computeInventoryRevision(current.Records) != stored.inventoryRevision ||
-		computeVerdictRevision(current.Verdicts) != stored.verdictRevision {
+		computeReviewedRevision(current) != stored.reviewedRevision {
 		return RetentionPlan{}, fmt.Errorf("%w: backup set %s changed since plan %s was previewed", ErrRetentionPlanStale, stored.set, req.PlanID)
 	}
 
@@ -547,29 +605,47 @@ func (b *BackupService) invalidateRetentionPlansFor(set model.BackupSetID) {
 	}
 }
 
-// computeVerdictRevision fingerprints the FR-20 verdict set a retention
-// plan showed, or would show: the answer to "is what would run still
-// exactly what was reviewed", independent of which input moved to change
-// it. Deliberately hashes every field of every verdict (the action, the
-// path, the tiers that kept it and the human reason each one carries), not
-// just the artifacts selected for deletion, for the same reason
+// computeReviewedRevision fingerprints everything a retention plan showed,
+// or would show: the answer to "is what would run still exactly what was
+// reviewed", independent of which input moved to change it. Deliberately
+// hashes every field of every verdict (the action, the path, the medium,
+// the tiers that kept it and the human reason each one carries), not just
+// the artifacts selected for deletion, for the same reason
 // computeInventoryRevision hashes whole records: a plan going stale too
 // often is the cheap failure, and a plan staying applyable while the
 // operator's reviewed reasoning no longer holds is the expensive one.
 //
+// # Why the moves section is in here (EPIC E FR-27, issue #239)
+//
+// Since this EPIC a plan is not only a list of deletions. It also says
+// which artifacts are not on the medium their chain says they belong on,
+// and an operator confirming a plan_id is confirming that too. Every
+// input the moves section is derived from is, today, also an input to one
+// of the other two revisions, so a divergence would probably be caught
+// transitively. "Probably, transitively" is exactly the argument this
+// function's own mandatory finding M1 rejected for the verdicts: the
+// guarantee is about the reviewed OUTPUT, so the reviewed output is what
+// gets hashed, and it keeps holding when a later change adds an input
+// nobody thought to fingerprint.
+//
 // Sorted by artifact id first, so this is a fingerprint of the verdict
 // SET and not of whatever order internal/retention happened to emit it in.
-func computeVerdictRevision(verdicts []retention.PruneVerdict) string {
-	sorted := append([]retention.PruneVerdict(nil), verdicts...)
+// The moves keep the order they were planned in, which is verdict order,
+// and is therefore already a function of the same sort.
+func computeReviewedRevision(plan app.PrunePlan) string {
+	sorted := append([]retention.PruneVerdict(nil), plan.Verdicts...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Artifact.String() < sorted[j].Artifact.String() })
 
-	b, err := json.Marshal(sorted)
+	b, err := json.Marshal(struct {
+		Verdicts []retention.PruneVerdict
+		Home     retention.HomePlan
+	}{sorted, plan.HomePlan})
 	if err != nil {
 		// See computeInventoryRevision's identical reasoning below:
-		// PruneVerdict is plain data, and a Marshal failure here is a
-		// programmer error to notice loudly rather than paper over with a
-		// fallback revision that would silently never change.
-		panic(fmt.Sprintf("service: computing verdict revision: %v", err))
+		// PruneVerdict and HomePlan are plain data, and a Marshal failure
+		// here is a programmer error to notice loudly rather than paper
+		// over with a fallback revision that would silently never change.
+		panic(fmt.Sprintf("service: computing reviewed revision: %v", err))
 	}
 	sum := sha256.Sum256(b)
 	return "vdt_" + hex.EncodeToString(sum[:])[:16]
@@ -616,9 +692,28 @@ func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, co
 		verdicts[i] = RetentionArtifactVerdict{
 			Artifact: v.Artifact.Name,
 			Action:   string(v.Action),
+			Medium:   v.Medium,
 			Reason:   v.Reason,
 			Tiers:    tiers,
 		}
+	}
+
+	// FR-27's moves, rendered the same way every other name on this
+	// boundary is: the artifact's own name, not its fully-qualified id.
+	// A plan is already scoped to one backup set (BackupSetID above), so
+	// re-spelling the set on every row would be noise a client has to
+	// strip to render a table.
+	var moves []RetentionMove
+	for _, m := range plan.HomePlan.Moves {
+		moves = append(moves, RetentionMove{
+			Artifact:   m.Artifact.Name,
+			FromMedium: m.From,
+			ToMedium:   m.To,
+		})
+	}
+	var unconfirmed []string
+	for _, a := range plan.HomePlan.Unconfirmed {
+		unconfirmed = append(unconfirmed, a.Name)
 	}
 
 	return RetentionPlan{
@@ -631,7 +726,10 @@ func summarizeRetentionPlan(set model.BackupSetID, planID, inventoryRevision, co
 		DeleteCount:       deleteCount,
 		ReclaimBytes:      reclaimBytes,
 		Verdicts:          verdicts,
-		OperationID:       operationID,
+
+		Moves:                 moves,
+		UnconfirmedPlacements: unconfirmed,
+		OperationID:           operationID,
 		// Issue #333: taken from the plan the decision was actually made
 		// on, not re-read from the running config here. A hot reload
 		// between the two would attribute these verdicts to a policy that

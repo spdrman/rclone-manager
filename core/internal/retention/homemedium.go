@@ -200,10 +200,10 @@ type HomePlan struct {
 // PlanHomeMoves works out which artifacts are not on the medium their
 // chain says they belong on (FR-27's home rule, issue #239).
 //
-// activeMedium answers "which medium is this artifact's durable copy on
-// right now", and its second return value is the load-bearing one. A
-// placement row means a DURABLE copy: an artifact still transferring
-// deliberately has no row, so a missing answer means "I cannot confirm
+// where answers "which medium is this artifact's durable copy on right
+// now", and the status it returns is the load-bearing part. A placement
+// row means a DURABLE copy: an artifact still transferring deliberately
+// has no row, so anything but LocationConfirmed means "I cannot confirm
 // where this is", never "it is not there".
 //
 // Those two readings are not interchangeable, and the difference is a
@@ -219,8 +219,8 @@ type HomePlan struct {
 // It plans no move for an artifact with no home either: an artifact that
 // no tier selects is on its way out, and copying bytes somewhere else
 // first is work in the service of a delete.
-func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, activeMedium func(model.ArtifactID) (string, bool)) (HomePlan, error) {
-	if activeMedium == nil {
+func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, where ArtifactLocator) (HomePlan, error) {
+	if where == nil {
 		return HomePlan{}, fmt.Errorf("retention: PlanHomeMoves needs a way to read where an artifact currently is; " +
 			"without one every artifact would look unplaced, and an unplaced artifact is one this manager must not move")
 	}
@@ -234,15 +234,22 @@ func PlanHomeMoves(chain []config.RetentionTier, verdicts []GFSVerdict, activeMe
 		if !hasHome {
 			continue
 		}
-		current, known := activeMedium(v.Artifact)
-		if !known {
+		loc := where(v.Artifact)
+		// Both non-confirmed statuses land here, and here they really are
+		// the same answer, which is what makes this different from the
+		// prune's own split (see LocationUnrecorded). A move ENDS by
+		// deleting a source, so it needs a location it proved; FR-20's
+		// local delete proves its own target from the path instead.
+		// Different proofs available, different answers to the same
+		// missing row.
+		if loc.Status != LocationConfirmed {
 			plan.Unconfirmed = append(plan.Unconfirmed, v.Artifact)
 			continue
 		}
-		if current == home {
+		if loc.Medium == home {
 			continue
 		}
-		plan.Moves = append(plan.Moves, HomeMove{Artifact: v.Artifact, From: current, To: home})
+		plan.Moves = append(plan.Moves, HomeMove{Artifact: v.Artifact, From: loc.Medium, To: home})
 	}
 	return plan, nil
 }

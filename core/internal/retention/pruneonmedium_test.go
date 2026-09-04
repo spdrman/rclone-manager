@@ -35,13 +35,18 @@ const pruneTestMedium = "offsite_s3"
 
 // onMedium builds the locator that says every artifact lives on medium.
 func onMedium(medium string) ArtifactLocator {
-	return func(model.ArtifactID) (string, bool) { return medium, true }
+	return func(model.ArtifactID) Location { return Location{Medium: medium, Status: LocationConfirmed} }
 }
 
-// nowhere is the locator that can never confirm a location, which is what
-// two ACTIVE placements (a move in flight) and no placement row at all
-// both look like from here.
-func nowhere(model.ArtifactID) (string, bool) { return "", false }
+// unrecorded is the locator for a journal that holds no placement row for
+// the artifact at all: every pre-EPIC-E artifact, and every Record a test
+// builds by hand.
+func unrecorded(model.ArtifactID) Location { return Location{Status: LocationUnrecorded} }
+
+// contested is the locator for more than one ACTIVE placement, which is
+// FR-30's copy phase in flight: there are two answers to "where is this",
+// and taking either one deletes a copy out from under a move.
+func contested(model.ArtifactID) Location { return Location{Status: LocationContested} }
 
 // recordingPruner is a MediumPruner that answers however a test tells it
 // to and records every call, so a refusal test can assert the strongest
@@ -77,27 +82,11 @@ func pruneMediumFixture(t *testing.T) (config.BackupSet, []state.Record, string)
 
 // --- the refusals ---
 
-// TestPruneOnMedium_RefusesWhenItCannotConfirmWhereTheArtifactIs is the
-// first refusal because it is the one a live deployment hits: FR-30's copy
-// phase leaves the source and the destination both ACTIVE, so mid-move
-// there are two answers to "where is this", and a prune that picked one
-// would delete a copy out from under a move.
-func TestPruneOnMedium_RefusesWhenItCannotConfirmWhereTheArtifactIs(t *testing.T) {
-	bs, records, path := pruneMediumFixture(t)
-
-	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, nowhere, nil)
-	if err != nil {
-		t.Fatalf("PruneApply: %v", err)
-	}
-	v := pruneFindVerdict(t, verdicts, "expired.dump")
-	if v.Action != PruneRefuse {
-		t.Fatalf("Action = %s, want %s: nothing confirmed where this artifact's durable copy is", v.Action, PruneRefuse)
-	}
-	if !strings.Contains(v.Reason, "confirm") {
-		t.Errorf("Reason = %q, which does not say the location could not be confirmed", v.Reason)
-	}
-	pruneMustExist(t, path)
-}
+// The refusal a live deployment hits first, "nothing could confirm where
+// this artifact is", used to be one test here. It is now two, at the
+// bottom of this file, because it was one test about two different facts:
+// see TestPruneContestedPlacement_RefusesAndDeletesNothing and
+// TestPruneUnrecordedPlacement_StillTakesFR20sLocalPath.
 
 // TestPruneOnMedium_RefusesWithNothingThatCanDeleteFromAMedium is the nil
 // -pruner refusal, and it is the same shape #238 gave the nil TierGuard: a
@@ -333,9 +322,9 @@ func TestPruneOnMedium_ALocalArtifactStillTakesTheLocalPath(t *testing.T) {
 // being exactly today's behaviour, so it is asserted rather than assumed.
 func TestPruneAllLocal_IsTheMediumFreeDeployment(t *testing.T) {
 	id := gfsMustArtifact(t, gfsMustSet(t, "production", "postgres-primary"), "a.dump")
-	medium, known := AllLocal(id)
-	if !known || medium != config.MediumLocal {
-		t.Fatalf("AllLocal = (%q, %v), want (%q, true)", medium, known, config.MediumLocal)
+	loc := AllLocal(id)
+	if loc.Status != LocationConfirmed || loc.Medium != config.MediumLocal {
+		t.Fatalf("AllLocal = %+v, want a confirmed %q", loc, config.MediumLocal)
 	}
 }
 
@@ -347,5 +336,102 @@ func TestPruneRefusesWithoutALocator(t *testing.T) {
 
 	if _, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), bs, records, nil); err == nil {
 		t.Fatal("PruneDecide accepted a nil locator")
+	}
+}
+
+// --- "cannot confirm" is two different facts, and only one of them is a
+// --- reason to refuse ---
+
+// TestPruneUnrecordedPlacement_StillTakesFR20sLocalPath is the regression
+// that the first cut of this issue introduced and nothing caught, because
+// the suite that would have caught it lives two packages up.
+//
+// An artifact with NO placement row is the ordinary pre-EPIC-E artifact,
+// the hand-built record most of this repository's tests use, and anything
+// ingested by a build that predates FR-29's table. Reading that absence as
+// "I cannot confirm where this is, so I refuse" turns FR-20 off: every
+// prune in a journal without placement rows becomes a REFUSE, forever, and
+// a retention engine that deletes nothing is a retention engine that does
+// not work.
+//
+// FR-20's proof was never a placement row. It is a canonicalized path,
+// proven beneath the configured root and re-derived at the moment of the
+// delete, and the absence of a row takes nothing away from it. The spec's
+// "an artifact with no ACTIVE placement is 'no copy confirmed', never 'no
+// copy needed'" is normative for the MOVE ENGINE, which ends by deleting a
+// source it never proved; FR-20 proves its own target.
+func TestPruneUnrecordedPlacement_StillTakesFR20sLocalPath(t *testing.T) {
+	bs, records, path := pruneMediumFixture(t)
+	pruner := &recordingPruner{}
+
+	wantPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, unrecorded, pruner)
+	if err != nil {
+		t.Fatalf("PruneApply: %v", err)
+	}
+	v := pruneFindVerdict(t, verdicts, "expired.dump")
+	if v.Action != PruneDelete {
+		t.Fatalf("Action = %s (%s), want %s: an artifact with no placement row is FR-20's ordinary local artifact", v.Action, v.Reason, PruneDelete)
+	}
+	if v.Medium != config.MediumLocal {
+		t.Errorf("Medium = %q, want %q: the copy this verdict is about is the file at %s", v.Medium, config.MediumLocal, v.Path)
+	}
+	pruneMustNotExist(t, wantPath)
+	if len(pruner.calls) != 0 {
+		t.Errorf("an artifact with no placement row reached the medium delete: %v", pruner.calls)
+	}
+}
+
+// TestPruneContestedPlacement_RefusesAndDeletesNothing is the other half.
+// More than one ACTIVE placement is FR-30's copy phase in flight, so the
+// journal is positively asserting that something else is operating on this
+// artifact's copies right now. Deleting one of them is the race FR-30's
+// journal exists to make unrepresentable, and this is the only one of the
+// two "cannot confirm" shapes that carries such an assertion.
+func TestPruneContestedPlacement_RefusesAndDeletesNothing(t *testing.T) {
+	bs, records, path := pruneMediumFixture(t)
+	pruner := &recordingPruner{}
+
+	verdicts, err := PruneApply(context.Background(), pruneNow, pruneTodayOnlyChain(), bs, records, contested, pruner)
+	if err != nil {
+		t.Fatalf("PruneApply: %v", err)
+	}
+	v := pruneFindVerdict(t, verdicts, "expired.dump")
+	if v.Action != PruneRefuse {
+		t.Fatalf("Action = %s (%s), want %s: a move is in flight over this artifact's copies", v.Action, v.Reason, PruneRefuse)
+	}
+	if !strings.Contains(v.Reason, "move") {
+		t.Errorf("Reason = %q, which does not tell an operator a move is in flight; a REFUSE they cannot act on is a REFUSE they will re-run", v.Reason)
+	}
+	pruneMustExist(t, path)
+	if len(pruner.calls) != 0 {
+		t.Errorf("a contested artifact reached the medium delete: %v", pruner.calls)
+	}
+}
+
+// TestPruneContestedPlacement_IsStillKeptWhenATierSelectsIt keeps the two
+// claims apart in the direction that is easiest to collapse. A contested
+// placement is a reason not to DELETE; it is not a reason to report a
+// tier's KEEP as something the prune refused. #390 landed that distinction
+// on the local path and this is it on the placement axis.
+func TestPruneContestedPlacement_IsStillKeptWhenATierSelectsIt(t *testing.T) {
+	root := t.TempDir()
+	set := gfsMustSet(t, "production", "postgres-primary")
+	artifact := gfsMustArtifact(t, set, "today.dump")
+	path := filepath.Join(root, "today.dump")
+	pruneWriteFile(t, path, "today")
+	records := []state.Record{pruneRecord(artifact, lifecycle.Complete, pruneNow, path)}
+
+	verdicts, err := PruneDecide(pruneNow, pruneTodayOnlyChain(), pruneBackupSet(set, root), records, contested)
+	if err != nil {
+		t.Fatalf("PruneDecide: %v", err)
+	}
+	v := pruneFindVerdict(t, verdicts, "today.dump")
+	if v.Action != PruneKeep {
+		t.Fatalf("Action = %s (%s), want %s: the daily tier selects it, and nothing is being deleted for a contested placement to endanger", v.Action, v.Reason, PruneKeep)
 	}
 }

@@ -186,8 +186,10 @@ type PruneVerdict struct {
 
 	// Medium is where the copy this verdict is about lives (EPIC E FR-30,
 	// issue #239): config.MediumLocal, or the id of a configured storage
-	// medium. It is empty only when the location could not be confirmed
-	// at all, which is always a REFUSE.
+	// medium. It is empty only for a contested location (more than one
+	// ACTIVE placement, a move in flight), where there are genuinely two
+	// answers and this verdict declines to pick one; such a verdict is
+	// never a DELETE. See localBranchMedium.
 	//
 	// FR-30 asks the mandatory dry-run to explain per-artifact WHERE a
 	// deletion would happen, not only whether, and this is that answer.
@@ -212,15 +214,68 @@ type PruneVerdict struct {
 	Reason string
 }
 
-// ArtifactLocator answers where one artifact's durable copy is right now:
-// config.MediumLocal, or the id of a configured storage medium.
+// LocationStatus is how well an ArtifactLocator could answer "where is
+// this artifact's durable copy".
 //
-// The second return value is the load-bearing one, and it means "I could
-// confirm this", never "it is there". A placement row records a DURABLE
-// copy, so an artifact mid-move has two ACTIVE rows and an artifact still
-// transferring has none, and both of those are "I cannot confirm where
-// this is". PlanHomeMoves takes the same shape for the same reason; see
-// its doc, and internal/app.ActiveMediumFromRecords for the reading.
+// There are three answers, not two, and collapsing the last two is a bug
+// this issue shipped once: "the journal says nothing about this artifact"
+// and "the journal says two contradictory things" are both failures to
+// name a single medium, and they are not the same claim. One is the
+// ordinary state of every artifact written before FR-29's placement table
+// existed. The other is a positive assertion that a move is operating on
+// this artifact's copies right now.
+type LocationStatus string
+
+const (
+	// LocationConfirmed: exactly one ACTIVE placement. Medium names it.
+	LocationConfirmed LocationStatus = "CONFIRMED"
+
+	// LocationUnrecorded: no ACTIVE placement row at all. That is the
+	// pre-EPIC-E artifact, the hand-built Record, and the artifact still
+	// transferring, and it takes nothing away from FR-20, whose proof was
+	// never a placement row: it is a canonicalized path, proven beneath
+	// the configured root, re-derived at the moment of the delete.
+	//
+	// It is emphatically NOT permission for the MOVE ENGINE, whose own
+	// standing invariant (FR-30, and the spec's "no copy confirmed, never
+	// no copy needed") is about deleting a source copy it never proved.
+	// The two rules differ because the proofs available to them differ,
+	// not because one of them is careless.
+	LocationUnrecorded LocationStatus = "UNRECORDED"
+
+	// LocationContested: more than one ACTIVE placement, which is FR-30's
+	// copy phase in flight. There are two answers to "where is this", and
+	// removing either copy is the race FR-30's journal exists to make
+	// unrepresentable.
+	LocationContested LocationStatus = "CONTESTED"
+)
+
+// Location is one artifact's answer from an ArtifactLocator.
+type Location struct {
+	// Medium is config.MediumLocal or a configured medium id, and is
+	// meaningful only when Status is LocationConfirmed. It is empty
+	// otherwise, deliberately, so a caller that ignores Status reads an
+	// empty string rather than a plausible-looking medium id.
+	Medium string
+
+	Status LocationStatus
+}
+
+// OnMedium reports whether this location is confirmed to be somewhere
+// other than the implicit local medium, which is the one question that
+// sends a prune down a different set of checks.
+func (l Location) OnMedium() bool {
+	return l.Status == LocationConfirmed && l.Medium != config.MediumLocal
+}
+
+// ArtifactLocator answers where one artifact's durable copy is right now.
+//
+// The status is the load-bearing part, and it means "I could confirm
+// this", never "it is there". A placement row records a DURABLE copy, so
+// an artifact mid-move has two ACTIVE rows and an artifact still
+// transferring has none. PlanHomeMoves takes the same shape for the same
+// reason; see its doc, and internal/app.ActiveMediumFromRecords for the
+// reading.
 //
 // It is a function rather than a placement lookup because internal/
 // retention may not read a placement row at all. FR-32 says nothing a
@@ -230,7 +285,7 @@ type PruneVerdict struct {
 // SuppliedValue fails the build if one appears. The adapter that BUILDS
 // this function reads the rows, one package up, where it is not a
 // retention decision.
-type ArtifactLocator func(model.ArtifactID) (medium string, known bool)
+type ArtifactLocator func(model.ArtifactID) Location
 
 // AllLocal is the locator for a deployment with no storage mediums: every
 // durable copy is a local file, which is exactly what every artifact in
@@ -241,7 +296,9 @@ type ArtifactLocator func(model.ArtifactID) (medium string, known bool)
 // every meaning available is a guess about where a copy of a backup lives.
 // Written out, the assumption is greppable and a caller that should not be
 // making it is visible.
-func AllLocal(model.ArtifactID) (string, bool) { return config.MediumLocal, true }
+func AllLocal(model.ArtifactID) Location {
+	return Location{Medium: config.MediumLocal, Status: LocationConfirmed}
+}
 
 // MediumPruner removes an artifact's copy from a storage medium, having
 // first re-proved that the object there is the one the journal recorded.
@@ -430,7 +487,7 @@ func pruneVerifySafeToDelete(bs config.BackupSet, rec state.Record) (string, err
 // GFS/last-known-good verdict DecideKeep already produced for this
 // artifact, decide KEEP, DELETE or REFUSE.
 func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict, lkg LastKnownGoodResult, where ArtifactLocator) PruneVerdict {
-	medium, located := where(rec.Artifact)
+	loc := where(rec.Artifact)
 
 	// An artifact whose durable copy is an object takes a different set of
 	// checks, because FR-20's list is about a PATH: canonicalization,
@@ -441,8 +498,12 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 	// What survives the move to a medium is FR-19, FR-18's own verdict,
 	// the "final managed artifact, never a .partial" guarantee, and the
 	// identity re-check, and those are what the branch below runs.
-	if located && medium != config.MediumLocal {
-		return pruneEvaluateOnMedium(rec, keepVerdict, lkg, medium)
+	//
+	// Everything else, an unrecorded location included, takes FR-20's own
+	// path. See LocationUnrecorded for why the absence of a placement row
+	// takes nothing away from a proof that was never made of one.
+	if loc.OnMedium() {
+		return pruneEvaluateOnMedium(rec, keepVerdict, lkg, loc.Medium)
 	}
 
 	path, err := pruneFinalPath(bs, rec.Artifact)
@@ -471,7 +532,7 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 			Artifact: rec.Artifact,
 			Action:   PruneKeep,
 			Path:     path,
-			Medium:   locatedMedium(medium, located),
+			Medium:   localBranchMedium(loc),
 			Tiers:    append([]GFSTierSelection(nil), keepVerdict.Tiers...),
 			Reason:   pruneKeepReason(keepVerdict.Tiers),
 		}
@@ -495,27 +556,34 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 			Artifact: rec.Artifact,
 			Action:   PruneRefuse,
 			Path:     path,
-			Medium:   locatedMedium(medium, located),
+			Medium:   localBranchMedium(loc),
 			Reason: fmt.Sprintf(
 				"refusing to delete %s: it holds FR-19 last-known-good protection, but the GFS verdict passed in claims Keep=false; this contradiction means mismatched inputs were passed to this decision, not a real delete candidate",
 				rec.Artifact),
 		}
 	}
 
-	// Not kept, not protected, and this manager could not confirm where
-	// the durable copy is. The two shapes that produce this are a move in
-	// flight (source and destination both ACTIVE) and an artifact with no
-	// placement row at all, and neither is a location. Deciding a delete
-	// against a location nobody established is deciding it against a
-	// guess, so the answer is REFUSE, which is a different claim from KEEP
-	// and is what makes the uncertainty visible instead of quiet.
-	if !located {
+	// Not kept, not protected, and the journal holds MORE than one ACTIVE
+	// placement for this artifact. That is FR-30's copy phase in flight,
+	// so something else is operating on this artifact's copies right now
+	// and removing one of them is the race FR-30's journal exists to make
+	// unrepresentable. REFUSE, which is a different claim from KEEP and is
+	// what makes the collision visible instead of quiet.
+	//
+	// It is checked here, after the KEEP branch, rather than first,
+	// because a contested placement is a reason not to DELETE and never a
+	// reason to report a tier's KEEP as something this pass refused. An
+	// artifact a tier selects is not being deleted, so there is nothing
+	// for the in-flight move to collide with.
+	//
+	// LocationUnrecorded deliberately does not land here: see its own doc.
+	if loc.Status == LocationContested {
 		return PruneVerdict{
 			Artifact: rec.Artifact,
 			Action:   PruneRefuse,
 			Path:     path,
 			Reason: fmt.Sprintf(
-				"refusing to delete %s: nothing could confirm where its durable copy is (no single ACTIVE placement), and a deletion decided against an unconfirmed location is decided against a guess",
+				"refusing to delete %s: the journal records more than one ACTIVE placement for it, which is a move in flight; deleting a copy out from under a move is the race FR-30's journal exists to make unrepresentable",
 				rec.Artifact),
 		}
 	}
@@ -526,7 +594,7 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 			Artifact: rec.Artifact,
 			Action:   PruneRefuse,
 			Path:     path,
-			Medium:   medium,
+			Medium:   localBranchMedium(loc),
 			Reason:   err.Error(),
 		}
 	}
@@ -535,19 +603,29 @@ func pruneEvaluate(bs config.BackupSet, rec state.Record, keepVerdict GFSVerdict
 		Artifact: rec.Artifact,
 		Action:   PruneDelete,
 		Path:     safePath,
-		Medium:   medium,
+		Medium:   localBranchMedium(loc),
 		Reason:   pruneDeleteReason(keepVerdict),
 	}
 }
 
-// locatedMedium renders a confirmed location and leaves an unconfirmed one
-// empty, rather than spelling "unknown" into a field whose other values
-// are medium ids an operator can act on.
-func locatedMedium(medium string, located bool) string {
-	if !located {
+// localBranchMedium is what a verdict taken on FR-20's local path names as
+// its medium.
+//
+// It is config.MediumLocal for a confirmed local placement and for an
+// unrecorded one alike, and that is not a guess: this branch's verdict is
+// about the file at Path, under the backup set's own local_path, and
+// config.MediumLocal is exactly what that place is called. An empty string
+// here would say "nowhere" about a file this function just canonicalized.
+//
+// A contested location gets an empty medium, because there really are two
+// answers and this verdict declines to pick one. That verdict is always a
+// KEEP or a REFUSE (the DELETE branch above refuses a contested location
+// outright), so the empty string never travels beside a deletion.
+func localBranchMedium(loc Location) string {
+	if loc.Status == LocationContested {
 		return ""
 	}
-	return medium
+	return config.MediumLocal
 }
 
 // pruneEvaluateOnMedium is pruneEvaluate for an artifact whose durable

@@ -26,35 +26,45 @@ package app
 
 import (
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
-// ActiveMediumFromRecords builds PlanHomeMoves' placement lookup from a
-// backup set's journal records (EPIC E FR-29's placement rows, #236).
+// ActiveMediumFromRecords builds the one placement lookup this product
+// has, from a backup set's journal records (EPIC E FR-29's placement
+// rows, #236). Both FR-27's move planner and FR-20's prune read it, so
+// there is a single answer to "where is this artifact" rather than two
+// that can drift apart.
 //
 // A placement row means a DURABLE copy, so the reading is:
 //
-//   - exactly one ACTIVE placement: that is where the artifact is, and
-//     the planner may compare it against the home the chain names;
-//   - none: this manager cannot confirm where the artifact is. An
-//     artifact still transferring deliberately has no row, and a
-//     hand-built Record has none either, so absence is never evidence of
-//     absence;
-//   - more than one: a move is already in flight (FR-30's copy phase
-//     leaves the source and the destination both ACTIVE until the source
-//     delete lands), and "where is this" has two answers. Planning a
-//     second move on top of one already running is exactly the race
-//     FR-30's journal exists to make unrepresentable.
+//   - exactly one ACTIVE placement (LocationConfirmed): that is where the
+//     artifact is, and the planner may compare it against the home the
+//     chain names;
+//   - none (LocationUnrecorded): the journal says nothing. An artifact
+//     still transferring deliberately has no row, a hand-built Record has
+//     none either, and neither did anything ingested before FR-29's table
+//     existed, so absence is never evidence of absence;
+//   - more than one (LocationContested): a move is already in flight
+//     (FR-30's copy phase leaves the source and the destination both
+//     ACTIVE until the source delete lands), and "where is this" has two
+//     answers. Planning a second move on top of one already running is
+//     exactly the race FR-30's journal exists to make unrepresentable.
 //
 // A DELETE_PENDING or GONE row is not a location either. It records a
 // copy on its way out or already gone, and reading one as a location
 // would plan a move FROM somewhere this manager is in the middle of
-// emptying.
+// emptying. Those rows are simply not ACTIVE, so they fall out of the
+// count, and an artifact left holding only them reads as unrecorded.
 //
-// Two of those readings are "cannot confirm", and both take the same
-// branch in the planner: report it, move nothing, leave the artifact
-// where it is.
-func ActiveMediumFromRecords(records []state.Record) func(model.ArtifactID) (string, bool) {
+// The last two are both "I could not name one medium", and it is
+// deliberately the CALLER that decides what to do with each: the move
+// planner treats them identically (it must not move either), and the
+// prune does not (see retention.LocationUnrecorded, which explains why
+// FR-20's proof never needed a row in the first place). Returning one
+// merged "unknown" is what made a prune refuse every pre-EPIC-E artifact
+// in this issue's first cut.
+func ActiveMediumFromRecords(records []state.Record) retention.ArtifactLocator {
 	byArtifact := make(map[model.ArtifactID][]string, len(records))
 	for _, rec := range records {
 		var active []string
@@ -65,11 +75,14 @@ func ActiveMediumFromRecords(records []state.Record) func(model.ArtifactID) (str
 		}
 		byArtifact[rec.Artifact] = active
 	}
-	return func(id model.ArtifactID) (string, bool) {
-		active, ok := byArtifact[id]
-		if !ok || len(active) != 1 {
-			return "", false
+	return func(id model.ArtifactID) retention.Location {
+		switch active := byArtifact[id]; len(active) {
+		case 1:
+			return retention.Location{Medium: active[0], Status: retention.LocationConfirmed}
+		case 0:
+			return retention.Location{Status: retention.LocationUnrecorded}
+		default:
+			return retention.Location{Status: retention.LocationContested}
 		}
-		return active[0], true
 	}
 }

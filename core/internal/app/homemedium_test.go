@@ -8,6 +8,7 @@ import (
 	"github.com/spdrman/rclone-manager/core/internal/config"
 	"github.com/spdrman/rclone-manager/core/internal/lifecycle"
 	"github.com/spdrman/rclone-manager/core/internal/model"
+	"github.com/spdrman/rclone-manager/core/internal/retention"
 	"github.com/spdrman/rclone-manager/core/internal/state"
 )
 
@@ -199,13 +200,14 @@ func TestActiveMediumFromRecords_TwoActivePlacementsCannotBeConfirmed(t *testing
 
 	lookup := ActiveMediumFromRecords([]state.Record{mid, settled})
 
-	if _, known := lookup(mid.Artifact); known {
-		t.Error("an artifact with two ACTIVE placements reported a confirmed location; a move is already in flight and there are two answers")
+	if got := lookup(mid.Artifact); got.Status != retention.LocationContested {
+		t.Errorf("an artifact with two ACTIVE placements reported %+v, want CONTESTED: a move is already in flight and there are two answers, "+
+			"which is a different fact from a journal that simply says nothing", got)
 	}
 	// The control: without it this would pass against a lookup that never
 	// confirms anything.
-	if m, known := lookup(settled.Artifact); !known || m != state.MediumLocal {
-		t.Errorf("an artifact with one ACTIVE placement reported (%q, %v), want (%q, true)", m, known, state.MediumLocal)
+	if got := lookup(settled.Artifact); got.Status != retention.LocationConfirmed || got.Medium != state.MediumLocal {
+		t.Errorf("an artifact with one ACTIVE placement reported %+v, want a confirmed %q", got, state.MediumLocal)
 	}
 }
 
@@ -220,8 +222,12 @@ func TestActiveMediumFromRecords_ANonActivePlacementIsNotALocation(t *testing.T)
 		rec := records[0]
 		rec.Placements = []state.Placement{{Medium: state.MediumLocal, Status: status}}
 		lookup := ActiveMediumFromRecords([]state.Record{rec})
-		if m, known := lookup(rec.Artifact); known {
-			t.Errorf("a %s placement reported the artifact as located on %q", status, m)
+		got := lookup(rec.Artifact)
+		if got.Status == retention.LocationConfirmed {
+			t.Errorf("a %s placement reported the artifact as located on %q", status, got.Medium)
+		}
+		if got.Status != retention.LocationUnrecorded {
+			t.Errorf("a %s placement reported %+v; the row is not ACTIVE, so it falls out of the count and what is left is a journal saying nothing", status, got)
 		}
 	}
 }
