@@ -53,8 +53,11 @@ export function ConfirmationDialog({
    *  exactly this. Omit it and the dialog behaves as it always has. */
   confirmPhrase?: string;
   /** The label on that box. Says what to type, so the requirement is not
-   *  a puzzle. */
-  confirmPhraseLabel?: string;
+   *  a puzzle. A node rather than a string so a caller can set the phrase
+   *  itself in mono inside the label, which keeps the phrase in exactly
+   *  one place: a second, prettier copy of it in the body would be a
+   *  second copy that can disagree with the one being compared. */
+  confirmPhraseLabel?: ReactNode;
   onConfirm(): void;
   onCancel(): void;
   children: ReactNode;
