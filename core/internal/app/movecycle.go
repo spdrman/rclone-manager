@@ -42,15 +42,20 @@ import (
 // which is not a per-set list, so a per-set caller would resume other
 // sets' moves anyway and spend their budget doing it.
 
-// runHomeMoves executes the moves this cycle's retention passes worked
-// out, and reports what happened.
+// RunHomeMoves executes the moves a retention pass worked out, and
+// reports what happened.
 //
-// plans is built from the reports the cycle already has, rather than by
+// plans is built from reports the caller already has, rather than by
 // re-deriving anything: a second derivation would decide against a
 // journal and a chain that the cycle's own work has since changed, and
 // the moves would then describe a policy that did not produce the
-// verdicts they were planned from.
-func (s *Service) runHomeMoves(ctx context.Context, plans []placement.Plan) (placement.CycleReport, error) {
+// verdicts they were planned from. HomeMovePlans is the mapping.
+//
+// RunCycle is its one production caller. It is exported anyway because it
+// IS the operation, and because the integration suite has to be able to
+// run the real one against a real S3 API rather than reassemble an engine
+// of its own and prove something about the reassembly.
+func (s *Service) RunHomeMoves(ctx context.Context, plans []placement.Plan) (placement.CycleReport, error) {
 	engine, err := s.moveEngine()
 	if err != nil {
 		return placement.CycleReport{}, err
@@ -61,7 +66,7 @@ func (s *Service) runHomeMoves(ctx context.Context, plans []placement.Plan) (pla
 	return engine.RunCycle(ctx, plans)
 }
 
-// homeMovePlans turns one backup set's retention report into the plans the
+// HomeMovePlans turns one backup set's retention report into the plans the
 // engine takes.
 //
 // retention.HomeMove maps onto placement.Plan exactly, which is not a
@@ -69,7 +74,7 @@ func (s *Service) runHomeMoves(ctx context.Context, plans []placement.Plan) (pla
 // deliberately dropped here rather than turned into anything: the planner
 // already decided those artifacts must not move, and re-deciding it here
 // would be a second answer to the question the planner owns.
-func homeMovePlans(plan retention.HomePlan) []placement.Plan {
+func HomeMovePlans(plan retention.HomePlan) []placement.Plan {
 	out := make([]placement.Plan, 0, len(plan.Moves))
 	for _, m := range plan.Moves {
 		out = append(out, placement.Plan{Artifact: m.Artifact, DestinationMedium: m.To})

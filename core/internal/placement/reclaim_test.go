@@ -333,3 +333,33 @@ func TestReclaim_RefusesOnASizeMismatchEvenWhenNoChecksumIsAvailable(t *testing.
 		t.Errorf("DeleteObject was called %d times", store.deletes)
 	}
 }
+
+// TestReclaim_RefusesOnANilReceiverRatherThanPanicking closes a hazard
+// that a typed nil opens and an untyped nil hides.
+//
+// internal/retention turns a nil MediumPruner into a REFUSE, which is what
+// makes "no way to prove an object's identity" fail safe. That check is on
+// the INTERFACE, so a caller that hands over a (*Reclaimer)(nil) satisfies
+// it: the interface value is not nil, the refusal never fires, and the
+// first field access panics in the middle of a retention apply, taking the
+// daemon down mid-prune.
+//
+// internal/app's own mediumPruner returns an untyped nil today so this
+// cannot happen through it, and it is guarded here anyway for the reason
+// this package's whole delete path is written that way: a safety check
+// worth having is worth having at the point of the dangerous action, not
+// only at the caller that happens to get it right today. I found it by
+// mutating that caller to hand over a typed nil and watching an
+// integration test segfault instead of report a refusal.
+func TestReclaim_RefusesOnANilReceiverRatherThanPanicking(t *testing.T) {
+	_, _, rec := reclaimFixture(t)
+	var r *placement.Reclaimer
+
+	err := r.DeleteFromMedium(context.Background(), rec, "offsite_s3")
+	if err == nil {
+		t.Fatal("a nil reclaimer reported a successful delete")
+	}
+	if !strings.Contains(err.Error(), "refusing") {
+		t.Errorf("err = %q, which does not read as a refusal", err)
+	}
+}

@@ -104,6 +104,16 @@ func (r *Reclaimer) DeleteFromMedium(ctx context.Context, rec state.Record, medi
 			append([]any{rec.Artifact, medium}, args...)...)
 	}
 
+	// internal/retention turns a nil MediumPruner into a REFUSE, and that
+	// check is on the INTERFACE: a caller handing over a (*Reclaimer)(nil)
+	// satisfies it, the refusal never fires, and the first field access
+	// below panics in the middle of a retention apply. Refusing here costs
+	// one comparison and makes the fail-safe hold for the value as well as
+	// for the interface. `refuse` reads nothing off r, so it is safe on a
+	// nil receiver.
+	if r == nil {
+		return refuse("there is no reclaimer to ask; something handed this delete path a nil value that still satisfied its interface, and a delete decided by nothing at all is not a delete")
+	}
 	if medium == config.MediumLocal {
 		// A local copy is FR-20's, and FR-20's proof is a canonicalized
 		// path proven beneath the backup set's configured root. Nothing

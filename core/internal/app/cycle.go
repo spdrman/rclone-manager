@@ -227,9 +227,9 @@ sourcesLoop:
 	if ctx.Err() == nil {
 		var plans []placement.Plan
 		for _, set := range report.Sets {
-			plans = append(plans, homeMovePlans(set.Retention.HomePlan)...)
+			plans = append(plans, HomeMovePlans(set.Retention.HomePlan)...)
 		}
-		moves, err := s.runHomeMoves(ctx, plans)
+		moves, err := s.RunHomeMoves(ctx, plans)
 		report.Moves, report.MovesErr = moves, err
 		if err != nil {
 			s.logger().Error(ctx, "move", err)
