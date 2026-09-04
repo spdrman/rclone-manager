@@ -147,7 +147,7 @@ jobs:
         run: go test ./packaging/ -count=1
 
       - name: Upload the release's compliance bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: compliance-bundle
           path: |
