@@ -233,6 +233,32 @@ expect_check_fails "a failed copy that records no reason on the move row" "$d" \
   'TestAFailedCopyLeavesItsReasonOnTheMoveRow'
 
 echo
+echo "==> prune meeting an artifact the chain has moved"
+
+# While #239's medium-aware prune is unbuilt, prune must REFUSE an artifact
+# whose only copy is on a medium rather than reading the missing local file
+# as work already done. The composed scenario is the only place that
+# produces such an artifact by actually moving one.
+d=$(mutant prune-reads-a-missing-file-as-already-deleted)
+swap "$d/core/internal/retention/prune.go" \
+  '	info, err := os.Lstat(expected)
+	if err != nil {
+		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
+	}' \
+  '	info, err := os.Lstat(expected)
+	if err != nil {
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh): a file that
+		// is not there is one less thing to delete, so call it done.
+		if os.IsNotExist(err) {
+			return expected, nil
+		}
+		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
+	}'
+expect_check_fails "prune reading a missing local file as a completed delete" "$d" \
+  "the only safe answer is a refusal" \
+  'TestPruneRefusesAnArtifactWhoseOnlyCopyIsOnAMedium'
+
+echo
 echo "==> the archive gate"
 
 # An archived copy tops out at existence, because reading one fails. Let it
