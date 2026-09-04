@@ -354,3 +354,72 @@ func TestRun_BackupSetRetentionExplicitFalseProtectionIsAWrite(t *testing.T) {
 		t.Errorf("--protect-last-known-good=false was treated as a show rather than a write; stderr:\n%s", stderr)
 	}
 }
+
+// TestRun_BackupSetRetentionRefusesAFirstMediumMappingUntilAcknowledged is
+// FR-27's consent at the CLI, on the one path this command has that can
+// name a medium: a policy file. The refusal is the disclosure, printed as
+// the error, and --acknowledge-medium-disclosure is what lets the same
+// write through. The flag rides beside the policy rather than inside the
+// file, so a policy file cannot consent on the operator's behalf every
+// time it is applied.
+func TestRun_BackupSetRetentionRefusesAFirstMediumMappingUntilAcknowledged(t *testing.T) {
+	configPath := writeTestConfigWithDeploymentPolicy(t)
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	declared := string(raw) +
+		"storage_mediums:\n" +
+		"  - id: offsite_s3\n" +
+		"    type: s3\n" +
+		"    region: us-east-1\n" +
+		"    bucket: nas-backups\n" +
+		"    credentials:\n" +
+		"      env: BACKUP_S3_CLI_TEST\n"
+	if err := os.WriteFile(configPath, []byte(declared), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	policy := "" +
+		"tiers:\n" +
+		"  - name: daily\n" +
+		"    granularity: day\n" +
+		"    keep: 7\n" +
+		"    medium: offsite_s3\n"
+	if err := os.WriteFile(policyPath, []byte(policy), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	stderr := captureStderr(t, func() {
+		if got := run(retentionArgs(configPath, "--policy-file", policyPath)); got == 0 {
+			t.Fatal("a policy file sending a tier to a medium was written with no acknowledgment")
+		}
+	})
+	if !strings.Contains(stderr, "delete the copy on this machine") || !strings.Contains(stderr, "daily -> offsite_s3") {
+		t.Errorf("the refusal is not the disclosure:\n%s", stderr)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(after) != declared {
+		t.Errorf("a refused write changed the configuration file:\n%s", after)
+	}
+
+	// The acknowledgment on its own writes nothing, so it is a usage
+	// error rather than a silently ignored flag.
+	if got := run(retentionArgs(configPath, "--acknowledge-medium-disclosure")); got != 2 {
+		t.Errorf("run(--acknowledge-medium-disclosure alone) = %d, want 2", got)
+	}
+
+	out := captureStdout(t, func() {
+		if got := run(retentionArgs(configPath, "--policy-file", policyPath, "--acknowledge-medium-disclosure")); got != 0 {
+			t.Fatalf("run(--policy-file --acknowledge-medium-disclosure) = %d, want 0", got)
+		}
+	})
+	for _, want := range []string{"retained under: this backup set's own policy", "name=daily granularity=day keep=7 medium=offsite_s3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+}

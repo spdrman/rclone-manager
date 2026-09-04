@@ -48,6 +48,16 @@ type operationResponse struct {
 	Result         string `json:"result,omitempty"`
 	Error          string `json:"error,omitempty"`
 
+	// Cycle is what a FINISHED run cycle got done, and is absent for
+	// every other operation and for one that has not finished.
+	//
+	// Absent rather than a row of zeroes, for the reason Progress below
+	// is absent rather than zeroed: "0 walked, 0 through" is the most
+	// alarming thing this object can say, and saying it about a cycle
+	// that is merely still running would send an operator hunting a
+	// failure that has not happened.
+	Cycle *cycleOutcomeResponse `json:"cycle,omitempty"`
+
 	// Progress is present only while the operation is executing in this
 	// process, and is simply absent otherwise (see
 	// core/service.OperationProgress). Absent is a different answer from
@@ -55,6 +65,21 @@ type operationResponse struct {
 	// this is a nested object that disappears rather than a set of
 	// flat fields that would each have to carry some sentinel.
 	Progress *operationProgressResponse `json:"progress,omitempty"`
+}
+
+// cycleOutcomeResponse is issue #361's two counts on the wire, the ones
+// #368 recorded into a completed cycle's summary and nothing rendered.
+//
+// A run cycle "completed" when it ran to the end, which is deliberately
+// narrower than it reads: an artifact's own quarantine is a business
+// outcome rather than an operation failure, so a cycle that backed nothing
+// up finishes with the same status as one that backed everything up. These
+// two numbers are the difference, and they are the same two the CLI prints
+// and exits on.
+type cycleOutcomeResponse struct {
+	BackupSetsProcessed int `json:"backup_sets_processed"`
+	ArtifactsWalked     int `json:"artifacts_walked"`
+	ArtifactsThrough    int `json:"artifacts_through"`
 }
 
 // operationProgressResponse is the wire shape of one live progress
@@ -99,6 +124,13 @@ func toOperationResponse(op service.Operation) operationResponse {
 	}
 	if !op.FinishedAt.IsZero() {
 		resp.FinishedAt = op.FinishedAt.Format(time.RFC3339Nano)
+	}
+	if op.Cycle != nil {
+		resp.Cycle = &cycleOutcomeResponse{
+			BackupSetsProcessed: op.Cycle.BackupSetsProcessed,
+			ArtifactsWalked:     op.Cycle.ArtifactsWalked,
+			ArtifactsThrough:    op.Cycle.ArtifactsThrough,
+		}
 	}
 	if op.Progress != nil {
 		p := op.Progress

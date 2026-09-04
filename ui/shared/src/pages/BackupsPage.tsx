@@ -8,10 +8,12 @@ import { PageHeader } from "@shared/components/PageHeader";
 import { FieldHelp } from "@shared/components/FieldHelp";
 import { FIELD_HELP } from "@shared/components/fieldHelpCopy";
 import { RetentionBadges } from "@shared/components/RetentionBadge";
+import { StatusBadge } from "@shared/components/StatusBadge";
 import { EmptyState, ErrorState } from "@shared/components/EmptyState";
 import { isNotConfigured } from "@shared/api/failure";
 import { RetentionPreviewDialog } from "./RetentionPreviewDialog";
 import { bytes, stamp } from "@shared/utilities/format";
+import type { BackupArtifact } from "@shared/types/backup";
 
 /** Called "Backups", never "Restore points" — the product does not perform
  *  application restore (§13). */
@@ -49,6 +51,12 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
 
   const rows = artifacts.data ?? [];
   const totalBytes = rows.reduce((n, a) => n + a.sizeBytes, 0);
+  // The Medium column exists because a backup on this deployment has a
+  // copy somewhere other than the local backup root, and for no other
+  // reason. FR-35: a configuration that names no storage medium gets the
+  // page it already had, with the same columns and the same widths, and
+  // nothing new to read past.
+  const showsMedium = rows.some((a) => a.placements.some((p) => p.medium !== "local"));
 
   return (
     <>
@@ -121,6 +129,7 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                   <th scope="col" style={{ textAlign: "right" }}>Size</th>
                   <th scope="col">Validation</th>
                   <th scope="col">Retention</th>
+                  {showsMedium ? <th scope="col">Medium</th> : null}
                   <th scope="col">Status</th>
                 </tr>
               </thead>
@@ -152,6 +161,9 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
                       </span>
                     </td>
                     <td><RetentionBadges classes={a.retentionClasses} /></td>
+                    {showsMedium ? (
+                      <td style={{ whiteSpace: "nowrap" }}><MediumCell artifact={a} /></td>
+                    ) : null}
                     <td style={{ fontSize: "var(--text-sm)", color: "var(--text-2)", whiteSpace: "nowrap" }}>
                       {a.remoteSourceRemovedAt ? "Remote source removed" : "Remote source retained"}
                     </td>
@@ -177,5 +189,40 @@ export function BackupsPage({ readOnly }: { readOnly: boolean }) {
         <RetentionPreviewDialog source={previewSet.source} set={previewSet.set} open onClose={() => setPreviewFor(null)} />
       ) : null}
     </>
+  );
+}
+
+/**
+ * Where one backup's copies are, in one cell.
+ *
+ * Three answers, kept apart on purpose (issue #240):
+ *
+ *   - no copies at all: "No copy yet", because a backup still arriving has
+ *     none, and its partial file on disk is not one;
+ *   - copies that can be read: their medium names;
+ *   - a copy nobody can confirm or that needs a restore: the medium name
+ *     PLUS a badge saying so, because a row that listed only the name
+ *     would read as "it is safely over there".
+ *
+ * The detail page is where the full story is; this is the smallest thing
+ * that does not mislead in a list.
+ */
+function MediumCell({ artifact }: { artifact: BackupArtifact }) {
+  if (artifact.placements.length === 0) {
+    return <span style={{ fontSize: "var(--text-sm)", color: "var(--text-2)" }}>No copy yet</span>;
+  }
+  const unreachable = artifact.placements.some((p) => p.access === "unreachable");
+  const needsRestore = artifact.placements.some((p) => p.access === "requires_restore" || p.access === "restoring");
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-start" }}>
+      <span className="mono" style={{ fontSize: "var(--text-sm)" }}>
+        {artifact.placements.map((p) => p.medium).join(", ")}
+      </span>
+      {unreachable ? (
+        <StatusBadge tone="warn" glyph={"\u25b2"}>Out of reach</StatusBadge>
+      ) : needsRestore ? (
+        <StatusBadge tone="warn" glyph={"\u25b2"}>Needs a restore</StatusBadge>
+      ) : null}
+    </div>
   );
 }
