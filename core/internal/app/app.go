@@ -136,12 +136,35 @@ var _ Journal = (*state.Journal)(nil)
 // sequentially (see cycle.go and daemon.go). An unbounded retry against one
 // unreachable source would starve every other configured backup set for as
 // long as the outage lasts, which is exactly the failure this bound exists
-// to prevent. Six attempts with this schedule spans a little over two
-// minutes worst case (1s, 2s, 4s, 8s, 16s, capped at 30s), long enough to
-// ride out a genuine blip without holding a whole cycle hostage to a
-// genuinely down source; a source still unreachable after that is picked up
-// again next cycle, which for `daemon` is a bounded wait of its own
-// (poll_interval), not a lost recovery opportunity.
+// to prevent.
+//
+// # The budget, counting the attempts and not only the gaps
+//
+// Six attempts with this schedule spans a little over two minutes worst
+// case, and both halves of that are real:
+//
+//   - the waiting BETWEEN attempts, at most 31 seconds, since full jitter
+//     never exceeds the cap for its step (1s, 2s, 4s, 8s, 16s, and the
+//     30s ceiling is never reached with only five gaps);
+//   - the attempts THEMSELVES, at most six times
+//     transport/rclone.ConnectTimeout, because the slowest way for one
+//     attempt to fail is a source that blackholes, and what bounds that is
+//     rclone's own connect timeout.
+//
+// The second half used to be worth nothing, because a connect timeout
+// classified as a cancellation and retry.DefaultIsTransient would not
+// retry it: the loop gave up after the first dial. Issue #388 corrected
+// the classification, which made those six dials real, and #415 is what
+// that cost at rclone's own 60s default: about six and a half minutes,
+// against the two this doc claimed. transport/rclone.ConnectTimeout is
+// the ceiling that puts it back; TestDefaultRetryBudgetIsPinned holds the
+// arithmetic so neither number can move without this sentence moving too.
+//
+// Two minutes is long enough to ride out a genuine blip without holding a
+// whole cycle hostage to a genuinely down source; a source still
+// unreachable after that is picked up again next cycle, which for `daemon`
+// is a bounded wait of its own (poll_interval), not a lost recovery
+// opportunity.
 var DefaultRetryPolicy = retry.Policy{
 	BaseDelay:   time.Second,
 	MaxDelay:    30 * time.Second,

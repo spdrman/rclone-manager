@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rclone/rclone/fs"
 
@@ -164,5 +165,60 @@ func TestOneConnectionAtATimeLeavesEverythingElseAlone(t *testing.T) {
 	}
 	if got.Transfers != 7 {
 		t.Errorf("Transfers = %d, want 7", got.Transfers)
+	}
+}
+
+// The connect-timeout ceiling (#415). See ConnectTimeout's own doc for
+// where fifteen seconds comes from; these three rows are what keeps it
+// from quietly becoming something else.
+//
+// The observable proof that rclone honours a --contimeout at all is
+// errors_test.go's TestClassify_ConnectTimeoutRcloneImposedIsTransient,
+// which dials a blackholed address and watches the deadline fire. This is
+// the other half: that the value rclone honours, on the path every
+// operation in this adapter takes, is ours and not rclone's own 60s.
+func TestOneConnectionAtATimeBoundsTheConnectTimeout(t *testing.T) {
+	// rclone's own default is what a caller who never asked gets, and it
+	// is the number #415 is about.
+	base := fs.GetConfig(context.Background()).ConnectTimeout
+	if base <= fs.Duration(ConnectTimeout) {
+		t.Fatalf("rclone's default --contimeout is %s, already at or under the %s ceiling; "+
+			"this row cannot show a ceiling being applied, so it proves nothing", time.Duration(base), ConnectTimeout)
+	}
+
+	got := fs.GetConfig(oneConnectionAtATime(context.Background())).ConnectTimeout
+	if got != fs.Duration(ConnectTimeout) {
+		t.Errorf("ConnectTimeout = %s, want %s: every operation in this adapter goes through oneConnectionAtATime, "+
+			"and app.DefaultRetryPolicy spends six attempts on this number, so rclone's own %s default is what "+
+			"turns a two-minute budget into six and a half minutes (#415)",
+			time.Duration(got), ConnectTimeout, time.Duration(base))
+	}
+}
+
+// A ceiling, not an assignment: a caller who already asked for less keeps
+// what it asked for. errors_test.go's connect-timeout evidence depends on
+// this directly (it runs six real dials into a blackhole at 500ms each,
+// which at fifteen seconds would be ninety seconds of gate).
+func TestOneConnectionAtATimeLeavesAShorterConnectTimeoutAlone(t *testing.T) {
+	const asked = 500 * time.Millisecond
+	base, baseCI := fs.AddConfig(context.Background())
+	baseCI.ConnectTimeout = fs.Duration(asked)
+
+	if got := fs.GetConfig(oneConnectionAtATime(base)).ConnectTimeout; got != fs.Duration(asked) {
+		t.Errorf("ConnectTimeout = %s, want the %s the caller asked for: this is a ceiling on rclone's default, "+
+			"not a policy that overrides a caller who wants to wait less", time.Duration(got), asked)
+	}
+}
+
+// A ConnectTimeout of zero is rclone's "no connect timeout at all", which
+// is the one value that would make the retry budget unbounded again, so it
+// gets the ceiling like anything else above it.
+func TestOneConnectionAtATimeBoundsAnUnsetConnectTimeout(t *testing.T) {
+	base, baseCI := fs.AddConfig(context.Background())
+	baseCI.ConnectTimeout = 0
+
+	if got := fs.GetConfig(oneConnectionAtATime(base)).ConnectTimeout; got != fs.Duration(ConnectTimeout) {
+		t.Errorf("ConnectTimeout = %s, want %s: zero means no deadline, which is the one setting that puts "+
+			"app.DefaultRetryPolicy's budget back to unbounded", time.Duration(got), ConnectTimeout)
 	}
 }
