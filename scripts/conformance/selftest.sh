@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+# Positive controls for EPIC E's composed conformance scenario (issue #242).
+#
+# core/tests/conformance is a wall of assertions about a chain that mostly
+# works: the artifact ends up on the medium the chain named, the invariant
+# held at every instant, the crash cells converged, the bytes hash right.
+# An assertion nobody has watched fail is indistinguishable from one that
+# cannot fail, and this repository has now found more than fifteen checks
+# that passed for the wrong reason.
+#
+# So every claim that suite makes is mutation-tested here against the real
+# tree: a copy of the working tree gets one deliberate violation planted in
+# a real product file, the suite runs, and it must fail AND name the check
+# whose promise the violation broke. Naming the check, not merely failing,
+# is what stops a mutation that broke the build for an unrelated reason
+# from reading as a pass. scripts/compat/selftest.sh is the same discipline
+# for the FR-35 half, and this is deliberately its sibling.
+#
+# Two of the violations below are named by the conformance matrix itself:
+#
+#   P2.1: "an engine that lets both placements be non-verified at the same
+#          instant. The harness has to observe it at that instant, which is
+#          why 'continuously' is in the gate line and why sampling would
+#          not do."
+#
+#   P2.2 / V1: "a mutation that issues the source delete before VERIFIED is
+#          durably recorded."
+#
+# They are the same planted edit here, because in this engine they are the
+# same mistake seen from two sides.
+#
+# This is not fast. Each mutant rebuilds core/ and runs a suite that stands
+# up MinIO containers, so budget ten minutes. It is the only thing standing
+# between "the composed scenario is green" and "the composed scenario is
+# green because it cannot go red".
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+root=$(pwd)
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/rclone-manager-conformance-selftest.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+pass=0
+fail=0
+
+# mutant <name> copies the working tree into $tmp/<name> and echoes its
+# path.
+#
+# --cached --others --exclude-standard, not plain `git ls-files`: the copy
+# has to include files that are present but not yet committed, because the
+# suite being tested is itself usually uncommitted while it is being
+# written. Copying tracked files only is what produced a self-test
+# elsewhere in this repository that silently "caught" every mutation,
+# because the check it invoked did not exist in the copy at all.
+mutant() {
+  local name=$1
+  local dir="$tmp/$name"
+  mkdir -p "$dir"
+  (cd "$root" && git ls-files -z --cached --others --exclude-standard | tar -cf - --null -T -) | (cd "$dir" && tar -xf -)
+  printf '%s' "$dir"
+}
+
+# conformance_gate runs the composed suite in whichever tree it is called
+# from. -run narrows it to the checks a mutation is expected to move, per
+# call, so a ten-minute self-test does not become an hour one.
+conformance_gate() {
+  local pattern=${1:-.}
+  (cd core && GOWORK=off go test -count=1 -timeout 30m -run "$pattern" ./tests/conformance/)
+}
+
+# expect_check_fails <label> <dir> <expected substring> [run pattern]
+expect_check_fails() {
+  local label=$1 dir=$2 needle=$3 pattern=${4:-.}
+  if (cd "$dir" && conformance_gate "$pattern") >"$tmp/out" 2>&1; then
+    echo "SELFTEST FAIL: $label. The composed suite PASSED against a planted violation." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  elif ! grep -qF "$needle" "$tmp/out"; then
+    echo "SELFTEST FAIL: $label. The suite failed, but never named the promise that was broken." >&2
+    echo "    expected its output to mention: $needle" >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  else
+    echo "  ok (caught): $label"
+    echo "      -> $(grep -m1 -F "$needle" "$tmp/out" | sed 's/^[[:space:]]*//' | cut -c1-400)"
+    pass=$((pass + 1))
+  fi
+}
+
+expect_gate_passes() {
+  local label=$1 dir=$2
+  if (cd "$dir" && conformance_gate) >"$tmp/out" 2>&1; then
+    echo "  ok (clean):  $label"
+    pass=$((pass + 1))
+  else
+    echo "SELFTEST FAIL: $label. The suite FAILED against an unmutated tree, so its failures mean nothing." >&2
+    sed 's/^/    /' "$tmp/out" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+# swap <file> <old> <new> replaces one exact string, and REFUSES if the old
+# text is not there.
+#
+# The refusal is the whole point. A planted violation that silently planted
+# nothing is the "green mutation" failure this file exists to rule out, and
+# it has happened here before: a mutation whose anchor had been refactored
+# away read as a clean pass for weeks.
+swap() {
+  local file=$1 old=$2 new=$3
+  python3 - "$file" "$old" "$new" <<'PY'
+import sys
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(path).read()
+if old not in src:
+    sys.exit("PLANTED NOTHING: %s does not contain the anchor:\n%s" % (path, old))
+if src.count(old) != 1:
+    sys.exit("AMBIGUOUS ANCHOR: %s contains the anchor %d times" % (path, src.count(old)))
+open(path, "w").write(src.replace(old, new))
+PY
+}
+
+echo "==> negative control: the composed suite is clean on the real tree"
+expect_gate_passes "core/tests/conformance on an unmutated tree" "$root"
+
+echo
+echo "==> the matrix's own falsification for the phase 2 exit gate (P2.1, P2.2, V1)"
+
+# The source delete issued before the destination has been verified. It is
+# one edit in two places because the ordering is enforced twice: the phase
+# table has no edge, and the driver has no case. Mutating only one of them
+# produces a refused write rather than the bug, which would be a mutation
+# that "passed" for the wrong reason.
+d=$(mutant source-delete-before-verified)
+swap "$d/core/internal/placement/phases.go" \
+  '	{From: Copied, To: Verifying},' \
+  '	{From: Copied, To: Verifying},
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+	{From: Copied, To: SourceDeletePending},'
+swap "$d/core/internal/placement/engine.go" \
+  '		case Copied:
+			next, err = e.startVerify(ctx, mv)' \
+  '		case Copied:
+			// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+			next, err = e.intendSourceDelete(ctx, mv)'
+# The third edit is what makes this a real violation rather than a refused
+# write. intendSourceDelete names the phase it is leaving, and without this
+# the mutant stalls at the copy phase and the suite goes red for "the write
+# expected a different phase", which is a mutation that broke the build
+# rather than one that broke the promise. The first run of this control did
+# exactly that.
+swap "$d/core/internal/placement/engine.go" \
+  '		MoveID: mv.ID, From: state.MoveVerified, To: state.MoveSourceDeletePending,' \
+  '		MoveID: mv.ID, From: mv.Phase, To: state.MoveSourceDeletePending,'
+expect_check_fails "the source delete issued before the destination is verified" "$d" \
+  "FR-30's standing invariant did not hold" \
+  'TestTheThreeTierChainEndToEnd|TestTheCrashMatrixAgainstARealS3Endpoint'
+
+echo
+echo "==> FR-27's home rule"
+
+# Chain order is load-bearing: the FIRST selecting tier names the home, so
+# an artifact claimed by daily and by monthly lives on daily's medium. A
+# rule that took the last one instead would quietly send every warm
+# artifact offsite.
+d=$(mutant home-medium-takes-the-last-tier)
+swap "$d/core/internal/retention/homemedium.go" \
+  '		return t.EffectiveMedium(), true, nil
+	}
+	return "", false, nil' \
+  '		// PLANTED VIOLATION (scripts/conformance/selftest.sh): keep
+		// going, so the LAST selecting tier wins instead of the first.
+		medium, hasHome = t.EffectiveMedium(), true
+	}
+	return medium, hasHome, nil'
+expect_check_fails "the home rule taking the last selecting tier instead of the first" "$d" \
+  'want "local"' \
+  'TestTheThreeTierChainEndToEnd'
+
+echo
+echo "==> the bucketing invariant across a move (P2.3, V2's composed shape)"
+
+# FR-32: nothing a medium reports may reach a retention decision. The
+# composed shape of that is a move changing where an artifact is bucketed,
+# and the value most likely to do it is the one the move itself writes,
+# which is when the destination copy was verified.
+d=$(mutant bucketing-reads-when-the-copy-was-verified)
+swap "$d/core/internal/retention/bucketkey.go" \
+  '	r := gfsDiscoveryInstant(rec)
+	discovered = gfsPlacement{date: gfsCivilDateIn(r, loc), occurred: r}' \
+  '	r := gfsDiscoveryInstant(rec)
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh): let where the
+	// bytes are decide when they were produced.
+	for _, pl := range rec.Placements {
+		if pl.Status == state.PlacementActive && pl.VerifiedAt != nil {
+			r = *pl.VerifiedAt
+		}
+	}
+	discovered = gfsPlacement{date: gfsCivilDateIn(r, loc), occurred: r}'
+expect_check_fails "bucketing derived from when a copy was verified" "$d" \
+  "changed its retention verdict" \
+  'TestAMoveDoesNotChangeARetentionVerdict'
+
+echo
+echo "==> the engine's refusals"
+
+# Medium to medium is refused because it would need a local staging copy
+# and a second set of failure modes. The refusal is what the composed
+# scenario runs into on the chain's second hop, so removing it has to move
+# that check.
+d=$(mutant medium-to-medium-allowed)
+swap "$d/core/internal/placement/engine.go" \
+  '	if src.Medium != config.MediumLocal && destination != config.MediumLocal {' \
+  '	if false { // PLANTED VIOLATION (scripts/conformance/selftest.sh).'
+expect_check_fails "the medium-to-medium refusal removed" "$d" \
+  "did not refuse the hop as medium-to-medium" \
+  'TestTheChainsSecondHopIsMediumToMedium'
+
+# A copy that fails leaves its reason on the move row. Without it the row
+# reads COPYING with an empty error for as long as the failure lasts, and
+# the only account of what went wrong lives in a cycle report that is gone.
+d=$(mutant failed-copy-records-no-reason)
+swap "$d/core/internal/placement/engine.go" \
+  '		noted, noteErr := e.step(ctx, mv, Copying, Copying, wrapped.Error())
+		if noteErr != nil {
+			return mv, fmt.Errorf("%w (and the reason could not be recorded on the move row: %v)", wrapped, noteErr)
+		}
+		return noted, wrapped' \
+  '		// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+		return mv, wrapped'
+expect_check_fails "a failed copy that records no reason on the move row" "$d" \
+  "the move row carries no error at all" \
+  'TestAFailedCopyLeavesItsReasonOnTheMoveRow'
+
+echo
+echo "==> prune meeting an artifact the chain has moved"
+
+# While #239's medium-aware prune is unbuilt, prune must REFUSE an artifact
+# whose only copy is on a medium rather than reading the missing local file
+# as work already done. The composed scenario is the only place that
+# produces such an artifact by actually moving one.
+d=$(mutant prune-reads-a-missing-file-as-already-deleted)
+swap "$d/core/internal/retention/prune.go" \
+  '	info, err := os.Lstat(expected)
+	if err != nil {
+		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
+	}' \
+  '	info, err := os.Lstat(expected)
+	if err != nil {
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh): a file that
+		// is not there is one less thing to delete, so call it done.
+		if os.IsNotExist(err) {
+			return expected, nil
+		}
+		return "", fmt.Errorf("retention: prune: refusing %s: cannot stat %q: %w", rec.Artifact, expected, err)
+	}'
+expect_check_fails "prune reading a missing local file as a completed delete" "$d" \
+  "the only safe answer is a refusal" \
+  'TestPruneRefusesAnArtifactWhoseOnlyCopyIsOnAMedium'
+
+echo
+echo "==> the archive gate"
+
+# An archived copy tops out at existence, because reading one fails. Let it
+# claim content and the composed scenario's whole argument about why the
+# annual tier is blocked stops being true.
+d=$(mutant archived-copy-claims-content)
+swap "$d/core/internal/placement/gate.go" \
+  '	case archive.RequiresRestore, archive.Restoring:
+		return Existence' \
+  '	case archive.RequiresRestore, archive.Restoring:
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+		return Content'
+expect_check_fails "an archived copy allowed to claim content class" "$d" \
+  "now has a ceiling of" \
+  'TestNoConfigurableVerificationCanBeAchievedOnAnArchiveClass'
+
+# The standing invariant means content class unless the operator opted into
+# attested. Admitting existence would make an archived copy an acceptable
+# SOLE copy, which is the failure the whole EPIC is built to prevent.
+d=$(mutant invariant-admits-existence)
+swap "$d/core/internal/placement/engine.go" \
+  '	if len(sufficient) == 0 {
+		sufficient = []Class{Content}
+	}' \
+  '	if len(sufficient) == 0 {
+		// PLANTED VIOLATION (scripts/conformance/selftest.sh).
+		sufficient = []Class{Content, Existence}
+	}'
+expect_check_fails "the standing invariant admitting existence class" "$d" \
+  "satisfies FR-30's standing invariant" \
+  'TestAnArchiveClassCopyCannotSatisfyTheStandingInvariant'
+
+echo
+echo "==> the crash matrix's convergence"
+
+# The destination is re-read and re-hashed before the source is deleted,
+# on the fresh path and the restart path alike. Trust the upload instead
+# and the two hostile-endpoint cells stop protecting anything: the local
+# copy goes and what survives is whatever the endpoint felt like keeping.
+d=$(mutant destination-trusted-instead-of-verified)
+swap "$d/core/internal/placement/engine.go" \
+  '	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+	return res, want, err' \
+  '	res, err := Verify(ctx, e.Store, medium, candidate, want, e.now())
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh): trust the
+	// upload rather than reading it back.
+	_ = res
+	return Result{Passed: true, Class: want, Detail: "planted"}, want, err'
+expect_check_fails "a destination trusted instead of verified" "$d" \
+  "does not hold the artifact's bytes" \
+  'TestTheCrashMatrixAgainstARealS3Endpoint'
+
+echo
+echo "==> the continuity claim itself"
+
+# The sampler in sampler_test.go is the control that gives "continuously"
+# its meaning, and a sampler that secretly looked continuously would make
+# the comparison vacuous while leaving it green. So the control gets
+# mutation-tested too: make the sampler look at every event and the
+# comparison must refuse to conclude anything.
+d=$(mutant sampler-secretly-watches-continuously)
+swap "$d/core/tests/conformance/watcher_test.go" \
+  '	mv, err := j.inner.AdvanceMove(ctx, a)
+	j.w.observe(fmt.Sprintf("after the journal wrote phase %s", a.To))
+	return mv, err' \
+  '	mv, err := j.inner.AdvanceMove(ctx, a)
+	j.w.observe(fmt.Sprintf("after the journal wrote phase %s", a.To))
+	// PLANTED VIOLATION (scripts/conformance/selftest.sh): the sampler
+	// looks at every event too, so the comparison compares nothing.
+	if j.w.sampler != nil {
+		j.w.sampler.sample(j.w.t, "at every event")
+	}
+	return mv, err'
+swap "$d/core/tests/conformance/watcher_test.go" \
+  '	// destroyed is the set of locators this run has watched being
+	// deleted and has not seen rewritten.
+	destroyed map[string]bool' \
+  '	// destroyed is the set of locators this run has watched being
+	// deleted and has not seen rewritten.
+	destroyed map[string]bool
+	sampler   *sampler'
+swap "$d/core/tests/conformance/sampler_test.go" \
+  '	sm := newSampler(w.journal, []model.ArtifactID{summer.id})
+
+	sm.sample(t, "before the cycle")
+	wa.observe("before the cycle")
+
+	plant := &earlyRelease{read: w.journal, target: summer.id}' \
+  '	sm := newSampler(w.journal, []model.ArtifactID{summer.id})
+	wa.sampler = sm
+
+	sm.sample(t, "before the cycle")
+	wa.observe("before the cycle")
+
+	plant := &earlyRelease{read: w.journal, target: summer.id}'
+expect_check_fails "a sampler that secretly looks continuously" "$d" \
+  "the sampler saw the breach" \
+  'TestTheWatcherCatchesABreachASamplerWouldMiss'
+
+# And the other direction: a planted breach that plants nothing must be
+# refused rather than read as agreement between the two judgements.
+d=$(mutant planted-breach-plants-nothing)
+swap "$d/core/tests/conformance/sampler_test.go" \
+  '	a.Placements = append(a.Placements, src.Update().WithStatus(state.PlacementDeletePending))
+	j.fired++' \
+  '	// PLANTED VIOLATION (scripts/conformance/selftest.sh): plant nothing.
+	_ = src'
+expect_check_fails "a planted breach that plants nothing" "$d" \
+  "the planted breach never fired" \
+  'TestTheWatcherCatchesABreachASamplerWouldMiss'
+
+echo
+echo "==> $pass passed, $fail failed"
+if [ "$fail" -ne 0 ]; then
+  exit 1
+fi

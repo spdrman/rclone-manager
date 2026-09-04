@@ -593,7 +593,31 @@ func (e *Engine) copy(ctx context.Context, mv state.Move) (state.Move, error) {
 		bytes, err = e.copyToMedium(ctx, mv, src)
 	}
 	if err != nil {
-		return mv, fmt.Errorf("placement: copying %s to %q: %w", mv.Artifact, mv.DestinationMedium, err)
+		// Record WHY on the move row before giving the error back.
+		//
+		// A failed copy is not abandoned and not advanced: the phase stays
+		// COPYING and the next cycle tries again, which is right for the
+		// transient case this retry exists for. What was missing is the
+		// reason. Without this write the row reads COPYING with an empty
+		// error for as long as the failure lasts, and the only account of
+		// what went wrong lived in the cycle report, which is in memory
+		// and gone by the time an operator looks. A move stuck for a week
+		// against a permanent refusal (an endpoint that will not take the
+		// storage class the medium is configured for, say) looked
+		// identical to one that started ten seconds ago.
+		//
+		// From == To, which phases.go names as the one legal
+		// non-transition, precisely because it is how a caller records a
+		// fact without claiming progress.
+		// The returned error still wraps the transport's own, so a caller
+		// that wants to classify a failure can. The move row gets its
+		// rendering, because a journal column is read by a person.
+		wrapped := fmt.Errorf("placement: copying %s to %q: %w", mv.Artifact, mv.DestinationMedium, err)
+		noted, noteErr := e.step(ctx, mv, Copying, Copying, wrapped.Error())
+		if noteErr != nil {
+			return mv, fmt.Errorf("%w (and the reason could not be recorded on the move row: %v)", wrapped, noteErr)
+		}
+		return noted, wrapped
 	}
 
 	advance := state.MoveAdvance{
