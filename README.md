@@ -1249,6 +1249,7 @@ core/internal/
   revalidate/    scheduled re-verification of artifacts that already passed
   state/         the SQLite journal: durable, idempotent transition recording
   testenv/       the environment a test has to be in before it may conclude anything from file permissions
+  testtier/      which tier a test belongs on, and the guard that refuses one written in the wrong place
   transport/     the manager-owned Transport interface and the rclone adapter behind it
 ```
 
