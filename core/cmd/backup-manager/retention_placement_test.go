@@ -183,3 +183,49 @@ func TestPrintPlacementPlan_SaysNothingWithoutAMediumEvenWithAPlanToShow(t *test
 		t.Errorf("a deployment that DOES declare a medium printed no placement section:\n%s", out)
 	}
 }
+
+// TestRun_RetentionNamesWhereADeletionWouldHappen is FR-30's own sentence
+// about this surface: "the mandatory dry-run explains per-artifact WHERE
+// the deletion would happen, not only whether".
+//
+// The distinction is not cosmetic. "DELETE 40 artifacts" means something
+// very different when half of them are objects in a bucket somebody else
+// pays for, and an operator reading a dry-run before authorising it has no
+// way to tell from the verdict alone.
+//
+// It drives printVerdictLine rather than the whole command, because
+// getting an artifact onto a medium through a real fetch would need a move
+// to have run first, and what this test is about is the rendering.
+func TestRun_RetentionNamesWhereADeletionWouldHappen(t *testing.T) {
+	set, err := model.NewBackupSetID("production", "postgres-primary")
+	if err != nil {
+		t.Fatalf("NewBackupSetID: %v", err)
+	}
+	offsite, err := model.NewArtifactID(set, "offsite.dump")
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	here, err := model.NewArtifactID(set, "here.dump")
+	if err != nil {
+		t.Fatalf("NewArtifactID: %v", err)
+	}
+	locations := map[model.ArtifactID]retention.Location{
+		offsite: {Medium: "cold_offsite", Status: retention.LocationConfirmed},
+		here:    {Medium: "local", Status: retention.LocationConfirmed},
+	}
+
+	out := captureStdout(t, func() {
+		printVerdictLine(retention.GFSVerdict{Artifact: offsite}, locations)
+		printVerdictLine(retention.GFSVerdict{Artifact: here}, locations)
+	})
+
+	if !strings.Contains(out, "medium=cold_offsite") {
+		t.Errorf("the line for an artifact on a medium does not say where its deletion would happen:\n%s", out)
+	}
+	// The control, and the compatibility half in one. A local artifact's
+	// line is exactly what it was before this field existed, which is what
+	// keeps every case in the pinned contract suite byte-identical.
+	if strings.Contains(out, "medium=local") {
+		t.Errorf("a local artifact's line grew a medium= field; that is every artifact in every pinned contract case:\n%s", out)
+	}
+}

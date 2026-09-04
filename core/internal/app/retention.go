@@ -42,6 +42,23 @@ type RetentionSetReport struct {
 	// purpose, and the mover is #238's.
 	HomePlan retention.HomePlan
 
+	// Locations is where each of these artifacts currently is, read off
+	// the same records the verdicts were decided from (EPIC E FR-30,
+	// issue #239).
+	//
+	// It is here because FR-30 asks the mandatory dry-run to explain
+	// per-artifact WHERE a deletion would happen, not only whether, and a
+	// GFSVerdict carries no such thing: FR-32 forbids internal/retention
+	// seeing a placement at all, which is exactly the property that keeps
+	// a medium from influencing a KEEP. So the location travels beside the
+	// verdict rather than inside it, derived one layer up, where it is not
+	// a retention decision.
+	//
+	// It is a map rather than a field on each verdict for the same reason:
+	// putting it on the verdict would put it in the vocabulary of the
+	// package that must not have it.
+	Locations map[model.ArtifactID]retention.Location
+
 	// Retention is the fully-resolved policy these verdicts were decided
 	// under, whichever of the two it came from. RetentionIsOverride says
 	// WHETHER the set decides for itself; this says WHAT it decided with,
@@ -110,9 +127,17 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 	// is a disagreement between two things this function just computed
 	// together, and a preview that dropped the moves and kept the
 	// verdicts would look like a backup set with nothing to move.
-	homePlan, err := retention.PlanHomeMoves(bs.Retention.EffectiveTiers(), verdicts, ActiveMediumFromRecords(records))
+	where := ActiveMediumFromRecords(records)
+	homePlan, err := retention.PlanHomeMoves(bs.Retention.EffectiveTiers(), verdicts, where)
 	if err != nil {
 		return RetentionSetReport{}, fmt.Errorf("app: retention: %s: %w", set, err)
+	}
+	// The same locator the plan was made with, read once per verdict, so
+	// a caller rendering "where would this deletion happen" and the plan
+	// beside it cannot come to disagree about where an artifact is.
+	locations := make(map[model.ArtifactID]retention.Location, len(verdicts))
+	for _, v := range verdicts {
+		locations[v.Artifact] = where(v.Artifact)
 	}
 
 	s.recordRetentionRun(set)
@@ -121,6 +146,7 @@ func (s *Service) RetentionPreview(ctx context.Context, set model.BackupSetID) (
 		Verdicts:            verdicts,
 		LastKnownGood:       lkg,
 		HomePlan:            homePlan,
+		Locations:           locations,
 		RetentionIsOverride: bs.RetentionIsOverride(),
 		Retention:           bs.Retention,
 	}, nil

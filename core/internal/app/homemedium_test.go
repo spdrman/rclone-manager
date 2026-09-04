@@ -270,3 +270,57 @@ func newCompleteRecord(t *testing.T, set model.BackupSetID, name string, at time
 		UpdatedAt:    at,
 	}
 }
+
+// TestRetentionPreview_ReportsWhereEachArtifactIs is the other half of
+// FR-30's "the dry-run explains per-artifact WHERE the deletion would
+// happen". The verdict cannot carry that, because FR-32 forbids
+// internal/retention seeing a placement at all, so it travels beside the
+// verdict and this is where it is filled in.
+//
+// The three statuses are all asserted, because they are three different
+// things to tell an operator and collapsing any two of them is how a
+// deletion gets reported as happening somewhere it would not.
+func TestRetentionPreview_ReportsWhereEachArtifactIs(t *testing.T) {
+	ctx := context.Background()
+	records := gfsRecordsForHomeTest(t)
+	records[0].Placements = []state.Placement{{Medium: state.MediumLocal, Status: state.PlacementActive}}
+	records[1].Placements = []state.Placement{{Medium: "cold_offsite", Status: state.PlacementActive}}
+	records[2].Placements = []state.Placement{
+		{Medium: state.MediumLocal, Status: state.PlacementActive},
+		{Medium: "cold_offsite", Status: state.PlacementActive},
+	}
+
+	bs := testBackupSet(t, t.TempDir())
+	cfg := testConfig(t, testSource("production", bs))
+	cfg.Retention = chainWithOffsiteMonthly()
+	resolveTestRetention(cfg)
+
+	svc := New(cfg, recordsJournal{records: records}, nil, nil)
+	svc.Now = fixedNow(retentionTestNow)
+
+	report, err := svc.RetentionPreview(ctx, bs.ID)
+	if err != nil {
+		t.Fatalf("RetentionPreview: %v", err)
+	}
+
+	for _, want := range []struct {
+		name string
+		loc  retention.Location
+	}{
+		{"recent.dump", retention.Location{Medium: state.MediumLocal, Status: retention.LocationConfirmed}},
+		{"monthly-only.dump", retention.Location{Medium: "cold_offsite", Status: retention.LocationConfirmed}},
+		{"too-old.dump", retention.Location{Status: retention.LocationContested}},
+	} {
+		id, err := model.NewArtifactID(bs.ID, want.name)
+		if err != nil {
+			t.Fatalf("NewArtifactID(%q): %v", want.name, err)
+		}
+		if got := report.Locations[id]; got != want.loc {
+			t.Errorf("Locations[%s] = %+v, want %+v", want.name, got, want.loc)
+		}
+	}
+	if len(report.Locations) != len(report.Verdicts) {
+		t.Errorf("Locations has %d entries for %d verdicts; every artifact a verdict is about has a location, even when that location is 'I could not confirm one'",
+			len(report.Locations), len(report.Verdicts))
+	}
+}
