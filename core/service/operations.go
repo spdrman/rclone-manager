@@ -190,6 +190,41 @@ type CycleOutcome struct {
 	// ArtifactsThrough is how many of those ended the cycle with their
 	// bytes on durable storage.
 	ArtifactsThrough int
+
+	// Moves is FR-30's half of the same question, and it is nil for a
+	// cycle whose recorded summary does not carry it.
+	//
+	// Nil is a real answer here for the reason Operation.Cycle is a
+	// pointer: a run cycle recorded before this build has no move counts
+	// in its summary, and rendering that as "0 attempted, 0 landed" would
+	// tell an operator a cycle moved nothing when it may have moved
+	// plenty. It is also nil-safe in the ordinary direction: a deployment
+	// that declares no storage medium records a real pair of zeroes,
+	// which is the truth and reads as nothing to do.
+	Moves *CycleMoveOutcome
+}
+
+// CycleMoveOutcome is what a finished cycle's FR-30 move pass got done.
+//
+// It is a pair rather than two loose fields because they are only ever
+// meaningful together: Landed on its own cannot tell a cycle that moved
+// nothing from one with nothing to move, which is the whole distinction
+// issue #361 was filed about.
+//
+// There is no reason string on it, deliberately. The engine's own refusal
+// sentence is the most useful thing an operator can read and it is built
+// out of whatever the transport handed back, about an endpoint, a bucket
+// and a credential reference, by code that was never written to a
+// redaction contract. FR-33 draws the line here, so the terminal and the
+// event stream carry the sentence (app.MoveProgress.Reason) and the wire
+// carries the arithmetic.
+type CycleMoveOutcome struct {
+	// Attempted is how many artifacts the move pass took up: a move it
+	// resumed, a move it planned, or a plan it refused outright.
+	Attempted int
+	// Landed is how many of those reached their home medium with the
+	// source gone, which is the only outcome that is a move.
+	Landed int
 }
 
 // OperationRestore is a restore operation's own facts: what was asked for,
@@ -563,6 +598,8 @@ type cycleSummary struct {
 	BackupSetsProcessed int    `json:"backup_sets_processed"`
 	ArtifactsWalked     int    `json:"artifacts_walked"`
 	ArtifactsThrough    int    `json:"artifacts_through"`
+	MovesAttempted      int    `json:"moves_attempted"`
+	MovesLanded         int    `json:"moves_landed"`
 	DurationMillis      int64  `json:"duration_ms"`
 	StartedAt           string `json:"started_at"`
 }
@@ -574,10 +611,17 @@ func summarizeCycle(report app.CycleReport) string {
 		walked += progress.Walked
 		through += progress.Durable
 	}
+	// FR-30's counts and nothing else off the move pass. MoveProgress
+	// also carries the engine's refusal text, which stays on the terminal
+	// and in the event stream; see CycleMoveOutcome for why it does not
+	// cross this boundary.
+	moves := report.MoveProgress()
 	b, err := json.Marshal(cycleSummary{
 		BackupSetsProcessed: len(report.Sets),
 		ArtifactsWalked:     walked,
 		ArtifactsThrough:    through,
+		MovesAttempted:      moves.Attempted,
+		MovesLanded:         moves.Landed,
 		DurationMillis:      report.Duration.Milliseconds(),
 		StartedAt:           report.StartedAt.Format(time.RFC3339Nano),
 	})
@@ -612,6 +656,8 @@ func parseCycleSummary(rec state.Operation) *CycleOutcome {
 		BackupSetsProcessed int  `json:"backup_sets_processed"`
 		ArtifactsWalked     *int `json:"artifacts_walked"`
 		ArtifactsThrough    *int `json:"artifacts_through"`
+		MovesAttempted      *int `json:"moves_attempted"`
+		MovesLanded         *int `json:"moves_landed"`
 	}
 	if err := json.Unmarshal([]byte(rec.Result), &raw); err != nil {
 		return nil
@@ -619,11 +665,19 @@ func parseCycleSummary(rec state.Operation) *CycleOutcome {
 	if raw.ArtifactsWalked == nil || raw.ArtifactsThrough == nil {
 		return nil
 	}
-	return &CycleOutcome{
+	out := &CycleOutcome{
 		BackupSetsProcessed: raw.BackupSetsProcessed,
 		ArtifactsWalked:     *raw.ArtifactsWalked,
 		ArtifactsThrough:    *raw.ArtifactsThrough,
 	}
+	// The move counts are read the same way and reported separately: a
+	// summary recorded before this build carries the two above and not
+	// these two, and that is a fact about the row rather than a cycle
+	// that moved nothing. See CycleOutcome.Moves.
+	if raw.MovesAttempted != nil && raw.MovesLanded != nil {
+		out.Moves = &CycleMoveOutcome{Attempted: *raw.MovesAttempted, Landed: *raw.MovesLanded}
+	}
+	return out
 }
 
 func toOperation(rec state.Operation) Operation {

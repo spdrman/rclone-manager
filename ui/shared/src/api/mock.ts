@@ -388,7 +388,13 @@ const OPERATIONS: Operation[] = [
     id: "op_cycle_1", setId: "", setName: "All backup sets",
     kind: "transfer", label: "run cycle", status: "completed", progress: null,
     nonDestructive: false, startedAt: "2026-08-29T01:00:00+02:00",
-    cycle: { backupSetsProcessed: 4, artifactsWalked: 12, artifactsThrough: 0 }
+    cycle: {
+      backupSetsProcessed: 4, artifactsWalked: 12, artifactsThrough: 0,
+      // And what FR-30's version of the same thing looks like beside it:
+      // three artifacts were due to move to the medium their tier names
+      // and none arrived.
+      moves: { attempted: 3, landed: 0 }
+    }
   }
 ];
 

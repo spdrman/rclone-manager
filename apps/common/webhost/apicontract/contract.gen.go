@@ -26,7 +26,7 @@ const (
 // hashes api/v1/openapi.json and compares. The full byte-for-byte
 // comparison still lives in scripts/api/check-contract-drift.sh, which is
 // the only thing that can also catch a hand edit to the body of this file.
-const ContractSHA256 = "a51f141e7841bad5f363e861c9e6e859c7bc4ea01f357dbe6418bec3af553699"
+const ContractSHA256 = "046a46f8c70d92dd842b4393d1fa02c99d2d5c43e04e56d34479804fbc7a2fa9"
 
 // ErrorCode is a stable, machine-readable failure token. The human-readable
 // message beside it on the wire MAY change without notice; this may not.
@@ -986,6 +986,21 @@ type CredentialsRequest struct {
 	Username string `json:"username"`
 }
 
+// CycleMoveOutcome is what a finished cycle's move pass got done: how many artifacts
+// were due to move to the medium their retention tier names, and how
+// many arrived. Without these, a cycle in which every move was
+// refused is indistinguishable from one in which every move landed,
+// which is the same defect artifacts_walked and artifacts_through
+// exist to remove one layer down. There is no reason string here,
+// deliberately: the engine's own refusal sentence is built from
+// whatever the transport handed back, about an endpoint, a bucket
+// and a credential reference, so it stays on the terminal and in the
+// event stream and never on this boundary.
+type CycleMoveOutcome struct {
+	Attempted int `json:"attempted"`
+	Landed    int `json:"landed"`
+}
+
 // CycleOutcome is what a finished run cycle actually got done, read off the
 // operation's own recorded summary. A cycle "completed" when it ran
 // to the end, which is a narrower statement than anyone reading it
@@ -994,9 +1009,10 @@ type CredentialsRequest struct {
 // finishes looking exactly like one that backed everything up. These
 // counts are what tell the two apart.
 type CycleOutcome struct {
-	ArtifactsThrough    int `json:"artifacts_through"`
-	ArtifactsWalked     int `json:"artifacts_walked"`
-	BackupSetsProcessed int `json:"backup_sets_processed"`
+	ArtifactsThrough    int               `json:"artifacts_through"`
+	ArtifactsWalked     int               `json:"artifacts_walked"`
+	BackupSetsProcessed int               `json:"backup_sets_processed"`
+	Moves               *CycleMoveOutcome `json:"moves,omitempty"`
 }
 
 // ErrorBody is the nested error body every operation outside /auth returns. code
@@ -1572,6 +1588,7 @@ var SchemaTypes = map[string]any{
 	"CreateBackupSetRequest":      CreateBackupSetRequest{},
 	"CreateBackupSetResponse":     CreateBackupSetResponse{},
 	"CredentialsRequest":          CredentialsRequest{},
+	"CycleMoveOutcome":            CycleMoveOutcome{},
 	"CycleOutcome":                CycleOutcome{},
 	"ErrorBody":                   ErrorBody{},
 	"ErrorResponse":               ErrorResponse{},

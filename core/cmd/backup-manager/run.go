@@ -45,5 +45,13 @@ func cmdRun(args []string) int {
 		// and it reads the same report `daemon` does.
 		verdicts = append(verdicts, s.Verdict())
 	}
-	return cycleExit(os.Stderr, verdicts...)
+	// Both writers run, and the worse code wins. A cycle can fail for an
+	// ingestion reason and a move reason at once, and an operator reading
+	// stderr needs both sentences rather than whichever one was checked
+	// first.
+	code := cycleExit(os.Stderr, verdicts...)
+	if moveCode := moveExit(os.Stderr, report); moveCode > code {
+		code = moveCode
+	}
+	return code
 }

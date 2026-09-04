@@ -229,6 +229,60 @@ func cycleExit(w io.Writer, verdicts ...app.CycleVerdict) int {
 	return code
 }
 
+// moveExit is cycleExit's FR-30 half: the exit status a cycle's move pass
+// contributes, with the reason for a non-zero one printed beside it.
+//
+// # Why a failed move pass fails the cycle
+//
+// An operator who writes `medium: cold_offsite` against a tier has said
+// where those backups belong. A cycle in which every move was refused has
+// not put them there, and will not on the next cycle either, because the
+// reasons a move is refused are configuration reasons: a credential that
+// is not set, a bucket that is not there, a storage class an artifact
+// cannot be delivered to. Left at exit 0 that is issue #361's defect one
+// layer up, a cycle that did nothing reporting success, and it stays
+// invisible for exactly as long as nobody reads the logs.
+//
+// It is deliberately narrow. One refused move among several that landed
+// does not fail anything, because the pass is working and one artifact
+// hit something transient. It takes the whole pass getting nothing
+// through, which is the same line CycleVerdict.NothingGotThrough draws.
+//
+// A deployment that declares no storage medium attempts no moves and
+// therefore can never reach a non-zero code here. That is FR-35's
+// compatibility promise for this exit status, which is pinned by a
+// black-box contract suite in another repository, held by arithmetic
+// rather than by a guard: the denominator is zero.
+//
+// # Two shapes, and MovesErr is the other one
+//
+// A pass that could not RUN at all (no way to reach a medium, a journal
+// that cannot record a move) reports no outcomes, so the arithmetic above
+// is silent about it. It is still a deployment that declared a medium and
+// moved nothing, so it fails here too, on its own line, naming its own
+// cause.
+//
+// Callers pass os.Stderr for cycleExit's reason: this binary's stdout is
+// FR-23's JSON event stream and a sentence in the middle of it breaks
+// every consumer that parses it a line at a time.
+func moveExit(w io.Writer, report app.CycleReport) int {
+	code := 0
+	if report.MovesErr != nil {
+		code = 1
+		_, _ = fmt.Fprintf(w, "backup-manager: this deployment declares a storage medium and could not run its move pass at all: %v\n", report.MovesErr)
+	}
+	if p := report.MoveProgress(); p.NothingMoved() {
+		code = 1
+		if p.Reason == "" {
+			_, _ = fmt.Fprintf(w, "backup-manager: this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived\n", p.Attempted)
+		} else {
+			_, _ = fmt.Fprintf(w, "backup-manager: this cycle moved nothing: %d artifact(s) were due to move to the medium their retention tier names and none arrived; the first refusal was: %s\n",
+				p.Attempted, p.Reason)
+		}
+	}
+	return code
+}
+
 // fail prints err to stderr in a consistent shape and returns the exit
 // code every subcommand's own failure path returns.
 func fail(err error) int {

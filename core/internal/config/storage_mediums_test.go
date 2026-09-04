@@ -113,11 +113,36 @@ func TestValidate_AcceptsEveryStorageClassAndVerificationMode(t *testing.T) {
 			mustValidate(t, &c)
 		})
 	}
+	// upload_verification is the one closed set whose members are not all
+	// acceptable on their own, and the split is deliberate. `attested` is
+	// IN the set, because the schema knows the word and has to refuse it
+	// for the right reason; it is then refused by the achievability rule,
+	// because no medium type this build has a backend for can produce the
+	// full-object digest it needs (validateUploadVerificationIsAchievable,
+	// and TestValidate_AttestedIsRefusedOnAMediumTypeThatCannotAttest).
+	//
+	// So the accepting half of the SET rule is carried by readback, and
+	// the assertion on attested is that it is refused as unachievable
+	// rather than as an unknown value. A validator that had started
+	// refusing every mode would fail the first branch.
 	for _, mode := range UploadVerificationModes() {
 		t.Run("upload_verification "+mode, func(t *testing.T) {
 			c := mediumsConfig()
 			c.StorageMediums[0].UploadVerification = mode
-			mustValidate(t, &c)
+			if mode != UploadVerificationAttested {
+				mustValidate(t, &c)
+				return
+			}
+			err := c.Validate()
+			if err == nil {
+				t.Fatalf("Validate accepted upload_verification %q, which no medium type this build has a backend for can achieve", mode)
+			}
+			if !strings.Contains(err.Error(), "cannot be achieved") {
+				t.Errorf("%q was refused, but not as unachievable: %v", mode, err)
+			}
+			if strings.Contains(err.Error(), "is not one of") {
+				t.Errorf("%q was refused as a value outside the closed set; it is inside it, and the reason it cannot be written is a different one: %v", mode, err)
+			}
 		})
 	}
 	for _, typ := range StorageMediumTypes() {
