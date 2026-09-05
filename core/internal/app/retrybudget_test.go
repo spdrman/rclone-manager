@@ -29,19 +29,28 @@ import (
 // arithmetic assumes is checked against the real retry.Do, and the
 // constant carries the sentence it is keeping honest.
 
-// documentedRetryBudget is the worst case DefaultRetryPolicy's doc claims
+// unreachableSourceBudget is the worst case DefaultRetryPolicy's doc claims
 // out loud: "a little over two minutes".
+//
+// It is named for the failure it bounds and not for the policy, because it
+// does not bound the policy. It is what a source that NEVER ANSWERS costs,
+// where every attempt ends at the connect deadline. A source that answers
+// and then stalls partway through a read is bounded by rclone's --timeout
+// instead, which this repository deliberately leaves at its five-minute
+// default; transport/rclone's TestAStalledSourceIsBoundedByADifferentNumber
+// is what keeps those two from collapsing into one, and DefaultRetryPolicy's
+// doc says so under "What two minutes is NOT".
 //
 // Change either input and this test fails, which is the point. What to do
 // when it does is NOT to move this constant until the failure message
 // agrees with it; it is to decide whether the new number is still one an
 // operator should be told to expect, and to rewrite DefaultRetryPolicy's
 // doc if it is.
-const documentedRetryBudget = 2*time.Minute + time.Second
+const unreachableSourceBudget = 2*time.Minute + time.Second
 
-// TestDefaultRetryBudgetIsPinned holds "six attempts, at most
+// TestUnreachableSourceBudgetIsPinned holds "six attempts, at most
 // ConnectTimeout each, plus at most 31s of backoff" to a single number.
-func TestDefaultRetryBudgetIsPinned(t *testing.T) {
+func TestUnreachableSourceBudgetIsPinned(t *testing.T) {
 	p := DefaultRetryPolicy
 	dialling := time.Duration(p.MaxAttempts) * rclone.ConnectTimeout
 	backoff := worstCaseBackoff(p)
@@ -50,34 +59,34 @@ func TestDefaultRetryBudgetIsPinned(t *testing.T) {
 	t.Logf("worst case: %d attempts x %s of dialling (%s) + %s of backoff = %s",
 		p.MaxAttempts, rclone.ConnectTimeout, dialling, backoff, got)
 
-	if got != documentedRetryBudget {
+	if got != unreachableSourceBudget {
 		t.Fatalf("one backup set now holds a cycle for up to %s against a source that blackholes, "+
 			"not the %s DefaultRetryPolicy's doc claims.\n"+
 			"  %d attempts (DefaultRetryPolicy.MaxAttempts) x %s (transport/rclone.ConnectTimeout) = %s of dialling\n"+
 			"  plus %s of backoff (the caps of %s x %v, ceiling %s)\n"+
 			"Whichever of those two numbers moved, DefaultRetryPolicy's doc and this constant have to move with it, "+
 			"and the question to answer first is whether the new number is one an operator should be told to expect.",
-			got, documentedRetryBudget, p.MaxAttempts, rclone.ConnectTimeout, dialling,
+			got, unreachableSourceBudget, p.MaxAttempts, rclone.ConnectTimeout, dialling,
 			backoff, p.BaseDelay, p.Multiplier, p.MaxDelay)
 	}
 }
 
-// TestDefaultRetryBudgetPinCanStillFail is the companion guard the timing
+// TestUnreachableSourceBudgetPinCanStillFail is the companion guard the timing
 // bounds elsewhere in this repository keep (see
 // transport/rclone's TestKeyCommandTimeoutBudget_CanStillFail and
 // lifecycle's hookReturnBudget): a pin that cannot be violated is not a
 // pin, it is a comment that runs.
-func TestDefaultRetryBudgetPinCanStillFail(t *testing.T) {
+func TestUnreachableSourceBudgetPinCanStillFail(t *testing.T) {
 	p := DefaultRetryPolicy
 
 	// The pin has to be sensitive to BOTH inputs, or half of #415 could
 	// come back without anything going red. A budget that ignored the
 	// attempts would sit green through rclone's own 60s default, which is
 	// the six-and-a-half-minute number #415 was filed about.
-	if worstCaseBackoff(p)+time.Duration(p.MaxAttempts)*(rclone.ConnectTimeout+time.Second) == documentedRetryBudget {
+	if worstCaseBackoff(p)+time.Duration(p.MaxAttempts)*(rclone.ConnectTimeout+time.Second) == unreachableSourceBudget {
 		t.Error("the pin does not move when ConnectTimeout does, so it is not pinning the dialling half at all")
 	}
-	if worstCaseBackoff(p)+time.Duration(p.MaxAttempts+1)*rclone.ConnectTimeout == documentedRetryBudget {
+	if worstCaseBackoff(p)+time.Duration(p.MaxAttempts+1)*rclone.ConnectTimeout == unreachableSourceBudget {
 		t.Error("the pin does not move when MaxAttempts does, so it is not pinning the attempt count at all")
 	}
 
@@ -86,18 +95,18 @@ func TestDefaultRetryBudgetPinCanStillFail(t *testing.T) {
 	// --contimeout is 60s.
 	const rcloneDefaultConnectTimeout = 60 * time.Second
 	before := worstCaseBackoff(p) + time.Duration(p.MaxAttempts)*rcloneDefaultConnectTimeout
-	if documentedRetryBudget >= before {
-		t.Errorf("documentedRetryBudget is %s, at or past the %s six attempts cost at rclone's own %s default; "+
+	if unreachableSourceBudget >= before {
+		t.Errorf("unreachableSourceBudget is %s, at or past the %s six attempts cost at rclone's own %s default; "+
 			"at this value the pin sits green through exactly the defect it is named for",
-			documentedRetryBudget, before, rcloneDefaultConnectTimeout)
+			unreachableSourceBudget, before, rcloneDefaultConnectTimeout)
 	}
-	t.Logf("bounded: %s, was %s at rclone's own %s default", documentedRetryBudget, before, rcloneDefaultConnectTimeout)
+	t.Logf("bounded: %s, was %s at rclone's own %s default", unreachableSourceBudget, before, rcloneDefaultConnectTimeout)
 
 	// A budget under the dialling alone could never be met by a correct
 	// run, which is the opposite failure and just as useless.
-	if documentedRetryBudget <= time.Duration(p.MaxAttempts)*rclone.ConnectTimeout {
-		t.Errorf("documentedRetryBudget is %s, at or below the %s the attempts alone cost, so no correct run fits inside it",
-			documentedRetryBudget, time.Duration(p.MaxAttempts)*rclone.ConnectTimeout)
+	if unreachableSourceBudget <= time.Duration(p.MaxAttempts)*rclone.ConnectTimeout {
+		t.Errorf("unreachableSourceBudget is %s, at or below the %s the attempts alone cost, so no correct run fits inside it",
+			unreachableSourceBudget, time.Duration(p.MaxAttempts)*rclone.ConnectTimeout)
 	}
 }
 

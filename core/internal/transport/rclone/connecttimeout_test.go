@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rclone/rclone/fs"
+
 	"github.com/spdrman/rclone-manager/core/tests/sftpfixture"
 )
 
@@ -96,5 +98,50 @@ func TestConnectTimeoutLeavesARealHandshakeRoom(t *testing.T) {
 			"  If ConnectTimeout is still %s: a loopback SSH handshake to a container took %s, and nothing about a "+
 			"healthy machine explains that. Re-run this on a host that is not also running another gate.",
 			ConnectTimeout, need, handshakeHeadroom, worst.Round(time.Millisecond), ConnectTimeout, worst.Round(time.Millisecond))
+	}
+}
+
+// TestAStalledSourceIsBoundedByADifferentNumber is the honesty guard on
+// app.DefaultRetryPolicy's budget (issue #415).
+//
+// That budget is "six attempts, at most ConnectTimeout each", and it is
+// true of a source that never answers, which is what an operator means when
+// they say a NAS is off. It is NOT true of every failure. ConnectTimeout
+// bounds a dial; a source that answers, accepts the session and then goes
+// quiet partway through a read is bounded by rclone's --timeout, an idle
+// timeout on the transfer, which this adapter deliberately does not touch.
+//
+// So there are two numbers, they are far apart, and the way #415 comes back
+// is somebody reading "six times ConnectTimeout" as the whole story. This
+// row fails if they ever become one number, in either direction: by the
+// idle timeout being pulled down to the connect timeout (which would start
+// failing slow-but-live links), or by this adapter starting to override it
+// at all (which would move a bound app's doc describes without app's doc
+// knowing).
+func TestAStalledSourceIsBoundedByADifferentNumber(t *testing.T) {
+	rcloneDefault := fs.GetConfig(context.Background())
+	ours := fs.GetConfig(oneConnectionAtATime(context.Background()))
+
+	idle := time.Duration(ours.Timeout)
+	connect := time.Duration(ours.ConnectTimeout)
+	t.Logf("a dial is bounded by ConnectTimeout (%s, ours); a stalled transfer by --timeout (%s, rclone's own default, untouched)",
+		connect, idle)
+
+	// This adapter bounds one of them and not the other, on purpose.
+	if idle != time.Duration(rcloneDefault.Timeout) {
+		t.Errorf("this adapter now sets rclone's --timeout to %s, against the %s default it used to leave alone. "+
+			"app.DefaultRetryPolicy's doc describes the stalled-source worst case in terms of that default and would "+
+			"now be wrong; and --timeout is a bound on a transfer making no progress, so shortening it fails "+
+			"slow-but-live links rather than unreachable ones",
+			idle, time.Duration(rcloneDefault.Timeout))
+	}
+
+	// And they have to stay recognisably different, or "six attempts at
+	// ConnectTimeout each" would quietly start reading as the whole budget.
+	if idle <= connect {
+		t.Errorf("--timeout is %s, at or under the %s connect timeout, so the two bounds have collapsed into one. "+
+			"app.DefaultRetryPolicy's doc has a whole section explaining that they are different failures with "+
+			"different costs; if that is genuinely no longer true, that section is what has to change",
+			idle, connect)
 	}
 }
